@@ -1,4 +1,10 @@
-import { useId, type ButtonHTMLAttributes, type ChangeEvent, type ReactNode } from "react";
+import {
+  useId,
+  type ButtonHTMLAttributes,
+  type ChangeEvent,
+  type ReactNode,
+  type TableHTMLAttributes,
+} from "react";
 import type { Headline, PilotCategory } from "../api/types";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { categoryColor } from "../theme";
@@ -325,5 +331,29 @@ export function Button({
     >
       {pending ? <span className="spinner" /> : children}
     </button>
+  );
+}
+
+/**
+ * Thin wrapper over the `.table` class (index.css) — standardizes th/td
+ * padding, header styling, and row borders across the app's dozen
+ * hand-rolled tables. Deliberately no `Th`/`Td` subcomponents: every table
+ * in this codebase is a plain `<table><thead><tr><th>…` /
+ * `<tbody><tr><td>…` structure, and the CSS class alone is enough to
+ * standardize them — no header/cell abstraction earns its keep here. Add
+ * `className="num"` to a `<th>`/`<td>` for right-aligned tabular-nums (the
+ * existing `.num` class, extended by `.table` to also right-align).
+ * Callers keep their own `overflowX: "auto"` wrapper div and any per-table
+ * `minWidth`/`fontSize` override via `style` — inline styles still win over
+ * this class.
+ */
+export function Table({
+  children,
+  ...rest
+}: { children: ReactNode } & TableHTMLAttributes<HTMLTableElement>) {
+  return (
+    <table className="table" {...rest}>
+      {children}
+    </table>
   );
 }

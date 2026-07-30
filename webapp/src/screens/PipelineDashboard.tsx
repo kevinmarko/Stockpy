@@ -23,6 +23,7 @@ import {
   ErrorState,
   Loading,
   StaleDataNotice,
+  Table,
 } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { timeAgo } from "../format";
@@ -208,37 +209,30 @@ function Controls({
 
 function RunsTable({ runs }: { runs: RunRecord[] }) {
   return (
-    <table
-      style={{
-        width: "100%",
-        borderCollapse: "collapse",
-        textAlign: "left",
-        fontSize: 13,
-      }}
-    >
+    <Table>
       <thead>
-        <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
-          <th style={{ padding: 8 }}>Run</th>
-          <th style={{ padding: 8 }}>Mode</th>
-          <th style={{ padding: 8 }}>State</th>
-          <th style={{ padding: 8 }}>Started</th>
-          <th style={{ padding: 8 }}>Duration</th>
+        <tr>
+          <th>Run</th>
+          <th>Mode</th>
+          <th>State</th>
+          <th>Started</th>
+          <th className="num">Duration</th>
         </tr>
       </thead>
       <tbody>
         {runs.map((r) => (
-          <tr key={r.run_id} style={{ borderBottom: `1px solid ${theme.surface3}` }}>
-            <td style={{ padding: 8, fontFamily: "monospace", fontSize: 12 }}>
+          <tr key={r.run_id}>
+            <td style={{ fontFamily: "monospace", fontSize: 12 }}>
               {r.run_id}
             </td>
-            <td style={{ padding: 8 }}>
+            <td>
               {r.mode ? (
                 <span className="chip">{r.mode.toUpperCase()}</span>
               ) : (
                 <span style={{ color: theme.textMuted }}>—</span>
               )}
             </td>
-            <td style={{ padding: 8 }}>
+            <td>
               <StateBadge state={r.state} />
               {r.error && (
                 <div
@@ -249,16 +243,16 @@ function RunsTable({ runs }: { runs: RunRecord[] }) {
                 </div>
               )}
             </td>
-            <td style={{ padding: 8, color: theme.textSecondary }}>
+            <td style={{ color: theme.textSecondary }}>
               {timeAgo(r.started_at)}
             </td>
-            <td className="num" style={{ padding: 8 }}>
+            <td className="num">
               {r.duration_seconds == null ? "—" : `${r.duration_seconds.toFixed(1)}s`}
             </td>
           </tr>
         ))}
       </tbody>
-    </table>
+    </Table>
   );
 }
 

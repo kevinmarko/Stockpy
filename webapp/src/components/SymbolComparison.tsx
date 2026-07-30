@@ -12,7 +12,7 @@ import {
 import { api } from "../api/client";
 import type { SymbolCompareResponse, UniverseResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading } from "./ui";
+import { ErrorState, Loading, Table } from "./ui";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "./charts";
 import { seriesColor, theme } from "../theme";
 import { fmtNum, fmtPct } from "../format";
@@ -181,12 +181,12 @@ export function SymbolComparison() {
       ) : (
         <>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13 }}>
+            <Table>
               <thead>
-                <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
-                  <th style={{ padding: 8 }}>Metric</th>
+                <tr>
+                  <th>Metric</th>
                   {compare.data.symbols.map((s) => (
-                    <th key={s.symbol} style={{ padding: 8, color: theme.accent }}>
+                    <th key={s.symbol} style={{ color: theme.accent }}>
                       {s.symbol}
                       {!s.found && (
                         <span style={{ display: "block", fontSize: 10, color: theme.textMuted, fontWeight: 400 }}>
@@ -198,58 +198,58 @@ export function SymbolComparison() {
                 </tr>
               </thead>
               <tbody>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Final Score</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Final Score</td>
                   {compare.data.symbols.map((s) => (
-                    <td key={s.symbol} style={{ padding: 8 }} className="num">{fmtNum(s.score, 1)}</td>
+                    <td key={s.symbol} className="num">{fmtNum(s.score, 1)}</td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Action</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Action</td>
                   {compare.data.symbols.map((s) => (
-                    <td key={s.symbol} style={{ padding: 8 }}>{s.action ?? "—"}</td>
+                    <td key={s.symbol}>{s.action ?? "—"}</td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Kelly Target</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Kelly Target</td>
                   {compare.data.symbols.map((s) => (
-                    <td key={s.symbol} style={{ padding: 8 }} className="num">
+                    <td key={s.symbol} className="num">
                       {fmtPct(s.kelly_target, 1, { fromFraction: true })}
                     </td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Conviction</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Conviction</td>
                   {compare.data.symbols.map((s) => (
-                    <td key={s.symbol} style={{ padding: 8 }} className="num">
+                    <td key={s.symbol} className="num">
                       {fmtPct(s.conviction, 0, { fromFraction: true })}
                     </td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>GARCH Vol</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>GARCH Vol</td>
                   {compare.data.symbols.map((s) => (
-                    <td key={s.symbol} style={{ padding: 8 }} className="num">{fmtNum(s.garch_vol, 3)}</td>
+                    <td key={s.symbol} className="num">{fmtNum(s.garch_vol, 3)}</td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Meta-Label Composite</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Meta-Label Composite</td>
                   {compare.data.symbols.map((s) => (
-                    <td key={s.symbol} style={{ padding: 8 }} className="num">
+                    <td key={s.symbol} className="num">
                       {fmtNum(s.meta_label_composite, 2)}
                     </td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Regime Multiplier</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Regime Multiplier</td>
                   {compare.data.symbols.map((s) => (
-                    <td key={s.symbol} style={{ padding: 8 }} className="num">
+                    <td key={s.symbol} className="num">
                       {fmtNum(s.regime_multiplier, 2)}
                     </td>
                   ))}
                 </tr>
               </tbody>
-            </table>
+            </Table>
           </div>
 
           {notTracked.length > 0 && (

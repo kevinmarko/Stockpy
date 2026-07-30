@@ -10,7 +10,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Loading, StaleDataNotice, Tile } from "../components/ui";
+import { Button, EmptyState, ErrorState, Loading, StaleDataNotice, Table, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -246,12 +246,12 @@ function BrinsonFachlerSection() {
       </p>
 
       <section className="card card-pad" style={{ marginBottom: 16, overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <Table>
           <thead>
-            <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
-              <th style={{ padding: "6px 8px", textAlign: "left" }}>Sector</th>
+            <tr>
+              <th>Sector</th>
               {_BF_COLUMNS.map((c) => (
-                <th key={c.field} style={{ padding: "6px 4px", textAlign: "right", fontWeight: 600 }}>
+                <th key={c.field} className="num">
                   {c.header}
                 </th>
               ))}
@@ -259,8 +259,8 @@ function BrinsonFachlerSection() {
           </thead>
           <tbody>
             {rows.map((row, i) => (
-              <tr key={row.sector} style={{ borderBottom: `1px solid ${theme.border}` }}>
-                <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{row.sector}</td>
+              <tr key={row.sector}>
+                <td style={{ whiteSpace: "nowrap" }}>{row.sector}</td>
                 {_BF_COLUMNS.map((c) => (
                   <td key={c.field} style={{ padding: "4px" }}>
                     <NumCell
@@ -273,7 +273,7 @@ function BrinsonFachlerSection() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </Table>
 
         {clientWarnings.length > 0 && (
           <div className="notice notice-warn" style={{ marginTop: 12 }}>
@@ -321,25 +321,23 @@ function BrinsonFachlerSection() {
 
           <section className="card card-pad" style={{ marginBottom: 16, overflowX: "auto" }}>
             <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>Per-sector effects</h3>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <Table>
               <thead>
-                <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
-                  <th style={{ padding: "6px 8px", textAlign: "left" }}>Sector</th>
-                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Allocation</th>
-                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Selection</th>
-                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Interaction</th>
-                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Total</th>
+                <tr>
+                  <th>Sector</th>
+                  <th className="num">Allocation</th>
+                  <th className="num">Selection</th>
+                  <th className="num">Interaction</th>
+                  <th className="num">Total</th>
                 </tr>
               </thead>
               <tbody>
                 {Object.entries(result["Sector Details"]).map(([sector, d]) => (
-                  <tr key={sector} style={{ borderBottom: `1px solid ${theme.border}` }}>
-                    <td style={{ padding: "6px 8px" }}>{sector}</td>
+                  <tr key={sector}>
+                    <td>{sector}</td>
                     <td
                       className="num"
                       style={{
-                        padding: "6px 8px",
-                        textAlign: "right",
                         color: d.allocation_effect >= 0 ? theme.growth : theme.decline,
                       }}
                     >
@@ -348,8 +346,6 @@ function BrinsonFachlerSection() {
                     <td
                       className="num"
                       style={{
-                        padding: "6px 8px",
-                        textAlign: "right",
                         color: d.selection_effect >= 0 ? theme.growth : theme.decline,
                       }}
                     >
@@ -358,8 +354,6 @@ function BrinsonFachlerSection() {
                     <td
                       className="num"
                       style={{
-                        padding: "6px 8px",
-                        textAlign: "right",
                         color: d.interaction_effect >= 0 ? theme.growth : theme.decline,
                       }}
                     >
@@ -368,8 +362,6 @@ function BrinsonFachlerSection() {
                     <td
                       className="num"
                       style={{
-                        padding: "6px 8px",
-                        textAlign: "right",
                         fontWeight: 700,
                         color: d.total_attribution >= 0 ? theme.growth : theme.decline,
                       }}
@@ -379,7 +371,7 @@ function BrinsonFachlerSection() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           </section>
         </>
       )}

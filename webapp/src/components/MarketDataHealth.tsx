@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { api } from "../api/client";
 import type { UniverseResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { Button, EmptyState, ErrorState, Loading } from "./ui";
+import { Button, EmptyState, ErrorState, Loading, Table } from "./ui";
 import { theme } from "../theme";
 
 // Safety cap on how many tracked symbols a single "Check connection" click
@@ -182,42 +182,31 @@ export function MarketDataHealth() {
           )}
           {results.length > 0 && (
             <div style={{ marginTop: 12, overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <Table>
                 <thead>
-                  <tr style={{ textAlign: "left", color: theme.textMuted, fontSize: 11, textTransform: "uppercase" }}>
-                    <th style={{ padding: "4px 6px" }}>Symbol</th>
-                    <th style={{ padding: "4px 6px" }}>Status</th>
-                    <th style={{ padding: "4px 6px", textAlign: "right" }}>Latency</th>
-                    <th style={{ padding: "4px 6px" }}>Source</th>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Status</th>
+                    <th className="num">Latency</th>
+                    <th>Source</th>
                   </tr>
                 </thead>
                 <tbody>
                   {results.map((r) => {
                     const meta = statusMeta(r.status);
                     return (
-                      <tr
-                        key={r.symbol}
-                        style={{ borderTop: `1px solid ${theme.border}` }}
-                        data-testid={`md-row-${r.symbol}`}
-                      >
-                        <td style={{ padding: "6px", fontWeight: 700, color: theme.textPrimary }}>{r.symbol}</td>
-                        <td style={{ padding: "6px", color: meta.color, fontWeight: 600 }}>{meta.label}</td>
-                        <td
-                          style={{
-                            padding: "6px",
-                            textAlign: "right",
-                            fontVariantNumeric: "tabular-nums",
-                            color: latencyColor(r.latencyMs),
-                          }}
-                        >
+                      <tr key={r.symbol} data-testid={`md-row-${r.symbol}`}>
+                        <td style={{ fontWeight: 700, color: theme.textPrimary }}>{r.symbol}</td>
+                        <td style={{ color: meta.color, fontWeight: 600 }}>{meta.label}</td>
+                        <td className="num" style={{ color: latencyColor(r.latencyMs) }}>
                           {r.latencyMs == null ? "—" : `${r.latencyMs} ms`}
                         </td>
-                        <td style={{ padding: "6px", color: theme.textMuted }}>{r.source ?? "—"}</td>
+                        <td style={{ color: theme.textMuted }}>{r.source ?? "—"}</td>
                       </tr>
                     );
                   })}
                 </tbody>
-              </table>
+              </Table>
             </div>
           )}
         </>

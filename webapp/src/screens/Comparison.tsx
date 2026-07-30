@@ -3,7 +3,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api } from "../api/client";
 import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading } from "../components/ui";
+import { ErrorState, Loading, Table } from "../components/ui";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
 import { SymbolComparison } from "../components/SymbolComparison";
@@ -317,15 +317,14 @@ export function Comparison() {
           {/* Comparison Table */}
           <section className="card card-pad" style={{ overflowX: "auto" }}>
             <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Key Metrics Comparison</h2>
-            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13 }}>
+            <Table>
               <thead>
-                <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
-                  <th style={{ padding: 8 }}>Metric</th>
+                <tr>
+                  <th>Metric</th>
                   {selectedPilots.map(p => (
                     <th
                       key={p.id}
                       style={{
-                        padding: 8,
                         color: theme.accent,
                         whiteSpace: "normal",
                         wordBreak: "break-word",
@@ -338,64 +337,64 @@ export function Comparison() {
                 </tr>
               </thead>
               <tbody>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Category</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Category</td>
                   {selectedPilots.map(p => (
-                    <td key={p.id} style={{ padding: 8 }}>{p.category}</td>
+                    <td key={p.id}>{p.category}</td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Sharpe Ratio</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Sharpe Ratio</td>
                   {selectedPilots.map(p => (
-                    <td key={p.id} style={{ padding: 8 }} className="num">
+                    <td key={p.id} className="num">
                       {p.headline.sharpe == null ? "—" : fmtNum(p.headline.sharpe, 2)}
                     </td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>PBO</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>PBO</td>
                   {selectedPilots.map(p => (
-                    <td key={p.id} style={{ padding: 8 }} className="num">
+                    <td key={p.id} className="num">
                       {p.headline.pbo == null ? "—" : fmtNum(p.headline.pbo, 2)}
                     </td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Max Drawdown</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Max Drawdown</td>
                   {selectedPilots.map(p => (
-                    <td key={p.id} style={{ padding: 8 }} className="num">
+                    <td key={p.id} className="num">
                       {p.headline.max_drawdown == null ? "—" : fmtPct(p.headline.max_drawdown, 0, { fromFraction: true })}
                     </td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>DSR</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>DSR</td>
                   {selectedPilots.map(p => (
-                    <td key={p.id} style={{ padding: 8 }} className="num">
+                    <td key={p.id} className="num">
                       {p.headline.dsr == null ? "—" : fmtNum(p.headline.dsr, 3)}
                     </td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>AUM Proxy</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>AUM Proxy</td>
                   {selectedPilots.map(p => (
-                    <td key={p.id} style={{ padding: 8 }} className="num">
+                    <td key={p.id} className="num">
                       {p.aum_proxy == null ? "—" : fmtUsd(p.aum_proxy)}
                     </td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Followers</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Followers</td>
                   {selectedPilots.map(p => (
-                    <td key={p.id} style={{ padding: 8 }} className="num">
+                    <td key={p.id} className="num">
                       {p.followers_proxy == null ? "—" : p.followers_proxy}
                     </td>
                   ))}
                 </tr>
-                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-                  <td style={{ padding: 8, fontWeight: 700 }}>Actions</td>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Actions</td>
                   {selectedPilots.map(p => (
-                    <td key={p.id} style={{ padding: 8 }}>
+                    <td key={p.id}>
                       <button
                         className="btn btn-primary"
                         onClick={() => setFollowPilot(p)}
@@ -408,7 +407,7 @@ export function Comparison() {
                   ))}
                 </tr>
               </tbody>
-            </table>
+            </Table>
           </section>
 
           {/* Recent pilot alerts */}

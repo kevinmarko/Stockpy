@@ -12,7 +12,7 @@ import {
 import { api } from "../api/client";
 import type { ValidationTrendSnapshot } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { DeployableBadge, ErrorState, Loading } from "./ui";
+import { DeployableBadge, ErrorState, Loading, Table } from "./ui";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "./charts";
 import { seriesColor, theme } from "../theme";
 import { fmtDate, fmtNum, fmtPct } from "../format";
@@ -126,37 +126,33 @@ export function ValidationTrend() {
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 13 }}>
+            <Table>
               <thead>
-                <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
-                  <th style={{ padding: 8 }}>Strategy</th>
-                  <th style={{ padding: 8 }}>Status</th>
-                  <th style={{ padding: 8 }}>PBO</th>
-                  <th style={{ padding: 8 }}>DSR</th>
-                  <th style={{ padding: 8 }}>Sharpe</th>
-                  <th style={{ padding: 8 }}>Max DD</th>
-                  <th style={{ padding: 8 }}>Stress gate</th>
-                  <th style={{ padding: 8 }}>Report date</th>
+                <tr>
+                  <th>Strategy</th>
+                  <th>Status</th>
+                  <th className="num">PBO</th>
+                  <th className="num">DSR</th>
+                  <th className="num">Sharpe</th>
+                  <th className="num">Max DD</th>
+                  <th>Stress gate</th>
+                  <th>Report date</th>
                 </tr>
               </thead>
               <tbody>
                 {data.strategies.map((s) => (
-                  <tr
-                    key={s.strategy_id}
-                    style={{ borderBottom: `1px solid ${theme.border}` }}
-                    data-testid={`validation-trend-row-${s.strategy_id}`}
-                  >
-                    <td style={{ padding: 8, fontWeight: 600 }}>{s.strategy_id}</td>
-                    <td style={{ padding: 8 }}>
+                  <tr key={s.strategy_id} data-testid={`validation-trend-row-${s.strategy_id}`}>
+                    <td style={{ fontWeight: 600 }}>{s.strategy_id}</td>
+                    <td>
                       <DeployableBadge deployable={s.deployable} />
                     </td>
-                    <td style={{ padding: 8 }} className="num">{fmtGateNum("pbo", s.pbo)}</td>
-                    <td style={{ padding: 8 }} className="num">{fmtGateNum("dsr", s.dsr)}</td>
-                    <td style={{ padding: 8 }} className="num">{fmtGateNum("sharpe", s.sharpe)}</td>
-                    <td style={{ padding: 8 }} className="num">
+                    <td className="num">{fmtGateNum("pbo", s.pbo)}</td>
+                    <td className="num">{fmtGateNum("dsr", s.dsr)}</td>
+                    <td className="num">{fmtGateNum("sharpe", s.sharpe)}</td>
+                    <td className="num">
                       {fmtGateNum("max_drawdown", s.max_drawdown)}
                     </td>
-                    <td style={{ padding: 8 }}>
+                    <td>
                       {!s.is_options_selling
                         ? "n/a"
                         : s.stress_gate_passed == null
@@ -165,11 +161,11 @@ export function ValidationTrend() {
                             ? "✓ passed"
                             : "✗ failed"}
                     </td>
-                    <td style={{ padding: 8, color: theme.textMuted }}>{s.report_date ?? "—"}</td>
+                    <td style={{ color: theme.textMuted }}>{s.report_date ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           </div>
         )}
       </section>

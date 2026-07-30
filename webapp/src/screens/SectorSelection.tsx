@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { SectorSelectionRow, SectorSelectionView } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Input, Loading, StaleDataNotice } from "../components/ui";
+import { ErrorState, Input, Loading, StaleDataNotice, Table } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { fmtDate, fmtNum } from "../format";
@@ -37,7 +37,7 @@ function degradedReasonLabel(reason: string): string {
 
 function NumCell({ value, digits = 3 }: { value: number | null; digits?: number }) {
   return (
-    <td className="num" style={{ padding: "6px 8px", textAlign: "right" }}>
+    <td className="num">
       {value == null ? <span className="muted">—</span> : fmtNum(value, digits)}
     </td>
   );
@@ -45,8 +45,8 @@ function NumCell({ value, digits = 3 }: { value: number | null; digits?: number 
 
 function SectorRow({ row }: { row: SectorSelectionRow }) {
   return (
-    <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
-      <td style={{ padding: "6px 8px" }}>
+    <tr>
+      <td>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {row.selected && (
             <span className="badge badge-good" title="In the top-N selection">
@@ -67,8 +67,6 @@ function SectorRow({ row }: { row: SectorSelectionRow }) {
       <td
         className="num"
         style={{
-          padding: "6px 8px",
-          textAlign: "right",
           fontWeight: 700,
           color:
             row.correlation_coefficient == null
@@ -84,7 +82,7 @@ function SectorRow({ row }: { row: SectorSelectionRow }) {
           fmtNum(row.correlation_coefficient, 4)
         )}
       </td>
-      <td style={{ padding: "6px 8px", textAlign: "right" }}>
+      <td className="num">
         {row.rank == null ? <span className="muted">—</span> : `#${row.rank}`}
       </td>
     </tr>
@@ -204,15 +202,15 @@ export function SectorSelection() {
           )}
 
           <section className="card card-pad" style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <Table>
               <thead>
-                <tr style={{ borderBottom: `1px solid ${theme.borderStrong}` }}>
-                  <th style={{ padding: "6px 8px", textAlign: "left" }}>Sector</th>
-                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Cosine sim.</th>
-                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Ingestion vol.</th>
-                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Heat (SHF)</th>
-                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Coefficient</th>
-                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Rank</th>
+                <tr>
+                  <th>Sector</th>
+                  <th className="num">Cosine sim.</th>
+                  <th className="num">Ingestion vol.</th>
+                  <th className="num">Heat (SHF)</th>
+                  <th className="num">Coefficient</th>
+                  <th className="num">Rank</th>
                 </tr>
               </thead>
               <tbody>
@@ -220,7 +218,7 @@ export function SectorSelection() {
                   <SectorRow key={row.sector} row={row} />
                 ))}
               </tbody>
-            </table>
+            </Table>
           </section>
 
           <p style={{ fontSize: 11.5, color: theme.textMuted, marginTop: 10, lineHeight: 1.5 }}>
