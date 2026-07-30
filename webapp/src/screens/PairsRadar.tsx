@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import {
   CartesianGrid,
   Line,
@@ -174,8 +174,8 @@ function PairAnalyzeSection() {
                   <XAxis dataKey="date" hide />
                   <YAxis tick={chartAxisTick} {...chartAxisLine} />
                   <ChartTooltip
-                    formatter={(value: number) => [fmtNum(value, 2), "z-score"]}
-                    labelFormatter={(label: string) => label}
+                    formatter={(value) => [fmtNum(Number(value), 2), "z-score"]}
+                    labelFormatter={(label) => label}
                   />
                   <ReferenceLine y={2} stroke={theme.caution} strokeDasharray="3 3" />
                   <ReferenceLine y={-2} stroke={theme.caution} strokeDasharray="3 3" />

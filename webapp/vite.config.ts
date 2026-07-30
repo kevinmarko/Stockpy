@@ -79,7 +79,7 @@ export default defineConfig({
               return "vendor-charts";
             }
             if (
-              id.includes("react-router-dom") ||
+              id.includes("react-router") ||
               id.includes("/react-dom/") ||
               id.includes("/react/")
             ) {

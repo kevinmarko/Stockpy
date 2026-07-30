@@ -14,6 +14,26 @@ version bump was ruled out, since that reasoning remains correct even
 though the ultimate fix went a different route (a major-version migration,
 not a 6.x patch).
 
+**Follow-up (same review, later same day):** PR #475 explicitly left one
+more advisory unfixed and documented why — GHSA-qwww-vcr4-c8h2 ("React
+Router: RSC Mode CSRF Bypass Allows Action Execution Before 400 Response"),
+affecting `react-router@7.18.2` (range `>=7.12.0 <8.3.0`), fixable only at
+`8.3.0+`, which requires React `>=19.2.7`. Since this app doesn't use RSC
+mode, PR #475 correctly treated it as accepted risk rather than force a
+React major-version bump for an inapplicable advisory. This was
+subsequently completed anyway (React 18→19 + `react-router-dom`→`react-router@8.3.0`,
+plus the `recharts` 2→3 and `@testing-library/react` 14→16 bumps React 19
+required as peers) once the operator asked to close out the remaining
+alerts. Verified: `npm audit` now reports 0 findings for the entire
+react-router dependency chain (only the unrelated `vite-plugin-pwa`
+dev-tooling chain remains — see
+[`vite_plugin_pwa_workbox_dev_chain_unfixable.md`](vite_plugin_pwa_workbox_dev_chain_unfixable.md)),
+`tsc --noEmit`/`npm run build`/`vitest run` (66 files / 753 tests) all pass.
+v8's `react-router-dom` package is retired — all imports moved to
+`"react-router"` (the unified package re-exports `BrowserRouter` from its
+core entry point for a plain Declarative Mode SPA like this one; `"react-router/dom"`
+is only needed for RSC/streaming-SSR hydration, which this app doesn't use).
+
 ## The alert
 
 Dependabot flagged `react-router-dom@6.30.4` (resolved in

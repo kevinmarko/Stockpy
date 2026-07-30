@@ -5,7 +5,7 @@
  * a fabricated $0 portfolio.
  */
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Portfolio } from "./Portfolio";
 import { api } from "../api/client";

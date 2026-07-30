@@ -134,8 +134,8 @@ export function PerfLine({
           <Tooltip
             contentStyle={chartTooltipStyle}
             labelFormatter={(l) => fmtDate(String(l))}
-            formatter={(val: number, name: string) => [
-              val.toFixed(2),
+            formatter={(val, name) => [
+              Number(val).toFixed(2),
               name === "value"
                 ? valueLabel
                 : name === "macro"
@@ -213,8 +213,8 @@ export function SectorDonut({ slices }: { slices: SectorSlice[] }) {
             </Pie>
             <Tooltip
               contentStyle={chartTooltipStyle}
-              formatter={(val: number, name: string) => [
-                fmtPct(val, 1, { fromFraction: true }),
+              formatter={(val, name) => [
+                fmtPct(Number(val), 1, { fromFraction: true }),
                 name,
               ]}
             />
@@ -315,7 +315,7 @@ export function DrawdownArea({ data }: { data: EquityDrawdownPoint[] }) {
           <Tooltip
             contentStyle={chartTooltipStyle}
             labelFormatter={(l) => fmtDate(String(l))}
-            formatter={(val: number) => [fmtPct(val, 1, { fromFraction: true }), "Drawdown"]}
+            formatter={(val) => [fmtPct(Number(val), 1, { fromFraction: true }), "Drawdown"]}
           />
           <Area
             type="monotone"
@@ -530,7 +530,7 @@ export function ForecastCandleChart({
           <Tooltip
             contentStyle={chartTooltipStyle}
             labelFormatter={(l) => fmtDate(String(l))}
-            formatter={(val: number, name: string, entry: { payload?: Row }) => {
+            formatter={(val, name, entry: { payload?: Row }) => {
               const p: Row = entry?.payload ?? { date: "" };
               if (name === "range")
                 return [typeof p.c === "number" ? p.c.toFixed(2) : "—", "Close"];

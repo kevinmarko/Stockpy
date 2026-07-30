@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import type {
   OptionsDirective,
@@ -278,7 +278,6 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
                     x1={spotPrice - expectedMove}
                     x2={spotPrice + expectedMove}
                     fill="rgba(56, 189, 248, 0.04)"
-                    isFront={false}
                   />
                 )}
                 <ReferenceLine y={0} stroke="rgba(255, 255, 255, 0.2)" strokeWidth={1} />

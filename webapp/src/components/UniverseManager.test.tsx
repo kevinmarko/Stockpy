@@ -4,7 +4,7 @@
  * the default navigate-to-symbol-detail behavior when no onSelect is passed.
  */
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UniverseManager } from "./UniverseManager";
 import { __resetMockDataUniverse } from "../api/mock";

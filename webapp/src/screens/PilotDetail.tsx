@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router";
 import { api } from "../api/client";
 import type { PerfRange, PilotDetail as PilotDetailT, PerformanceResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";

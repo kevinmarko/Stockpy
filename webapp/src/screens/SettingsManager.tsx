@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { TunableField, TunablesResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";

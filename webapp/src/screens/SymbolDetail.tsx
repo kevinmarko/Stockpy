@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router";
 import {
   ResponsiveContainer,
   BarChart,
@@ -158,7 +158,7 @@ function RegimeSizingCard({
               contentStyle={chartTooltipStyle}
               labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
               itemStyle={{ fontSize: 11 }}
-              formatter={(v: number) => `${v.toFixed(2)}%`}
+              formatter={(v) => `${Number(v).toFixed(2)}%`}
             />
             <Bar dataKey="value" fill={theme.accent} />
           </BarChart>
@@ -214,7 +214,7 @@ function ForecastErrorChart({ rows }: { rows: ForecastModelError[] }) {
               contentStyle={chartTooltipStyle}
               labelStyle={{ color: theme.textSecondary, fontSize: 11 }}
               itemStyle={{ fontSize: 11 }}
-              formatter={(value: any, name: string, entry: { payload?: { n: number } }) => {
+              formatter={(value, name, entry: { payload?: { n: number } }) => {
                 const label = name === "rmse" ? "RMSE" : "Mean absolute error";
                 if (typeof value !== "number") return ["—", label];
                 const n = entry?.payload?.n;

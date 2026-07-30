@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { api, apiMeta } from "../api/client";
 import type { PilotSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";

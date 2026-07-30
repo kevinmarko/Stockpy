@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { PilotSummary } from "../api/types";
 import { CategoryChip, DeployableBadge } from "./ui";
 import { fmtNum, fmtPct } from "../format";

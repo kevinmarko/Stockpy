@@ -11,7 +11,7 @@
  * is actually in flight (battery), mirroring the Settings screen.
  */
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { api, ApiError } from "../api/client";
 import type { ControlStatus, RunRecord } from "../api/types";
 import { useApi } from "../hooks/useApi";
