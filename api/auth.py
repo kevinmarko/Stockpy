@@ -20,7 +20,7 @@ import hmac
 import logging
 from typing import Optional
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from settings import settings
@@ -34,16 +34,43 @@ logger = logging.getLogger(__name__)
 # Authorization header it actually carried.
 bearer_scheme = HTTPBearer(auto_error=False)
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _is_loopback(request: Request) -> bool:
+    """True if the request's client host is loopback. ``request.client`` can
+    be ``None`` under some ASGI transports — treated as loopback so today's
+    zero-config local behavior is unaffected; the fail-closed branch below
+    only ever tightens things for a REAL non-loopback bind."""
+    if request.client is None:
+        return True
+    return request.client.host in _LOOPBACK_HOSTS
+
 
 def require_read_token(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> None:
-    """Read-endpoint guard shared by every api/*.py service. FAIL-OPEN when
-    STATE_API_TOKEN is unset (zero-config local use); requires a matching
-    bearer token when one is configured. Constant-time compare (never ==) so
-    no timing leak; the token is never logged (CONSTRAINT #3)."""
+    """Read-endpoint guard shared by every api/*.py service.
+
+    FAIL-OPEN when STATE_API_TOKEN is unset AND the request is loopback
+    (zero-config local use — today's exact behavior). FAIL-CLOSED (503) when
+    STATE_API_TOKEN is unset and the request arrives on a non-loopback
+    interface (LAN/Tailscale) — an unset token must never mean "open" once
+    the API is reachable from outside this machine. When a token IS
+    configured, every request (loopback or not) must present a matching
+    bearer token. Constant-time compare (never ==); token never logged
+    (CONSTRAINT #3)."""
     token = settings.STATE_API_TOKEN
-    if not token:  # unset/empty -> auth disabled (open)
+    if not token:
+        if not _is_loopback(request):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "STATE_API_TOKEN is unset — refusing a non-loopback request. "
+                    "Set STATE_API_TOKEN before exposing this API beyond localhost."
+                ),
+            )
         return
     presented = credentials.credentials if credentials else ""
     if not hmac.compare_digest(presented, token):
@@ -51,6 +78,7 @@ def require_read_token(
 
 
 def require_stream_token(
+    request: Request,
     token: Optional[str] = None,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> None:
@@ -59,9 +87,18 @@ def require_stream_token(
     log streaming) cannot set an ``Authorization`` header at all — there is
     no headers option in that API — so an SSE endpoint that only checked the
     header would be unreachable from a real browser the moment a token is
-    configured."""
+    configured. Same fail-open-on-loopback / fail-closed-otherwise posture as
+    require_read_token when unset."""
     st_token = settings.STATE_API_TOKEN
     if not st_token:
+        if not _is_loopback(request):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "STATE_API_TOKEN is unset — refusing a non-loopback request. "
+                    "Set STATE_API_TOKEN before exposing this API beyond localhost."
+                ),
+            )
         return
     presented = (credentials.credentials if credentials else "") or (token or "")
     if not hmac.compare_digest(presented, st_token):

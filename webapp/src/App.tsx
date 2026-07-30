@@ -38,6 +38,8 @@ import { TradingHub } from "./screens/TradingHub";
 import { OperationsHub } from "./screens/OperationsHub";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
+import { TokenGate } from "./components/TokenGate";
+import { needsTokenEntry } from "./auth/apiToken";
 import { usePwaStatus } from "./hooks/usePwaStatus";
 import { useApi } from "./hooks/useApi";
 import { api } from "./api/client";
@@ -433,6 +435,13 @@ function Sidebar() {
 
 export default function App() {
   const [done, setDone] = useState(() => readOnboarding().completed);
+  // TokenGate reloads the page after storing a token (see its own comment),
+  // so this only ever needs to be read once per mount -- no setter to wire.
+  const [tokenGated] = useState(() => needsTokenEntry());
+
+  if (tokenGated) {
+    return <TokenGate />;
+  }
 
   if (!done) {
     return (

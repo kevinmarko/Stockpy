@@ -26,7 +26,12 @@ from settings import settings
 import api.state_api as state_api
 from transactions_store import TransactionsStore
 
-client = TestClient(state_api.app)
+# Starlette's TestClient defaults request.client.host to the literal
+# string "testclient" -- NOT loopback -- which would trip
+# api.auth.require_read_token's new fail-closed-when-non-loopback branch
+# on every one of this file's existing zero-config-behavior assertions.
+# An explicit loopback host here is what these tests have always meant.
+client = TestClient(state_api.app, client=("127.0.0.1", 54123))
 
 
 # ---------------------------------------------------------------------------

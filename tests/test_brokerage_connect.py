@@ -266,6 +266,10 @@ class TestVerifyCredentials:
 
 
 class TestBrokerageStatus:
+    """GET /brokerage/status is a normal read endpoint (require_read_token,
+    not require_loopback) -- uses loopback_client like every other read test
+    in this file, not the plain non-loopback `client` reserved for
+    TestBrokerageConnect/TestBrokerageDisconnect's require_loopback checks."""
     def test_status_not_connected_no_snapshot(self, monkeypatch):
         monkeypatch.setattr(
             pilots_api.brokerage_credentials, "rh_credentials_present", lambda: False
@@ -276,7 +280,7 @@ class TestBrokerageStatus:
                 return None
 
         with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
-            resp = client.get("/brokerage/status")
+            resp = loopback_client.get("/brokerage/status")
         assert resp.status_code == 200
         assert resp.json() == {"connected": False, "has_account_snapshot": False}
 
@@ -290,7 +294,7 @@ class TestBrokerageStatus:
                 return object()
 
         with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
-            resp = client.get("/brokerage/status")
+            resp = loopback_client.get("/brokerage/status")
         assert resp.status_code == 200
         assert resp.json() == {"connected": True, "has_account_snapshot": True}
 
@@ -307,7 +311,7 @@ class TestBrokerageStatus:
 
         with mock.patch.object(settings, "BROKERAGE_CONNECT_ENABLED", False):
             with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
-                resp = client.get("/brokerage/status")
+                resp = loopback_client.get("/brokerage/status")
         assert resp.status_code == 200
 
     def test_status_db_error_degrades_to_false(self, monkeypatch):
@@ -320,7 +324,7 @@ class TestBrokerageStatus:
                 raise RuntimeError("cold db")
 
         with mock.patch.object(pilots_api, "HistoricalStore", return_value=_BoomStore()):
-            resp = client.get("/brokerage/status")
+            resp = loopback_client.get("/brokerage/status")
         assert resp.status_code == 200
         assert resp.json()["has_account_snapshot"] is False
 

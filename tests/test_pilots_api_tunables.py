@@ -35,7 +35,12 @@ from fastapi.testclient import TestClient
 from settings import settings
 import api.pilots_api as pilots_api
 
-client = TestClient(pilots_api.app)
+# Starlette's TestClient defaults request.client.host to the literal
+# string "testclient" -- NOT loopback -- which would trip
+# api.auth.require_read_token's new fail-closed-when-non-loopback branch
+# on every one of this file's existing zero-config-behavior assertions.
+# An explicit loopback host here is what these tests have always meant.
+client = TestClient(pilots_api.app, client=("127.0.0.1", 54123))
 
 _CMD_TOKEN = "cmd-tok"
 _READ_TOKEN = "read-tok"
