@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import type { DecisionCreateRequest } from "../api/types";
 import { useMutation } from "../hooks/useMutation";
-import { Button } from "./ui";
+import { Button, Notice } from "./ui";
 import { Modal } from "./Modal";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
@@ -98,10 +98,10 @@ export function DecisionModal({
             style={{ width: "100%", resize: "vertical", minHeight: 68 }}
           />
           {error && (
-            <div className="notice notice-warn" style={{ marginTop: 10 }}>
+            <Notice variant="warn" style={{ marginTop: 10 }}>
               <span>⚠️</span>
               <span>{error}</span>
-            </div>
+            </Notice>
           )}
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <Button variant="primary" onClick={() => submit("acted")} pending={pending} style={{ flex: 1 }}>

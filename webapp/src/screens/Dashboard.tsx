@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { Portfolio, PilotSummary, PerfRange, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Tile } from "../components/ui";
+import { ErrorState, Loading, Notice, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { NotebookMLExport } from "../components/NotebookMLExport";
@@ -320,13 +320,13 @@ export function Dashboard() {
                   ) : (
                     <div>
                       {portfolioIsOffline && (
-                        <div
-                          className="notice notice-warn"
+                        <Notice
+                          variant="warn"
                           style={{ marginBottom: 12, fontSize: 12 }}
                           data-testid="portfolio-offline-warning"
                         >
                           Offline: using cached data. <button onClick={port.reload} style={{ background: "none", border: "none", color: theme.accent, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Retry</button>
-                        </div>
+                        </Notice>
                       )}
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div className="num" style={{ fontSize: 24, fontWeight: 800 }}>

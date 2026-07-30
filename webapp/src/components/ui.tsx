@@ -2,6 +2,7 @@ import {
   useId,
   type ButtonHTMLAttributes,
   type ChangeEvent,
+  type CSSProperties,
   type ReactNode,
   type TableHTMLAttributes,
 } from "react";
@@ -149,6 +150,43 @@ export function EmptyState({
 }
 
 /**
+ * Shared notice banner — routes through the `.notice`/`.notice-{variant}`
+ * classes already declared in index.css, with WAI-ARIA live-region semantics
+ * wired in centrally so no call site has to remember to add them itself.
+ * `success`/`info` are non-interrupting confirmations
+ * (`role="status"` + `aria-live="polite"`); `warn` represents something
+ * needing attention — macro-regime-gate-off banners, stale-data notices,
+ * mutation failures — and interrupts (`role="alert"` + `aria-live="assertive"`),
+ * per WAI-ARIA authoring practices. `children` is rendered as-is (icon span +
+ * text span, lists, inline retry buttons, etc.) so this stays a thin
+ * accessibility/consistency wrapper, not a new layout contract.
+ */
+export function Notice({
+  variant,
+  children,
+  style,
+  "data-testid": dataTestId,
+}: {
+  variant: "success" | "warn" | "info";
+  children: ReactNode;
+  style?: CSSProperties;
+  "data-testid"?: string;
+}) {
+  const isWarn = variant === "warn";
+  return (
+    <div
+      className={`notice notice-${variant}`}
+      style={style}
+      role={isWarn ? "alert" : "status"}
+      aria-live={isWarn ? "assertive" : "polite"}
+      data-testid={dataTestId}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
  * Shown when `useApi` served a GET from the localStorage offline-cache
  * fallback (client.ts) instead of a live response — generalizes Dashboard's
  * ad hoc "Offline: using cached data" notice to any screen.
@@ -161,8 +199,8 @@ export function StaleDataNotice({
   onRetry?: () => void;
 }) {
   return (
-    <div
-      className="notice notice-warn"
+    <Notice
+      variant="warn"
       style={{ marginBottom: 12, alignItems: "center" }}
       data-testid="stale-data-notice"
     >
@@ -178,7 +216,7 @@ export function StaleDataNotice({
           Retry
         </button>
       )}
-    </div>
+    </Notice>
   );
 }
 

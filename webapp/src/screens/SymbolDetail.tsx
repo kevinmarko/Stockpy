@@ -24,7 +24,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Loading, MetricBadge } from "../components/ui";
+import { Button, ErrorState, Loading, MetricBadge, Notice } from "../components/ui";
 import { PerfLine, chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { DecisionModal } from "../components/DecisionModal";
 import { TabGuide } from "../components/TabGuide";
@@ -748,9 +748,9 @@ function CommentaryCard({ symbol }: { symbol: string }) {
         onGenerate={() => mutation.run()}
       />
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: 12 }}>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
       {data && !data.available && (
         <ReasonNotice
@@ -794,9 +794,9 @@ function ChartReadCard({ symbol }: { symbol: string }) {
         onGenerate={() => mutation.run()}
       />
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: 12 }}>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
       {data?.chart_png_base64 && (
         <img
@@ -847,9 +847,9 @@ function ResearchBriefCard({ symbol }: { symbol: string }) {
         onGenerate={() => mutation.run()}
       />
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: 12 }}>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
       {data && !data.available && (
         <ReasonNotice

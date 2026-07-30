@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { TunableField, TunablesResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Input, Loading } from "../components/ui";
+import { Button, EmptyState, ErrorState, Input, Loading, Notice } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { theme } from "../theme";
 
@@ -72,10 +72,10 @@ export function SettingsManager() {
         an order.
       </p>
 
-      <div className="notice notice-info" style={{ marginBottom: 12 }} data-testid="applies-notice">
+      <Notice variant="info" style={{ marginBottom: 12 }} data-testid="applies-notice">
         <span>ℹ️</span>
         <span>Changes apply on the next pipeline / daemon restart (no hot-reload).</span>
-      </div>
+      </Notice>
 
       {loading && <Loading lines={4} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
@@ -176,42 +176,42 @@ function TunablesEditor({
   return (
     <>
       {data.env_drift.detected && (
-        <div className="notice notice-info" style={{ marginBottom: 12 }} data-testid="env-drift-notice">
+        <Notice variant="info" style={{ marginBottom: 12 }} data-testid="env-drift-notice">
           <span>ℹ️</span>
           <span>
             {data.env_drift.keys.length} setting{data.env_drift.keys.length === 1 ? "" : "s"}{" "}
             differ{data.env_drift.keys.length === 1 ? "s" : ""} from the running process
             ({data.env_drift.keys.join(", ")}). {data.env_drift.note}
           </span>
-        </div>
+        </Notice>
       )}
 
       {writtenKeys.length > 0 && (
-        <div className="notice notice-info" style={{ marginBottom: 12 }} data-testid="written-notice">
+        <Notice variant="success" style={{ marginBottom: 12 }} data-testid="written-notice">
           <span>✅</span>
           <span>
             Saved to .env: {writtenKeys.join(", ")}. The running engine keeps the
             previous values until its next restart.
           </span>
-        </div>
+        </Notice>
       )}
 
       {Object.keys(rejected).length > 0 && (
-        <div className="notice notice-warn" style={{ marginBottom: 12 }} data-testid="rejected-notice">
+        <Notice variant="warn" style={{ marginBottom: 12 }} data-testid="rejected-notice">
           <span>⚠️</span>
           <span>
             {Object.keys(rejected).length} change
             {Object.keys(rejected).length === 1 ? "" : "s"} rejected — see the
             highlighted fields below.
           </span>
-        </div>
+        </Notice>
       )}
 
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginBottom: 12 }}>
+        <Notice variant="warn" style={{ marginBottom: 12 }}>
           <span>⚠️</span>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
 
       {data.groups.map((group) =>
@@ -384,10 +384,10 @@ function FieldRow({
       </p>
 
       {rejectedReason && (
-        <div className="notice notice-warn" style={{ marginTop: 8 }} data-testid={`rejected-${f.key}`}>
+        <Notice variant="warn" style={{ marginTop: 8 }} data-testid={`rejected-${f.key}`}>
           <span>⚠️</span>
           <span>{rejectedReason}</span>
-        </div>
+        </Notice>
       )}
     </div>
   );

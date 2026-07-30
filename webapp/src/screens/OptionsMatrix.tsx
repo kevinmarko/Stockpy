@@ -9,7 +9,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading, StaleDataNotice } from "../components/ui";
+import { Button, ErrorState, Input, Loading, Notice, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
@@ -672,9 +672,9 @@ function OptionsRecomputeSection() {
       </div>
 
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: 12 }}>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
 
       {result && (
@@ -695,13 +695,13 @@ function OptionsRecomputeSection() {
           </div>
 
           {result.errors.length > 0 && (
-            <div className="notice notice-warn" style={{ marginBottom: 12 }}>
+            <Notice variant="warn" style={{ marginBottom: 12 }}>
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {result.errors.map((e) => (
                   <li key={e}>{e}</li>
                 ))}
               </ul>
-            </div>
+            </Notice>
           )}
 
           {directives.length === 0 ? (
@@ -817,13 +817,13 @@ export function OptionsMatrix() {
           </div>
 
           {/* Persistent honesty banner */}
-          <div className="notice notice-warn" style={{ marginBottom: 12 }}>
+          <Notice variant="warn" style={{ marginBottom: 12 }}>
             <span>
               <strong>IVR here is a realized-volatility rank</strong> (IVR_Proxy) — no options
               chain is fetched, so this is <em>not</em> true implied-vol rank. Advisory only; no
               orders are placed.
             </span>
-          </div>
+          </Notice>
 
           {/* Integrity strip */}
           <div style={{ fontSize: 13, marginBottom: 12 }}>

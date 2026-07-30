@@ -16,6 +16,7 @@ import {
   ErrorState,
   Input,
   Loading,
+  Notice,
   StaleDataNotice,
 } from "../components/ui";
 import { Chip, ExecutionQueueSection, ModeBadge } from "../components/ExecutionQueueSection";
@@ -463,10 +464,10 @@ function ScanConfigModal({
         onChange={(e) => setMinVolume(e.target.value)}
       />
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: 10 }}>
           <span>⚠️</span>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
       <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
         <Button variant="neutral" onClick={onClose} style={{ flex: 1 }}>

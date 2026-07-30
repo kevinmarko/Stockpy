@@ -22,6 +22,7 @@ import {
   EmptyState,
   ErrorState,
   Loading,
+  Notice,
   StaleDataNotice,
   Table,
 } from "../components/ui";
@@ -104,14 +105,14 @@ function StatusBanner({ status }: { status: ControlStatus }) {
       </div>
 
       {status.kill_switch_active && (
-        <div className="notice notice-warn" style={{ marginTop: 12 }}>
+        <Notice variant="warn" style={{ marginTop: 12 }}>
           <span aria-hidden>⚠️</span>
           <span>
             Kill switch active
             {status.kill_switch_reason ? `: ${status.kill_switch_reason}` : ""}. New
             runs are paused.
           </span>
-        </div>
+        </Notice>
       )}
     </section>
   );
@@ -185,13 +186,13 @@ function Controls({
       </div>
 
       {trigger.error && (
-        <div className="notice notice-warn" style={{ marginTop: 10 }}>
+        <Notice variant="warn" style={{ marginTop: 10 }}>
           <span aria-hidden>⚠️</span>
           <span>{trigger.error}</span>
-        </div>
+        </Notice>
       )}
       {trigger.result && (
-        <div className="notice notice-info" style={{ marginTop: 10 }}>
+        <Notice variant="success" style={{ marginTop: 10 }}>
           <span aria-hidden>✅</span>
           <span>
             {trigger.result.state ?? "queued"}
@@ -201,7 +202,7 @@ function Controls({
               : ""}
             .
           </span>
-        </div>
+        </Notice>
       )}
     </section>
   );

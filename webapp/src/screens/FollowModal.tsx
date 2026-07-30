@@ -4,6 +4,7 @@ import type { FollowResult, PilotSummary, Thresholds } from "../api/types";
 import { fmtPct, fmtUsd } from "../format";
 import { loadThresholds } from "../help/thresholds";
 import { theme } from "../theme";
+import { Notice } from "../components/ui";
 
 const MODE_LABEL: Record<string, { label: string; cls: string }> = {
   off: { label: "OFF — nothing is written", cls: "badge-neutral" },
@@ -149,19 +150,19 @@ export function FollowModal({
                 : `Minimum allocation: ${fmtUsd(minAmount)}`}
             </p>
 
-            <div className="notice notice-warn" style={{ marginTop: 16 }}>
+            <Notice variant="warn" style={{ marginTop: 16 }}>
               <span>⚠️</span>
               <span>
                 This creates a <strong>gated, paper-first order queue you must
                 confirm</strong>. No order is placed automatically — the broker path
                 stays quarantined until you approve each trade.
               </span>
-            </div>
+            </Notice>
 
             {error && (
-              <p style={{ color: theme.decline, fontSize: 13, marginTop: 12 }}>
+              <Notice variant="warn" style={{ marginTop: 12 }}>
                 {error}
-              </p>
+              </Notice>
             )}
 
             <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
@@ -235,10 +236,10 @@ export function FollowModal({
               </div>
             </div>
 
-            <div className="notice notice-info" style={{ marginTop: 14 }}>
+            <Notice variant="info" style={{ marginTop: 14 }}>
               <span>ℹ️</span>
               <span>{result.notice}</span>
-            </div>
+            </Notice>
 
             <p style={{ color: theme.textMuted, fontSize: 12, marginTop: 10 }}>
               Per-order notional cap{" "}

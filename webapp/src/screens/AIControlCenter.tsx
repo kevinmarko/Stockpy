@@ -3,7 +3,7 @@ import { api } from "../api/client";
 import type { LlmCapabilityRow, LlmStatus } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { ErrorState, Loading, MetricBadge, StaleDataNotice } from "../components/ui";
+import { ErrorState, Loading, MetricBadge, Notice, StaleDataNotice } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
@@ -120,10 +120,10 @@ function CapabilityToggles({ data, onSaved }: { data: LlmStatus; onSaved: () => 
   return (
     <section className="card card-pad" style={{ marginTop: 16 }}>
       {!data.writable && (
-        <div className="notice notice-warn" style={{ marginBottom: 12 }}>
+        <Notice variant="warn" style={{ marginBottom: 12 }}>
           <span aria-hidden>⚠️</span>
           <span>{data.writable_note}</span>
-        </div>
+        </Notice>
       )}
       <div>
         {groups.map((g) => (
@@ -178,10 +178,10 @@ function ToggleGroupRow({
         {rows.length > 1 ? " -- covers all capabilities listed above." : ""}
       </p>
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 8 }}>
+        <Notice variant="warn" style={{ marginTop: 8 }}>
           <span aria-hidden>⚠️</span>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
       {mutation.result && !mutation.error && (
         <p style={{ color: theme.textMuted, fontSize: 12, margin: "6px 0 0" }}>
@@ -252,10 +252,10 @@ function ProviderSelectRow({
         )}
       </label>
       {mutation.error && (
-        <div className="notice notice-warn" style={{ marginTop: 6 }}>
+        <Notice variant="warn" style={{ marginTop: 6 }}>
           <span aria-hidden>⚠️</span>
           <span>{mutation.error}</span>
-        </div>
+        </Notice>
       )}
     </div>
   );
@@ -307,7 +307,7 @@ function TelemetrySection({ data }: { data: LlmStatus }) {
                 />
               </div>
               {c.status === "invalid_key" && c.invalid_provider && (
-                <div className="notice notice-warn" style={{ marginTop: 8 }}>
+                <Notice variant="warn" style={{ marginTop: 8 }}>
                   <span aria-hidden>⚠️</span>
                   <span>
                     The last real {c.invalid_provider} call
@@ -316,16 +316,16 @@ function TelemetrySection({ data }: { data: LlmStatus }) {
                     <code>.env</code>. This clears automatically on the next successful call, or
                     as soon as the key is changed.
                   </span>
-                </div>
+                </Notice>
               )}
               {c.status === "missing_key" && (
-                <div className="notice notice-warn" style={{ marginTop: 8 }}>
+                <Notice variant="warn" style={{ marginTop: 8 }}>
                   <span aria-hidden>⚠️</span>
                   <span>
                     Enabled, but <code>{c.provider_keys.join(", ")}</code> is unset in{" "}
                     <code>.env</code>. Narratives fall back to the deterministic template.
                   </span>
-                </div>
+                </Notice>
               )}
               {tel?.source === "key_rotated" && (
                 <p style={{ color: theme.textMuted, fontSize: 12, margin: "4px 0 0" }}>

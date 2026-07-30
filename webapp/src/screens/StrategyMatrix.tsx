@@ -17,7 +17,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading } from "../components/ui";
+import { Button, ErrorState, Input, Loading, Notice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
@@ -164,7 +164,7 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
           </div>
 
           {dist.all_unity ? (
-            <div className="notice notice-info" style={{ marginTop: 10 }} data-testid="meta-label-all-unity-notice">
+            <Notice variant="info" style={{ marginTop: 10 }} data-testid="meta-label-all-unity-notice">
               <span>ℹ️</span>
               <span>
                 Every symbol shows exactly 1.0 — this is expected pre-Stage-4-deployment.
@@ -175,7 +175,7 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
                 variation; the distribution will spread once real MetaLabelers
                 are trained and registered.
               </span>
-            </div>
+            </Notice>
           ) : (
             <p style={{ margin: "10px 0 0", fontSize: 12.5, color: theme.textMuted }} data-testid="meta-label-gated-caption">
               {dist.count} symbols. {dist.n_gated} currently hard-gated to 0.0
@@ -270,24 +270,24 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
       </div>
 
       {!data.writable && (
-        <div className="notice notice-warn" style={{ marginBottom: 12 }}>
+        <Notice variant="warn" style={{ marginBottom: 12 }}>
           <span>{data.note}</span>
-        </div>
+        </Notice>
       )}
 
       {data.env_drift.detected && (
-        <div className="notice notice-info" style={{ marginBottom: 12 }} data-testid="env-drift-notice">
+        <Notice variant="info" style={{ marginBottom: 12 }} data-testid="env-drift-notice">
           <span>{data.env_drift.note}</span>
-        </div>
+        </Notice>
       )}
 
       {saved && (
-        <div className="notice notice-info" style={{ marginBottom: 12 }} data-testid="saved-notice">
+        <Notice variant="success" style={{ marginBottom: 12 }} data-testid="saved-notice">
           <span>
             Saved to .env. The running engine keeps the previous values until its
             next restart.
           </span>
-        </div>
+        </Notice>
       )}
 
       {/* Module rows */}
@@ -397,9 +397,9 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
             </div>
           )}
           {mutation.error && (
-            <div className="notice notice-warn" style={{ marginTop: 12 }}>
+            <Notice variant="warn" style={{ marginTop: 12 }}>
               <span>{mutation.error}</span>
-            </div>
+            </Notice>
           )}
           <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
             <Button variant="neutral" block onClick={() => setConfirming(false)}>
