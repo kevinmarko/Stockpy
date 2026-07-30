@@ -840,7 +840,33 @@ def _build_etf_transmission_cov_matrix(
                 "(see risk.etf_transmission.build_transmission_adjusted_cov); "
                 "falling back to the sum-of-|weight| gross cap this cycle."
             )
-        return cov_matrix
+            return None
+
+        # build_transmission_adjusted_cov operates on WHATEVER frequency it's
+        # handed (its own docstring: "daily simple-return DataFrame") and
+        # returns a covariance matrix on that same daily scale. But
+        # apply_portfolio_gross_cap's cov_matrix path compares
+        # sqrt(w' Sigma w) against `target_vol`, and every other caller of
+        # target_vol/VOL_TARGET in this codebase (e.g.
+        # sizing.vol_target.volatility_target_weight, whose own docstring
+        # says "Annualized ... volatility") treats it as an ANNUALIZED
+        # figure. A daily-scale covariance handed to an annualized target is
+        # a silent units mismatch: daily portfolio vol (typically well under
+        # 5%) will almost always sit far below a ~10% annualized target, so
+        # portfolio_vol_target's scalar saturates at its ceiling regardless
+        # of the ACTUAL covariance structure -- the whole point of this
+        # feature (a risk-aware cap) would silently never bind. Annualize
+        # here, matching processing_engine.py's own convention for
+        # Realized_Vol_60D (`daily_std * sqrt(252)`): variance/covariance
+        # scales with TIME (not sqrt(time)) under the i.i.d. return
+        # assumption, so the covariance matrix annualizes by *252, not
+        # *sqrt(252). Caught and fixed via
+        # tests/test_etf_transmission_sensitivity_sweep.py -- the sweep
+        # showed IDENTICAL final_gross across every ETF_TRANSMISSION_COV_
+        # INFLATION value before this fix, because the un-annualized
+        # covariance never came close to influencing the vol-target scalar.
+        TRADING_DAYS_PER_YEAR = 252
+        return cov_matrix * TRADING_DAYS_PER_YEAR
     except Exception as exc:
         logger.warning("ETF transmission portfolio covariance build failed (non-fatal): %s", exc)
         return None
