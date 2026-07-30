@@ -98,6 +98,7 @@ import type {
   ScanConfigResult,
   WatchResult,
 } from "./types";
+import { getEffectiveToken } from "../auth/apiToken";
 
 const BASE_URL = (
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8602"
@@ -122,7 +123,13 @@ const METRICS_BASE_URL = (
 const CONTROL_BASE_URL = (
   import.meta.env.VITE_CONTROL_API_BASE_URL ?? "http://localhost:8601"
 ).replace(/\/+$/, "");
-const TOKEN = import.meta.env.VITE_API_TOKEN ?? "";
+// Resolved once at module load. On a non-loopback origin with nothing in
+// sessionStorage yet, this is "" and every request goes out unauthenticated
+// -- by design: <TokenGate> (rendered before the rest of the app on a
+// non-loopback origin) stores a token then reloads the page, so this module
+// re-evaluates fresh with the real value rather than needing every call site
+// here to re-resolve the token on every request.
+const TOKEN = getEffectiveToken();
 
 /** Route a request path to its owning service's base URL by prefix. */
 function baseFor(path: string): string {
