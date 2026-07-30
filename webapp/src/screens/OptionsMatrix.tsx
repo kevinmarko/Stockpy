@@ -9,7 +9,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading, Notice, StaleDataNotice } from "../components/ui";
+import { Button, ErrorState, Input, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
@@ -57,6 +57,13 @@ const FILTERS: { key: Filter; label: string; test: (d: OptionsDirective) => bool
   { key: "credit", label: "Credit", test: isCredit },
   { key: "debit", label: "Debit", test: isDebit },
   { key: "flagged", label: "Flagged", test: isFlagged },
+];
+
+const SORT_OPTIONS: { value: Sort; label: string }[] = [
+  { value: "premium", label: "Net premium ↓" },
+  { value: "ivr", label: "IVR ↓" },
+  { value: "sigma", label: "σ ↓" },
+  { value: "symbol", label: "Symbol A–Z" },
 ];
 
 /** Nulls always sort last, regardless of direction. */
@@ -871,26 +878,14 @@ export function OptionsMatrix() {
           </div>
 
           {/* Sort */}
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-            <span style={{ fontSize: 12.5, color: theme.textMuted }}>Sort</span>
-            <select
+          <div style={{ marginBottom: 12 }}>
+            <Select
+              label="Sort"
               value={sort}
               onChange={(e) => setSort(e.target.value as Sort)}
-              style={{
-                fontSize: 16,
-                padding: "6px 10px",
-                borderRadius: "var(--r-md)",
-                background: "var(--surface-2)",
-                color: theme.textPrimary,
-                border: "1px solid var(--border)",
-              }}
-            >
-              <option value="premium">Net premium ↓</option>
-              <option value="ivr">IVR ↓</option>
-              <option value="sigma">σ ↓</option>
-              <option value="symbol">Symbol A–Z</option>
-            </select>
-          </label>
+              options={SORT_OPTIONS}
+            />
+          </div>
 
           {visible.length === 0 ? (
             <div className="empty" style={{ padding: 24 }}>

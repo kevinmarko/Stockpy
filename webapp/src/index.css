@@ -821,6 +821,88 @@ button:focus-visible {
   cursor: not-allowed;
 }
 
+/* ---- Select (sibling to .input) ----
+   Same box model as .input (width, min-height, background, border, radius,
+   500-weight text) so a dropdown reads as the same control family. Native
+   <select> arrows vary wildly across browsers, so the arrow is disabled
+   (appearance: none) and replaced with one consistent chevron drawn by
+   .select-wrap's ::after — a wrapper element because Chrome does not render
+   ::after on a replaced <select> element itself. Same --t-input 16px floor
+   as .input (see the token comment above .field) so a dropdown doesn't
+   trigger iOS Safari's auto-zoom-on-focus either. */
+.select-wrap {
+  position: relative;
+}
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: var(--s-3);
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
+}
+.select {
+  width: 100%;
+  min-height: var(--tap);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-primary);
+  font-size: var(--t-input);
+  font-weight: 500;
+  padding: var(--s-2) calc(var(--s-3) * 2 + 8px) var(--s-2) var(--s-3);
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.select[aria-invalid="true"] {
+  border-color: var(--decline);
+}
+.select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- Textarea (sibling to .input) ----
+   Same box model as .input, plus vertical-only resize (both real call sites
+   want the user able to grow the field, neither wants horizontal resize
+   breaking the layout) and an opt-in .textarea-mono variant for the one
+   call site editing raw JSON. */
+.textarea {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-primary);
+  font-size: var(--t-input);
+  font-weight: 500;
+  font-family: inherit;
+  padding: var(--s-2) var(--s-3);
+  resize: vertical;
+}
+.textarea-mono {
+  font-family: var(--font-mono, monospace);
+}
+.textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.textarea[aria-invalid="true"] {
+  border-color: var(--decline);
+}
+.textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ---- Toggle / switch ----
    A button, not a checkbox — see Toggle.tsx: it fires a mutation immediately
    (pause/resume, feature toggles), so it's an action control. role="switch"

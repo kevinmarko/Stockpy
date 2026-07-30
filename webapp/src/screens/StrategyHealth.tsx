@@ -10,7 +10,7 @@ import type {
   Thresholds,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { DeployableBadge, ErrorState, Loading, Table } from "../components/ui";
+import { DeployableBadge, ErrorState, Loading, Select, Table } from "../components/ui";
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
 import { ValidationTrend } from "../components/ValidationTrend";
@@ -99,6 +99,10 @@ const TREND_METRIC_DIRECTION: Record<TrendMetricKey, "above" | "below"> = {
   sharpe: "above",
   max_drawdown: "below",
 };
+
+const TREND_METRIC_OPTIONS: { value: TrendMetricKey; label: string }[] = (
+  Object.keys(GATE_SHORT_LABEL) as TrendMetricKey[]
+).map((key) => ({ value: key, label: GATE_SHORT_LABEL[key] }));
 
 /** Run-over-run values for the selected metric, as a tiny sparkline. */
 function trendToCurve(row: StrategyHealthRow, metric: TrendMetricKey): CurvePoint[] {
@@ -475,28 +479,15 @@ export function StrategyHealth() {
                 </div>
               )}
               {hasAnyTrend && (
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: theme.textMuted }}>
-                  Trend metric
-                  <select
+                <div style={{ minWidth: 120 }}>
+                  <Select
+                    label="Trend metric"
                     value={trendMetric}
                     onChange={(e) => setTrendMetric(e.target.value as TrendMetricKey)}
-                    data-testid="trend-metric-select"
-                    style={{
-                      background: theme.surface2,
-                      color: theme.textSecondary,
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: 6,
-                      padding: "4px 8px",
-                      fontSize: 12,
-                    }}
-                  >
-                    {(Object.keys(GATE_SHORT_LABEL) as TrendMetricKey[]).map((key) => (
-                      <option key={key} value={key}>
-                        {GATE_SHORT_LABEL[key]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    options={TREND_METRIC_OPTIONS}
+                    testId="trend-metric-select"
+                  />
+                </div>
               )}
             </div>
             {data.map((row) => (

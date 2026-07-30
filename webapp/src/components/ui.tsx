@@ -329,6 +329,168 @@ export function Input({
 }
 
 /**
+ * Labeled dropdown — matches `Input`'s contract (label, hint, invalid, id,
+ * aria-describedby) so the six ad hoc `<select>`s across the app (provider
+ * pickers, sort/filter/metric selectors) get one consistent treatment
+ * instead of each hand-rolling its own inline styles + label wiring.
+ *
+ * `options` is a plain `{ value, label }[]` — every real call site's option
+ * list is flat strings (no disabled options, no `<optgroup>`), so there's no
+ * need for a raw-children escape hatch.
+ *
+ * `hideLabel` is for the one real call site (ValidationTrend's inline metric
+ * selector) that has no visible caption at all today — rather than force a
+ * label into the UI or leave the control with no accessible name, the label
+ * text is still supplied but applied via `aria-label` instead of a rendered
+ * `<label>`.
+ */
+export function Select({
+  label,
+  hideLabel,
+  value,
+  onChange,
+  options,
+  invalid,
+  hint,
+  id,
+  disabled,
+  testId,
+}: {
+  label: string;
+  hideLabel?: boolean;
+  value: string;
+  onChange: (e: ChangeEvent<HTMLSelectElement>) => void;
+  options: { value: string; label: string }[];
+  invalid?: boolean;
+  hint?: string;
+  id?: string;
+  disabled?: boolean;
+  testId?: string;
+}) {
+  const autoId = useId();
+  const selectId = id ?? autoId;
+  const hintId = hint ? `${selectId}-hint` : undefined;
+
+  return (
+    <div>
+      {!hideLabel && (
+        <label
+          htmlFor={selectId}
+          className="tile-label"
+          style={{ display: "block", marginBottom: 6 }}
+        >
+          {label}
+        </label>
+      )}
+      <div className="select-wrap">
+        <select
+          id={selectId}
+          className="select"
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          aria-invalid={invalid ? "true" : undefined}
+          aria-describedby={hintId}
+          aria-label={hideLabel ? label : undefined}
+          data-testid={testId}
+        >
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      {hint && (
+        <div
+          id={hintId}
+          style={{
+            marginTop: 6,
+            fontSize: "var(--t-caption)",
+            color: invalid ? "var(--decline)" : "var(--text-muted)",
+          }}
+        >
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Labeled multi-line text field — same label/hint/invalid/id/aria-describedby
+ * contract as `Input`, for the two ad hoc `<textarea>`s in the app (a free-text
+ * decision note, a JSON-blob settings field). `monospace` + `spellCheck` are
+ * exposed because the two real call sites genuinely disagree on both (prose
+ * note vs. raw JSON) — not speculative knobs.
+ */
+export function Textarea({
+  label,
+  value,
+  onChange,
+  rows = 3,
+  placeholder,
+  invalid,
+  hint,
+  id,
+  disabled,
+  spellCheck,
+  monospace,
+}: {
+  label: string;
+  value: string;
+  onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void;
+  rows?: number;
+  placeholder?: string;
+  invalid?: boolean;
+  hint?: string;
+  id?: string;
+  disabled?: boolean;
+  spellCheck?: boolean;
+  monospace?: boolean;
+}) {
+  const autoId = useId();
+  const textareaId = id ?? autoId;
+  const hintId = hint ? `${textareaId}-hint` : undefined;
+
+  return (
+    <div>
+      <label
+        htmlFor={textareaId}
+        className="tile-label"
+        style={{ display: "block", marginBottom: 6 }}
+      >
+        {label}
+      </label>
+      <textarea
+        id={textareaId}
+        className={`textarea${monospace ? " textarea-mono" : ""}`}
+        value={value}
+        onChange={onChange}
+        rows={rows}
+        placeholder={placeholder}
+        disabled={disabled}
+        spellCheck={spellCheck}
+        aria-invalid={invalid ? "true" : undefined}
+        aria-describedby={hintId}
+      />
+      {hint && (
+        <div
+          id={hintId}
+          style={{
+            marginTop: 6,
+            fontSize: "var(--t-caption)",
+            color: invalid ? "var(--decline)" : "var(--text-muted)",
+          }}
+        >
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Thin wrapper over the `.btn` class — exists so a mutation's `submitting`
  * boolean doesn't get hand-wired at every call site the way FollowModal does
  * (`disabled={submitting}` + a manually-inlined `<span className="spinner"/>`

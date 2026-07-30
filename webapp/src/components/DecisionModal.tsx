@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import type { DecisionCreateRequest } from "../api/types";
 import { useMutation } from "../hooks/useMutation";
-import { Button, Notice } from "./ui";
+import { Button, Notice, Textarea } from "./ui";
 import { Modal } from "./Modal";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
@@ -85,18 +85,16 @@ export function DecisionModal({
         </div>
       ) : (
         <>
-          <label htmlFor="dj-notes" className="tile-label" style={{ display: "block", margin: "10px 0 6px" }}>
-            Notes {`(required when modifying)`}
-          </label>
-          <textarea
-            id="dj-notes"
-            className="input"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={3}
-            placeholder="e.g. 'Halved size — position already large', 'Used a limit, not market'"
-            style={{ width: "100%", resize: "vertical", minHeight: 68 }}
-          />
+          <div style={{ marginTop: 10 }}>
+            <Textarea
+              id="dj-notes"
+              label="Notes (required when modifying)"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              placeholder="e.g. 'Halved size — position already large', 'Used a limit, not market'"
+            />
+          </div>
           {error && (
             <Notice variant="warn" style={{ marginTop: 10 }}>
               <span>⚠️</span>

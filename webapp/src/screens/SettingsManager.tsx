@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { TunableField, TunablesResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Input, Loading, Notice } from "../components/ui";
+import { Button, EmptyState, ErrorState, Input, Loading, Notice, Select, Textarea } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { theme } from "../theme";
 
@@ -303,67 +303,24 @@ function FieldRow({
           </p>
         </>
       ) : f.type === "enum" ? (
-        <label style={{ display: "block" }}>
-          <span
-            className="tile-label"
-            style={{ display: "block", marginBottom: 6 }}
-          >
-            {f.key}
-          </span>
-          <select
-            value={String(value)}
-            aria-label={f.key}
-            onChange={(e) => onChange(e.target.value)}
-            style={{
-              fontSize: "var(--t-input)",
-              padding: "10px 12px",
-              width: "100%",
-              borderRadius: "var(--r-md)",
-              background: theme.surface2,
-              color: theme.textPrimary,
-              border: `1px solid ${theme.border}`,
-            }}
-          >
-            {(f.options ?? []).map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-            ))}
-          </select>
-          <p style={{ color: theme.textSecondary, fontSize: 12.5, margin: "6px 0 0" }}>
-            {f.description}
-          </p>
-        </label>
+        <Select
+          label={f.key}
+          value={String(value)}
+          onChange={(e) => onChange(e.target.value)}
+          options={(f.options ?? []).map((o) => ({ value: o, label: o }))}
+          hint={f.description ?? undefined}
+        />
       ) : isJsonBlob(f) ? (
-        <label style={{ display: "block" }}>
-          <span
-            className="tile-label"
-            style={{ display: "block", marginBottom: 6 }}
-          >
-            {f.key}
-          </span>
-          <textarea
-            aria-label={f.key}
-            value={value as string}
-            onChange={(e) => onChange(e.target.value)}
-            rows={4}
-            spellCheck={false}
-            style={{
-              fontSize: "var(--t-input)",
-              padding: "10px 12px",
-              width: "100%",
-              borderRadius: "var(--r-md)",
-              background: theme.surface2,
-              color: theme.textPrimary,
-              border: `1px solid ${invalid ? theme.decline : theme.border}`,
-              fontFamily: "var(--font-mono, monospace)",
-              resize: "vertical",
-            }}
-          />
-          <p style={{ color: theme.textSecondary, fontSize: 12.5, margin: "6px 0 0" }}>
-            {f.description}
-          </p>
-        </label>
+        <Textarea
+          label={f.key}
+          value={value as string}
+          onChange={(e) => onChange(e.target.value)}
+          rows={4}
+          spellCheck={false}
+          monospace
+          invalid={invalid}
+          hint={f.description ?? undefined}
+        />
       ) : (
         <Input
           label={f.key}
