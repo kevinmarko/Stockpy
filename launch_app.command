@@ -48,6 +48,48 @@ echo "  $SCRIPT_DIR"
 echo "══════════════════════════════════════════════════════════════"
 echo ""
 
+# ── Stop any previous instance launched from this folder ─────────────────────
+# Lets you just double-click this file again to "restart" — no need to find
+# and close the old window/Terminal first. Scoped to a PID file written by
+# THIS script (output/app_shell.pid, gitignored — see output/daemon.json for
+# the same pattern) so it never touches an app_shell.py instance running from
+# a different worktree/checkout on this machine.
+PID_FILE="$SCRIPT_DIR/output/app_shell.pid"
+if [ -f "$PID_FILE" ]; then
+    OLD_PID="$(cat "$PID_FILE" 2>/dev/null)"
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "  ↺  Stopping previous instance (pid $OLD_PID)…"
+        kill -TERM "$OLD_PID" 2>/dev/null
+        for _ in $(seq 1 20); do
+            kill -0 "$OLD_PID" 2>/dev/null || break
+            sleep 0.5
+        done
+        if kill -0 "$OLD_PID" 2>/dev/null; then
+            echo "      Still running after 10s — forcing it closed."
+            kill -KILL "$OLD_PID" 2>/dev/null
+        fi
+    fi
+    rm -f "$PID_FILE"
+fi
+
+# ── Sync to the latest merged code (best-effort; never blocks the launch) ────
+# Fast-forward only, exactly like the CLAUDE.md-documented post-merge sync —
+# if local edits conflict with the pull, this just skips and runs whatever
+# code is already here rather than touching your working tree.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
+    if [ -n "$UPSTREAM" ]; then
+        echo "  ↻  Syncing with $UPSTREAM…"
+        if git fetch --quiet 2>/dev/null && MERGE_OUT="$(git merge --ff-only "$UPSTREAM" 2>&1)"; then
+            echo "  ✓  Up to date @ $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD))"
+        else
+            echo "  ⚠  Could not fast-forward — running with the code already here."
+            echo "     (local edits or diverged history; run 'git status' here to see why)"
+        fi
+    fi
+fi
+echo ""
+
 # ── Guard 1: .venv must exist ─────────────────────────────────────────────────
 if [ ! -d ".venv" ]; then
     echo "  ERROR: Virtual environment (.venv) not found in:"
@@ -124,4 +166,11 @@ echo "     Close the window (or press Ctrl+C here) to stop."
 echo ""
 
 # ── Launch the unified desktop app ────────────────────────────────────────────
-python app_shell.py
+mkdir -p "$(dirname "$PID_FILE")"
+python app_shell.py &
+APP_PID=$!
+echo "$APP_PID" > "$PID_FILE"
+wait "$APP_PID"
+EXIT_CODE=$?
+rm -f "$PID_FILE"
+exit "$EXIT_CODE"
