@@ -832,7 +832,16 @@ def calculate_equity_curve_metrics(
 
         # ── Sharpe ratio ─────────────────────────────────────────────────
         returns = equity.pct_change().dropna()
-        if len(returns) < 2 or pd.isna(returns.std(ddof=1)) or returns.std(ddof=1) == 0:
+        # A degenerate (flat/no-signal) returns series is mathematically
+        # constant, but pandas' two-pass std() accumulates floating-point
+        # rounding noise over many rows, so it lands near (not bit-identical
+        # to) 0.0 rather than exactly 0.0. An exact `== 0` check misses that,
+        # and mean/std then explodes into an absurd, unbounded "Sharpe"
+        # instead of the honest NaN (CONSTRAINT #4). 1e-12 mirrors the
+        # degenerate-std threshold already used by risk/etf_transmission.py --
+        # far above float noise (~1e-16 to 1e-20) and far below any real
+        # strategy's daily-return std.
+        if len(returns) < 2 or pd.isna(returns.std(ddof=1)) or returns.std(ddof=1) < 1e-12:
             sharpe_ratio = float("nan")
         else:
             sharpe_ratio = float(
@@ -867,7 +876,10 @@ def calculate_equity_curve_metrics(
             cagr = float((end_val / start_val) ** (365.25 / days_elapsed) - 1.0)
 
         # ── Calmar ratio ─────────────────────────────────────────────────
-        if pd.isna(cagr) or max_drawdown == 0.0 or pd.isna(max_drawdown):
+        # Same degenerate-value guard as sharpe_ratio above -- a near-zero
+        # (but not exactly zero) max_drawdown would otherwise let
+        # cagr / abs(max_drawdown) explode into an absurd ratio.
+        if pd.isna(cagr) or abs(max_drawdown) < 1e-12 or pd.isna(max_drawdown):
             calmar_ratio = float("nan")
         else:
             calmar_ratio = float(cagr / abs(max_drawdown))
