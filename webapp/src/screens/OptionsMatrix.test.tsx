@@ -41,15 +41,78 @@ describe("OptionsMatrix screen (real mock API)", () => {
     expect(screen.getByText("XOM")).toBeInTheDocument();
   });
 
-  it("labels IVR as a realized-vol rank, never as implied vol", async () => {
+  it("labels IVR as a realized-vol rank, never as implied vol, when no True_IVR is present", async () => {
     renderScreen();
-    // Persistent banner states the honest caveat.
+    // Persistent banner states the honest caveat -- the fixture carries no
+    // True_IVR (OPTIONS_TRUE_IVR_ENABLED off / chain fetch unavailable), so
+    // this must be the ONLY banner shown, never the chain-derived one.
     expect(await screen.findByText(/realized-volatility rank/i)).toBeInTheDocument();
+    expect(screen.queryByText(/options-chain-derived/i)).not.toBeInTheDocument();
     // The per-directive IVR row is labeled "realized-vol rank", not "implied".
     await userEvent.click(await screen.findByText("AAPL"));
     const sheet = await screen.findByRole("dialog", { name: /AAPL options directive/ });
     expect(within(sheet).getByText(/IVR Proxy/i)).toBeInTheDocument();
     expect(within(sheet).queryByText(/implied volatility rank/i)).not.toBeInTheDocument();
+  });
+
+  it("prefers real chain-derived True_IVR when present, but keeps proxy rows honestly labeled", async () => {
+    vi.spyOn(api, "getOptions").mockResolvedValueOnce({
+      as_of: new Date().toISOString(),
+      target_dte: 30,
+      vix: 15.2,
+      market_regime: "RISK ON",
+      reason: null,
+      directives: [
+        {
+          Symbol: "AAPL",
+          Price: 214.9,
+          Strategy: "Put Credit Spread",
+          Action: "Sell to Open",
+          IVR_Proxy: 58.4,
+          True_IVR: 72.3, // real chain-derived value this cycle
+          Net_Premium: 1.24,
+          Integrity_OK: true,
+          Integrity_Issues: [],
+          Legs: [],
+        },
+        {
+          // No chain/history data this cycle -> must fall back to IVR_Proxy,
+          // and must NOT be relabeled as chain-derived just because AAPL was.
+          Symbol: "MSFT",
+          Price: 431.2,
+          Strategy: "Iron Condor",
+          Action: "Sell to Open",
+          IVR_Proxy: 51.7,
+          True_IVR: null,
+          Net_Premium: 2.06,
+          Integrity_OK: true,
+          Integrity_Issues: [],
+          Legs: [],
+        },
+      ],
+    } satisfies OptionsMatrixT);
+    renderScreen();
+
+    // Banner switches to the honest chain-derived-where-available message and
+    // reports the real count (1 of 2), rather than the blanket proxy-only claim.
+    expect(await screen.findByText(/options-chain-derived/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 of 2 symbols/)).toBeInTheDocument();
+    expect(screen.queryByText(/realized-volatility rank/i)).not.toBeInTheDocument();
+
+    // AAPL's card shows the True_IVR value (72) marked "chain".
+    const aaplCard = (await screen.findByText("AAPL")).closest('[role="button"]')!;
+    expect(within(aaplCard as HTMLElement).getByText("72")).toBeInTheDocument();
+    expect(within(aaplCard as HTMLElement).getByText("chain")).toBeInTheDocument();
+
+    // MSFT's card falls back to IVR_Proxy (52) marked "proxy", not "chain".
+    const msftCard = screen.getByText("MSFT").closest('[role="button"]')!;
+    expect(within(msftCard as HTMLElement).getByText("52")).toBeInTheDocument();
+    expect(within(msftCard as HTMLElement).getByText("proxy")).toBeInTheDocument();
+
+    // AAPL's detail sheet labels the metric "IVR (chain)", not "IVR Proxy".
+    await userEvent.click(screen.getByText("AAPL"));
+    const sheet = await screen.findByRole("dialog", { name: /AAPL options directive/ });
+    expect(within(sheet).getByText(/IVR \(chain\)/i)).toBeInTheDocument();
   });
 
   it("an empty matrix renders the honest reason, never a fabricated row", async () => {

@@ -30,7 +30,7 @@ import { DecisionModal } from "../components/DecisionModal";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { seriesColor, theme } from "../theme";
-import { realizableTheta } from "../optionsHonesty";
+import { realizableTheta, effectiveIvr } from "../optionsHonesty";
 import { useState } from "react";
 import type { DecisionEntry } from "../api/types";
 
@@ -622,6 +622,7 @@ export function SymbolDetail() {
 function OptionsDirectiveView({ d }: { d: OptionsDirective }) {
   const legOk = d.Integrity_OK === true;
   const theta = realizableTheta(d);
+  const ivr = effectiveIvr(d);
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-2)" }}>
@@ -647,7 +648,10 @@ function OptionsDirectiveView({ d }: { d: OptionsDirective }) {
           value={`${fmtUsd(d.Long_Strike ?? null)} / ${fmtNum(d.Long_Delta ?? null, 2)}`}
         />
         <StatRow label="GARCH σ" value={fmtNum(d.Sigma_GARCH ?? null, 3)} />
-        <StatRow label="IVR proxy" value={fmtNum(d.IVR_Proxy ?? null, 1)} />
+        <StatRow
+          label={ivr.isTrue ? "IVR (chain)" : "IVR (proxy)"}
+          value={fmtNum(ivr.value, 1)}
+        />
       </div>
     </>
   );

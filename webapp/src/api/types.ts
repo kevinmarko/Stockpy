@@ -948,6 +948,15 @@ export interface OptionsDirective {
   Trend_Bias?: string | null;
   Sigma_GARCH?: number | null;
   IVR_Proxy?: number | null;
+  /**
+   * Opt-in real, options-chain-derived 30-day ATM IV rank (settings.
+   * OPTIONS_TRUE_IVR_ENABLED — see technical_options_engine.build_premium_directive).
+   * `null`/absent whenever the flag is off, the chain fetch failed, or the
+   * iv_history table had no prior data for this symbol yet — in every such
+   * case the directive/screen must fall back to `IVR_Proxy` (see
+   * `optionsHonesty.effectiveIvr`), never silently claim a true IV rank.
+   */
+  True_IVR?: number | null;
   Aroon_Oscillator?: number | null;
   Coppock_Curve?: number | null;
   Net_Premium?: number | null;
