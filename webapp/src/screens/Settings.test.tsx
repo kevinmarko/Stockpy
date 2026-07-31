@@ -724,6 +724,85 @@ describe("Settings screen — Brokerage", () => {
     expect(await screen.findByLabelText(/robinhood email/i)).toBeInTheDocument();
   });
 
+  it("Disconnect clears a stale 'Force fresh login' success notice, not just the connect form", async () => {
+    // Regression: found by manually driving the app in mock mode -- a
+    // successful refresh's Notice survived a subsequent Disconnect and kept
+    // rendering ("Refreshed just now...") in the now-disconnected section,
+    // because `refresh`'s useMutation state was never reset on disconnect.
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBrokerageStatus")
+      // 1) initial mount, 2) doRefresh's own reload() (still connected --
+      // a successful refresh doesn't change credential presence), 3) the
+      // reload() after Disconnect actually clears them.
+      .mockResolvedValueOnce({ connected: true, has_account_snapshot: true })
+      .mockResolvedValueOnce({ connected: true, has_account_snapshot: true })
+      .mockResolvedValue({ connected: false, has_account_snapshot: false });
+    vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
+      total_equity: 48213.55,
+      buying_power: 6120.4,
+      total_unrealized_pl: 3182.19,
+      total_dividends: 412.66,
+      position_count: 6,
+      positions: [],
+      fetched_at: new Date().toISOString(),
+      source: "live",
+      is_stale: false,
+      age_hours: 0,
+    });
+    vi.spyOn(api, "disconnectBrokerage").mockResolvedValueOnce({ connected: false });
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
+    expect(await screen.findByText(/total equity/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Disconnect" }));
+    const dialog = await screen.findByRole("dialog", { name: "Disconnect brokerage" });
+    await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+
+    await screen.findByLabelText(/robinhood email/i); // back to the connect form
+    expect(screen.queryByText(/total equity/i)).not.toBeInTheDocument();
+  });
+
+  it("A successful typed-credential connect clears a stale '.env credentials' failure notice", async () => {
+    // Regression, symmetric to the Disconnect case above: an earlier failed
+    // .env-credentials attempt's error Notice survived a subsequent
+    // successful typed-form connect.
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBrokerageStatus")
+      // 1) initial mount, 2) doRefresh's own reload() after the failed
+      // .env-credentials attempt (still disconnected), 3) RobinhoodConnectForm's
+      // onConnected reload() after the typed-form connect actually succeeds.
+      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false })
+      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false })
+      .mockResolvedValue({ connected: true, has_account_snapshot: true });
+    vi.spyOn(api, "refreshBrokerage").mockRejectedValueOnce(
+      new Error("Could not refresh the Robinhood account snapshot.")
+    );
+    vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
+      connected: true,
+      verified: true,
+      has_account_snapshot: true,
+    });
+    renderSettings();
+
+    await user.click(
+      await screen.findByRole("button", { name: /connect using \.env credentials/i })
+    );
+    expect(
+      await screen.findByText("Could not refresh the Robinhood account snapshot.")
+    ).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/robinhood email/i), "user@example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "sUp3rS3cr3t!!");
+    await user.type(screen.getByLabelText(/authenticator app code/i), "123456");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await screen.findByRole("button", { name: "Disconnect" }); // now connected
+    expect(
+      screen.queryByText("Could not refresh the Robinhood account snapshot.")
+    ).not.toBeInTheDocument();
+  });
+
   it("a status-fetch failure shows an ErrorState, not a crash", async () => {
     vi.spyOn(api, "getBrokerageStatus").mockRejectedValueOnce(new Error("brokerage down"));
     renderSettings();
