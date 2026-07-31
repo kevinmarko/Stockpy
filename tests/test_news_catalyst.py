@@ -868,6 +868,13 @@ class TestNewsHistoryArchive:
         # returning None here keeps this test exercising the real lexicon
         # scoring path, matching its pre-batching intent.
         mock_store_instance.get_finbert_score.return_value = None
+        # No real credibility-aggregate rows for this cycle -- an
+        # unconfigured MagicMock here would otherwise be read by
+        # _build_archive_scores as truthy "real social data" (MagicMock's
+        # default __float__ makes math.isnan() on it False), contaminating
+        # the archived score with a Mock object instead of the pure
+        # Finnhub-headline value this test is about.
+        mock_store_instance.get_sentiment_aggregate_by_symbol.return_value = {}
         mock_store_cls = MagicMock(return_value=mock_store_instance)
 
         with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
@@ -883,14 +890,13 @@ class TestNewsHistoryArchive:
         # the write itself, not the raw constructor call count.
         mock_store_instance.save_news_sentiment.assert_called_once()
         call_args = mock_store_instance.save_news_sentiment.call_args
-        # Archives _news_archive_scores, NOT _news_scores (they're separate
-        # dicts — see TestArchiveVsLiveScoreHonesty for the case where they
-        # diverge). In THIS scenario every symbol scored real headlines, so
-        # the two dicts happen to hold equal content — that coincidence is
-        # exactly why this assertion alone can't tell the dicts apart; the
-        # explicit `is`/identity check below can.
+        # Archived score is _build_archive_scores()'s output, which with no
+        # social data reduces to exactly _news_archive_scores' values (see
+        # TestArchiveVsLiveScoreHonesty for the case where they diverge) --
+        # a NEW dict object, not the same one _news_scores holds either.
         assert call_args[0][0] == sig._news_archive_scores
         assert call_args[0][0] is not sig._news_scores
+        assert call_args[0][0] is not sig._news_archive_scores
 
     def test_archive_disabled_skips_write(self):
         """settings.NEWS_HISTORY_CAPTURE_ENABLED=False must skip the write entirely."""
@@ -1028,6 +1034,10 @@ class TestArchiveVsLiveScoreHonesty:
 
         mock_store_instance = MagicMock()
         mock_store_instance.get_finbert_score.return_value = None
+        # See the identical comment in test_pre_compute_archives_scores_when_enabled:
+        # an unconfigured MagicMock return here would read as real social
+        # data and mask the NaN this test is verifying.
+        mock_store_instance.get_sentiment_aggregate_by_symbol.return_value = {}
         mock_store_cls = MagicMock(return_value=mock_store_instance)
 
         with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
@@ -1036,6 +1046,121 @@ class TestArchiveVsLiveScoreHonesty:
                     with patch("data.historical_store.HistoricalStore", mock_store_cls):
                         sig.pre_compute(universe, ctx)
 
+        archived = mock_store_instance.save_news_sentiment.call_args[0][0]
+        assert math.isnan(archived["AAPL"])
+
+
+# ===========================================================================
+# TestArchiveScoresIncludeSocialBlend -- the free-source archival fix
+#
+# Before this fix, news_history (what the webapp's Sentiment Dynamics screen
+# charts) was archived ONLY from Finnhub headline scores, and the archive
+# call never even ran without a configured FINNHUB_API_KEY -- even though
+# the free multi-source pipeline (GDELT/EDGAR/Reddit/Google News, via
+# _run_multi_source_ingestion/_read_sentiment_credibility_aggregate) runs
+# every cycle independent of Finnhub and already feeds compute()'s live
+# trading score. _build_archive_scores() closes that gap: it archives the
+# SAME headline+social blend compute() uses, and pre_compute() now calls the
+# archive step unconditionally, not only inside the Finnhub branch.
+# ===========================================================================
+
+class TestArchiveScoresIncludeSocialBlend:
+    def test_headline_only_returns_headline_value(self):
+        sig = _make_signal()
+        sig._news_archive_scores = {"AAPL": 0.6}
+        sig._sentiment_credibility = {}
+        out = sig._build_archive_scores(["AAPL"])
+        assert out == {"AAPL": 0.6}
+
+    def test_social_only_returns_social_value(self):
+        """No Finnhub headline score at all for this symbol (e.g. no
+        FINNHUB_API_KEY configured) but real free-source social data exists
+        -- must archive the social value, not NaN."""
+        sig = _make_signal()
+        sig._news_archive_scores = {}
+        sig._sentiment_credibility = {
+            "AAPL": {"credibility_weighted_sentiment": 0.7, "bot_activity_ratio": 0.0,
+                     "aggregated_source_credibility": 1.0},
+        }
+        out = sig._build_archive_scores(["AAPL"])
+        assert out == {"AAPL": 0.7}
+
+    def test_both_present_blends_with_configured_weight(self):
+        sig = _make_signal()
+        sig._news_archive_scores = {"AAPL": 0.8}
+        sig._sentiment_credibility = {
+            "AAPL": {"credibility_weighted_sentiment": 0.0, "bot_activity_ratio": 0.0,
+                     "aggregated_source_credibility": 1.0},
+        }
+        with patch("settings.settings.SENTIMENT_SOCIAL_BLEND_WEIGHT", 0.4):
+            out = sig._build_archive_scores(["AAPL"])
+        # 0.6 * 0.8 (headline) + 0.4 * 0.0 (social) = 0.48 -- same formula as
+        # compute()'s live blend (TestSentimentCredibilityBlend uses the
+        # identical inputs/weight for the live-score version of this math).
+        assert abs(out["AAPL"] - 0.48) < 1e-6
+
+    def test_neither_present_is_honest_nan(self):
+        sig = _make_signal()
+        sig._news_archive_scores = {}
+        sig._sentiment_credibility = {}
+        out = sig._build_archive_scores(["AAPL"])
+        assert math.isnan(out["AAPL"])
+
+    def test_headline_nan_but_social_real_uses_social(self):
+        """A Finnhub fetch/scoring failure for this symbol (NaN in
+        _news_archive_scores) must not suppress a genuinely real social
+        score for the same symbol."""
+        sig = _make_signal()
+        sig._news_archive_scores = {"AAPL": float("nan")}
+        sig._sentiment_credibility = {
+            "AAPL": {"credibility_weighted_sentiment": -0.3, "bot_activity_ratio": 0.0,
+                     "aggregated_source_credibility": 1.0},
+        }
+        out = sig._build_archive_scores(["AAPL"])
+        assert out["AAPL"] == pytest.approx(-0.3)
+
+    def test_missing_symbol_from_both_dicts_is_nan(self):
+        sig = _make_signal()
+        sig._news_archive_scores = {}
+        sig._sentiment_credibility = {}
+        out = sig._build_archive_scores(["MSFT"])
+        assert math.isnan(out["MSFT"])
+
+    def test_pre_compute_archives_without_finnhub_key_when_social_data_exists(self):
+        """The actual bug this fix closes: with no FINNHUB_API_KEY, the
+        archive call must still fire and must carry the real free-source
+        social score -- not stay permanently unreached."""
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        mock_store_instance = MagicMock()
+        mock_store_instance.get_sentiment_aggregate_by_symbol.return_value = {
+            "AAPL": {"credibility_weighted_sentiment": 0.55, "bot_activity_ratio": 0.0,
+                     "aggregated_source_credibility": 1.0},
+        }
+        mock_store_cls = MagicMock(return_value=mock_store_instance)
+        with patch("settings.settings.FINNHUB_API_KEY", ""):
+            with patch("data.historical_store.HistoricalStore", mock_store_cls):
+                sig.pre_compute(universe, ctx)
+
+        mock_store_instance.save_news_sentiment.assert_called_once()
+        archived = mock_store_instance.save_news_sentiment.call_args[0][0]
+        assert archived["AAPL"] == pytest.approx(0.55)
+
+    def test_pre_compute_archives_nan_without_finnhub_key_or_social_data(self):
+        """No Finnhub, no social data -- archive still fires (proving it's
+        no longer gated on Finnhub at all) but honestly records NaN."""
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        mock_store_instance = MagicMock()
+        mock_store_instance.get_sentiment_aggregate_by_symbol.return_value = {}
+        mock_store_cls = MagicMock(return_value=mock_store_instance)
+        with patch("settings.settings.FINNHUB_API_KEY", ""):
+            with patch("data.historical_store.HistoricalStore", mock_store_cls):
+                sig.pre_compute(universe, ctx)
+
+        mock_store_instance.save_news_sentiment.assert_called_once()
         archived = mock_store_instance.save_news_sentiment.call_args[0][0]
         assert math.isnan(archived["AAPL"])
 
