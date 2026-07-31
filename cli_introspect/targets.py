@@ -35,4 +35,5 @@ TARGETS: list[Target] = [
     Target("module", "scripts.refresh_validations", "refresh_validations.py", "python -m scripts.refresh_validations"),
     Target("path", "scripts/daily_briefing.py", "daily_briefing.py", "python scripts/daily_briefing.py"),
     Target("path", "scripts/track_record_status.py", "track_record_status.py", "python scripts/track_record_status.py"),
+    Target("path", "database_setup.py", "database_setup.py", "python3 database_setup.py"),
 ]

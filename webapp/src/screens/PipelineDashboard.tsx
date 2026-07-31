@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api, ApiError } from "../api/client";
-import type { ControlStatus, RunRecord } from "../api/types";
+import type { ControlStatus, DeadLetterQueue, DeadLetterQueueEntry, RunRecord } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
 import { useMutation } from "../hooks/useMutation";
@@ -347,6 +347,126 @@ function DurableRunHistory({
   );
 }
 
+/**
+ * DeadLetterQueueSection — Streamlit Launcher tab's dead-letter queue
+ * (gui/panels/launcher.py::_render_dead_letter_queue) ported to the webapp.
+ * Backed by GET /dead-letter (fail-open read) + POST /dead-letter/retry
+ * (fail-closed command token + the dedicated DEAD_LETTER_RETRY_ENABLED
+ * flag). `is_clean: null` (no run yet) is rendered distinctly from
+ * `is_clean: true` (a genuinely clean last run) — CONSTRAINT #4, "no run
+ * yet" is not the same claim as "the last run was clean". Retry does not
+ * stream logs the way Console.tsx's job launchers do (this is a bespoke
+ * subprocess spawn, not routed through the generic POST /jobs job manager) —
+ * it reports the spawned PID/log path it was actually given, honestly.
+ */
+function DeadLetterRow({
+  entry,
+  retryEnabled,
+}: {
+  entry: DeadLetterQueueEntry;
+  retryEnabled: boolean;
+}) {
+  const retry = useMutation(() => api.retryDeadLetter(entry.symbol));
+
+  return (
+    <div
+      className="card card-pad"
+      style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}
+      data-testid={`dead-letter-row-${entry.symbol}`}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "var(--s-2)", flexWrap: "wrap" }}>
+        <div>
+          <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{entry.symbol}</span>
+          <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginLeft: "var(--s-2)" }}>
+            stage: {entry.stage}
+          </span>
+        </div>
+        <Button
+          variant="neutral"
+          disabled={!retryEnabled}
+          pending={retry.pending}
+          onClick={() => void retry.run()}
+          data-testid={`retry-${entry.symbol}`}
+        >
+          🔄 Retry
+        </Button>
+      </div>
+      <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>{entry.error}</div>
+      {retry.error && (
+        <Notice variant="warn">
+          <span aria-hidden>⚠️</span>
+          <span>{retry.error}</span>
+        </Notice>
+      )}
+      {retry.result && (
+        <Notice variant="success" data-testid={`retry-result-${entry.symbol}`}>
+          <span aria-hidden>✅</span>
+          <span>
+            {retry.result.note} (PID {retry.result.pid}, log: {retry.result.log_path})
+          </span>
+        </Notice>
+      )}
+    </div>
+  );
+}
+
+function DeadLetterQueueSection() {
+  const { data, loading, error, status, reload } = useApi<DeadLetterQueue>(
+    () => api.getDeadLetter(),
+    []
+  );
+
+  return (
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }} data-testid="dead-letter-section">
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Dead-letter queue</h2>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", margin: "0 0 var(--s-3)" }}>
+        Symbols that failed during the last pipeline run. Each failure is
+        isolated — the rest of the run was unaffected.
+      </p>
+
+      {loading && <Loading lines={2} />}
+      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+      {!loading && !error && data && (
+        data.is_clean == null ? (
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-body)" }}>
+            {data.reason ?? "No dead-letter report yet — run the pipeline once to populate it."}
+          </p>
+        ) : data.is_clean ? (
+          <Notice variant="success">
+            <span aria-hidden>✅</span>
+            <span>
+              All symbols processed cleanly in the last run
+              {data.run_id ? ` (${data.run_id.slice(0, 19)})` : ""}.
+            </span>
+          </Notice>
+        ) : (
+          <>
+            <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
+              <span aria-hidden>⚠️</span>
+              <span>
+                {data.entries.length} symbol(s) failed in the last run
+                {data.run_id ? ` (${data.run_id.slice(0, 19)})` : ""}. Use Retry to
+                re-evaluate a single symbol.
+              </span>
+            </Notice>
+            {!data.retry_enabled && (
+              <Notice variant="info" style={{ marginBottom: "var(--s-3)" }}>
+                <span aria-hidden>ℹ️</span>
+                <span>Retry is disabled on the server (DEAD_LETTER_RETRY_ENABLED=false).</span>
+              </Notice>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+              {data.entries.map((entry) => (
+                <DeadLetterRow key={entry.symbol} entry={entry} retryEnabled={data.retry_enabled} />
+              ))}
+            </div>
+          </>
+        )
+      )}
+    </section>
+  );
+}
+
 export function PipelineDashboard() {
   const nav = useNavigate();
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
@@ -424,6 +544,7 @@ export function PipelineDashboard() {
             httpStatus={historyStatus}
             onReload={reloadHistory}
           />
+          <DeadLetterQueueSection />
         </>
       ) : null}
     </div>

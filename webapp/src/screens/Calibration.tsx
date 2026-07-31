@@ -14,6 +14,7 @@ import { DecisionModal } from "../components/DecisionModal";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
+import { exportCsv } from "../utils/csv";
 
 /**
  * Calibration — the "did our actual calls work?" evaluation surface, ported
@@ -499,7 +500,32 @@ function DecisionJournalSection({
         </div>
       )}
 
-      <h3 style={{ fontSize: "var(--t-callout)", margin: "var(--s-5) 0 var(--s-2)", color: theme.textSecondary }}>Recent decisions</h3>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--s-2)", flexWrap: "wrap", margin: "var(--s-5) 0 var(--s-2)" }}>
+        <h3 style={{ fontSize: "var(--t-callout)", margin: 0, color: theme.textSecondary }}>Recent decisions</h3>
+        {recent.decisions.length > 0 && (
+          <Button
+            variant="neutral"
+            onClick={() =>
+              exportCsv(
+                recent.decisions,
+                [
+                  { key: "symbol", header: "Symbol" },
+                  { key: "action_taken", header: "Decision" },
+                  { key: "signal_action", header: "Signal" },
+                  { key: "conviction", header: "Conviction" },
+                  { key: "timestamp", header: "When" },
+                  { key: "trade_id", header: "Trade" },
+                  { key: "notes", header: "Notes" },
+                ],
+                "decision_log"
+              )
+            }
+            data-testid="export-decision-log-csv"
+          >
+            ⬇️ Export CSV
+          </Button>
+        )}
+      </div>
       {recent.decisions.length === 0 ? (
         <p style={{ color: theme.textMuted, fontSize: "var(--t-label)" }}>
           {recent.reason ?? "No decisions logged yet."}

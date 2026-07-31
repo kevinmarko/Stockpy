@@ -118,6 +118,15 @@ FIXTURE_MANIFEST = {
             "positionals": [],
             "subcommands": [],
         },
+        {
+            "name": "database_setup.py",
+            "invocation": "python3 database_setup.py",
+            "aliases": [],
+            "description": None,
+            "options": [],
+            "positionals": [],
+            "subcommands": [],
+        },
     ],
     "reason": None,
 }
@@ -362,6 +371,36 @@ def test_main_refresh_account_requires_confirmation_then_succeeds(monkeypatch):
     assert created[0].args == [sys.executable, "main.py", "--refresh-account"]
 
 
+def test_database_setup_requires_confirmation_then_succeeds(monkeypatch):
+    """database_setup.py takes NO argv -- its HIGH_STAKES_COMMANDS entry keys
+    on frozenset() (the empty set is a subset of any arg_set, including the
+    always-empty one this command actually gets), so every invocation is
+    gated on confirm regardless of `args`."""
+    created: list = []
+    monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _recording_popen(created))
+    with _manifest_patch(), _enabled():
+        no_confirm = client.post(
+            "/jobs",
+            json={"job_type": "command", "params": {"command": "database_setup.py", "args": []}},
+            headers=_HEADERS,
+        )
+        assert no_confirm.status_code == 400
+        assert "confirmation required" in no_confirm.json()["detail"].lower()
+        assert created == []  # nothing spawned on the rejected attempt
+
+        confirmed = client.post(
+            "/jobs",
+            json={
+                "job_type": "command",
+                "params": {"command": "database_setup.py", "args": [], "confirm": True},
+            },
+            headers=_HEADERS,
+        )
+    assert confirmed.status_code == 200
+    assert len(created) == 1
+    assert created[0].args == [sys.executable, "database_setup.py"]
+
+
 def test_two_different_resolved_commands_can_run_concurrently(monkeypatch):
     """Single-flight must key on the resolved command, not the bare job_type
     'command' -- two different targets running at once must both succeed."""
@@ -482,6 +521,33 @@ def test_launch_manifest_command_high_stakes_with_confirm_succeeds(monkeypatch, 
     assert handle.pid == created[0].pid
     assert handle.log_path == tmp_path / "gui_commands" / "job-6.log"
     assert created[0].args == [sys.executable, "-m", "execution.kill_switch", "--activate"]
+
+
+def test_launch_manifest_command_database_setup_requires_confirmation(monkeypatch):
+    """database_setup.py's HIGH_STAKES_COMMANDS entry keys on frozenset()
+    (the empty set), so an empty args list still triggers the gate -- unlike
+    the kill-switch/main.py entries, there is no flag whose ABSENCE would
+    exempt it."""
+    mock_popen = MagicMock()
+    monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", mock_popen)
+    with _manifest_patch():
+        with pytest.raises(ValueError, match="(?i)confirmation required"):
+            orchestrator_runner.launch_manifest_command(
+                "job-db1", "database_setup.py", None, []
+            )
+    mock_popen.assert_not_called()
+
+
+def test_launch_manifest_command_database_setup_with_confirm_succeeds(monkeypatch, tmp_path):
+    created: list = []
+    monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _recording_popen(created))
+    with _manifest_patch():
+        handle = orchestrator_runner.launch_manifest_command(
+            "job-db2", "database_setup.py", None, [], confirm=True
+        )
+    assert handle.mode == "command"
+    assert handle.pid == created[0].pid
+    assert created[0].args == [sys.executable, "database_setup.py"]
 
 
 def test_launch_manifest_command_main_refresh_account_requires_confirmation(monkeypatch):

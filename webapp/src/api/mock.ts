@@ -138,6 +138,12 @@ import type {
   ForecastResult,
   SentimentDynamics,
   SentimentHistory,
+  ReportFile,
+  ReportManifest,
+  ReportContent,
+  DeadLetterQueueEntry,
+  DeadLetterQueue,
+  DeadLetterRetryResult,
 } from "./types";
 
 const SECTORS = [
@@ -5296,6 +5302,180 @@ export const mockApi = {
       150
     );
   },
+
+  // ---- Report Library (G5) + Dead-Letter Queue (G6) ----
+  async getReports(): Promise<ReportManifest> {
+    return delay(MOCK_REPORT_MANIFEST);
+  },
+
+  async getReport(name: string): Promise<ReportContent> {
+    const found = MOCK_REPORT_CONTENT[name];
+    if (!found) {
+      throw new ApiError(`No report named '${name}'.`, 404);
+    }
+    return delay(found);
+  },
+
+  async getDeadLetter(): Promise<DeadLetterQueue> {
+    return delay(MOCK_DEAD_LETTER);
+  },
+
+  async retryDeadLetter(symbol: string): Promise<DeadLetterRetryResult> {
+    const sym = symbol.trim().toUpperCase();
+    return delay(
+      {
+        symbol: sym,
+        pid: 51234,
+        log_path: `output/gui_retry.log`,
+        applies: "immediately",
+        note: `(mock) Retry launched for ${sym} (advisory-only — no orders placed).`,
+      },
+      200
+    );
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Report Library (G5) + Dead-Letter Queue (G6) fixtures.
+//
+// Honesty branches covered here: an empty-with-content briefing/summary/html
+// happy path, PLUS one manifest row (`corrupt_validation_summary.json`) whose
+// listing succeeds (size/mtime present — the file existed when globbed) but
+// whose CONTENT read fails (`json: null`, a `reason` string) — the same
+// "matched the manifest, failed at read time" shape the real backend returns
+// on a race or a malformed JSON file (CONSTRAINT #6, never a 500). A totally
+// unknown name throws a 404 ApiError from `getReport` above, covering the
+// "not in the manifest at all" branch. `ReportLibrary.test.tsx` additionally
+// overrides `api.getReports`/`api.getReport` per-test for the cold-start
+// (empty manifest) and hard-error branches, per this file's established
+// per-test-override convention (see Commands.test.tsx).
+// ---------------------------------------------------------------------------
+const MOCK_REPORTS: ReportFile[] = [
+  { name: "daily_report.html", kind: "daily_report", size: 48213, mtime: "2026-07-30T21:05:11+00:00" },
+  { name: "daily_report_dashboard.html", kind: "dashboard", size: 1931842, mtime: "2026-07-30T06:02:47+00:00" },
+  { name: "volatility_bands_dashboard.html", kind: "dashboard", size: 512340, mtime: "2026-07-30T06:02:51+00:00" },
+  { name: "briefing_2026-07-30.md", kind: "briefing", size: 2104, mtime: "2026-07-30T12:00:03+00:00" },
+  { name: "briefing_2026-07-29.md", kind: "briefing", size: 1987, mtime: "2026-07-29T12:00:04+00:00" },
+  { name: "trend_following_validation_summary.json", kind: "validation_summary", size: 918, mtime: "2026-07-28T18:22:10+00:00" },
+  { name: "validation_trend-following_20260728183012.html", kind: "validation_html", size: 76004, mtime: "2026-07-28T18:30:12+00:00" },
+  // Honesty branch: listed successfully (stat succeeded) but unreadable/
+  // malformed at content-read time -- see MOCK_REPORT_CONTENT below.
+  { name: "corrupt_validation_summary.json", kind: "validation_summary", size: 41, mtime: "2026-07-27T09:10:00+00:00" },
+];
+
+const MOCK_REPORT_MANIFEST: ReportManifest = {
+  generated_at: "2026-07-30T21:05:12+00:00",
+  reports: MOCK_REPORTS,
+  reason: null,
+};
+
+const MOCK_REPORT_CONTENT: Record<string, ReportContent> = {
+  "daily_report.html": {
+    name: "daily_report.html",
+    kind: "daily_report",
+    content_type: "html",
+    text: "<html><body><h1>InvestYo Daily Report — 2026-07-30</h1><p>(mock content)</p></body></html>",
+    json: null,
+    size: 48213,
+    mtime: "2026-07-30T21:05:11+00:00",
+    reason: null,
+  },
+  "daily_report_dashboard.html": {
+    name: "daily_report_dashboard.html",
+    kind: "dashboard",
+    content_type: "html",
+    text: "<html><body><h1>Orchestrator Dashboard (mock, real file is ~1.9MB)</h1></body></html>",
+    json: null,
+    size: 1931842,
+    mtime: "2026-07-30T06:02:47+00:00",
+    reason: null,
+  },
+  "volatility_bands_dashboard.html": {
+    name: "volatility_bands_dashboard.html",
+    kind: "dashboard",
+    content_type: "html",
+    text: "<html><body><h1>Volatility Bands Dashboard (mock)</h1></body></html>",
+    json: null,
+    size: 512340,
+    mtime: "2026-07-30T06:02:51+00:00",
+    reason: null,
+  },
+  "briefing_2026-07-30.md": {
+    name: "briefing_2026-07-30.md",
+    kind: "briefing",
+    content_type: "markdown",
+    text: "# Daily Briefing — 2026-07-30\n\n## Portfolio\n- 3 positions held, 0 dead-lettered symbols.\n\n## Signals\n- NVDA: BUY, conviction 0.71\n- AAPL: HOLD\n",
+    json: null,
+    size: 2104,
+    mtime: "2026-07-30T12:00:03+00:00",
+    reason: null,
+  },
+  "briefing_2026-07-29.md": {
+    name: "briefing_2026-07-29.md",
+    kind: "briefing",
+    content_type: "markdown",
+    text: "# Daily Briefing — 2026-07-29\n\n## Portfolio\n- 3 positions held, 1 dead-lettered symbol (ZZZZ, strategy stage).\n",
+    json: null,
+    size: 1987,
+    mtime: "2026-07-29T12:00:04+00:00",
+    reason: null,
+  },
+  "trend_following_validation_summary.json": {
+    name: "trend_following_validation_summary.json",
+    kind: "validation_summary",
+    content_type: "json",
+    text: null,
+    json: {
+      strategy_id: "timeseries_momentum",
+      deployable: true,
+      pbo: 0.18,
+      dsr: 0.972,
+      sharpe: 1.14,
+      max_drawdown: 0.176,
+      report_date: "2026-07-28",
+    },
+    size: 918,
+    mtime: "2026-07-28T18:22:10+00:00",
+    reason: null,
+  },
+  "validation_trend-following_20260728183012.html": {
+    name: "validation_trend-following_20260728183012.html",
+    kind: "validation_html",
+    content_type: "html",
+    text: "<html><body><h1>Validation Report — timeseries_momentum (mock)</h1></body></html>",
+    json: null,
+    size: 76004,
+    mtime: "2026-07-28T18:30:12+00:00",
+    reason: null,
+  },
+  "corrupt_validation_summary.json": {
+    name: "corrupt_validation_summary.json",
+    kind: "validation_summary",
+    content_type: "json",
+    text: null,
+    json: null,
+    size: 41,
+    mtime: "2026-07-27T09:10:00+00:00",
+    reason: "Could not parse corrupt_validation_summary.json.",
+  },
+};
+
+const MOCK_DEAD_LETTER_ENTRIES: DeadLetterQueueEntry[] = [
+  {
+    symbol: "ZZZZ",
+    stage: "strategy",
+    error: "ValueError: insufficient history for RSI(14)",
+    timestamp: "2026-07-30T12:03:41+00:00",
+  },
+];
+
+const MOCK_DEAD_LETTER: DeadLetterQueue = {
+  run_id: "run-2026-07-30T12:00:00+00:00",
+  generated_at: "2026-07-30T12:05:22+00:00",
+  entries: MOCK_DEAD_LETTER_ENTRIES,
+  is_clean: false,
+  reason: null,
+  retry_enabled: true,
 };
 
 function round2(n: number): number {
