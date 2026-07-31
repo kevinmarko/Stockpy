@@ -404,6 +404,52 @@ class TestToggleWriteGuard:
 
 
 # ---------------------------------------------------------------------------
+# LIVE_PATCHABLE_KEYS (2026-07 live-reread fix)
+# ---------------------------------------------------------------------------
+class TestLivePatchableKeys:
+    def test_covers_every_toggle_key(self) -> None:
+        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
+
+        for c in CAPABILITIES:
+            if c.toggle_key:
+                assert c.toggle_key in LIVE_PATCHABLE_KEYS
+
+    def test_covers_every_provider_selector_setting(self) -> None:
+        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
+
+        for c in CAPABILITIES:
+            if c.provider_selector_setting:
+                assert c.provider_selector_setting in LIVE_PATCHABLE_KEYS
+
+    def test_covers_opal_research_model(self) -> None:
+        # llm/router.py reads this via getattr(settings, ...) at call time,
+        # not cached -- see LIVE_PATCHABLE_KEYS's docstring.
+        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
+
+        assert "OPAL_RESEARCH_MODEL" in LIVE_PATCHABLE_KEYS
+
+    def test_every_member_is_non_secret_allowlisted(self) -> None:
+        # Membership here is an ADDITIVE narrowing on top of validate_toggle_
+        # write's ALLOWED_KEYS/SECRET_KEYS gate, never a way around it.
+        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
+        from gui.env_io import ALLOWED_KEYS, SECRET_KEYS
+
+        for key in LIVE_PATCHABLE_KEYS:
+            assert key in ALLOWED_KEYS
+            assert key not in SECRET_KEYS
+
+    def test_excludes_settings_captured_at_engine_construction_time(self) -> None:
+        # Kelly/vol-target/signal-weight tunables ARE cached into engine
+        # objects elsewhere -- live-patching those here would create a
+        # misleading half-live state instead of the honest "needs a
+        # restart" contract they still get.
+        from gui.ai_control_center import LIVE_PATCHABLE_KEYS
+
+        for key in ("KELLY_FRACTION", "VOL_TARGET", "MAX_LEVERAGE", "SIGNAL_WEIGHTS"):
+            assert key not in LIVE_PATCHABLE_KEYS
+
+
+# ---------------------------------------------------------------------------
 # Opal gating
 # ---------------------------------------------------------------------------
 class TestOpalGating:
@@ -702,12 +748,19 @@ def _capability_grid_script() -> str:
 
 
 class TestCapabilityRowToggleDedup:
-    def _isolated_env(self, tmp_path: Path, monkeypatch) -> Path:
+    def _isolated_env(self, tmp_path: Path, monkeypatch, *, initial: bool = False) -> Path:
         from gui import env_io
+        from settings import settings
 
         env_path = tmp_path / ".env"
-        env_path.write_text("LLM_COMMENTARY_ENABLED=false\n", encoding="utf-8")
+        env_path.write_text(f"LLM_COMMENTARY_ENABLED={'true' if initial else 'false'}\n", encoding="utf-8")
         monkeypatch.setattr(env_io, "ENV_PATH", env_path)
+        # AppTest.from_string execs the script in THIS process, so the panel's
+        # setattr(settings, tkey, new) (added alongside the live-reread fix)
+        # mutates the REAL settings singleton every other test file shares.
+        # monkeypatch.setattr here establishes a known, auto-restored baseline
+        # so that mutation never leaks past this test.
+        monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", initial)
         return env_path
 
     def test_only_one_widget_for_the_shared_toggle_key(self, tmp_path, monkeypatch) -> None:
@@ -743,10 +796,7 @@ class TestCapabilityRowToggleDedup:
         from streamlit.testing.v1 import AppTest
         from gui import env_io
 
-        env_path = tmp_path / ".env"
-        env_path.write_text("LLM_COMMENTARY_ENABLED=true\n", encoding="utf-8")
-        monkeypatch.setattr(env_io, "ENV_PATH", env_path)
-
+        self._isolated_env(tmp_path, monkeypatch, initial=True)
         at = AppTest.from_string(_capability_grid_script())
         at.run(timeout=15)
 
@@ -756,6 +806,57 @@ class TestCapabilityRowToggleDedup:
         toggle.set_value(False).run(timeout=15)
         assert not at.exception
         assert env_io.get_value("LLM_COMMENTARY_ENABLED", "") == "false"
+
+
+class TestCapabilityRowLivePatch:
+    """The panel-side half of the "toggle writes but nothing seems to take
+    effect" fix: _render_capability_row now setattr's the live settings
+    object right after env_io.write_setting, so a capability toggled ON in
+    THIS session is immediately usable in THIS session -- no restart of the
+    Streamlit process needed (a separately-running process, e.g. the
+    orchestrator daemon, still needs its own restart; that part is
+    unchanged)."""
+
+    def test_toggle_write_patches_the_live_settings_object(self, tmp_path, monkeypatch) -> None:
+        from streamlit.testing.v1 import AppTest
+        from gui import env_io
+        from settings import settings
+
+        env_path = tmp_path / ".env"
+        env_path.write_text("LLM_COMMENTARY_ENABLED=false\n", encoding="utf-8")
+        monkeypatch.setattr(env_io, "ENV_PATH", env_path)
+        monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", False)
+
+        at = AppTest.from_string(_capability_grid_script())
+        at.run(timeout=15)
+        toggle = next(t for t in at.toggle if t.key == "acc_toggle_shared_LLM_COMMENTARY_ENABLED")
+        toggle.set_value(True).run(timeout=15)
+        assert not at.exception
+
+        assert settings.LLM_COMMENTARY_ENABLED is True
+
+    def test_provider_selector_write_patches_the_live_settings_object(self, tmp_path, monkeypatch) -> None:
+        from streamlit.testing.v1 import AppTest
+        from gui import env_io
+        from settings import settings
+
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            "LLM_COMMENTARY_ENABLED=true\nLLM_COMMENTARY_RATIONALE_PROVIDER=claude\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(env_io, "ENV_PATH", env_path)
+        monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", True)
+        monkeypatch.setattr(settings, "LLM_COMMENTARY_RATIONALE_PROVIDER", "claude")
+
+        at = AppTest.from_string(_capability_grid_script())
+        at.run(timeout=15)
+        selectors = [s for s in at.selectbox if s.key == "acc_provider_claude_commentary"]
+        assert len(selectors) == 1
+        selectors[0].set_value("gemini").run(timeout=15)
+        assert not at.exception
+
+        assert settings.LLM_COMMENTARY_RATIONALE_PROVIDER == "gemini"
 
 
 def test_ai_control_center_never_imports_status_store() -> None:
