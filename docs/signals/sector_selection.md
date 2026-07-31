@@ -1,10 +1,20 @@
 # Feature: Semantic Related Sector Selection
 
 **File (heat term):** `data/sector_selection_heat.py` (`compute_spec_sector_heat`)
+**File (orchestration):** `sector_selection_engine.py` (`run_sector_selection`)
 **Master switch:** `settings.SECTOR_SELECTION_ENABLED` (default `False`)
-**Status:** heat term only so far — the semantic similarity term, the
-persisted `sector_correlations` store, and `sector_selection_engine.py`'s
-daily ranking pass ship in a follow-on PR.
+**Status:** fully wired. The semantic similarity term, the persisted
+`sector_correlations` store (`data/sector_correlation_store.py`), and
+`sector_selection_engine.py`'s daily ranking pass all shipped in follow-on
+PRs — but for a while none of them was ever actually *called* from either
+orchestrator, so with the flag on the engine still never ran and the webapp
+Sector Selection screen permanently showed its empty state for every
+symbol. `pipeline/production_steps.py::_apply_sector_selection`, called
+from `StrategyEvalStep.run`, closes that gap: once
+`SECTOR_SELECTION_ENABLED=true`, every tracked symbol whose most recent
+persisted ranking isn't from today's trading day gets recomputed once per
+day (a per-symbol `get_latest()` freshness check prevents duplicate rows
+from piling up under `main.py --interval N`).
 
 **This is NOT a registered `SignalModule`.** It does not appear in
 `settings.SIGNAL_WEIGHTS` and does not feed `StrategyEngine.

@@ -501,6 +501,71 @@ def _apply_sector_heat_factor(dashboard_df: pd.DataFrame) -> None:
         dashboard_df['Sector_Heat_Factor'] = float('nan')
 
 
+def _apply_sector_selection(dashboard_df: pd.DataFrame) -> None:
+    """Compute and durably persist each tracked symbol's semantic Related
+    Sector Selection ranking (``sector_selection_engine.run_sector_selection``)
+    so the webapp's Sector Selection screen (``GET /sector/selection``,
+    ``pilots/sector_selection.py``) has something to read.
+
+    Before this function existed, nothing in either orchestrator ever called
+    ``run_sector_selection`` -- ``data/sector_correlation_store.py``'s
+    ``sector_correlations`` table was never written in production, so the
+    screen always rendered its honest-but-permanent "nothing computed yet"
+    empty state for every symbol regardless of ``SECTOR_SELECTION_ENABLED``.
+    See ``docs/signals/sector_selection.md``.
+
+    No-op (CONSTRAINT #6: never raises, no side effect) when
+    ``settings.SECTOR_SELECTION_ENABLED`` is False -- mirrors
+    ``run_sector_selection``'s own gate, checked again here so this function
+    never even constructs a ``HistoricalStore``/``SectorCorrelationStore``
+    when the feature is off.
+
+    Only recomputes a symbol whose most-recently-persisted ``as_of`` isn't
+    TODAY's trading day: ``SectorCorrelationStore.record_correlations()``
+    appends rows with no de-dup, so calling this every cycle under
+    ``main.py --interval N`` without this check would insert duplicate
+    per-sector rows for the same day on every pass. After the first cycle of
+    a trading day this degrades to one cheap ``get_latest()`` read per
+    symbol and zero SBERT/heat computation.
+
+    Deliberately a module-level function (same pattern as
+    ``_apply_sector_heat_factor`` above): stays importable/testable without
+    ``main_orchestrator``'s heavy top-level import chain, and logs via this
+    module's own plain ``logger`` rather than the ``telemetry`` proxy (whose
+    ``__getattr__`` lazily imports ``main_orchestrator`` on first attribute
+    access, defeating the light import footprint).
+    """
+    if not settings.SECTOR_SELECTION_ENABLED:
+        return
+    if dashboard_df is None or dashboard_df.empty or 'Symbol' not in dashboard_df.columns:
+        return
+    try:
+        from sector_selection_engine import run_sector_selection, _build_correlation_store
+        from data.historical_store import HistoricalStore
+
+        symbols = sorted({
+            str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
+            if str(s).strip()
+        })
+        if not symbols:
+            return
+
+        correlation_store = _build_correlation_store()
+        today = HistoricalStore.resolve_trading_day(datetime.now(timezone.utc))
+
+        stale_targets = []
+        for sym in symbols:
+            latest = correlation_store.get_latest(sym)
+            if not latest or latest[0].get("as_of") != today:
+                stale_targets.append(sym)
+        if not stale_targets:
+            return
+
+        run_sector_selection(stale_targets, correlation_store=correlation_store)
+    except Exception as exc:
+        logger.warning("Sector Selection computation failed (non-fatal): %s", exc)
+
+
 _ETF_TRANSMISSION_COLUMNS = (
     'ETF_Ownership_Pct',
     'ETF_Comovement_R2',
@@ -1055,6 +1120,14 @@ class StrategyEvalStep(PipelineStep):
         # See data/sentiment_sources.py::compute_sector_heat_factors and
         # docs/signals/sector_heat_factor.md.
         _apply_sector_heat_factor(ctx.dashboard_df)
+
+        # Semantic Related Sector Selection (sector_selection_engine.py) --
+        # persists each tracked symbol's top-N related-sector ranking so the
+        # webapp's Sector Selection screen has data to read. A no-op when
+        # settings.SECTOR_SELECTION_ENABLED is False (the default). See
+        # _apply_sector_selection's own docstring for the daily-refresh gate
+        # that keeps this from inserting duplicate rows under --interval.
+        _apply_sector_selection(ctx.dashboard_df)
 
         # ETF volatility transmission (Ben-David, Franzoni & Moussawi 2018) --
         # three measurement columns (ETF_Ownership_Pct / ETF_Comovement_R2 /
