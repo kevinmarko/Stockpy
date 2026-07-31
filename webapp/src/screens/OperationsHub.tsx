@@ -4,7 +4,7 @@ import { theme } from "../theme";
 
 /**
  * OperationsHub — landing screen for the "Operations" nav section (see
- * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 4
+ * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 5
  * screens as clickable cards; someone else wires the section-header tap that
  * routes here. This screen owns only its own content and navigation.
  *
@@ -21,6 +21,11 @@ import { theme } from "../theme";
  * here for the same reason -- neither is a symbol/portfolio research screen,
  * and Settings (a different agent's file) already has its own write-surface
  * convention this isn't part of.
+ *
+ * Report Library (parity gap G5) is the same unreachable-route shape as
+ * Console was -- built read-only against `output/`/`reports/` artifacts, not
+ * a `.env`-write surface, so it belongs here alongside Console/Pipeline
+ * rather than under Settings.
  */
 interface HubCard {
   to: string;
@@ -33,6 +38,7 @@ const CARDS: HubCard[] = [
   { to: "/observability", label: "Mission Control", ico: "🛰️", description: TAB_HELP.observability.description },
   { to: "/pipeline", label: "Pipeline", ico: "🚀", description: TAB_HELP.pipeline.description },
   { to: "/console", label: "Console", ico: "🖥️", description: TAB_HELP.console.description },
+  { to: "/operations/reports", label: "Report Library", ico: "📚", description: TAB_HELP.reports.description },
   {
     to: "/help",
     label: "Help & Glossary",

@@ -2518,6 +2518,128 @@ export interface WatchResult {
   note: string;
 }
 
+// ---------------------------------------------------------------------------
+// Prompt Registry (webapp parity gap G4) — GET /prompts, GET /prompts/{id},
+// PUT /prompts/pin (api/pilots_api.py, backed by pilots/prompt_registry.py).
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of `GET /prompts` — a registered Prompt Registry entry's resolved
+ * version/source/pin/cache state (`pilots/prompt_registry.py::list_prompts`).
+ * `resolved_version`/`source` are `null` only when NOTHING resolves for this
+ * id anywhere (no pin, no remote manifest, no disk cache, no committed
+ * baseline) — in practice every committed baseline id always resolves, so
+ * this is a genuinely rare state, not the common case (CONSTRAINT #4: never
+ * fabricate a version when nothing actually resolved).
+ */
+export interface PromptEntry {
+  id: string;
+  resolved_version: string | null;
+  source: "pin" | "remote" | "cache" | "baseline" | null;
+  pinned_version: string | null;
+  cached_version_count: number;
+}
+
+/** `GET /prompts` response. `reason` is non-null only when the registry
+ *  itself could not be constructed, or no prompt IDs are known at all (e.g.
+ *  an empty/corrupt committed baseline directory) — never on the common
+ *  path. `enabled` mirrors `settings.PROMPT_REGISTRY_ENABLED`; a disabled
+ *  registry still lists every baseline id (all resolve `source: "baseline"`),
+ *  it just never attempted a remote fetch. `writable` tracks
+ *  `PROMPT_REGISTRY_WRITES_ENABLED` (mirrors `StrategyMatrix.writable`) — the
+ *  pin/clear-pin UI should disable itself rather than let the operator hit a
+ *  surprise 403. */
+export interface PromptListResponse {
+  enabled: boolean;
+  prompts: PromptEntry[];
+  reason: string | null;
+  writable: boolean;
+  note: string;
+}
+
+/**
+ * `GET /prompts/{id}?version=...` response — the resolved body for one
+ * prompt ID, either via the full resolution chain (no `version` requested)
+ * or one specific version (a cached version string, or the literal
+ * `"baseline"`). `found: false` is an honest, structurally-expected outcome
+ * (unknown id or version) — the endpoint never 404s for this (CONSTRAINT #4).
+ * `source` is populated only for a full-resolution-chain lookup; a
+ * specific-version lookup does not re-derive provenance (always `null`).
+ * `cached_versions` (newest first) and `has_baseline` are populated on EVERY
+ * call regardless of `found`/`version` — a diff-version picker needs the
+ * full set of resolvable versions for this id up front, not just whichever
+ * single version this particular call resolved.
+ */
+export interface PromptBody {
+  id: string;
+  version: string | null;
+  found: boolean;
+  body: string | null;
+  source: "pin" | "remote" | "cache" | "baseline" | null;
+  reason: string | null;
+  cached_versions: string[];
+  has_baseline: boolean;
+}
+
+/** Body for `PUT /prompts/pin`. `version: null` CLEARS any existing pin for
+ *  `prompt_id` (resolves to remote latest / disk cache / baseline again on
+ *  the next daemon restart) rather than pinning it. */
+export interface PromptPinRequest {
+  prompt_id: string;
+  version: string | null;
+}
+
+/** `PUT /prompts/pin` response. `pins` echoes the FULL new
+ *  `PROMPT_REGISTRY_PINS` map (the request's pin value merged onto the live
+ *  `settings.PROMPT_REGISTRY_PINS` snapshot) — NEVER a stale post-write
+ *  re-read of `settings` (which would return the OLD values and read as a
+ *  failed write). `applies` is always `"next_daemon_restart"` — there is no
+ *  live setter for `.env`-sourced config in this codebase. */
+export interface PromptPinResult {
+  prompt_id: string;
+  version: string | null;
+  pins: Record<string, string>;
+  applies: "next_daemon_restart";
+  note: string;
+}
+
+// ---------------------------------------------------------------------------
+// Live Inventory sync write (webapp parity gap G8) + Market Data provider
+// status (webapp parity gap G9) — api/data_api.py.
+// ---------------------------------------------------------------------------
+
+/**
+ * `POST /data/sync` response — the HTTP port of the Streamlit Live Inventory
+ * tab's "Sync Now" button. `default_tickers` is the full discovered universe
+ * SUBMITTED for persistence to `DEFAULT_TICKERS` (a best-effort `.env` write
+ * — the endpoint cannot confirm it actually landed, see its own docstring).
+ * `report` is the SAME shape `GET /data/sync-report` returns, computed fresh
+ * by this same call (never a stale re-read).
+ */
+export interface DataSyncResult {
+  report: SyncReportResponse;
+  default_tickers: string[];
+  applies: "next_daemon_restart";
+  note: string;
+}
+
+/**
+ * `GET /data/provider-status` response — the active market-data provider,
+ * delivery mode, and quote TTL (the HTTP port of the Streamlit Market Data
+ * tab's provider/mode/TTL tiles). Connection-health sliding-window tracking
+ * is DELIBERATELY NOT part of this response — it stays entirely client-side
+ * (`components/MarketDataHealth.tsx`'s own session-local tracker); see that
+ * endpoint's docstring for why a server-side tracker would be a confusing
+ * second signal rather than a duplicate of the same one.
+ */
+export interface ProviderStatus {
+  provider: string;
+  is_realtime: boolean;
+  mode: "real_time" | "delayed";
+  quote_ttl_seconds: number;
+  fundamentals_source: string;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;
@@ -2534,4 +2656,123 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.status = status;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Report Library (GET /reports, GET /reports/{name}) + Dead-Letter Queue
+// (GET /dead-letter, POST /dead-letter/retry) — parity gaps G5/G6.
+// ---------------------------------------------------------------------------
+
+/**
+ * A report file's category — mirrors `gui/panels/reports_library.py`'s four
+ * sections. `validation_summary` (parsed JSON) is rendered distinctly from
+ * `validation_html` (a full harness HTML report) even though both live in
+ * the same `reports/` directory.
+ */
+export type ReportKind =
+  | "daily_report"
+  | "dashboard"
+  | "briefing"
+  | "validation_summary"
+  | "validation_html";
+
+/** One row of `GET /reports`' manifest. `size`/`mtime` are `null` only on a
+ * stat race (the file existed when globbed, vanished by the time it was
+ * stat'd) — CONSTRAINT #4, never a fabricated 0/timestamp. */
+export interface ReportFile {
+  name: string;
+  kind: ReportKind;
+  size: number | null;
+  mtime: string | null;
+}
+
+/**
+ * `GET /reports` — every generated report file the Streamlit Report Library
+ * tab enumerates: the daily report, the two orchestrator dashboards, daily
+ * briefings, and validation reports. `reason` is set only when `reports` is
+ * empty (CONSTRAINT #4 — never a fabricated list). `GET /reports/{name}`
+ * resolves `name` back to one of these rows ONLY — the server never joins a
+ * client-supplied string onto a filesystem path (see that endpoint's own
+ * doc comment on `client.ts`).
+ */
+export interface ReportManifest {
+  generated_at: string | null;
+  reports: ReportFile[];
+  reason: string | null;
+}
+
+/**
+ * `GET /reports/{name}` — content for one report. Exactly one of
+ * `text`/`json` is populated per `content_type`: `"html"`/`"markdown"`
+ * kinds carry `text`; a validation summary carries a parsed `json` object.
+ * `reason` is set (with both `text` and `json` left `null`) when the name
+ * matched the manifest but the file failed to read/parse at content time (a
+ * race, corrupt JSON) — CONSTRAINT #6, the server degrades honestly rather
+ * than 500ing. A `name` absent from the manifest entirely surfaces as a 404
+ * `ApiError`, not this shape — SECURITY: the server resolves `name` only by
+ * exact match against its own server-built manifest, never by joining the
+ * raw client string onto a path (mirrors `pilots.commands.resolve_command`'s
+ * identical discipline for `POST /jobs`).
+ */
+export interface ReportContent {
+  name: string;
+  kind: ReportKind;
+  content_type: "html" | "markdown" | "json";
+  text: string | null;
+  json: unknown | null;
+  size: number | null;
+  mtime: string | null;
+  reason: string | null;
+}
+
+/**
+ * One failed-symbol record from the last pipeline run's dead-letter queue
+ * (`output/dead_letter.json`, written by `main_orchestrator.run_pipeline`).
+ * NOTE: distinct from (and richer/typed vs.) the generic
+ * `Record<string, unknown>[]` entries `AutomationStatus.errors` (its own
+ * `DeadLetterReport` type, above) carries — that field is a capped,
+ * generic-shaped error tail for the Data & Automation status view;
+ * `GET /dead-letter` below is the Launcher tab's dead-letter QUEUE, scoped
+ * to symbol/stage/error/timestamp specifically for the per-symbol Retry
+ * control, so it gets its own, differently-named type here rather than
+ * widening that one.
+ */
+export interface DeadLetterQueueEntry {
+  symbol: string;
+  stage: string;
+  error: string;
+  timestamp: string;
+}
+
+/**
+ * `GET /dead-letter`. `is_clean` is `null` (NOT `true`) when no run has
+ * completed yet — "no run yet" is not the same claim as "the last run was
+ * clean" (CONSTRAINT #4). `retry_enabled` tracks
+ * `settings.DEAD_LETTER_RETRY_ENABLED` so the PWA can hide/disable the Retry
+ * control before the operator hits a 403 on `POST /dead-letter/retry`
+ * (mirrors `StrategyMatrix`'s `writable` convention).
+ */
+export interface DeadLetterQueue {
+  run_id: string | null;
+  generated_at: string | null;
+  entries: DeadLetterQueueEntry[];
+  is_clean: boolean | null;
+  reason: string | null;
+  retry_enabled: boolean;
+}
+
+/**
+ * `POST /dead-letter/retry` response. Re-runs `main.py` (advisory-only — no
+ * orders) for exactly one symbol via the same subprocess launcher the
+ * Streamlit Launcher tab's dead-letter Retry button already uses. Does not
+ * wait for the run to finish — returns immediately with the spawned PID/log
+ * path so the caller can poll/tail it. `applies: "immediately"` describes
+ * the subprocess launch itself, never any order submission (there is none).
+ */
+export interface DeadLetterRetryResult {
+  symbol: string;
+  pid: number;
+  log_path: string;
+  applies: "immediately";
+  note: string;
 }

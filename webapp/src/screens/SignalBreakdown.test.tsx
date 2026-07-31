@@ -3,9 +3,9 @@
  * happy path, a null-score module rendering "—" (never a fabricated 0), and the
  * cold-start (no bars) all-null / empty-modules honest state.
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SignalBreakdown } from "./SignalBreakdown";
 import { api } from "../api/client";
 
@@ -75,6 +75,49 @@ describe("SignalBreakdown screen (real mock API)", () => {
       vi.spyOn(api, "getUniverse").mockResolvedValueOnce({ symbols: [] });
       renderScreen();
       expect(await screen.findByText("No tracked symbols yet — run the pipeline, then reload.")).toBeInTheDocument();
+    });
+  });
+
+  describe("Export CSV (client-side, G11)", () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+
+    beforeEach(() => {
+      URL.createObjectURL = vi.fn(() => "blob:mock-url");
+      URL.revokeObjectURL = vi.fn();
+    });
+
+    afterEach(() => {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    });
+
+    it("clicking Export CSV downloads a file named after the symbol, no network call", async () => {
+      let downloadedName: string | null = null;
+      const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+        this: HTMLAnchorElement
+      ) {
+        downloadedName = this.download;
+      });
+      renderScreen();
+      const button = await screen.findByTestId("export-signal-breakdown-csv");
+      fireEvent.click(button);
+      expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+      expect(downloadedName).toBe("signal_breakdown_AAPL.csv");
+    });
+
+    it("does not render an export button in the cold-start (no modules) state", async () => {
+      vi.spyOn(api, "getSignalBreakdown").mockResolvedValueOnce({
+        symbol: "ZZZZ",
+        action: null,
+        conviction: null,
+        final_score: null,
+        modules: [],
+      });
+      renderScreen();
+      await screen.findByText(/No signal modules ran for ZZZZ/);
+      expect(screen.queryByTestId("export-signal-breakdown-csv")).not.toBeInTheDocument();
     });
   });
 });

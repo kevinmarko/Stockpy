@@ -259,4 +259,23 @@ def migrate_daily_signals_schema(cursor, conn):
 
 
 if __name__ == "__main__":
+    import argparse
+
+    # Zero real options -- this script has never taken any argv, and still
+    # doesn't. The parser exists solely so `python -m cli_introspect.capture`
+    # (scripts/build_command_manifest.py's introspection harness) can capture
+    # a real parser via its monkeypatched parse_args() and add this command to
+    # cli_introspect/command_manifest.json, instead of dead-lettering it (every
+    # other manifest target already builds an argparse.ArgumentParser for
+    # exactly this reason -- see cli_introspect/targets.py's module docstring).
+    # `parser.parse_args()` raises immediately under that monkeypatch, so
+    # initialize_database() is never reached during introspection -- a real
+    # invocation (no monkeypatch) parses zero args and behaves identically to
+    # before this change.
+    _parser = argparse.ArgumentParser(
+        description="InvestYo database schema setup -- CREATE TABLE IF NOT EXISTS "
+        "against quant_platform.db, driven by config.COLUMN_SCHEMA. Idempotent; "
+        "additive migrations only (never drops/alters destructively)."
+    )
+    _parser.parse_args()
     initialize_database()

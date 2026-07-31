@@ -304,6 +304,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "One-click launchers for the platform's background jobs — a preflight check, the pytest suite, an advisory pipeline cycle, full verification, a Gravity AI Review Suite audit, and the validation harness backtest — each streamed live via the log panel below. Runs the same gated job-execution infrastructure Commands' Run control uses; nothing here places an order with a broker.",
     keyConcepts: ["advisory only", "deployable"],
   },
+  reports: {
+    title: "Report Library",
+    description:
+      "Every generated report artifact in one place: the daily HTML report, the orchestrator's dashboards, generated daily briefings, and per-strategy validation reports (with the same Deployable / PBO / DSR gates Strategy Health shows). Large dashboards are download-only by default — you opt in to viewing one inline rather than it loading automatically.",
+    keyConcepts: ["deployable", "pbo", "dsr"],
+  },
   settings: {
     title: "Data & Automation",
     description:

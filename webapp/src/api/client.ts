@@ -98,6 +98,16 @@ import type {
   ScanConfigRequest,
   ScanConfigResult,
   WatchResult,
+  ReportManifest,
+  ReportContent,
+  DeadLetterQueue,
+  DeadLetterRetryResult,
+  PromptListResponse,
+  PromptBody,
+  PromptPinRequest,
+  PromptPinResult,
+  DataSyncResult,
+  ProviderStatus,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 
@@ -593,6 +603,31 @@ const liveApi = {
     http<RestartDaemonResult>("/daemon/restart", {
       method: "POST",
     }),
+  // ---- Report Library (G5) + Dead-Letter Queue (G6) ----
+  getReports: () => http<ReportManifest>("/reports"),
+  getReport: (name: string) =>
+    http<ReportContent>(`/reports/${encodeURIComponent(name)}`),
+  getDeadLetter: () => http<DeadLetterQueue>("/dead-letter"),
+  retryDeadLetter: (symbol: string) =>
+    http<DeadLetterRetryResult>("/dead-letter/retry", {
+      method: "POST",
+      body: JSON.stringify({ symbol }),
+    }),
+  // ---- Prompt Registry (pilots base, :8602) — webapp parity gap G4 ----
+  getPrompts: () => http<PromptListResponse>("/prompts"),
+  getPrompt: (id: string, version?: string) =>
+    http<PromptBody>(
+      `/prompts/${encodeURIComponent(id)}${version ? `?version=${encodeURIComponent(version)}` : ""}`
+    ),
+  putPromptPin: (req: PromptPinRequest) =>
+    http<PromptPinResult>("/prompts/pin", {
+      method: "PUT",
+      body: JSON.stringify(req),
+    }),
+  // ---- Universe sync write (data base, :8603) — webapp parity gap G8 ----
+  postDataSync: () => http<DataSyncResult>("/data/sync", { method: "POST" }),
+  // ---- Market Data provider status (data base, :8603) — webapp parity gap G9 ----
+  getProviderStatus: () => http<ProviderStatus>("/data/provider-status"),
 };
 
 /**

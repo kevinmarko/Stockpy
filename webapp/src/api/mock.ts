@@ -138,6 +138,19 @@ import type {
   ForecastResult,
   SentimentDynamics,
   SentimentHistory,
+  ReportFile,
+  ReportManifest,
+  ReportContent,
+  DeadLetterQueueEntry,
+  DeadLetterQueue,
+  DeadLetterRetryResult,
+  PromptListResponse,
+  PromptEntry,
+  PromptBody,
+  PromptPinRequest,
+  PromptPinResult,
+  DataSyncResult,
+  ProviderStatus,
 } from "./types";
 
 const SECTORS = [
@@ -3587,6 +3600,110 @@ const MOCK_AGENT_LOOP: AgentLoopStatus = {
 // running -> cancelled) is believable rather than always-terminal.
 const _mockJobs: Record<string, { jobType: string; startedAt: number; cancelled: boolean }> = {};
 
+// ---------------------------------------------------------------------------
+// Prompt Registry (webapp parity gap G4) — GET /prompts, GET /prompts/{id},
+// PUT /prompts/pin. Uses the SAME real baseline prompt IDs the backend's
+// prompt_registry/baseline/*.md ships (master_preprompt, gravity.system,
+// gravity.step_01..07) so a screen exercised against the mock looks
+// shape-identical to a real, unconfigured (baseline-only) registry.
+// ---------------------------------------------------------------------------
+
+interface _MockPromptFixture {
+  /** Resolution state with NO pin set: version + source GET /prompts would
+   *  report. "remote"/"cache" ids also carry a believable cachedVersions
+   *  list; a pure "baseline" id has none (never synced, never pinned). */
+  unpinnedVersion: string;
+  unpinnedSource: "remote" | "cache" | "baseline";
+  cachedVersions: string[]; // newest first; [] for baseline-only ids
+  body: string;
+}
+
+const _MOCK_PROMPT_FIXTURES: Record<string, _MockPromptFixture> = {
+  master_preprompt: {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body:
+      "You are the InvestYo advisory assistant. Ground every claim in the " +
+      "provided DTOs; never fabricate a price, signal, or metric that isn't " +
+      "present in the data. (mock baseline body — real text lives in " +
+      "prompt_registry/baseline/master_preprompt.md)",
+  },
+  "gravity.system": {
+    unpinnedVersion: "2.1.0",
+    unpinnedSource: "remote",
+    cachedVersions: ["2.1.0", "2.0.0", "1.0.0"],
+    body:
+      "You are Gravity, the AI code auditor for the InvestYo quant platform. " +
+      "Verify vectorization, lookahead-bias freedom, and honest degradation on " +
+      "every changed file. Respond in JSON: {\"status\": \"PASSED/FAILED\", " +
+      "\"score\": 0-100, \"findings\": []}. (mock remote body)",
+  },
+  "gravity.step_01": {
+    unpinnedVersion: "1.1.0",
+    unpinnedSource: "cache",
+    cachedVersions: ["1.1.0", "1.0.0"],
+    body:
+      "Analyze the provided source code for Step 1. Verify vectorized " +
+      "Pandas/NumPy operations and a relational database schema. Respond in " +
+      "JSON: {\"status\": \"PASSED/FAILED\", \"score\": 0-100}. (mock cached body)",
+  },
+  "gravity.step_02": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 2. (mock baseline body)",
+  },
+  "gravity.step_03": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 3. (mock baseline body)",
+  },
+  "gravity.step_04": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 4. (mock baseline body)",
+  },
+  "gravity.step_05": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 5. (mock baseline body)",
+  },
+  "gravity.step_06": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 6. (mock baseline body)",
+  },
+  "gravity.step_07": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 7. (mock baseline body)",
+  },
+};
+
+// In-memory pin map -- mutated by putPromptPin, read by getPrompts/getPrompt,
+// so a pin set within a mock session is genuinely visible on re-fetch within
+// that session (mirrors MOCK_DECISION_LOG's convention). Seeded with ONE
+// pre-existing pin so the "already pinned" row/badge renders on first load
+// without requiring an interaction first — an honesty-fixture requirement,
+// not just a nicety (a screen that only ever sees an all-unpinned registry
+// can't be checked against the pinned-row rendering path at all).
+const _MOCK_PROMPT_PINS: Record<string, string> = {
+  "gravity.system": "2.0.0",
+};
+
+const MOCK_PROMPT_REGISTRY_ENABLED = true;
+// Mirrors settings.PROMPT_REGISTRY_WRITES_ENABLED — true here so the mock
+// exercises the pin/clear-pin write UI by default (the more interesting
+// path); co-located tests cover the writable:false / disabled-pin-UI branch
+// by overriding this via a mocked api module rather than a second fixture.
+const MOCK_PROMPT_REGISTRY_WRITABLE = true;
+
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
   async health() {
@@ -5296,6 +5413,325 @@ export const mockApi = {
       150
     );
   },
+
+  // ---- Report Library (G5) + Dead-Letter Queue (G6) ----
+  async getReports(): Promise<ReportManifest> {
+    return delay(MOCK_REPORT_MANIFEST);
+  },
+
+  async getReport(name: string): Promise<ReportContent> {
+    const found = MOCK_REPORT_CONTENT[name];
+    if (!found) {
+      throw new ApiError(`No report named '${name}'.`, 404);
+    }
+    return delay(found);
+  },
+
+  async getDeadLetter(): Promise<DeadLetterQueue> {
+    return delay(MOCK_DEAD_LETTER);
+  },
+
+  async retryDeadLetter(symbol: string): Promise<DeadLetterRetryResult> {
+    const sym = symbol.trim().toUpperCase();
+    return delay(
+      {
+        symbol: sym,
+        pid: 51234,
+        log_path: `output/gui_retry.log`,
+        applies: "immediately",
+        note: `(mock) Retry launched for ${sym} (advisory-only — no orders placed).`,
+      },
+      200
+    );
+  },
+
+  // ---- Prompt Registry (webapp parity gap G4) ----
+  async getPrompts(): Promise<PromptListResponse> {
+    const prompts: PromptEntry[] = Object.keys(_MOCK_PROMPT_FIXTURES)
+      .sort()
+      .map((id) => {
+        const fx = _MOCK_PROMPT_FIXTURES[id];
+        const pinned = _MOCK_PROMPT_PINS[id] ?? null;
+        return {
+          id,
+          resolved_version: pinned ?? fx.unpinnedVersion,
+          source: pinned ? "pin" : fx.unpinnedSource,
+          pinned_version: pinned,
+          cached_version_count: fx.cachedVersions.length,
+        };
+      });
+    return delay<PromptListResponse>({
+      enabled: MOCK_PROMPT_REGISTRY_ENABLED,
+      prompts,
+      reason: null,
+      writable: MOCK_PROMPT_REGISTRY_WRITABLE,
+      note: MOCK_PROMPT_REGISTRY_WRITABLE
+        ? "Pins persist to .env and apply on the next daemon restart."
+        : "Pin writes are disabled (PROMPT_REGISTRY_WRITES_ENABLED=false).",
+    });
+  },
+
+  async getPrompt(id: string, version?: string): Promise<PromptBody> {
+    const fx = _MOCK_PROMPT_FIXTURES[id];
+    if (!fx) {
+      return delay<PromptBody>({
+        id,
+        version: version ?? null,
+        found: false,
+        body: null,
+        source: null,
+        reason: `No body available for '${id}' in the registry, cache, or committed baseline.`,
+        cached_versions: [],
+        has_baseline: false,
+      });
+    }
+    // Every fixture id here has a real committed baseline file (they mirror
+    // prompt_registry/baseline/*.md's exact set) -- true for every entry,
+    // never fabricated for an id that wouldn't actually have one.
+    const has_baseline = true;
+    if (version) {
+      const known = version === "baseline" || fx.cachedVersions.includes(version);
+      if (!known) {
+        return delay<PromptBody>({
+          id,
+          version,
+          found: false,
+          body: null,
+          source: null,
+          reason: `Version '${version}' of '${id}' not found in the manifest, disk cache, or committed baseline.`,
+          cached_versions: fx.cachedVersions,
+          has_baseline,
+        });
+      }
+      // A specific-version lookup does not re-derive provenance (matches the
+      // real endpoint's contract — source is only populated for the
+      // full-resolution-chain lookup below).
+      return delay<PromptBody>({
+        id, version, found: true, body: fx.body, source: null, reason: null,
+        cached_versions: fx.cachedVersions, has_baseline,
+      });
+    }
+    const pinned = _MOCK_PROMPT_PINS[id] ?? null;
+    return delay<PromptBody>({
+      id,
+      version: pinned ?? fx.unpinnedVersion,
+      found: true,
+      body: fx.body,
+      source: pinned ? "pin" : fx.unpinnedSource,
+      reason: null,
+      cached_versions: fx.cachedVersions,
+      has_baseline,
+    });
+  },
+
+  async putPromptPin(req: PromptPinRequest): Promise<PromptPinResult> {
+    const id = req.prompt_id.trim();
+    if (!id) throw new ApiError("prompt_id must not be empty.", 422);
+
+    if (req.version === null) {
+      delete _MOCK_PROMPT_PINS[id];
+    } else {
+      const fx = _MOCK_PROMPT_FIXTURES[id];
+      const known = Boolean(fx) && (req.version === "baseline" || fx.cachedVersions.includes(req.version));
+      if (!known) {
+        throw new ApiError(
+          `Version '${req.version}' of '${id}' not found in the manifest, disk cache, or committed baseline.`,
+          422
+        );
+      }
+      _MOCK_PROMPT_PINS[id] = req.version;
+    }
+
+    return delay<PromptPinResult>(
+      {
+        prompt_id: id,
+        version: req.version,
+        pins: { ..._MOCK_PROMPT_PINS },
+        applies: "next_daemon_restart",
+        note:
+          req.version === null
+            ? `Pin cleared for '${id}'. Saved to .env; effective on next daemon restart.`
+            : `Pinned '${id}' -> '${req.version}'. Saved to .env; effective on next daemon restart.`,
+      },
+      150
+    );
+  },
+
+  // ---- Universe sync write (webapp parity gap G8) ----
+  async postDataSync(): Promise<DataSyncResult> {
+    // Reuses the SAME sync-report fixture data getSyncReport() returns, so a
+    // "Sync Now" click in the mock renders a believable, internally
+    // consistent report rather than a second, drifted fixture. Safe to call
+    // as `mockApi.getSyncReport()` here: by the time any mockApi method is
+    // actually invoked the object literal below has fully constructed, so
+    // this sibling reference resolves normally (not a TDZ hazard — only the
+    // *definition*, not the *call*, happens during object construction).
+    const report = await mockApi.getSyncReport();
+    const default_tickers = Object.keys(report.symbols).sort();
+    return delay<DataSyncResult>(
+      {
+        report,
+        default_tickers,
+        applies: "next_daemon_restart",
+        note: `(mock) Synced ${default_tickers.length} symbol(s). Submitted to DEFAULT_TICKERS in .env; effective on next daemon restart.`,
+      },
+      600
+    );
+  },
+
+  // ---- Market Data provider status (webapp parity gap G9) ----
+  async getProviderStatus(): Promise<ProviderStatus> {
+    return delay<ProviderStatus>({
+      provider: "alpaca",
+      is_realtime: true,
+      mode: "real_time",
+      quote_ttl_seconds: 30,
+      fundamentals_source: "yahoo_computed",
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Report Library (G5) + Dead-Letter Queue (G6) fixtures.
+//
+// Honesty branches covered here: an empty-with-content briefing/summary/html
+// happy path, PLUS one manifest row (`corrupt_validation_summary.json`) whose
+// listing succeeds (size/mtime present — the file existed when globbed) but
+// whose CONTENT read fails (`json: null`, a `reason` string) — the same
+// "matched the manifest, failed at read time" shape the real backend returns
+// on a race or a malformed JSON file (CONSTRAINT #6, never a 500). A totally
+// unknown name throws a 404 ApiError from `getReport` above, covering the
+// "not in the manifest at all" branch. `ReportLibrary.test.tsx` additionally
+// overrides `api.getReports`/`api.getReport` per-test for the cold-start
+// (empty manifest) and hard-error branches, per this file's established
+// per-test-override convention (see Commands.test.tsx).
+// ---------------------------------------------------------------------------
+const MOCK_REPORTS: ReportFile[] = [
+  { name: "daily_report.html", kind: "daily_report", size: 48213, mtime: "2026-07-30T21:05:11+00:00" },
+  { name: "daily_report_dashboard.html", kind: "dashboard", size: 1931842, mtime: "2026-07-30T06:02:47+00:00" },
+  { name: "volatility_bands_dashboard.html", kind: "dashboard", size: 512340, mtime: "2026-07-30T06:02:51+00:00" },
+  { name: "briefing_2026-07-30.md", kind: "briefing", size: 2104, mtime: "2026-07-30T12:00:03+00:00" },
+  { name: "briefing_2026-07-29.md", kind: "briefing", size: 1987, mtime: "2026-07-29T12:00:04+00:00" },
+  { name: "trend_following_validation_summary.json", kind: "validation_summary", size: 918, mtime: "2026-07-28T18:22:10+00:00" },
+  { name: "validation_trend-following_20260728183012.html", kind: "validation_html", size: 76004, mtime: "2026-07-28T18:30:12+00:00" },
+  // Honesty branch: listed successfully (stat succeeded) but unreadable/
+  // malformed at content-read time -- see MOCK_REPORT_CONTENT below.
+  { name: "corrupt_validation_summary.json", kind: "validation_summary", size: 41, mtime: "2026-07-27T09:10:00+00:00" },
+];
+
+const MOCK_REPORT_MANIFEST: ReportManifest = {
+  generated_at: "2026-07-30T21:05:12+00:00",
+  reports: MOCK_REPORTS,
+  reason: null,
+};
+
+const MOCK_REPORT_CONTENT: Record<string, ReportContent> = {
+  "daily_report.html": {
+    name: "daily_report.html",
+    kind: "daily_report",
+    content_type: "html",
+    text: "<html><body><h1>InvestYo Daily Report — 2026-07-30</h1><p>(mock content)</p></body></html>",
+    json: null,
+    size: 48213,
+    mtime: "2026-07-30T21:05:11+00:00",
+    reason: null,
+  },
+  "daily_report_dashboard.html": {
+    name: "daily_report_dashboard.html",
+    kind: "dashboard",
+    content_type: "html",
+    text: "<html><body><h1>Orchestrator Dashboard (mock, real file is ~1.9MB)</h1></body></html>",
+    json: null,
+    size: 1931842,
+    mtime: "2026-07-30T06:02:47+00:00",
+    reason: null,
+  },
+  "volatility_bands_dashboard.html": {
+    name: "volatility_bands_dashboard.html",
+    kind: "dashboard",
+    content_type: "html",
+    text: "<html><body><h1>Volatility Bands Dashboard (mock)</h1></body></html>",
+    json: null,
+    size: 512340,
+    mtime: "2026-07-30T06:02:51+00:00",
+    reason: null,
+  },
+  "briefing_2026-07-30.md": {
+    name: "briefing_2026-07-30.md",
+    kind: "briefing",
+    content_type: "markdown",
+    text: "# Daily Briefing — 2026-07-30\n\n## Portfolio\n- 3 positions held, 0 dead-lettered symbols.\n\n## Signals\n- NVDA: BUY, conviction 0.71\n- AAPL: HOLD\n",
+    json: null,
+    size: 2104,
+    mtime: "2026-07-30T12:00:03+00:00",
+    reason: null,
+  },
+  "briefing_2026-07-29.md": {
+    name: "briefing_2026-07-29.md",
+    kind: "briefing",
+    content_type: "markdown",
+    text: "# Daily Briefing — 2026-07-29\n\n## Portfolio\n- 3 positions held, 1 dead-lettered symbol (ZZZZ, strategy stage).\n",
+    json: null,
+    size: 1987,
+    mtime: "2026-07-29T12:00:04+00:00",
+    reason: null,
+  },
+  "trend_following_validation_summary.json": {
+    name: "trend_following_validation_summary.json",
+    kind: "validation_summary",
+    content_type: "json",
+    text: null,
+    json: {
+      strategy_id: "timeseries_momentum",
+      deployable: true,
+      pbo: 0.18,
+      dsr: 0.972,
+      sharpe: 1.14,
+      max_drawdown: 0.176,
+      report_date: "2026-07-28",
+    },
+    size: 918,
+    mtime: "2026-07-28T18:22:10+00:00",
+    reason: null,
+  },
+  "validation_trend-following_20260728183012.html": {
+    name: "validation_trend-following_20260728183012.html",
+    kind: "validation_html",
+    content_type: "html",
+    text: "<html><body><h1>Validation Report — timeseries_momentum (mock)</h1></body></html>",
+    json: null,
+    size: 76004,
+    mtime: "2026-07-28T18:30:12+00:00",
+    reason: null,
+  },
+  "corrupt_validation_summary.json": {
+    name: "corrupt_validation_summary.json",
+    kind: "validation_summary",
+    content_type: "json",
+    text: null,
+    json: null,
+    size: 41,
+    mtime: "2026-07-27T09:10:00+00:00",
+    reason: "Could not parse corrupt_validation_summary.json.",
+  },
+};
+
+const MOCK_DEAD_LETTER_ENTRIES: DeadLetterQueueEntry[] = [
+  {
+    symbol: "ZZZZ",
+    stage: "strategy",
+    error: "ValueError: insufficient history for RSI(14)",
+    timestamp: "2026-07-30T12:03:41+00:00",
+  },
+];
+
+const MOCK_DEAD_LETTER: DeadLetterQueue = {
+  run_id: "run-2026-07-30T12:00:00+00:00",
+  generated_at: "2026-07-30T12:05:22+00:00",
+  entries: MOCK_DEAD_LETTER_ENTRIES,
+  is_clean: false,
+  reason: null,
+  retry_enabled: true,
 };
 
 function round2(n: number): number {
