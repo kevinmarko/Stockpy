@@ -21,11 +21,12 @@ function renderConsole() {
 describe("Console screen (real mock API)", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("renders the title and every quick-action card", () => {
+  it("renders the title, the 'How this works' guide, and every quick-action card", () => {
     renderConsole();
     expect(
       screen.getByRole("heading", { name: "One-Click Command Center" })
     ).toBeInTheDocument();
+    expect(screen.getByTestId("tab-guide-console")).toBeInTheDocument();
     expect(screen.getByText("🛡️ Preflight Check")).toBeInTheDocument();
     expect(screen.getByText("🧪 Run Test Suite")).toBeInTheDocument();
     expect(screen.getByText("🚀 Advisory Pipeline")).toBeInTheDocument();

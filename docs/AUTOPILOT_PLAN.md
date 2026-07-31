@@ -267,6 +267,80 @@ stayed green throughout.
   can't import each other, and importing `desktop.daemon_runtime` into `pilots_api.py` would
   drag `main_orchestrator` into a module whose own AST guard forbids the heavy engines.
 
+## Webapp ↔ Streamlit parity register (added 2026-07-31)
+
+A companion tracking effort to the makeover above, and the first committed GUI→webapp
+migration doc anywhere in this repo — until this section, "parity" in this codebase meant
+state-snapshot-writer parity or mock↔live API parity, never Streamlit-vs-webapp feature
+parity. The operator's stated target: the Pilots PWA will eventually **replace** the
+Streamlit Command Center (`gui/app.py`, 19 tabs — see that file's module docstring), so
+every capability gap is a blocker to retirement and gets tracked here rather than assumed
+fine. An audit found the Streamlit side registers 19 tabs against the webapp's 31
+routes / 22 nav items (`webapp/src/App.tsx`); most functionality is already ported, and
+what's left is a short, concentrated list of 15 gaps. Four agents split the list and each
+worked on its own branch/PR in parallel; this table is the shared record.
+
+Legend: **◐ partial** · **✗ missing** · **⚠ built but unreachable** · **✅ closed**
+
+| # | Streamlit tab | Webapp home | Status | Owner |
+|---|---|---|---|---|
+| G1 | Launcher / Gravity Audit / Validation Lab (run triggers) | `Console.tsx` → `/console` | ✅ linked into `NAV_ITEMS` + `OperationsHub` card, restyled off inert Tailwind-ish classes onto `card`/`screen` + `theme.ts` | A |
+| G2 | — | `ResearchHub` card list | ✅ now lists all 11 cards matching `NAV_ITEMS`' research section (was 9 — `/sentiment` and `/sector-selection` were missing) | A |
+| G3 | — | `/sentiment` `TabGuide` | ✅ added (`sentiment` `TAB_HELP` key + 4 new `GLOSSARY` terms) | A |
+| G10 | Help (searchable glossary) | new `/help` (`Help.tsx`) | ✅ added — full-`GLOSSARY` search, no `docs/HOW_TO_GUIDE.md` deep link (the webapp's `GLOSSARY` carries no `guide_anchor` field to link honestly from) | A |
+| G7 | Observability (sizing-cap, ETF transmission, heartbeat, strategy P&L) | 7 of ~16 sections | ◐ open | B |
+| G12 | Paper Monitor (held-no-signal / signalled-not-held) | — | ✗ open | B |
+| G13 | Strategy Matrix (meta-label confidence histogram) | `StrategyMatrix.tsx` | ◐ open | B |
+| G14 | Analytics (buying-power overlay) | `Portfolio.tsx` equity curve | ◐ open | B |
+| G15 | AI Insights (Claude-vs-Gemini disagreement table) | Gravity chip only | ◐ open — needs investigation first; Streamlit builds this from session-state mirrors of per-symbol AI calls the webapp has no equivalent of | B |
+| G5 | Report Library | — | ✗ open | C |
+| G6 | Launcher (dead-letter + retry, DB rebuild, briefing) | briefing CLI-only | ◐ / ✗ open | C |
+| G11 | Exports (HTML report, signals CSV, decision-log CSV) | — | ✗ open | C |
+| G4 | Prompts (Prompt Registry) | CLI-only via `Commands.tsx` | ◐ open — prerequisite fix first: `prompt_registry/registry.py` reads `os.environ` instead of `settings`, the same class of bug this doc's D-decisions and `CLAUDE.md`'s 2026-07 `news_catalyst`/Finnhub fix already document | D |
+| G8 | Live Inventory | `UniverseManager`/`UniverseCoverage` in Settings | ◐ open — no Sync-Now write path | D |
+| G9 | Market Data | `MarketDataHealth` in `DataExplorer` | ◐ open | D |
+
+Already at good parity, no work needed: Options, Pairs, Settings tunables, AI Control
+Center, Pipeline, Attribution, Calibration, Strategy Health, Signal Breakdown, Forecast
+Viewer, Sector Selection, Data Explorer, Models, Marketplace/Pilot Detail, Portfolio,
+Activity, Agentic Trading, Commands.
+
+**Deliberately not ported** (argued, not merely skipped): `app_shell.py`'s launch stays
+copy-only in the command manifest — it pops a native pywebview window on the *server*
+host, which a browser click can neither show nor use.
+
+**Agent A scope (this PR) — closed G1, G2, G3, G10; zero backend changes.** Also fixed
+`gui/app.py`'s module docstring, which said "Tabs (18, ...)" and omitted the Sentiment
+Dynamics tab entirely from its own numbered list — `tab_labels` (the actual registration
+list two dozen lines below) has always had 19 entries; the docstring was stale, not the
+registration.
+
+**G16 — gotcha found while closing G1, documentation-only (2026-07-31).** Console's job
+launchers depend on **three** tokens matching, not the two this doc's Decision D4 already
+documents. `webapp/src/api/client.ts` sends exactly one `VITE_API_TOKEN` on every request
+regardless of which backend service it's addressed to (same tradeoff D4/D5/D6 already
+accept for `pilots_api`'s own two-token split). Console's job creation
+(`api.createJob` → `POST /jobs`) is served by the **Control API**
+(`api/control_api.py`, port 8601, distinct from `pilots_api`'s port 8602), which imports
+`require_orchestrator_command_token as require_command_token` (`api/auth.py`) — gated on
+`settings.ORCHESTRATOR_DAEMON_TOKEN`, fail-closed when unset — for `POST /jobs` and
+`POST /jobs/{id}/cancel`, while `GET /jobs/{id}` (status polling) is gated on
+`require_read_token`, which reads `settings.STATE_API_TOKEN` (the same token
+`pilots_api`'s read endpoints already use). So for Console to work end-to-end in a live
+deployment, **`STATE_API_TOKEN`, `FOLLOW_API_TOKEN`, and `ORCHESTRATOR_DAEMON_TOKEN` must
+all be set to the same value** — an operator who only synced the two tokens D4 names will
+see Console's job launchers 401 on creation with no diagnosis path (status polling and
+every `pilots_api` read would keep working, which makes the failure read as Console-
+specific rather than the shared-token gap it actually is). Recorded here rather than
+silently worked around; no code changed for this — a specific 401 hint in `Console.tsx`
+pointing at the mismatch would be a reasonable low-cost follow-up for whichever agent
+next touches that screen.
+
+**Still open as of this commit: G4–G9, G11–G15**, owned by Agents B/C/D per the 4-agent
+plan above. Each ships its own branch/PR and should flip its own rows in this table to
+✅ (with a one-line "what changed" note, following G1–G3/G10's pattern above) when it
+lands — this table is the shared source of truth, not a snapshot to be recreated per-PR.
+
 ## Running it
 
 ```bash

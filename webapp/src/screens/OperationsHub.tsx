@@ -4,12 +4,23 @@ import { theme } from "../theme";
 
 /**
  * OperationsHub — landing screen for the "Operations" nav section (see
- * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 2
+ * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 4
  * screens as clickable cards; someone else wires the section-header tap that
  * routes here. This screen owns only its own content and navigation.
  *
- * Both descriptions are sourced live from `TAB_HELP` (`help/helpContent.ts`)
- * so they can never drift from the real in-app help content.
+ * Descriptions marked "TAB_HELP" read live off `help/helpContent.ts`'s
+ * `TAB_HELP` map so this card's blurb can never drift from the real in-app
+ * explainer text; Help & Glossary's is static prose specific to this hub
+ * (the Help screen has no TabGuide of its own -- see Help.tsx's docstring).
+ *
+ * Console was previously routed at /console (App.tsx) with NO nav entry and
+ * NO hub card -- reachable only by typing the URL, despite being a fully
+ * built screen (six one-click job launchers + live SSE log streaming). This
+ * card is the fix (parity gap G1) -- see `.claude/skills/new-pwa-screen/
+ * SKILL.md`'s nav-reachability trap. Help & Glossary (parity gap G10) lives
+ * here for the same reason -- neither is a symbol/portfolio research screen,
+ * and Settings (a different agent's file) already has its own write-surface
+ * convention this isn't part of.
  */
 interface HubCard {
   to: string;
@@ -21,6 +32,13 @@ interface HubCard {
 const CARDS: HubCard[] = [
   { to: "/observability", label: "Mission Control", ico: "🛰️", description: TAB_HELP.observability.description },
   { to: "/pipeline", label: "Pipeline", ico: "🚀", description: TAB_HELP.pipeline.description },
+  { to: "/console", label: "Console", ico: "🖥️", description: TAB_HELP.console.description },
+  {
+    to: "/help",
+    label: "Help & Glossary",
+    ico: "❓",
+    description: "Search the platform's full glossary of terms, metrics, and gates -- every definition each screen's own \"How this works\" panel draws from, in one searchable place.",
+  },
 ];
 
 export function OperationsHub() {

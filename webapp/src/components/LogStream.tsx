@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { jobStreamUrl, USE_MOCK } from "../api/client";
+import { Button } from "./ui";
+import { theme } from "../theme";
 
 interface LogStreamProps {
   jobId?: string;
@@ -57,11 +59,24 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
   );
 
   return (
-    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 font-mono text-sm text-zinc-100 flex flex-col h-96">
-      <div className="flex justify-between items-center mb-2 pb-2 border-b border-zinc-800">
-        <span className="font-semibold text-zinc-300">Live Console Output</span>
-        <div className="flex items-center space-x-2">
-          <label className="flex items-center gap-1 text-xs text-zinc-400">
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: 384 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "var(--s-2)",
+          marginBottom: "var(--s-2-5)",
+          paddingBottom: "var(--s-2-5)",
+          borderBottom: `1px solid ${theme.border}`,
+        }}
+      >
+        <span style={{ fontWeight: 700, color: theme.textSecondary, fontSize: "var(--t-callout)" }}>
+          Live Console Output
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-1)", fontSize: "var(--t-caption)", color: theme.textMuted }}>
             <input
               type="checkbox"
               checked={autoScroll}
@@ -74,31 +89,41 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
             placeholder="Filter logs..."
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="bg-zinc-900 border border-zinc-700 text-xs text-zinc-200 px-2 py-1 rounded focus:outline-none focus:border-zinc-500"
+            className="input"
+            style={{ width: 160, fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)", minHeight: "auto" }}
           />
-          <button
-            onClick={() => setLogs([])}
-            className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-2 py-1 rounded"
-          >
-            Clear
-          </button>
+          <Button onClick={() => setLogs([])}>Clear</Button>
         </div>
       </div>
-      <div ref={listRef} className="flex-1 overflow-y-auto space-y-1">
+      <div
+        ref={listRef}
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: "var(--s-1)",
+          fontFamily: "var(--font-mono, ui-monospace, monospace)",
+          fontSize: "var(--t-caption)",
+          color: theme.textPrimary,
+        }}
+      >
         {USE_MOCK ? (
-          <div className="text-zinc-500 text-xs italic">
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", fontStyle: "italic" }}>
             Log streaming is only available in live mode.
           </div>
         ) : filteredLogs.length === 0 ? (
-          <div className="text-zinc-500 text-xs italic">No logs received yet...</div>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", fontStyle: "italic" }}>
+            No logs received yet...
+          </div>
         ) : (
           filteredLogs.map((line, idx) => (
-            <div key={idx} className="whitespace-pre-wrap break-all leading-snug">
+            <div key={idx} style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.4 }}>
               {line}
             </div>
           ))
         )}
       </div>
-    </div>
+    </section>
   );
 };

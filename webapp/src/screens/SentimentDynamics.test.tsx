@@ -22,6 +22,11 @@ function renderScreen() {
 describe("SentimentDynamics screen (real mock API)", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("renders the 'How this works' guide (parity gap G3 — this screen previously had none)", () => {
+    renderScreen();
+    expect(screen.getByTestId("tab-guide-sentiment")).toBeInTheDocument();
+  });
+
   it("renders the populated tiles for the default symbol (mock's antigravity_agent example)", async () => {
     renderScreen();
     expect(await screen.findByText("Sentiment Score")).toBeInTheDocument();

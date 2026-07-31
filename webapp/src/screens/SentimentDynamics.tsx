@@ -20,6 +20,7 @@ import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Notice, Tile } from "../components/ui";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
+import { TabGuide } from "../components/TabGuide";
 import { fmtDate, fmtNum } from "../format";
 import { seriesColor, theme } from "../theme";
 
@@ -258,7 +259,8 @@ export function SentimentDynamics() {
         driven by the Antigravity Agent and GJR-GARCH asymmetric volatility metrics.
       </p>
 
-      {/* TabGuide key doesn't really matter unless we define it, we can omit it or use an existing one, omitting is fine or just pass "sentiment" */}
+      <TabGuide tabKey="sentiment" />
+
       <SymbolInput initial={symbol} onSubmit={setSymbol} pending={loading} />
 
       {loading && <Loading lines={3} />}
