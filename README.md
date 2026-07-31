@@ -151,7 +151,10 @@ false "no data" result for the full TTL.
 
 **`./launch_app.command`** is the recommended everyday launcher — it opens the unified
 Command Center in a native desktop window (pywebview) with an always-on background
-refresh loop tied to the window's lifecycle. `./launch.command` (headless interval loop)
+refresh loop tied to the window's lifecycle. On every double-click it also best-effort
+safe-restarts any still-running previous instance and auto-syncs the checkout to its
+upstream branch (fast-forward-only, never touching local edits) before starting —
+see `docs/RUNBOOK.md` §0 for the exact behavior. `./launch.command` (headless interval loop)
 and `./launch_gui.command` / `streamlit run gui/app.py` (the Streamlit Command Center GUI,
 Launcher/Reports/Settings/Strategy Matrix/Paper-Trading Monitor/Gravity Audit/Technical
 Options Matrix/Market Data/Live Inventory/Observability tabs) remain valid standalone
