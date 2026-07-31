@@ -59,8 +59,9 @@ def _key_metrics_ttm(roe=0.20):
 def _ratios_ttm(
     pe=15.0, book_value=10.0, ptb=15.0, div_yield=0.0257, payout=0.30,
     gross_margin=0.45, op_margin=0.25, dte=1.5, current_ratio=1.8,
+    net_income_per_share=None,
 ):
-    return [{
+    row = {
         "symbol": "TEST",
         "priceToEarningsRatioTTM": pe,
         "bookValuePerShareTTM": book_value,
@@ -71,7 +72,10 @@ def _ratios_ttm(
         "operatingProfitMarginTTM": op_margin,
         "debtToEquityRatioTTM": dte,
         "currentRatioTTM": current_ratio,
-    }]
+    }
+    if net_income_per_share is not None:
+        row["netIncomePerShareTTM"] = net_income_per_share
+    return [row]
 
 
 def _income_statement_ttm(eps_diluted=10.0):
@@ -226,6 +230,80 @@ class TestSignGates:
         )
         assert out["priceToBook"] == pytest.approx(15.0)
         assert out["bookValue"] == pytest.approx(10.0)
+
+
+# --------------------------------------------------------------------------- #
+# 2b. trailingEps sourcing fallback -- the SECOND live correction (module
+# docstring). Confirmed 2026-07-31 against real KO/JNJ FMP responses:
+# income-statement-ttm (epsDiluted) requires Ultimate/Enterprise and is
+# ALWAYS unavailable on Starter, which without this fallback made
+# trailingEps/trailingPE permanently NaN for every symbol -- not just
+# loss-makers -- defeating earnings_yield across the whole pipeline.
+# --------------------------------------------------------------------------- #
+class TestTrailingEpsFallback:
+    def test_eps_diluted_used_when_present(self):
+        """epsDiluted still wins when the account tier actually supplies it."""
+        out = map_fundamentals(
+            "TEST",
+            **full_kwargs(
+                income_statement_ttm=_income_statement_ttm(eps_diluted=10.0),
+                ratios_ttm=_ratios_ttm(net_income_per_share=3.33),
+            ),
+        )
+        assert out["trailingEps"] == pytest.approx(10.0)
+
+    def test_falls_back_to_net_income_per_share_when_income_statement_missing(self):
+        """The real Starter-tier condition: income_statement_ttm=None (an
+        ACCESS DENIED 403 degrades to None upstream in FMPProvider)."""
+        out = map_fundamentals(
+            "TEST",
+            **full_kwargs(
+                income_statement_ttm=None,
+                ratios_ttm=_ratios_ttm(net_income_per_share=3.327754532775453, pe=26.30330330330331),
+            ),
+        )
+        assert out["trailingEps"] == pytest.approx(3.327754532775453)
+        # And the whole point: trailingPE is no longer permanently NaN.
+        assert out["trailingPE"] == pytest.approx(26.30330330330331)
+
+    def test_falls_back_when_epsdiluted_key_present_but_null(self):
+        out = map_fundamentals(
+            "TEST",
+            **full_kwargs(
+                income_statement_ttm=[{"symbol": "TEST", "epsDiluted": None}],
+                ratios_ttm=_ratios_ttm(net_income_per_share=5.0),
+            ),
+        )
+        assert out["trailingEps"] == pytest.approx(5.0)
+
+    def test_nan_when_neither_source_available(self):
+        out = map_fundamentals(
+            "TEST",
+            **full_kwargs(income_statement_ttm=None, ratios_ttm=_ratios_ttm()),
+        )
+        assert math.isnan(out["trailingEps"])
+        assert math.isnan(out["trailingPE"])
+
+    def test_real_ko_jnj_response_shapes_no_longer_permanently_nan(self):
+        """Regression guard using the exact live-probed KO payload shapes
+        from the module docstring's second LIVE CORRECTION."""
+        ko_ratios = _ratios_ttm(
+            pe=26.30330330330331, book_value=8.906322640632265, ptb=10.423573443983402,
+            div_yield=0.023747, payout=0.7724224643755239, gross_margin=0.6188832811346725,
+            op_margin=0.2963155059945341, dte=1.204508990318119, current_ratio=1.3046031746031745,
+            net_income_per_share=3.327754532775453,
+        )
+        out = map_fundamentals(
+            "KO",
+            **full_kwargs(
+                profile=_profile(price=87.59, market_cap=376854223200, sector="Consumer Defensive", name="The Coca-Cola Company"),
+                ratios_ttm=ko_ratios,
+                income_statement_ttm=None,  # ACCESS DENIED on Starter -- confirmed live
+            ),
+        )
+        assert not math.isnan(out["trailingEps"])
+        assert not math.isnan(out["trailingPE"])
+        assert out["debtToEquity"] == pytest.approx(120.4508990318119)  # x100 contract
 
 
 # --------------------------------------------------------------------------- #
