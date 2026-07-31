@@ -7,11 +7,12 @@ import type {
   SignalModuleScore,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Table, Tile } from "../components/ui";
+import { Button, ErrorState, Loading, Table, Tile } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum } from "../format";
 import { pnlColor, theme } from "../theme";
+import { exportCsv } from "../utils/csv";
 
 const DASH = "—";
 
@@ -95,7 +96,27 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
         </div>
       ) : (
         <section className="card card-pad">
-          <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Module contributions</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--s-2)", flexWrap: "wrap" }}>
+            <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Module contributions</h2>
+            <Button
+              variant="neutral"
+              onClick={() =>
+                exportCsv(
+                  modules,
+                  [
+                    { key: "name", header: "Module" },
+                    { key: "score", header: "Score" },
+                    { key: "weight", header: "Weight" },
+                    { key: "contribution", header: "Contribution" },
+                  ],
+                  `signal_breakdown_${d.symbol}`
+                )
+              }
+              data-testid="export-signal-breakdown-csv"
+            >
+              ⬇️ Export CSV
+            </Button>
+          </div>
           <div style={{ overflowX: "auto" }}>
             <Table>
               <thead>

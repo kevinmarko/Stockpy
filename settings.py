@@ -3184,6 +3184,30 @@ class Settings(BaseSettings):
             "had."
         ),
     )
+    # Master switch for the Pilots API's dead-letter retry endpoint
+    # (api/pilots_api.py POST /dead-letter/retry -- spawns a real single-symbol
+    # `main.py` subprocess via gui.orchestrator_runner.launch_symbol_retry, the
+    # SAME launcher the Streamlit Launcher tab's dead-letter Retry button
+    # already calls). A DEDICATED flag, per this codebase's established
+    # pattern (see BROKERAGE_REFRESH_ENABLED / AGENTIC_DISCOVERY_ENABLED /
+    # GENERAL_SETTINGS_WRITES_ENABLED / MACRO_GATE_WRITES_ENABLED above): a
+    # write with a real persistence/subprocess/network cost gets its OWN
+    # flag, never rides in on an unrelated one (e.g. AUTOMATION_WRITES_ENABLED,
+    # which is scoped to the daemon interval and kill-switch resume). Default
+    # False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS or SECRET_KEYS
+    # (a GUI bug must never flip it on; hand-set in .env only), and also
+    # requires FOLLOW_API_TOKEN. GET /dead-letter is read-only and NOT gated
+    # by this flag (require_read_token alone, matching every other GET here).
+    DEAD_LETTER_RETRY_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables POST /dead-letter/retry on the Pilots API (re-runs main.py "
+            "for one dead-lettered symbol, advisory-only -- no orders). Off by "
+            "default; also requires FOLLOW_API_TOKEN. Never GUI-writable -- "
+            "hand-set in .env only, so a single-symbol pipeline re-run cannot "
+            "ride in on any other writes-enabled flag."
+        ),
+    )
 
     @field_validator("OUTPUT_DIR")
     @classmethod

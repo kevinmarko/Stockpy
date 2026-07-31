@@ -919,6 +919,19 @@ HIGH_STAKES_COMMANDS: Dict[str, Dict[frozenset, str]] = {
     "main.py": {
         frozenset({"--refresh-account"}): "This forces a fresh Robinhood login, bypassing the daily account-snapshot cache.",
     },
+    # database_setup.py takes NO argv (see its own trivial argparse -- added
+    # only so cli_introspect can capture a real parser instead of dead-
+    # lettering it) -- there is no flag to gate on, so the empty frozenset()
+    # is the trigger: `frozenset() <= arg_set` is True for ANY arg_set,
+    # including the always-empty one this command actually gets, so every
+    # invocation requires confirm=True. Schema-safe (CREATE TABLE IF NOT
+    # EXISTS, additive-only migration -- see initialize_database()) but still
+    # a real write against quant_platform.db, so it gets the same
+    # confirmation gate as the kill switch / forced re-login above rather
+    # than running silently the instant an operator clicks Run.
+    "database_setup.py": {
+        frozenset(): "This (re)initializes/migrates the SQLite schema in quant_platform.db (CREATE TABLE IF NOT EXISTS -- idempotent, additive-only, but a real schema write).",
+    },
 }
 
 # app_shell.py pops a native desktop window (pywebview) on whichever machine

@@ -8,10 +8,10 @@
  * (no closed trades / no logged signals), and the decision write flow
  * (click a signal → Acted → the server result renders, never assumed).
  */
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Calibration } from "./Calibration";
 import { api } from "../api/client";
 import type { CalibrationSummary, EdgeByStrategy } from "../api/types";
@@ -160,5 +160,44 @@ describe("Calibration screen (real mock API)", () => {
     expect(modifiedBtn).toBeDisabled();
     await user.type(screen.getByPlaceholderText(/Halved size/), "trimmed to half");
     expect(modifiedBtn).not.toBeDisabled();
+  });
+});
+
+describe("Decision log export CSV (client-side, G11)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+
+  beforeEach(() => {
+    URL.createObjectURL = vi.fn(() => "blob:mock-url");
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  it("clicking Export CSV on Recent decisions downloads decision_log.csv, no network call", async () => {
+    let downloadedName: string | null = null;
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement
+    ) {
+      downloadedName = this.download;
+    });
+    renderScreen();
+    const button = await screen.findByTestId("export-decision-log-csv");
+    fireEvent.click(button);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(downloadedName).toBe("decision_log.csv");
+  });
+
+  it("does not render an export button when no decisions are logged yet", async () => {
+    vi.spyOn(api, "getCalibrationSummary").mockResolvedValueOnce(EMPTY_SUMMARY);
+    renderScreen();
+    await screen.findByText("No decisions logged yet.");
+    expect(screen.queryByTestId("export-decision-log-csv")).not.toBeInTheDocument();
   });
 });

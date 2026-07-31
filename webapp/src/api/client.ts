@@ -98,6 +98,10 @@ import type {
   ScanConfigRequest,
   ScanConfigResult,
   WatchResult,
+  ReportManifest,
+  ReportContent,
+  DeadLetterQueue,
+  DeadLetterRetryResult,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 
@@ -592,6 +596,16 @@ const liveApi = {
   restartDaemon: () =>
     http<RestartDaemonResult>("/daemon/restart", {
       method: "POST",
+    }),
+  // ---- Report Library (G5) + Dead-Letter Queue (G6) ----
+  getReports: () => http<ReportManifest>("/reports"),
+  getReport: (name: string) =>
+    http<ReportContent>(`/reports/${encodeURIComponent(name)}`),
+  getDeadLetter: () => http<DeadLetterQueue>("/dead-letter"),
+  retryDeadLetter: (symbol: string) =>
+    http<DeadLetterRetryResult>("/dead-letter/retry", {
+      method: "POST",
+      body: JSON.stringify({ symbol }),
     }),
 };
 

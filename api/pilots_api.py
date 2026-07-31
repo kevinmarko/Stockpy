@@ -3427,3 +3427,161 @@ def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
             "in-process — restart the daemon via POST /daemon/restart to apply."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Report Library (GET /reports, GET /reports/{name}) + Dead-Letter Queue
+# (GET /dead-letter, POST /dead-letter/retry) — webapp parity gaps G5/G6.
+#
+# ``pilots/reports.py`` and ``pilots/dead_letter.py`` are new, dependency-light
+# (stdlib + ``settings`` only) read helpers — see their own module docstrings.
+# Imported LAZILY per function (matching ``gui.decision_log``/
+# ``pilots.watchlist_writer`` elsewhere in this file) rather than added to the
+# multi-line ``from pilots import (...)`` block above, so this block stays a
+# self-contained append with no edit to that shared block.
+# ---------------------------------------------------------------------------
+
+
+def require_dead_letter_retry_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``POST /dead-letter/retry``. A
+    DEDICATED flag (``settings.DEAD_LETTER_RETRY_ENABLED``), NOT any sibling
+    ``require_*_writes_enabled`` flag: this spawns a REAL single-symbol
+    ``main.py`` subprocess (network calls, a fresh data fetch, a real
+    advisory evaluation) — a materially different cost/risk than any
+    existing flag was scoped for. Mirrors ``require_brokerage_connect_enabled``
+    exactly — deliberately NOT GUI-writable (``gui/env_io.py``), hand-set in
+    ``.env`` only. ``GET /dead-letter`` is read-only and NOT gated by this
+    flag (``require_read_token`` alone, matching every other GET here)."""
+    if not settings.DEAD_LETTER_RETRY_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Dead-letter retry is disabled (DEAD_LETTER_RETRY_ENABLED=false).",
+        )
+
+
+class DeadLetterRetryRequest(BaseModel):
+    """Body for ``POST /dead-letter/retry``. Re-runs ``main.py``
+    (advisory-only — no orders) for exactly ONE symbol via
+    ``gui.orchestrator_runner.launch_symbol_retry``, the SAME subprocess
+    launcher the Streamlit Launcher tab's dead-letter Retry button already
+    uses (``gui/panels/launcher.py::_render_dead_letter_queue``). ``symbol``
+    shape is re-validated by the endpoint against
+    ``pilots.watchlist_writer._SYMBOL_RE`` before the launcher is ever
+    invoked — the launcher itself builds a subprocess env var from the raw
+    string and performs no shape validation of its own (unlike
+    ``pilots.watchlist_writer.append_symbols``)."""
+
+    symbol: str = Field(..., min_length=1, max_length=16)
+
+
+@app.get("/reports", dependencies=[Depends(require_read_token)])
+def get_reports() -> Dict[str, Any]:
+    """Manifest of every generated report file the Streamlit Report Library
+    tab (``gui/panels/reports_library.py``) enumerates: the daily report, the
+    two orchestrator dashboards, daily briefings (``briefing_*.md``), and
+    validation reports (``*_validation_summary.json`` / ``validation_*.html``).
+
+    Fail-open read (``require_read_token``), mirroring every other GET here.
+    Reuses THIS module's own ``_reports_dir()`` (validation files only —
+    briefings/dashboards/the daily report all resolve off
+    ``settings.OUTPUT_DIR`` directly, matching every other reader in this
+    file) so tests can point it at a fixture dir the same way they already do
+    for ``GET /strategy/health`` and ``GET /strategy/validation-trend``.
+    Never 500s — an empty universe degrades to ``reports: []`` plus an
+    honest ``reason`` (CONSTRAINT #6)."""
+    from pilots import reports as reports_reader
+
+    return reports_reader.list_reports(reports_dir=_reports_dir())
+
+
+@app.get("/reports/{name}", dependencies=[Depends(require_read_token)])
+def get_report_content(name: str) -> Dict[str, Any]:
+    """Content for one report file: markdown text (a briefing), HTML text
+    (the daily report / an orchestrator dashboard / a validation HTML
+    report), or a parsed JSON object (a validation summary).
+
+    SECURITY: ``name`` is resolved ONLY against the manifest
+    ``pilots.reports.get_report_content`` itself builds by globbing the real
+    report directories (see that function's docstring) — this handler never
+    joins the client-supplied ``name`` onto a filesystem path. Mirrors
+    ``pilots.commands.resolve_command``'s identical discipline for
+    ``POST /jobs``'s command execution. A ``name`` absent from that manifest
+    — including any ``../`` traversal attempt, which can never match a real
+    globbed basename — 404s honestly rather than attempting a read."""
+    from pilots import reports as reports_reader
+
+    result = reports_reader.get_report_content(name, reports_dir=_reports_dir())
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No report named {name!r}.")
+    return result
+
+
+@app.get("/dead-letter", dependencies=[Depends(require_read_token)])
+def get_dead_letter() -> Dict[str, Any]:
+    """The last pipeline run's dead-letter queue (failed symbols) —
+    ``output/dead_letter.json``, written by ``main_orchestrator.run_pipeline``
+    (mirrors the Streamlit Launcher tab's dead-letter section,
+    ``gui/panels/launcher.py::_render_dead_letter_queue``).
+
+    Fail-open read (``require_read_token``). ``retry_enabled`` mirrors the
+    ``writable`` convention used elsewhere (``GET /strategy/matrix``,
+    ``GET /agentic/discovery``) so the PWA can hide/disable the Retry control
+    before the operator hits a 403 on ``POST /dead-letter/retry``. Never
+    500s — a missing/corrupt file degrades to ``entries: []`` with an honest
+    ``reason`` and ``is_clean: null`` (CONSTRAINT #6; ``null``, not ``true``,
+    since "no run has completed yet" is not the same claim as "the last run
+    was clean")."""
+    from pilots import dead_letter as dead_letter_reader
+
+    payload = dead_letter_reader.read_dead_letter()
+    payload["retry_enabled"] = bool(settings.DEAD_LETTER_RETRY_ENABLED)
+    return payload
+
+
+@app.post(
+    "/dead-letter/retry",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_dead_letter_retry_enabled),
+    ],
+)
+def post_dead_letter_retry(body: DeadLetterRetryRequest) -> Dict[str, Any]:
+    """Re-run ``main.py`` for exactly one dead-lettered symbol — a genuine
+    subprocess spawn with real network/broker-cache cost, so this sits
+    behind ``require_command_token`` STACKED with the dedicated
+    ``require_dead_letter_retry_enabled`` master switch (same "auth tier AND
+    feature flag" pattern as ``PUT /strategy/modules`` / ``POST
+    /agentic/watch``). Reuses ``gui.orchestrator_runner.launch_symbol_retry``
+    — the SAME launcher the Streamlit Launcher tab's per-symbol Retry button
+    already calls — rather than re-implementing the subprocess spawn.
+
+    The symbol is re-validated against ``pilots.watchlist_writer._SYMBOL_RE``
+    here first (422 ``invalid_symbol`` on a malformed value) since
+    ``launch_symbol_retry`` performs no shape validation of its own before
+    writing the value into a subprocess env var and a log-file banner line.
+    Does not wait for the run to finish — returns immediately with the
+    spawned PID and log path so the caller can poll/tail it. This is an
+    advisory-only, no-order diagnostic run (``main.py`` submits no orders),
+    never applied retroactively (``applies: "immediately"`` describes the
+    subprocess launch itself, not any order submission — there is none)."""
+    from gui.orchestrator_runner import launch_symbol_retry
+    from pilots.watchlist_writer import _SYMBOL_RE
+
+    symbol = body.symbol.strip().upper()
+    if not _SYMBOL_RE.match(symbol):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_symbol",
+                "message": f"{symbol!r} is not a valid ticker shape.",
+            },
+        )
+
+    handle = launch_symbol_retry(symbol)
+    return {
+        "symbol": symbol,
+        "pid": handle.pid,
+        "log_path": str(handle.log_path),
+        "applies": "immediately",
+        "note": f"Retry launched for {symbol} (advisory-only — no orders placed).",
+    }
