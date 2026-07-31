@@ -32,7 +32,7 @@ TARGETS: list[Target] = [
     Target("module", "validation.harness", "validation.harness", "python -m validation.harness"),
     Target("module", "prompt_registry", "prompt_registry", "python -m prompt_registry"),
     Target("path", "scripts/preflight_check.py", "preflight_check.py", "python scripts/preflight_check.py"),
-    Target("path", "scripts/refresh_validations.py", "refresh_validations.py", "python scripts/refresh_validations.py"),
+    Target("module", "scripts.refresh_validations", "refresh_validations.py", "python -m scripts.refresh_validations"),
     Target("path", "scripts/daily_briefing.py", "daily_briefing.py", "python scripts/daily_briefing.py"),
     Target("path", "scripts/track_record_status.py", "track_record_status.py", "python scripts/track_record_status.py"),
 ]
