@@ -1,6 +1,8 @@
 /**
- * ResearchHub.test.tsx — the Research section's landing hub: all 9 screen
- * cards render with their label + description, the TAB_HELP-sourced
+ * ResearchHub.test.tsx — the Research section's landing hub: all 11 screen
+ * cards render with their label + description (Sentiment Dynamics and
+ * Sector Selection closing parity gap G2 — the hub previously listed only 9
+ * of the 11 screens the nav actually carries), the TAB_HELP-sourced
  * descriptions read live off help/helpContent.ts (never a hard-coded
  * duplicate, so the test would catch drift), and clicking a card navigates
  * to that screen's route.
@@ -29,6 +31,8 @@ function renderHub(initialPath = "/research") {
         <Route path="/pairs" element={<Stub marker="landed:pairs" />} />
         <Route path="/options" element={<Stub marker="landed:options" />} />
         <Route path="/signals" element={<Stub marker="landed:signals" />} />
+        <Route path="/sentiment" element={<Stub marker="landed:sentiment" />} />
+        <Route path="/sector-selection" element={<Stub marker="landed:sector-selection" />} />
         <Route path="/forecast" element={<Stub marker="landed:forecast" />} />
         <Route path="/data-explorer" element={<Stub marker="landed:data-explorer" />} />
       </Routes>
@@ -45,7 +49,7 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 9 card labels", () => {
+  it("renders all 11 card labels", () => {
     renderHub();
     for (const label of [
       "Pilots",
@@ -55,6 +59,8 @@ describe("ResearchHub screen", () => {
       "Pairs radar",
       "Options",
       "Signal Breakdown",
+      "Sentiment Dynamics",
+      "Sector Selection",
       "Forecast Viewer",
       "Data Explorer",
     ]) {
@@ -62,7 +68,7 @@ describe("ResearchHub screen", () => {
     }
   });
 
-  it("renders live TAB_HELP descriptions for all 9 cards, not a hard-coded duplicate", () => {
+  it("renders live TAB_HELP descriptions for all 11 cards, not a hard-coded duplicate", () => {
     renderHub();
     // Asserts against the actual TAB_HELP.* text at runtime -- a change to
     // helpContent.ts's prose would break this test if ResearchHub still
@@ -76,6 +82,10 @@ describe("ResearchHub screen", () => {
     expect(screen.getByText(TAB_HELP.pairs.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.options.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.signals.description)).toBeInTheDocument();
+    expect(screen.getByText(TAB_HELP.sentiment.description)).toBeInTheDocument();
+    expect(
+      screen.getByText(TAB_HELP["sector-selection"].description)
+    ).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.forecast.description)).toBeInTheDocument();
     expect(
       screen.getByText(TAB_HELP["data-explorer"].description)
@@ -90,6 +100,8 @@ describe("ResearchHub screen", () => {
     ["Pairs radar", "landed:pairs"],
     ["Options", "landed:options"],
     ["Signal Breakdown", "landed:signals"],
+    ["Sentiment Dynamics", "landed:sentiment"],
+    ["Sector Selection", "landed:sector-selection"],
     ["Forecast Viewer", "landed:forecast"],
     ["Data Explorer", "landed:data-explorer"],
   ])("clicking the %s card navigates to its route", async (label, marker) => {

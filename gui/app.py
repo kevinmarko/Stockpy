@@ -10,7 +10,7 @@ Launch
 
 or double-click ``launch_gui.command`` on macOS.
 
-Tabs (18, in ``tab_labels`` order)
+Tabs (19, in ``tab_labels`` order)
 ----------------------------------
 1.  Launcher & Orchestration  — run main_orchestrator.py + live stage status
 2.  Reports                   — evaluation/research analytics + report export
@@ -22,19 +22,22 @@ Tabs (18, in ``tab_labels`` order)
 8.  Market Data               — active provider, quote freshness, cache controls
 9.  Observability             — compact macro/regime/P&L summary
 10. Analytics                 — broker realized P&L, equity curve, alerts, ML registry
-11. Pairs                     — cointegration scan + Kalman hedge (advisory-only)
-12. Live Inventory            — synchronized portfolio + watchlist coverage map
+11. Sentiment Dynamics        — per-symbol News Catalyst sentiment + on-demand
+                                Antigravity agent sentiment/credibility plus a real
+                                GJR-GARCH asymmetric-volatility persistence read
+12. Pairs                     — cointegration scan + Kalman hedge (advisory-only)
+13. Live Inventory            — synchronized portfolio + watchlist coverage map
                                 with on-demand "Sync Now" (Task 1.4)
-13. Help                      — glossary + tab-by-tab How-To Guide
-14. Prompts                   — Prompt Registry: resolved version/source per ID,
+14. Help                      — glossary + tab-by-tab How-To Guide
+15. Prompts                   — Prompt Registry: resolved version/source per ID,
                                 🔄 Sync, diff viewer, ↩ Rollback/pin (Stage 7)
-15. AI Insights               — Claude analyst note + Gemini chart-pattern vision +
+16. AI Insights               — Claude analyst note + Gemini chart-pattern vision +
                                 aggregate Claude-vs-Gemini disagreement view (Tier 9 Scope 3)
-16. AI Control Center         — one operator surface for every AI option: master-switch
+17. AI Control Center         — one operator surface for every AI option: master-switch
                                 toggles, on-demand per-symbol actions, Gravity AI audit,
                                 and Start/Stop of an --interval/--agent scheduled run
-17. Report Library            — inline-viewable browser over all generated reports
-18. Validation Lab            — run the validation harness per strategy + view
+18. Report Library            — inline-viewable browser over all generated reports
+19. Validation Lab            — run the validation harness per strategy + view
                                 deployable verdict / PBO / DSR / Sharpe / MaxDD
 
 Design
@@ -303,7 +306,7 @@ tab_labels = [
     "📁 Report Library",
     "🔬 Validation Lab",
 ]
-# Light tab grouping: a compact legend that maps the 18-tab row into five
+# Light tab grouping: a compact legend that maps the 19-tab row into five
 # logical clusters so operators can orient quickly. The tabs themselves stay a
 # single st.tabs row (indices/safe_panel wrapping unchanged); the responsive
 # wrap CSS injected by styling.inject_global_css() keeps every tab reachable on
