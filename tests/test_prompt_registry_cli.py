@@ -364,8 +364,12 @@ class TestPinCommand:
         mock_write.assert_called_once()
         key_arg, val_arg = mock_write.call_args[0]
         assert key_arg == "PROMPT_REGISTRY_PINS"
-        parsed = json.loads(val_arg)
-        assert parsed[_KNOWN_ID] == "1.0.0"
+        # Must be the plain dict, NOT a pre-json.dumps'd string — env_io.write_setting
+        # already JSON-encodes _JSON_KEYS values internally, so passing an
+        # already-encoded string would double-encode it (see TestPinWriteEncoding
+        # in tests/test_prompt_registry_gui.py for the original regression).
+        assert isinstance(val_arg, dict)
+        assert val_arg[_KNOWN_ID] == "1.0.0"
 
     def test_pin_nonexistent_version_exits_nonzero(self, tmp_path, capsys):
         reg = PromptRegistry(store=None, cache=CacheManager(tmp_path), enabled=True)
@@ -463,6 +467,48 @@ class TestRollbackCommand:
         assert rc != 0
         err = capsys.readouterr().err
         assert "no older" in err.lower() or "roll" in err.lower()
+
+    def test_rollback_calls_env_io_write_setting_with_plain_dict(self, tmp_path):
+        cache = CacheManager(tmp_path)
+        self._write_two_versions(cache)
+        reg = PromptRegistry(store=None, cache=cache, enabled=True)
+        _inject_registry(reg)
+
+        with unittest.mock.patch("gui.env_io.write_setting") as mock_write:
+            main(["rollback", _KNOWN_ID])
+
+        mock_write.assert_called_once()
+        key_arg, val_arg = mock_write.call_args[0]
+        assert key_arg == "PROMPT_REGISTRY_PINS"
+        # Same double-encoding hazard as the pin command — see
+        # TestPinWriteEncoding in tests/test_prompt_registry_gui.py.
+        assert isinstance(val_arg, dict)
+        assert val_arg[_KNOWN_ID] == "1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# TestPinWriteEncoding (regression for the double-JSON-encoding bug)
+# ---------------------------------------------------------------------------
+
+class TestPinWriteEncoding:
+    def test_no_pre_encoded_pins_dict_in_source(self):
+        """Neither of the two PROMPT_REGISTRY_PINS write sites (cmd_pin,
+        cmd_rollback) may pre-``json.dumps`` the pins dict before handing it
+        to ``env_io.write_setting`` — that double-encodes, and
+        ``PromptRegistry._build_registry_from_settings``'s ``isinstance(pins,
+        dict)`` check then silently discards every CLI-set pin."""
+        import re as _re
+        main_src = Path(_REPO_ROOT / "prompt_registry" / "__main__.py").read_text()
+        assert "json.dumps(dict(sorted(reg._pins.items())))" not in main_src
+
+        write_calls = _re.findall(
+            r'write_setting\("PROMPT_REGISTRY_PINS",\s*(\w+)\)', main_src
+        )
+        assert len(write_calls) == 2, f"expected 2 write sites, found {write_calls}"
+        for var_name in write_calls:
+            assert "json" not in var_name.lower(), (
+                f"write_setting called with {var_name!r} — looks pre-JSON-encoded"
+            )
 
 
 # ---------------------------------------------------------------------------
