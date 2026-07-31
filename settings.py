@@ -502,41 +502,45 @@ class Settings(BaseSettings):
     FMP_QUOTES_ENABLED: bool = Field(
         default=False,
         description=(
-            "Reserved switch for FMP-sourced quotes. False (the default) is a "
-            "complete no-op reproducing today's exact behavior: no FMP quote "
-            "request is ever attempted and the incumbent Alpaca/yfinance path "
-            "is untouched. NOT CURRENTLY READ by the provider-selection code "
-            "-- today MARKET_DATA_PROVIDER='fmp' alone elects FMP for quotes, "
-            "with no check of this flag either way. Kept in the schema so a "
-            "future PR can wire in the two-gate convention (the "
-            "STOCKTWITS_ENABLED precedent) without a new env var; setting it "
-            "currently has no effect."
+            "Two-gate capability switch for FMP-sourced quotes, independent "
+            "of FMP_BARS_ENABLED (an operator may want one live without the "
+            "other). False (the default) is a complete no-op reproducing "
+            "today's exact behavior. Requires MARKET_DATA_PROVIDER='fmp' to "
+            "have any effect at all -- with that set but this flag False, "
+            "get_latest_quote() falls through UNCONDITIONALLY to the same "
+            "Alpaca-if-keyed-else-yfinance default an unset "
+            "MARKET_DATA_PROVIDER would produce (not governed by "
+            "FMP_FALLBACK_ENABLED, since FMP is never attempted -- there is "
+            "nothing to fall back FROM). quote_source/is_realtime always "
+            "report the provider actually serving, never 'fmp' while this "
+            "is False."
         ),
     )
     FMP_BARS_ENABLED: bool = Field(
         default=False,
         description=(
-            "Reserved switch for FMP-sourced OHLCV bars. False (the default) "
-            "is a complete no-op reproducing today's exact behavior. NOT "
-            "CURRENTLY READ by the provider-selection code -- today "
-            "MARKET_DATA_PROVIDER='fmp' alone elects FMP for bars, with no "
-            "check of this flag either way; see FMP_QUOTES_ENABLED's "
-            "description for why. Read FMP_BARS_ADJUSTMENT before enabling: "
-            "an adjustment-convention mismatch corrupts every return series, "
-            "indicator, GARCH fit and backtest, and does so PLAUSIBLY "
-            "(nothing fails loudly)."
+            "Two-gate capability switch for FMP-sourced OHLCV bars, "
+            "independent of FMP_QUOTES_ENABLED -- see that field's "
+            "description for the shared mechanics (requires "
+            "MARKET_DATA_PROVIDER='fmp'; False falls through unconditionally "
+            "to the non-FMP default, not governed by FMP_FALLBACK_ENABLED). "
+            "Read FMP_BARS_ADJUSTMENT before enabling: an adjustment-"
+            "convention mismatch corrupts every return series, indicator, "
+            "GARCH fit and backtest, and does so PLAUSIBLY (nothing fails "
+            "loudly)."
         ),
     )
     FMP_FUNDAMENTALS_ENABLED: bool = Field(
         default=False,
         description=(
-            "Reserved switch for FMP-sourced fundamentals. False (the "
-            "default) is a complete no-op reproducing today's exact behavior "
-            "-- the Yahoo statement-derived path is untouched. NOT CURRENTLY "
-            "READ by the provider-selection code -- today "
-            "FUNDAMENTALS_SOURCE='fmp' alone elects FMP for fundamentals, "
-            "with no check of this flag either way; see "
-            "FMP_QUOTES_ENABLED's description for why."
+            "Two-gate capability switch for FMP-sourced fundamentals -- same "
+            "mechanics as FMP_QUOTES_ENABLED, one layer down. Requires "
+            "FUNDAMENTALS_SOURCE='fmp' to have any effect; with that set but "
+            "this flag False, get_fundamentals() falls through "
+            "unconditionally to the Yahoo statement-derived path (the "
+            "existing FUNDAMENTALS_SOURCE='yahoo' default), not governed by "
+            "FMP_FALLBACK_ENABLED. source_name always reports the provider "
+            "actually serving, never 'fmp' while this is False."
         ),
     )
     FMP_ANALYST_ENABLED: bool = Field(

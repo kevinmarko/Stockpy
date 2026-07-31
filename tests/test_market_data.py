@@ -1295,6 +1295,12 @@ class TestFMPFundamentalsChain:
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
             FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
+            # Defaults ON here so every existing "FMP actually serves" test
+            # below keeps exercising that path -- FMP_FUNDAMENTALS_ENABLED is
+            # the independent capability gate wired in on top of
+            # FUNDAMENTALS_SOURCE=fmp (see TestFMPCapabilityGates for
+            # coverage of the gate being off).
+            FMP_FUNDAMENTALS_ENABLED=True,
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)
@@ -1498,6 +1504,13 @@ class TestFMPQuoteBarsChain:
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
             FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
+            # Defaults ON here so every existing "FMP actually serves" test
+            # below keeps exercising that path -- FMP_QUOTES_ENABLED /
+            # FMP_BARS_ENABLED are the independent capability gates wired in
+            # on top of MARKET_DATA_PROVIDER=fmp (see
+            # TestFMPCapabilityGates for coverage of each gate being off,
+            # including independently of one another).
+            FMP_QUOTES_ENABLED=True, FMP_BARS_ENABLED=True,
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)
@@ -1728,3 +1741,197 @@ class TestFMPQuoteBarsChain:
             pd.testing.assert_frame_equal(out, yf_bars)
             yf_mock.assert_called_once()
             fmp_get_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 11. FMP_QUOTES_ENABLED / FMP_BARS_ENABLED / FMP_FUNDAMENTALS_ENABLED --
+# the independent per-capability gates on top of MARKET_DATA_PROVIDER=fmp /
+# FUNDAMENTALS_SOURCE=fmp. These were originally shipped as reserved,
+# unread settings (documented as a "two-gate convention" that the code never
+# actually enforced); this class covers the follow-up that wires them in for
+# real. The defining property under test throughout: MARKET_DATA_PROVIDER=fmp
+# selects the FMPProvider OBJECT, but each capability (quotes, bars,
+# fundamentals) independently decides whether that object actually SERVES --
+# a gate being off must behave EXACTLY like MARKET_DATA_PROVIDER/
+# FUNDAMENTALS_SOURCE had never selected 'fmp' at all for that capability,
+# unconditionally (i.e. NOT governed by FMP_FALLBACK_ENABLED, since FMP was
+# never attempted in the first place -- there's nothing to "fall back" from).
+# ---------------------------------------------------------------------------
+
+class TestFMPCapabilityGates:
+    @pytest.fixture(autouse=True)
+    def _reset_serve_counts(self):
+        from data.market_data import reset_provider_serve_counts
+        reset_provider_serve_counts()
+        yield
+        reset_provider_serve_counts()
+
+    def _patched(self, **overrides):
+        base = dict(
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
+            FMP_QUOTES_ENABLED=False, FMP_BARS_ENABLED=False, FMP_FUNDAMENTALS_ENABLED=False,
+        )
+        base.update(overrides)
+        return patch.multiple("settings.settings", **base)
+
+    # -- Quotes gate, independently -------------------------------------
+    def test_quotes_gate_off_falls_through_to_default_unconditionally(self):
+        """MARKET_DATA_PROVIDER=fmp + FMP_QUOTES_ENABLED=False: quotes must
+        be served by the plain Alpaca-if-keyed-else-yfinance default, with
+        ZERO FMP network activity -- even though FMP_FALLBACK_ENABLED is at
+        its default True, this is NOT a fallback (FMP was never attempted)."""
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+            yf_quote = _make_fake_quote("AAPL", "yfinance")
+            with patch.object(
+                     YFinanceProvider, "get_latest_quote", return_value=yf_quote,
+                 ) as yf_mock, \
+                 patch("data.fmp_client.requests.get") as fmp_get_mock:
+                out = cp.get_latest_quote("AAPL")
+
+            assert out.source == "yfinance"
+            yf_mock.assert_called_once()
+            fmp_get_mock.assert_not_called()
+
+    def test_quotes_gate_off_even_with_fallback_disabled_still_serves(self):
+        """The capability-gate-off path must NOT be short-circuited by
+        FMP_FALLBACK_ENABLED=False -- that setting only governs what happens
+        after a REAL FMP attempt fails, and FMP is never attempted here."""
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+            yf_quote = _make_fake_quote("AAPL", "yfinance")
+            with patch.object(YFinanceProvider, "get_latest_quote", return_value=yf_quote):
+                out = cp.get_latest_quote("AAPL")
+            assert out.source == "yfinance"
+
+    def test_quotes_gate_on_bars_gate_off_are_independent(self):
+        """The whole point of two separate settings: quotes can use FMP while
+        bars fall through to the default, from the SAME CompositeProvider
+        instance, without touching MARKET_DATA_PROVIDER at all."""
+        from data.market_data import CompositeProvider, FMPProvider, YFinanceProvider
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_QUOTES_ENABLED=True, FMP_BARS_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+            fmp_quote = _make_fake_quote("AAPL", "fmp")
+            yf_bars = _make_fake_bars_df()
+            with patch.object(FMPProvider, "get_latest_quote", return_value=fmp_quote), \
+                 patch.object(FMPProvider, "get_intraday_bars") as fmp_bars_mock, \
+                 patch.object(YFinanceProvider, "get_intraday_bars", return_value=yf_bars):
+                quote_out = cp.get_latest_quote("AAPL")
+                bars_out = cp.get_intraday_bars("AAPL")
+
+            assert quote_out.source == "fmp"
+            pd.testing.assert_frame_equal(bars_out, yf_bars)
+            fmp_bars_mock.assert_not_called()
+
+    # -- Bars gate, independently ----------------------------------------
+    def test_bars_gate_off_falls_through_to_default_unconditionally(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+            yf_bars = _make_fake_bars_df()
+            with patch.object(
+                     YFinanceProvider, "get_intraday_bars", return_value=yf_bars,
+                 ) as yf_mock, \
+                 patch("data.fmp_client.requests.get") as fmp_get_mock:
+                out = cp.get_intraday_bars("AAPL")
+
+            pd.testing.assert_frame_equal(out, yf_bars)
+            yf_mock.assert_called_once()
+            fmp_get_mock.assert_not_called()
+
+    def test_bars_gate_on_quotes_gate_off_are_independent(self):
+        """The mirror image of test_quotes_gate_on_bars_gate_off_are_independent."""
+        from data.market_data import CompositeProvider, FMPProvider, YFinanceProvider
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_QUOTES_ENABLED=False, FMP_BARS_ENABLED=True,
+        ):
+            cp = CompositeProvider()
+            fmp_bars = _make_fake_bars_df()
+            yf_quote = _make_fake_quote("AAPL", "yfinance")
+            with patch.object(FMPProvider, "get_intraday_bars", return_value=fmp_bars), \
+                 patch.object(FMPProvider, "get_latest_quote") as fmp_quote_mock, \
+                 patch.object(YFinanceProvider, "get_latest_quote", return_value=yf_quote):
+                bars_out = cp.get_intraday_bars("AAPL")
+                quote_out = cp.get_latest_quote("AAPL")
+
+            pd.testing.assert_frame_equal(bars_out, fmp_bars)
+            assert quote_out.source == "yfinance"
+            fmp_quote_mock.assert_not_called()
+
+    # -- Fundamentals gate, independently ---------------------------------
+    def test_fundamentals_gate_off_falls_through_to_default_unconditionally(self):
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider
+
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+            with patch.object(
+                     YahooFundamentalsProvider, "get_fundamentals",
+                     return_value={"trailingPE": 12.0},
+                 ) as yahoo_mock, \
+                 patch("data.fmp_client.requests.get") as fmp_get_mock:
+                out = cp.get_fundamentals("AAPL")
+
+            assert out == {"trailingPE": 12.0}
+            yahoo_mock.assert_called_once()
+            fmp_get_mock.assert_not_called()
+            # No "_source" tagging on the legacy path this falls through to
+            # -- matches TestFMPFundamentalsChain's default-config contract.
+            assert "_source" not in out
+
+    def test_fundamentals_gate_off_even_with_fallback_disabled_still_serves(self):
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider
+
+        with self._patched(
+            FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+            with patch.object(
+                YahooFundamentalsProvider, "get_fundamentals",
+                return_value={"trailingPE": 12.0},
+            ):
+                out = cp.get_fundamentals("AAPL")
+            assert out == {"trailingPE": 12.0}
+
+    # -- Observability: is_realtime / quote_source / source_name must be
+    #    honest about the EFFECTIVE provider, not the merely-selected one --
+    def test_quote_source_and_is_realtime_reflect_effective_not_selected_provider(self):
+        from data.market_data import CompositeProvider
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_QUOTES_ENABLED=False, FMP_QUOTES_REALTIME=True,
+        ):
+            cp = CompositeProvider()
+            # Provider SELECTION still picked FMP...
+            from data.market_data import FMPProvider
+            assert isinstance(cp._quote_provider, FMPProvider)
+            # ...but with the capability gate off, the observable labels must
+            # report the provider that ACTUALLY serves quotes (yfinance),
+            # never "fmp" -- even though FMP_QUOTES_REALTIME=True would have
+            # made is_realtime True had FMP genuinely been serving.
+            assert cp.quote_source == "yfinance"
+            assert cp.is_realtime is False
+
+    def test_source_name_reflects_effective_not_selected_fundamentals_provider(self):
+        from data.market_data import CompositeProvider, FMPProvider
+
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+            assert isinstance(cp._fundamentals_provider, FMPProvider)
+            assert cp.source_name != "fmp"
