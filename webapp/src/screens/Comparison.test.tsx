@@ -122,7 +122,10 @@ describe("Comparison screen (R2)", () => {
     expect(note).toHaveTextContent("Value + Quality");
 
     // Empty chart placeholder (0 real curves) and NO fabricated recharts line.
-    expect(screen.getByText("No performance curve data available for selected pilots.")).toBeInTheDocument();
+    // findByText (not getByText): the placeholder and the note above don't
+    // necessarily commit in the same render pass, so a synchronous query here
+    // was a race that CI's timing tripped more reliably than local runs.
+    expect(await screen.findByText("No performance curve data available for selected pilots.")).toBeInTheDocument();
     expect(container.querySelector(".recharts-line")).not.toBeInTheDocument();
   });
 

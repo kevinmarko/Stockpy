@@ -136,8 +136,10 @@ describe("Adversarial Robustness and Edge Case Suite", () => {
     fireEvent.click(checkbox);
 
     expect(await screen.findByText("Key Metrics Comparison")).toBeInTheDocument();
-    // Should not crash, and should display the empty curve message.
-    expect(screen.getByText("No performance curve data available for selected pilots.")).toBeInTheDocument();
+    // Should not crash, and should display the empty curve message. findByText
+    // (not getByText): this placeholder doesn't necessarily commit in the same
+    // render pass as "Key Metrics Comparison" above.
+    expect(await screen.findByText("No performance curve data available for selected pilots.")).toBeInTheDocument();
   });
 
   // --- 3. Activity Feed and API Failures ---
