@@ -100,6 +100,45 @@ class TestPopulated:
         result = discovery(candidates_path=path, scan_config_path=_configs_path(tmp_path))
         assert [c["symbol"] for c in result["candidates"]] == ["AAPL"]
 
+    def test_sell_and_hold_candidates_are_not_buy_candidates_and_are_dropped(self, tmp_path):
+        # Discovery exists to surface stocks the operator might want to BUY —
+        # a symbol they don't hold can't sensibly be "sold", and a HOLD isn't
+        # a buy either, so both are dropped before reaching the webapp even
+        # though the advisory engine can legitimately emit them.
+        path = self._write_candidates(
+            tmp_path,
+            [
+                {"symbol": "NVDA", "action": "BUY", "conviction": 0.71},
+                {"symbol": "PRPL", "action": "SELL", "conviction": 0.52},
+                {"symbol": "LESL", "action": "HOLD", "conviction": 0.44},
+                {"symbol": "PLTR", "action": None, "conviction": None},
+            ],
+        )
+        result = discovery(candidates_path=path, scan_config_path=_configs_path(tmp_path))
+        symbols = [c["symbol"] for c in result["candidates"]]
+        assert symbols == ["NVDA", "PLTR"]
+        assert result["reason"] is None
+
+    def test_all_candidates_filtered_out_gets_honest_reason(self, tmp_path):
+        path = self._write_candidates(
+            tmp_path,
+            [
+                {"symbol": "PRPL", "action": "SELL", "conviction": 0.52},
+                {"symbol": "LESL", "action": "HOLD", "conviction": 0.44},
+            ],
+        )
+        result = discovery(candidates_path=path, scan_config_path=_configs_path(tmp_path))
+        assert result["candidates"] == []
+        assert result["reason"] is not None
+        assert "BUY" in result["reason"]
+
+    def test_action_is_normalized_to_uppercase(self, tmp_path):
+        path = self._write_candidates(
+            tmp_path, [{"symbol": "AAPL", "action": "buy", "conviction": 0.6}]
+        )
+        result = discovery(candidates_path=path, scan_config_path=_configs_path(tmp_path))
+        assert result["candidates"][0]["action"] == "BUY"
+
     def test_non_numeric_conviction_degrades_to_none(self, tmp_path):
         path = self._write_candidates(
             tmp_path, [{"symbol": "AAPL", "action": "BUY", "conviction": "not-a-number"}]
