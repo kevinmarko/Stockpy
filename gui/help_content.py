@@ -1223,16 +1223,6 @@ SECTION_HELP: Dict[str, str] = {
         "placement the receipts log doesn't confirm — investigate before the next "
         "run. The ledger is tolerated as absent (no placements yet)."
     ),
-    "sidebar.regime_filter": (
-        "Filters the 'symbols matching' count below to the selected macro "
-        "regime. 'All regimes' shows every symbol from the last run regardless "
-        "of the regime tag recorded at that time."
-    ),
-    "export.download_signals_csv": (
-        "Exports the per-symbol rows from the last `state_snapshot.json` run — "
-        "action, score, Kelly target, buy/sell ranges, macro status — as a flat "
-        "CSV for offline post-trade analysis. Respects the regime filter above."
-    ),
     "pipeline_progress": (
         "Percentage of pipeline stages completed for the current run.  "
         f"Refreshes every {_PROGRESS_POLL_SECONDS} seconds while a run is "
@@ -1579,6 +1569,16 @@ METRIC_HELP: Dict[str, str] = {
         "Count of symbols from the last pipeline run whose recorded macro "
         "status matches the sidebar regime filter. Based on "
         "`output/state_snapshot.json` — refresh the pipeline to update it."
+    ),
+    "sidebar.regime_filter": (
+        "Filters the 'symbols matching' count below to the selected macro "
+        "regime. 'All regimes' shows every symbol from the last run regardless "
+        "of the regime tag recorded at that time."
+    ),
+    "export.download_signals_csv": (
+        "Exports the per-symbol rows from the last `state_snapshot.json` run — "
+        "action, score, Kelly target, buy/sell ranges, macro status — as a flat "
+        "CSV for offline post-trade analysis. Respects the regime filter above."
     ),
     "reports.suggested_exit_pct": (
         "Fraction of the currently held quantity recommended for exit on a "
