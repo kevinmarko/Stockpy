@@ -239,9 +239,11 @@ class TestVerifyCredentials:
         )
         assert result is True
 
-    def test_login_still_works_unchanged(self, monkeypatch):
-        """Refactoring _login()/_login_with() must not change _login()'s
-        existing env-var + interactive-fallback behavior."""
+    def test_login_with_mfa_secret_ignores_interactivity(self, monkeypatch):
+        """With RH_MFA_SECRET set, _login() derives mfa_code via pyotp and
+        takes the direct r.login(..., mfa_code=...) path regardless of
+        whether stdin happens to be a TTY -- the interactive-vs-headless
+        distinction only matters on the missing-secret fallback path."""
         calls = {}
 
         def mock_login(username, password, store_session=True, mfa_code=None):
@@ -249,12 +251,57 @@ class TestVerifyCredentials:
             return {"access_token": "tok"}
 
         monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
+        monkeypatch.setattr(robinhood_portfolio.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setenv("RH_USERNAME", "user@example.com")
+        monkeypatch.setenv("RH_PASSWORD", "pw")
+        monkeypatch.setenv("RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
+
+        robinhood_portfolio._login()
+        assert calls["mfa_code"]  # a real 6-digit TOTP code, not None/empty
+
+        monkeypatch.delenv("RH_USERNAME", raising=False)
+        monkeypatch.delenv("RH_PASSWORD", raising=False)
+        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+
+    def test_login_falls_back_to_interactive_only_at_a_real_terminal(self, monkeypatch):
+        """Missing RH_MFA_SECRET + a genuine TTY (a human running python3
+        main.py by hand) still falls through to robin_stocks' interactive
+        prompt, exactly as before -- this narrow case is preserved on purpose."""
+        calls = {}
+
+        def mock_login(username, password, store_session=True, mfa_code=None):
+            calls["mfa_code"] = mfa_code
+            return {"access_token": "tok"}
+
+        monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
+        monkeypatch.setattr(robinhood_portfolio.sys.stdin, "isatty", lambda: True)
         monkeypatch.setenv("RH_USERNAME", "user@example.com")
         monkeypatch.setenv("RH_PASSWORD", "pw")
         monkeypatch.delenv("RH_MFA_SECRET", raising=False)
 
-        robinhood_portfolio._login()  # should fall back to interactive path, no raise
+        robinhood_portfolio._login()  # falls back to interactive path, no raise
         assert calls["mfa_code"] is None
+
+        monkeypatch.delenv("RH_USERNAME", raising=False)
+        monkeypatch.delenv("RH_PASSWORD", raising=False)
+
+    def test_login_raises_immediately_when_headless_and_no_mfa_secret(self, monkeypatch):
+        """The actual bug fix: missing RH_MFA_SECRET in a headless context
+        (no TTY -- the Pilots API server, main.py under cron/systemd, any app
+        bundle launched without a terminal) must raise immediately, never
+        fall through to a blocking input() call that hangs forever with zero
+        feedback (this is exactly what a real operator hit)."""
+        def boom_login(*args, **kwargs):
+            raise AssertionError("r.login must not be called at all on this path")
+
+        monkeypatch.setattr(robinhood_portfolio.r, "login", boom_login)
+        monkeypatch.setattr(robinhood_portfolio.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setenv("RH_USERNAME", "user@example.com")
+        monkeypatch.setenv("RH_PASSWORD", "pw")
+        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+
+        with pytest.raises(ValueError, match="MFA code is required"):
+            robinhood_portfolio._login()
 
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)

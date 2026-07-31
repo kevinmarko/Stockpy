@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -204,10 +205,13 @@ def _login_with(
     ``RH_MFA_SECRET`` via ``pyotp``; ``verify_credentials()`` takes it
     verbatim from its caller). This function has no TOTP/pyotp knowledge of
     its own. When ``mfa_code`` is absent and ``allow_interactive=True``,
-    falls through to ``robin_stocks``' interactive terminal MFA prompt (only
-    safe for the env-var CLI/GUI path — never for an HTTP request, which must
-    not block on stdin). When absent and ``allow_interactive=False``, raises
-    immediately rather than risking a hang.
+    falls through to ``robin_stocks``' interactive terminal MFA prompt (a
+    blocking ``input()`` call) — the caller is responsible for only passing
+    ``True`` when a human is actually watching a real terminal (``_login()``
+    gates this on ``sys.stdin.isatty()``); never for an HTTP request or any
+    other headless context, which must not block on stdin that will never
+    arrive. When absent and ``allow_interactive=False``, raises immediately
+    rather than risking a hang.
     """
     if mfa_code:
         result = r.login(
@@ -252,8 +256,21 @@ def _login() -> None:
     minimising MFA prompts and avoiding spurious "new device" notifications.
     Passing ``mfa_code=`` selects the TOTP path; ``robin-stocks`` >= 3.4
     removed the legacy ``by_sms=`` kwarg and infers the path from whether
-    ``mfa_code`` is supplied. If RH_MFA_SECRET is not set, falls back to
-    interactive MFA prompting in the terminal.
+    ``mfa_code`` is supplied.
+
+    All THREE of RH_USERNAME/RH_PASSWORD/RH_MFA_SECRET are meant to be set
+    together for any automated caller (see .env.example) -- this function is
+    reached from every context that calls fetch_account_snapshot(), including
+    the Pilots API's POST /brokerage/refresh and main.py's own unattended
+    daily cache refresh, neither of which has anyone watching a terminal.
+    If RH_MFA_SECRET is missing, this ONLY falls back to robin_stocks'
+    interactive terminal MFA prompt (a blocking ``input()`` call) when
+    ``sys.stdin`` is a real TTY -- a human actually at a terminal running
+    ``python3 main.py`` by hand. In every headless context (a TTY-less
+    server process, a cron/systemd-launched run, an app bundle launched
+    without a terminal) it raises immediately instead of hanging forever on
+    stdin that will never receive input -- see _login_with's own docstring
+    for why that distinction matters.
     """
     username = _require_env("RH_USERNAME")
     password = _require_env("RH_PASSWORD")
@@ -266,7 +283,7 @@ def _login() -> None:
         mfa_code = ""
         logger.info("RH_MFA_SECRET is missing or empty. Falling back to interactive MFA login.")
 
-    _login_with(username, password, mfa_code, allow_interactive=True)
+    _login_with(username, password, mfa_code, allow_interactive=sys.stdin.isatty())
     logger.info("Robinhood login succeeded.")
 
 
