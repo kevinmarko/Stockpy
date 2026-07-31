@@ -26,16 +26,19 @@ import { fmtDate, fmtNum, fmtPct } from "../format";
  * `pilots.catalog` entry, joined on `validation_strategy_id`); a strategy
  * validated by `validation.harness` but not yet wired to any Pilot is
  * invisible there. This component instead renders `GET
- * /strategy/validation-trend`'s three sections, each backed by every
+ * /strategy/validation-trend`'s strategy sections, each backed by every
  * `reports/*_validation_summary.json` on disk regardless of Pilot mapping:
  *
  * 1. A flat table of every validated strategy's current gate snapshot.
  * 2. A multi-strategy, metric-selectable run-over-run trend chart (PBO/DSR/
  *    Sharpe/Max Drawdown) — only strategies with >= 2 recorded harness runs
  *    are plotted (CONSTRAINT #4: never a fabricated single-point trend).
- * 3. A macro-regime TRANSITION timeline from the rotated `output/history/`
- *    snapshots (only rows where the regime differs from the immediately
- *    preceding rotated snapshot, not every raw snapshot).
+ *
+ * (The endpoint also returns a macro-regime transition timeline; this
+ * component deliberately does not render it — the operator-facing macro
+ * regime control lives on the Mission Control tab's `MacroGateControl`,
+ * where turning the gate on/off actually does something, and CLAUDE.md's
+ * `MACRO_REGIME_GATE_ENABLED` bullet documents that control.)
  *
  * Each section degrades independently with its own honest `*_reason` string
  * when its underlying data doesn't exist yet — an empty section is never
@@ -59,18 +62,6 @@ function fmtGateNum(key: MetricKey, value: number | null): string {
   if (value == null) return "—";
   if (key === "max_drawdown") return fmtPct(value, 0, { fromFraction: true });
   return fmtNum(value, 2);
-}
-
-/** RISK ON -> growth, RECESSION/CREDIT EVENT -> decline, everything else
- * (NEUTRAL, RISK OFF, UNKNOWN, ...) -> caution. Never guesses at a regime
- * string that wasn't actually persisted. Mirrors Observability.tsx's own
- * local `regimeColor` (kept as an independent copy here rather than an
- * export, to keep this component's diff isolated from that screen). */
-function regimeColor(regime: string): string {
-  const r = regime.toUpperCase();
-  if (r.includes("RISK ON")) return theme.growth;
-  if (r.includes("RECESSION") || r.includes("CREDIT EVENT")) return theme.decline;
-  return theme.caution;
 }
 
 export function ValidationTrend() {
@@ -235,45 +226,6 @@ export function ValidationTrend() {
                 ))}
               </LineChart>
             </ResponsiveContainer>
-          </div>
-        )}
-      </section>
-
-      <section
-        className="card card-pad"
-        style={{ marginBottom: "var(--s-4)" }}
-        data-testid="validation-trend-regime"
-      >
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Macro regime timeline</h2>
-        <p style={{ margin: "0 0 var(--s-3)", fontSize: "var(--t-body)", color: theme.textMuted }}>
-          {data.n_rotated_snapshots} rotated snapshot{data.n_rotated_snapshots === 1 ? "" : "s"} available
-          in output/history/; only regime CHANGES are listed below.
-        </p>
-        {data.regime_timeline.length === 0 ? (
-          <div className="empty" data-testid="validation-trend-regime-empty">
-            {data.regime_reason ?? "No regime timeline yet."}
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-1-5)" }} data-testid="validation-trend-regime-list">
-            {data.regime_timeline.map((t, i) => (
-              <div
-                key={`${t.timestamp}-${i}`}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "var(--s-1-5) var(--s-2-5)",
-                  background: theme.surface2,
-                  borderRadius: "var(--r-xs)",
-                  fontSize: "var(--t-body)",
-                }}
-              >
-                <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>{fmtDate(t.timestamp)}</span>
-                <span style={{ color: regimeColor(t.market_regime), fontWeight: 700 }}>
-                  {t.market_regime}
-                </span>
-              </div>
-            ))}
           </div>
         )}
       </section>

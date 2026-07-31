@@ -1,10 +1,14 @@
 /**
- * ValidationTrend.test.tsx — the cross-strategy validation snapshot + trend +
- * macro-regime timeline card (Strategy Health screen, below the per-Pilot
- * cards). Covers the three independently-degrading sections: the
- * all-strategies table (including a strategy with no Pilot mapping — the
- * whole reason this component exists), the metric-selectable trend chart,
- * and the regime-transition timeline, plus each section's honest empty state.
+ * ValidationTrend.test.tsx — the cross-strategy validation snapshot + trend
+ * card (Strategy Health screen, below the per-Pilot cards). Covers the two
+ * independently-degrading sections: the all-strategies table (including a
+ * strategy with no Pilot mapping — the whole reason this component exists)
+ * and the metric-selectable trend chart, plus each section's honest empty
+ * state. (The `GET /strategy/validation-trend` payload also carries a
+ * macro-regime transition timeline; this component deliberately doesn't
+ * render it — see ValidationTrend.tsx's top-of-file comment — so the mock
+ * payloads below still populate those fields to satisfy the API contract
+ * type without asserting on them.)
  */
 import { render, screen, fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -42,12 +46,11 @@ describe("ValidationTrend (real mock API)", () => {
     expect((select as HTMLSelectElement).value).toBe("pbo");
   });
 
-  it("renders the macro regime timeline with only genuine transitions", async () => {
+  it("does not render a macro regime timeline section", async () => {
     render(<ValidationTrend />);
-    const list = await screen.findByTestId("validation-trend-regime-list");
-    expect(list.textContent).toContain("RISK ON");
-    expect(list.textContent).toContain("RISK OFF");
-    expect(list.textContent).toContain("NEUTRAL");
+    expect(await screen.findByTestId("validation-trend-chart")).toBeInTheDocument();
+    expect(screen.queryByTestId("validation-trend-regime")).not.toBeInTheDocument();
+    expect(screen.queryByText("Macro regime timeline")).not.toBeInTheDocument();
   });
 
   it("shows the honest cold-start reason when no strategies have been validated yet", async () => {
@@ -66,9 +69,6 @@ describe("ValidationTrend (real mock API)", () => {
     );
     expect(screen.getByTestId("validation-trend-chart-empty")).toHaveTextContent(
       "No run-over-run history yet."
-    );
-    expect(screen.getByTestId("validation-trend-regime-empty")).toHaveTextContent(
-      "Regime timeline needs >= 2 rotated snapshots."
     );
     // No metric selector when there's nothing to plot.
     expect(screen.queryByTestId("validation-trend-metric-select")).not.toBeInTheDocument();
