@@ -58,9 +58,10 @@ Auto-registered with ``global_registry`` at module import time (imported by
 
 import hashlib
 import logging
+import math
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -350,6 +351,20 @@ def _score_headline(headline: str, pipeline: Optional[Any]) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Headline/social blend weight -- shared by compute() (the live trading
+# signal) and NewsCatalystSignal._build_archive_scores() (what gets written
+# to news_history) so the two can never drift apart.
+# ---------------------------------------------------------------------------
+
+def _resolve_social_blend_weights() -> Tuple[float, float]:
+    """Return ``(headline_weight, social_weight)`` from
+    ``settings.SENTIMENT_SOCIAL_BLEND_WEIGHT``, clamped to [0, 1]."""
+    from settings import settings as _settings
+    social_weight = max(0.0, min(1.0, float(_settings.SENTIMENT_SOCIAL_BLEND_WEIGHT)))
+    return 1.0 - social_weight, social_weight
+
+
+# ---------------------------------------------------------------------------
 # Earnings-proximity gating
 # ---------------------------------------------------------------------------
 
@@ -605,10 +620,10 @@ class NewsCatalystSignal(SignalModule):
         ``compute()`` to read.
 
         If ``FINNHUB_API_KEY`` is unset, ``_news_scores``/``_news_archive_scores``
-        stay empty (no crash, no fabricated per-symbol 0.0 either).
+        stay empty (no crash, no fabricated per-symbol 0.0 either) -- but
+        ``news_history`` archival still runs off the free multi-source
+        social aggregate alone (see ``_build_archive_scores``).
         """
-        from settings import settings as _settings
-
         self._news_scores = {}
         self._news_archive_scores = {}
         self._earnings_dt = {}
@@ -637,16 +652,50 @@ class NewsCatalystSignal(SignalModule):
         context.sentiment_credibility_scores = dict(self._sentiment_credibility)
 
         client = build_finnhub_client()
+        pipeline: Optional[Any] = None
         if client is None:
             logger.info(
-                "NewsCatalystSignal: FINNHUB_API_KEY not set — all news "
-                "scores will be 0.0 (no-op)."
+                "NewsCatalystSignal: FINNHUB_API_KEY not set — headline "
+                "scores will be 0.0; free multi-source social sentiment "
+                "(if any) still archives to news_history and contributes "
+                "via the live blend (see compute())."
             )
             # Still surface empty dicts to context so orchestrator writeback
             # doesn't fail
             context.news_sentiment_scores = {}
             context.earnings_dates = {}
-            return
+        else:
+            pipeline = self._score_via_finnhub(client, symbols, context)
+
+        # Archive the SAME headline+social blend compute() uses for the live
+        # trading signal (see _build_archive_scores) -- runs regardless of
+        # whether Finnhub is configured, so free multi-source sentiment alone
+        # still accumulates real point-in-time history instead of news_history
+        # staying permanently empty for operators with no Finnhub key.
+        self._archive_news_history(self._build_archive_scores(symbols))
+
+        logger.info(
+            "NewsCatalystSignal.pre_compute: scored %d symbols "
+            "(FinBERT=%s).",
+            len(self._news_scores),
+            pipeline is not None,
+        )
+
+    def _score_via_finnhub(
+        self,
+        client: Any,
+        symbols: List[str],
+        context: SignalContext,
+    ) -> Optional[Any]:
+        """Batch-score Finnhub headlines for every symbol, populating
+        ``self._news_scores``/``self._news_archive_scores``/
+        ``self._earnings_dt`` and the context writeback fields.
+
+        Returns the FinBERT pipeline used (``None`` on lexicon fallback) so
+        the caller can log it. Only called when a Finnhub client is
+        available -- see ``pre_compute``.
+        """
+        from settings import settings as _settings
 
         pipeline = _get_finbert_pipeline() if _settings.FINBERT_ENABLED else None
 
@@ -705,15 +754,44 @@ class NewsCatalystSignal(SignalModule):
             sym: (dt.strftime("%Y-%m-%d") if dt is not None else "")
             for sym, dt in self._earnings_dt.items()
         }
+        return pipeline
 
-        self._archive_news_history(self._news_archive_scores)
+    def _build_archive_scores(self, symbols: List[str]) -> Dict[str, float]:
+        """Build the score actually written to ``news_history`` for each
+        symbol -- the SAME headline+social blend ``compute()`` returns for
+        the live trading signal (not just the raw Finnhub headline score),
+        so the archived/charted history matches what was actually traded on.
 
-        logger.info(
-            "NewsCatalystSignal.pre_compute: scored %d symbols "
-            "(FinBERT=%s).",
-            len(self._news_scores),
-            pipeline is not None,
-        )
+        Runs off ``self._sentiment_credibility`` (populated by
+        ``_read_sentiment_credibility_aggregate()`` every cycle, independent
+        of Finnhub configuration) even when ``self._news_archive_scores`` is
+        empty -- a symbol with real free multi-source social data but no
+        Finnhub headline still gets a real archived value, not a forced
+        NaN. ``NaN`` only when BOTH sides genuinely have nothing for that
+        symbol this cycle (CONSTRAINT #4).
+        """
+        headline_weight, social_weight = _resolve_social_blend_weights()
+        out: Dict[str, float] = {}
+        for symbol in symbols:
+            headline_raw = self._news_archive_scores.get(symbol, float("nan"))
+            has_headline = not math.isnan(headline_raw)
+
+            social_entry = self._sentiment_credibility.get(symbol)
+            social_raw = (
+                social_entry.get("credibility_weighted_sentiment", float("nan"))
+                if social_entry is not None else float("nan")
+            )
+            has_social = social_entry is not None and not math.isnan(social_raw)
+
+            if has_headline and has_social:
+                out[symbol] = headline_weight * headline_raw + social_weight * social_raw
+            elif has_headline:
+                out[symbol] = headline_raw
+            elif has_social:
+                out[symbol] = social_raw
+            else:
+                out[symbol] = float("nan")
+        return out
 
     @staticmethod
     def _archive_news_history(scores: Dict[str, float]) -> None:
@@ -742,8 +820,6 @@ class NewsCatalystSignal(SignalModule):
         for this symbol this trading day -- never a fabricated social score
         (CONSTRAINT #4). See ``settings.SENTIMENT_SOCIAL_BLEND_WEIGHT``.
         """
-        from settings import settings as _settings
-
         symbol = str(row.get("Symbol", row.get("Ticker", ""))).upper()
         headline_score = self._news_scores.get(symbol, 0.0)
         confidence = 0.75 if symbol in self._news_scores else 0.5
@@ -752,8 +828,7 @@ class NewsCatalystSignal(SignalModule):
         blend_suffix = ""
         if social_entry is not None:
             social_score = social_entry.get("credibility_weighted_sentiment", 0.0)
-            social_weight = max(0.0, min(1.0, float(_settings.SENTIMENT_SOCIAL_BLEND_WEIGHT)))
-            headline_weight = 1.0 - social_weight
+            headline_weight, social_weight = _resolve_social_blend_weights()
             score = headline_weight * headline_score + social_weight * social_score
             blend_suffix = f" [social blend w={social_weight:.2f}]"
         else:
