@@ -382,8 +382,37 @@ class ForecastingStep(PipelineStep):
                 pairs = list(pool.map(_forecast_one, rows))
         forecast_results = {tk: fc for tk, fc in pairs if fc is not None}
 
-        for col in forecast_cols:
-            ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: forecast_results.get(x, {}).get(col, 0.0))
+        _apply_forecast_columns(ctx.dashboard_df, forecast_results, forecast_cols)
+
+
+def _apply_forecast_columns(
+    dashboard_df: pd.DataFrame, forecast_results: dict, forecast_cols: list,
+) -> None:
+    """Map ``ForecastingStep``'s per-ticker ``forecast_results`` dict onto
+    ``dashboard_df``'s Target_Days/ARIMA/MC_*/Forecast_* columns.
+
+    NaN-fills every column first, then overlays whatever each ticker actually
+    produced. A ticker absent from ``forecast_results`` (price was 0/missing,
+    so ``_forecast_one`` short-circuited without ever calling the forecasting
+    engine) or missing an individual key -- e.g. ``Forecast_30_Prophet_Lower``/
+    ``_Upper``, which ``ForecastingEngine.generate_forecast`` only sets when
+    Prophet actually produced output for that ticker this cycle -- stays NaN
+    for that cell. "Unforecastable"/"Prophet unavailable" must never read as
+    "$0.00 target price" (CONSTRAINT #4); a fabricated 0.0 there is
+    indistinguishable from a genuinely-computed, near-zero forecast.
+
+    Deliberately a module-level function (same NaN-fill-first pattern as
+    ``_apply_sector_heat_factor`` below) so it's testable without going
+    through ``ForecastingStep.run()``'s heavy ``main_orchestrator`` import
+    chain.
+    """
+    nan = float("nan")
+    for col in forecast_cols:
+        dashboard_df[col] = nan
+    for col in forecast_cols:
+        dashboard_df[col] = dashboard_df['Symbol'].map(
+            lambda x: forecast_results.get(x, {}).get(col, nan)
+        )
 
 
 _OPTIONS_COLUMN_MAP = (
