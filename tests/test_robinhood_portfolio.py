@@ -760,21 +760,25 @@ class TestLoginFlow:
         assert login_calls[0]["mfa_code"] is not None
         assert login_calls[0]["by_sms"] is False
 
-    def test_login_without_mfa_secret_sms_fallback(self, monkeypatch) -> None:
-        """When RH_MFA_SECRET is empty/missing, login should fall back to SMS MFA (by_sms=True)."""
+    def test_login_without_mfa_secret_at_a_real_terminal_falls_back_interactive(self, monkeypatch) -> None:
+        """When RH_MFA_SECRET is empty/missing AND a human is actually at a
+        real terminal (sys.stdin.isatty() is True), login falls back to
+        robin_stocks' own interactive MFA prompt (mfa_code=None passed
+        through -- robin-stocks >= 3.4 infers the interactive path from the
+        absence of mfa_code, no separate by_sms kwarg exists)."""
         login_calls = []
 
-        def mock_login(username, password, store_session=True, mfa_code=None, by_sms=True):
+        def mock_login(username, password, store_session=True, mfa_code=None):
             login_calls.append({
                 "username": username,
                 "password": password,
                 "store_session": store_session,
                 "mfa_code": mfa_code,
-                "by_sms": by_sms
             })
-            return {"access_token": "mock-sms-token"}
+            return {"access_token": "mock-interactive-token"}
 
         monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
+        monkeypatch.setattr("data.robinhood_portfolio.sys.stdin.isatty", lambda: True)
         monkeypatch.setenv("RH_USERNAME", "sms_user@example.com")
         monkeypatch.setenv("RH_PASSWORD", "sms_pass")
         monkeypatch.delenv("RH_MFA_SECRET", raising=False)
@@ -786,7 +790,26 @@ class TestLoginFlow:
         assert login_calls[0]["username"] == "sms_user@example.com"
         assert login_calls[0]["password"] == "sms_pass"
         assert login_calls[0]["mfa_code"] is None
-        assert login_calls[0]["by_sms"] is True
+
+    def test_login_without_mfa_secret_headless_raises_immediately(self, monkeypatch) -> None:
+        """When RH_MFA_SECRET is empty/missing AND there is no real terminal
+        (the Pilots API server, main.py under cron/systemd, an app bundle
+        launched without a TTY), login must raise immediately rather than
+        falling through to robin_stocks' interactive prompt -- a blocking
+        input() call with no TTY behind it would hang the caller forever
+        with zero feedback. This is the real-world bug this test guards."""
+        def boom_login(*args, **kwargs):
+            raise AssertionError("r.login must not be called at all on this path")
+
+        monkeypatch.setattr("data.robinhood_portfolio.r.login", boom_login)
+        monkeypatch.setattr("data.robinhood_portfolio.sys.stdin.isatty", lambda: False)
+        monkeypatch.setenv("RH_USERNAME", "sms_user@example.com")
+        monkeypatch.setenv("RH_PASSWORD", "sms_pass")
+        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+
+        from data.robinhood_portfolio import _login
+        with pytest.raises(ValueError, match="MFA code is required"):
+            _login()
 
     def test_login_failures(self, monkeypatch) -> None:
         """If login fails (does not return dict with access_token), raise RuntimeError."""
