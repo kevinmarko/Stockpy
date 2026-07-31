@@ -250,10 +250,12 @@ function BrokerageSection() {
   const doDisconnect = async () => {
     await disconnect.run();
     setConfirmingDisconnect(false);
+    refresh.reset(); // clear a stale refresh notice from before the disconnect
     reload();
   };
 
   const doRefresh = async () => {
+    disconnect.reset(); // clear a stale disconnect notice from before this attempt
     await refresh.run();
     reload(); // pick up the (possibly now-populated) connected/has_account_snapshot flags
   };
@@ -372,7 +374,12 @@ function BrokerageSection() {
                 Not connected. Credentials go only to your local backend and are
                 verified with a read-only login before anything is saved.
               </p>
-              <RobinhoodConnectForm onConnected={reload} />
+              <RobinhoodConnectForm
+                onConnected={() => {
+                  refresh.reset(); // clear a stale refresh notice from before this connect
+                  reload();
+                }}
+              />
             </>
           )}
         </div>
