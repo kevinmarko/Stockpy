@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from fredapi import Fred
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from typing import Dict, List, Any, Optional
 
@@ -87,32 +87,99 @@ class DataEngine(IDataProvider):
         else:
             self.fred = None
 
+    # The hardcoded emergency snapshot -- a known CONSTRAINT #4 violation kept
+    # only as the LAST resort when neither FRED nor (if enabled) FMP can serve
+    # real data, so a total macro-data outage never crashes the pipeline. Do
+    # not "improve" these numbers here -- see settings.FMP_MACRO_ENABLED's
+    # docstring and data/fmp_macro.py for the honest replacement path.
+    _MACRO_HARDCODED_FALLBACK: Dict[str, float] = {
+        'T10Y2Y': 0.5, 'BAMLH0A0HYM2': 3.5, 'UNRATE': 3.8, 'VIXCLS': 15.0,
+    }
+
     def fetch_macro_raw(self) -> Dict[str, Any]:
         """
-        Pulls macroeconomic indices from FRED.
+        Pulls macroeconomic indices from FRED (unchanged, still the primary,
+        higher-quality unrevised-vintage source where it works).
+
+        When settings.FMP_MACRO_ENABLED is True (default False -- a complete
+        no-op) AND the FRED snapshot above could not be produced at all, this
+        falls back to data/fmp_macro.py's fetch_treasury_curve /
+        fetch_unemployment_rate for T10Y2Y and UNRATE ONLY -- never for
+        VIXCLS or BAMLH0A0HYM2, which have no FMP Starter-plan equivalent and
+        stay FRED-only-or-fabricated-constant exactly as before. Only when
+        BOTH FRED and (if enabled) FMP fail to improve on the hardcoded
+        snapshot does that fabricated dict apply, and that case is logged at
+        WARNING (CONSTRAINT #4 known exception, last resort).
         """
+        fred_result: Optional[Dict[str, Any]] = None
         if not self.fred:
             logger.warning("FRED API not initialized. Returning baseline defaults.")
-            return {'T10Y2Y': 0.5, 'BAMLH0A0HYM2': 3.5, 'UNRATE': 3.8, 'VIXCLS': 15.0}
-            
-        try:
-            # Yield Curve, OAS Corporate Spread, Unemployment, VIX
-            t10y2y = self.fred.get_series('T10Y2Y', limit=1).iloc[-1]
-            oas = self.fred.get_series('BAMLH0A0HYM2', limit=1).iloc[-1]
-            unrate = self.fred.get_series('UNRATE', limit=1).iloc[-1]
+        else:
             try:
-                vix = self.fred.get_series('VIXCLS', limit=5).dropna().iloc[-1]
-            except Exception:
-                vix = 15.0
-            return {
-                'T10Y2Y': float(t10y2y),
-                'BAMLH0A0HYM2': float(oas),
-                'UNRATE': float(unrate),
-                'VIXCLS': float(vix)
-            }
+                # Yield Curve, OAS Corporate Spread, Unemployment, VIX
+                t10y2y = self.fred.get_series('T10Y2Y', limit=1).iloc[-1]
+                oas = self.fred.get_series('BAMLH0A0HYM2', limit=1).iloc[-1]
+                unrate = self.fred.get_series('UNRATE', limit=1).iloc[-1]
+                try:
+                    vix = self.fred.get_series('VIXCLS', limit=5).dropna().iloc[-1]
+                except Exception:
+                    vix = 15.0
+                fred_result = {
+                    'T10Y2Y': float(t10y2y),
+                    'BAMLH0A0HYM2': float(oas),
+                    'UNRATE': float(unrate),
+                    'VIXCLS': float(vix),
+                }
+            except Exception as e:
+                logger.error(f"Error fetching economic data from FRED: {e}")
+
+        if fred_result is not None:
+            return fred_result
+
+        # FRED could not serve a full snapshot. Flag-off (the default) is a
+        # byte-identical no-op: return the EXACT hardcoded dict FRED-failure
+        # has always produced here, with ZERO data/fmp_macro.py import and
+        # ZERO FMP network activity.
+        if not getattr(settings, "FMP_MACRO_ENABLED", False):
+            return dict(self._MACRO_HARDCODED_FALLBACK)
+
+        result = dict(self._MACRO_HARDCODED_FALLBACK)
+        fmp_error: Optional[Exception] = None
+        try:
+            from data.fmp_macro import fetch_treasury_curve, fetch_unemployment_rate
+
+            to_date = datetime.now(timezone.utc).date()
+            # A generous window: treasury rates are business-day-only and
+            # UNRATE is a monthly release published with a real lag, so a
+            # short window can legitimately return zero rows even when FMP
+            # itself is healthy.
+            from_date = to_date - timedelta(days=45)
+            from_str, to_str = from_date.isoformat(), to_date.isoformat()
+
+            curve_rows = fetch_treasury_curve(from_str, to_str)
+            if curve_rows:
+                result['T10Y2Y'] = float(curve_rows[-1]['value'])
+
+            unrate_rows = fetch_unemployment_rate(from_str, to_str)
+            if unrate_rows:
+                result['UNRATE'] = float(unrate_rows[-1]['value'])
         except Exception as e:
-            logger.error(f"Error fetching economic data from FRED: {e}")
-            return {'T10Y2Y': 0.5, 'BAMLH0A0HYM2': 3.5, 'UNRATE': 3.8, 'VIXCLS': 15.0}
+            # fetch_treasury_curve / fetch_unemployment_rate never raise
+            # (CONSTRAINT #6) -- this guards the import itself and any other
+            # genuinely unexpected failure, so it never propagates.
+            fmp_error = e
+
+        if result == self._MACRO_HARDCODED_FALLBACK:
+            # Neither FRED nor FMP could serve T10Y2Y/UNRATE -- the returned
+            # snapshot is entirely fabricated placeholder data.
+            suffix = f" FMP fallback error: {fmp_error}." if fmp_error else ""
+            logger.warning(
+                "Both FRED and the FMP macro fallback failed to serve "
+                "T10Y2Y/UNRATE -- fetch_macro_raw is returning fabricated "
+                "placeholder macro values (known CONSTRAINT #4 exception, "
+                "last resort)." + suffix
+            )
+        return result
 
     def fetch_macro_history(self) -> pd.DataFrame:
         """
@@ -126,6 +193,19 @@ class DataEngine(IDataProvider):
         a single current-snapshot value (fetch_macro_raw) cannot do this.
         Returns an empty DataFrame (never fabricated placeholder rows) if
         FRED is unavailable or the fetch fails.
+
+        Deliberately FRED-only, unlike fetch_macro_raw() above (2026-07 FMP
+        integration): this method pulls the ENTIRE available history with no
+        date-range parameter (self.fred.get_series('T10Y2Y') with no `limit`),
+        which HistoricalStore.get_macro()'s top-up and
+        regime/hmm_regime.py's expanding-window fit both depend on. FMP's
+        /treasury-rates and /economic-indicators endpoints require an explicit
+        from/to date range, so a clean FMP supplement here would need to pick
+        an arbitrary backfill window rather than "everything FRED has" -- a
+        real behavioral question this PR does not answer. Left as a documented
+        follow-up rather than forced in; see data/fmp_macro.py for the
+        two-series (T10Y2Y/UNRATE) snapshot-only supplement that IS wired, in
+        fetch_macro_raw() above.
         """
         if not self.fred:
             logger.warning("FRED API not initialized. Cannot fetch macro history.")

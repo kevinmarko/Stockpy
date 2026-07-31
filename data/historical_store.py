@@ -3547,7 +3547,7 @@ class HistoricalStore:
             from data_engine import DataEngine
             from settings import settings as _s
             if _s.FRED_API_KEY:
-                return DataEngine()
+                return DataEngine(fred_api_key=_s.FRED_API_KEY)
         except Exception as exc:
             logger.debug(
                 "HistoricalStore._resolve_data_engine: could not construct "
