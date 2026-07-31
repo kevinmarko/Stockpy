@@ -68,6 +68,36 @@ the RATIOS-TTM payload instead. Implementing the brief literally would make
 ``bookValue``/``priceToBook`` — and therefore ``Quality_Z`` — permanently NaN
 in production. This module reads ``bookValuePerShareTTM`` from
 ``ratios_ttm``, not ``key_metrics_ttm``, based on that live verification.
+
+A SECOND live correction, found the same way (2026-07-31, symbols KO/JNJ)
+------------------------------------------------------------------------
+``/income-statement-ttm`` — the sole source ``trailingEps`` was designed to
+read (``epsDiluted``) — returns ``ACCESS DENIED: requires Ultimate or
+Enterprise`` on a Starter-tier account. Left as originally designed, this
+means ``trailingEps`` is ALWAYS ``NaN`` in production, which in turn means
+``trailingPE`` is ALWAYS ``NaN`` too (the sign-gate at
+``np.isfinite(trailing_eps) and trailing_eps > 0`` unconditionally fails on
+NaN) — for every symbol, not just loss-makers, even though ``ratios-ttm``'s
+own ``priceToEarningsRatioTTM`` is sitting right there and IS
+Starter-accessible. That silently defeats ``earnings_yield`` (the multifactor
+value z-score's second leg) for the whole fundamentals pipeline whenever
+FMP is the active source. Confirmed by running this module's real code
+against real KO/JNJ ``ratios-ttm``/``income-statement-ttm`` responses: with
+``income_statement_ttm=None`` (the genuine Starter-tier condition),
+``trailingEps``/``trailingPE`` both came back NaN despite KO's real P/E
+(26.30) and EPS-equivalent (3.33) being present in the ``ratios_ttm`` payload
+this module already receives.
+
+Fix: ``trailingEps`` tries ``income_statement_ttm["epsDiluted"]`` FIRST
+(kept as primary — it is the more precisely-correct "diluted EPS" concept,
+and a higher account tier, or a future FMP plan change, may make it
+available) and falls back to ``ratios_ttm["netIncomePerShareTTM"]`` only
+when that is unavailable. The fallback is net income per share, not
+literally diluted EPS — they can differ slightly where dilutive securities
+exist — but it is Starter-accessible, real, and a far closer approximation
+than a value that is permanently and unconditionally NaN. Both legs still
+independently degrade to NaN (never a fabricated 0.0) if neither source
+supplies a value.
 """
 
 from __future__ import annotations
@@ -283,11 +313,21 @@ def map_fundamentals(
         out["sector"] = "N/A"  # type: ignore[assignment]
 
     # --- trailingEps = TTM DILUTED eps (not basic) ----------------------- #
+    # income_statement_ttm.epsDiluted is Ultimate/Enterprise-only on a real
+    # Starter account (live-confirmed 2026-07-31 -- see the module
+    # docstring's second LIVE CORRECTION) and is therefore always None/{}
+    # there; ratios_ttm.netIncomePerShareTTM is Starter-accessible and used
+    # as a fallback so trailingPE/earnings_yield aren't permanently NaN.
     trailing_eps = _NAN
     try:
         trailing_eps = _to_float((inc or {}).get("epsDiluted"))
     except Exception:
         trailing_eps = _NAN
+    if not np.isfinite(trailing_eps):
+        try:
+            trailing_eps = _to_float((r or {}).get("netIncomePerShareTTM"))
+        except Exception:
+            trailing_eps = _NAN
     out["trailingEps"] = trailing_eps
 
     # --- trailingPE = ratios_ttm.priceToEarningsRatioTTM,               -- #
