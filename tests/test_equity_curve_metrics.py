@@ -119,6 +119,44 @@ class TestFlatEquitySeries:
         assert result["n_snapshots"] == n
 
 
+class TestDegenerateStdGuard:
+    """Regression test for the same degenerate-std bug pattern fixed in
+    validation/metrics.py::sharpe_ratio -- an exact `== 0` check on
+    returns.std(ddof=1) misses a mathematically-constant-but-not-bit-identical
+    series (std lands near, not exactly at, 0.0 due to floating-point
+    rounding noise), letting mean/std explode into an absurd, unbounded
+    Sharpe instead of degrading to the honest NaN (CONSTRAINT #4)."""
+
+    def test_constant_series_after_flat_cost_deduction_is_nan(self) -> None:
+        n = MIN_SNAPSHOTS_FOR_STATS + 5000
+        daily_rate = 0.03 * (11.0 / 10000.0)  # turnover=0.03, 11bps round-trip
+        equities = [10000.0 * (1.0 - daily_rate) ** i for i in range(n)]
+
+        df = _mk_df(equities)
+        returns = df["total_equity"].pct_change().dropna()
+        # Confirm the premise: std is nonzero (floating noise), not exactly 0.0.
+        assert returns.std(ddof=1) != 0.0
+        assert returns.std(ddof=1) < 1e-12
+
+        result = calculate_equity_curve_metrics(df)
+        assert math.isnan(result["sharpe_ratio"]), (
+            f"expected NaN, got an absurd value: {result['sharpe_ratio']}"
+        )
+
+    def test_genuine_low_but_real_variance_is_not_treated_as_degenerate(self) -> None:
+        n = MIN_SNAPSHOTS_FOR_STATS + 2000
+        rng = np.random.default_rng(11)
+        daily_returns = rng.normal(0.0002, 0.0005, size=n - 1)
+        equities = [10000.0]
+        for r in daily_returns:
+            equities.append(equities[-1] * (1.0 + r))
+
+        df = _mk_df(equities)
+        result = calculate_equity_curve_metrics(df)
+        assert math.isfinite(result["sharpe_ratio"])
+        assert abs(result["sharpe_ratio"]) < 50  # sane order of magnitude
+
+
 class TestMultiSnapshotPerDayDedup:
     def test_intraday_duplicates_collapse_to_last_value_per_day(self) -> None:
         start = datetime(2026, 1, 1, tzinfo=timezone.utc)
