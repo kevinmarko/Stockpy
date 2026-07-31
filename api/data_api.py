@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 
 from settings import settings
 from api.auth import require_read_token as require_token, require_write_token
+from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 from data.historical_store import HistoricalStore
 from data.market_data import MarketDataError, get_provider
 from data.robinhood_portfolio import fetch_account_snapshot
@@ -73,6 +74,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=LAN_TAILSCALE_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["GET", "PUT", "POST"],
     allow_headers=["Authorization", "Content-Type"],

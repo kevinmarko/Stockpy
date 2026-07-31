@@ -54,6 +54,7 @@ from fastapi.responses import JSONResponse
 
 from settings import settings
 from api.auth import require_read_token as require_token
+from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 from transactions_store import TransactionsStore
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=LAN_TAILSCALE_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["GET"],
     allow_headers=["Authorization", "Content-Type"],

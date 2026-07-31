@@ -109,6 +109,7 @@ from api.auth import (
     require_read_token,
     require_stream_token,
 )
+from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 from desktop.daemon_runtime import OrchestratorDaemon, RunRecord, TriggerOutcome
 from desktop.run_history_store import RunHistoryStore
 from execution.kill_switch import GlobalKillSwitch
@@ -130,6 +131,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=LAN_TAILSCALE_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Authorization", "Content-Type"],

@@ -104,6 +104,7 @@ from api.auth import (
     require_follow_command_token as require_command_token,
     require_read_token,
 )
+from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 
 # Deployability-gate thresholds — a pure, import-free leaf module (see its own
 # docstring: "Never hard-code these numbers elsewhere"). Backs GET /thresholds
@@ -227,6 +228,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=LAN_TAILSCALE_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Authorization", "Content-Type"],
