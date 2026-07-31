@@ -82,6 +82,30 @@ class TestValidateDashboard:
         assert "except PipelineFatalError" in src
         assert "sys.exit(1)" in src
 
+    def test_fmp_diagnostic_columns_nan_filled_frame_passes_strict(self) -> None:
+        """The eight FMP diagnostic columns are NaN on every gate-off cycle
+        (the default), which is the overwhelmingly common case. Prove that a
+        frame carrying NaN for all of them still validates in STRICT mode --
+        i.e. wave-0 scaffolding cannot fail a production run's schema gate."""
+        import numpy as np
+
+        fmp_keys = [
+            "Analyst_Target_Consensus", "Analyst_Target_Upside", "Analyst_Grade_Score",
+            "Days_To_Earnings", "Last_EPS_Surprise_Pct",
+            "Insider_Buy_Sell_Ratio",
+            "Sector_PE", "Sector_1D_Change",
+        ]
+        schema_keys = {c["key"] for c in config.COLUMN_SCHEMA}
+        assert set(fmp_keys) <= schema_keys, (
+            f"FMP diagnostic columns missing from COLUMN_SCHEMA: "
+            f"{sorted(set(fmp_keys) - schema_keys)}"
+        )
+
+        row = _valid_dashboard_row()
+        for key in fmp_keys:
+            row[key] = np.nan
+        assert mo._validate_dashboard(pd.DataFrame([row]), strict=True) is True
+
     def test_main_threads_strict_flag(self) -> None:
         """`main(strict=...)` and `--strict` must wire through to _main_body."""
         import inspect

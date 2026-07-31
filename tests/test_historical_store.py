@@ -1434,3 +1434,463 @@ class TestReadonlyGetBarsFallsBackToLive:
 
         after = HistoricalStore(db_path=db).latest_bar_date("MSFT")
         assert after == before
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FMP feed tables — analyst_history / earnings_events / insider_stats /
+# sector_snapshots (wave-0 scaffolding for the Financial Modeling Prep series)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FMP_TABLES = ("analyst_history", "earnings_events", "insider_stats", "sector_snapshots")
+_FMP_INDEXES = (
+    "idx_analyst_history_symbol",
+    "idx_earnings_events_symbol_date",
+    "idx_insider_stats_symbol_period",
+    "idx_sector_snapshots_date",
+)
+
+
+def _table_names(db: str) -> set:
+    with sqlite3.connect(db) as conn:
+        return {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+
+
+def _index_names(db: str) -> set:
+    with sqlite3.connect(db) as conn:
+        return {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()}
+
+
+class TestFMPTableCreation:
+    """All four tables are created by ``_ensure_tables()`` via plain additive
+    ``CREATE TABLE IF NOT EXISTS``, which is this module's documented upgrade
+    mechanism -- deliberately WITHOUT a ``CURRENT_SCHEMA_VERSION`` bump (see
+    that constant's DDL comment: the stamp exists only for the drift additive
+    DDL cannot self-detect)."""
+
+    def test_fresh_db_creates_all_four_tables_and_indexes(self, tmp_path):
+        db = str(tmp_path / "fresh.db")
+        HistoricalStore(db_path=db)
+
+        tables = _table_names(db)
+        indexes = _index_names(db)
+        for name in _FMP_TABLES:
+            assert name in tables, f"{name} not created on a fresh DB"
+        for name in _FMP_INDEXES:
+            assert name in indexes, f"{name} not created on a fresh DB"
+
+    def test_creation_is_idempotent(self, tmp_path):
+        """Constructing twice must not raise (CREATE TABLE IF NOT EXISTS)."""
+        db = str(tmp_path / "twice.db")
+        HistoricalStore(db_path=db)
+        HistoricalStore(db_path=db)
+        assert set(_FMP_TABLES) <= _table_names(db)
+
+    def test_legacy_db_gains_the_tables_without_losing_data(self, tmp_path):
+        """A DB written by a build predating these tables must gain them on the
+        next construction, and its existing rows must survive untouched -- the
+        whole point of additive-only DDL."""
+        db = str(tmp_path / "legacy.db")
+        store = HistoricalStore(db_path=db)
+        store._upsert_bars("AAPL", _make_ohlcv(5), source="yfinance")
+
+        # Simulate a legacy DB: drop the four new tables entirely.
+        with sqlite3.connect(db) as conn:
+            for name in _FMP_TABLES:
+                conn.execute(f"DROP TABLE IF EXISTS {name}")
+            conn.commit()
+        assert not (set(_FMP_TABLES) & _table_names(db))
+
+        reopened = HistoricalStore(db_path=db)
+        assert set(_FMP_TABLES) <= _table_names(db)
+        # Pre-existing data untouched.
+        assert reopened.latest_bar_date("AAPL") is not None
+
+    def test_schema_version_is_not_bumped_by_these_tables(self, tmp_path):
+        from data.historical_store import CURRENT_SCHEMA_VERSION
+
+        db = str(tmp_path / "ver.db")
+        store = HistoricalStore(db_path=db)
+        assert store.get_schema_version() == CURRENT_SCHEMA_VERSION
+
+
+class TestAnalystHistory:
+    def test_upsert_and_read_back(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        assert store.upsert_analyst_snapshot(
+            "aapl", "2026-07-30",
+            target_consensus=250.0, target_median=248.0,
+            target_high=300.0, target_low=200.0,
+            grade_score=4.1, source="fmp",
+        ) == 1
+
+        row = store.get_analyst_snapshot("AAPL")
+        assert row["symbol"] == "AAPL"
+        assert row["as_of"] == "2026-07-30"
+        assert row["target_consensus"] == pytest.approx(250.0)
+        assert row["grade_score"] == pytest.approx(4.1)
+        assert row["source"] == "fmp"
+
+    def test_unreported_figures_stay_null_never_zero(self, tmp_path):
+        """CONSTRAINT #4: "no analyst coverage" and "a target of zero" are
+        different facts."""
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_analyst_snapshot("AAPL", "2026-07-30", target_consensus=250.0)
+
+        row = store.get_analyst_snapshot("AAPL")
+        assert row["target_high"] is None
+        assert row["target_low"] is None
+        assert row["grade_score"] is None
+
+    def test_nan_is_stored_as_null_not_zero(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_analyst_snapshot(
+            "AAPL", "2026-07-30", target_consensus=float("nan"),
+        )
+        assert store.get_analyst_snapshot("AAPL")["target_consensus"] is None
+
+    def test_as_of_cutoff_excludes_later_rows(self, tmp_path):
+        """Storage-layer causality, same contract as get_etf_holdings."""
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_analyst_snapshot("AAPL", "2026-06-01", target_consensus=200.0)
+        store.upsert_analyst_snapshot("AAPL", "2026-07-30", target_consensus=250.0)
+
+        assert store.get_analyst_snapshot("AAPL")["target_consensus"] == pytest.approx(250.0)
+        cut = store.get_analyst_snapshot("AAPL", as_of="2026-07-01")
+        assert cut["as_of"] == "2026-06-01"
+        assert cut["target_consensus"] == pytest.approx(200.0)
+
+    def test_same_day_refetch_replaces_rather_than_duplicates(self, tmp_path):
+        db = str(tmp_path / "t.db")
+        store = HistoricalStore(db_path=db)
+        store.upsert_analyst_snapshot("AAPL", "2026-07-30", target_consensus=250.0)
+        store.upsert_analyst_snapshot("AAPL", "2026-07-30", target_consensus=255.0)
+
+        with sqlite3.connect(db) as conn:
+            count = conn.execute("SELECT COUNT(*) FROM analyst_history").fetchone()[0]
+        assert count == 1
+        assert store.get_analyst_snapshot("AAPL")["target_consensus"] == pytest.approx(255.0)
+
+    def test_empty_sentinels_and_never_raises(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        assert store.get_analyst_snapshot("NOPE") == {}
+        assert store.get_analyst_snapshot("") == {}
+        assert store.upsert_analyst_snapshot("", "2026-07-30") == 0
+        assert store.upsert_analyst_snapshot("AAPL", "") == 0
+        assert store.latest_analyst_as_of("NOPE") is None
+
+    def test_latest_as_of_for_cadence_gate(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_analyst_snapshot("AAPL", "2026-06-01")
+        store.upsert_analyst_snapshot("AAPL", "2026-07-30")
+        assert store.latest_analyst_as_of("aapl") == "2026-07-30"
+
+
+class TestEarningsEvents:
+    def _rows(self):
+        return [
+            # Reported quarter.
+            {"symbol": "AAPL", "event_date": "2026-05-01", "eps_actual": 1.52,
+             "eps_estimated": 1.40, "revenue_actual": 9.0e10,
+             "revenue_estimated": 8.8e10, "last_updated": "2026-05-02",
+             "source": "fmp"},
+            # Scheduled but not yet reported -- NULL actuals is normal.
+            {"symbol": "AAPL", "event_date": "2026-08-01", "eps_actual": None,
+             "eps_estimated": 1.60, "last_updated": "2026-07-15", "source": "fmp"},
+        ]
+
+    def test_upsert_and_read_back(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        assert store.upsert_earnings_events(self._rows()) == 2
+
+        rows = store.get_earnings_events("AAPL")
+        assert len(rows) == 2
+        assert rows[0]["event_date"] == "2026-08-01"  # newest first by default
+
+    def test_future_row_keeps_null_actual_never_zero(self, tmp_path):
+        """A future-dated row with a NULL actual is normal and correct. Reading
+        it back as 0.0 would turn every unreported quarter into a 100% miss."""
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_earnings_events(self._rows())
+
+        future = [
+            r for r in store.get_earnings_events("AAPL")
+            if r["event_date"] == "2026-08-01"
+        ][0]
+        assert future["eps_actual"] is None
+        assert future["eps_estimated"] == pytest.approx(1.60)
+        # revenue fields were not supplied at all -> NULL, not 0.0
+        assert future["revenue_actual"] is None
+
+    def test_actuals_only_plus_date_cutoff_excludes_a_wrongly_populated_future_row(self, tmp_path):
+        """BOTH filters, never the date filter alone: a vendor bug that puts an
+        actual on a FUTURE row must not slip through."""
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        rows = self._rows()
+        rows.append({
+            "symbol": "AAPL", "event_date": "2026-11-01",
+            "eps_actual": 99.0,  # vendor bug: an actual on a future row
+            "eps_estimated": 1.70, "source": "fmp",
+        })
+        store.upsert_earnings_events(rows)
+
+        trailing = store.get_earnings_events(
+            "AAPL", on_or_before="2026-07-31", actuals_only=True,
+        )
+        assert [r["event_date"] for r in trailing] == ["2026-05-01"]
+
+    def test_after_cutoff_returns_the_next_scheduled_date_ascending(self, tmp_path):
+        """Knowing a publicly-announced future DATE is not lookahead; knowing
+        the RESULT is. ``after=`` returns ascending so [0] is the next event."""
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_earnings_events(self._rows())
+
+        upcoming = store.get_earnings_events("AAPL", after="2026-07-31")
+        assert [r["event_date"] for r in upcoming] == ["2026-08-01"]
+
+    def test_last_updated_is_persisted_verbatim(self, tmp_path):
+        """The only thing enabling a future PIT replay -- imperfect (a
+        backfilled actual with a stale stamp defeats it), which is exactly why
+        it must be stored rather than derived."""
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_earnings_events(self._rows())
+        reported = store.get_earnings_events("AAPL", on_or_before="2026-07-31")[0]
+        assert reported["last_updated"] == "2026-05-02"
+
+    def test_rows_without_a_pk_anchor_are_skipped_not_defaulted(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        written = store.upsert_earnings_events([
+            {"symbol": "", "event_date": "2026-05-01"},
+            {"symbol": "AAPL", "event_date": ""},
+            {"symbol": "AAPL", "event_date": "2026-05-01"},
+        ])
+        assert written == 1
+
+    def test_refetch_upgrades_a_scheduled_row_in_place(self, tmp_path):
+        db = str(tmp_path / "t.db")
+        store = HistoricalStore(db_path=db)
+        store.upsert_earnings_events([
+            {"symbol": "AAPL", "event_date": "2026-08-01", "eps_estimated": 1.60},
+        ])
+        store.upsert_earnings_events([
+            {"symbol": "AAPL", "event_date": "2026-08-01",
+             "eps_estimated": 1.60, "eps_actual": 1.71, "last_updated": "2026-08-02"},
+        ])
+        with sqlite3.connect(db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM earnings_events").fetchone()[0] == 1
+        assert store.get_earnings_events("AAPL")[0]["eps_actual"] == pytest.approx(1.71)
+
+    def test_empty_sentinels_and_never_raises(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        assert store.upsert_earnings_events([]) == 0
+        assert store.get_earnings_events("NOPE") == []
+        assert store.get_earnings_events("") == []
+        assert store.latest_earnings_fetched_at("NOPE") is None
+
+    def test_latest_fetched_at_is_wall_clock_not_event_date(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_earnings_events(self._rows())
+        stamp = store.latest_earnings_fetched_at("AAPL")
+        assert stamp is not None
+        # fetched_at is an ISO UTC wall-clock stamp, never one of the event dates.
+        assert stamp not in {"2026-05-01", "2026-08-01"}
+
+
+class TestInsiderStats:
+    def _rows(self):
+        return [
+            {"symbol": "AAPL", "year": 2026, "quarter": 1,
+             "acquired_transactions": 12, "disposed_transactions": 30,
+             "acquired_disposed_ratio": 0.4, "total_acquired": 1000.0,
+             "total_disposed": 2500.0, "total_purchases": 5, "total_sales": 11,
+             "source": "fmp"},
+            {"symbol": "AAPL", "year": 2026, "quarter": 2,
+             "acquired_transactions": 4, "disposed_transactions": 9,
+             "source": "fmp"},
+        ]
+
+    def test_upsert_and_read_back_newest_first(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        assert store.upsert_insider_stats(self._rows()) == 2
+
+        rows = store.get_insider_stats("AAPL")
+        assert [(r["year"], r["quarter"]) for r in rows] == [(2026, 2), (2026, 1)]
+        assert rows[1]["acquired_disposed_ratio"] == pytest.approx(0.4)
+
+    def test_unreported_aggregates_stay_null(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_insider_stats(self._rows())
+        q2 = store.get_insider_stats("AAPL")[0]
+        assert q2["acquired_disposed_ratio"] is None
+        assert q2["total_acquired"] is None
+        assert q2["total_purchases"] is None
+
+    def test_restated_quarter_replaces_rather_than_duplicates(self, tmp_path):
+        """A quarter's aggregate keeps changing as late Form 4s land -- the
+        newest read of a quarter supersedes the older one."""
+        db = str(tmp_path / "t.db")
+        store = HistoricalStore(db_path=db)
+        store.upsert_insider_stats([
+            {"symbol": "AAPL", "year": 2026, "quarter": 1, "acquired_transactions": 12},
+        ])
+        store.upsert_insider_stats([
+            {"symbol": "AAPL", "year": 2026, "quarter": 1, "acquired_transactions": 15},
+        ])
+        with sqlite3.connect(db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM insider_stats").fetchone()[0] == 1
+        assert store.get_insider_stats("AAPL")[0]["acquired_transactions"] == 15
+
+    def test_reader_does_not_apply_the_min_lag_filter_itself(self, tmp_path):
+        """The minimum-lag filter is a consumer-side judgment call
+        (settings.FMP_INSIDER_MIN_LAG_DAYS). A storage helper that silently
+        dropped rows would make the archive un-auditable."""
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        now = datetime.now(timezone.utc)
+        store.upsert_insider_stats([
+            {"symbol": "AAPL", "year": now.year, "quarter": ((now.month - 1) // 3) + 1,
+             "acquired_transactions": 3},
+        ])
+        # The current (still-accruing) quarter IS returned by the storage read.
+        assert len(store.get_insider_stats("AAPL")) == 1
+
+    def test_rows_without_a_pk_anchor_are_skipped(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        written = store.upsert_insider_stats([
+            {"symbol": "AAPL", "year": None, "quarter": 1},
+            {"symbol": "AAPL", "year": 2026, "quarter": None},
+            {"symbol": "", "year": 2026, "quarter": 1},
+            {"symbol": "AAPL", "year": 2026, "quarter": 1},
+        ])
+        assert written == 1
+
+    def test_empty_sentinels_and_never_raises(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        assert store.upsert_insider_stats([]) == 0
+        assert store.get_insider_stats("NOPE") == []
+        assert store.get_insider_stats("") == []
+        assert store.latest_insider_fetched_at("NOPE") is None
+
+
+class TestSectorSnapshots:
+    def test_upsert_and_read_back_keyed_by_sector(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        assert store.upsert_sector_snapshots([
+            {"sector": "Technology", "date": "2026-07-30", "pe": 31.2,
+             "change_pct": 0.0084, "source": "fmp"},
+            {"sector": "Energy", "date": "2026-07-30", "pe": 12.4,
+             "change_pct": -0.0031, "source": "fmp"},
+        ]) == 2
+
+        snap = store.get_sector_snapshots()
+        assert set(snap) == {"Technology", "Energy"}
+        assert snap["Technology"]["pe"] == pytest.approx(31.2)
+        assert snap["Energy"]["change_pct"] == pytest.approx(-0.0031)
+
+    def test_as_of_cutoff_is_genuinely_point_in_time(self, tmp_path):
+        """The one new FMP feed with a real PIT story: both endpoints are
+        date-parameterized, so a dated read must return THAT date's figures."""
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_sector_snapshots([
+            {"sector": "Technology", "date": "2026-06-01", "pe": 28.0},
+            {"sector": "Technology", "date": "2026-07-30", "pe": 31.2},
+        ])
+        assert store.get_sector_snapshots()["Technology"]["pe"] == pytest.approx(31.2)
+        cut = store.get_sector_snapshots(as_of="2026-07-01")["Technology"]
+        assert cut["date"] == "2026-06-01"
+        assert cut["pe"] == pytest.approx(28.0)
+
+    def test_each_sector_resolves_its_own_latest_qualifying_date(self, tmp_path):
+        """A sector missing from the cutoff date's snapshot falls back to its
+        own last known one rather than disappearing."""
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_sector_snapshots([
+            {"sector": "Technology", "date": "2026-07-30", "pe": 31.2},
+            {"sector": "Energy", "date": "2026-05-01", "pe": 11.0},
+        ])
+        snap = store.get_sector_snapshots(as_of="2026-07-30")
+        assert snap["Technology"]["date"] == "2026-07-30"
+        assert snap["Energy"]["date"] == "2026-05-01"
+
+    def test_unreported_figures_stay_null(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_sector_snapshots([{"sector": "Utilities", "date": "2026-07-30"}])
+        row = store.get_sector_snapshots()["Utilities"]
+        assert row["pe"] is None
+        assert row["change_pct"] is None
+
+    def test_rows_without_a_pk_anchor_are_skipped(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        written = store.upsert_sector_snapshots([
+            {"sector": "", "date": "2026-07-30"},
+            {"sector": "Technology", "date": ""},
+            {"sector": "Technology", "date": "2026-07-30"},
+        ])
+        assert written == 1
+
+    def test_empty_sentinels_and_never_raises(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        assert store.upsert_sector_snapshots([]) == 0
+        assert store.get_sector_snapshots() == {}
+        assert store.latest_sector_snapshot_date() is None
+
+    def test_latest_snapshot_date_for_the_per_cycle_cadence_gate(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "t.db"))
+        store.upsert_sector_snapshots([
+            {"sector": "Technology", "date": "2026-06-01"},
+            {"sector": "Energy", "date": "2026-07-30"},
+        ])
+        assert store.latest_sector_snapshot_date() == "2026-07-30"
+
+
+class TestSourceNamePrefersEmbeddedSource:
+    """``_source_name`` gained an optional ``raw`` argument so a per-symbol
+    ``_source`` key embedded by a fallback-capable provider wins over the
+    provider OBJECT's chain-level label. Without it,
+    ``fundamentals_history.source`` would claim a provenance that isn't true
+    for a symbol the chain fell back on -- and that column is the ground-truth
+    operator query for "did the chain fall back on me?"."""
+
+    def test_embedded_source_wins(self):
+        from data.historical_store import _source_name
+
+        provider = MagicMock()
+        provider.source_name = "composite"
+        assert _source_name(provider, {"_source": "yahoo_computed"}) == "yahoo_computed"
+
+    def test_unchanged_when_raw_is_none(self):
+        from data.historical_store import _source_name
+
+        provider = MagicMock()
+        provider.source_name = "yahoo_computed"
+        assert _source_name(provider) == "yahoo_computed"
+        assert _source_name(provider, None) == "yahoo_computed"
+
+    def test_unchanged_when_raw_lacks_the_key(self):
+        from data.historical_store import _source_name
+
+        provider = MagicMock()
+        provider.source_name = "yahoo_computed"
+        assert _source_name(provider, {"trailingPE": 21.0}) == "yahoo_computed"
+
+    def test_empty_or_non_dict_raw_falls_back(self):
+        """An empty-string / None ``_source``, or a non-dict ``raw``, must NOT
+        produce an empty provenance label."""
+        from data.historical_store import _source_name
+
+        provider = MagicMock()
+        provider.source_name = "yahoo_computed"
+        assert _source_name(provider, {}) == "yahoo_computed"
+        assert _source_name(provider, {"_source": ""}) == "yahoo_computed"
+        assert _source_name(provider, {"_source": None}) == "yahoo_computed"
+        assert _source_name(provider, ["not", "a", "dict"]) == "yahoo_computed"
+
+    def test_falls_back_to_lowercased_class_name_without_source_name_attr(self):
+        from data.historical_store import _source_name
+
+        class FakeProvider:
+            pass
+
+        assert _source_name(FakeProvider()) == "fakeprovider"

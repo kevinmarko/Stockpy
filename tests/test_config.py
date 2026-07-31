@@ -61,7 +61,7 @@ class TestColumnSchemaIntegrity:
     COLUMN_SCHEMA, that's exactly the drift this test exists to catch."""
 
     # Update deliberately, in the same commit as any COLUMN_SCHEMA change.
-    EXPECTED_COLUMN_COUNT = 102
+    EXPECTED_COLUMN_COUNT = 110
 
     def test_exact_column_count(self) -> None:
         assert len(config.COLUMN_SCHEMA) == self.EXPECTED_COLUMN_COUNT, (
@@ -282,6 +282,15 @@ class TestAdvisoryColumnCoverage:
         # which engine/advisory.py deliberately does not route through (it keeps
         # its own tighter, decoupled CONFIG["max_single_position_pct"] cap).
         "ETF_Transmission_Multiplier",
+        # FMP diagnostic feeds -- orchestrator-only by construction: every one
+        # is written by a pipeline/production_steps.py::_apply_fmp_* helper
+        # inside StrategyEvalStep, and the advisory path (main.py ->
+        # engine/advisory.py -> rec_to_sheet_row) never runs those steps, so it
+        # has no source for any of them.
+        "Analyst_Target_Consensus", "Analyst_Target_Upside", "Analyst_Grade_Score",
+        "Days_To_Earnings", "Last_EPS_Surprise_Pct",
+        "Insider_Buy_Sell_Ratio",
+        "Sector_PE", "Sector_1D_Change",
     })
 
     def test_mapped_and_unmapped_sets_are_exact_complements_of_column_schema(self) -> None:
@@ -300,8 +309,8 @@ class TestAdvisoryColumnCoverage:
             f"keys in one of the sets but no longer in COLUMN_SCHEMA: {(mapped | unmapped) - all_keys}"
         )
         assert len(mapped) == 35
-        assert len(unmapped) == 67
-        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 102
+        assert len(unmapped) == 75
+        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 110
 
     def test_rec_to_sheet_row_emits_exactly_the_known_mapped_keys(self) -> None:
         """AST/behavioral cross-check: call rec_to_sheet_row() for real and
@@ -392,3 +401,92 @@ class TestAdvisoryColumnCoverage:
         for key, fmt in expected.items():
             assert key in by_key, f"Expected new ADVISORY METADATA key {key!r} missing from COLUMN_SCHEMA"
             assert by_key[key]["format"] == fmt
+
+
+# ---------------------------------------------------------------------------
+# TestFMPDiagnosticColumns
+# ---------------------------------------------------------------------------
+
+class TestFMPDiagnosticColumns:
+    """The eight FMP diagnostic-feed COLUMN_SCHEMA entries (analyst, earnings,
+    insider, sector snapshot). Wave-0 scaffolding: the columns exist and are
+    schema-valid, but nothing populates them until the corresponding
+    ``FMP_*_ENABLED`` gate is on AND a wave-1 agent fills in the matching
+    ``pipeline/production_steps.py::_apply_fmp_*`` body."""
+
+    EXPECTED: Dict[str, str] = {
+        "Analyst_Target_Consensus": "currency",
+        "Analyst_Target_Upside": "percent",
+        "Analyst_Grade_Score": "number",
+        "Days_To_Earnings": "number",
+        "Last_EPS_Surprise_Pct": "percent",
+        "Insider_Buy_Sell_Ratio": "number",
+        "Sector_PE": "number",
+        "Sector_1D_Change": "percent",
+    }
+
+    def test_all_eight_keys_present_with_expected_format(self) -> None:
+        by_key = {c["key"]: c for c in config.COLUMN_SCHEMA}
+        for key, fmt in self.EXPECTED.items():
+            assert key in by_key, f"Expected FMP diagnostic key {key!r} missing from COLUMN_SCHEMA"
+            assert by_key[key]["format"] == fmt, (
+                f"{key!r} format drifted: expected {fmt!r}, got {by_key[key]['format']!r}"
+            )
+
+    def test_headers_are_unique_and_non_empty(self) -> None:
+        by_key = {c["key"]: c for c in config.COLUMN_SCHEMA}
+        headers = [by_key[k]["header"] for k in self.EXPECTED]
+        assert all(isinstance(h, str) and h.strip() for h in headers)
+        assert len(set(headers)) == len(headers)
+
+    def test_no_duplicate_earnings_date_column_was_added(self) -> None:
+        """The FMP earnings feed becomes a SECOND source for the EXISTING
+        news-catalyst ``Earnings_Date`` column rather than duplicating it.
+        A second entry would silently break Config.validate_config()'s
+        duplicate-key guard, but pin the intent explicitly here too."""
+        keys = config.get_internal_keys()
+        assert keys.count("Earnings_Date") == 1
+
+    def test_each_new_column_gets_a_dashboard_schema_column_of_the_right_dtype(self) -> None:
+        """DashboardSchema is built dynamically from COLUMN_SCHEMA, so all
+        eight must be present; the seven numeric formats must map to a
+        nullable float column so a NaN-filled (gate-off) cycle validates."""
+        schema_cols = config.DashboardSchema.columns
+        for key, fmt in self.EXPECTED.items():
+            assert key in schema_cols, f"{key!r} missing from config.DashboardSchema"
+            assert schema_cols[key].nullable is True, (
+                f"{key!r} must be nullable -- every FMP diagnostic column is "
+                "NaN whenever its gate is off (CONSTRAINT #4)."
+            )
+            assert fmt in ("currency", "percent", "number")
+
+    def test_nan_filled_frame_validates_against_dashboard_schema(self) -> None:
+        """A gate-off cycle emits NaN for all eight; that must be a VALID
+        dashboard frame, not a schema violation."""
+        import numpy as np
+        import pandas as pd
+
+        row = _valid_dashboard_row_for_fmp_test()
+        for key in self.EXPECTED:
+            row[key] = np.nan
+        df = pd.DataFrame([row])
+        # Raises SchemaError on failure; a clean return is the assertion.
+        config.DashboardSchema.validate(df, lazy=True)
+
+
+def _valid_dashboard_row_for_fmp_test() -> Dict[str, Any]:
+    """Build one schema-conformant row from config.COLUMN_SCHEMA.
+
+    Mirrors tests/test_dashboard_validation.py::_valid_dashboard_row; kept
+    local so this file has no cross-test-module import.
+    """
+    row: Dict[str, Any] = {}
+    for col in config.COLUMN_SCHEMA:
+        key = col["key"]
+        if key == "Symbol":
+            row[key] = "AAPL"
+        elif col["format"] in ("currency", "currency_large", "percent", "number"):
+            row[key] = 1.0
+        else:
+            row[key] = "x"
+    return row
