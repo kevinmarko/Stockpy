@@ -948,6 +948,11 @@ export interface OptionsDirective {
   Trend_Bias?: string | null;
   Sigma_GARCH?: number | null;
   IVR_Proxy?: number | null;
+  /** Real, options-chain-derived IV rank (settings.OPTIONS_TRUE_IVR_ENABLED, opt-in).
+   * Null unless the flag is on AND a live chain fetch + history lookup both
+   * succeeded -- alongside IVR_Proxy, never replacing it, so provenance stays
+   * honest. Preferred over IVR_Proxy for strategy selection when finite. */
+  True_IVR?: number | null;
   Aroon_Oscillator?: number | null;
   Coppock_Curve?: number | null;
   Net_Premium?: number | null;

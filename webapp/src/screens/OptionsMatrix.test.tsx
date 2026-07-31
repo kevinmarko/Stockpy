@@ -52,6 +52,46 @@ describe("OptionsMatrix screen (real mock API)", () => {
     expect(within(sheet).queryByText(/implied volatility rank/i)).not.toBeInTheDocument();
   });
 
+  it("shows True IVR (real, chain-derived) alongside IVR proxy when OPTIONS_TRUE_IVR_ENABLED produced a finite value -- never replacing the proxy", async () => {
+    vi.spyOn(api, "getOptions").mockResolvedValueOnce({
+      as_of: new Date().toISOString(),
+      target_dte: 30,
+      vix: 15,
+      market_regime: "RISK ON",
+      reason: null,
+      directives: [
+        {
+          Symbol: "ZOOM",
+          Price: 100,
+          Stale: false,
+          Strategy: "Iron Condor",
+          Action: "Sell to Open",
+          Trend_Bias: "Neutral",
+          Sigma_GARCH: 0.3,
+          IVR_Proxy: 36,
+          True_IVR: 92.4,
+          Net_Premium: 1.5,
+          Realizable_Daily_Theta: 0.02,
+          Legs: [],
+          Integrity_OK: true,
+          Integrity_Issues: [],
+        },
+      ],
+    } satisfies OptionsMatrixT);
+    renderScreen();
+    await screen.findByText("ZOOM");
+
+    // Banner swaps from the realized-vol-only caveat to the True-IVR-aware one.
+    expect(await screen.findByText(/shown where available/i)).toBeInTheDocument();
+    expect(screen.queryByText(/realized-volatility rank/i)).not.toBeInTheDocument();
+
+    // Detail sheet shows BOTH figures -- True IVR never replaces the proxy.
+    await userEvent.click(screen.getByText("ZOOM"));
+    const sheet = await screen.findByRole("dialog", { name: /ZOOM options directive/ });
+    expect(within(sheet).getByText(/IVR Proxy/i)).toBeInTheDocument();
+    expect(within(sheet).getByText(/True IVR/i)).toBeInTheDocument();
+  });
+
   it("an empty matrix renders the honest reason, never a fabricated row", async () => {
     vi.spyOn(api, "getOptions").mockResolvedValueOnce({
       as_of: null,

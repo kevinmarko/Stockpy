@@ -648,6 +648,9 @@ function OptionsDirectiveView({ d }: { d: OptionsDirective }) {
         />
         <StatRow label="GARCH σ" value={fmtNum(d.Sigma_GARCH ?? null, 3)} />
         <StatRow label="IVR proxy" value={fmtNum(d.IVR_Proxy ?? null, 1)} />
+        {typeof d.True_IVR === "number" && Number.isFinite(d.True_IVR) && (
+          <StatRow label="True IVR" value={fmtNum(d.True_IVR, 1)} />
+        )}
       </div>
     </>
   );

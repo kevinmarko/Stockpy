@@ -47,6 +47,15 @@ function isActionable(d: OptionsDirective): boolean {
 function isFlagged(d: OptionsDirective): boolean {
   return d.Integrity_OK !== true;
 }
+function hasTrueIvr(d: OptionsDirective): boolean {
+  return typeof d.True_IVR === "number" && Number.isFinite(d.True_IVR);
+}
+/** Mirrors technical_options_engine.build_premium_directive's own preference
+ * order: True_IVR when finite, else the IVR_Proxy fallback -- so "sort by
+ * IVR" ranks by the same figure that actually drove each strategy pick. */
+function effectiveIvr(d: OptionsDirective): number | null | undefined {
+  return hasTrueIvr(d) ? d.True_IVR : d.IVR_Proxy;
+}
 
 type Filter = "all" | "actionable" | "credit" | "debit" | "flagged";
 type Sort = "premium" | "ivr" | "sigma" | "symbol";
@@ -165,8 +174,13 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
       >
         <PremiumLabel d={d} />
         <span style={{ fontSize: "var(--t-body)", color: theme.textSecondary }}>
-          IVR <span className="num">{fmtNum(d.IVR_Proxy ?? null, 0)}</span>
+          IVR proxy <span className="num">{fmtNum(d.IVR_Proxy ?? null, 0)}</span>
         </span>
+        {hasTrueIvr(d) && (
+          <span style={{ fontSize: "var(--t-body)", color: theme.growth }}>
+            True IVR <span className="num">{fmtNum(d.True_IVR ?? null, 0)}</span>
+          </span>
+        )}
         <span style={{ fontSize: "var(--t-body)", color: theme.textSecondary }}>{d.Trend_Bias ?? "—"}</span>
         {isFlagged(d) && (
           <span className="badge badge-bad" style={{ marginLeft: "auto" }}>
@@ -261,6 +275,14 @@ function DetailSheet({ d, dte, asOf, onClose }: { d: OptionsDirective; dte: numb
             {fmtNum(d.IVR_Proxy ?? null, 0)}
           </div>
         </div>
+        {hasTrueIvr(d) && (
+          <div className="options-vol-item" style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>True IVR</div>
+            <div className="num" style={{ fontSize: "var(--t-input)", fontWeight: 700, color: theme.growth }}>
+              {fmtNum(d.True_IVR ?? null, 0)}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Visual legs view */}
@@ -810,6 +832,7 @@ export function OptionsMatrix() {
 
   const cleanCount = directives.filter((d) => d.Integrity_OK === true).length;
   const flaggedCount = directives.length - cleanCount;
+  const anyTrueIvr = directives.some(hasTrueIvr);
 
   const visible = useMemo(() => {
     const activeFilter = FILTERS.find((f) => f.key === filter)!;
@@ -818,7 +841,7 @@ export function OptionsMatrix() {
     );
     const sorted = [...rows];
     if (sort === "premium") sorted.sort(byNum((d) => d.Net_Premium));
-    else if (sort === "ivr") sorted.sort(byNum((d) => d.IVR_Proxy));
+    else if (sort === "ivr") sorted.sort(byNum(effectiveIvr));
     else if (sort === "sigma") sorted.sort(byNum((d) => d.Sigma_GARCH));
     else sorted.sort((a, b) => a.Symbol.localeCompare(b.Symbol));
     return sorted;
@@ -887,9 +910,19 @@ export function OptionsMatrix() {
           {/* Persistent honesty banner */}
           <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
             <span>
-              <strong>IVR here is a realized-volatility rank</strong> (IVR_Proxy) — no options
-              chain is fetched, so this is <em>not</em> true implied-vol rank. Advisory only; no
-              orders are placed.
+              {anyTrueIvr ? (
+                <>
+                  <strong>True IVR</strong> (real, options-chain-derived) is shown where available;{" "}
+                  <strong>IVR proxy</strong> is the realized-volatility fallback used for the rest.
+                  Advisory only; no orders are placed.
+                </>
+              ) : (
+                <>
+                  <strong>IVR here is a realized-volatility rank</strong> (IVR_Proxy) — no options
+                  chain is fetched, so this is <em>not</em> true implied-vol rank. Advisory only; no
+                  orders are placed.
+                </>
+              )}
             </span>
           </Notice>
 
