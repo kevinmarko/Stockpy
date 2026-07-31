@@ -78,7 +78,18 @@ class TestPortfolioRiskMetrics:
         assert out["reason"] and "5 snapshot" in out["reason"]
 
     def test_warm_path_flat_growth_has_zero_drawdown(self):
-        values = [1000.0 * (1.001 ** i) for i in range(25)]
+        # A perfectly geometric series (constant per-day rate) has a
+        # returns std of ~1e-16 -- floating-point noise, not a real signal --
+        # which is exactly the degenerate case
+        # calculate_equity_curve_metrics's Sharpe/Calmar guard (PR #501/#502)
+        # is designed to catch and report as None. Vary the daily growth
+        # rate (still always positive, so equity stays monotonically
+        # increasing and max_drawdown stays exactly 0) to get a genuine,
+        # above-noise-floor std for this "warm path" case.
+        rates = [0.0005, 0.0015, 0.001, 0.002, 0.0008]
+        values = [1000.0]
+        for i in range(24):
+            values.append(values[-1] * (1 + rates[i % len(rates)]))
 
         class _Store:
             def account_snapshot_history(self, since=None):
