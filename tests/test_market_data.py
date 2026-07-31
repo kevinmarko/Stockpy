@@ -1244,3 +1244,209 @@ class TestCompositeProviderSettingsWiring:
             assert YahooFundamentalsProvider._beta_period() == "3mo"
         with patch("settings.settings.BETA_LOOKBACK_DAYS", 1260):
             assert YahooFundamentalsProvider._beta_period() == "5y"
+
+
+# ---------------------------------------------------------------------------
+# 12. FMP fundamentals wiring: FUNDAMENTALS_SOURCE=fmp selection + the
+#     ordered fallback chain in CompositeProvider.get_fundamentals (wave 1).
+#     The pure mapping layer (data/fmp_fundamentals.py) and FMPProvider's own
+#     I/O-shell behavior have their own dedicated test files
+#     (tests/test_fmp_fundamentals.py, tests/test_fmp_provider.py); this
+#     class only covers CompositeProvider's SELECTION and CHAIN logic.
+# ---------------------------------------------------------------------------
+
+class TestFMPFundamentalsChain:
+    """The single most important invariant here: with FUNDAMENTALS_SOURCE at
+    its default, the pre-existing Yahoo -> yfinance chain is BYTE-IDENTICAL
+    to before FMP existed, even when FMP_API_KEY is set and FMP is fully
+    configured to fail. FMP_API_KEY alone must never elect FMP."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_serve_counts(self):
+        from data.market_data import reset_provider_serve_counts
+        reset_provider_serve_counts()
+        yield
+        reset_provider_serve_counts()
+
+    def _patched(self, **overrides):
+        base = dict(
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
+        )
+        base.update(overrides)
+        return patch.multiple("settings.settings", **base)
+
+    # -- 1. Flag-off byte-identical -----------------------------------
+    def test_flag_off_fmp_key_set_but_source_not_fmp_selects_yahoo(self):
+        """FMP_API_KEY alone must NEVER elect FMP -- FUNDAMENTALS_SOURCE must
+        ALSO be explicitly 'fmp' (the two-gate convention)."""
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider
+
+        with self._patched(FMP_API_KEY="a-real-looking-key", FUNDAMENTALS_SOURCE="yahoo"):
+            cp = CompositeProvider()
+        assert isinstance(cp._fundamentals_provider, YahooFundamentalsProvider)
+
+    def test_flag_off_get_fundamentals_never_touches_fmp_network(self):
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider
+
+        # The settings patch stays open across BOTH construction and the
+        # get_fundamentals() call: FMP_FALLBACK_ENABLED (irrelevant on this
+        # branch, but the general pattern below relies on it) and the
+        # provider-selection settings are read at different times.
+        with self._patched(FMP_API_KEY="a-real-looking-key", FUNDAMENTALS_SOURCE="yahoo"):
+            cp = CompositeProvider()
+            with patch("data.fmp_client.requests.get") as mock_get, \
+                 patch.object(
+                     YahooFundamentalsProvider, "get_fundamentals",
+                     return_value={"trailingPE": 1.0},
+                 ):
+                cp.get_fundamentals("AAPL")
+            mock_get.assert_not_called()
+
+    # -- 2. FUNDAMENTALS_SOURCE=fmp without a key -> RuntimeError -------
+    def test_fmp_source_without_api_key_raises_at_construction(self):
+        from data.market_data import CompositeProvider
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY=None):
+            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
+                CompositeProvider()
+
+    def test_fmp_source_with_blank_api_key_also_raises(self):
+        from data.market_data import CompositeProvider
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="   "):
+            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
+                CompositeProvider()
+
+    def test_fmp_source_with_key_selects_fmp_provider(self):
+        from data.market_data import CompositeProvider, FMPProvider
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+        assert isinstance(cp._fundamentals_provider, FMPProvider)
+
+    # -- 3. FMP empty -> Yahoo serves, tagged, counted, WARNING logged --
+    def test_fmp_empty_falls_back_to_yahoo_then_serves_and_counts(self, caplog):
+        import logging
+        from data.market_data import (
+            CompositeProvider,
+            FMPProvider,
+            YahooFundamentalsProvider,
+            get_provider_serve_counts,
+        )
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+
+            yahoo_fund = {"trailingPE": 28.5}
+            with patch.object(FMPProvider, "get_fundamentals", return_value={}), \
+                 patch.object(YahooFundamentalsProvider, "get_fundamentals", return_value=yahoo_fund), \
+                 caplog.at_level(logging.WARNING, logger="data.market_data"):
+                out = cp.get_fundamentals("AAPL")
+
+        assert out["_source"] == "yahoo_computed"
+        assert out["trailingPE"] == 28.5
+        assert any(
+            r.levelno == logging.WARNING and "returned nothing for AAPL" in r.message
+            for r in caplog.records
+        )
+        assert get_provider_serve_counts()[("fundamentals", "yahoo_computed")] == 1
+
+    # -- 4. All three chain members empty -> {} cached at negative TTL --
+    def test_all_three_chain_members_empty_returns_empty_and_caches_negative(self):
+        from data.market_data import (
+            CompositeProvider,
+            FMPProvider,
+            YahooFundamentalsProvider,
+            YFinanceProvider,
+        )
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+
+            with patch.object(FMPProvider, "get_fundamentals", return_value={}), \
+                 patch.object(YahooFundamentalsProvider, "get_fundamentals", return_value={}), \
+                 patch.object(YFinanceProvider, "get_fundamentals", return_value={}):
+                out = cp.get_fundamentals("AAPL")
+            assert out == {}
+
+            # Cached at the negative TTL -- a second call hits the cache,
+            # never re-consulting any chain member.
+            with patch.object(FMPProvider, "get_fundamentals", return_value={}) as fmp_mock, \
+                 patch.object(YahooFundamentalsProvider, "get_fundamentals", return_value={}) as yahoo_mock, \
+                 patch.object(YFinanceProvider, "get_fundamentals", return_value={}) as yf_mock:
+                cp.get_fundamentals("AAPL")
+            fmp_mock.assert_not_called()
+            yahoo_mock.assert_not_called()
+            yf_mock.assert_not_called()
+
+    # -- 5. FMP_FALLBACK_ENABLED=False -> chain length 1 ----------------
+    def test_fallback_disabled_chain_is_fmp_only(self):
+        from data.market_data import CompositeProvider, FMPProvider, YahooFundamentalsProvider
+        with self._patched(
+            FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+
+            with patch.object(FMPProvider, "get_fundamentals", return_value={}), \
+                 patch.object(
+                     YahooFundamentalsProvider, "get_fundamentals",
+                     return_value={"trailingPE": 1.0},
+                 ) as yahoo_mock:
+                out = cp.get_fundamentals("AAPL")
+
+            assert out == {}
+            yahoo_mock.assert_not_called()
+
+    def test_fallback_disabled_but_fmp_succeeds_still_serves_and_tags(self):
+        from data.market_data import CompositeProvider, FMPProvider
+        with self._patched(
+            FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+
+            with patch.object(FMPProvider, "get_fundamentals", return_value={"trailingPE": 9.0}):
+                out = cp.get_fundamentals("AAPL")
+            assert out["trailingPE"] == 9.0
+            assert out["_source"] == "fmp"
+
+    # -- 6. Existing Yahoo -> yfinance chain completely untouched -------
+    def test_default_config_chain_untouched_even_with_fmp_fully_configured(self):
+        """Regression guard: even with FMP fully configured (a real-looking
+        key present) but FUNDAMENTALS_SOURCE left at its default, the
+        existing 2-element Yahoo -> yfinance chain must be exactly what it
+        is today -- FMP must never appear in it, and no FMP network call is
+        ever attempted."""
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider, YFinanceProvider
+
+        with self._patched(FMP_API_KEY="a-real-looking-key", FUNDAMENTALS_SOURCE="yahoo"):
+            cp = CompositeProvider()
+
+            with patch.object(YahooFundamentalsProvider, "get_fundamentals", return_value={}), \
+                 patch.object(
+                     YFinanceProvider, "get_fundamentals",
+                     return_value={"trailingPE": 2.0},
+                 ) as yf_mock, \
+                 patch("data.fmp_client.requests.get") as fmp_get_mock:
+                out = cp.get_fundamentals("AAPL")
+
+            assert out == {"trailingPE": 2.0}
+            yf_mock.assert_called_once()
+            fmp_get_mock.assert_not_called()
+            # No "_source" tagging on the legacy path -- the returned dict is
+            # exactly what YFinanceProvider.get_fundamentals returned, byte
+            # for byte (existing tests pin this same no-extra-keys contract).
+            assert "_source" not in out
+
+    def test_default_config_yfinance_info_source_also_untouched(self):
+        """The other pre-existing non-FMP branch (FUNDAMENTALS_SOURCE=
+        yfinance_info) must be equally unaffected by FMP's existence."""
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched(FMP_API_KEY="a-real-looking-key", FUNDAMENTALS_SOURCE="yfinance_info"):
+            cp = CompositeProvider()
+            assert isinstance(cp._fundamentals_provider, YFinanceProvider)
+
+            with patch.object(
+                YFinanceProvider, "get_fundamentals", return_value={"trailingPE": 3.0},
+            ), patch("data.fmp_client.requests.get") as fmp_get_mock:
+                out = cp.get_fundamentals("AAPL")
+            assert out == {"trailingPE": 3.0}
+            fmp_get_mock.assert_not_called()
