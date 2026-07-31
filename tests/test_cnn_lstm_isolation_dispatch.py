@@ -112,13 +112,32 @@ class TestFreshFitIsolationDispatch:
 
         assert result == {h: 0.0 for h in horizons}
 
-    def test_isolation_disabled_by_default_uses_legacy_in_process_path(self, engine, monkeypatch):
-        """Default (no settings override): the legacy path must run to a
-        real result, and the isolation pool must never be touched. Both
-        directions are proven at once -- if dispatch went the wrong way
-        either function's raising side effect would be hit, the outer
-        except would swallow it, and the fit-call / result assertions below
-        would fail."""
+    def test_isolation_enabled_by_default_dispatches_to_subprocess(self, engine):
+        """As of 2026-07-31 (docs/known_issues/cnn_lstm_tf_deadlock.md, Round
+        7), CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED defaults True -- no override
+        needed. This locks in that default: unlike
+        test_isolation_enabled_dispatches_to_run_in_subprocess above, this
+        test deliberately does NOT patch the setting."""
+        horizons = (10, 30, 60, 90)
+        fake_result = {"pred_scaled": [0.5, 0.5, 0.5, 0.5], "saved": False}
+
+        with mock.patch("cnn_lstm_process_pool.run_in_subprocess", return_value=fake_result) as mock_run:
+            df = _bars_df(340)
+            result = engine.run_cnn_lstm_forecast(df, horizons=horizons)
+
+        assert set(result.keys()) == set(horizons)
+        mock_run.assert_called_once()
+        called_func = mock_run.call_args[0][0]
+        assert called_func.__name__ == "fit_predict_cnn_lstm"
+
+    def test_isolation_explicitly_disabled_uses_legacy_in_process_path(self, engine, monkeypatch):
+        """CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=False (an explicit operator
+        opt-out from the 2026-07-31 default -- see the test above): the
+        legacy path must run to a real result, and the isolation pool must
+        never be touched. Both directions are proven at once -- if dispatch
+        went the wrong way either function's raising side effect would be
+        hit, the outer except would swallow it, and the fit-call / result
+        assertions below would fail."""
         import sys
         import types
 
@@ -150,10 +169,11 @@ class TestFreshFitIsolationDispatch:
         # import -- same fragility as Sequential/Conv1D/etc above, same fix.
         monkeypatch.setattr(forecasting_engine, "tf", mock_tf, raising=False)
 
-        with mock.patch(
-            "cnn_lstm_process_pool.run_in_subprocess",
-            side_effect=AssertionError("isolation path must not run when disabled"),
-        ):
+        with mock.patch("settings.settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", False), \
+             mock.patch(
+                 "cnn_lstm_process_pool.run_in_subprocess",
+                 side_effect=AssertionError("isolation path must not run when disabled"),
+             ):
             df = _bars_df(340)
             result = engine.run_cnn_lstm_forecast(df, horizons=(10, 30, 60, 90))
 

@@ -62,6 +62,24 @@ import pytest
 from sklearn.preprocessing import MinMaxScaler
 from forecasting_engine import ForecastingEngine
 
+
+@pytest.fixture(autouse=True)
+def _force_legacy_in_process_cnn_lstm_path(monkeypatch):
+    """This whole file drives run_cnn_lstm_forecast through the module-level
+    `mock_tf`/`Sequential` injection above (sys.modules-style, matching this
+    file's own docstring/comments) -- i.e. every assertion here (fit_kwargs,
+    numpy/tf seeding, MinMaxScaler.fit call args) is checking the LEGACY
+    in-process training path's own behavior. CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED
+    defaults True as of 2026-07-31 (docs/known_issues/cnn_lstm_tf_deadlock.md,
+    Round 7) -- routing through the real subprocess pool here would bypass
+    every mock in this file (a spawned worker gets a fresh interpreter, real
+    installed TensorFlow, none of mock_tf) and either hang or silently start
+    running real, slow training instead of the fast deterministic mocked path
+    this file is built around. Isolation dispatch itself has its own dedicated
+    coverage in tests/test_cnn_lstm_isolation_dispatch.py."""
+    monkeypatch.setattr("settings.settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", False)
+
+
 @pytest.fixture
 def sine_wave_data():
     """Generates a deterministic sine-wave series (340 days).

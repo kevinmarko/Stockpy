@@ -69,6 +69,20 @@ def _isolated_models_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(mp, "MODELS_DIR", tmp_path / "forecast_cache")
 
 
+@pytest.fixture(autouse=True)
+def _force_legacy_in_process_cnn_lstm_path(monkeypatch):
+    """The CNN-LSTM persistence tests below (TestCnnLstmCacheHit) monkeypatch
+    forecasting_engine.tf directly to a fake/stub tf.keras.models namespace --
+    an in-process-only technique that a real subprocess worker (spawned with a
+    fresh interpreter, unaware of this monkeypatch) would never see.
+    CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED defaults True as of 2026-07-31
+    (docs/known_issues/cnn_lstm_tf_deadlock.md, Round 7); pin it False here so
+    this file keeps testing the persistence WIRING logic it's actually about,
+    not real subprocess dispatch (covered separately by
+    tests/test_cnn_lstm_isolation_dispatch.py)."""
+    monkeypatch.setattr("settings.settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", False)
+
+
 # ============================================================================
 # forecasting/model_persistence.py — pure helpers
 # ============================================================================

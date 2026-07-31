@@ -1,30 +1,37 @@
-# Known issue: CNN-LSTM forecaster deadlocks on TensorFlow eager execution
+# Known issue (fixed): CNN-LSTM forecaster deadlocks on TensorFlow eager execution
 
-**Status (Round 6, 2026-07-27): verified against the real native deadlock on real
-production data — the current production entry points are NOT exposed, but the
-underlying collision is still live and exactly one wrong import away from
-reproducing.** Round 6 ran the exact repro this doc's Round 5 status line asked
-for — real `.venv`, real macOS arm64 + Framework-Python + TF 2.21.0 + pyarrow
-24.0.0, real backfilled AAPL bars, the actual `ForecastingEngine.generate_forecast()`
-entry point — on the same `.venv` the live `desktop.orchestrator_daemon` process
-uses. Two results: (1) the deadlock reproduces deterministically and matches
-Round 1's stack signature exactly, whenever the *calling process's own* import
-order puts `pandas`/`pyarrow` before `tensorflow`; (2) `main_orchestrator.py` /
-`pipeline/production_steps.py`'s existing Fix-2 guard (`import tensorflow` before
-their own `pandas` import) is empirically **sufficient on its own** to prevent it
-for those entry points — confirmed both by a live-data re-test (1.7s clean, isolation
-off, matching the real `.env`) and by the live daemon's own `pipeline_runs` history
-(dozens of 100-135s clean cycles, zero hangs, zero errors). See "Round 6" below for
-the full methodology, all four tested combinations, and why this is a narrower
-finding than "fixed" — Fix 3 (the actual ODR collision) remains unaddressed, so any
-future entry point, ad-hoc script, or notebook that imports `pandas` first will hit
-this deterministically, with no compile-time or lint-time signal that it's about to.
-Tracked in [issue #381](https://github.com/kevinmarko/Stockpy/issues/381). Discovered
+**Status (Round 7, 2026-07-31): fixed by default.** `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED`
+now defaults **`True`** (was `False`) — Round 6 (2026-07-27) verified subprocess
+isolation end-to-end against the real native deadlock, on real production data,
+in the exact macOS arm64 + Framework-Python + TF 2.21.0 + pyarrow 24.0.0
+environment the deadlock was originally confirmed on (see "Round 6" below,
+Attempt 18). That was the one caveat blocking this from being the default — Fix
+1 (subprocess isolation, Round 5) was implemented and unit-tested but not yet
+proven against the real deadlock. With that proof in hand, isolation is now the
+default for every caller, not an opt-in only the three entry points that
+remembered the Fix-2 import-order guard benefited from. See "Round 7" below for
+the full rationale, what changed, and the honest residual: the underlying
+Abseil ODR symbol collision between TensorFlow's and pyarrow's bundled libraries
+(confirmed via `nm`, Round 1) is still physically present in both wheels —
+Fix 3 (eliminating it at the source) remains "not actionable as a code change
+this repository can make" per Round 5's due diligence — but production code no
+longer creates the conditions for it to fire: every real fit/predict call now
+runs inside a freshly-spawned worker process with a controlled import order,
+regardless of what the calling process already imported. Tracked in
+[issue #381](https://github.com/kevinmarko/Stockpy/issues/381). Discovered
 2026-07-19/20 while enabling the CNN-LSTM forecaster path in
 `forecasting_engine.py` (tracked in
 [PR #377](https://github.com/kevinmarko/Stockpy/pull/377), which shipped only the
 safe half — the idempotent `setup.sh` and the numpy-safe `requirements-optional.txt`
 — and explicitly deferred this deadlock as follow-up work).
+
+**Status history (superseded by Round 7 above, kept for the record):** Round 6
+(2026-07-27) verified against the real native deadlock on real production data
+— the production entry points (`main.py`, `main_orchestrator.py`,
+`pipeline/production_steps.py`) were NOT exposed (protected by the Fix-2
+import-order guard), but the underlying collision was still live and exactly
+one wrong import away from reproducing for any OTHER entry point, ad-hoc
+script, or notebook. That gap is what Round 7 closes.
 
 Round 3's mitigation (reordering imports inside `forecasting_engine.py`, PR #387)
 only prevents the deadlock when that module happens to be the first thing in the
@@ -758,6 +765,137 @@ risk than "CNN-LSTM might hang in production" — it is "CNN-LSTM hangs
 deterministically the moment anything imports pandas before tensorflow in that
 process, and today's protection is convention, not enforcement."
 
+## Round 7 (2026-07-31): default flipped — the enforcement gap closed
+
+Round 6 left one precise, correctly-scoped gap open: the three known production
+entry points were empirically safe, but that safety was **convention** (a
+guarded `import tensorflow` a developer has to remember to place above their
+own `import pandas`), not **enforcement** — and Round 6's own Attempts 16-17
+demonstrated exactly how easy that convention is to violate by accident, even
+by an agent that had just read this doc. [PR #439](https://github.com/kevinmarko/Stockpy/pull/439)
+closed part of that gap with a static AST test
+(`tests/test_cnn_lstm_import_order.py`) that fails the build if the three
+known files ever regress — real, useful, but by construction it can only ever
+protect files on its own hardcoded `GUARDED_ENTRY_POINTS` list. It cannot
+protect a fourth entry point nobody has written yet, an ad-hoc script, a
+notebook, or an MCP tool invocation — exactly the blind spot Round 6's status
+line called out.
+
+### What changed
+
+`settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` now defaults **`True`**
+(previously `False`). This was always understood to be "the actual fix that
+removes the process-scope constraint" (Round 5's own framing) — the only
+reason it stayed opt-in was that, as of Round 5, it had been verified against
+the mocked test suite and the documented evidence, but explicitly **not**
+against the real native deadlock on the real machine class that originally
+reproduced it. Round 6 closed exactly that gap (Attempt 18: "Guard present,
+isolation on | Clean, 4.0s, same real result shape" — a direct, real-deadlock,
+real-production-data verification of the isolation path itself, not just the
+import-order guard). With the blocking caveat resolved, there was no longer a
+reason to leave the actual fix opt-in while a strictly weaker, unenforced
+mitigation stayed the default.
+
+With isolation on by default, every call into
+`ForecastingEngine.run_cnn_lstm_forecast` — from any entry point, known or
+not — runs its actual TF-touching work (fit/predict, or cached-model
+load/predict) inside a freshly `spawn`-ed worker process
+(`cnn_lstm_process_pool.py` / `cnn_lstm_worker.py`, built in Round 5). A
+`spawn`-ed interpreter's import order is fully controlled by
+`cnn_lstm_worker.py`'s own top-of-file `import tensorflow` regardless of
+whatever the parent process already imported, so the deadlock's precondition
+(TensorFlow's Python-level init losing a race to pandas/pyarrow's) can no
+longer be constructed no matter which process reaches this code path first.
+This is a strictly stronger guarantee than Fix 2's import-order convention:
+Fix 2 protects three specific files that were edited to carry the guard; Fix 1
+(now the default) protects the code path itself, unconditionally.
+
+Fix 2 (the guarded `import tensorflow` in `main.py`/`main_orchestrator.py`/
+`pipeline/production_steps.py`) and the Round 6 AST enforcement test
+([PR #439](https://github.com/kevinmarko/Stockpy/pull/439)) are both left in
+place, unchanged, as defense-in-depth for anyone who explicitly sets
+`CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=False` to opt back into the legacy
+in-process path (e.g. to avoid the subprocess pool's warm-up cost, or while
+debugging with an in-process breakpoint). Bounded, recoverable failure is
+still the backstop either way: `CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS` (default
+300s) caps any single isolated call, degrading to the zero-result sentinel
+(CONSTRAINT #6) rather than hanging forever, even in the hypothetical case
+that some other, as-yet-undiscovered collision reproduces inside the worker
+process itself.
+
+### Test suite changes
+
+Flipping the default surfaced a real category of pre-existing tests that had
+been implicitly relying on `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` defaulting
+to `False`: `tests/test_forecasting_lookahead.py` and
+`tests/test_forecast_model_persistence.py` both drive
+`run_cnn_lstm_forecast` through an **in-process** monkeypatch of
+`forecasting_engine.tf`/`Sequential` (a fake Keras stand-in) to keep training
+instant and deterministic — a technique that only works for the in-process
+path, since a real `spawn`-ed worker gets a fresh interpreter and never sees
+the parent process's monkeypatches. Both files gained a file-wide
+`autouse` fixture pinning `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=False` for
+their own duration, so they keep testing the engine logic (scaler-fit
+boundaries, seeding, purge/embargo, persistence cache-hit wiring) they were
+actually built to test, independent of which process the fit runs in — that
+dispatch question already has its own dedicated coverage in
+`tests/test_cnn_lstm_isolation_dispatch.py`, which was updated in the other
+direction: `test_isolation_disabled_by_default_uses_legacy_in_process_path`
+(a name that stopped being true) was renamed to
+`test_isolation_explicitly_disabled_uses_legacy_in_process_path` and now
+patches the setting explicitly, and a new
+`test_isolation_enabled_by_default_dispatches_to_subprocess` locks in the new
+default with no override at all. `tests/test_forecasting_engine.py` and
+`tests/test_quantitative_models.py` needed no changes — their CNN-LSTM-adjacent
+tests already force `TENSORFLOW_AVAILABLE=False` or supply too little history
+to reach the fit/predict dispatch point at all, so they never touch the
+isolation branch either way.
+
+`.env.example`'s `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` line was updated from
+`false` to `true` to match; an operator's own `.env` that doesn't set this key
+picks up the new code default automatically, and one that already set it
+explicitly (either direction) is unaffected by this change.
+
+### Verification
+
+- `pytest -q -p no:randomly` on every test file that reaches
+  `run_cnn_lstm_forecast`/`generate_forecast` (`test_cnn_lstm_import_order.py`,
+  `test_cnn_lstm_isolation_dispatch.py`, `test_cnn_lstm_process_pool.py`,
+  `test_cnn_lstm_worker.py`, `test_forecast_model_persistence.py`,
+  `test_gui_env_io_cnn_lstm_keys.py`, `test_forecasting_lookahead.py`,
+  `test_forecasting_engine.py`, `test_forecasting_engine_config_loader.py`,
+  `test_forecasting_improvements.py`, `test_forecast_parallel.py`,
+  `test_forecast_skill_uplift.py`, `test_forecast_tracker.py`,
+  `test_quantitative_models.py::test_forecasting_engine_cnn_lstm_slicing_and_fallbacks`) —
+  all passing.
+- A second sweep across every test file that calls `generate_forecast()`
+  without explicitly mocking TensorFlow (`test_advisory.py`,
+  `test_advisory_dedup_wiring.py`, `test_advisory_pause_gate.py`,
+  `test_bert_lla_lookahead.py`, `test_bug_fixes.py`,
+  `test_dead_letter_resilience.py`, `test_metrics_api.py`,
+  `test_pipeline_smoke.py`, `test_production_steps_forecast_columns.py`,
+  `test_rationale_verbosity.py`, `test_sector_forecast_backtest.py`) —
+  confirms none of them reach the CNN-LSTM fit/predict dispatch point with
+  enough history to matter; all pass in under 10 seconds with no slowdown or
+  hang from the new default.
+- Full repo-wide `pytest -q -p no:randomly -m "not network"` re-run against
+  the flipped default — see the introducing PR for the final pass count.
+
+### What this doesn't change
+
+Same honest bottom line as Round 5's own Fix 3 section, restated because it's
+still true: the Abseil ODR symbol collision itself (Round 1's `nm` evidence —
+`AbslInternalPerThreadSemWait_lts_20250814` defined in both
+`libtensorflow_framework.2.dylib` and `libarrow.2400.dylib`) has not been
+eliminated, cannot be eliminated by dropping either dependency (both are
+load-bearing), and no linker/loader trick applies on macOS's `dyld` model.
+What Round 7 changes is not the collision's existence but whether production
+code ever creates the conditions for it to matter — by default, it no longer
+does, for any caller. An operator who explicitly disables isolation
+(`CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=False`) is opting back into the
+Round 6 risk profile in full, including for entry points the Fix-2 guard and
+AST test don't cover.
+
 ## What was ruled out
 
 - SQLite/WAL lock contention with the concurrently-running orchestrator daemon (WAL
@@ -821,17 +959,27 @@ process, and today's protection is convention, not enforcement."
   fit/predict worker and its persistent `multiprocessing` "spawn" pool manager.
   Deliberately repo-root modules, not inside `forecasting/` (see Round 5, Fix 1,
   for why `forecasting/__init__.py` makes that package unsafe for this).
-- `settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` /
-  `CNN_LSTM_PROCESS_POOL_WORKERS` / `CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS`
-  (Round 5) — the opt-in flags controlling the process-isolation fix.
-- `forecasting/forecast_tracker.py` — the skill tracker CNN-LSTM would feed once
-  this is resolved; currently has zero `cnn_lstm` rows in the live database.
+- `settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` (default `True` as of Round
+  7, 2026-07-31) / `CNN_LSTM_PROCESS_POOL_WORKERS` / `CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS`
+  (Round 5) — the flags controlling the process-isolation fix.
+- `forecasting/forecast_tracker.py` — the skill tracker CNN-LSTM feeds; check
+  `pending_count`/`completed_count` there to confirm real forecasts are
+  flowing post-Round-7.
 - Round 6 (2026-07-27) — the real-data, real-`.venv` verification Round 5's
-  status line asked for; confirms the live daemon's entry points are protected
-  by Fix 2 today, and that protection is convention (an easy-to-omit import
-  order), not something enforced by tests or tooling.
-- [PR #439](https://github.com/kevinmarko/Stockpy/pull/439) — closes that
-  enforcement gap: a static AST-based test
-  (`tests/test_cnn_lstm_import_order.py`) that fails the build if
-  `main.py`/`main_orchestrator.py`/`pipeline/production_steps.py` ever
-  reorder `pandas` before `tensorflow` again.
+  status line asked for; confirmed the live daemon's entry points were
+  protected by Fix 2, and that protection was convention (an easy-to-omit
+  import order), not something enforced by tests or tooling -- the gap Round 7
+  closes by making Fix 1 (isolation) the default instead.
+- [PR #439](https://github.com/kevinmarko/Stockpy/pull/439) — a static
+  AST-based test (`tests/test_cnn_lstm_import_order.py`) that fails the build
+  if `main.py`/`main_orchestrator.py`/`pipeline/production_steps.py` ever
+  reorder `pandas` before `tensorflow` again. Kept as defense-in-depth for the
+  `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED=False` opt-out path after Round 7 --
+  it only ever covered those three files, which is exactly why Round 7 didn't
+  stop there.
+- Round 7 (2026-07-31) — flips `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED`'s
+  default to `True`, closing the "any future entry point" gap Round 6 left
+  open. See `tests/test_cnn_lstm_isolation_dispatch.py` for the updated
+  default-behavior tests and `tests/test_forecasting_lookahead.py` /
+  `tests/test_forecast_model_persistence.py` for the pinned-legacy-path fixture
+  this required.
