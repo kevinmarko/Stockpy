@@ -32,6 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from settings import settings
 from api.auth import require_read_token as require_token
+from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 from data.historical_store import HistoricalStore
 from data.market_data import MarketDataError, get_provider
 from processing_engine import ProcessingEngine
@@ -55,6 +56,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=LAN_TAILSCALE_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["GET"],
     allow_headers=["Authorization", "Content-Type"],
