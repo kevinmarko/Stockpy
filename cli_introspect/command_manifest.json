@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-27T12:54:24.922892+00:00",
+  "generated_at": "2026-07-31T09:26:04.331167+00:00",
   "command_count": 11,
   "dead_letters": [],
   "commands": [
@@ -546,7 +546,7 @@
     },
     {
       "name": "refresh_validations.py",
-      "invocation": "python scripts/refresh_validations.py",
+      "invocation": "python -m scripts.refresh_validations",
       "aliases": [],
       "description": "Run walk-forward validation for registered strategies (monthly cadence).",
       "options": [
@@ -657,7 +657,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/Desktop/Stockpy/output",
+          "default": "/Users/kevinlee/worktrees/fix-refresh-validations-target/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -693,7 +693,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/Desktop/Stockpy/output",
+          "default": "/Users/kevinlee/worktrees/fix-refresh-validations-target/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
