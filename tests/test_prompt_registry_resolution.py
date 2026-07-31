@@ -620,74 +620,92 @@ class TestSingleton:
         assert r1 is not r2
 
     def test_get_registry_default_is_baseline_only(self):
-        """With no env vars, get_registry() creates a baseline-only registry."""
-        # Ensure the enabling env var is absent
-        env_backup = os.environ.pop("PROMPT_REGISTRY_ENABLED", None)
-        try:
+        """With PROMPT_REGISTRY_ENABLED unset (settings default False),
+        get_registry() creates a baseline-only registry.
+
+        Reads settings.settings.PROMPT_REGISTRY_ENABLED, not os.environ — a
+        .env-only value would never appear in the real os.environ (see
+        prompt_registry.registry._build_registry_from_settings's docstring).
+        """
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", False):
             reset_registry()
             reg = get_registry()
             assert reg._enabled is False
             assert reg._store is None
-        finally:
-            if env_backup is not None:
-                os.environ["PROMPT_REGISTRY_ENABLED"] = env_backup
-            reset_registry()
+        reset_registry()
 
     def test_get_registry_baseline_only_returns_baseline(self):
         """Baseline-only registry always returns the committed baseline for known ids."""
-        env_backup = os.environ.pop("PROMPT_REGISTRY_ENABLED", None)
-        try:
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", False):
             reset_registry()
             reg = get_registry()
             result = reg.get(_KNOWN_ID)
             assert result == read_baseline(_KNOWN_ID)
-        finally:
-            if env_backup is not None:
-                os.environ["PROMPT_REGISTRY_ENABLED"] = env_backup
-            reset_registry()
+        reset_registry()
 
     def test_build_registry_from_settings_disabled(self):
-        """_build_registry_from_settings with ENABLED=false → baseline-only."""
-        with unittest.mock.patch.dict(
-            os.environ, {"PROMPT_REGISTRY_ENABLED": "false"}, clear=False
-        ):
+        """_build_registry_from_settings with settings.PROMPT_REGISTRY_ENABLED=False → baseline-only."""
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", False):
             reset_registry()
             reg = get_registry()
         assert reg._enabled is False
         reset_registry()
 
     def test_build_registry_from_settings_enabled_http_no_url(self):
-        """ENABLED=true + BACKEND=http but no URL → store is None (logged warning)."""
-        with unittest.mock.patch.dict(
-            os.environ,
-            {
-                "PROMPT_REGISTRY_ENABLED": "true",
-                "PROMPT_REGISTRY_BACKEND": "http",
-                "PROMPT_REGISTRY_URL": "",
-            },
-            clear=False,
-        ):
+        """ENABLED=True + BACKEND=http but no URL → store is None (logged warning)."""
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", True), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_BACKEND", "http"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_URL", None):
             reset_registry()
             reg = get_registry()
         assert reg._enabled is True
         assert reg._store is None
         reset_registry()
 
-    def test_build_registry_pins_parsed_from_json(self):
-        """PROMPT_REGISTRY_PINS JSON is parsed into the pins dict."""
-        pins_json = '{"gravity.system": "1.2.3"}'
-        with unittest.mock.patch.dict(
-            os.environ,
-            {
-                "PROMPT_REGISTRY_ENABLED": "false",
-                "PROMPT_REGISTRY_PINS": pins_json,
-            },
-            clear=False,
-        ):
+    def test_build_registry_pins_parsed_from_settings(self):
+        """settings.PROMPT_REGISTRY_PINS (already dict[str, str]) populates the pins dict.
+
+        Regression test for the os.environ-vs-settings bug: PROMPT_REGISTRY_PINS
+        is a real dict[str, str] Settings field (pydantic-settings parses the
+        .env JSON string for us) — _build_registry_from_settings must read it
+        directly, not re-parse a nonexistent os.environ JSON string.
+        """
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", False), \
+             unittest.mock.patch(
+                 "settings.settings.PROMPT_REGISTRY_PINS", {"gravity.system": "1.2.3"}
+             ):
             reset_registry()
             reg = get_registry()
         # Even when disabled, pins are parsed
         assert reg._pins.get("gravity.system") == "1.2.3"
+        reset_registry()
+
+    def test_dot_env_only_config_enables_registry(self):
+        """Regression test for the os.environ-vs-settings bug (CLAUDE.md's
+        2026-07 Finnhub/news_catalyst precedent).
+
+        Setting settings.settings.PROMPT_REGISTRY_ENABLED directly on the
+        object — exactly what happens when an operator's ONLY source for the
+        value is `.env` (pydantic-settings' env_file loading populates the
+        Settings object but never copies into the real os.environ) — must
+        produce an ENABLED registry. Before the fix, _build_registry_from_settings
+        read os.environ.get("PROMPT_REGISTRY_ENABLED", "false") directly, so a
+        `.env`-only configuration was silently ignored and this would have
+        produced a baseline-only (disabled) registry with no error.
+        """
+        assert "PROMPT_REGISTRY_ENABLED" not in os.environ, (
+            "test setup invariant: real os.environ must NOT carry this key, "
+            "so the only way the registry can see it enabled is via settings"
+        )
+        with unittest.mock.patch("settings.settings.PROMPT_REGISTRY_ENABLED", True), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_BACKEND", "local"), \
+             unittest.mock.patch("settings.settings.PROMPT_REGISTRY_URL", "registry.json"):
+            reset_registry()
+            reg = get_registry()
+            assert reg._enabled is True, (
+                "settings.settings.PROMPT_REGISTRY_ENABLED=True (a .env-only-style "
+                "config) must yield an enabled registry"
+            )
         reset_registry()
 
 

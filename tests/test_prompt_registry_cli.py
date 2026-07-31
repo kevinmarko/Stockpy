@@ -41,6 +41,7 @@ _REPO_ROOT = Path(__file__).parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+import settings as settings_module
 from prompt_registry.cache import CacheManager, read_baseline
 from prompt_registry.models import PromptRecord, PromptVersion, RegistryManifest
 from prompt_registry.registry import (
@@ -609,8 +610,8 @@ class TestVerifyCommand:
 
 class TestPublishCommand:
     def test_publish_no_token_exits_nonzero(self, tmp_path, capsys, monkeypatch):
-        monkeypatch.delenv("PROMPT_REGISTRY_PUBLISH_TOKEN", raising=False)
-        monkeypatch.delenv("PROMPT_REGISTRY_SIGNING_KEY", raising=False)
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_PUBLISH_TOKEN", None)
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_SIGNING_KEY", None)
         reg = _make_registry(tmp_path)
         _inject_registry(reg)
         body_file = tmp_path / "body.md"
@@ -621,8 +622,8 @@ class TestPublishCommand:
         assert "PROMPT_REGISTRY_PUBLISH_TOKEN" in err
 
     def test_publish_no_signing_key_exits_nonzero(self, tmp_path, capsys, monkeypatch):
-        monkeypatch.setenv("PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
-        monkeypatch.delenv("PROMPT_REGISTRY_SIGNING_KEY", raising=False)
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_SIGNING_KEY", None)
         reg = _make_registry(tmp_path)
         _inject_registry(reg)
         body_file = tmp_path / "body.md"
@@ -633,8 +634,8 @@ class TestPublishCommand:
         assert "SIGNING_KEY" in err
 
     def test_publish_guardrail_failure_exits_nonzero(self, tmp_path, capsys, monkeypatch):
-        monkeypatch.setenv("PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
-        monkeypatch.setenv("PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
         reg = _make_registry(tmp_path)
         _inject_registry(reg)
         evil_file = tmp_path / "evil.md"
@@ -648,8 +649,8 @@ class TestPublishCommand:
         assert "guardrail" in err.lower() or "deny-list" in err.lower() or "fails" in err.lower()
 
     def test_publish_no_store_exits_nonzero(self, tmp_path, capsys, monkeypatch):
-        monkeypatch.setenv("PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
-        monkeypatch.setenv("PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
         reg = PromptRegistry(store=None, cache=CacheManager(tmp_path), enabled=True)
         _inject_registry(reg)
         body_file = tmp_path / "body.md"
@@ -660,8 +661,8 @@ class TestPublishCommand:
         assert "store" in err.lower() or "no remote" in err.lower()
 
     def test_publish_readonly_store_exits_nonzero(self, tmp_path, capsys, monkeypatch):
-        monkeypatch.setenv("PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
-        monkeypatch.setenv("PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
         reg = _make_registry(tmp_path, store=_FailingStore(), enabled=True)
         reg._store = _FailingStore()  # FailingStore.publish() raises ReadOnlyStoreError
         _inject_registry(reg)
@@ -671,8 +672,8 @@ class TestPublishCommand:
         assert rc != 0
 
     def test_publish_success_exits_zero(self, tmp_path, capsys, monkeypatch):
-        monkeypatch.setenv("PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
-        monkeypatch.setenv("PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
 
         class WritableStore(_FakeStore):
             def __init__(self):
@@ -697,8 +698,8 @@ class TestPublishCommand:
         assert "Published" in out
 
     def test_publish_missing_file_exits_nonzero(self, tmp_path, capsys, monkeypatch):
-        monkeypatch.setenv("PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
-        monkeypatch.setenv("PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_PUBLISH_TOKEN", "some-token")
+        monkeypatch.setattr(settings_module.settings, "PROMPT_REGISTRY_SIGNING_KEY", _SIGN_KEY)
         reg = _make_registry(tmp_path)
         _inject_registry(reg)
         rc = main(["publish", _KNOWN_ID, str(tmp_path / "nonexistent.md"), "--version", "1.0.0"])

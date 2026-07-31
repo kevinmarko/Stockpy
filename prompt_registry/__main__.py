@@ -55,7 +55,6 @@ import argparse
 import datetime
 import difflib
 import json
-import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -249,15 +248,17 @@ def cmd_pin(reg: PromptRegistry, prompt_id: str, version: str) -> int:
         write_setting("PROMPT_REGISTRY_PINS", pins_json)
         print(f"Pinned {prompt_id!r} → {version!r}  (saved to .env).")
     except Exception as exc:
-        # The in-memory pin is live; the .env write may fail when
-        # PROMPT_REGISTRY_PINS has not yet been added to ALLOWED_KEYS (Stage 6).
+        # The in-memory pin is live; PROMPT_REGISTRY_PINS is already present in
+        # gui/env_io.py's ALLOWED_KEYS, so a write failure here means something
+        # else went wrong (e.g. a non-writable .env file), not a missing
+        # allowlist entry.
         print(
             f"Warning: in-memory pin set but .env write failed: {exc}",
             file=sys.stderr,
         )
         print(
             f"  Add  PROMPT_REGISTRY_PINS={json.dumps({prompt_id: version})!r}  "
-            "to .env manually, or upgrade to Stage 6.",
+            "to .env manually.",
             file=sys.stderr,
         )
         print(f"Pinned {prompt_id!r} → {version!r}  (in-memory only this session).")
@@ -421,7 +422,13 @@ def cmd_publish(
     - the store raises ``ReadOnlyStoreError``
     """
     # ── Credential gates ────────────────────────────────────────────────────
-    publish_token = os.environ.get("PROMPT_REGISTRY_PUBLISH_TOKEN") or None
+    # Read from settings.settings, not os.environ — pydantic-settings' env_file
+    # loading does not copy .env values into the real os.environ (see
+    # prompt_registry.registry._build_registry_from_settings's docstring for
+    # the full precedent / CLAUDE.md's 2026-07 Finnhub fix).
+    from settings import settings as _settings  # noqa: PLC0415
+
+    publish_token = _settings.PROMPT_REGISTRY_PUBLISH_TOKEN or None
     if not publish_token:
         print(
             "Error: PROMPT_REGISTRY_PUBLISH_TOKEN is not set.\n"
@@ -431,7 +438,7 @@ def cmd_publish(
         )
         return 1
 
-    signing_key = os.environ.get("PROMPT_REGISTRY_SIGNING_KEY") or None
+    signing_key = _settings.PROMPT_REGISTRY_SIGNING_KEY or None
     if not signing_key:
         print(
             "Error: PROMPT_REGISTRY_SIGNING_KEY is not set.\n"
