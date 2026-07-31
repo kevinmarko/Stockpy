@@ -123,6 +123,8 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     // Sahm/VIX/HY-OAS trigger levels are fixed constants in the macro kill-switch
     // check, not Thresholds API fields — same documented-literal precedent as above.
     "The pre-trade check that vetoes a new BUY when the macro regime looks dangerous (Sahm Rule ≥ 0.5, VIX > 30, or HY OAS > 6%). Mission Control's block log lists every order it actually stopped, and why. Operators can switch it off for hybrid mode, in which technical signals run without the macro override.",
+  "prompt registry":
+    "Version control for every AI-facing instruction the platform sends to an LLM. Pinning a version freezes it against future auto-updates; a pin only changes what the AI is TOLD, never what the platform is PERMITTED to do — order submission, the advisory quarantine, the risk gate, and the kill switch are enforced in Python regardless of registry content.",
   "circuit breaker":
     // The 24h dedup window is a documented literal default (gui/circuit_breakers.py
     // ::collect_circuit_breaker_trips's `window` parameter), not a Thresholds API
@@ -309,6 +311,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "Every generated report artifact in one place: the daily HTML report, the orchestrator's dashboards, generated daily briefings, and per-strategy validation reports (with the same Deployable / PBO / DSR gates Strategy Health shows). Large dashboards are download-only by default — you opt in to viewing one inline rather than it loading automatically.",
     keyConcepts: ["deployable", "pbo", "dsr"],
+  },
+  prompts: {
+    title: "Prompt Registry",
+    description:
+      "Version control for every AI-facing instruction: the resolved version, source, and pin state for each registered prompt, plus a per-prompt diff viewer. Pinning only changes what the AI is told, never what the platform is permitted to do — order submission, the advisory quarantine, the risk gate, and the kill switch stay enforced in Python regardless of registry content.",
+    keyConcepts: ["prompt registry", "advisory only"],
   },
   settings: {
     title: "Data & Automation",

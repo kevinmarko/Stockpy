@@ -21,6 +21,22 @@ as long as the window stays open, stopping automatically when you close it. This
 now the recommended everyday launcher — it replaces separately running `launch.command`
 and `launch_gui.command`.
 
+Before it starts the app, `launch_app.command` now (2026-07-31) does two more things
+on every double-click:
+
+- **Safe restart**: it reads a PID from `output/app_shell.pid` (gitignored, per-checkout);
+  if that process is still alive it sends `SIGTERM`, polls for up to 10 s, then
+  `SIGKILL`s it if it hasn't exited — so double-clicking again cleanly replaces a
+  still-running instance instead of leaving two competing refresh loops. No need to
+  manually close the previous window first. The new instance's PID is written back to
+  the same file.
+- **Auto-sync**: if the checkout is a git work tree with an upstream configured, it
+  runs `git fetch --quiet` then `git merge --ff-only` against that upstream. This is
+  best-effort and fast-forward-only — on any failure (local edits that would conflict,
+  diverged history, a detached HEAD, or no upstream) it prints a warning and launches
+  with whatever code is already checked out. It never touches your working tree and
+  never blocks the launch.
+
 `launch.command` (headless interval loop) and `launch_gui.command` (Command Center in
 a browser tab) still work and remain useful for headless/scripted runs or development,
 but are no longer the primary day-to-day path:
