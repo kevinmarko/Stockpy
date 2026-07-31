@@ -78,23 +78,18 @@ class TestPortfolioRiskMetrics:
         assert out["reason"] and "5 snapshot" in out["reason"]
 
     def test_warm_path_flat_growth_has_zero_drawdown(self):
-        # Alternating (not constant) daily growth rates -- both always > 1.0,
-        # so equity is still strictly monotonically increasing (genuine zero
-        # drawdown), but with real, non-degenerate day-to-day return
-        # dispersion. A perfectly CONSTANT daily rate (e.g. a flat 1.001**i)
-        # is a mathematically zero-variance-by-construction series whose
-        # pct_change std lands in the ~1e-16 floating-point noise band (each
-        # 1.001**i is computed independently, so consecutive ratios aren't
-        # bit-identical) -- exactly the degenerate-std case
-        # evaluation_engine.calculate_equity_curve_metrics now correctly
-        # guards to NaN rather than fabricating a Sharpe from noise
-        # (CONSTRAINT #4). This fixture tests the intended happy path
-        # (monotonic growth -> zero drawdown, real Sharpe/CAGR) without
-        # accidentally exercising that guard.
+        # A perfectly geometric series (constant per-day rate) has a
+        # returns std of ~1e-16 -- floating-point noise, not a real signal --
+        # which is exactly the degenerate case
+        # calculate_equity_curve_metrics's Sharpe/Calmar guard (PR #501/#502)
+        # is designed to catch and report as None. Vary the daily growth
+        # rate (still always positive, so equity stays monotonically
+        # increasing and max_drawdown stays exactly 0) to get a genuine,
+        # above-noise-floor std for this "warm path" case.
+        rates = [0.0005, 0.0015, 0.001, 0.002, 0.0008]
         values = [1000.0]
         for i in range(24):
-            rate = 1.0008 if i % 2 == 0 else 1.0012
-            values.append(values[-1] * rate)
+            values.append(values[-1] * (1 + rates[i % len(rates)]))
 
         class _Store:
             def account_snapshot_history(self, since=None):
