@@ -4249,3 +4249,297 @@ class TestCORSLanTailscale:
         resp = client.get("/health", headers={"Origin": "http://8.8.8.8:5173"})
         assert resp.status_code == 200
         assert resp.headers.get("access-control-allow-origin") != "http://8.8.8.8:5173"
+
+
+# ===========================================================================
+# Prompt Registry (webapp parity gap G4) — GET /prompts, GET /prompts/{id},
+# PUT /prompts/pin. Appended at the end of the file per this repo's
+# multi-agent collision protocol (other agents append their own new test
+# classes elsewhere in this same file concurrently on separate branches).
+# ===========================================================================
+
+
+def _reset_prompt_registry_singleton():
+    from prompt_registry.registry import reset_registry
+    reset_registry()
+
+
+class TestPromptsRead:
+    """GET /prompts and GET /prompts/{id} — fail-open reads over
+    pilots.prompt_registry (which wraps prompt_registry.registry.get_registry()).
+    The committed prompt_registry/baseline/*.md files guarantee at least one
+    real prompt ID resolves in every test environment, with zero mocking."""
+
+    def setup_method(self):
+        _reset_prompt_registry_singleton()
+
+    def teardown_method(self):
+        _reset_prompt_registry_singleton()
+
+    def test_list_shape(self):
+        resp = client.get("/prompts")
+        assert resp.status_code == 200
+        body = resp.json()
+        for key in ("enabled", "prompts", "reason", "writable", "note"):
+            assert key in body
+        assert len(body["prompts"]) > 0
+        row = body["prompts"][0]
+        for key in ("id", "resolved_version", "source", "pinned_version", "cached_version_count"):
+            assert key in row
+
+    def test_writable_tracks_the_flag(self):
+        with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+            on = client.get("/prompts").json()
+        with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", False):
+            off = client.get("/prompts").json()
+        assert on["writable"] is True
+        assert off["writable"] is False
+
+    def test_baseline_id_resolves_from_committed_baseline(self):
+        resp = client.get("/prompts")
+        row = next(r for r in resp.json()["prompts"] if r["id"] == "gravity.step_01")
+        assert row["source"] == "baseline"
+        assert row["resolved_version"] == "baseline"
+        assert row["pinned_version"] is None
+
+    def test_pinned_prompt_reflects_pin_source_and_value(self):
+        with mock.patch.object(settings, "PROMPT_REGISTRY_PINS", {"gravity.step_01": "9.9.9"}):
+            _reset_prompt_registry_singleton()
+            resp = client.get("/prompts")
+        row = next(r for r in resp.json()["prompts"] if r["id"] == "gravity.step_01")
+        assert row["pinned_version"] == "9.9.9"
+        assert row["source"] == "pin"
+        assert row["resolved_version"] == "9.9.9"
+
+    def test_fail_open_read_with_no_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/prompts")
+        assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get("/prompts", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
+
+    def test_never_500_when_registry_unconstructible(self):
+        with mock.patch.object(
+            pilots_api.prompt_registry_reader, "_get_registry_or_none", return_value=None
+        ):
+            resp = client.get("/prompts")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["prompts"] == []
+        assert body["reason"] is not None
+
+    def test_get_prompt_resolved_body(self):
+        resp = client.get("/prompts/gravity.step_01")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["found"] is True
+        assert body["body"]
+        assert body["source"] == "baseline"
+        assert body["version"] == "baseline"
+        assert body["has_baseline"] is True
+        assert body["cached_versions"] == []
+
+    def test_get_prompt_reports_cached_versions_and_has_baseline(self):
+        """cached_versions/has_baseline are populated on EVERY call — a
+        diff-version picker needs the full set up front, not just whichever
+        single version this particular request happened to resolve."""
+        resp = client.get("/prompts/gravity.step_01", params={"version": "baseline"})
+        body = resp.json()
+        assert "cached_versions" in body
+        assert "has_baseline" in body
+        assert body["has_baseline"] is True
+
+    def test_get_prompt_specific_version_baseline_keyword(self):
+        resp = client.get("/prompts/gravity.step_01", params={"version": "baseline"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["found"] is True
+        assert body["version"] == "baseline"
+        # A specific-version lookup does not re-derive provenance.
+        assert body["source"] is None
+
+    def test_get_prompt_unknown_id_is_honest_not_found_never_404(self):
+        resp = client.get("/prompts/totally.unknown.id")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["found"] is False
+        assert body["body"] is None
+        assert body["reason"] is not None
+
+    def test_get_prompt_unknown_version_is_honest_not_found(self):
+        resp = client.get(
+            "/prompts/gravity.step_01", params={"version": "9.9.9-does-not-exist"}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["found"] is False
+        assert body["reason"] is not None
+
+    def test_get_prompt_fail_open_read_with_no_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/prompts/gravity.step_01")
+        assert resp.status_code == 200
+
+    def test_get_prompt_401_on_wrong_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get(
+                "/prompts/gravity.step_01", headers={"Authorization": "Bearer wrong"}
+            )
+        assert resp.status_code == 401
+
+
+class TestPromptsPinWrite:
+    """PUT /prompts/pin — fail-closed command token (FOLLOW_API_TOKEN) STACKED
+    with the dedicated PROMPT_REGISTRY_WRITES_ENABLED master flag, mirroring
+    PUT /strategy/modules's auth tier exactly."""
+
+    def _auth(self):
+        return {"Authorization": f"Bearer {_CMD_TOKEN}"}
+
+    def setup_method(self):
+        _reset_prompt_registry_singleton()
+
+    def teardown_method(self):
+        _reset_prompt_registry_singleton()
+
+    def test_fails_closed_when_prompt_registry_writes_disabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", False):
+                resp = client.put(
+                    "/prompts/pin",
+                    json={"prompt_id": "gravity.step_01", "version": "baseline"},
+                    headers=self._auth(),
+                )
+        assert resp.status_code == 403
+
+    def test_fails_closed_when_follow_token_unset(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/prompts/pin",
+                    json={"prompt_id": "gravity.step_01", "version": "baseline"},
+                    headers={"Authorization": "Bearer anything"},
+                )
+        assert resp.status_code == 403
+
+    def test_401_on_wrong_command_token(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+                resp = client.put(
+                    "/prompts/pin",
+                    json={"prompt_id": "gravity.step_01", "version": "baseline"},
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401
+
+    def test_happy_path_pin_writes_and_echoes(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "PROMPT_REGISTRY_PINS", {}):
+                    with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                        resp = client.put(
+                            "/prompts/pin",
+                            json={"prompt_id": "gravity.step_01", "version": "baseline"},
+                            headers=self._auth(),
+                        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["prompt_id"] == "gravity.step_01"
+        assert body["version"] == "baseline"
+        assert body["pins"] == {"gravity.step_01": "baseline"}
+        assert body["applies"] == "next_daemon_restart"
+        # Writer called exactly once, with the full expected payload.
+        w.assert_called_once_with("PROMPT_REGISTRY_PINS", {"gravity.step_01": "baseline"})
+
+    def test_happy_path_merges_onto_existing_pins(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+                with mock.patch.object(
+                    settings, "PROMPT_REGISTRY_PINS", {"other.prompt": "1.0.0"}
+                ):
+                    with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                        resp = client.put(
+                            "/prompts/pin",
+                            json={"prompt_id": "gravity.step_01", "version": "baseline"},
+                            headers=self._auth(),
+                        )
+        assert resp.status_code == 200
+        expected = {"other.prompt": "1.0.0", "gravity.step_01": "baseline"}
+        assert resp.json()["pins"] == expected
+        w.assert_called_once_with("PROMPT_REGISTRY_PINS", expected)
+
+    def test_clearing_pin_omits_it_from_response_and_write(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+                with mock.patch.object(
+                    settings, "PROMPT_REGISTRY_PINS", {"gravity.step_01": "1.0.0"}
+                ):
+                    with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                        resp = client.put(
+                            "/prompts/pin",
+                            json={"prompt_id": "gravity.step_01"},
+                            headers=self._auth(),
+                        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["version"] is None
+        assert body["pins"] == {}
+        w.assert_called_once_with("PROMPT_REGISTRY_PINS", {})
+
+    def test_version_not_found_422_stable_tag(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                    resp = client.put(
+                        "/prompts/pin",
+                        json={
+                            "prompt_id": "gravity.step_01",
+                            "version": "9.9.9-nonexistent",
+                        },
+                        headers=self._auth(),
+                    )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "version_not_found"
+        w.assert_not_called()  # never writes on a validation failure
+
+    def test_empty_prompt_id_422_stable_tag(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                    resp = client.put(
+                        "/prompts/pin",
+                        json={"prompt_id": "   ", "version": "baseline"},
+                        headers=self._auth(),
+                    )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "invalid_prompt_id"
+        w.assert_not_called()
+
+    def test_write_never_logs_token(self, caplog):
+        with caplog.at_level("DEBUG"):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+                    with mock.patch.object(pilots_api.env_io, "write_setting"):
+                        client.put(
+                            "/prompts/pin",
+                            json={"prompt_id": "gravity.step_01", "version": "baseline"},
+                            headers=self._auth(),
+                        )
+        assert _CMD_TOKEN not in caplog.text
+
+
+class TestPromptRegistryWritesInvariants:
+    def test_prompt_registry_writes_enabled_is_not_gui_writable(self):
+        """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI bug
+        must never flip this on. Neither allowlisted nor secret — hand-set only."""
+        assert "PROMPT_REGISTRY_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+        assert "PROMPT_REGISTRY_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+
+    def test_prompt_registry_pins_key_stays_allowlisted(self):
+        """The TARGET key this endpoint writes has been GUI-writable via the
+        Streamlit Prompt Registry tab for a long time (gui/panels/prompt_registry.py)
+        — this new write path must not require (or accidentally break) that."""
+        assert "PROMPT_REGISTRY_PINS" in pilots_api.env_io.ALLOWED_KEYS

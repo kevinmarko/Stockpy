@@ -1,6 +1,6 @@
 {
   "generated_at": "2026-07-31T09:26:04.331167+00:00",
-  "command_count": 11,
+  "command_count": 12,
   "dead_letters": [],
   "commands": [
     {
@@ -714,6 +714,15 @@
           "takes_value": false
         }
       ],
+      "positionals": [],
+      "subcommands": []
+    },
+    {
+      "name": "database_setup.py",
+      "invocation": "python3 database_setup.py",
+      "aliases": [],
+      "description": "InvestYo database schema setup -- CREATE TABLE IF NOT EXISTS against quant_platform.db, driven by config.COLUMN_SCHEMA. Idempotent; additive migrations only (never drops/alters destructively).",
+      "options": [],
       "positionals": [],
       "subcommands": []
     }

@@ -224,7 +224,7 @@ describe("App — Settings gear + nav", () => {
     for (const label of ["Attribution", "Calibration", "Commands"]) {
       expect(within(dialog).getByText(label)).toBeInTheDocument();
     }
-    for (const label of ["Mission Control", "Pipeline"]) {
+    for (const label of ["Mission Control", "Pipeline", "Console", "Help & Glossary"]) {
       expect(within(dialog).getByText(label)).toBeInTheDocument();
     }
     // Settings is now listed like any other screen, not gear-only.

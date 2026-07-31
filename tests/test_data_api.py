@@ -511,3 +511,189 @@ class TestCORSLanTailscale:
         resp = client.get("/health", headers={"Origin": "http://8.8.8.8:5173"})
         assert resp.status_code == 200
         assert resp.headers.get("access-control-allow-origin") != "http://8.8.8.8:5173"
+
+
+# ===========================================================================
+# POST /data/sync + GET /data/provider-status (webapp parity gaps G8/G9).
+# Appended at the end of the file per this repo's multi-agent collision
+# protocol (other agents append their own new test classes elsewhere in this
+# same file concurrently on separate branches).
+# ===========================================================================
+
+
+class TestDataSyncWrite:
+    """POST /data/sync — fail-closed require_write_token STACKED with the
+    dedicated UNIVERSE_SYNC_ENABLED master flag."""
+
+    async def _fake_async_sync_now(self, snapshot, **kwargs):
+        return SimpleNamespace(
+            symbols={"AAPL": object(), "NVDA": object()},
+            to_dict=lambda: {"symbols": ["AAPL", "NVDA"], "generated_at": "x"},
+        )
+
+    def test_fails_closed_when_universe_sync_disabled(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+            with mock.patch.object(settings, "UNIVERSE_SYNC_ENABLED", False):
+                resp = client.post(
+                    "/data/sync", headers={"Authorization": "Bearer secret"}
+                )
+        assert resp.status_code == 403
+
+    def test_fails_closed_when_state_api_token_unset(self):
+        """Unlike a fail-open GET, POST /data/sync uses require_write_token,
+        which fails CLOSED when STATE_API_TOKEN is unset -- mirrors
+        PUT /data/universe's existing posture."""
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "UNIVERSE_SYNC_ENABLED", True):
+                resp = client.post(
+                    "/data/sync", headers={"Authorization": "Bearer anything"}
+                )
+        assert resp.status_code == 403
+
+    def test_401_on_wrong_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+            with mock.patch.object(settings, "UNIVERSE_SYNC_ENABLED", True):
+                resp = client.post(
+                    "/data/sync", headers={"Authorization": "Bearer WRONG"}
+                )
+        assert resp.status_code == 401
+
+    def test_happy_path_calls_async_sync_now_and_echoes(self, monkeypatch):
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+        monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
+        monkeypatch.setattr(data_api, "async_sync_now", self._fake_async_sync_now)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+            with mock.patch.object(settings, "UNIVERSE_SYNC_ENABLED", True):
+                resp = client.post(
+                    "/data/sync", headers={"Authorization": "Bearer secret"}
+                )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["default_tickers"] == ["AAPL", "NVDA"]
+        assert body["report"] == {"symbols": ["AAPL", "NVDA"], "generated_at": "x"}
+        assert body["applies"] == "next_daemon_restart"
+
+    def test_never_forces_a_live_login(self, monkeypatch):
+        """fetch_account_snapshot must always be called with force=False —
+        force=True can block on interactive MFA stdin, unsafe inside a
+        headless HTTP request handler."""
+        captured = {}
+
+        def _fetch(force=False):
+            captured["force"] = force
+            return object()
+
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", _fetch)
+        monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
+        monkeypatch.setattr(data_api, "async_sync_now", self._fake_async_sync_now)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+            with mock.patch.object(settings, "UNIVERSE_SYNC_ENABLED", True):
+                client.post("/data/sync", headers={"Authorization": "Bearer secret"})
+        assert captured["force"] is False
+
+    def test_tolerates_missing_account_snapshot(self, monkeypatch):
+        def _fetch(force=False):
+            raise RuntimeError("no robinhood creds")
+
+        called = {}
+
+        async def _sync(snapshot, **kwargs):
+            called["snapshot"] = snapshot
+            return SimpleNamespace(symbols={}, to_dict=lambda: {"symbols": []})
+
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", _fetch)
+        monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
+        monkeypatch.setattr(data_api, "async_sync_now", _sync)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+            with mock.patch.object(settings, "UNIVERSE_SYNC_ENABLED", True):
+                resp = client.post(
+                    "/data/sync", headers={"Authorization": "Bearer secret"}
+                )
+        assert resp.status_code == 200
+        assert called["snapshot"] is None  # degraded to None, never raised
+
+    def test_sync_failure_returns_503_never_500(self, monkeypatch):
+        async def _boom(snapshot, **kwargs):
+            raise RuntimeError("provider outage")
+
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+        monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
+        monkeypatch.setattr(data_api, "async_sync_now", _boom)
+        with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+            with mock.patch.object(settings, "UNIVERSE_SYNC_ENABLED", True):
+                resp = client.post(
+                    "/data/sync", headers={"Authorization": "Bearer secret"}
+                )
+        assert resp.status_code == 503
+
+    def test_write_never_logs_token(self, monkeypatch, caplog):
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+        monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
+        monkeypatch.setattr(data_api, "async_sync_now", self._fake_async_sync_now)
+        with caplog.at_level("DEBUG"):
+            with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
+                with mock.patch.object(settings, "UNIVERSE_SYNC_ENABLED", True):
+                    client.post("/data/sync", headers={"Authorization": "Bearer secret"})
+        assert "secret" not in caplog.text
+
+
+class TestUniverseSyncInvariants:
+    def test_universe_sync_enabled_is_not_gui_writable(self):
+        """Mirrors the other *_WRITES_ENABLED invariants in api/pilots_api.py:
+        a GUI bug must never flip this on. Neither allowlisted nor secret —
+        hand-set only."""
+        import gui.env_io as env_io
+
+        assert "UNIVERSE_SYNC_ENABLED" not in env_io.ALLOWED_KEYS
+        assert "UNIVERSE_SYNC_ENABLED" not in env_io.SECRET_KEYS
+
+
+class TestProviderStatus:
+    """GET /data/provider-status — fail-open read."""
+
+    def test_shape_and_values(self, monkeypatch):
+        provider = SimpleNamespace(
+            quote_source="alpaca", is_realtime=True, source_name="yahoo_computed",
+        )
+        monkeypatch.setattr(data_api, "get_provider", lambda: provider)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "MARKET_DATA_QUOTE_TTL_SECONDS", 45):
+                resp = client.get("/data/provider-status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body == {
+            "provider": "alpaca",
+            "is_realtime": True,
+            "mode": "real_time",
+            "quote_ttl_seconds": 45,
+            "fundamentals_source": "yahoo_computed",
+        }
+
+    def test_delayed_mode_for_non_realtime_provider(self, monkeypatch):
+        provider = SimpleNamespace(
+            quote_source="yfinance", is_realtime=False, source_name="yahoo_computed",
+        )
+        monkeypatch.setattr(data_api, "get_provider", lambda: provider)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/data/provider-status")
+        body = resp.json()
+        assert body["mode"] == "delayed"
+        assert body["is_realtime"] is False
+
+    def test_fail_open_read_with_no_token(self, monkeypatch):
+        monkeypatch.setattr(data_api, "get_provider", lambda: SimpleNamespace(
+            quote_source="yfinance", is_realtime=False, source_name="yahoo_computed",
+        ))
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            resp = client.get("/data/provider-status")
+        assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self, monkeypatch):
+        monkeypatch.setattr(data_api, "get_provider", lambda: SimpleNamespace(
+            quote_source="yfinance", is_realtime=False, source_name="yahoo_computed",
+        ))
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get(
+                "/data/provider-status", headers={"Authorization": "Bearer wrong"}
+            )
+        assert resp.status_code == 401

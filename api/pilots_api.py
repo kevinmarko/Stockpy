@@ -3450,3 +3450,335 @@ def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
             "in-process — restart the daemon via POST /daemon/restart to apply."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Report Library (GET /reports, GET /reports/{name}) + Dead-Letter Queue
+# (GET /dead-letter, POST /dead-letter/retry) — webapp parity gaps G5/G6.
+#
+# ``pilots/reports.py`` and ``pilots/dead_letter.py`` are new, dependency-light
+# (stdlib + ``settings`` only) read helpers — see their own module docstrings.
+# Imported LAZILY per function (matching ``gui.decision_log``/
+# ``pilots.watchlist_writer`` elsewhere in this file) rather than added to the
+# multi-line ``from pilots import (...)`` block above, so this block stays a
+# self-contained append with no edit to that shared block.
+# ---------------------------------------------------------------------------
+
+
+def require_dead_letter_retry_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``POST /dead-letter/retry``. A
+    DEDICATED flag (``settings.DEAD_LETTER_RETRY_ENABLED``), NOT any sibling
+    ``require_*_writes_enabled`` flag: this spawns a REAL single-symbol
+    ``main.py`` subprocess (network calls, a fresh data fetch, a real
+    advisory evaluation) — a materially different cost/risk than any
+    existing flag was scoped for. Mirrors ``require_brokerage_connect_enabled``
+    exactly — deliberately NOT GUI-writable (``gui/env_io.py``), hand-set in
+    ``.env`` only. ``GET /dead-letter`` is read-only and NOT gated by this
+    flag (``require_read_token`` alone, matching every other GET here)."""
+    if not settings.DEAD_LETTER_RETRY_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Dead-letter retry is disabled (DEAD_LETTER_RETRY_ENABLED=false).",
+        )
+
+
+class DeadLetterRetryRequest(BaseModel):
+    """Body for ``POST /dead-letter/retry``. Re-runs ``main.py``
+    (advisory-only — no orders) for exactly ONE symbol via
+    ``gui.orchestrator_runner.launch_symbol_retry``, the SAME subprocess
+    launcher the Streamlit Launcher tab's dead-letter Retry button already
+    uses (``gui/panels/launcher.py::_render_dead_letter_queue``). ``symbol``
+    shape is re-validated by the endpoint against
+    ``pilots.watchlist_writer._SYMBOL_RE`` before the launcher is ever
+    invoked — the launcher itself builds a subprocess env var from the raw
+    string and performs no shape validation of its own (unlike
+    ``pilots.watchlist_writer.append_symbols``)."""
+
+    symbol: str = Field(..., min_length=1, max_length=16)
+
+
+@app.get("/reports", dependencies=[Depends(require_read_token)])
+def get_reports() -> Dict[str, Any]:
+    """Manifest of every generated report file the Streamlit Report Library
+    tab (``gui/panels/reports_library.py``) enumerates: the daily report, the
+    two orchestrator dashboards, daily briefings (``briefing_*.md``), and
+    validation reports (``*_validation_summary.json`` / ``validation_*.html``).
+
+    Fail-open read (``require_read_token``), mirroring every other GET here.
+    Reuses THIS module's own ``_reports_dir()`` (validation files only —
+    briefings/dashboards/the daily report all resolve off
+    ``settings.OUTPUT_DIR`` directly, matching every other reader in this
+    file) so tests can point it at a fixture dir the same way they already do
+    for ``GET /strategy/health`` and ``GET /strategy/validation-trend``.
+    Never 500s — an empty universe degrades to ``reports: []`` plus an
+    honest ``reason`` (CONSTRAINT #6)."""
+    from pilots import reports as reports_reader
+
+    return reports_reader.list_reports(reports_dir=_reports_dir())
+
+
+@app.get("/reports/{name}", dependencies=[Depends(require_read_token)])
+def get_report_content(name: str) -> Dict[str, Any]:
+    """Content for one report file: markdown text (a briefing), HTML text
+    (the daily report / an orchestrator dashboard / a validation HTML
+    report), or a parsed JSON object (a validation summary).
+
+    SECURITY: ``name`` is resolved ONLY against the manifest
+    ``pilots.reports.get_report_content`` itself builds by globbing the real
+    report directories (see that function's docstring) — this handler never
+    joins the client-supplied ``name`` onto a filesystem path. Mirrors
+    ``pilots.commands.resolve_command``'s identical discipline for
+    ``POST /jobs``'s command execution. A ``name`` absent from that manifest
+    — including any ``../`` traversal attempt, which can never match a real
+    globbed basename — 404s honestly rather than attempting a read."""
+    from pilots import reports as reports_reader
+
+    result = reports_reader.get_report_content(name, reports_dir=_reports_dir())
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No report named {name!r}.")
+    return result
+
+
+@app.get("/dead-letter", dependencies=[Depends(require_read_token)])
+def get_dead_letter() -> Dict[str, Any]:
+    """The last pipeline run's dead-letter queue (failed symbols) —
+    ``output/dead_letter.json``, written by ``main_orchestrator.run_pipeline``
+    (mirrors the Streamlit Launcher tab's dead-letter section,
+    ``gui/panels/launcher.py::_render_dead_letter_queue``).
+
+    Fail-open read (``require_read_token``). ``retry_enabled`` mirrors the
+    ``writable`` convention used elsewhere (``GET /strategy/matrix``,
+    ``GET /agentic/discovery``) so the PWA can hide/disable the Retry control
+    before the operator hits a 403 on ``POST /dead-letter/retry``. Never
+    500s — a missing/corrupt file degrades to ``entries: []`` with an honest
+    ``reason`` and ``is_clean: null`` (CONSTRAINT #6; ``null``, not ``true``,
+    since "no run has completed yet" is not the same claim as "the last run
+    was clean")."""
+    from pilots import dead_letter as dead_letter_reader
+
+    payload = dead_letter_reader.read_dead_letter()
+    payload["retry_enabled"] = bool(settings.DEAD_LETTER_RETRY_ENABLED)
+    return payload
+
+
+@app.post(
+    "/dead-letter/retry",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_dead_letter_retry_enabled),
+    ],
+)
+def post_dead_letter_retry(body: DeadLetterRetryRequest) -> Dict[str, Any]:
+    """Re-run ``main.py`` for exactly one dead-lettered symbol — a genuine
+    subprocess spawn with real network/broker-cache cost, so this sits
+    behind ``require_command_token`` STACKED with the dedicated
+    ``require_dead_letter_retry_enabled`` master switch (same "auth tier AND
+    feature flag" pattern as ``PUT /strategy/modules`` / ``POST
+    /agentic/watch``). Reuses ``gui.orchestrator_runner.launch_symbol_retry``
+    — the SAME launcher the Streamlit Launcher tab's per-symbol Retry button
+    already calls — rather than re-implementing the subprocess spawn.
+
+    The symbol is re-validated against ``pilots.watchlist_writer._SYMBOL_RE``
+    here first (422 ``invalid_symbol`` on a malformed value) since
+    ``launch_symbol_retry`` performs no shape validation of its own before
+    writing the value into a subprocess env var and a log-file banner line.
+    Does not wait for the run to finish — returns immediately with the
+    spawned PID and log path so the caller can poll/tail it. This is an
+    advisory-only, no-order diagnostic run (``main.py`` submits no orders),
+    never applied retroactively (``applies: "immediately"`` describes the
+    subprocess launch itself, not any order submission — there is none)."""
+    from gui.orchestrator_runner import launch_symbol_retry
+    from pilots.watchlist_writer import _SYMBOL_RE
+
+    symbol = body.symbol.strip().upper()
+    if not _SYMBOL_RE.match(symbol):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_symbol",
+                "message": f"{symbol!r} is not a valid ticker shape.",
+            },
+        )
+
+    handle = launch_symbol_retry(symbol)
+    return {
+        "symbol": symbol,
+        "pid": handle.pid,
+        "log_path": str(handle.log_path),
+        "applies": "immediately",
+        "note": f"Retry launched for {symbol} (advisory-only — no orders placed).",
+    }
+
+
+# =============================================================================
+# Prompt Registry (webapp parity gap G4) — pilots/prompt_registry.py wraps
+# prompt_registry.registry.get_registry(). Self-contained block, appended at
+# the end of the file per this repo's multi-agent collision protocol (other
+# agents append their own new endpoints elsewhere in this same file
+# concurrently on separate branches — appending here avoids a merge conflict
+# on a shared line range near the top of the file).
+#
+# GET /prompts and GET /prompts/{id} are fail-open reads (require_read_token
+# alone, matching every other GET on this API). PUT /prompts/pin changes
+# WHICH PROMPT TEXT THE PLATFORM ACTUALLY RUNS -- a real behavioral change,
+# not a config tunable -- so it sits behind BOTH the fail-closed command
+# token (require_command_token, i.e. FOLLOW_API_TOKEN) AND a NEW dedicated
+# master flag (require_prompt_registry_writes_enabled ->
+# settings.PROMPT_REGISTRY_WRITES_ENABLED), mirroring
+# require_strategy_writes_enabled's exact reasoning. `sync`/`verify`/
+# `rollback`/`diff` are deliberately NOT new endpoints here -- they are
+# already CLI-drivable via POST /jobs {job_type: "command", params:
+# {command: "prompt_registry", subcommand: "sync"|"verify"|"rollback"|"diff"}}
+# (see pilots/commands.py + cli_introspect/command_manifest.json), so building
+# a bespoke HTTP path for them would duplicate existing, tested capability.
+# =============================================================================
+
+from pilots import prompt_registry as prompt_registry_reader  # noqa: E402
+
+
+def require_prompt_registry_writes_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``PUT /prompts/pin`` (pins/clears a
+    prompt ID's entry in ``PROMPT_REGISTRY_PINS`` -> ``.env``). A DEDICATED
+    flag (``settings.PROMPT_REGISTRY_WRITES_ENABLED``), NOT
+    ``STRATEGY_WRITES_ENABLED``/``GENERAL_SETTINGS_WRITES_ENABLED``/any other
+    sibling flag: pinning a prompt version changes WHICH PROMPT TEXT THE
+    PLATFORM ACTUALLY RUNS, its own risk class distinct from a numeric
+    tunable or a signal weight, and must not ride in on a flag scoped to a
+    different concern. Mirrors ``require_strategy_writes_enabled`` exactly —
+    deliberately NOT GUI-writable (absent from BOTH ``gui/env_io.py``'s
+    ``ALLOWED_KEYS`` and ``SECRET_KEYS``), hand-set in ``.env`` only.
+    ``GET /prompts`` and ``GET /prompts/{id}`` are read-only and NOT gated by
+    this flag (``require_read_token`` alone, matching ``GET /strategy/matrix``
+    and every other GET on this API)."""
+    if not settings.PROMPT_REGISTRY_WRITES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Prompt Registry writes are disabled (PROMPT_REGISTRY_WRITES_ENABLED=false).",
+        )
+
+
+class PromptPinRequest(BaseModel):
+    """Body for ``PUT /prompts/pin``. ``version=None`` CLEARS any existing pin
+    for ``prompt_id`` (resolves to remote latest / cache / baseline again on
+    the next daemon restart) rather than pinning it — a single endpoint covers
+    both the Streamlit tab's "Set pin" and "Clear pin" actions. Auto-rollback
+    (pin to the previous cached version) is a client-side computation: fetch
+    ``GET /prompts`` for the cached-version count / current pin, then call
+    this endpoint with the desired older version — no separate rollback
+    endpoint exists here (see this block's module-level comment)."""
+
+    prompt_id: str = Field(..., min_length=1)
+    version: Optional[str] = Field(default=None, min_length=1)
+
+
+@app.get("/prompts", dependencies=[Depends(require_read_token)])
+def get_prompts() -> Dict[str, Any]:
+    """Every known prompt ID with its resolved version, source, pinned state,
+    and cached-version count (ports ``gui/panels/prompt_registry.py``'s
+    "Registered prompts" table). Fail-open read, mirroring every other GET on
+    this API. Never 500s — a disabled/unconstructible registry degrades to
+    ``{"enabled": ..., "prompts": [], "reason": "..."}`` (CONSTRAINT #6).
+
+    Adds two API-layer fields to the pure reader's payload — ``writable``
+    (tracks ``PROMPT_REGISTRY_WRITES_ENABLED``, so the PWA can disable the
+    pin/clear-pin UI instead of a surprise 403) and ``note`` — mirroring
+    ``GET /strategy/matrix``'s identical ``writable``/``note`` addition over
+    its own pure reader's payload."""
+    payload = prompt_registry_reader.list_prompts()
+    writable = bool(settings.PROMPT_REGISTRY_WRITES_ENABLED)
+    payload["writable"] = writable
+    payload["note"] = (
+        "Pins persist to .env and apply on the next daemon restart."
+        if writable
+        else "Pin writes are disabled (PROMPT_REGISTRY_WRITES_ENABLED=false)."
+    )
+    return payload
+
+
+@app.get("/prompts/{prompt_id}", dependencies=[Depends(require_read_token)])
+def get_prompt(prompt_id: str, version: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+    """The resolved body for one prompt ID — the full resolution chain when
+    ``?version=`` is omitted, or one specific version (a cached version
+    string, or the literal ``"baseline"``) when provided. Fail-open read. The
+    client computes a unified diff between two versions itself from two calls
+    to this endpoint — no server-side diff endpoint exists (the plan's own
+    decision to keep the surface minimal: a diff is trivial to produce
+    client-side once both bodies are in hand).
+
+    ``found: false`` (never a 404 — an unknown prompt ID / version is an
+    honest, structurally-expected outcome on this endpoint, not an error) is
+    returned with a ``reason`` when nothing resolves."""
+    return prompt_registry_reader.get_prompt_body(prompt_id, version=version)
+
+
+@app.put(
+    "/prompts/pin",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_prompt_registry_writes_enabled),
+    ],
+)
+def put_prompts_pin(body: PromptPinRequest) -> Dict[str, Any]:
+    """Pin (or, when ``version`` is omitted, clear the pin for) one prompt ID
+    in ``PROMPT_REGISTRY_PINS`` -> ``.env`` via ``gui.env_io.write_setting``.
+
+    Fail-closed command token (``require_command_token``, i.e.
+    ``FOLLOW_API_TOKEN``) STACKED with the dedicated
+    ``PROMPT_REGISTRY_WRITES_ENABLED`` master flag
+    (``require_prompt_registry_writes_enabled``) — same "auth tier AND
+    feature flag" pattern as ``PUT /strategy/modules``. A pin-set request is
+    verified to actually resolve (manifest / disk cache / the ``"baseline"``
+    keyword) BEFORE being persisted — pinning to a version that doesn't exist
+    anywhere would silently degrade every future resolution for this ID down
+    to the sentinel string, so that returns 422 ``version_not_found`` instead.
+
+    The merge base for the OTHER prompt IDs' pins is read from
+    ``settings.PROMPT_REGISTRY_PINS`` (the live process's view — the same
+    source ``GET /prompts`` reads via the registry singleton it was
+    constructed from) rather than re-reading ``.env`` directly, matching every
+    other multi-key JSON ``.env`` writer in this file. Like every other
+    ``.env`` write here this does NOT patch the running ``settings``
+    singleton, so ``applies`` is always ``"next_daemon_restart"`` and the
+    echoed ``pins``/``version`` reflect the REQUEST BODY merged onto that base
+    — NOT a re-read of ``settings`` after the write (which would return the
+    stale pre-write values and read as a failed write)."""
+    prompt_id = body.prompt_id.strip()
+    if not prompt_id:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_prompt_id", "message": "prompt_id must not be empty."},
+        )
+
+    pins: Dict[str, str] = dict(settings.PROMPT_REGISTRY_PINS or {})
+
+    if body.version is None:
+        pins.pop(prompt_id, None)
+        note = f"Pin cleared for {prompt_id!r}. Saved to .env; effective on next daemon restart."
+    else:
+        resolved = prompt_registry_reader.get_prompt_body(prompt_id, version=body.version)
+        if not resolved.get("found"):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "version_not_found",
+                    "message": (
+                        f"Version {body.version!r} of {prompt_id!r} not found in the "
+                        "manifest, disk cache, or committed baseline."
+                    ),
+                },
+            )
+        pins[prompt_id] = body.version
+        note = (
+            f"Pinned {prompt_id!r} -> {body.version!r}. Saved to .env; effective on "
+            "next daemon restart."
+        )
+
+    env_io.write_setting("PROMPT_REGISTRY_PINS", pins)
+
+    return {
+        "prompt_id": prompt_id,
+        "version": body.version,
+        "pins": pins,
+        "applies": "next_daemon_restart",
+        "note": note,
+    }

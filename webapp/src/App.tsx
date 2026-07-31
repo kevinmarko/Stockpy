@@ -32,10 +32,13 @@ import { ForecastViewer } from "./screens/ForecastViewer";
 import { SectorSelection } from "./screens/SectorSelection";
 import { Commands } from "./screens/Commands";
 import { Console } from "./screens/Console";
+import { ReportLibrary } from "./screens/ReportLibrary";
+import { PromptRegistry } from "./screens/PromptRegistry";
 import { AgenticTrading } from "./screens/AgenticTrading";
 import { ResearchHub } from "./screens/ResearchHub";
 import { TradingHub } from "./screens/TradingHub";
 import { OperationsHub } from "./screens/OperationsHub";
+import { Help } from "./screens/Help";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 import { TokenGate } from "./components/TokenGate";
@@ -124,6 +127,20 @@ const NAV_ITEMS: { to: string; label: string; ico: string; match: (p: string) =>
   // Operations — the platform/pipeline itself, not a symbol or your money.
   { to: "/observability", label: "Mission Control", ico: "🛰️", match: (p) => p.startsWith("/observability"), section: "operations" },
   { to: "/pipeline", label: "Pipeline", ico: "🚀", match: (p) => p.startsWith("/pipeline"), section: "operations" },
+  // Console was previously routed with NO nav entry (reachable only by typing
+  // the URL) despite being a fully built job-launcher screen -- see
+  // OperationsHub.tsx's docstring (parity gap G1).
+  { to: "/console", label: "Console", ico: "🖥️", match: (p) => p.startsWith("/console"), section: "operations" },
+  // Report Library was previously routed with NO nav entry (same
+  // unreachable-route shape Console had) despite being a fully built,
+  // read-only artifact browser -- see OperationsHub.tsx's docstring (parity
+  // gap G5).
+  { to: "/operations/reports", label: "Report Library", ico: "📚", match: (p) => p.startsWith("/operations/reports"), section: "operations" },
+  // Help & Glossary lives here rather than under Settings (a different
+  // agent's file, and reserved for the .env-write-surface convention) or a
+  // research hub (it isn't symbol/portfolio research) -- see
+  // OperationsHub.tsx's docstring (parity gap G10).
+  { to: "/help", label: "Help & Glossary", ico: "❓", match: (p) => p.startsWith("/help"), section: "operations" },
   // Settings — also has the always-on gear shortcut (SettingsButton) below.
   { to: "/settings", label: "Settings", ico: "⚙", match: (p) => p.startsWith("/settings"), section: "settings" },
 ];
@@ -479,6 +496,8 @@ export default function App() {
           <Route path="/sector-selection" element={<SectorSelection />} />
           <Route path="/commands" element={<Commands />} />
           <Route path="/console" element={<Console />} />
+          <Route path="/operations/reports" element={<ReportLibrary />} />
+          <Route path="/help" element={<Help />} />
           <Route path="/agentic" element={<AgenticTrading />} />
           <Route path="/research" element={<ResearchHub />} />
           <Route path="/trading" element={<TradingHub />} />
@@ -488,6 +507,7 @@ export default function App() {
           <Route path="/settings/strategy" element={<StrategyMatrix />} />
           <Route path="/settings/tunables" element={<SettingsManager />} />
           <Route path="/settings/ai" element={<AIControlCenter />} />
+          <Route path="/settings/prompts" element={<PromptRegistry />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

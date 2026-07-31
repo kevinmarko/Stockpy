@@ -147,6 +147,14 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "A Gaussian response to how much news + investor-forum volume a candidate sector is seeing, normalized against every OTHER candidate sector over a trailing 22-trading-day window — not a raw volume count. When investor-forum (Reddit/StockTwits) volume has never been observed, this degrades honestly to news-volume-only, flagged 'Investor-forum volume unavailable' rather than showing a fabricated number.",
   "sector correlation coefficient":
     "Semantic Related Sector Selection's ranking score: cosine similarity × Sector Heat Factor. Sectors are ranked by this number and the top N are selected as the most relevant related sectors for a target stock. '—' whenever either input side is unavailable — never computed from a partial or guessed value.",
+  "sentiment score":
+    "A -1 to 1 read of financial-news/social sentiment for a symbol, from FinBERT (or a keyword-lexicon fallback) scored headlines. Positive means bullish tone, negative bearish. Blank ('—') whenever the sourcing agent is unavailable for that request, never guessed.",
+  "sentiment intensity":
+    "0.1 to 1: how emotionally extreme or high-volume the sourced news/social commentary is right now, independent of its direction (sentiment score).",
+  "credibility score":
+    "0.1 to 1: a filter for 'rumor mill' spikes — low credibility means the sentiment reading is likely noise rather than a durable signal.",
+  "volatility persistence":
+    "A GJR-GARCH measure of how long a volatility shock takes to decay back toward baseline for a symbol. Computed independently from price history, not from the sentiment agent — it stays populated even when the sentiment agent itself is unavailable.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -204,6 +212,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "Multi-horizon, probabilistic price forecasts for one symbol, with the model's volatility (GJR-GARCH) and regime inputs. Forecasts are not guarantees — an input that can't be computed shows '—', never a fabricated number.",
     keyConcepts: ["forecast", "garch vol", "hmm regime", "attention weight"],
+  },
+  sentiment: {
+    title: "Sentiment Dynamics",
+    description:
+      "Live sentiment analysis from financial news and social media for one symbol, driven by the Antigravity Agent, alongside a GJR-GARCH volatility-persistence read and an archived sentiment-vs-VIX trend chart. Every value degrades honestly to '—' when the sourcing agent is unavailable — never a guessed number.",
+    keyConcepts: ["sentiment score", "sentiment intensity", "credibility score", "volatility persistence"],
   },
   "sector-selection": {
     title: "Sector Selection",
@@ -283,6 +297,18 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "The orchestrator daemon's live status and manual run triggers — full pipeline, data-only, or metrics-only — plus run history. Distinct from Settings' automation summary: this is the raw daemon the trigger buttons act directly against. A run with no recorded outcome shows '—', never a fabricated success.",
     keyConcepts: ["orchestrator daemon"],
+  },
+  console: {
+    title: "Console",
+    description:
+      "One-click launchers for the platform's background jobs — a preflight check, the pytest suite, an advisory pipeline cycle, full verification, a Gravity AI Review Suite audit, and the validation harness backtest — each streamed live via the log panel below. Runs the same gated job-execution infrastructure Commands' Run control uses; nothing here places an order with a broker.",
+    keyConcepts: ["advisory only", "deployable"],
+  },
+  reports: {
+    title: "Report Library",
+    description:
+      "Every generated report artifact in one place: the daily HTML report, the orchestrator's dashboards, generated daily briefings, and per-strategy validation reports (with the same Deployable / PBO / DSR gates Strategy Health shows). Large dashboards are download-only by default — you opt in to viewing one inline rather than it loading automatically.",
+    keyConcepts: ["deployable", "pbo", "dsr"],
   },
   settings: {
     title: "Data & Automation",

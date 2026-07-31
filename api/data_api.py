@@ -45,7 +45,7 @@ from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 from data.historical_store import HistoricalStore
 from data.market_data import MarketDataError, get_provider
 from data.robinhood_portfolio import fetch_account_snapshot
-from data.portfolio_sync import build_sync_report
+from data.portfolio_sync import async_sync_now, build_sync_report
 from data_engine import DataEngine
 import options_ondemand
 import pairs_ondemand
@@ -956,3 +956,133 @@ def get_ai_disagreements() -> Dict[str, Any]:
         for r in rows
     ]
     return {"rows": row_dicts, "summary": summary, "reason": None}
+
+
+# =============================================================================
+# Universe sync write + Market Data provider status (webapp parity gaps G8/G9)
+# Appended at the end of the file per this repo's multi-agent collision
+# protocol (other agents append their own new endpoints elsewhere in this
+# same file concurrently on separate branches — appending here avoids a
+# merge conflict on a shared line range near the top of the file).
+# =============================================================================
+
+_require_universe_sync_enabled = require_ai_capability_enabled(
+    "UNIVERSE_SYNC_ENABLED", "Universe sync"
+)
+
+
+@app.post(
+    "/data/sync",
+    dependencies=[
+        Depends(require_write_token),
+        Depends(_require_universe_sync_enabled),
+    ],
+)
+async def post_data_sync() -> Dict[str, Any]:
+    """Run ``data.portfolio_sync.async_sync_now`` and persist the discovered
+    universe to ``DEFAULT_TICKERS`` — the HTTP port of the Streamlit Live
+    Inventory tab's "Sync Now" button (``gui/panels/live_inventory.py``).
+
+    Deliberately does NOT pass ``client=`` (a ``data.robinhood_client.
+    RobinhoodClient``): the Streamlit panel's best-effort
+    ``RobinhoodClient().login()`` call is a live broker auth flow that can
+    block on interactive MFA input — unsafe for a headless HTTP request
+    handler backed by a bounded thread pool (a hung request would tie up a
+    worker indefinitely). This endpoint folds in held positions
+    (``fetch_account_snapshot(force=False)`` — NEVER ``force=True``, same
+    reasoning) and file-backed watchlists (``SYNC_WATCHLIST_FILES`` /
+    ``watchlist.txt``) only; Robinhood-hosted watchlists are not discovered
+    here. ``GET /data/sync-report`` has the identical limitation already (it
+    also never passes ``client=``).
+
+    Fail-closed ``require_write_token`` (``STATE_API_TOKEN``) STACKED with the
+    dedicated ``UNIVERSE_SYNC_ENABLED`` master flag — a real broker-adjacent
+    read plus a ``DEFAULT_TICKERS`` ``.env`` write, matching
+    ``PUT /data/universe``'s existing auth tier plus the additional feature
+    flag every ``.env`` write with real side effects carries elsewhere in this
+    codebase.
+
+    The persisted ``DEFAULT_TICKERS`` write happens INSIDE ``async_sync_now``
+    and is itself best-effort (a write failure there is caught and logged,
+    never raised — see that function's own docstring), so this endpoint
+    cannot confirm the ``.env`` write actually succeeded; it reports the
+    tickers it SUBMITTED for persistence, not a re-read of ``settings``
+    (which would never reflect an in-process ``.env`` write anyway — the same
+    reasoning behind every other ``.env``-write endpoint in this codebase
+    echoing the request/computed value rather than the stale settings
+    singleton)."""
+    try:
+        snapshot = fetch_account_snapshot(force=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("data_api: account snapshot unavailable for sync: %s", exc)
+        snapshot = None
+
+    snap = load_snapshot()
+    forecast_syms = [
+        s.get("symbol") for s in (snap or {}).get("signals", []) if s.get("symbol")
+    ]
+
+    try:
+        report = await async_sync_now(
+            snapshot,
+            forecast_symbols=forecast_syms,
+            persist_default_tickers=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("data_api: sync failed: %s", exc)
+        raise HTTPException(status_code=503, detail="Sync failed")
+
+    tickers = sorted(report.symbols.keys())
+    return _clean_nan(
+        {
+            "report": report.to_dict(),
+            "default_tickers": tickers,
+            "applies": "next_daemon_restart",
+            "note": (
+                f"Synced {len(tickers)} symbol(s). Submitted to DEFAULT_TICKERS "
+                "in .env (best-effort persist — see server logs on failure); "
+                "effective on next daemon restart."
+            ),
+        }
+    )
+
+
+@app.get("/data/provider-status", dependencies=[Depends(require_token)])
+def get_provider_status() -> Dict[str, Any]:
+    """Active market-data provider, delivery mode, and quote TTL — the HTTP
+    port of the Streamlit Market Data tab's provider/mode/TTL tiles
+    (``gui/panels/market_data.py``).
+
+    Fail-open read, matching every other GET on this API. ``provider`` and
+    ``is_realtime`` introspect the actually-constructed
+    ``data.market_data.CompositeProvider`` singleton (``get_provider()``)
+    rather than re-deriving the answer from ``settings.MARKET_DATA_PROVIDER``
+    — so this reports what is REALLY running even if provider construction
+    fell back to auto-detection. ``quote_ttl_seconds`` reads
+    ``settings.MARKET_DATA_QUOTE_TTL_SECONDS`` directly.
+
+    Connection-health tracking (Streamlit's sliding 20-fetch-window
+    Healthy/Degraded/Down badge,
+    ``gui.market_data_diagnostics.FetchHealthTracker``) is DELIBERATELY NOT
+    duplicated server-side here: ``components/MarketDataHealth.tsx`` already
+    implements the identical session-local sliding-window tracker
+    client-side (its own ``useRef``-based ledger, mirroring
+    ``FetchHealthTracker``'s exact thresholds — see that component's
+    docstring), derived from THIS browser tab's own observed
+    ``GET /data/quotes`` responses. A second, server-side tracker updated by
+    unrelated requests from other tabs/users at other times would be a
+    DIFFERENT signal, not a duplicate of the same one — surfacing it
+    alongside the client's own tracker would be confusing, not more honest.
+    Connection health therefore stays entirely client-side/session-local by
+    design; this endpoint answers a different, complementary question (which
+    provider, what mode, what TTL) that the client genuinely cannot answer on
+    its own."""
+    provider = get_provider()
+    is_realtime = bool(getattr(provider, "is_realtime", False))
+    return {
+        "provider": getattr(provider, "quote_source", "unknown"),
+        "is_realtime": is_realtime,
+        "mode": "real_time" if is_realtime else "delayed",
+        "quote_ttl_seconds": settings.MARKET_DATA_QUOTE_TTL_SECONDS,
+        "fundamentals_source": getattr(provider, "source_name", "unknown"),
+    }

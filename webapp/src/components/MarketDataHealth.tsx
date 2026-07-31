@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
-import { api } from "../api/client";
-import type { UniverseResponse } from "../api/types";
+import { api, ApiError } from "../api/client";
+import type { ProviderStatus, UniverseResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { Button, EmptyState, ErrorState, Loading, Table } from "./ui";
+import { Button, EmptyState, ErrorState, Loading, MetricBadge, Table } from "./ui";
 import { theme } from "../theme";
 
 // Safety cap on how many tracked symbols a single "Check connection" click
@@ -22,7 +22,33 @@ const HEALTH_WINDOW = 20;
 const HEALTHY_RATE = 0.9;
 const DEGRADED_RATE = 0.5;
 
-type CheckStatus = "reachable" | "stale" | "unreachable";
+/**
+ * Typed classification for a per-symbol check failure — mirrors
+ * gui/market_data_diagnostics.ErrorCategory's operator-facing categories
+ * (Rate Limited / Symbol Not Found / Network Timeout / Malformed Response /
+ * Unknown), adapted to what a BROWSER CLIENT can actually observe:
+ *
+ * - `GET /data/quotes` dead-letters a per-symbol provider failure by simply
+ *   OMITTING it from the response (always a 200) — the client genuinely
+ *   cannot know WHY that symbol failed server-side (rate-limited upstream?
+ *   delisted? malformed?), so that case is classified honestly as
+ *   `no_data`, never guessed into a more specific bucket it has no evidence
+ *   for (CONSTRAINT #4).
+ * - A THROWN request (the whole `/data/quotes` call itself failed) DOES
+ *   carry a real HTTP status via `ApiError.status`, which maps directly to
+ *   `rate_limited` (429) / `unauthorized` (401/403) / `server_error` (5xx) /
+ *   `network_error` (0 — client.ts's convention for "fetch() itself threw",
+ *   e.g. offline, CORS, DNS) / `unknown_error` (anything else).
+ */
+type CheckStatus =
+  | "reachable"
+  | "stale"
+  | "no_data"
+  | "rate_limited"
+  | "unauthorized"
+  | "server_error"
+  | "network_error"
+  | "unknown_error";
 
 interface SymbolCheck {
   symbol: string;
@@ -43,18 +69,52 @@ function latencyColor(ms: number | null): string {
   return theme.decline;
 }
 
+const STATUS_META: Record<CheckStatus, { label: string; color: string }> = {
+  reachable: { label: "OK", color: theme.growth },
+  stale: { label: "Stale", color: theme.caution },
+  no_data: { label: "No data returned", color: theme.decline },
+  rate_limited: { label: "Rate limited", color: theme.decline },
+  unauthorized: { label: "Unauthorized", color: theme.decline },
+  server_error: { label: "Server error", color: theme.decline },
+  network_error: { label: "Network unreachable", color: theme.decline },
+  unknown_error: { label: "Unknown error", color: theme.decline },
+};
+
 function statusMeta(status: CheckStatus): { label: string; color: string } {
-  if (status === "reachable") return { label: "OK", color: theme.growth };
-  if (status === "stale") return { label: "Stale", color: theme.caution };
-  return { label: "Unreachable", color: theme.decline };
+  return STATUS_META[status];
+}
+
+/** A whole-request failure counts as an "unsuccessful" check for the
+ *  connection-health ledger regardless of its specific category. */
+function isCheckSuccessful(status: CheckStatus): boolean {
+  return status === "reachable" || status === "stale";
+}
+
+/** Classify a thrown request error into a CheckStatus. Only ever called for
+ *  a request that actually THREW (the client.ts http() error path) — a
+ *  per-symbol dead-letter (200 with the symbol omitted) is classified
+ *  separately as `no_data`, not through this function. */
+function classifyRequestError(err: unknown): CheckStatus {
+  if (!(err instanceof ApiError)) return "unknown_error";
+  if (err.status === 0) return "network_error";
+  if (err.status === 429) return "rate_limited";
+  if (err.status === 401 || err.status === 403) return "unauthorized";
+  if (err.status >= 500) return "server_error";
+  return "unknown_error";
 }
 
 /**
  * Market data connection diagnostic — a lightweight webapp analog of the
  * legacy Streamlit "Market Data Provider" tab (`gui/panels/market_data.py`):
- * a connection-health badge and a per-symbol latency table across the
- * tracked universe. Derived ENTIRELY client-side from the existing
- * `GET /data/quotes?symbols=...` (`api/data_api.py`) — no backend change.
+ * provider/mode/TTL tiles (`GET /data/provider-status`), a connection-health
+ * badge, typed per-symbol failure classification, and a latency table across
+ * the tracked universe.
+ *
+ * Provider/mode/TTL come from the new `GET /data/provider-status` (webapp
+ * parity gap G9); the connection-health badge + per-symbol check table are
+ * derived ENTIRELY client-side from the existing
+ * `GET /data/quotes?symbols=...` (`api/data_api.py`) — no backend change for
+ * that half, unchanged from before this gap was closed.
  *
  * Differences from the legacy panel, and why:
  *  - Latency here is the CLIENT-OBSERVED round trip to `/data/quotes`
@@ -66,20 +126,25 @@ function statusMeta(status: CheckStatus): { label: string; color: string } {
  *    keep a genuine PER-SYMBOL latency and honesty signal (a symbol
  *    silently omitted from the response means the provider fetch failed for
  *    it server-side — the endpoint's own dead-letter contract, CONSTRAINT
- *    #4), this checks one symbol per request, staggered by `STAGGER_MS` —
+ *    #4), this checks one symbol per request, staggered by `STAGGER_MS` --
  *    the same throttling spirit as the legacy panel's `BatchQuoteFetcher`.
  *  - The connection-health badge mirrors `FetchHealthTracker` exactly (see
  *    constants above). A quote present but `is_stale` still counts as a
  *    successful connection — matches the legacy split between "did we get a
- *    response" and "is the data fresh"; only a symbol missing from the
- *    response counts as a failure.
+ *    response" and "is the data fresh"; only a genuinely FAILED check
+ *    (no_data / rate_limited / unauthorized / server_error / network_error /
+ *    unknown_error) counts as a failure.
+ *  - Server-side connection-health tracking is deliberately NOT duplicated
+ *    (see GET /data/provider-status's own docstring): this component's
+ *    session-local tracker IS the intended design, not a stand-in for one.
  *
  * Never renders a fabricated all-green state: the mock fixture
  * (`api/mock.ts::getDataQuotes`) always includes an `is_stale` row and an
- * always-omitted ("unreachable") row so both honesty branches render.
+ * always-omitted ("no_data") row so both honesty branches render.
  */
 export function MarketDataHealth() {
   const universe = useApi<UniverseResponse>(() => api.getUniverse(), []);
+  const providerStatus = useApi<ProviderStatus>(() => api.getProviderStatus(), []);
   const [checking, setChecking] = useState(false);
   const [results, setResults] = useState<SymbolCheck[]>([]);
   const [progress, setProgress] = useState<{ i: number; n: number } | null>(null);
@@ -114,14 +179,19 @@ export function MarketDataHealth() {
               latencyMs,
               source: q.source,
             }
-          : { symbol, status: "unreachable", latencyMs, source: null };
-      } catch {
-        // Network-level failure (e.g. the data API is down entirely) -- the
-        // real endpoint itself never throws per-symbol, but the fetch call
-        // wrapping it can (offline, CORS, 5xx). Same honest bucket.
-        check = { symbol, status: "unreachable", latencyMs: Math.round(performance.now() - t0), source: null };
+          : { symbol, status: "no_data", latencyMs, source: null };
+      } catch (err) {
+        // Network-level failure (e.g. the data API is down entirely) or a
+        // genuine non-2xx from a reachable server (rate limit, auth, 5xx) --
+        // classified from the real HTTP status when available.
+        check = {
+          symbol,
+          status: classifyRequestError(err),
+          latencyMs: Math.round(performance.now() - t0),
+          source: null,
+        };
       }
-      historyRef.current = [...historyRef.current, check.status !== "unreachable"].slice(-HEALTH_WINDOW);
+      historyRef.current = [...historyRef.current, isCheckSuccessful(check.status)].slice(-HEALTH_WINDOW);
       setResults((prev) => [...prev, check]);
       if (i < symbols.length - 1) await sleep(STAGGER_MS);
     }
@@ -154,6 +224,27 @@ export function MarketDataHealth() {
         Checks the live quote feed for each tracked symbol and times the round trip — a quick
         read on whether the data layer feeding every screen is actually up.
       </p>
+
+      {providerStatus.data && (
+        <div
+          data-testid="md-provider-tiles"
+          style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-3)" }}
+        >
+          <MetricBadge label="Provider" value={providerStatus.data.provider} />
+          <MetricBadge
+            label="Mode"
+            value={providerStatus.data.is_realtime ? "Real-time" : "Delayed (~15 min)"}
+            good={providerStatus.data.is_realtime}
+          />
+          <MetricBadge label="Quote TTL" value={`${providerStatus.data.quote_ttl_seconds}s`} />
+        </div>
+      )}
+      {!providerStatus.loading && providerStatus.data && !providerStatus.data.is_realtime && (
+        <p style={{ fontSize: "var(--t-caption)", color: theme.textMuted, margin: "0 0 var(--s-3)" }} data-testid="md-delayed-note">
+          yfinance is delayed by ~15 minutes and marked stale on every quote. Set
+          ALPACA_API_KEY/ALPACA_SECRET_KEY in .env to upgrade to the free IEX real-time feed.
+        </p>
+      )}
 
       {universe.loading && <Loading lines={2} />}
       {!universe.loading && universe.error && (
@@ -197,7 +288,9 @@ export function MarketDataHealth() {
                     return (
                       <tr key={r.symbol} data-testid={`md-row-${r.symbol}`}>
                         <td style={{ fontWeight: 700, color: theme.textPrimary }}>{r.symbol}</td>
-                        <td style={{ color: meta.color, fontWeight: 600 }}>{meta.label}</td>
+                        <td style={{ color: meta.color, fontWeight: 600 }} data-testid={`md-status-${r.symbol}`}>
+                          {meta.label}
+                        </td>
                         <td className="num" style={{ color: latencyColor(r.latencyMs) }}>
                           {r.latencyMs == null ? "—" : `${r.latencyMs} ms`}
                         </td>

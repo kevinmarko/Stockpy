@@ -17,7 +17,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PipelineDashboard } from "./PipelineDashboard";
 import { api, ApiError } from "../api/client";
-import type { ControlStatus, RunRecord } from "../api/types";
+import type { ControlStatus, DeadLetterQueue, RunRecord } from "../api/types";
 
 function renderScreen() {
   return render(
@@ -199,5 +199,92 @@ describe("PipelineDashboard — durable run history (GET /runs/history)", () => 
     await waitFor(() =>
       expect(spy.mock.calls.length).toBeGreaterThan(callsBeforeClick)
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dead-letter queue (G6) — GET /dead-letter + POST /dead-letter/retry.
+// ---------------------------------------------------------------------------
+function deadLetterFixture(overrides: Partial<DeadLetterQueue> = {}): DeadLetterQueue {
+  return {
+    run_id: "run-2026-07-30T12:00:00+00:00",
+    generated_at: "2026-07-30T12:05:22+00:00",
+    entries: [
+      { symbol: "ZZZZ", stage: "strategy", error: "ValueError: insufficient history", timestamp: "2026-07-30T12:03:41+00:00" },
+    ],
+    is_clean: false,
+    reason: null,
+    retry_enabled: true,
+    ...overrides,
+  };
+}
+
+describe("PipelineDashboard — dead-letter queue (G6)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renders the failed symbol, its stage, and its real error text", async () => {
+    vi.spyOn(api, "getDeadLetter").mockResolvedValue(deadLetterFixture());
+    renderScreen();
+    expect(await screen.findByTestId("dead-letter-row-ZZZZ")).toBeInTheDocument();
+    expect(screen.getByText(/stage: strategy/)).toBeInTheDocument();
+    expect(screen.getByText(/insufficient history/)).toBeInTheDocument();
+  });
+
+  it("a clean last run renders the honest all-clear notice, not a fabricated failure", async () => {
+    vi.spyOn(api, "getDeadLetter").mockResolvedValue(
+      deadLetterFixture({ entries: [], is_clean: true })
+    );
+    renderScreen();
+    expect(await screen.findByText(/processed cleanly/)).toBeInTheDocument();
+    expect(screen.queryByTestId(/dead-letter-row-/)).not.toBeInTheDocument();
+  });
+
+  it("no run yet (is_clean: null) is rendered distinctly from a clean run", async () => {
+    vi.spyOn(api, "getDeadLetter").mockResolvedValue(
+      deadLetterFixture({ entries: [], is_clean: null, reason: "No dead-letter report yet — run the pipeline once to populate it." })
+    );
+    renderScreen();
+    expect(await screen.findByText(/No dead-letter report yet/)).toBeInTheDocument();
+    // Must NOT claim "processed cleanly" -- CONSTRAINT #4: no-run-yet is not
+    // the same claim as a genuinely clean run.
+    expect(screen.queryByText(/processed cleanly/)).not.toBeInTheDocument();
+  });
+
+  it("retry_enabled: false disables the Retry button and shows the server-off notice", async () => {
+    vi.spyOn(api, "getDeadLetter").mockResolvedValue(
+      deadLetterFixture({ retry_enabled: false })
+    );
+    renderScreen();
+    const retryBtn = await screen.findByTestId("retry-ZZZZ");
+    expect(retryBtn).toBeDisabled();
+    expect(screen.getByText(/DEAD_LETTER_RETRY_ENABLED=false/)).toBeInTheDocument();
+  });
+
+  it("clicking Retry calls POST /dead-letter/retry and renders the server's real result", async () => {
+    vi.spyOn(api, "getDeadLetter").mockResolvedValue(deadLetterFixture());
+    const spy = vi.spyOn(api, "retryDeadLetter").mockResolvedValue({
+      symbol: "ZZZZ",
+      pid: 5150,
+      log_path: "output/gui_retry.log",
+      applies: "immediately",
+      note: "Retry launched for ZZZZ (advisory-only — no orders placed).",
+    });
+    const user = userEvent.setup();
+    renderScreen();
+
+    const retryBtn = await screen.findByTestId("retry-ZZZZ");
+    await user.click(retryBtn);
+
+    expect(spy).toHaveBeenCalledWith("ZZZZ");
+    const result = await screen.findByTestId("retry-result-ZZZZ");
+    expect(result).toHaveTextContent(/PID 5150/);
+    expect(result).toHaveTextContent(/output\/gui_retry\.log/);
+  });
+
+  it("a dead-letter read failure renders ErrorState, not a fabricated queue", async () => {
+    vi.spyOn(api, "getDeadLetter").mockRejectedValue(new ApiError("db unreachable", 500));
+    renderScreen();
+    const section = (await screen.findByTestId("dead-letter-section")) as HTMLElement;
+    expect(await within(section).findByText("Couldn't load")).toBeInTheDocument();
   });
 });
