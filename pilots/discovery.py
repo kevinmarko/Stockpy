@@ -19,6 +19,18 @@ Design invariants (identical to the rest of the Pilots read layer):
   list with an honest ``reason``; a candidate with no advisory cross-reference
   carries ``action: None`` / ``conviction: None``, never a fabricated value.
 * **Never raises (CONSTRAINT #6)** — a missing/corrupt file degrades to empty.
+* **Buy-candidates only** — this section exists to surface *new* symbols the
+  operator might want to buy, not to review positions they already hold.
+  ``engine.advisory.evaluate()`` (the cross-reference the agentic-discovery
+  skill records into the file) can legitimately return ``SELL``/``HOLD`` for a
+  symbol that isn't held at all — that's the same general-purpose BUY/SELL/HOLD
+  read used for reviewing existing positions elsewhere in the platform, and
+  "SELL" is meaningless (nothing to exit) for a symbol the operator doesn't
+  own. So a raw ``SELL``/``HOLD`` action recorded in the file is filtered out
+  here before it reaches the webapp; only ``BUY`` and the honest "not yet
+  scored" (``None``) gap are ever returned. This matches the intended contract
+  already encoded in the webapp's mock fixture
+  (``webapp/src/api/mock.ts``'s ``MOCK_DISCOVERY_CANDIDATES``).
 """
 from __future__ import annotations
 
@@ -73,11 +85,13 @@ def _sanitize_candidate(raw: Any) -> Optional[Dict[str, Any]]:
         conviction = float(conviction) if conviction is not None else None
     except (TypeError, ValueError):
         conviction = None
+    action = raw.get("action")
+    action = action.upper().strip() or None if isinstance(action, str) else None
     return {
         "symbol": symbol,
         "scan_name": raw.get("scan_name"),
         "scan_reason": raw.get("scan_reason"),
-        "action": raw.get("action"),  # BUY/SELL/HOLD or None — never fabricated
+        "action": action,  # BUY/SELL/HOLD or None — never fabricated
         "conviction": conviction,
         "discovered_at": raw.get("discovered_at"),
     }
@@ -112,11 +126,23 @@ def discovery(
     if not isinstance(raw_candidates, list):
         raw_candidates = []
     candidates = [c for c in (_sanitize_candidate(r) for r in raw_candidates) if c is not None]
+    had_candidates = bool(candidates)
+    # Buy-candidates only (see module docstring) — a SELL/HOLD cross-reference
+    # is real data (kept in the file for audit) but isn't a buy candidate, so
+    # it's dropped here rather than shown as if the operator should act on it.
+    candidates = [c for c in candidates if c["action"] in ("BUY", None)]
     candidates = candidates[: max(0, int(cap))]
+
+    if candidates:
+        reason = None
+    elif had_candidates:
+        reason = "Last scan run found candidates, but none scored a BUY signal from the advisory engine."
+    else:
+        reason = "Last scan run found no candidates."
 
     return {
         "generated_at": obj.get("generated_at"),
         "candidates": candidates,
         "scan_configs": scan_configs,
-        "reason": None if candidates else "Last scan run found no candidates.",
+        "reason": reason,
     }
