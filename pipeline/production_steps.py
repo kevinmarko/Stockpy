@@ -931,15 +931,96 @@ def _apply_fmp_analyst(dashboard_df: pd.DataFrame) -> None:
         return
 
     try:
-        # TODO(wave-1, agent F3): fetch via data/fmp_feeds_company.py --
-        # cadence-gate on HistoricalStore.latest_analyst_as_of(symbol) vs
-        # settings.FMP_ANALYST_REFRESH_HOURS, archive each observation via
-        # HistoricalStore.upsert_analyst_snapshot(), then map the three
-        # columns back onto dashboard_df by upper-cased Symbol (the
-        # _apply_etf_transmission write-back pattern). Upside is
-        # (consensus / Price) - 1.0, NaN when either leg is missing or
-        # Price <= 0 -- never a fabricated 0.0.
-        return
+        import time as _time
+
+        from data.fmp_feeds_company import fetch_analyst_snapshot
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore()
+        refresh_hours = float(getattr(settings, "FMP_ANALYST_REFRESH_HOURS", 24) or 24)
+        raw_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", None)
+        max_seconds = max(0.0, float(120.0 if raw_budget is None else raw_budget))
+        deadline = _time.monotonic() + max_seconds
+
+        symbols = sorted({
+            str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
+            if str(s).strip()
+        })
+        if not symbols:
+            return
+
+        today_str = datetime.now(timezone.utc).date().isoformat()
+
+        def _hours_since_as_of(as_of_str: str) -> Optional[float]:
+            try:
+                as_of_date = datetime.strptime(str(as_of_str)[:10], "%Y-%m-%d")
+            except (TypeError, ValueError):
+                return None
+            now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+            return (now_naive - as_of_date).total_seconds() / 3600.0
+
+        consensus_map: dict[str, float] = {}
+        grade_map: dict[str, float] = {}
+        budget_exhausted = False
+
+        for sym in symbols:
+            if not budget_exhausted and _time.monotonic() >= deadline:
+                budget_exhausted = True
+                logger.warning(
+                    "FMP analyst feed: cycle time budget (%.0fs) reached; "
+                    "remaining symbols served from archive/NaN only this cycle.",
+                    max_seconds,
+                )
+
+            latest_as_of = store.latest_analyst_as_of(sym)
+            age_hours = _hours_since_as_of(latest_as_of) if latest_as_of else None
+            fresh_enough = age_hours is not None and age_hours < refresh_hours
+
+            if not fresh_enough and not budget_exhausted:
+                fetched = fetch_analyst_snapshot(sym)
+                if fetched:
+                    store.upsert_analyst_snapshot(
+                        sym,
+                        today_str,
+                        target_consensus=fetched.get("target_consensus"),
+                        target_median=fetched.get("target_median"),
+                        target_high=fetched.get("target_high"),
+                        target_low=fetched.get("target_low"),
+                        grade_score=fetched.get("grade_score"),
+                        source=fetched.get("source", "fmp"),
+                    )
+
+            snapshot = store.get_analyst_snapshot(sym)
+            if not snapshot:
+                continue
+            tc = snapshot.get("target_consensus")
+            if tc is not None:
+                consensus_map[sym] = float(tc)
+            gs = snapshot.get("grade_score")
+            if gs is not None:
+                grade_map[sym] = float(gs)
+
+        upper_symbol = dashboard_df['Symbol'].astype(str).str.upper().str.strip()
+        dashboard_df['Analyst_Target_Consensus'] = upper_symbol.map(consensus_map)
+        dashboard_df['Analyst_Grade_Score'] = upper_symbol.map(grade_map)
+
+        if 'Price' in dashboard_df.columns:
+            def _upside(sym: str, price: Any) -> float:
+                tc = consensus_map.get(sym)
+                if tc is None:
+                    return float('nan')
+                try:
+                    price_f = float(price)
+                except (TypeError, ValueError):
+                    return float('nan')
+                if price_f <= 0:
+                    return float('nan')
+                return (tc / price_f) - 1.0
+
+            dashboard_df['Analyst_Target_Upside'] = [
+                _upside(sym, price)
+                for sym, price in zip(upper_symbol, dashboard_df['Price'])
+            ]
     except Exception as exc:
         logger.warning("FMP analyst feed failed (non-fatal): %s", exc)
         for col in _FMP_ANALYST_COLUMNS:
@@ -984,16 +1065,112 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
         return
 
     try:
-        # TODO(wave-1, agent F3): fetch via data/fmp_feeds_company.py --
-        # cadence-gate on HistoricalStore.latest_earnings_fetched_at(symbol)
-        # vs settings.FMP_EARNINGS_REFRESH_HOURS, persist raw rows (INCLUDING
-        # lastUpdated) via HistoricalStore.upsert_earnings_events(), then read
-        # back through get_earnings_events(..., on_or_before=as_of,
-        # actuals_only=True) for the surprise and (..., after=as_of) for the
-        # next date. Only overwrite the shared 'Earnings_Date' column for
-        # symbols FMP actually covered -- a NaN/absent FMP row must not blank
-        # a date the Finnhub news-catalyst path already resolved this cycle.
-        return
+        import time as _time
+
+        from data.fmp_feeds_company import fetch_earnings_rows
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore()
+        refresh_hours = float(getattr(settings, "FMP_EARNINGS_REFRESH_HOURS", 12) or 12)
+        raw_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", None)
+        max_seconds = max(0.0, float(120.0 if raw_budget is None else raw_budget))
+        deadline = _time.monotonic() + max_seconds
+
+        symbols = sorted({
+            str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
+            if str(s).strip()
+        })
+        if not symbols:
+            return
+
+        as_of = datetime.now(timezone.utc).date().isoformat()
+
+        def _hours_since_fetched_at(fetched_at_str: str) -> Optional[float]:
+            try:
+                fetched_dt = datetime.fromisoformat(str(fetched_at_str))
+            except (TypeError, ValueError):
+                return None
+            if fetched_dt.tzinfo is None:
+                now_cmp = datetime.now(timezone.utc).replace(tzinfo=None)
+            else:
+                now_cmp = datetime.now(timezone.utc)
+            return (now_cmp - fetched_dt).total_seconds() / 3600.0
+
+        days_map: dict[str, float] = {}
+        surprise_map: dict[str, float] = {}
+        next_date_map: dict[str, str] = {}
+        budget_exhausted = False
+
+        for sym in symbols:
+            if not budget_exhausted and _time.monotonic() >= deadline:
+                budget_exhausted = True
+                logger.warning(
+                    "FMP earnings feed: cycle time budget (%.0fs) reached; "
+                    "remaining symbols served from archive/NaN only this cycle.",
+                    max_seconds,
+                )
+
+            latest_fetched_at = store.latest_earnings_fetched_at(sym)
+            age_hours = (
+                _hours_since_fetched_at(latest_fetched_at) if latest_fetched_at else None
+            )
+            fresh_enough = age_hours is not None and age_hours < refresh_hours
+
+            if not fresh_enough and not budget_exhausted:
+                rows = fetch_earnings_rows(sym)
+                if rows:
+                    store.upsert_earnings_events(rows)
+
+            # Trailing surprise: rules 1 + 2 -- event_date <= as_of AND a
+            # non-null actual, BOTH filters, so a vendor bug populating an
+            # actual on a future row cannot slip through the date filter
+            # alone. Never treat a null actual as 0.0 (CONSTRAINT #4).
+            past_rows = store.get_earnings_events(
+                sym, on_or_before=as_of, actuals_only=True, limit=1,
+            )
+            if past_rows:
+                row = past_rows[0]
+                eps_actual = row.get("eps_actual")
+                eps_estimated = row.get("eps_estimated")
+                if eps_actual is not None and eps_estimated not in (None, 0, 0.0):
+                    try:
+                        surprise_map[sym] = (
+                            (float(eps_actual) - float(eps_estimated))
+                            / abs(float(eps_estimated))
+                        )
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        pass
+
+            # Next scheduled date: rule 3 -- event_date > as_of. A publicly
+            # announced future date is not lookahead; the RESULT would be.
+            future_rows = store.get_earnings_events(sym, after=as_of, limit=1)
+            if future_rows:
+                row = future_rows[0]
+                event_date = row.get("event_date")
+                if event_date:
+                    next_date_map[sym] = str(event_date)
+                    try:
+                        d_next = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").date()
+                        d_as_of = datetime.strptime(as_of, "%Y-%m-%d").date()
+                        days_map[sym] = float((d_next - d_as_of).days)
+                    except (TypeError, ValueError):
+                        pass
+
+        upper_symbol = dashboard_df['Symbol'].astype(str).str.upper().str.strip()
+        dashboard_df['Days_To_Earnings'] = upper_symbol.map(days_map)
+        dashboard_df['Last_EPS_Surprise_Pct'] = upper_symbol.map(surprise_map)
+
+        # Rule 4 / the shared-column discipline: only overwrite 'Earnings_Date'
+        # for symbols FMP actually covered (a real next-event date) this
+        # cycle -- a NaN/absent FMP row must never blank a date the Finnhub
+        # news-catalyst write-back already resolved earlier in this same
+        # cycle. If the column doesn't exist yet (unit tests calling this
+        # function standalone), there is nothing to preserve or overwrite.
+        if next_date_map and 'Earnings_Date' in dashboard_df.columns:
+            dashboard_df['Earnings_Date'] = [
+                next_date_map.get(sym, current)
+                for sym, current in zip(upper_symbol, dashboard_df['Earnings_Date'])
+            ]
     except Exception as exc:
         logger.warning("FMP earnings feed failed (non-fatal): %s", exc)
         for col in _FMP_EARNINGS_COLUMNS:
