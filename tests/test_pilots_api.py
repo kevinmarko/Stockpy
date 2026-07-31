@@ -4251,12 +4251,20 @@ class TestPromptsRead:
         resp = client.get("/prompts")
         assert resp.status_code == 200
         body = resp.json()
-        for key in ("enabled", "prompts", "reason"):
+        for key in ("enabled", "prompts", "reason", "writable", "note"):
             assert key in body
         assert len(body["prompts"]) > 0
         row = body["prompts"][0]
         for key in ("id", "resolved_version", "source", "pinned_version", "cached_version_count"):
             assert key in row
+
+    def test_writable_tracks_the_flag(self):
+        with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", True):
+            on = client.get("/prompts").json()
+        with mock.patch.object(settings, "PROMPT_REGISTRY_WRITES_ENABLED", False):
+            off = client.get("/prompts").json()
+        assert on["writable"] is True
+        assert off["writable"] is False
 
     def test_baseline_id_resolves_from_committed_baseline(self):
         resp = client.get("/prompts")
@@ -4302,6 +4310,18 @@ class TestPromptsRead:
         assert body["body"]
         assert body["source"] == "baseline"
         assert body["version"] == "baseline"
+        assert body["has_baseline"] is True
+        assert body["cached_versions"] == []
+
+    def test_get_prompt_reports_cached_versions_and_has_baseline(self):
+        """cached_versions/has_baseline are populated on EVERY call — a
+        diff-version picker needs the full set up front, not just whichever
+        single version this particular request happened to resolve."""
+        resp = client.get("/prompts/gravity.step_01", params={"version": "baseline"})
+        body = resp.json()
+        assert "cached_versions" in body
+        assert "has_baseline" in body
+        assert body["has_baseline"] is True
 
     def test_get_prompt_specific_version_baseline_keyword(self):
         resp = client.get("/prompts/gravity.step_01", params={"version": "baseline"})

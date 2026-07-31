@@ -3496,8 +3496,22 @@ def get_prompts() -> Dict[str, Any]:
     and cached-version count (ports ``gui/panels/prompt_registry.py``'s
     "Registered prompts" table). Fail-open read, mirroring every other GET on
     this API. Never 500s — a disabled/unconstructible registry degrades to
-    ``{"enabled": ..., "prompts": [], "reason": "..."}`` (CONSTRAINT #6)."""
-    return prompt_registry_reader.list_prompts()
+    ``{"enabled": ..., "prompts": [], "reason": "..."}`` (CONSTRAINT #6).
+
+    Adds two API-layer fields to the pure reader's payload — ``writable``
+    (tracks ``PROMPT_REGISTRY_WRITES_ENABLED``, so the PWA can disable the
+    pin/clear-pin UI instead of a surprise 403) and ``note`` — mirroring
+    ``GET /strategy/matrix``'s identical ``writable``/``note`` addition over
+    its own pure reader's payload."""
+    payload = prompt_registry_reader.list_prompts()
+    writable = bool(settings.PROMPT_REGISTRY_WRITES_ENABLED)
+    payload["writable"] = writable
+    payload["note"] = (
+        "Pins persist to .env and apply on the next daemon restart."
+        if writable
+        else "Pin writes are disabled (PROMPT_REGISTRY_WRITES_ENABLED=false)."
+    )
+    return payload
 
 
 @app.get("/prompts/{prompt_id}", dependencies=[Depends(require_read_token)])

@@ -2518,6 +2518,128 @@ export interface WatchResult {
   note: string;
 }
 
+// ---------------------------------------------------------------------------
+// Prompt Registry (webapp parity gap G4) — GET /prompts, GET /prompts/{id},
+// PUT /prompts/pin (api/pilots_api.py, backed by pilots/prompt_registry.py).
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of `GET /prompts` — a registered Prompt Registry entry's resolved
+ * version/source/pin/cache state (`pilots/prompt_registry.py::list_prompts`).
+ * `resolved_version`/`source` are `null` only when NOTHING resolves for this
+ * id anywhere (no pin, no remote manifest, no disk cache, no committed
+ * baseline) — in practice every committed baseline id always resolves, so
+ * this is a genuinely rare state, not the common case (CONSTRAINT #4: never
+ * fabricate a version when nothing actually resolved).
+ */
+export interface PromptEntry {
+  id: string;
+  resolved_version: string | null;
+  source: "pin" | "remote" | "cache" | "baseline" | null;
+  pinned_version: string | null;
+  cached_version_count: number;
+}
+
+/** `GET /prompts` response. `reason` is non-null only when the registry
+ *  itself could not be constructed, or no prompt IDs are known at all (e.g.
+ *  an empty/corrupt committed baseline directory) — never on the common
+ *  path. `enabled` mirrors `settings.PROMPT_REGISTRY_ENABLED`; a disabled
+ *  registry still lists every baseline id (all resolve `source: "baseline"`),
+ *  it just never attempted a remote fetch. `writable` tracks
+ *  `PROMPT_REGISTRY_WRITES_ENABLED` (mirrors `StrategyMatrix.writable`) — the
+ *  pin/clear-pin UI should disable itself rather than let the operator hit a
+ *  surprise 403. */
+export interface PromptListResponse {
+  enabled: boolean;
+  prompts: PromptEntry[];
+  reason: string | null;
+  writable: boolean;
+  note: string;
+}
+
+/**
+ * `GET /prompts/{id}?version=...` response — the resolved body for one
+ * prompt ID, either via the full resolution chain (no `version` requested)
+ * or one specific version (a cached version string, or the literal
+ * `"baseline"`). `found: false` is an honest, structurally-expected outcome
+ * (unknown id or version) — the endpoint never 404s for this (CONSTRAINT #4).
+ * `source` is populated only for a full-resolution-chain lookup; a
+ * specific-version lookup does not re-derive provenance (always `null`).
+ * `cached_versions` (newest first) and `has_baseline` are populated on EVERY
+ * call regardless of `found`/`version` — a diff-version picker needs the
+ * full set of resolvable versions for this id up front, not just whichever
+ * single version this particular call resolved.
+ */
+export interface PromptBody {
+  id: string;
+  version: string | null;
+  found: boolean;
+  body: string | null;
+  source: "pin" | "remote" | "cache" | "baseline" | null;
+  reason: string | null;
+  cached_versions: string[];
+  has_baseline: boolean;
+}
+
+/** Body for `PUT /prompts/pin`. `version: null` CLEARS any existing pin for
+ *  `prompt_id` (resolves to remote latest / disk cache / baseline again on
+ *  the next daemon restart) rather than pinning it. */
+export interface PromptPinRequest {
+  prompt_id: string;
+  version: string | null;
+}
+
+/** `PUT /prompts/pin` response. `pins` echoes the FULL new
+ *  `PROMPT_REGISTRY_PINS` map (the request's pin value merged onto the live
+ *  `settings.PROMPT_REGISTRY_PINS` snapshot) — NEVER a stale post-write
+ *  re-read of `settings` (which would return the OLD values and read as a
+ *  failed write). `applies` is always `"next_daemon_restart"` — there is no
+ *  live setter for `.env`-sourced config in this codebase. */
+export interface PromptPinResult {
+  prompt_id: string;
+  version: string | null;
+  pins: Record<string, string>;
+  applies: "next_daemon_restart";
+  note: string;
+}
+
+// ---------------------------------------------------------------------------
+// Live Inventory sync write (webapp parity gap G8) + Market Data provider
+// status (webapp parity gap G9) — api/data_api.py.
+// ---------------------------------------------------------------------------
+
+/**
+ * `POST /data/sync` response — the HTTP port of the Streamlit Live Inventory
+ * tab's "Sync Now" button. `default_tickers` is the full discovered universe
+ * SUBMITTED for persistence to `DEFAULT_TICKERS` (a best-effort `.env` write
+ * — the endpoint cannot confirm it actually landed, see its own docstring).
+ * `report` is the SAME shape `GET /data/sync-report` returns, computed fresh
+ * by this same call (never a stale re-read).
+ */
+export interface DataSyncResult {
+  report: SyncReportResponse;
+  default_tickers: string[];
+  applies: "next_daemon_restart";
+  note: string;
+}
+
+/**
+ * `GET /data/provider-status` response — the active market-data provider,
+ * delivery mode, and quote TTL (the HTTP port of the Streamlit Market Data
+ * tab's provider/mode/TTL tiles). Connection-health sliding-window tracking
+ * is DELIBERATELY NOT part of this response — it stays entirely client-side
+ * (`components/MarketDataHealth.tsx`'s own session-local tracker); see that
+ * endpoint's docstring for why a server-side tracker would be a confusing
+ * second signal rather than a duplicate of the same one.
+ */
+export interface ProviderStatus {
+  provider: string;
+  is_realtime: boolean;
+  mode: "real_time" | "delayed";
+  quote_ttl_seconds: number;
+  fundamentals_source: string;
+}
+
 /** Envelope used to distinguish "not run yet" (honest 404) from a hard error. */
 export class ApiError extends Error {
   status: number;

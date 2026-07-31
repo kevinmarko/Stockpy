@@ -189,14 +189,19 @@ def get_prompt_body(prompt_id: str, version: Optional[str] = None) -> Dict[str, 
     dict
         ``{"id": str, "version": Optional[str], "found": bool,
         "body": Optional[str], "source": Optional[str], "reason":
-        Optional[str]}``. ``version`` in the response is the RESOLVED version
-        when ``found`` is True and no explicit version was requested (``None``
-        in, an actual version string out); it echoes the requested version
-        when one was given. ``source`` is only ever populated for a
-        full-resolution-chain lookup (``version=None``) — a specific-version
-        lookup does not re-derive provenance. ``found=False`` is an honest,
-        expected outcome (unknown ID, unknown version, or a total resolution
-        failure), never an exception.
+        Optional[str], "cached_versions": List[str], "has_baseline": bool}``.
+        ``version`` in the response is the RESOLVED version when ``found`` is
+        True and no explicit version was requested (``None`` in, an actual
+        version string out); it echoes the requested version when one was
+        given. ``source`` is only ever populated for a full-resolution-chain
+        lookup (``version=None``) — a specific-version lookup does not
+        re-derive provenance. ``found=False`` is an honest, expected outcome
+        (unknown ID, unknown version, or a total resolution failure), never an
+        exception. ``cached_versions`` (newest first) and ``has_baseline`` are
+        populated on EVERY call, regardless of ``found`` — a caller building a
+        diff-version picker (e.g. the PWA's Prompt Registry screen) needs the
+        full set of resolvable versions for this id up front, not just
+        whichever single version this particular call resolved.
     """
     reg = _get_registry_or_none()
     if reg is None:
@@ -207,7 +212,17 @@ def get_prompt_body(prompt_id: str, version: Optional[str] = None) -> Dict[str, 
             "body": None,
             "source": None,
             "reason": "Prompt Registry is unavailable (failed to construct).",
+            "cached_versions": [],
+            "has_baseline": False,
         }
+
+    cached_versions = _cached_versions(reg, prompt_id)
+    try:
+        from prompt_registry.cache import read_baseline
+        has_baseline = read_baseline(prompt_id) is not None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("prompt_registry: has_baseline check failed for %s: %s", prompt_id, exc)
+        has_baseline = False
 
     if version:
         try:
@@ -230,6 +245,8 @@ def get_prompt_body(prompt_id: str, version: Optional[str] = None) -> Dict[str, 
                     f"Version {version!r} of {prompt_id!r} not found in the "
                     "manifest, disk cache, or committed baseline."
                 ),
+                "cached_versions": cached_versions,
+                "has_baseline": has_baseline,
             }
         return {
             "id": prompt_id,
@@ -238,6 +255,8 @@ def get_prompt_body(prompt_id: str, version: Optional[str] = None) -> Dict[str, 
             "body": body,
             "source": None,
             "reason": None,
+            "cached_versions": cached_versions,
+            "has_baseline": has_baseline,
         }
 
     # Full resolution chain (pin -> remote latest -> disk cache -> baseline ->
@@ -255,6 +274,8 @@ def get_prompt_body(prompt_id: str, version: Optional[str] = None) -> Dict[str, 
             "body": None,
             "source": None,
             "reason": f"Resolution failed: {exc}",
+            "cached_versions": cached_versions,
+            "has_baseline": has_baseline,
         }
 
     if not body or body.startswith("[PROMPT UNAVAILABLE"):
@@ -268,6 +289,8 @@ def get_prompt_body(prompt_id: str, version: Optional[str] = None) -> Dict[str, 
                 f"No body available for {prompt_id!r} in the registry, cache, "
                 "or committed baseline."
             ),
+            "cached_versions": cached_versions,
+            "has_baseline": has_baseline,
         }
 
     resolved_version, source = _resolve_source(reg, prompt_id)
@@ -278,4 +301,6 @@ def get_prompt_body(prompt_id: str, version: Optional[str] = None) -> Dict[str, 
         "body": body,
         "source": source,
         "reason": None,
+        "cached_versions": cached_versions,
+        "has_baseline": has_baseline,
     }

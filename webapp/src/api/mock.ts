@@ -138,6 +138,13 @@ import type {
   ForecastResult,
   SentimentDynamics,
   SentimentHistory,
+  PromptListResponse,
+  PromptEntry,
+  PromptBody,
+  PromptPinRequest,
+  PromptPinResult,
+  DataSyncResult,
+  ProviderStatus,
 } from "./types";
 
 const SECTORS = [
@@ -3587,6 +3594,110 @@ const MOCK_AGENT_LOOP: AgentLoopStatus = {
 // running -> cancelled) is believable rather than always-terminal.
 const _mockJobs: Record<string, { jobType: string; startedAt: number; cancelled: boolean }> = {};
 
+// ---------------------------------------------------------------------------
+// Prompt Registry (webapp parity gap G4) — GET /prompts, GET /prompts/{id},
+// PUT /prompts/pin. Uses the SAME real baseline prompt IDs the backend's
+// prompt_registry/baseline/*.md ships (master_preprompt, gravity.system,
+// gravity.step_01..07) so a screen exercised against the mock looks
+// shape-identical to a real, unconfigured (baseline-only) registry.
+// ---------------------------------------------------------------------------
+
+interface _MockPromptFixture {
+  /** Resolution state with NO pin set: version + source GET /prompts would
+   *  report. "remote"/"cache" ids also carry a believable cachedVersions
+   *  list; a pure "baseline" id has none (never synced, never pinned). */
+  unpinnedVersion: string;
+  unpinnedSource: "remote" | "cache" | "baseline";
+  cachedVersions: string[]; // newest first; [] for baseline-only ids
+  body: string;
+}
+
+const _MOCK_PROMPT_FIXTURES: Record<string, _MockPromptFixture> = {
+  master_preprompt: {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body:
+      "You are the InvestYo advisory assistant. Ground every claim in the " +
+      "provided DTOs; never fabricate a price, signal, or metric that isn't " +
+      "present in the data. (mock baseline body — real text lives in " +
+      "prompt_registry/baseline/master_preprompt.md)",
+  },
+  "gravity.system": {
+    unpinnedVersion: "2.1.0",
+    unpinnedSource: "remote",
+    cachedVersions: ["2.1.0", "2.0.0", "1.0.0"],
+    body:
+      "You are Gravity, the AI code auditor for the InvestYo quant platform. " +
+      "Verify vectorization, lookahead-bias freedom, and honest degradation on " +
+      "every changed file. Respond in JSON: {\"status\": \"PASSED/FAILED\", " +
+      "\"score\": 0-100, \"findings\": []}. (mock remote body)",
+  },
+  "gravity.step_01": {
+    unpinnedVersion: "1.1.0",
+    unpinnedSource: "cache",
+    cachedVersions: ["1.1.0", "1.0.0"],
+    body:
+      "Analyze the provided source code for Step 1. Verify vectorized " +
+      "Pandas/NumPy operations and a relational database schema. Respond in " +
+      "JSON: {\"status\": \"PASSED/FAILED\", \"score\": 0-100}. (mock cached body)",
+  },
+  "gravity.step_02": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 2. (mock baseline body)",
+  },
+  "gravity.step_03": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 3. (mock baseline body)",
+  },
+  "gravity.step_04": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 4. (mock baseline body)",
+  },
+  "gravity.step_05": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 5. (mock baseline body)",
+  },
+  "gravity.step_06": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 6. (mock baseline body)",
+  },
+  "gravity.step_07": {
+    unpinnedVersion: "baseline",
+    unpinnedSource: "baseline",
+    cachedVersions: [],
+    body: "Analyze the provided source code for Step 7. (mock baseline body)",
+  },
+};
+
+// In-memory pin map -- mutated by putPromptPin, read by getPrompts/getPrompt,
+// so a pin set within a mock session is genuinely visible on re-fetch within
+// that session (mirrors MOCK_DECISION_LOG's convention). Seeded with ONE
+// pre-existing pin so the "already pinned" row/badge renders on first load
+// without requiring an interaction first — an honesty-fixture requirement,
+// not just a nicety (a screen that only ever sees an all-unpinned registry
+// can't be checked against the pinned-row rendering path at all).
+const _MOCK_PROMPT_PINS: Record<string, string> = {
+  "gravity.system": "2.0.0",
+};
+
+const MOCK_PROMPT_REGISTRY_ENABLED = true;
+// Mirrors settings.PROMPT_REGISTRY_WRITES_ENABLED — true here so the mock
+// exercises the pin/clear-pin write UI by default (the more interesting
+// path); co-located tests cover the writable:false / disabled-pin-UI branch
+// by overriding this via a mocked api module rather than a second fixture.
+const MOCK_PROMPT_REGISTRY_WRITABLE = true;
+
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
   async health() {
@@ -5295,6 +5406,151 @@ export const mockApi = {
       },
       150
     );
+  },
+
+  // ---- Prompt Registry (webapp parity gap G4) ----
+  async getPrompts(): Promise<PromptListResponse> {
+    const prompts: PromptEntry[] = Object.keys(_MOCK_PROMPT_FIXTURES)
+      .sort()
+      .map((id) => {
+        const fx = _MOCK_PROMPT_FIXTURES[id];
+        const pinned = _MOCK_PROMPT_PINS[id] ?? null;
+        return {
+          id,
+          resolved_version: pinned ?? fx.unpinnedVersion,
+          source: pinned ? "pin" : fx.unpinnedSource,
+          pinned_version: pinned,
+          cached_version_count: fx.cachedVersions.length,
+        };
+      });
+    return delay<PromptListResponse>({
+      enabled: MOCK_PROMPT_REGISTRY_ENABLED,
+      prompts,
+      reason: null,
+      writable: MOCK_PROMPT_REGISTRY_WRITABLE,
+      note: MOCK_PROMPT_REGISTRY_WRITABLE
+        ? "Pins persist to .env and apply on the next daemon restart."
+        : "Pin writes are disabled (PROMPT_REGISTRY_WRITES_ENABLED=false).",
+    });
+  },
+
+  async getPrompt(id: string, version?: string): Promise<PromptBody> {
+    const fx = _MOCK_PROMPT_FIXTURES[id];
+    if (!fx) {
+      return delay<PromptBody>({
+        id,
+        version: version ?? null,
+        found: false,
+        body: null,
+        source: null,
+        reason: `No body available for '${id}' in the registry, cache, or committed baseline.`,
+        cached_versions: [],
+        has_baseline: false,
+      });
+    }
+    // Every fixture id here has a real committed baseline file (they mirror
+    // prompt_registry/baseline/*.md's exact set) -- true for every entry,
+    // never fabricated for an id that wouldn't actually have one.
+    const has_baseline = true;
+    if (version) {
+      const known = version === "baseline" || fx.cachedVersions.includes(version);
+      if (!known) {
+        return delay<PromptBody>({
+          id,
+          version,
+          found: false,
+          body: null,
+          source: null,
+          reason: `Version '${version}' of '${id}' not found in the manifest, disk cache, or committed baseline.`,
+          cached_versions: fx.cachedVersions,
+          has_baseline,
+        });
+      }
+      // A specific-version lookup does not re-derive provenance (matches the
+      // real endpoint's contract — source is only populated for the
+      // full-resolution-chain lookup below).
+      return delay<PromptBody>({
+        id, version, found: true, body: fx.body, source: null, reason: null,
+        cached_versions: fx.cachedVersions, has_baseline,
+      });
+    }
+    const pinned = _MOCK_PROMPT_PINS[id] ?? null;
+    return delay<PromptBody>({
+      id,
+      version: pinned ?? fx.unpinnedVersion,
+      found: true,
+      body: fx.body,
+      source: pinned ? "pin" : fx.unpinnedSource,
+      reason: null,
+      cached_versions: fx.cachedVersions,
+      has_baseline,
+    });
+  },
+
+  async putPromptPin(req: PromptPinRequest): Promise<PromptPinResult> {
+    const id = req.prompt_id.trim();
+    if (!id) throw new ApiError("prompt_id must not be empty.", 422);
+
+    if (req.version === null) {
+      delete _MOCK_PROMPT_PINS[id];
+    } else {
+      const fx = _MOCK_PROMPT_FIXTURES[id];
+      const known = Boolean(fx) && (req.version === "baseline" || fx.cachedVersions.includes(req.version));
+      if (!known) {
+        throw new ApiError(
+          `Version '${req.version}' of '${id}' not found in the manifest, disk cache, or committed baseline.`,
+          422
+        );
+      }
+      _MOCK_PROMPT_PINS[id] = req.version;
+    }
+
+    return delay<PromptPinResult>(
+      {
+        prompt_id: id,
+        version: req.version,
+        pins: { ..._MOCK_PROMPT_PINS },
+        applies: "next_daemon_restart",
+        note:
+          req.version === null
+            ? `Pin cleared for '${id}'. Saved to .env; effective on next daemon restart.`
+            : `Pinned '${id}' -> '${req.version}'. Saved to .env; effective on next daemon restart.`,
+      },
+      150
+    );
+  },
+
+  // ---- Universe sync write (webapp parity gap G8) ----
+  async postDataSync(): Promise<DataSyncResult> {
+    // Reuses the SAME sync-report fixture data getSyncReport() returns, so a
+    // "Sync Now" click in the mock renders a believable, internally
+    // consistent report rather than a second, drifted fixture. Safe to call
+    // as `mockApi.getSyncReport()` here: by the time any mockApi method is
+    // actually invoked the object literal below has fully constructed, so
+    // this sibling reference resolves normally (not a TDZ hazard — only the
+    // *definition*, not the *call*, happens during object construction).
+    const report = await mockApi.getSyncReport();
+    const default_tickers = Object.keys(report.symbols).sort();
+    return delay<DataSyncResult>(
+      {
+        report,
+        default_tickers,
+        applies: "next_daemon_restart",
+        note: `(mock) Synced ${default_tickers.length} symbol(s). Submitted to DEFAULT_TICKERS in .env; effective on next daemon restart.`,
+      },
+      600
+    );
+  },
+
+  // ---- Market Data provider status (webapp parity gap G9) ----
+  async getProviderStatus(): Promise<ProviderStatus> {
+    return delay<ProviderStatus>({
+      provider: "alpaca",
+      is_realtime: true,
+      mode: "real_time",
+      quote_ttl_seconds: 30,
+      fundamentals_source: "yahoo_computed",
+    });
   },
 };
 
