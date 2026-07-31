@@ -41,6 +41,8 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -165,7 +167,7 @@ class AlpacaProvider(MarketDataProvider):
     Parameters
     ----------
     api_key:
-        Alpaca API key (read from os.environ by CompositeProvider).
+        Alpaca API key (read from settings.settings by CompositeProvider).
     secret_key:
         Alpaca secret key.
     stale_threshold_seconds:
@@ -482,7 +484,7 @@ class YahooFundamentalsProvider:
     def _beta_period() -> str:
         """Map ``BETA_LOOKBACK_DAYS`` (default 504 = ~2y) to a yfinance period."""
         try:
-            days = int(os.environ.get("BETA_LOOKBACK_DAYS", "504"))
+            days = int(settings.BETA_LOOKBACK_DAYS)
         except Exception:
             days = 504
         if days <= 30:
@@ -1143,33 +1145,25 @@ class CompositeProvider(MarketDataProvider):
     """
 
     def __init__(self, quote_ttl_seconds: Optional[int] = None) -> None:
-        ttl = quote_ttl_seconds or int(
-            os.environ.get("MARKET_DATA_QUOTE_TTL_SECONDS", "30")
-        )
+        ttl = quote_ttl_seconds or int(settings.MARKET_DATA_QUOTE_TTL_SECONDS)
         self._cache = _QuoteCache(ttl_seconds=ttl)
         # Short-TTL cache for get_intraday_bars — bars are daily-resolution, so
-        # a small default (300 s) safely de-duplicates the back-to-back fetches
-        # a single refresh cycle issues per symbol. getattr keeps this working
-        # whether or not settings.py has been given the field yet.
-        try:
-            from settings import settings as _settings
-            _bars_ttl = int(getattr(_settings, "MARKET_DATA_BARS_TTL_SECONDS", 300))
-        except Exception:
-            _bars_ttl = int(os.environ.get("MARKET_DATA_BARS_TTL_SECONDS", "300"))
-        self._bars_cache = _BarsCache(ttl_seconds=_bars_ttl)
+        # a small default safely de-duplicates the back-to-back fetches a
+        # single refresh cycle issues per symbol.
+        self._bars_cache = _BarsCache(ttl_seconds=int(settings.MARKET_DATA_BARS_TTL_SECONDS))
         # Composite-level fundamentals cache wraps Finnhub-then-yfinance so
         # neither backend is re-hammered within the TTL window, regardless of
         # which source produced the final dict.  Defense in depth: the
         # FinnhubProvider has its own cache for direct callers; this one
         # protects the yfinance fallback path too.
         self._fundamentals_cache = _FundamentalsCache(
-            ttl_seconds=int(os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600")),
-            neg_ttl_seconds=int(os.environ.get("FUNDAMENTALS_NEG_CACHE_TTL_SECONDS", "900")),
+            ttl_seconds=int(settings.FUNDAMENTALS_CACHE_TTL_SECONDS),
+            neg_ttl_seconds=int(settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS),
         )
         self._quote_provider: MarketDataProvider = self._select_quote_provider()
         # Fundamentals source: Yahoo-derived statement engine (primary) or raw
         # yfinance .info when FUNDAMENTALS_SOURCE=yfinance_info.
-        src = os.environ.get("FUNDAMENTALS_SOURCE", "yahoo").strip().lower()
+        src = (settings.FUNDAMENTALS_SOURCE or "yahoo").strip().lower()
         if src == "yfinance_info":
             self._fundamentals_provider = YFinanceProvider()
         else:
@@ -1182,9 +1176,9 @@ class CompositeProvider(MarketDataProvider):
     # ------------------------------------------------------------------
 
     def _select_quote_provider(self) -> MarketDataProvider:
-        explicit = os.environ.get("MARKET_DATA_PROVIDER", "").strip().lower()
-        alpaca_key = os.environ.get("ALPACA_API_KEY", "").strip()
-        alpaca_secret = os.environ.get("ALPACA_SECRET_KEY", "").strip()
+        explicit = (settings.MARKET_DATA_PROVIDER or "").strip().lower()
+        alpaca_key = (settings.ALPACA_API_KEY or "").strip()
+        alpaca_secret = (settings.ALPACA_SECRET_KEY or "").strip()
 
         if explicit == "alpaca" or (not explicit and alpaca_key and alpaca_secret):
             if not alpaca_key or not alpaca_secret:
@@ -1289,7 +1283,7 @@ class CompositeProvider(MarketDataProvider):
         # Lazy-init for instances constructed via ``__new__`` (test fixtures).
         if not hasattr(self, "_bars_cache"):
             self._bars_cache = _BarsCache(
-                ttl_seconds=int(os.environ.get("MARKET_DATA_BARS_TTL_SECONDS", "300"))
+                ttl_seconds=int(settings.MARKET_DATA_BARS_TTL_SECONDS)
             )
 
         cached = self._bars_cache.get(sym, lookback_days, interval)
@@ -1329,8 +1323,8 @@ class CompositeProvider(MarketDataProvider):
         # Lazy-init for instances constructed via ``__new__`` (test fixtures).
         if not hasattr(self, "_fundamentals_cache"):
             self._fundamentals_cache = _FundamentalsCache(
-                ttl_seconds=int(os.environ.get("FUNDAMENTALS_CACHE_TTL_SECONDS", "21600")),
-                neg_ttl_seconds=int(os.environ.get("FUNDAMENTALS_NEG_CACHE_TTL_SECONDS", "900")),
+                ttl_seconds=int(settings.FUNDAMENTALS_CACHE_TTL_SECONDS),
+                neg_ttl_seconds=int(settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS),
             )
 
         sym = symbol.upper()
