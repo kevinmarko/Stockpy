@@ -87,6 +87,10 @@ pip install*.md
 # Generated report output
 /output/
 
+# Runtime logs (platform log tail, ad-hoc backfill run logs) — transient,
+# never committed.
+/logs/
+
 # Coverage.py artifacts
 .coverage
 .coverage.*
