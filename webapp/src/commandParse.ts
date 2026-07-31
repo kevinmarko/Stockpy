@@ -8,10 +8,13 @@
  * four functional specs, all client-side and pure so they're unit-testable in
  * isolation.
  *
- * It never executes anything: `composed` is the exact CLI string the operator
- * would run in their own terminal (the Copy target). Compose-only is deliberate
- * — running platform CLIs from a web UI would bypass the advisory quarantine
- * (ADVISORY_ONLY / kill switch / risk gate). See the screen for that note.
+ * `composed` can now also be RUN directly (a gated, confirmed execution path —
+ * see Commands.tsx's Run control and the backend's `COMMAND_EXECUTION_ENABLED`
+ * flag), not just copied. High-stakes commands (the kill switch, a forced
+ * broker re-login) require an explicit operator confirmation
+ * (`highStakesReason`) before the run request is even sent; `app_shell.py`
+ * (`DISALLOWED_EXECUTE_COMMANDS`) stays copy-only since it opens a native
+ * window on the server host, not the browser.
  */
 import type { CommandSpec, CommandOption } from "./api/types";
 
@@ -41,7 +44,42 @@ export interface ParseResult {
   hints: ValidationHint[];
   /** Full CLI string to copy/run, or null until a runnable command is resolved. */
   composed: string | null;
+  /** The exact tokens used to build `composed` (empty until one is resolved). */
+  argTokens: string[];
 }
+
+/** Mirrors gui/orchestrator_runner.py's HIGH_STAKES_COMMANDS table exactly —
+ *  same two command names, same flag names. This is a client-side UX hint
+ *  only; the server is still the enforcing authority. */
+const HIGH_STAKES_COMMANDS: Record<string, { flags: string[]; reason: string }[]> = {
+  "execution.kill_switch": [
+    { flags: ["--activate"], reason: "This activates the platform's global kill switch — it immediately blocks ALL order submission." },
+    { flags: ["--deactivate"], reason: "This deactivates the platform's global kill switch — order submission resumes." },
+  ],
+  "main.py": [
+    { flags: ["--refresh-account"], reason: "This forces a fresh Robinhood login, bypassing the daily account-snapshot cache." },
+  ],
+};
+
+/** Non-null when running `command` with `argTokens` needs explicit operator
+ *  confirmation before executing (kill switch activate/deactivate, a forced
+ *  broker re-login). Mirrors gui/orchestrator_runner.py's HIGH_STAKES_COMMANDS
+ *  table — the server is still the enforcing authority; this is a client-side
+ *  UX gate so the operator sees the risk BEFORE the request is even sent. */
+export function highStakesReason(command: CommandSpec | null, argTokens: string[]): string | null {
+  if (!command) return null;
+  const rules = HIGH_STAKES_COMMANDS[command.name];
+  if (!rules) return null;
+  const argSet = new Set(argTokens);
+  for (const rule of rules) {
+    if (rule.flags.every((f) => argSet.has(f))) return rule.reason;
+  }
+  return null;
+}
+
+/** app_shell.py pops a native desktop window on the server host — never
+ *  executable from a browser click. Stays copy-only. */
+export const DISALLOWED_EXECUTE_COMMANDS: ReadonlySet<string> = new Set(["app_shell.py"]);
 
 /** Whitespace-tokenize, dropping empties. */
 function tokenize(input: string): string[] {
@@ -178,6 +216,7 @@ export function parseCommandLine(input: string, commands: CommandSpec[]): ParseR
     suggestions: [],
     hints: [],
     composed: null,
+    argTokens: [],
   };
 
   const tokens = tokenize(input);
@@ -232,6 +271,7 @@ export function parseCommandLine(input: string, commands: CommandSpec[]): ParseR
         suggestions: subcommandSuggestions(command, partial),
         hints,
         composed: null,
+        argTokens: [],
       };
     }
   }
@@ -256,7 +296,8 @@ export function parseCommandLine(input: string, commands: CommandSpec[]): ParseR
   }
 
   const hints = validate(active, settledArgs);
-  const composed = [active.invocation, ...tokens.slice(argStart)].join(" ").trim();
+  const argTokens = tokens.slice(argStart);
+  const composed = [active.invocation, ...argTokens].join(" ").trim();
 
-  return { command, subcommand, active, suggestions, hints, composed };
+  return { command, subcommand, active, suggestions, hints, composed, argTokens };
 }

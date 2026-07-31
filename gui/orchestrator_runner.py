@@ -37,6 +37,7 @@ from __future__ import annotations
 import enum
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -899,6 +900,112 @@ def launch_verify() -> RunHandle:
         refresh_account=False,
         log_path=VERIFY_LOG_PATH,
         mode="verify",
+        _popen=popen,
+    )
+
+
+COMMAND_LOG_DIR: Path = settings.OUTPUT_DIR / "gui_commands"
+
+# Executed via python -m execution.kill_switch / python main.py -- see
+# execution/kill_switch.py's real argparse and main.py's --refresh-account
+# flag. NOT main_orchestrator.py: it has no --refresh-account flag in its
+# real argparse (only --dry-run/--strict), so the manifest (built by real
+# introspection) can never surface that flag for that target anyway.
+HIGH_STAKES_COMMANDS: Dict[str, Dict[frozenset, str]] = {
+    "execution.kill_switch": {
+        frozenset({"--activate"}): "This activates the platform's global kill switch -- it immediately blocks ALL order submission.",
+        frozenset({"--deactivate"}): "This deactivates the platform's global kill switch -- order submission resumes.",
+    },
+    "main.py": {
+        frozenset({"--refresh-account"}): "This forces a fresh Robinhood login, bypassing the daily account-snapshot cache.",
+    },
+}
+
+# app_shell.py pops a native desktop window (pywebview) on whichever machine
+# runs the API server -- not something a browser click can show or benefit
+# from. Stays copy-only; never dispatched through launch_manifest_command.
+DISALLOWED_EXECUTE_COMMANDS: frozenset = frozenset({"app_shell.py"})
+
+
+def launch_manifest_command(
+    job_id: str,
+    command_name: str,
+    subcommand_name: Optional[str],
+    args: List[str],
+    *,
+    confirm: bool = False,
+) -> RunHandle:
+    """Spawn a cli_introspect-manifest-listed CLI target as a non-blocking
+    subprocess -- the generic execution path behind the webapp Commands
+    screen's "Run" button (api/_jobs.py's JobType.COMMAND).
+
+    Unlike every other launcher in this module (which spawn ONE fixed,
+    hardcoded argv), this resolves `command_name`/`subcommand_name` against
+    the SERVER's own committed manifest (pilots.commands.resolve_command) --
+    never trusting a client-supplied path/module string -- then appends the
+    caller-supplied `args` as literal argv elements (no shell involved, so
+    arbitrary argument VALUES carry no shell-injection risk; they become
+    plain argv to the target script's own argparse).
+
+    Raises
+    ------
+    ValueError
+        Unknown command/subcommand, a disallowed target (app_shell.py), or a
+        high-stakes command/flag combination (kill switch activate/
+        deactivate, main.py --refresh-account) attempted without
+        `confirm=True`. The caller (api/_jobs.py) maps this to HTTP 400.
+    """
+    from pilots.commands import resolve_command  # lazy import -- matches this codebase's lazy-import-to-avoid-coupling convention (see e.g. HistoricalStore)
+
+    if command_name in DISALLOWED_EXECUTE_COMMANDS:
+        raise ValueError(
+            f"{command_name} cannot be executed remotely -- it opens a native "
+            "window on the server host. Copy the command and run it locally instead."
+        )
+
+    spec = resolve_command(command_name, subcommand_name)
+    if spec is None:
+        target_desc = f"{command_name} {subcommand_name}" if subcommand_name else command_name
+        raise ValueError(f"unknown command: {target_desc}")
+
+    high_stakes = HIGH_STAKES_COMMANDS.get(command_name, {})
+    arg_set = set(args)
+    for flag_set, reason in high_stakes.items():
+        if flag_set <= arg_set and not confirm:
+            raise ValueError(f"confirmation required: {reason}")
+
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    COMMAND_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = COMMAND_LOG_DIR / f"{job_id}.log"
+
+    invocation_tokens = shlex.split(spec["invocation"])
+    cmd: List[str] = [sys.executable, *invocation_tokens[1:], *args]
+
+    log_file = open(log_path, "w", encoding="utf-8")  # noqa: SIM115 - kept open for the child
+    log_file.write(
+        f"# InvestYo manifest command launch @ {time.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(command={command_name!r}, subcommand={subcommand_name!r}, args={args})\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched manifest command pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=("--refresh-account" in args),
+        log_path=log_path,
+        mode="command",
         _popen=popen,
     )
 

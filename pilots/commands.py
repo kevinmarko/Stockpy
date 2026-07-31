@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -65,3 +65,44 @@ def command_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
         "commands": commands,
         "reason": None,
     }
+
+
+def _last_invocation_token(command: Dict[str, Any]) -> str:
+    """Last whitespace-separated token of a command's ``invocation`` string.
+
+    E.g. ``"python -m prompt_registry list"`` -> ``"list"``.
+    """
+    invocation = command.get("invocation") or ""
+    parts = invocation.split()
+    return parts[-1] if parts else ""
+
+
+def _find_command(commands: List[Dict[str, Any]], token: str) -> Optional[Dict[str, Any]]:
+    """First entry in ``commands`` whose name, any alias, or the last
+    invocation token case-insensitively matches ``token`` — else ``None``.
+    """
+    needle = token.lower()
+    for command in commands:
+        keys = [command.get("name", ""), *command.get("aliases", []), _last_invocation_token(command)]
+        if any(str(key).lower() == needle for key in keys):
+            return command
+    return None
+
+
+def resolve_command(name: str, subcommand: Optional[str] = None, *, path: Optional[Path] = None) -> Optional[dict]:
+    """Resolve a manifest command (and optional subcommand) by name/alias.
+
+    Mirrors the frontend's commandParse.ts::resolveCommand matching rules so
+    server-side execution only ever runs a target the manifest actually
+    lists -- never a client-supplied path/module string. Case-insensitive
+    match against `name`, any `aliases` entry, or the last whitespace token
+    of `invocation`. Returns the resolved leaf CommandSpec dict (has
+    `.invocation`, ready for argv-building), or None if not found.
+    """
+    manifest = command_manifest(path)
+    command = _find_command(manifest["commands"], name)
+    if command is None:
+        return None
+    if not subcommand:
+        return command
+    return _find_command(command.get("subcommands", []), subcommand)

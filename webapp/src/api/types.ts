@@ -13,7 +13,8 @@ export type JobType =
   | "verify"
   | "gravity"
   | "advisory"
-  | "orchestrator";
+  | "orchestrator"
+  | "command";
 
 export interface JobRecord {
   job_id: string;
@@ -22,6 +23,23 @@ export interface JobRecord {
   exit_code?: number | null;
   is_running?: boolean;
   cancellable: boolean;
+}
+
+/**
+ * POST /jobs params for `job_type: "command"` — executes a command composed
+ * by the Commands screen's autocomplete bar via the backend's gated
+ * `COMMAND_EXECUTION_ENABLED` path. `confirm` is sent `true` once the operator
+ * has clicked through the Run control (plain Run for a non-high-stakes
+ * command, or the confirmation dialog's "Yes, run it" for one flagged by
+ * `commandParse.ts`'s `highStakesReason`) — the server re-derives whether
+ * confirmation was actually required and is the enforcing authority either
+ * way, this is not a trust-the-client flag.
+ */
+export interface CommandJobParams {
+  command: string;
+  subcommand?: string | null;
+  args: string[];
+  confirm?: boolean;
 }
 
 export interface RestartDaemonResult {

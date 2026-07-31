@@ -518,6 +518,8 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(err)) from err
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
+    except PermissionError as err:
+        raise HTTPException(status_code=403, detail=str(err)) from err
 
     return {
         "job_id": rec.job_id,
