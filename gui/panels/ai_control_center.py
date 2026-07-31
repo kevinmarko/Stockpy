@@ -1,4 +1,4 @@
-"""InvestYo Command Center — AI Control Center tab. Renders master on/off switches and provider/model selectors for the platform's LLM capabilities, writing the chosen settings through the allowlist-bounded gui.env_io writer (effective on the next launch)."""
+"""InvestYo Command Center — AI Control Center tab. Renders master on/off switches and provider/model selectors for the platform's LLM capabilities, writing the chosen settings through the allowlist-bounded gui.env_io writer and applying them immediately to this process's live settings (see gui.ai_control_center.LIVE_PATCHABLE_KEYS) — a separately-running process (e.g. the orchestrator daemon) still needs its own restart."""
 
 from __future__ import annotations
 
@@ -114,6 +114,15 @@ def _render_capability_row(
     ``toggle_key`` so only ONE widget instance is ever created for it; every
     other capability sharing that key gets a caption pointing at the owning
     row instead of its own (fighting) toggle.
+
+    Every write here (toggle, provider selector, Opal model) also
+    ``setattr``s the new value directly onto the live ``settings`` object
+    right after ``env_io.write_setting`` — every key reachable from this
+    function is read fresh via ``getattr(settings, ...)`` on each use, never
+    cached (see ``gui.ai_control_center.LIVE_PATCHABLE_KEYS``), so this is
+    safe and makes the change visible immediately in THIS process, no
+    restart needed (a separately-running process, e.g. the orchestrator
+    daemon, still needs its own restart).
     """
     c1, c2, c3, c4 = st.columns([3, 2, 2, 3])
     c1.markdown(f"**{rowinfo['label']}**")
@@ -162,7 +171,8 @@ def _render_capability_row(
                 try:
                     validate_toggle_write_fn(tkey)
                     env_io.write_setting(tkey, "true" if new else "false")
-                    c4.success("Saved — effective next launch.")
+                    setattr(settings, tkey, new)
+                    c4.success("Saved — applied immediately.")
                 except Exception as exc:
                     c4.error(f"Write refused: {exc}")
             toggle_owner[tkey] = rowinfo["label"]
@@ -188,7 +198,8 @@ def _render_capability_row(
             if new_sel != cur_sel:
                 try:
                     env_io.write_setting(sel_key, new_sel)
-                    c4.success("Provider saved — effective next launch.")
+                    setattr(settings, sel_key, new_sel)
+                    c4.success("Provider saved — applied immediately.")
                 except Exception as exc:
                     c4.error(f"Provider write refused: {exc}")
 
@@ -206,7 +217,8 @@ def _render_capability_row(
             if new_model.strip() != cur_model:
                 try:
                     env_io.write_setting("OPAL_RESEARCH_MODEL", new_model.strip())
-                    c4.success("Model saved — effective next launch.")
+                    setattr(settings, "OPAL_RESEARCH_MODEL", new_model.strip())
+                    c4.success("Model saved — applied immediately.")
                 except Exception as exc:
                     c4.error(f"Model write refused: {exc}")
     elif not rowinfo["built"]:
@@ -223,8 +235,10 @@ def render_ai_control_center() -> None:
     * **A — Capability grid + toggles.** One row per AI option (Claude
       commentary, Gemini alerts, Gemini chart vision, Gravity AI runner, Opal
       research) with a status badge, a masked key-present badge, and an
-      enable/disable toggle written via ``gui.env_io`` (takes effect next
-      launch). Provider API keys stay secret-only (CONSTRAINT #3).
+      enable/disable toggle written via ``gui.env_io`` and applied
+      immediately to this process (no restart needed here; a separately
+      running process, e.g. the orchestrator daemon, still needs its own).
+      Provider API keys stay secret-only (CONSTRAINT #3).
     * **B — On-demand per-symbol actions.** A symbol picker + buttons that
       REUSE the exact existing helpers (`_render_llm_commentary_button`,
       `_render_gemini_chart_section`) — no logic duplication.
@@ -252,12 +266,13 @@ def render_ai_control_center() -> None:
     # ── Section A — capability grid + toggles ───────────────────────────
     st.markdown("#### A · Capabilities & master switches")
     st.caption(
-        "Toggles write to `.env` and take effect on the **next launch** (no "
-        "hot-reload). Provider API keys are secret-only — set them by hand in "
-        "`.env` (CONSTRAINT #3). Key status is presence + LAST-REAL-CALL "
-        "telemetry — the platform never probes a provider, so a 🔴 verdict is a "
-        "past call that was rejected, and it clears on the next call or a key "
-        "change."
+        "Toggles write to `.env` and apply **immediately** to this running "
+        "session — a separately-running process (e.g. the orchestrator "
+        "daemon) still needs its own restart to see the change. Provider API "
+        "keys are secret-only — set them by hand in `.env` (CONSTRAINT #3). "
+        "Key status is presence + LAST-REAL-CALL telemetry — the platform "
+        "never probes a provider, so a 🔴 verdict is a past call that was "
+        "rejected, and it clears on the next call or a key change."
     )
     # Last-real-call telemetry (llm/status_store.py), lazily imported so the tab
     # degrades rather than breaks if it is unavailable. This module (the panel)

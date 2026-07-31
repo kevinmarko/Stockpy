@@ -73,38 +73,122 @@ class TestLlmSettingWriteHappyPath:
     def test_writes_bool_toggle_and_echoes_request(self):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
-                with mock.patch.object(
-                    pilots_api.env_io, "write_setting", return_value="true"
-                ) as w:
-                    resp = _put("LLM_COMMENTARY_ENABLED", True)
+                with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", False):
+                    with mock.patch.object(
+                        pilots_api.env_io, "write_setting", return_value="true"
+                    ) as w:
+                        resp = _put("LLM_COMMENTARY_ENABLED", True)
         assert resp.status_code == 200
         w.assert_called_once_with("LLM_COMMENTARY_ENABLED", True)
         body = resp.json()
         assert body["written"] == ["LLM_COMMENTARY_ENABLED"]
         assert body["value"] is True
-        assert body["applies"] == "next_daemon_restart"
-        assert "not patched in-process" in body["note"]
+        assert body["applies"] == "immediately"
+        assert "applied immediately" in body["note"]
 
     def test_writes_string_provider_selector(self):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
-                with mock.patch.object(
-                    pilots_api.env_io, "write_setting", return_value="gemini"
-                ) as w:
-                    resp = _put("LLM_COMMENTARY_RATIONALE_PROVIDER", "gemini")
+                with mock.patch.object(settings, "LLM_COMMENTARY_RATIONALE_PROVIDER", "claude"):
+                    with mock.patch.object(
+                        pilots_api.env_io, "write_setting", return_value="gemini"
+                    ) as w:
+                        resp = _put("LLM_COMMENTARY_RATIONALE_PROVIDER", "gemini")
         assert resp.status_code == 200
         w.assert_called_once_with("LLM_COMMENTARY_RATIONALE_PROVIDER", "gemini")
         body = resp.json()
         assert body["written"] == ["LLM_COMMENTARY_RATIONALE_PROVIDER"]
         assert body["value"] == "gemini"
+        assert body["applies"] == "immediately"
 
     def test_write_never_logs_token(self, caplog):
         with caplog.at_level("DEBUG"):
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                 with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
-                    with mock.patch.object(pilots_api.env_io, "write_setting"):
-                        _put("LLM_COMMENTARY_ENABLED", True)
+                    with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", False):
+                        with mock.patch.object(pilots_api.env_io, "write_setting"):
+                            _put("LLM_COMMENTARY_ENABLED", True)
         assert _CMD_TOKEN not in caplog.text
+
+
+class TestLlmSettingWriteLivePatch:
+    """The whole point of this endpoint over a plain .env write: every key it
+    validates against is read fresh via getattr(settings, ...) on each use
+    (never cached — see gui.ai_control_center.LIVE_PATCHABLE_KEYS), so a
+    successful write also setattr's the running settings singleton directly.
+    Regression coverage for the "toggle writes but GET /llm/status still
+    reports the old value" bug — the write landed in .env, but every reader
+    of the IN-PROCESS settings object (this API's own next GET, and the
+    advisory/orchestrator pipeline's own gating checks) kept seeing the
+    stale value until a full daemon restart."""
+
+    def test_toggle_write_is_visible_to_the_very_next_status_read(self):
+        # Assertions on the mutated attribute happen INSIDE the patch
+        # contexts: mock.patch.object restores the PRE-patch value on
+        # __exit__ regardless of any mutation during the block, so checking
+        # settings.LLM_COMMENTARY_ENABLED after exiting would just observe
+        # the teardown, not the endpoint's live setattr.
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", False):
+                    with mock.patch.object(settings, "LLM_COMMENTARY_RATIONALE_PROVIDER", "none"):
+                        with mock.patch.object(pilots_api.env_io, "write_setting"):
+                            before = client.get("/llm/status").json()
+                            claude_before = next(
+                                r for r in before["capabilities"] if r["key"] == "claude_commentary"
+                            )
+                            assert claude_before["enabled"] is False
+
+                            put_resp = _put("LLM_COMMENTARY_ENABLED", True)
+                            assert put_resp.status_code == 200
+                            # The endpoint's own setattr is visible immediately.
+                            assert settings.LLM_COMMENTARY_ENABLED is True
+
+                            after = client.get("/llm/status").json()
+                            claude_after = next(
+                                r for r in after["capabilities"] if r["key"] == "claude_commentary"
+                            )
+                            # Provider is "none" in this test, so the capability
+                            # itself stays disabled -- what mattered above was
+                            # the underlying settings attribute, not the
+                            # derived "enabled" (which also needs a provider).
+                            assert claude_after["enabled"] is False
+
+    def test_provider_selector_write_is_visible_immediately(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", True):
+                    with mock.patch.object(settings, "LLM_COMMENTARY_RATIONALE_PROVIDER", "claude"):
+                        with mock.patch.object(settings, "ANTHROPIC_API_KEY", "sk-ant-x"):
+                            with mock.patch.object(settings, "GEMINI_API_KEY", "sk-gem-x"):
+                                with mock.patch.object(pilots_api.env_io, "write_setting"):
+                                    put_resp = _put("LLM_COMMENTARY_RATIONALE_PROVIDER", "gemini")
+                                    assert put_resp.status_code == 200
+                                    status = client.get("/llm/status").json()
+        row = next(r for r in status["capabilities"] if r["key"] == "claude_commentary")
+        assert row["active_provider"] == "gemini"
+
+    def test_key_outside_the_ai_control_center_family_does_not_live_patch(self):
+        """KELLY_FRACTION is in ALLOWED_KEYS (so validate_toggle_write lets it
+        through) but is NOT one of the AI Control Center's known-uncached
+        keys -- it's captured into sizing engine objects at construction
+        time elsewhere, so live-patching it here would create a misleading
+        half-live state. Must fall back to the honest next_daemon_restart
+        contract instead of guessing it's safe."""
+        original = settings.KELLY_FRACTION
+        try:
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
+                    with mock.patch.object(pilots_api.env_io, "write_setting"):
+                        resp = _put("KELLY_FRACTION", "0.75")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["applies"] == "next_daemon_restart"
+            assert "not patched in-process" in body["note"]
+            # And it genuinely was NOT mutated.
+            assert settings.KELLY_FRACTION == original
+        finally:
+            settings.KELLY_FRACTION = original
 
 
 class TestLlmSettingWriteValidation:

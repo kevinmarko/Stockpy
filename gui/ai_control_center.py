@@ -194,6 +194,33 @@ CAPABILITIES: Tuple[AICapability, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# Live in-process patchability (2026-07)
+# ---------------------------------------------------------------------------
+# Every key here is read FRESH via ``getattr(settings, ...)`` on each call --
+# by ``_is_enabled``/``_keys_present``/``_active_provider`` below (called anew
+# from every ``control_center_overview``/``capability_status`` invocation, in
+# both ``GET /llm/status`` and the Streamlit panel's own rerender), and by
+# ``llm/router.py``'s ``getattr(settings, "OPAL_RESEARCH_MODEL", "")`` read at
+# call time -- NEVER cached/captured into an engine object at construction
+# time. Writing one of these via ``gui.env_io.write_setting`` and then
+# ``setattr(settings, key, value)`` is therefore safe: the very next read (in
+# this same process -- the daemon hosting ``api/pilots_api.py``, or a
+# Streamlit session) sees the new value immediately, no restart needed.
+#
+# This is DELIBERATELY narrower than "every ALLOWED_KEYS write live-patches
+# settings": most OTHER GUI-writable settings (Kelly fraction, VOL_TARGET,
+# signal weights, ...) ARE captured into engine/sizing objects at
+# construction time, so patching those in-process would create a misleading
+# half-live state instead of the honest "needs a restart" ``PUT /llm/setting``
+# used to report for everything, unconditionally, before this.
+LIVE_PATCHABLE_KEYS: frozenset[str] = frozenset(
+    {"OPAL_RESEARCH_MODEL"}
+    | {c.toggle_key for c in CAPABILITIES if c.toggle_key}
+    | {c.provider_selector_setting for c in CAPABILITIES if c.provider_selector_setting}
+)
+
+
+# ---------------------------------------------------------------------------
 # Status derivation
 # ---------------------------------------------------------------------------
 

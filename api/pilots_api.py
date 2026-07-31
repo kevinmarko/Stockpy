@@ -2254,8 +2254,8 @@ def get_llm_status() -> Dict[str, Any]:
         "attention_reason": attention_reason,
         "writable": writable,
         "writable_note": (
-            "Toggle and provider writes persist to .env and apply on the next "
-            "daemon restart."
+            "Toggle and provider writes persist to .env and apply immediately "
+            "to this running process — no restart needed."
             if writable
             else "AI-capability writes are disabled (LLM_WRITES_ENABLED=false)."
         ),
@@ -2270,7 +2270,9 @@ def get_llm_status() -> Dict[str, Any]:
     ],
 )
 def set_llm_setting(body: LlmSettingUpdateRequest) -> Dict[str, Any]:
-    """Write ONE AI-capability toggle or provider-selector key to ``.env``.
+    """Write ONE AI-capability toggle or provider-selector key to ``.env``,
+    and apply it immediately to the in-process ``settings`` singleton when
+    it's safe to (see ``ai_control_center.LIVE_PATCHABLE_KEYS``).
 
     ``key`` must be a capability's ``toggle_key`` (bool value) or
     ``provider_selector_setting`` (str value) from ``GET /llm/status``'s
@@ -2279,26 +2281,43 @@ def set_llm_setting(body: LlmSettingUpdateRequest) -> Dict[str, Any]:
     is refused with 403, as is any key outside ``gui.env_io.ALLOWED_KEYS``)
     before ``env_io.write_setting`` performs the actual (re-validated) write.
 
-    Like ``PUT /strategy/modules`` this is an ``.env``-ONLY write: it does NOT
-    patch the running ``settings`` singleton (a process-lifetime object), so
-    this API and any already-launched pipeline keep using the previous value
-    until restart. ``applies`` is therefore always ``"next_daemon_restart"``,
-    and the echoed ``value`` reflects the REQUEST BODY, not ``settings``
-    (which would return the stale value and read as a failed write).
+    Unlike ``PUT /strategy/modules`` (a multi-key sizing/signal-weight write
+    where the "next restart" caveat is real — those values ARE captured into
+    engine objects at construction time), every key ``PUT /llm/setting``
+    validates against is read fresh via ``getattr(settings, ...)`` on each
+    use, never cached — see ``LIVE_PATCHABLE_KEYS``'s docstring. So once the
+    ``.env`` write succeeds, this ALSO ``setattr``s the value directly onto
+    the process's live ``settings`` object, and ``applies`` is honestly
+    ``"immediately"``: this API's very next ``GET /llm/status`` (and the
+    advisory/orchestrator pipeline's own next cycle, in THIS process) sees
+    it. A separately-running process (e.g. a Streamlit session) still needs
+    its own restart — ``settings`` is per-process, not shared memory. The
+    echoed ``value`` reflects the REQUEST BODY, not a re-read of ``settings``
+    (equivalent now that the patch has already applied, but keeps the
+    contract simple).
     """
     try:
         ai_control_center.validate_toggle_write(body.key)
     except (env_io.SecretWriteError, env_io.DisallowedKeyError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     env_io.write_setting(body.key, body.value)
+    applied_live = body.key in ai_control_center.LIVE_PATCHABLE_KEYS
+    if applied_live:
+        setattr(settings, body.key, body.value)
     return {
         "written": [body.key],
         "value": body.value,
-        "applies": "next_daemon_restart",
+        "applies": "immediately" if applied_live else "next_daemon_restart",
         "note": (
-            "Written to .env. settings is not patched in-process — this API "
-            "and any already-launched pipeline still use the previous value "
-            "until restarted."
+            "Written to .env and applied immediately to this process — no "
+            "restart needed. A separately-running process (e.g. a Streamlit "
+            "session) still needs its own restart to see it."
+            if applied_live
+            else (
+                "Written to .env. settings is not patched in-process — this "
+                "API and any already-launched pipeline still use the previous "
+                "value until restarted."
+            )
         ),
     }
 
