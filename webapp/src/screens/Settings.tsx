@@ -221,6 +221,19 @@ function AiControlCenterLink() {
  * FOLLOW_API_TOKEN + loopback-only -- see api/pilots_api.py); this UI renders
  * whatever the server actually returned and never echoes credentials. Reuses
  * the SAME RobinhoodConnectForm as onboarding so the intake path can't drift.
+ *
+ * The refreshBrokerage() button (POST /brokerage/refresh) is deliberately
+ * NOT gated on `data.connected` -- unlike connect/disconnect, it never reads
+ * a request body; it just calls fetch_account_snapshot(force=True)
+ * server-side, which logs in with whatever RH_USERNAME/RH_PASSWORD/
+ * RH_MFA_SECRET is already configured in THIS MACHINE's .env, no typed input
+ * needed. That works identically regardless of what `data.connected` (a
+ * client-side read of the SAME env vars, which can be stale relative to a
+ * just-restarted backend, or simply not yet reflect a hand-edited .env)
+ * currently reports -- so the button is offered in both branches, as a
+ * faster alternative to typing credentials into RobinhoodConnectForm below.
+ * An honest failure (no usable credentials configured at all) surfaces the
+ * same way either way: refresh.error, never a fabricated success.
  */
 function BrokerageSection() {
   const { data, loading, error, status, reload } = useApi<BrokerageStatus>(
@@ -239,7 +252,7 @@ function BrokerageSection() {
 
   const doRefresh = async () => {
     await refresh.run();
-    reload(); // pick up the (possibly now-populated) has_account_snapshot flag
+    reload(); // pick up the (possibly now-populated) connected/has_account_snapshot flags
   };
 
   return (
@@ -252,8 +265,8 @@ function BrokerageSection() {
         <ErrorState message={error} status={status} onRetry={reload} />
       )}
       {!loading && !error && data && (
-        data.connected ? (
-          <div className="list">
+        <div className="list">
+          {data.connected && (
             <div className="row">
               <span className="row-title">Robinhood</span>
               <MetricBadge
@@ -262,56 +275,76 @@ function BrokerageSection() {
                 good={true}
               />
             </div>
-            <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-3)" }}>
-              <Button
-                variant="neutral"
-                onClick={doRefresh}
-                pending={refresh.pending}
-              >
-                🔐 Force fresh login
-              </Button>
+          )}
+
+          <div
+            style={{
+              display: "flex",
+              gap: "var(--s-2-5)",
+              flexWrap: "wrap",
+              marginTop: data.connected ? "var(--s-3)" : 0,
+            }}
+          >
+            <Button variant="neutral" onClick={doRefresh} pending={refresh.pending}>
+              {data.connected ? "🔐 Force fresh login" : "🔐 Connect using .env credentials"}
+            </Button>
+            {data.connected && (
               <Button
                 variant="neutral"
                 onClick={() => setConfirmingDisconnect(true)}
               >
                 Disconnect
               </Button>
-            </div>
-            <p
-              style={{
-                color: theme.textMuted,
-                fontSize: "var(--t-caption)",
-                marginTop: "var(--s-1-5)",
-                marginBottom: 0,
-                lineHeight: 1.4,
-              }}
-            >
-              Bypasses the daily cache and re-authenticates against Robinhood
-              right now — equivalent to <code>python3 main.py --refresh-account</code>.
-            </p>
-            {refresh.error && (
-              <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
-                <span>⚠️</span>
-                <span>{refresh.error}</span>
-              </Notice>
             )}
-            {refresh.result && !refresh.error && (
-              <Notice variant="success" style={{ marginTop: "var(--s-2-5)" }}>
-                <span>✅</span>
-                <span>
-                  Refreshed {timeAgo(refresh.result.fetched_at)}
-                  {refresh.result.is_stale
-                    ? " — Robinhood login failed; showing the last cached snapshot instead."
-                    : ` — ${fmtUsd(refresh.result.total_equity)} total equity.`}
-                </span>
-              </Notice>
+          </div>
+          <p
+            style={{
+              color: theme.textMuted,
+              fontSize: "var(--t-caption)",
+              marginTop: "var(--s-1-5)",
+              marginBottom: 0,
+              lineHeight: 1.4,
+            }}
+          >
+            {data.connected ? (
+              <>
+                Bypasses the daily cache and re-authenticates against Robinhood
+                right now — equivalent to <code>python3 main.py --refresh-account</code>.
+              </>
+            ) : (
+              <>
+                Logs in with <code>RH_USERNAME</code>/<code>RH_PASSWORD</code>
+                {" "}(and <code>RH_MFA_SECRET</code>, if set) already in this
+                machine's <code>.env</code> — no typing required. Haven't set
+                those yet? Use the form below instead.
+              </>
             )}
-            {disconnect.error && (
-              <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
-                <span>⚠️</span>
-                <span>{disconnect.error}</span>
-              </Notice>
-            )}
+          </p>
+          {refresh.error && (
+            <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
+              <span>⚠️</span>
+              <span>{refresh.error}</span>
+            </Notice>
+          )}
+          {refresh.result && !refresh.error && (
+            <Notice variant="success" style={{ marginTop: "var(--s-2-5)" }}>
+              <span>✅</span>
+              <span>
+                Refreshed {timeAgo(refresh.result.fetched_at)}
+                {refresh.result.is_stale
+                  ? " — Robinhood login failed; showing the last cached snapshot instead."
+                  : ` — ${fmtUsd(refresh.result.total_equity)} total equity.`}
+              </span>
+            </Notice>
+          )}
+          {disconnect.error && (
+            <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
+              <span>⚠️</span>
+              <span>{disconnect.error}</span>
+            </Notice>
+          )}
+
+          {data.connected ? (
             <p
               style={{
                 color: theme.textMuted,
@@ -323,23 +356,23 @@ function BrokerageSection() {
               Credentials are stored only on this local machine and are never
               shown here.
             </p>
-          </div>
-        ) : (
-          <>
-            <p
-              style={{
-                color: theme.textSecondary,
-                fontSize: "var(--t-body)",
-                marginTop: 0,
-                marginBottom: "var(--s-3)",
-              }}
-            >
-              Not connected. Credentials go only to your local backend and are
-              verified with a read-only login before anything is saved.
-            </p>
-            <RobinhoodConnectForm onConnected={reload} />
-          </>
-        )
+          ) : (
+            <>
+              <p
+                style={{
+                  color: theme.textSecondary,
+                  fontSize: "var(--t-body)",
+                  marginTop: "var(--s-3)",
+                  marginBottom: "var(--s-3)",
+                }}
+              >
+                Not connected. Credentials go only to your local backend and are
+                verified with a read-only login before anything is saved.
+              </p>
+              <RobinhoodConnectForm onConnected={reload} />
+            </>
+          )}
+        </div>
       )}
 
       {confirmingDisconnect && (

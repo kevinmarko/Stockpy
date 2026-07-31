@@ -597,6 +597,72 @@ describe("Settings screen — Brokerage", () => {
     expect(screen.queryByRole("button", { name: "Disconnect" })).not.toBeInTheDocument();
   });
 
+  it("disconnected: still offers a one-click connect using .env credentials, alongside the typed form", async () => {
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: false,
+      has_account_snapshot: false,
+    });
+    renderSettings();
+
+    expect(
+      await screen.findByRole("button", { name: /connect using \.env credentials/i })
+    ).toBeInTheDocument();
+    // The typed form is still there too -- not an either/or.
+    expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();
+  });
+
+  it("disconnected: clicking the .env-credentials button on success flips the section to connected", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBrokerageStatus")
+      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false })
+      .mockResolvedValue({ connected: true, has_account_snapshot: true });
+    const refreshSpy = vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
+      total_equity: 48213.55,
+      buying_power: 6120.4,
+      total_unrealized_pl: 3182.19,
+      total_dividends: 412.66,
+      position_count: 6,
+      positions: [],
+      fetched_at: new Date().toISOString(),
+      source: "live",
+      is_stale: false,
+      age_hours: 0,
+    });
+    renderSettings();
+
+    await user.click(
+      await screen.findByRole("button", { name: /connect using \.env credentials/i })
+    );
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    // Reloaded /brokerage/status now reports connected -> Disconnect appears,
+    // the typed-credential form is gone.
+    expect(await screen.findByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/robinhood email/i)).not.toBeInTheDocument();
+  });
+
+  it("disconnected: an honest failure (no usable .env credentials) shows the error, form stays put", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: false,
+      has_account_snapshot: false,
+    });
+    vi.spyOn(api, "refreshBrokerage").mockRejectedValueOnce(
+      new Error("Could not refresh the Robinhood account snapshot.")
+    );
+    renderSettings();
+
+    await user.click(
+      await screen.findByRole("button", { name: /connect using \.env credentials/i })
+    );
+
+    expect(
+      await screen.findByText("Could not refresh the Robinhood account snapshot.")
+    ).toBeInTheDocument();
+    // Still disconnected -- the typed form remains available as a fallback.
+    expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();
+  });
+
   it("connected: renders status + Disconnect, and never the credential form", async () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: true,
