@@ -664,6 +664,77 @@ describe("Settings screen — Brokerage", () => {
 
     expect(await screen.findByText("brokerage down")).toBeInTheDocument();
   });
+
+  it("Force fresh login refreshes and shows a success notice", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: true,
+      has_account_snapshot: true,
+    });
+    const refreshSpy = vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
+      total_equity: 48213.55,
+      buying_power: 6120.4,
+      total_unrealized_pl: 3182.19,
+      total_dividends: 412.66,
+      position_count: 6,
+      positions: [],
+      fetched_at: new Date().toISOString(),
+      source: "live",
+      is_stale: false,
+      age_hours: 0,
+    });
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/total equity/i)).toBeInTheDocument();
+  });
+
+  it("Force fresh login degraded to a stale cached snapshot shows the honest degraded notice", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: true,
+      has_account_snapshot: true,
+    });
+    vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
+      total_equity: 48213.55,
+      buying_power: 6120.4,
+      total_unrealized_pl: 3182.19,
+      total_dividends: 412.66,
+      position_count: 6,
+      positions: [],
+      fetched_at: new Date().toISOString(),
+      source: "live",
+      is_stale: true,
+      age_hours: 48,
+    });
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
+
+    expect(
+      await screen.findByText(/login failed; showing the last cached snapshot instead/i)
+    ).toBeInTheDocument();
+  });
+
+  it("a refresh failure shows a warning notice, not a crash", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: true,
+      has_account_snapshot: true,
+    });
+    vi.spyOn(api, "refreshBrokerage").mockRejectedValueOnce(
+      new Error("Could not refresh the Robinhood account snapshot.")
+    );
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
+
+    expect(
+      await screen.findByText("Could not refresh the Robinhood account snapshot.")
+    ).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

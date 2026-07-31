@@ -2428,6 +2428,37 @@ class Settings(BaseSettings):
             "other writes-enabled flag."
         ),
     )
+    # Master switch for the Pilots API's on-demand brokerage-refresh endpoint
+    # (api/pilots_api.py POST /brokerage/refresh -- forces a live Robinhood
+    # re-login + account-snapshot fetch, bypassing the daily cache; the webapp/
+    # API equivalent of `python3 main.py --refresh-account` and the Streamlit
+    # GUI's "Force fresh login" checkbox on Live Inventory/Paper Monitor). A
+    # DEDICATED flag, NOT BROKERAGE_CONNECT_ENABLED: that flag scopes credential
+    # INTAKE (verifying and persisting NEW username/password) and clearing them
+    # on disconnect: it does not receive any credential material and instead
+    # re-uses whatever is already configured, but every call is still a real,
+    # live network login against the operator's actual brokerage account and
+    # must not ride in on a flag named for a different action. Mirrors
+    # BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED / LLM_WRITES_ENABLED /
+    # AGENTIC_DISCOVERY_ENABLED / GENERAL_SETTINGS_WRITES_ENABLED /
+    # MACRO_GATE_WRITES_ENABLED exactly: default False, deliberately NOT in
+    # gui/env_io.py's ALLOWED_KEYS (a GUI bug must never flip it on; hand-set in
+    # .env only), and also requires FOLLOW_API_TOKEN and the same loopback-only
+    # check as /brokerage/connect and /brokerage/disconnect. GET /brokerage/status
+    # and GET /portfolio remain read-only and are NOT gated by this flag
+    # (require_read_token alone).
+    BROKERAGE_REFRESH_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables POST /brokerage/refresh on the Pilots API (forces a live "
+            "Robinhood re-login + account-snapshot fetch, bypassing the daily "
+            "cache). Off by default; also requires FOLLOW_API_TOKEN and a "
+            "loopback (127.0.0.1) request. Never GUI-writable — hand-set in "
+            ".env only, so on-demand refresh cannot ride in on "
+            "BROKERAGE_CONNECT_ENABLED (a different action: credential intake, "
+            "not re-use of already-configured credentials)."
+        ),
+    )
     # Cap on candidates GET /agentic/discovery returns (and on what the
     # agentic-discovery skill is expected to write per scan) — keeps the Discovery
     # section of the Agentic Trading tab bounded regardless of how many symbols a

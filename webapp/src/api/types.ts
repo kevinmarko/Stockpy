@@ -516,6 +516,19 @@ export interface BrokerageDisconnectResult {
   connected: boolean;
 }
 
+/**
+ * POST /brokerage/refresh response — forces a live Robinhood re-login +
+ * account-snapshot fetch bypassing the daily cache (the webapp equivalent of
+ * `python3 main.py --refresh-account` / the Streamlit GUI's "Force fresh
+ * login" checkbox). Shape-identical to GET /portfolio's `Portfolio` — the
+ * backend reuses the same serializer — except `source` is always `"live"`
+ * here rather than `"db"`, since this request triggered a live fetch rather
+ * than reading HistoricalStore directly. A degraded-to-stale-cache result
+ * (fetch_account_snapshot's own internal fallback) still returns 200 here —
+ * check `is_stale`/`age_hours`, don't assume success means fully fresh.
+ */
+export type BrokerageRefreshResult = Portfolio;
+
 // ---------------------------------------------------------------------------
 // GET /llm/status — LLM provider configuration + last-real-call telemetry.
 // Never probes a provider; never carries a key, prefix, or fingerprint. A null

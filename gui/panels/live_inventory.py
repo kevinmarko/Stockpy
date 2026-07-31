@@ -118,8 +118,18 @@ def render_live_inventory() -> None:
     with col_fetch:
         fetch_rh = st.button(
             "📥 Refresh Robinhood snapshot",
-            help="Fetch fresh holdings/dividends. Uses the daily cache when fresh.",
+            help="Fetch holdings/dividends. Uses the daily cache when fresh.",
             width="stretch",
+        )
+        force_login = st.checkbox(
+            "🔐 Force fresh login (bypass cache)",
+            key="live_inv_force_rh_login",
+            help=(
+                "Bypass the daily cache and re-authenticate against Robinhood "
+                "right now, even if a fresh snapshot is already cached — "
+                "equivalent to `python3 main.py --refresh-account`. Overrides "
+                "ROBINHOOD_AUTO_REFRESH_ENABLED=False for this one fetch."
+            ),
         )
     with col_sync:
         do_sync = st.button(
@@ -135,10 +145,13 @@ def render_live_inventory() -> None:
 
     if fetch_rh:
         try:
-            with busy("Fetching Robinhood snapshot…"):
+            _busy_msg = (
+                "Logging in to Robinhood…" if force_login else "Fetching Robinhood snapshot…"
+            )
+            with busy(_busy_msg):
                 from data.robinhood_portfolio import fetch_account_snapshot
 
-                snapshot_obj = fetch_account_snapshot()
+                snapshot_obj = fetch_account_snapshot(force=force_login)
                 st.session_state["rh_snapshot"] = snapshot_obj
         except Exception as exc:  # noqa: BLE001 - never crash the panel
             st.error(f"Robinhood snapshot failed: {exc}")

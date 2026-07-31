@@ -229,11 +229,17 @@ function BrokerageSection() {
   );
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const disconnect = useMutation(() => api.disconnectBrokerage());
+  const refresh = useMutation(() => api.refreshBrokerage());
 
   const doDisconnect = async () => {
     await disconnect.run();
     setConfirmingDisconnect(false);
     reload();
+  };
+
+  const doRefresh = async () => {
+    await refresh.run();
+    reload(); // pick up the (possibly now-populated) has_account_snapshot flag
   };
 
   return (
@@ -256,13 +262,50 @@ function BrokerageSection() {
                 good={true}
               />
             </div>
-            <Button
-              variant="neutral"
-              onClick={() => setConfirmingDisconnect(true)}
-              style={{ marginTop: "var(--s-3)" }}
+            <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-3)" }}>
+              <Button
+                variant="neutral"
+                onClick={doRefresh}
+                pending={refresh.pending}
+              >
+                🔐 Force fresh login
+              </Button>
+              <Button
+                variant="neutral"
+                onClick={() => setConfirmingDisconnect(true)}
+              >
+                Disconnect
+              </Button>
+            </div>
+            <p
+              style={{
+                color: theme.textMuted,
+                fontSize: "var(--t-caption)",
+                marginTop: "var(--s-1-5)",
+                marginBottom: 0,
+                lineHeight: 1.4,
+              }}
             >
-              Disconnect
-            </Button>
+              Bypasses the daily cache and re-authenticates against Robinhood
+              right now — equivalent to <code>python3 main.py --refresh-account</code>.
+            </p>
+            {refresh.error && (
+              <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
+                <span>⚠️</span>
+                <span>{refresh.error}</span>
+              </Notice>
+            )}
+            {refresh.result && !refresh.error && (
+              <Notice variant="success" style={{ marginTop: "var(--s-2-5)" }}>
+                <span>✅</span>
+                <span>
+                  Refreshed {timeAgo(refresh.result.fetched_at)}
+                  {refresh.result.is_stale
+                    ? " — Robinhood login failed; showing the last cached snapshot instead."
+                    : ` — ${fmtUsd(refresh.result.total_equity)} total equity.`}
+                </span>
+              </Notice>
+            )}
             {disconnect.error && (
               <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
                 <span>⚠️</span>
