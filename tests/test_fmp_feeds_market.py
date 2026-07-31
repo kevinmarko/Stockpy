@@ -39,7 +39,11 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from data.fmp_feeds_market import fetch_insider_stats, fetch_sector_snapshot
+from data.fmp_feeds_market import (
+    _pct_to_fraction,
+    fetch_insider_stats,
+    fetch_sector_snapshot,
+)
 from pipeline.production_steps import _apply_fmp_insider, _apply_fmp_sector
 from settings import settings
 
@@ -227,11 +231,14 @@ class TestFetchSectorSnapshot:
         assert get.call_count == 2
         by_sector = {r["sector"]: r for r in rows}
         assert by_sector["Technology"]["pe"] == pytest.approx(28.5)
-        assert by_sector["Technology"]["change_pct"] == pytest.approx(1.23)
+        # averageChange is a vendor PERCENT NUMBER (live-verified); this
+        # module converts it to the FRACTION every other "percent"-format
+        # column in the schema stores -- 1.23% -> 0.0123, not 1.23.
+        assert by_sector["Technology"]["change_pct"] == pytest.approx(0.0123)
         assert by_sector["Technology"]["date"] == "2026-07-30"
         assert by_sector["Technology"]["source"] == "fmp"
         assert by_sector["Energy"]["pe"] == pytest.approx(12.1)
-        assert by_sector["Energy"]["change_pct"] == pytest.approx(-0.5)
+        assert by_sector["Energy"]["change_pct"] == pytest.approx(-0.005)
 
     def test_always_calls_the_dated_endpoint_form_never_none_or_implicit(self, fmp_settings):
         with patch(
@@ -288,6 +295,54 @@ class TestFetchSectorSnapshot:
             rows = fetch_sector_snapshot("")
         assert rows == []
         get.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# data/fmp_feeds_market.py::_pct_to_fraction
+#
+# Live-verified 2026-07-31: FMP's sector-performance-snapshot `averageChange`
+# field is a PERCENT NUMBER (e.g. -2.79 for a -2.79% average sector move),
+# not a fraction. This is the isolated unit-conversion logic that keeps
+# Sector_1D_Change consistent with every other "percent"-format column in
+# config.COLUMN_SCHEMA (which store fractions, per processing_engine.py's
+# ROC_12M convention).
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestPctToFraction:
+    def test_typical_values_converted_to_fraction(self):
+        assert _pct_to_fraction(1.23) == pytest.approx(0.0123)
+        assert _pct_to_fraction(-2.79) == pytest.approx(-0.0279)
+        assert _pct_to_fraction(0.0) == pytest.approx(0.0)
+
+    def test_none_returns_nan(self):
+        assert _pct_to_fraction(None) != _pct_to_fraction(None)  # NaN
+
+    def test_unparseable_returns_nan(self):
+        assert _pct_to_fraction("not-a-number") != _pct_to_fraction("not-a-number")
+
+    def test_nan_input_passes_through_as_nan(self):
+        result = _pct_to_fraction(float("nan"))
+        assert result != result  # NaN
+
+    def test_implausible_magnitude_refuses_and_logs_error(self, caplog):
+        import logging
+        with caplog.at_level(logging.ERROR, logger="data.fmp_feeds_market"):
+            result = _pct_to_fraction(75.0)  # >50% -- a shape-change red flag
+        assert result != result  # NaN, never a wrong-but-plausible-looking number
+        assert any(
+            r.levelno == logging.ERROR and "implausible sector change value" in r.message
+            for r in caplog.records
+        )
+
+    def test_boundary_value_at_the_guard_threshold_still_converts(self):
+        # Exactly at the threshold is still plausible; only strictly beyond
+        # it is refused.
+        assert _pct_to_fraction(50.0) == pytest.approx(0.5)
+        assert _pct_to_fraction(-50.0) == pytest.approx(-0.5)
+
+    def test_just_beyond_threshold_refuses(self):
+        result = _pct_to_fraction(50.01)
+        assert result != result  # NaN
 
 
 # ─────────────────────────────────────────────────────────────────────────

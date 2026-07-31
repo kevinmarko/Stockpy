@@ -29,21 +29,27 @@ never raises into the pipeline. CONSTRAINT #4, everywhere: a field the
 vendor did not report is omitted/NaN, never a fabricated 0.0 or a guessed
 ratio.
 
-Honesty note on the sector-snapshot field names: the exact JSON keys
-``/sector-pe-snapshot`` and ``/sector-performance-snapshot`` return could
-not be verified against a live response from this sandbox (no live-market
-network access here — see the plan's own "Cannot be verified in this
-sandbox" section). ``pe`` is FMP's documented field name for the PE
-snapshot and is used directly. For the performance snapshot's change
-figure, several plausible vendor field names are tried in a fixed
-preference order (``_CHANGE_PCT_KEYS`` below) rather than committing to one
-unverified guess. Whichever key is used, THE VALUE IS STORED EXACTLY AS THE
-VENDOR RETURNED IT — no assumed percent-vs-fraction conversion is applied,
-because guessing that conversion wrong (see ``dividendYield``'s unit-guard
-precedent in ``data/fmp_fundamentals.py``'s design) is a worse failure than
-storing an unconverted-but-real number. This should be confirmed against a
-live response before ``FMP_SECTOR_SNAPSHOT_ENABLED`` is ever flipped on for
-real, exactly like every other FMP field-shape assumption in this series.
+Field-name and unit note on the sector-performance-snapshot's change figure
+(live-verified 2026-07-31 via a real Starter-plan response, superseding the
+original "could not be verified in this sandbox" caveat): the field is
+``averageChange`` (the first, and correct, entry in ``_CHANGE_PCT_KEYS``
+below — the other three remain as defensive fallbacks only), and the vendor
+returns a PERCENT NUMBER (e.g. ``-2.79`` for a sector averaging a -2.79%
+daily move), NOT a fraction. This module converts it to a fraction
+(``-0.0279``) via ``_pct_to_fraction`` before returning, to match this
+codebase's universal "percent"-format convention: every other percent
+column (e.g. ``processing_engine.py``'s ``ROC_12M = Close/Close.shift(253)
+- 1.0``) stores a fraction and is multiplied by 100 only at DISPLAY time
+(see ``signals/timeseries_momentum.py``). Storing the raw vendor percent
+number unconverted, as an earlier version of this module did, would have
+been a 100x unit error the moment ``FMP_SECTOR_SNAPSHOT_ENABLED`` was ever
+flipped on — dormant today only because that flag defaults ``False``.
+``_pct_to_fraction`` is still sanity-guarded (the ``dividendYield``
+unit-guard precedent in ``data/fmp_fundamentals.py``): an average SECTOR
+daily move beyond ±50% in magnitude would mean the vendor's response shape
+changed underneath this code, not that the sector genuinely moved that
+much, so it refuses to convert and emits NaN rather than storing a
+plausible-looking but wrong number.
 """
 from __future__ import annotations
 
@@ -113,6 +119,44 @@ def _first_present(row: Dict[str, Any], keys: tuple) -> Any:
         if value is not None:
             return value
     return None
+
+
+# An average SECTOR daily move beyond this magnitude (as a percent number,
+# pre-conversion) almost certainly means the vendor's response shape
+# changed, not that the sector genuinely moved that much in one day.
+_MAX_PLAUSIBLE_SECTOR_CHANGE_PCT = 50.0
+
+
+def _pct_to_fraction(value: Any) -> float:
+    """Convert a vendor PERCENT NUMBER (e.g. ``-2.79``) to the FRACTION
+    (``-0.0279``) this codebase's "percent"-format columns store — see the
+    module docstring for the live verification and the codebase-wide
+    convention this matches.
+
+    Sanity-guarded rather than a blind ``/100``: refuses (logs ``ERROR``,
+    returns NaN) when the magnitude exceeds
+    ``_MAX_PLAUSIBLE_SECTOR_CHANGE_PCT`` — the same "refuse rather than
+    silently store a wrong number" precedent as ``dividendYield``'s
+    unit-guard in ``data/fmp_fundamentals.py``. Never raises (CONSTRAINT #6);
+    ``None``/unparseable/NaN input passes through as NaN (CONSTRAINT #4).
+    """
+    if value is None:
+        return float("nan")
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    if raw != raw:  # NaN in, NaN out
+        return raw
+    if abs(raw) > _MAX_PLAUSIBLE_SECTOR_CHANGE_PCT:
+        logger.error(
+            "fetch_sector_snapshot: implausible sector change value %r "
+            "(>%.0f%% in magnitude) -- refusing to convert to a fraction, "
+            "storing NaN. The vendor's response shape may have changed.",
+            raw, _MAX_PLAUSIBLE_SECTOR_CHANGE_PCT,
+        )
+        return float("nan")
+    return raw / 100.0
 
 
 def fetch_insider_stats(symbol: str) -> List[Dict[str, Any]]:
@@ -259,7 +303,7 @@ def fetch_sector_snapshot(
             sector = str(row.get("sector") or "").strip()
             if not sector:
                 continue
-            change_map[sector] = _safe_float(_first_present(row, _CHANGE_PCT_KEYS))
+            change_map[sector] = _pct_to_fraction(_first_present(row, _CHANGE_PCT_KEYS))
 
         sectors = sorted(set(pe_map) | set(change_map))
         if not sectors:
