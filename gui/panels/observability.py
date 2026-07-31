@@ -1183,12 +1183,7 @@ def _render_observability_sizing_cap_audit() -> None:
     used throughout this codebase), never a traceback.
     """
     st.markdown("### 🧢 Sizing Cap-Event Audit Trail (last 100)")
-    st.caption(
-        help_widgets.metric_help("observability.sizing_cap_audit")
-        or "Durable log of every position-sizing capping event (KELLY_CAP, "
-        "MAX_POSITION_WEIGHT, the portfolio-wide gross-exposure cap, or "
-        "cap-aware escalation) -- not just this cycle's snapshot."
-    )
+    help_widgets.section_caption("observability.sizing_cap_audit")
 
     if not settings.SIZING_CAP_AUDIT_ENABLED:
         st.info(
