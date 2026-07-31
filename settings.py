@@ -502,33 +502,41 @@ class Settings(BaseSettings):
     FMP_QUOTES_ENABLED: bool = Field(
         default=False,
         description=(
-            "Master switch for FMP-sourced quotes. False (the default) is a "
+            "Reserved switch for FMP-sourced quotes. False (the default) is a "
             "complete no-op reproducing today's exact behavior: no FMP quote "
             "request is ever attempted and the incumbent Alpaca/yfinance path "
-            "is untouched. Two-gate convention — this flag alone does not "
-            "elect FMP; MARKET_DATA_PROVIDER must ALSO be set to 'fmp'."
+            "is untouched. NOT CURRENTLY READ by the provider-selection code "
+            "-- today MARKET_DATA_PROVIDER='fmp' alone elects FMP for quotes, "
+            "with no check of this flag either way. Kept in the schema so a "
+            "future PR can wire in the two-gate convention (the "
+            "STOCKTWITS_ENABLED precedent) without a new env var; setting it "
+            "currently has no effect."
         ),
     )
     FMP_BARS_ENABLED: bool = Field(
         default=False,
         description=(
-            "Master switch for FMP-sourced OHLCV bars. False (the default) is "
-            "a complete no-op reproducing today's exact behavior. Two-gate "
-            "convention — this flag alone does not elect FMP; "
-            "MARKET_DATA_PROVIDER must ALSO be set to 'fmp'. Read "
-            "FMP_BARS_ADJUSTMENT before enabling: an adjustment-convention "
-            "mismatch corrupts every return series, indicator, GARCH fit and "
-            "backtest, and does so PLAUSIBLY (nothing fails loudly)."
+            "Reserved switch for FMP-sourced OHLCV bars. False (the default) "
+            "is a complete no-op reproducing today's exact behavior. NOT "
+            "CURRENTLY READ by the provider-selection code -- today "
+            "MARKET_DATA_PROVIDER='fmp' alone elects FMP for bars, with no "
+            "check of this flag either way; see FMP_QUOTES_ENABLED's "
+            "description for why. Read FMP_BARS_ADJUSTMENT before enabling: "
+            "an adjustment-convention mismatch corrupts every return series, "
+            "indicator, GARCH fit and backtest, and does so PLAUSIBLY "
+            "(nothing fails loudly)."
         ),
     )
     FMP_FUNDAMENTALS_ENABLED: bool = Field(
         default=False,
         description=(
-            "Master switch for FMP-sourced fundamentals. False (the default) "
-            "is a complete no-op reproducing today's exact behavior — the "
-            "Yahoo statement-derived path is untouched. Two-gate convention — "
-            "this flag alone does not elect FMP; FUNDAMENTALS_SOURCE must ALSO "
-            "be set to 'fmp'."
+            "Reserved switch for FMP-sourced fundamentals. False (the "
+            "default) is a complete no-op reproducing today's exact behavior "
+            "-- the Yahoo statement-derived path is untouched. NOT CURRENTLY "
+            "READ by the provider-selection code -- today "
+            "FUNDAMENTALS_SOURCE='fmp' alone elects FMP for fundamentals, "
+            "with no check of this flag either way; see "
+            "FMP_QUOTES_ENABLED's description for why."
         ),
     )
     FMP_ANALYST_ENABLED: bool = Field(
