@@ -5178,7 +5178,26 @@ export const mockApi = {
     );
   },
 
-  async createJob(job_type: string, _params?: Record<string, unknown>): Promise<JobRecord> {
+  async createJob(job_type: string, params?: Record<string, unknown>): Promise<JobRecord> {
+    // job_type === "command" mirrors the backend's two HIGH_STAKES_COMMANDS
+    // gates (see commandParse.ts) so the frontend can exercise the full
+    // confirm/error flow offline, plus the app_shell.py hard-disallow.
+    if (job_type === "command") {
+      const command = typeof params?.command === "string" ? params.command : "";
+      const args = Array.isArray(params?.args) ? (params.args as unknown[]) : [];
+      const confirmed = params?.confirm === true;
+
+      if (command === "app_shell.py") {
+        throw new ApiError("app_shell.py cannot be executed remotely.", 400);
+      }
+      if (command === "execution.kill_switch" && (args.includes("--activate") || args.includes("--deactivate")) && !confirmed) {
+        throw new ApiError("confirmation required: this command activates/deactivates the global kill switch.", 400);
+      }
+      if (command === "main.py" && args.includes("--refresh-account") && !confirmed) {
+        throw new ApiError("confirmation required: this command forces a fresh Robinhood login.", 400);
+      }
+    }
+
     const job_id = `mock-job-${Object.keys(_mockJobs).length + 1}`;
     _mockJobs[job_id] = { jobType: job_type, startedAt: Date.now(), cancelled: false };
     return delay({

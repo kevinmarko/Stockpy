@@ -25,6 +25,7 @@ from gui.orchestrator_runner import (
     RunHandle,
     launch_advisory_main,
     launch_gravity_audit,
+    launch_manifest_command,
     launch_orchestrator,
     launch_preflight,
     launch_pytest,
@@ -32,6 +33,7 @@ from gui.orchestrator_runner import (
     launch_verify,
     stop_run,
 )
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,7 @@ class JobType(str, enum.Enum):
     GRAVITY = "gravity"
     ADVISORY = "advisory"
     ORCHESTRATOR = "orchestrator"
+    COMMAND = "command"
 
 
 def job_status(handle: RunHandle, *, cancelled: bool) -> str:
@@ -67,6 +70,7 @@ class JobRecord:
     job_type: JobType
     handle: RunHandle
     cancelled: bool = False
+    command_name: Optional[str] = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -99,8 +103,18 @@ class JobManager:
         params = params or {}
 
         with self._lock:
+            job_id = f"job-{uuid.uuid4().hex[:8]}"
+            command_name = params.get("command") if job_type == JobType.COMMAND else None
+
             for rec in self._jobs.values():
-                if rec.job_type == job_type and rec.handle.is_running():
+                if not rec.handle.is_running():
+                    continue
+                if job_type == JobType.COMMAND:
+                    if rec.job_type == JobType.COMMAND and rec.command_name == command_name:
+                        raise RuntimeError(
+                            f"Command '{command_name}' is already running (ID: {rec.job_id})"
+                        )
+                elif rec.job_type == job_type:
                     raise RuntimeError(
                         f"Job of type '{job_type.value}' is already running (ID: {rec.job_id})"
                     )
@@ -134,11 +148,21 @@ class JobManager:
                     dry_run=bool(params.get("dry_run", False)),
                     refresh_account=bool(params.get("refresh_account", False)),
                 )
+            elif job_type == JobType.COMMAND:
+                if not settings.COMMAND_EXECUTION_ENABLED:
+                    raise PermissionError("COMMAND_EXECUTION_ENABLED is False.")
+                subcommand_name = params.get("subcommand")
+                args = params.get("args") or []
+                confirm = bool(params.get("confirm", False))
+                if not command_name or not isinstance(command_name, str):
+                    raise ValueError("COMMAND job requires params: command (str)")
+                if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+                    raise ValueError("COMMAND job requires params: args (list[str])")
+                handle = launch_manifest_command(job_id, command_name, subcommand_name, args, confirm=confirm)
             else:
                 raise ValueError(f"Unsupported job type: {job_type}")
 
-            job_id = f"job-{uuid.uuid4().hex[:8]}"
-            rec = JobRecord(job_id=job_id, job_type=job_type, handle=handle)
+            rec = JobRecord(job_id=job_id, job_type=job_type, handle=handle, command_name=command_name)
             self._jobs[job_id] = rec
             return rec
 

@@ -201,6 +201,23 @@ class Settings(BaseSettings):
             "preserves fail-closed behavior for jobs execution."
         ),
     )
+    COMMAND_EXECUTION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enable the 'command' job type on the orchestrator Control API's "
+            "POST /jobs (api/_jobs.py) — lets the webapp's Commands screen "
+            "actually run a manifest-listed CLI target (not just compose/copy "
+            "it), gated on top of the existing JOBS_API_ENABLED + "
+            "ORCHESTRATOR_DAEMON_TOKEN guard already protecting POST /jobs. "
+            "False (default) preserves today's compose-only behavior. "
+            "Deliberately excluded from gui/env_io.py's ALLOWED_KEYS/SECRET_KEYS "
+            "(hand-set in .env only) -- same treatment as BROKERAGE_CONNECT_ENABLED "
+            "-- because this flag gates execution of the global kill switch, a "
+            "forced Robinhood re-login, and arbitrary flags to the orchestrators, "
+            "a materially bigger risk than the fixed 7-job-type dispatch "
+            "JOBS_API_ENABLED alone already covers."
+        ),
+    )
 
     # --- Market-data layer (data/market_data.py) ---
     # Explicit provider override.  When absent the platform auto-selects:
