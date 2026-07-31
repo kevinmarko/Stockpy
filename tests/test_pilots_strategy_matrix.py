@@ -390,7 +390,7 @@ def _import_roots(source: str) -> set:
 
 @pytest.mark.parametrize(
     "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection"],
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "prompt_registry"],
 )
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
@@ -452,4 +452,13 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # not `signals`) inside its own lazy, function-local import. `data`
         # is allowed here specifically for that one narrow store read.
         allowed = allowed | {"data"}
+    if module_name == "prompt_registry":
+        # pilots.prompt_registry wraps prompt_registry.registry.get_registry()
+        # (and prompt_registry.cache / prompt_registry.__main__ for baseline
+        # IDs and specific-version resolution) — the prompt_registry package
+        # is independently confirmed stdlib+settings-only by its own module
+        # docstrings (models/cache/guardrails/signing/store/registry/
+        # __main__), so importing it here is safe and does not pull `signals`
+        # or any AST-forbidden heavy engine onto the API import path.
+        allowed = allowed | {"prompt_registry"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"

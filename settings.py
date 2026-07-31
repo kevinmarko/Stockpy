@@ -3185,6 +3185,50 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── Pilots PWA parity: Prompt Registry writes / Universe sync (2026-07) ──
+    # Two independent, dedicated fail-closed master-switch flags for
+    # api/pilots_api.py's `PUT /prompts/pin` and api/data_api.py's
+    # `POST /data/sync` respectively (see .claude/skills/pilots-endpoint/
+    # SKILL.md §1's "fail-closed command + dedicated master flag" tier).
+    # Both default to False (today's exact behavior — neither endpoint exists
+    # in a reachable form until explicitly enabled) and are DELIBERATELY in
+    # NEITHER gui/env_io.py's ALLOWED_KEYS NOR SECRET_KEYS — hand-set in
+    # .env only, exactly like BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED
+    # / AGENTIC_DISCOVERY_ENABLED above.
+    PROMPT_REGISTRY_WRITES_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "FAIL-CLOSED master switch for api/pilots_api.py's `PUT /prompts/pin` "
+            "(pins/clears a prompt ID's PROMPT_REGISTRY_PINS entry -- changes WHICH "
+            "PROMPT TEXT THE PLATFORM ACTUALLY RUNS, a real behavioral change, not "
+            "merely a config tunable). A DEDICATED flag, not "
+            "STRATEGY_WRITES_ENABLED/GENERAL_SETTINGS_WRITES_ENABLED/etc: pinning a "
+            "prompt version is its own risk class and must not ride in on a sibling "
+            "flag scoped to a different concern. `GET /prompts` and "
+            "`GET /prompts/{id}` are read-only and NOT gated by this flag "
+            "(require_read_token alone, matching every other GET). Sits BEHIND the "
+            "fail-closed FOLLOW_API_TOKEN command-token guard, same tier as "
+            "PUT /strategy/modules. Effective only on the next daemon restart -- "
+            "there is no live setter for .env-sourced config in this codebase."
+        ),
+    )
+    UNIVERSE_SYNC_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "FAIL-CLOSED master switch for api/data_api.py's `POST /data/sync` "
+            "(runs data.portfolio_sync.async_sync_now() -- a live Robinhood/broker "
+            "read plus a DEFAULT_TICKERS .env write). A DEDICATED flag: this is a "
+            "real broker call with a real .env side effect, a materially different "
+            "risk from every fail-open GET on this API. `GET /data/sync-report` "
+            "remains read-only and NOT gated by this flag. Sits behind the "
+            "fail-closed require_write_token guard (STATE_API_TOKEN), matching this "
+            "module's existing PUT /data/universe posture. POST /data/sync never "
+            "forces an interactive-MFA live login (fetch_account_snapshot is always "
+            "called with force=False) -- a headless HTTP handler must never block "
+            "on stdin that will never arrive."
+        ),
+    )
+
     @field_validator("OUTPUT_DIR")
     @classmethod
     def _ensure_output_dir(cls, value: Path) -> Path:

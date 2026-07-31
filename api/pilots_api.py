@@ -3427,3 +3427,163 @@ def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
             "in-process — restart the daemon via POST /daemon/restart to apply."
         ),
     }
+
+
+# =============================================================================
+# Prompt Registry (webapp parity gap G4) — pilots/prompt_registry.py wraps
+# prompt_registry.registry.get_registry(). Self-contained block, appended at
+# the end of the file per this repo's multi-agent collision protocol (other
+# agents append their own new endpoints elsewhere in this same file
+# concurrently on separate branches — appending here avoids a merge conflict
+# on a shared line range near the top of the file).
+#
+# GET /prompts and GET /prompts/{id} are fail-open reads (require_read_token
+# alone, matching every other GET on this API). PUT /prompts/pin changes
+# WHICH PROMPT TEXT THE PLATFORM ACTUALLY RUNS -- a real behavioral change,
+# not a config tunable -- so it sits behind BOTH the fail-closed command
+# token (require_command_token, i.e. FOLLOW_API_TOKEN) AND a NEW dedicated
+# master flag (require_prompt_registry_writes_enabled ->
+# settings.PROMPT_REGISTRY_WRITES_ENABLED), mirroring
+# require_strategy_writes_enabled's exact reasoning. `sync`/`verify`/
+# `rollback`/`diff` are deliberately NOT new endpoints here -- they are
+# already CLI-drivable via POST /jobs {job_type: "command", params:
+# {command: "prompt_registry", subcommand: "sync"|"verify"|"rollback"|"diff"}}
+# (see pilots/commands.py + cli_introspect/command_manifest.json), so building
+# a bespoke HTTP path for them would duplicate existing, tested capability.
+# =============================================================================
+
+from pilots import prompt_registry as prompt_registry_reader  # noqa: E402
+
+
+def require_prompt_registry_writes_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``PUT /prompts/pin`` (pins/clears a
+    prompt ID's entry in ``PROMPT_REGISTRY_PINS`` -> ``.env``). A DEDICATED
+    flag (``settings.PROMPT_REGISTRY_WRITES_ENABLED``), NOT
+    ``STRATEGY_WRITES_ENABLED``/``GENERAL_SETTINGS_WRITES_ENABLED``/any other
+    sibling flag: pinning a prompt version changes WHICH PROMPT TEXT THE
+    PLATFORM ACTUALLY RUNS, its own risk class distinct from a numeric
+    tunable or a signal weight, and must not ride in on a flag scoped to a
+    different concern. Mirrors ``require_strategy_writes_enabled`` exactly —
+    deliberately NOT GUI-writable (absent from BOTH ``gui/env_io.py``'s
+    ``ALLOWED_KEYS`` and ``SECRET_KEYS``), hand-set in ``.env`` only.
+    ``GET /prompts`` and ``GET /prompts/{id}`` are read-only and NOT gated by
+    this flag (``require_read_token`` alone, matching ``GET /strategy/matrix``
+    and every other GET on this API)."""
+    if not settings.PROMPT_REGISTRY_WRITES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Prompt Registry writes are disabled (PROMPT_REGISTRY_WRITES_ENABLED=false).",
+        )
+
+
+class PromptPinRequest(BaseModel):
+    """Body for ``PUT /prompts/pin``. ``version=None`` CLEARS any existing pin
+    for ``prompt_id`` (resolves to remote latest / cache / baseline again on
+    the next daemon restart) rather than pinning it — a single endpoint covers
+    both the Streamlit tab's "Set pin" and "Clear pin" actions. Auto-rollback
+    (pin to the previous cached version) is a client-side computation: fetch
+    ``GET /prompts`` for the cached-version count / current pin, then call
+    this endpoint with the desired older version — no separate rollback
+    endpoint exists here (see this block's module-level comment)."""
+
+    prompt_id: str = Field(..., min_length=1)
+    version: Optional[str] = Field(default=None, min_length=1)
+
+
+@app.get("/prompts", dependencies=[Depends(require_read_token)])
+def get_prompts() -> Dict[str, Any]:
+    """Every known prompt ID with its resolved version, source, pinned state,
+    and cached-version count (ports ``gui/panels/prompt_registry.py``'s
+    "Registered prompts" table). Fail-open read, mirroring every other GET on
+    this API. Never 500s — a disabled/unconstructible registry degrades to
+    ``{"enabled": ..., "prompts": [], "reason": "..."}`` (CONSTRAINT #6)."""
+    return prompt_registry_reader.list_prompts()
+
+
+@app.get("/prompts/{prompt_id}", dependencies=[Depends(require_read_token)])
+def get_prompt(prompt_id: str, version: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+    """The resolved body for one prompt ID — the full resolution chain when
+    ``?version=`` is omitted, or one specific version (a cached version
+    string, or the literal ``"baseline"``) when provided. Fail-open read. The
+    client computes a unified diff between two versions itself from two calls
+    to this endpoint — no server-side diff endpoint exists (the plan's own
+    decision to keep the surface minimal: a diff is trivial to produce
+    client-side once both bodies are in hand).
+
+    ``found: false`` (never a 404 — an unknown prompt ID / version is an
+    honest, structurally-expected outcome on this endpoint, not an error) is
+    returned with a ``reason`` when nothing resolves."""
+    return prompt_registry_reader.get_prompt_body(prompt_id, version=version)
+
+
+@app.put(
+    "/prompts/pin",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_prompt_registry_writes_enabled),
+    ],
+)
+def put_prompts_pin(body: PromptPinRequest) -> Dict[str, Any]:
+    """Pin (or, when ``version`` is omitted, clear the pin for) one prompt ID
+    in ``PROMPT_REGISTRY_PINS`` -> ``.env`` via ``gui.env_io.write_setting``.
+
+    Fail-closed command token (``require_command_token``, i.e.
+    ``FOLLOW_API_TOKEN``) STACKED with the dedicated
+    ``PROMPT_REGISTRY_WRITES_ENABLED`` master flag
+    (``require_prompt_registry_writes_enabled``) — same "auth tier AND
+    feature flag" pattern as ``PUT /strategy/modules``. A pin-set request is
+    verified to actually resolve (manifest / disk cache / the ``"baseline"``
+    keyword) BEFORE being persisted — pinning to a version that doesn't exist
+    anywhere would silently degrade every future resolution for this ID down
+    to the sentinel string, so that returns 422 ``version_not_found`` instead.
+
+    The merge base for the OTHER prompt IDs' pins is read from
+    ``settings.PROMPT_REGISTRY_PINS`` (the live process's view — the same
+    source ``GET /prompts`` reads via the registry singleton it was
+    constructed from) rather than re-reading ``.env`` directly, matching every
+    other multi-key JSON ``.env`` writer in this file. Like every other
+    ``.env`` write here this does NOT patch the running ``settings``
+    singleton, so ``applies`` is always ``"next_daemon_restart"`` and the
+    echoed ``pins``/``version`` reflect the REQUEST BODY merged onto that base
+    — NOT a re-read of ``settings`` after the write (which would return the
+    stale pre-write values and read as a failed write)."""
+    prompt_id = body.prompt_id.strip()
+    if not prompt_id:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_prompt_id", "message": "prompt_id must not be empty."},
+        )
+
+    pins: Dict[str, str] = dict(settings.PROMPT_REGISTRY_PINS or {})
+
+    if body.version is None:
+        pins.pop(prompt_id, None)
+        note = f"Pin cleared for {prompt_id!r}. Saved to .env; effective on next daemon restart."
+    else:
+        resolved = prompt_registry_reader.get_prompt_body(prompt_id, version=body.version)
+        if not resolved.get("found"):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "version_not_found",
+                    "message": (
+                        f"Version {body.version!r} of {prompt_id!r} not found in the "
+                        "manifest, disk cache, or committed baseline."
+                    ),
+                },
+            )
+        pins[prompt_id] = body.version
+        note = (
+            f"Pinned {prompt_id!r} -> {body.version!r}. Saved to .env; effective on "
+            "next daemon restart."
+        )
+
+    env_io.write_setting("PROMPT_REGISTRY_PINS", pins)
+
+    return {
+        "prompt_id": prompt_id,
+        "version": body.version,
+        "pins": pins,
+        "applies": "next_daemon_restart",
+        "note": note,
+    }
