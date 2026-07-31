@@ -188,9 +188,14 @@ class ProcessingEngine:
                 
                 # NaN (never a fabricated 0.0) when downside deviation is zero or
                 # undefined -- an honest "insufficient/zero downside" reading.
-                # signals/sortino_drawdown.py treats NaN as "abstain".
+                # signals/sortino_drawdown.py treats NaN as "abstain". 1e-12
+                # (not an exact `> 0`) guards against a near-zero-but-nonzero
+                # downside_std that's floating-point noise from a near-constant
+                # downside series, not real signal -- the same degenerate-std
+                # convention as risk/etf_transmission.py and
+                # validation/metrics.py::sharpe_ratio.
                 sortino = float('nan')
-                if downside_std > 0:
+                if downside_std >= 1e-12:
                     sortino = (avg_return * 252) / (downside_std * np.sqrt(252))
 
                 # --- C. AROON INDICATOR & OSCILLATOR ---

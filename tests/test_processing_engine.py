@@ -242,6 +242,36 @@ class TestCalculateTechnicalMetrics:
         result = engine.calculate_technical_metrics(raw)
         assert "GOOD" in result
 
+    def test_sortino_near_zero_noise_downside_std_is_nan_not_absurd(self, engine):
+        """Regression for the same degenerate-std bug fixed in
+        validation/metrics.py::sharpe_ratio (PR #501): a smooth exponential
+        price decay produces a daily-return series that's mathematically
+        constant, but pandas' two-pass std() accumulates floating-point
+        rounding noise over many rows, landing near (not bit-identical to)
+        0.0. The old `if downside_std > 0:` check let this slip through and
+        computed an absurd, unbounded Sortino instead of the honest NaN
+        (CONSTRAINT #4)."""
+        n = 300
+        r = 0.0001
+        dates = pd.date_range("2020-01-01", periods=n, freq="B")
+        close = pd.Series([100.0 * (1.0 - r) ** i for i in range(n)], index=dates)
+        df = pd.DataFrame(
+            {
+                "Open": close, "High": close + 0.01, "Low": close - 0.01,
+                "Close": close, "Volume": 500_000.0,
+            },
+            index=dates,
+        )
+        # Confirm the premise: downside std is nonzero (floating noise), not exactly 0.0.
+        downside = df["Close"].pct_change().dropna()
+        downside = downside[downside < 0]
+        assert downside.std() != 0.0
+        assert downside.std() < 1e-12
+
+        result = engine.calculate_technical_metrics({"TICKER": df})
+        sortino = result["TICKER"]["Sortino Ratio"]
+        assert math.isnan(sortino), f"expected NaN, got an absurd value: {sortino}"
+
 
 # ============================================================================
 # calculate_momentum_metrics — lookahead perturbation proof

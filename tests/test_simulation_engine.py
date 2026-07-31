@@ -159,6 +159,26 @@ class TestCostSensitivityCurve:
         result = sim.cost_sensitivity_curve(constant)
         assert result is None  # no crash
 
+    def test_near_zero_noise_std_returns_gracefully(self, caplog):
+        """Regression: a mathematically-constant-but-not-bit-identical series
+        (e.g. an all-zero book after a flat per-day cost deduction, the same
+        shape validation/metrics.py::sharpe_ratio's degenerate-std bug was
+        fixed for) produces a std() that's floating-point noise (~1e-20),
+        not exactly 0.0. The old exact `== 0` check let this slip through and
+        compute an absurd, unbounded Sharpe instead of early-returning."""
+        n = 5000
+        daily_cost = 0.03 * (11.0 / 10000.0)
+        idx = pd.date_range("2024-01-01", periods=n, freq="B")
+        near_flat = pd.Series([0.0] * n, index=idx) - daily_cost
+        # Confirm the premise: std is nonzero (floating noise), not exactly 0.0.
+        assert near_flat.std() != 0.0
+        assert near_flat.std() < 1e-12
+
+        with caplog.at_level(logging.WARNING):
+            result = sim.cost_sensitivity_curve(near_flat)
+        assert result is None
+        assert any("No returns data" in rec.message for rec in caplog.records)
+
     def test_prints_table_and_costs_reduce_returns(self, capsys):
         rets = _synthetic_close().pct_change().dropna()
         sim.cost_sensitivity_curve(rets, cost_bps_range=(0, 50))

@@ -1036,9 +1036,13 @@ def _build_sortino_drawdown_adapter(
     # enough downside observations for a meaningful deviation estimate.
     downside_std = daily_ret.where(daily_ret < 0).rolling(window, min_periods=60).std()
     # NaN (never a fabricated 0.0) when downside deviation is zero/undefined —
-    # mirrors signals/sortino_drawdown.py's "abstain on NaN" contract.
+    # mirrors signals/sortino_drawdown.py's "abstain on NaN" contract. 1e-12
+    # (not an exact `> 0`) guards against a near-zero-but-nonzero downside_std
+    # that's floating-point noise from a near-constant downside window, not
+    # real signal -- the same degenerate-std convention as
+    # risk/etf_transmission.py and validation/metrics.py::sharpe_ratio.
     sortino = (avg_return * 252.0) / (downside_std * np.sqrt(252.0))
-    sortino = sortino.where(downside_std > 0)
+    sortino = sortino.where(downside_std >= 1e-12)
 
     rolling_peak = spy_close.rolling(window, min_periods=1).max()
     drawdown = (spy_close - rolling_peak) / rolling_peak
@@ -1929,7 +1933,8 @@ def _build_signal_replay_adapter(
         window = 504
         avg_return = ret.rolling(window).mean()
         downside_std = ret.where(ret < 0).rolling(window, min_periods=60).std()
-        sortino = ((avg_return * 252.0) / (downside_std * np.sqrt(252.0))).where(downside_std > 0)
+        # Same degenerate-std guard as _build_sortino_drawdown_adapter above.
+        sortino = ((avg_return * 252.0) / (downside_std * np.sqrt(252.0))).where(downside_std >= 1e-12)
         rolling_peak = close.rolling(window, min_periods=1).max()
         drawdown = (close - rolling_peak) / rolling_peak
 
