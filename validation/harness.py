@@ -755,7 +755,11 @@ class StrategyValidationHarness:
         max_dd = compute_max_drawdown(full_returns)
         
         # Calmar
-        calmar = (full_returns.mean() * 252 / max_dd) if max_dd > 0 else np.nan
+        # Same degenerate-value guard as the Sortino calc above -- a near-zero
+        # (but not exactly zero) max_dd is floating-point noise from a
+        # constant/near-constant compounded equity curve, not a real drawdown;
+        # dividing by it would explode into an absurd ratio.
+        calmar = (full_returns.mean() * 252 / max_dd) if max_dd >= 1e-12 else np.nan
         
         # Turnover & Trade metrics
         trade_days = full_returns != 0
@@ -782,7 +786,7 @@ class StrategyValidationHarness:
             sortino = cpcv_results["mean_oos_sortino"]
             calmar = (
                 (cpcv_results["mean_oos_avg_trade_pct"] * 252 / max_dd)
-                if (not np.isnan(max_dd) and max_dd > 0) else np.nan
+                if (not np.isnan(max_dd) and max_dd >= 1e-12) else np.nan
             )
             hit_rate = cpcv_results["mean_oos_hit_rate"]
             avg_trade_pct = cpcv_results["mean_oos_avg_trade_pct"]

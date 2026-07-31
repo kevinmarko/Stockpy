@@ -132,6 +132,26 @@ def test_zscore_winsorize_clips_extreme_outlier():
     assert (z.iloc[:-1].abs() <= WINSOR_LIMIT).all()
 
 
+def test_zscore_winsorize_near_zero_noise_std_is_all_nan():
+    """Regression for the same degenerate-std bug fixed in
+    validation/metrics.py::sharpe_ratio (PR #501): a mathematically-constant
+    cross-section (e.g. every ticker landing on the same fallback value)
+    produces a std() that's floating-point noise (~1e-21 here), not exactly
+    0.0, once the cross-section is large enough. The old `std == 0.0` check
+    let this slip through and fabricated a confident, arbitrary-sign
+    +/-WINSOR_LIMIT z-score from noise instead of the honest all-NaN this
+    function's own docstring promises for a zero-variance cross-section."""
+    n = 500
+    c = 0.03 * (11.0 / 10000.0)
+    values = pd.Series([0.0] * n) - c
+    # Confirm the premise: std is nonzero (floating noise), not exactly 0.0.
+    assert values.std(ddof=1) != 0.0
+    assert values.std(ddof=1) < 1e-12
+
+    z = _zscore_winsorize(values)
+    assert z.isna().all(), f"expected all-NaN, got fabricated z-scores: {z.unique()}"
+
+
 def test_winsorization_outlier_does_not_dominate_composite():
     df = _synthetic_universe(n_good=10, n_rest=39)
     # Inject one extreme outlier in book_to_market for an otherwise-average name.

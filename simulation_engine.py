@@ -71,7 +71,13 @@ def cost_sensitivity_curve(strategy_returns: pd.Series, cost_bps_range: Tuple[fl
     print(f"{'Cost (bps)':<12}{'Annualized Return':<20}{'Sharpe Ratio':<15}")
     print("-" * 50)
     
-    if strategy_returns.empty or strategy_returns.std() == 0:
+    # A degenerate (flat/no-signal) returns series is mathematically constant,
+    # but pandas' two-pass std() accumulates floating-point rounding noise
+    # over many rows, so it lands near (not bit-identical to) 0.0 rather than
+    # exactly 0.0 -- an exact `== 0` check misses that. 1e-12 mirrors the
+    # degenerate-std threshold used by risk/etf_transmission.py and
+    # validation/metrics.py::sharpe_ratio.
+    if strategy_returns.empty or strategy_returns.std() < 1e-12:
         logger.warning("No returns data for sensitivity analysis.")
         return
         
@@ -83,7 +89,7 @@ def cost_sensitivity_curve(strategy_returns: pd.Series, cost_bps_range: Tuple[fl
         
         ann_return = adjusted_returns.mean() * 252
         std_ret = adjusted_returns.std()
-        sharpe = (adjusted_returns.mean() / std_ret * np.sqrt(252)) if std_ret > 0 else np.nan
+        sharpe = (adjusted_returns.mean() / std_ret * np.sqrt(252)) if std_ret >= 1e-12 else np.nan
         
         print(f"{cost_bps:<12.1f}{ann_return * 100:<20.2f}%{sharpe:<15.2f}")
         
