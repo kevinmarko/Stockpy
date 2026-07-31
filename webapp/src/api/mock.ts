@@ -32,6 +32,7 @@ import type {
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
+  BrokerageRefreshResult,
   BrokerageStatus,
   CalibrationSummary,
   CircuitBreakerSummary,
@@ -841,6 +842,26 @@ function writeBrokerageConnected(connected: boolean) {
     else localStorage.removeItem(BROKERAGE_KEY);
   } catch {
     /* ignore quota */
+  }
+}
+
+// ---- Local brokerage-refresh degraded-fetch simulation (localStorage) so
+// the "live login failed, falling back to the last cached snapshot" honest
+// branch (fetch_account_snapshot's own internal stale-cache fallback -- see
+// api/pilots_api.py's refresh_brokerage docstring) is reachable by actually
+// running the app with USE_MOCK=true, not only through a hand-crafted test
+// spy override. No dedicated UI control, same reasoning as
+// OBSERVABILITY_COLD_START_KEY below -- flip it from the browser devtools
+// console instead:
+//   localStorage.setItem("stockpy.mock.brokerage_refresh_degraded", "1")  // next refresh is stale
+//   localStorage.removeItem("stockpy.mock.brokerage_refresh_degraded")    // back to a fresh refresh
+const BROKERAGE_REFRESH_DEGRADED_KEY = "stockpy.mock.brokerage_refresh_degraded";
+
+function readBrokerageRefreshDegraded(): boolean {
+  try {
+    return localStorage.getItem(BROKERAGE_REFRESH_DEGRADED_KEY) === "1";
+  } catch {
+    return false;
   }
 }
 
@@ -4191,6 +4212,34 @@ export const mockApi = {
   async disconnectBrokerage(): Promise<BrokerageDisconnectResult> {
     writeBrokerageConnected(false);
     return delay({ connected: false }, 150);
+  },
+
+  async refreshBrokerage(): Promise<BrokerageRefreshResult> {
+    // Honesty branch: nothing is configured to log back into — mirrors the
+    // real backend's 502 when fetch_account_snapshot has neither a fresh
+    // live fetch nor any cached snapshot to fall back on (e.g. never
+    // connected). A longer delay than the other brokerage calls simulates a
+    // real login round-trip rather than a local cache read.
+    if (!readBrokerageConnected()) {
+      throw new ApiError("Could not refresh the Robinhood account snapshot.", 502);
+    }
+    if (readBrokerageRefreshDegraded()) {
+      // Honesty branch: fetch_account_snapshot's own internal fallback —
+      // the live login failed, so a real (if stale) PREVIOUSLY cached
+      // snapshot was returned instead of a fresh one. fetched_at/age_hours
+      // are deliberately NOT reset to "now", unlike the healthy branch below.
+      return delay({ ...PORTFOLIO, is_stale: true, source: "live" }, 900);
+    }
+    return delay(
+      {
+        ...PORTFOLIO,
+        fetched_at: new Date().toISOString(),
+        is_stale: false,
+        age_hours: 0,
+        source: "live",
+      },
+      900
+    );
   },
 
   async getRealized(): Promise<RealizedPerformance> {

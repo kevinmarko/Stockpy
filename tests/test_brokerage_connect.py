@@ -531,3 +531,167 @@ class TestBrokerageDisconnect:
                 resp = loopback_client.post("/brokerage/disconnect", headers=_auth())
         assert resp.status_code == 200
         assert cleared["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# api/pilots_api.py — POST /brokerage/refresh (three independent gates, a
+# DEDICATED BROKERAGE_REFRESH_ENABLED flag distinct from BROKERAGE_CONNECT_ENABLED
+# -- see require_brokerage_refresh_enabled's own docstring for why)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRefreshSnap:
+    """Minimal AccountSnapshot double: to_dict()/is_stale()/age_hours() is
+    everything _serialize_portfolio touches (mirrors test_pilots_api.py's
+    test_portfolio_serializes_snapshot _FakeSnap)."""
+
+    def __init__(self, *, stale: bool = False, age_hours: float = 0.02, total_equity: float = 1000.0):
+        self._stale = stale
+        self._age_hours = age_hours
+        self._total_equity = total_equity
+
+    def to_dict(self):
+        return {
+            "positions": {},
+            "buying_power": 250.0,
+            "total_equity": self._total_equity,
+            "total_dividends": 3.0,
+            "fetched_at": "2026-07-31T00:00:00+00:00",
+        }
+
+    def is_stale(self):
+        return self._stale
+
+    def age_hours(self):
+        return self._age_hours
+
+
+class TestBrokerageRefreshGating:
+    def test_403_when_flag_disabled(self):
+        with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", False):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = loopback_client.post("/brokerage/refresh", headers=_auth())
+        assert resp.status_code == 403
+
+    def test_403_when_token_unset_even_if_flag_enabled(self):
+        with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+                resp = loopback_client.post("/brokerage/refresh")
+        assert resp.status_code == 403
+
+    def test_401_wrong_token(self):
+        with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = loopback_client.post(
+                    "/brokerage/refresh",
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401
+
+    def test_403_when_not_loopback(self):
+        """The module-level `client` fixture reports host='testclient', not
+        loopback — even with the flag on and the correct token, it must be
+        rejected (mirrors TestBrokerageConnectGating.test_403_when_not_loopback)."""
+        with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = client.post("/brokerage/refresh", headers=_auth())
+        assert resp.status_code == 403
+
+    def test_refresh_not_gated_by_brokerage_connect_enabled(self, monkeypatch):
+        """A DEDICATED flag: connect intake being disabled must not block an
+        on-demand refresh of already-configured credentials."""
+        monkeypatch.setattr(
+            pilots_api.robinhood_portfolio,
+            "fetch_account_snapshot",
+            lambda force=False: _FakeRefreshSnap(),
+        )
+        with mock.patch.object(settings, "BROKERAGE_CONNECT_ENABLED", False):
+            with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
+                with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                    resp = loopback_client.post("/brokerage/refresh", headers=_auth())
+        assert resp.status_code == 200
+
+    def test_brokerage_refresh_enabled_is_not_gui_writable(self):
+        """Mirrors test_automation_writes_enabled_is_not_gui_writable in
+        test_pilots_api.py: a GUI bug must never be able to flip this on."""
+        assert "BROKERAGE_REFRESH_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+        assert "BROKERAGE_REFRESH_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+
+
+class TestBrokerageRefreshHappyPath:
+    def test_refresh_calls_fetch_with_force_true(self, monkeypatch):
+        calls = {}
+
+        def fake_fetch(force=False):
+            calls["force"] = force
+            return _FakeRefreshSnap()
+
+        monkeypatch.setattr(pilots_api.robinhood_portfolio, "fetch_account_snapshot", fake_fetch)
+
+        with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = loopback_client.post("/brokerage/refresh", headers=_auth())
+
+        assert resp.status_code == 200
+        assert calls["force"] is True
+        body = resp.json()
+        assert body["total_equity"] == 1000.0
+        assert body["is_stale"] is False
+        # Honestly relabeled from _serialize_portfolio's hardcoded "db" (that
+        # value is correct for GET /portfolio, which reads HistoricalStore
+        # directly -- this endpoint triggered a live fetch instead).
+        assert body["source"] == "live"
+
+    def test_refresh_surfaces_stale_degraded_snapshot_as_200(self, monkeypatch):
+        """fetch_account_snapshot itself already degrades a live-fetch
+        failure to the last cached snapshot when one exists -- that's still a
+        real (if stale) snapshot, not an endpoint-level failure."""
+        monkeypatch.setattr(
+            pilots_api.robinhood_portfolio,
+            "fetch_account_snapshot",
+            lambda force=False: _FakeRefreshSnap(stale=True, age_hours=48.0),
+        )
+
+        with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = loopback_client.post("/brokerage/refresh", headers=_auth())
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["is_stale"] is True
+        assert body["age_hours"] == 48.0
+        assert body["source"] == "live"
+
+    def test_refresh_failure_returns_clean_502(self, monkeypatch):
+        """Plain-string detail (mirrors /brokerage/connect's plain-401 posture):
+        no request body / form field exists here for a frontend to highlight,
+        so a structured {error, message} dict would only round-trip through
+        client.ts's `String(body.detail)` as "[object Object]"."""
+        def boom(force=False):
+            raise RuntimeError("no cache and Robinhood login failed: bad password xyz")
+
+        monkeypatch.setattr(pilots_api.robinhood_portfolio, "fetch_account_snapshot", boom)
+
+        with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = loopback_client.post("/brokerage/refresh", headers=_auth())
+
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert isinstance(detail, str)
+        # Never leaks the underlying exception text (which could embed
+        # credential-adjacent detail) — logged server-side only.
+        assert "bad password" not in detail
+        assert "xyz" not in detail
+
+    def test_refresh_never_logs_token(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            pilots_api.robinhood_portfolio,
+            "fetch_account_snapshot",
+            lambda force=False: _FakeRefreshSnap(),
+        )
+        with caplog.at_level(logging.DEBUG):
+            with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
+                with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                    loopback_client.post("/brokerage/refresh", headers=_auth())
+        assert _CMD_TOKEN not in caplog.text

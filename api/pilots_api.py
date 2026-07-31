@@ -71,7 +71,11 @@ AI-capability writes cannot ride in on either of the other two), and
 ``require_macro_gate_writes_enabled`` (``PUT /observability/macro-gate`` —
 flips ``MACRO_REGIME_GATE_ENABLED``, the recession/credit-event BUY-veto
 bypass, to ``.env``; its own flag so this genuine risk-management kill switch
-cannot ride in on any sibling flag). ``GET /strategy/matrix``, ``GET
+cannot ride in on any sibling flag), and ``require_brokerage_refresh_enabled``
+(``POST /brokerage/refresh`` — forces a live Robinhood re-login + snapshot
+fetch bypassing the daily cache; its own flag, distinct from
+``require_brokerage_connect_enabled``, since refresh re-uses already-configured
+credentials rather than intaking new ones). ``GET /strategy/matrix``, ``GET
 /llm/status``, and ``GET /observability/summary`` are read-only
 (``require_read_token``).
 
@@ -289,6 +293,24 @@ def require_brokerage_connect_enabled() -> None:
         raise HTTPException(
             status_code=403,
             detail="Brokerage connect is disabled (BROKERAGE_CONNECT_ENABLED=false).",
+        )
+
+
+def require_brokerage_refresh_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``POST /brokerage/refresh``. A
+    DEDICATED flag, NOT ``require_brokerage_connect_enabled``: that one scopes
+    credential INTAKE (verify + persist new username/password, or clear them on
+    disconnect) — refresh receives no credential material and instead re-uses
+    whatever is already configured, but it is still a real, live login against
+    the operator's actual brokerage account and must not ride in on a flag
+    named for a different action. ``settings.BROKERAGE_REFRESH_ENABLED`` is
+    deliberately NOT GUI-writable (gui/env_io.py) — it must be hand-set in
+    ``.env``. ``/brokerage/status`` and ``GET /portfolio`` are read-only and NOT
+    gated by this flag."""
+    if not settings.BROKERAGE_REFRESH_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Brokerage refresh is disabled (BROKERAGE_REFRESH_ENABLED=false).",
         )
 
 
@@ -2405,6 +2427,69 @@ def disconnect_brokerage() -> Dict[str, Any]:
         logger.warning("pilots_api: brokerage logout failed (ignored): %s", exc)
     brokerage_credentials.clear_rh_credentials()
     return {"connected": False}
+
+
+@app.post(
+    "/brokerage/refresh",
+    dependencies=[
+        Depends(require_brokerage_refresh_enabled),
+        Depends(require_command_token),
+        Depends(require_loopback),
+    ],
+)
+def refresh_brokerage() -> Any:
+    """Force an on-demand Robinhood re-login + account-snapshot refresh,
+    bypassing the daily cache — the webapp/API equivalent of
+    ``python3 main.py --refresh-account`` and the Streamlit GUI's "Force fresh
+    login (bypass cache)" checkbox on the Live Inventory / Paper Monitor tabs.
+
+    Calls ``data.robinhood_portfolio.fetch_account_snapshot(force=True)``,
+    which unconditionally re-authenticates against Robinhood and overrides
+    ``ROBINHOOD_AUTO_REFRESH_ENABLED`` for this one fetch (see that function's
+    own docstring), then writes both the JSON cache and the DB. Gated by three
+    independent controls (see the dependencies above): a DEDICATED
+    ``BROKERAGE_REFRESH_ENABLED`` flag (not ``BROKERAGE_CONNECT_ENABLED`` — see
+    ``require_brokerage_refresh_enabled``), the fail-closed follow command
+    token, and the same loopback-only check as ``/brokerage/connect`` and
+    ``/brokerage/disconnect``.
+
+    ``fetch_account_snapshot`` itself already degrades a live-fetch failure to
+    the last cached snapshot when one exists (never a crash) — that case
+    returns here as a normal 200 (a real, if stale, snapshot), same as
+    ``GET /portfolio``'s ``is_stale``/``age_hours`` fields already surface.
+    This endpoint only raises when NO snapshot — fresh or cached — is
+    available at all (e.g. missing/invalid credentials on a first-ever
+    refresh): a plain-string 502, same posture as ``/brokerage/connect``'s
+    plain-401 (no structured ``{error, message}`` tag — there is no request
+    body / form field for a frontend to highlight here, just a pass/fail
+    live call, so a dict detail would only round-trip through client.ts's
+    ``String(body.detail)`` as ``"[object Object]"``). The underlying
+    exception is logged server-side only, never echoed to the client
+    (CONSTRAINT #3: never leak which credential was wrong)."""
+    try:
+        snapshot = robinhood_portfolio.fetch_account_snapshot(force=True)
+    except Exception as exc:  # noqa: BLE001 - translate to a clean 502
+        logger.error("pilots_api: brokerage refresh failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not refresh the Robinhood account snapshot.",
+        ) from exc
+    try:
+        payload = _serialize_portfolio(snapshot)
+    except Exception as exc:  # noqa: BLE001 - defensive: malformed snapshot
+        logger.warning("pilots_api: refresh serialization failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Snapshot refreshed but could not be read back.",
+        ) from exc
+    # _serialize_portfolio hardcodes "db" (correct for GET /portfolio, which
+    # reads HistoricalStore directly) — this endpoint triggered a live fetch,
+    # so relabel honestly. Still "live" even on the internal stale-cache
+    # fallback inside fetch_account_snapshot: `is_stale`/`age_hours` above
+    # already surface that degradation; the DATA didn't come from this
+    # request reading the DB, it came from what the live-fetch call returned.
+    payload["source"] = "live"
+    return payload
 
 
 # ---------------------------------------------------------------------------

@@ -49,13 +49,26 @@ def render_paper_monitor() -> None:
     )
 
     fetch = st.button("🔄 Fetch Robinhood snapshot (read-only)")
+    force_login = st.checkbox(
+        "🔐 Force fresh login (bypass cache)",
+        key="paper_monitor_force_rh_login",
+        help=(
+            "Bypass the daily cache and re-authenticate against Robinhood right "
+            "now, even if a fresh snapshot is already cached — equivalent to "
+            "`python3 main.py --refresh-account`. Overrides "
+            "ROBINHOOD_AUTO_REFRESH_ENABLED=False for this one fetch."
+        ),
+    )
     snapshot_obj = st.session_state.get("rh_snapshot")
     if fetch:
         try:
-            with busy("Fetching Robinhood snapshot…"):
+            _busy_msg = (
+                "Logging in to Robinhood…" if force_login else "Fetching Robinhood snapshot…"
+            )
+            with busy(_busy_msg):
                 from data.robinhood_portfolio import fetch_account_snapshot
 
-                snapshot_obj = fetch_account_snapshot()
+                snapshot_obj = fetch_account_snapshot(force=force_login)
                 st.session_state["rh_snapshot"] = snapshot_obj
         except Exception as exc:
             st.error(f"Robinhood fetch failed: {exc}")

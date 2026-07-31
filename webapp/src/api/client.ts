@@ -24,6 +24,7 @@ import type {
   BrokerageConnectRequest,
   BrokerageConnectResult,
   BrokerageDisconnectResult,
+  BrokerageRefreshResult,
   BrokerageStatus,
   CalibrationSummary,
   ControlStatus,
@@ -556,6 +557,11 @@ const liveApi = {
     }),
   disconnectBrokerage: () =>
     http<BrokerageDisconnectResult>("/brokerage/disconnect", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  refreshBrokerage: () =>
+    http<BrokerageRefreshResult>("/brokerage/refresh", {
       method: "POST",
       body: JSON.stringify({}),
     }),
