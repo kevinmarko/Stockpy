@@ -500,6 +500,21 @@ happen.
   no ETF-holdings source at all: `_build_context_extras` builds a minimal
   `universe_df` with no holdings input, and `engine/advisory.py` is not
   routed through `size_position()` or `apply_portfolio_gross_cap()`.
+- `gui/panels/settings_manager.py` — all nine settings (`ETF_HOLDINGS_*`,
+  `ETF_TRANSMISSION_*`) are GUI-writable via the standard `_SETTINGS_LAYOUT`
+  bool/int/number/text/tickers widgets, allowlisted in
+  `gui/env_io.py::ALLOWED_KEYS`.
+- `gui/panels/observability.py::_render_observability_etf_transmission` — a
+  read-only Mission Control sub-section showing each of the three master
+  switches' ON/OFF state plus a per-symbol table (`ETF_Ownership_Pct` /
+  `ETF_Comovement_R2` / `ETF_Primary_Wrapper` / `ETF_Transmission_Multiplier`)
+  sourced from `state_snapshot.json`, sorted so the most heavily-derated
+  names surface first. Row extraction/sorting is a pure, Streamlit-free
+  helper (`gui.observability_panel_helpers.etf_transmission_rows`,
+  unit-tested in `tests/test_observability_panel.py`) — the panel itself
+  never writes anything and degrades to an info message (never a table of
+  fabricated nulls) when the measurement gate is off or no symbol has
+  coverage yet.
 
 ## Not wired into
 
