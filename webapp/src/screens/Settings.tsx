@@ -10,6 +10,7 @@ import type {
   ProgressState,
   StrategyMatrix,
   TunablesResponse,
+  PromptListResponse,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
@@ -140,6 +141,8 @@ export function Settings() {
       <SignalModulesLink />
 
       <TunablesLink />
+
+      <PromptRegistryLink />
 
       <ActiveFollowsSection />
 
@@ -486,6 +489,41 @@ function TunablesLink() {
             {fieldCount == null
               ? "Sizing, forecasting & data settings"
               : `${fieldCount} tunables · ${groupCount} groups`}
+          </div>
+        </div>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
+      </div>
+    </Link>
+  );
+}
+
+/**
+ * Entry point to the Prompt Registry screen — a `.env`-write-adjacent surface
+ * (`PUT /prompts/pin` persists PROMPT_REGISTRY_PINS), so it lives under
+ * /settings alongside every other write surface, not in top-level nav. Shows
+ * a live "N prompts · M pinned" summary and links to the full table/diff/pin
+ * editor. NOTE: the actual `<Route path="/settings/prompts">` is added by
+ * Agent A's integration pass (see App.tsx's sole-editor convention) — this
+ * card is wired ahead of that route landing, matching the pattern every other
+ * *Link component here already uses.
+ */
+function PromptRegistryLink() {
+  const { data } = useApi<PromptListResponse>(() => api.getPrompts(), []);
+  const count = data?.prompts.length ?? null;
+  const pinnedCount = data?.prompts.filter((p) => p.pinned_version != null).length ?? null;
+  return (
+    <Link
+      to="/settings/prompts"
+      className="card card-pad"
+      style={{ display: "block", textDecoration: "none", marginTop: "var(--s-4)" }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Prompt Registry</div>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
+            {count == null
+              ? "Version control for AI-facing instructions"
+              : `${count} prompts · ${pinnedCount} pinned`}
           </div>
         </div>
         <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
