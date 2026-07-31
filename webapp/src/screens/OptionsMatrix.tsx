@@ -15,7 +15,7 @@ import { TabGuide } from "../components/TabGuide";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
-import { realizableTheta } from "../optionsHonesty";
+import { realizableTheta, effectiveIvr } from "../optionsHonesty";
 import {
   computePayoff,
   computeExpectedMove,
@@ -109,6 +109,7 @@ function PremiumLabel({ d }: { d: OptionsDirective }) {
  * a real `<button>` gets for free, mirroring TradingHub.tsx's HubCardRow.
  */
 function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void }) {
+  const ivr = effectiveIvr(d);
   return (
     <div
       className="glass-card card-pad"
@@ -165,7 +166,19 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
       >
         <PremiumLabel d={d} />
         <span style={{ fontSize: "var(--t-body)", color: theme.textSecondary }}>
-          IVR <span className="num">{fmtNum(d.IVR_Proxy ?? null, 0)}</span>
+          IVR <span className="num">{fmtNum(ivr.value, 0)}</span>
+          {ivr.value != null && (
+            <span
+              style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginLeft: 3 }}
+              title={
+                ivr.isTrue
+                  ? "Real options-chain-derived 30-day ATM IV rank."
+                  : "Realized-volatility proxy — no options chain fetched for this symbol; not true implied-vol rank."
+              }
+            >
+              {ivr.isTrue ? "chain" : "proxy"}
+            </span>
+          )}
         </span>
         <span style={{ fontSize: "var(--t-body)", color: theme.textSecondary }}>{d.Trend_Bias ?? "—"}</span>
         {isFlagged(d) && (
@@ -182,6 +195,7 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
 
 function DetailSheet({ d, dte, asOf, onClose }: { d: OptionsDirective; dte: number; asOf?: string | null; onClose: () => void }) {
   const theta = realizableTheta(d);
+  const ivr = effectiveIvr(d);
   const legs = Array.isArray(d.Legs) ? d.Legs : [];
   const spotPrice = d.Price ?? 0;
   const sigma = d.Sigma_GARCH ?? 0;
@@ -256,9 +270,11 @@ function DetailSheet({ d, dte, asOf, onClose }: { d: OptionsDirective; dte: numb
           </div>
         </div>
         <div className="options-vol-item" style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>IVR Proxy</div>
+          <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>
+            {ivr.isTrue ? "IVR (chain)" : "IVR Proxy"}
+          </div>
           <div className="num" style={{ fontSize: "var(--t-input)", fontWeight: 700 }}>
-            {fmtNum(d.IVR_Proxy ?? null, 0)}
+            {fmtNum(ivr.value, 0)}
           </div>
         </div>
       </div>
@@ -810,6 +826,7 @@ export function OptionsMatrix() {
 
   const cleanCount = directives.filter((d) => d.Integrity_OK === true).length;
   const flaggedCount = directives.length - cleanCount;
+  const trueIvrCount = directives.filter((d) => effectiveIvr(d).isTrue).length;
 
   const visible = useMemo(() => {
     const activeFilter = FILTERS.find((f) => f.key === filter)!;
@@ -818,7 +835,7 @@ export function OptionsMatrix() {
     );
     const sorted = [...rows];
     if (sort === "premium") sorted.sort(byNum((d) => d.Net_Premium));
-    else if (sort === "ivr") sorted.sort(byNum((d) => d.IVR_Proxy));
+    else if (sort === "ivr") sorted.sort(byNum((d) => effectiveIvr(d).value));
     else if (sort === "sigma") sorted.sort(byNum((d) => d.Sigma_GARCH));
     else sorted.sort((a, b) => a.Symbol.localeCompare(b.Symbol));
     return sorted;
@@ -884,14 +901,30 @@ export function OptionsMatrix() {
             <span className="chip">{data.market_regime ?? "—"}</span>
           </div>
 
-          {/* Persistent honesty banner */}
-          <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
-            <span>
-              <strong>IVR here is a realized-volatility rank</strong> (IVR_Proxy) — no options
-              chain is fetched, so this is <em>not</em> true implied-vol rank. Advisory only; no
-              orders are placed.
-            </span>
-          </Notice>
+          {/* Persistent honesty banner — reflects what THIS cycle's data actually
+              is, not a static claim. When settings.OPTIONS_TRUE_IVR_ENABLED is on
+              and at least one symbol resolved a real options-chain-derived IV
+              rank, say so — but the fallback is per-row (see `effectiveIvr`), so
+              even here the banner names the fallback explicitly rather than
+              implying every row is chain-derived. */}
+          {trueIvrCount === 0 ? (
+            <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
+              <span>
+                <strong>IVR here is a realized-volatility rank</strong> (IVR_Proxy) — no options
+                chain is fetched, so this is <em>not</em> true implied-vol rank. Advisory only; no
+                orders are placed.
+              </span>
+            </Notice>
+          ) : (
+            <Notice variant="info" style={{ marginBottom: "var(--s-3)" }}>
+              <span>
+                <strong>IVR</strong> is a real, options-chain-derived 30-day ATM IV rank for{" "}
+                {trueIvrCount} of {directives.length} symbols this cycle (marked "chain" below),
+                falling back to a realized-volatility proxy (marked "proxy") where chain or
+                history data wasn't available. Advisory only; no orders are placed.
+              </span>
+            </Notice>
+          )}
 
           {/* Summary Metrics Banner */}
           <div className="glass-panel" style={{ display: "flex", gap: "var(--s-4)", padding: "var(--s-3) var(--s-4)", borderRadius: "var(--r-md)", marginBottom: "var(--s-4)", alignItems: "center" }}>
