@@ -38,23 +38,45 @@ def _constant_return_strategy_fn(daily_return=0.001, turnover=0.02):
     return strategy_fn
 
 
+def _wobbling_return_strategy_fn(daily_return=0.001, turnover=0.02, wobble=0.0001):
+    """Like ``_constant_return_strategy_fn`` but with a tiny deterministic
+    +/-wobble around the constant mean, so the series carries genuine
+    (non-degenerate) variance. Sharpe/Sortino need real dispersion to be
+    well-defined -- an exactly-flat series correctly returns NaN under
+    ``validation.metrics.sharpe_ratio``'s degenerate-std guard (a near-zero
+    std that's pure floating-point noise, not signal, must never be divided
+    into an absurd ratio -- CONSTRAINT #4), so tests that need a comparable,
+    orderable Sharpe use this fixture instead."""
+    def strategy_fn(X_train, y_train, X_test, y_test):
+        def _series(index):
+            sign = np.resize([1.0, -1.0], len(index))
+            return pd.Series(daily_return + sign * wobble, index=index)
+        return [{
+            "params": "wobbling",
+            "train_returns": _series(y_train.index),
+            "test_returns": _series(y_test.index),
+            "turnover": turnover,
+        }]
+    return strategy_fn
+
+
 class TestCostModelFn:
     def test_none_reproduces_gross_returns(self):
         X, y = _synthetic_xy()
-        strategy_fn = _constant_return_strategy_fn(daily_return=0.002, turnover=0.02)
+        strategy_fn = _wobbling_return_strategy_fn(daily_return=0.002, turnover=0.02, wobble=0.0002)
         result = run_cpcv_evaluation(strategy_fn, X, y, n_splits=5, n_test_splits=2)
-        # A constant +0.002/day return with zero volatility has an
-        # (effectively) infinite/very large Sharpe -- what matters here is that
-        # it is POSITIVE and large, since no cost was subtracted.
-        assert result["mean_oos_sharpe"] > 0
+        # A +0.002/day return with only a tiny wobble around it has a large
+        # (but finite, well-defined) Sharpe -- what matters here is that it's
+        # POSITIVE and large, since no cost was subtracted.
+        assert result["mean_oos_sharpe"] > 50
 
     def test_cost_model_fn_reduces_returns_before_any_stat_is_computed(self):
-        """A cost model draining more than the constant daily return must flip
-        the OOS return series (and therefore Sharpe/hit-rate) negative --
-        proof the adjustment happens BEFORE Sharpe/PBO/DSR/drawdown, not after."""
+        """A cost model draining more than the daily return must flip the OOS
+        return series (and therefore Sharpe/hit-rate) negative -- proof the
+        adjustment happens BEFORE Sharpe/PBO/DSR/drawdown, not after."""
         X, y = _synthetic_xy()
         daily_return = 0.0005
-        strategy_fn = _constant_return_strategy_fn(daily_return=daily_return, turnover=0.02)
+        strategy_fn = _wobbling_return_strategy_fn(daily_return=daily_return, turnover=0.02, wobble=0.00005)
 
         def draining_cost_model(returns: pd.Series, turnover: float) -> pd.Series:
             # Drains far more than the constant daily return -> net returns go negative.

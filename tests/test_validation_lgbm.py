@@ -143,8 +143,17 @@ def test_lgbm_validation_harness_runs_end_to_end(tmp_path):
         strategy_name="LGBM_CrossSectional_Validation",
     )
 
-    # Structural smoke-test: report fields are populated
-    assert not np.isnan(report.sharpe), "Sharpe is NaN"
+    # Structural smoke-test: report fields are populated. NOTE: report.sharpe
+    # is honestly NaN here, not a bug in the harness -- this fixture's
+    # noise-only features (identical every call, unrelated to price_df/
+    # X_panel/y_panel) make the ranker's predicted scores collapse to a
+    # single constant value for this tiny 10-ticker sample, so `top` and
+    # `bot` both resolve to the full universe and the long-top/short-bottom
+    # book trades exactly zero every day. validation.metrics.sharpe_ratio
+    # correctly refuses to divide by that near-zero (floating-point-noise)
+    # std rather than fabricate an absurd ratio (CONSTRAINT #4) -- see the
+    # regression test in tests/test_metrics_sharpe_ratio.py.
+    assert np.isnan(report.sharpe), "Sharpe should be honestly NaN for this degenerate zero-signal fixture"
     assert not np.isnan(report.max_dd), "MaxDD is NaN"
     assert not np.isnan(report.pbo), "PBO is NaN"
     assert not np.isnan(report.dsr), "DSR is NaN"
