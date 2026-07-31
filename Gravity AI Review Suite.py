@@ -2844,21 +2844,23 @@ class GravityAIAuditor:
             }
 
             # ── (g) CompositeProvider selects yfinance when no Alpaca keys ────
+            # NOTE: provider selection reads settings.settings (the pydantic
+            # singleton, populated once from .env at import time), never
+            # os.environ directly -- see data/market_data.py's
+            # _select_quote_provider() and the 2026-07 os.environ ->
+            # settings.settings fix documented in
+            # tests/test_market_data.py::TestCompositeProviderSelection.
+            # Patching os.environ here would be a no-op against the
+            # already-constructed settings singleton, so we patch
+            # settings.settings directly, mirroring that test file exactly.
             import os as _os
-            saved_provider = _os.environ.pop("MARKET_DATA_PROVIDER", None)
-            saved_key = _os.environ.pop("ALPACA_API_KEY", None)
-            saved_secret = _os.environ.pop("ALPACA_SECRET_KEY", None)
-            try:
+            with patch.multiple(
+                "settings.settings",
+                MARKET_DATA_PROVIDER=None, ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+            ):
                 cp_no_keys = CompositeProvider.__new__(CompositeProvider)
                 cp_no_keys._quote_provider = cp_no_keys._select_quote_provider()  # type: ignore[attr-defined]
                 selected_no_keys = type(cp_no_keys._quote_provider).__name__
-            finally:
-                if saved_provider is not None:
-                    _os.environ["MARKET_DATA_PROVIDER"] = saved_provider
-                if saved_key is not None:
-                    _os.environ["ALPACA_API_KEY"] = saved_key
-                if saved_secret is not None:
-                    _os.environ["ALPACA_SECRET_KEY"] = saved_secret
             yf_selected = selected_no_keys == "YFinanceProvider"
             audit["checks"]["composite_selects_yfinance_no_keys"] = {
                 "status": "PASSED" if yf_selected else "FAILED",
@@ -2866,13 +2868,16 @@ class GravityAIAuditor:
             }
 
             # ── (h) CompositeProvider selects Alpaca when both keys present ───
-            with patch.dict(_os.environ, {
-                "ALPACA_API_KEY": "test_key",
-                "ALPACA_SECRET_KEY": "test_secret",
-            }):
-                _os.environ.pop("MARKET_DATA_PROVIDER", None)
-                # Patch StockHistoricalDataClient so alpaca-py doesn't try to connect
-                with patch("alpaca.data.historical.stock.StockHistoricalDataClient"):
+            with patch.multiple(
+                "settings.settings",
+                MARKET_DATA_PROVIDER=None, ALPACA_API_KEY="test_key", ALPACA_SECRET_KEY="test_secret",
+            ):
+                # Patch StockHistoricalDataClient so alpaca-py doesn't try to connect.
+                # Must patch the name as looked up by AlpacaProvider._build_client()'s
+                # `from alpaca.data.historical import StockHistoricalDataClient` --
+                # i.e. the attribute on alpaca.data.historical itself, not on the
+                # (possibly different) submodule it was originally defined in.
+                with patch("alpaca.data.historical.StockHistoricalDataClient"):
                     cp_with_keys = CompositeProvider.__new__(CompositeProvider)
                     cp_with_keys._quote_provider = cp_with_keys._select_quote_provider()  # type: ignore[attr-defined]
                     selected_with_keys = type(cp_with_keys._quote_provider).__name__
@@ -7371,15 +7376,26 @@ class GravityAIAuditor:
             all_pass = all_pass and c6
 
             # Check 7: rotation round-trip (sandboxed)
+            # `now=` must be pinned to the snapshot's own embedded timestamp:
+            # rotate_snapshot() prunes anything older than max_age_days (30)
+            # relative to `now` (real wall-clock when omitted) in the SAME
+            # call that writes the file. A hardcoded snapshot timestamp with
+            # no `now=` pin is a time bomb -- once real wall-clock drifts more
+            # than 30 days past that hardcoded date, rotate_snapshot deletes
+            # the file it just wrote as part of its own retention pruning,
+            # before this check ever inspects it.
             with tempfile.TemporaryDirectory() as td:
                 tdp = Path(td)
+                snap_ts = "2026-06-26T12:00:00+00:00"
                 snap = {
-                    "timestamp": "2026-06-26T12:00:00+00:00",
+                    "timestamp": snap_ts,
                     "market_regime": "RISK ON",
                     "holdings": [],
                     "signals": [],
                 }
-                written = rotate_snapshot(snap, tdp)
+                written = rotate_snapshot(
+                    snap, tdp, now=datetime.fromisoformat(snap_ts)
+                )
                 listed = list_rotated_snapshots(tdp)
                 c7 = (
                     written is not None
@@ -11503,15 +11519,25 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c5
 
-            # ── Check 6: preflight check registered + always warning-only ──
+            # ── Check 6: preflight check registered + always non-blocking ───
+            # check_calibration_drift() is "warning-only" in the sense that it
+            # never gates go-live (CheckResult.passed is always True) -- NOT
+            # in the sense that CheckResult.warning is always True. Its own
+            # source (scripts/preflight_check.py) only sets warning=True on
+            # the "insufficient history" and "drift detected" branches; a
+            # real deployment with real, healthy (non-drifting) tracking
+            # history in output/decision_log.jsonl legitimately returns
+            # warning=False (a clean, unremarkable PASS). Asserting
+            # warning is True unconditionally only ever held by coincidence
+            # on a machine with no tracking history yet.
             from scripts.preflight_check import ALL_CHECKS as _ALL_CHECKS, check_calibration_drift as _check_cal_drift
             _registered = _check_cal_drift in _ALL_CHECKS
             _cal_result = _check_cal_drift()
-            c6 = _registered and _cal_result.warning is True and _cal_result.passed is True
+            c6 = _registered and _cal_result.passed is True
             audit["checks"].append({
                 "check": (
                     "check_calibration_drift registered in ALL_CHECKS and is "
-                    "always warning-only (never blocking)"
+                    "always non-blocking (CheckResult.passed is always True)"
                 ),
                 "passed": c6,
                 "detail": {
@@ -13521,13 +13547,22 @@ class GravityAIAuditor:
             all_pass = all_pass and c1
 
             # ── Check 2: settings.GRAVITY_AI_RUNNER_ENABLED defaults False ──
+            # Asserts the pydantic FIELD's declared default, not a live
+            # Settings() instance -- BaseSettings reads the real .env at
+            # construction time regardless of when/where it's instantiated,
+            # so a "fresh" Settings() reflects whatever the operator has
+            # opted into in their own .env (e.g. deliberately turning this on
+            # to exercise the separate, LLM-calling Tier 9 Scope 2 runner).
+            # That's an operator's live configuration choice, not a change to
+            # the code's shipped default, and this check must not conflate
+            # the two.
             from settings import Settings as _Settings
-            _fresh = _Settings()
-            c2 = getattr(_fresh, "GRAVITY_AI_RUNNER_ENABLED", True) is False
+            _default_field = _Settings.model_fields["GRAVITY_AI_RUNNER_ENABLED"].default
+            c2 = _default_field is False
             audit["checks"].append({
                 "check": "settings.GRAVITY_AI_RUNNER_ENABLED default is False (opt-in)",
                 "passed": bool(c2),
-                "detail": f"default={getattr(_fresh, 'GRAVITY_AI_RUNNER_ENABLED', '<missing>')}",
+                "detail": f"default={_default_field}",
             })
             all_pass = all_pass and c2
 
@@ -13582,7 +13617,15 @@ class GravityAIAuditor:
             all_pass = all_pass and c5
 
             # ── Check 6: run_all() disabled by default → no provider call ───
-            report = _runner.run_all()
+            # run_all() reads settings.settings.GRAVITY_AI_RUNNER_ENABLED (the
+            # live singleton) with no override param of its own, so this must
+            # explicitly force the switch off to test the "disabled" behavior
+            # deterministically -- an ambient run_all() call would instead
+            # reflect whatever the operator's real .env currently has, same
+            # class of bug as check 2 above.
+            from unittest.mock import patch as _patch_gr
+            with _patch_gr("settings.settings.GRAVITY_AI_RUNNER_ENABLED", False):
+                report = _runner.run_all()
             c6 = (
                 isinstance(report, _runner.RunReport)
                 and report.enabled is False
