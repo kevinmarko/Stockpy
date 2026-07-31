@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type {
+  AiDisagreementRow,
+  AiDisagreementsResponse,
   CurvePoint,
   GravityAiAuditStep,
   GravityAuditStatus,
@@ -276,6 +278,97 @@ function AiAuditStepTable({ steps }: { steps: GravityAiAuditStep[] }) {
   );
 }
 
+/**
+ * AiDisagreementSection — G15: durable per-symbol Claude-vs-Gemini verdict
+ * comparison (GET /data/ai/disagreements). Distinct from the AI Gravity
+ * Audit card's `disagreements` chip above (a durably-computed AGGREGATE
+ * COUNT from the STRUCTURAL Gravity audit's own Claude/Gemini cross-check)
+ * -- this is a per-symbol table sourced from REAL analyst-note/chart-pattern
+ * calls, a different question entirely ("where do the two AI features
+ * disagree on a symbol's trend", not "did the audit steps disagree").
+ *
+ * This is the durable equivalent of the legacy Streamlit AI Insights tab's
+ * "Aggregate Claude vs Gemini disagreement" table, which is built from two
+ * st.session_state mirrors and has no cross-session durable form -- see
+ * api/data_api.py::get_ai_disagreements's docstring for the full honesty
+ * note. `claude_verdict`/`gemini_verdict` are `null` -- never fabricated --
+ * whenever that side has never been generated for the symbol.
+ */
+function DisagreementRowView({ row }: { row: AiDisagreementRow }) {
+  return (
+    <tr data-testid="ai-disagreement-row">
+      <td style={{ fontWeight: 700 }}>
+        {row.symbol}
+        {row.disagreement && (
+          <span className="badge badge-warn" style={{ marginLeft: 6 }}>
+            ⚠ disagree
+          </span>
+        )}
+      </td>
+      <td style={{ color: theme.textMuted }}>{row.advisory_action}</td>
+      <td>{row.claude_verdict ?? "—"}</td>
+      <td>{row.gemini_verdict ?? "—"}</td>
+    </tr>
+  );
+}
+
+function AiDisagreementSection() {
+  const { data, loading, error, status, reload } = useApi<AiDisagreementsResponse>(
+    () => api.getAiDisagreements(),
+    []
+  );
+
+  return (
+    <section style={{ marginTop: "var(--s-6)" }}>
+      <h2 style={{ fontSize: "var(--t-subhead)", fontWeight: 700, margin: "0 0 var(--s-1)" }}>
+        🔍 AI Verdict Disagreements
+      </h2>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", lineHeight: 1.5, marginBottom: "var(--s-3)" }}>
+        Per-symbol Claude analyst note vs. Gemini chart-pattern read, from
+        cached results in <code>output/llm_commentary_cache.json</code> — a
+        durable record, not a per-session snapshot. Generate notes/reads from
+        a symbol's detail page to populate this table.
+      </p>
+
+      {loading && <Loading lines={3} />}
+      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+      {!loading && !error && data && (
+        data.rows.length === 0 ? (
+          <div className="empty" style={{ padding: "var(--s-5)" }}>
+            {data.reason ?? "No cached Claude/Gemini verdicts yet."}
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-3)" }}>
+              <span className="chip">{data.summary.total_symbols} symbols</span>
+              <span className="chip">{data.summary.both_present} with both verdicts</span>
+              <span className="chip">{data.summary.agreements} agree</span>
+              <span className="chip">{data.summary.disagreements} disagree</span>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <Table style={{ fontSize: "var(--t-caption)", minWidth: 420 }}>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Action</th>
+                    <th>Claude</th>
+                    <th>Gemini</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.rows.map((r) => (
+                    <DisagreementRowView key={r.symbol} row={r} />
+                  ))}
+                </tbody>
+              </Table>
+            </div>
+          </>
+        )
+      )}
+    </section>
+  );
+}
+
 function GravityAuditSection() {
   const { data, loading, error, status, reload } = useApi<GravityAuditStatus>(
     () => api.getGravityAuditStatus(),
@@ -527,6 +620,7 @@ export function StrategyHealth() {
       </p>
 
       <GravityAuditSection />
+      <AiDisagreementSection />
     </div>
   );
 }

@@ -138,6 +138,13 @@ import type {
   ForecastResult,
   SentimentDynamics,
   SentimentHistory,
+  SizingCapAuditTrail,
+  SizingCapEvent,
+  EtfTransmissionSummary,
+  HeartbeatSummary,
+  StrategyPnlSummary,
+  EquityCurveResponse,
+  AiDisagreementsResponse,
   ReportFile,
   ReportManifest,
   ReportContent,
@@ -3113,6 +3120,139 @@ export function mockSystemTelemetryUnavailable(
   };
 }
 
+// ---- Sizing Cap-Event Audit Trail (G7) ----
+// A mix of capped and uncapped events, plus one with no strategy_id (the
+// global-aggregate sizing path) -- exercises the "not every event is a
+// cap event" and "strategy_id can be null" rendering paths, not just a
+// wall-to-wall capped happy path.
+function mockSizingCapEvents(): SizingCapEvent[] {
+  const now = Date.now();
+  return [
+    {
+      id: 3, timestamp: new Date(now - 30 * 60_000).toISOString(), cycle_id: "cycle-118",
+      symbol: "NVDA", strategy_id: "timeseries_momentum", raw_weight: 0.32, final_weight: 0.20,
+      binding_constraint: "kelly_cap", was_capped: true,
+    },
+    {
+      id: 2, timestamp: new Date(now - 90 * 60_000).toISOString(), cycle_id: "cycle-117",
+      symbol: "TSLA", strategy_id: null, raw_weight: 0.28, final_weight: 0.28,
+      binding_constraint: null, was_capped: false,
+    },
+    {
+      id: 1, timestamp: new Date(now - 150 * 60_000).toISOString(), cycle_id: "cycle-116",
+      symbol: "SPY", strategy_id: "multifactor_lowvol_size", raw_weight: 4.10, final_weight: 3.0,
+      binding_constraint: "portfolio_gross", was_capped: true,
+    },
+  ];
+}
+
+function mockSizingCapAuditTrail(): SizingCapAuditTrail {
+  const events = mockSizingCapEvents();
+  return {
+    events,
+    count: events.length,
+    capped_count: events.filter((e) => e.was_capped).length,
+    audit_enabled: true,
+    escalation_enabled: true,
+    escalation_threshold_cycles: 5,
+    escalation_factor: 0.5,
+    reason: null,
+  };
+}
+
+// The honest "audit disabled" degrade -- exported (matching the
+// mockSystemTelemetryUnavailable convention above) so both mock-mode devtools
+// toggling and the co-located screen test are pinned to the same
+// canonical shape.
+export function mockSizingCapAuditDisabled(): SizingCapAuditTrail {
+  return {
+    events: [],
+    count: 0,
+    capped_count: 0,
+    audit_enabled: false,
+    escalation_enabled: false,
+    escalation_threshold_cycles: 5,
+    escalation_factor: 0.5,
+    reason: "SIZING_CAP_AUDIT_ENABLED is False -- the durable cap-event log is not being written this run.",
+  };
+}
+
+// ---- ETF Volatility Transmission (G7) ----
+function mockEtfTransmissionSummary(): EtfTransmissionSummary {
+  return {
+    rows: [
+      { symbol: "SPY", etf_ownership_pct: 1.0, etf_comovement_r2: 1.0, etf_primary_wrapper: "SPY", etf_transmission_multiplier: null },
+      { symbol: "NVDA", etf_ownership_pct: 0.42, etf_comovement_r2: 0.81, etf_primary_wrapper: "QQQ", etf_transmission_multiplier: 0.74 },
+      { symbol: "JPM", etf_ownership_pct: 0.18, etf_comovement_r2: 0.55, etf_primary_wrapper: "XLF", etf_transmission_multiplier: 0.94 },
+    ],
+    measurement_enabled: true,
+    sizing_enabled: true,
+    portfolio_enabled: false,
+    reason: null,
+  };
+}
+
+// The honest "measurement disabled" degrade -- exported for the same reason
+// as mockSizingCapAuditDisabled above.
+export function mockEtfTransmissionDisabled(): EtfTransmissionSummary {
+  return {
+    rows: [],
+    measurement_enabled: false,
+    sizing_enabled: false,
+    portfolio_enabled: false,
+    reason: "ETF_TRANSMISSION_ENABLED is False -- measurement columns are not computed this cycle.",
+  };
+}
+
+// ---- Heartbeat Age (G7) ----
+// A "Fresh" (<60s) sample by default so mock mode exercises the normal
+// rendering path; mockHeartbeatNoData below is the honest cold-start degrade.
+function mockHeartbeatSummary(): HeartbeatSummary {
+  return {
+    age_seconds: 24.0,
+    status: "🟢 Fresh",
+    history_available: false,
+    history_note:
+      "The legacy Streamlit \"Heartbeat Age Trend\" sparkline is a 60-sample ring buffer held only in st.session_state -- never persisted to disk -- so there is no durable history for this endpoint to serve honestly. Only the current sample is real.",
+    reason: null,
+  };
+}
+
+// The honest "no heartbeat file yet" degrade -- exported for the same reason
+// as mockSizingCapAuditDisabled above.
+export function mockHeartbeatNoData(): HeartbeatSummary {
+  return {
+    age_seconds: null,
+    status: "⚪ No heartbeat",
+    history_available: false,
+    history_note:
+      "The legacy Streamlit \"Heartbeat Age Trend\" sparkline is a 60-sample ring buffer held only in st.session_state -- never persisted to disk -- so there is no durable history for this endpoint to serve honestly. Only the current sample is real.",
+    reason: "No heartbeat file yet -- output/heartbeat.txt is written only by main_orchestrator.py's async heartbeat task.",
+  };
+}
+
+// ---- Strategy P&L (G7) ----
+// One tagged-strategy row plus one strategy_id:null row (untagged trades) --
+// exercises the "real money grouped under a null bucket" honesty path, not
+// just an all-tagged happy path.
+function mockStrategyPnlSummary(): StrategyPnlSummary {
+  return {
+    rows: [
+      { strategy_id: "timeseries_momentum", realized_pnl: 842.15, trade_count: 11 },
+      { strategy_id: "cross_sectional_momentum", realized_pnl: 213.40, trade_count: 4 },
+      { strategy_id: null, realized_pnl: -58.20, trade_count: 2 },
+    ],
+    total_realized_pnl: 997.35,
+    reason: null,
+  };
+}
+
+// The honest "no closed trades yet" degrade -- exported for the same reason
+// as mockSizingCapAuditDisabled above.
+export function mockStrategyPnlEmpty(): StrategyPnlSummary {
+  return { rows: [], total_realized_pnl: null, reason: "No closed trades in the transactions store yet." };
+}
+
 function mockObservabilitySummary(range: PerfRange, horizon: number): ObservabilitySummary {
   return {
     portfolio_risk: mockPortfolioRisk(),
@@ -3125,6 +3265,14 @@ function mockObservabilitySummary(range: PerfRange, horizon: number): Observabil
     system_telemetry: readObservabilityColdStart()
       ? mockSystemTelemetryUnavailable()
       : mockSystemTelemetry(),
+    sizing_cap_audit: readObservabilityColdStart()
+      ? mockSizingCapAuditDisabled()
+      : mockSizingCapAuditTrail(),
+    etf_transmission: readObservabilityColdStart()
+      ? mockEtfTransmissionDisabled()
+      : mockEtfTransmissionSummary(),
+    heartbeat: readObservabilityColdStart() ? mockHeartbeatNoData() : mockHeartbeatSummary(),
+    strategy_pnl: readObservabilityColdStart() ? mockStrategyPnlEmpty() : mockStrategyPnlSummary(),
   };
 }
 
@@ -4051,10 +4199,15 @@ export const mockApi = {
     return delay(PORTFOLIO);
   },
 
-  async getEquityCurve(range: PerfRange) {
+  async getEquityCurve(range: PerfRange): Promise<EquityCurveResponse> {
     return delay({
       range,
       curve: synthCurve("account-equity", range, 0.1, 0.08, 44000),
+      // Buying power drifts far more slowly than equity and dips on new
+      // positions -- a distinct (near-flat, lower-vol) series, not a scaled
+      // copy of the equity curve, so the overlay toggle visibly shows a
+      // DIFFERENT line (G14).
+      buying_power_curve: synthCurve("account-buying-power", range, 0.01, 0.03, 6100),
     });
   },
 
@@ -5414,6 +5567,11 @@ export const mockApi = {
     );
   },
 
+  // ---- G15: durable per-symbol Claude-vs-Gemini disagreement ----
+  async getAiDisagreements(): Promise<AiDisagreementsResponse> {
+    return delay(mockAiDisagreements());
+  },
+
   // ---- Report Library (G5) + Dead-Letter Queue (G6) ----
   async getReports(): Promise<ReportManifest> {
     return delay(MOCK_REPORT_MANIFEST);
@@ -5733,6 +5891,43 @@ const MOCK_DEAD_LETTER: DeadLetterQueue = {
   reason: null,
   retry_enabled: true,
 };
+
+// ---- G15: durable per-symbol Claude-vs-Gemini disagreement ----
+// Mixed on purpose: one clear agreement (AAPL), one clear disagreement
+// (NVDA), one Claude-only (MSFT -- gemini_verdict null, never fabricated),
+// and one symbol with NEITHER side cached (DUK -- both verdicts null,
+// disagreement false) so mock mode exercises every honesty branch, not just
+// a wall-to-wall happy path.
+function mockAiDisagreements(): AiDisagreementsResponse {
+  const rows = [
+    { symbol: "AAPL", advisory_action: "BUY", claude_verdict: "bullish", gemini_verdict: "bullish", disagreement: false },
+    { symbol: "NVDA", advisory_action: "STRONG BUY", claude_verdict: "bullish", gemini_verdict: "bearish", disagreement: true },
+    { symbol: "MSFT", advisory_action: "HOLD", claude_verdict: "neutral", gemini_verdict: null, disagreement: false },
+    { symbol: "DUK", advisory_action: "SELL", claude_verdict: null, gemini_verdict: null, disagreement: false },
+  ];
+  const bothPresent = rows.filter((r) => r.claude_verdict !== null && r.gemini_verdict !== null).length;
+  const disagreements = rows.filter((r) => r.disagreement).length;
+  return {
+    rows,
+    summary: {
+      total_symbols: rows.length,
+      both_present: bothPresent,
+      agreements: bothPresent - disagreements,
+      disagreements,
+    },
+    reason: null,
+  };
+}
+
+// The honest "no snapshot yet" degrade -- exported for the same reason as
+// mockSizingCapAuditDisabled above (co-located test parity).
+export function mockAiDisagreementsEmpty(): AiDisagreementsResponse {
+  return {
+    rows: [],
+    summary: { total_symbols: 0, both_present: 0, agreements: 0, disagreements: 0 },
+    reason: "No state snapshot yet — run the pipeline to populate the signal universe.",
+  };
+}
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;

@@ -1870,6 +1870,122 @@ export interface SystemTelemetry {
   reason: string | null; // present when psutil_available is false
 }
 
+/**
+ * One durable position-sizing guardrail event (`sizing/cap_audit_store.py`'s
+ * `sizing_cap_events` table, via `CapAuditStore._row_to_dict`). Distinct from
+ * the per-cycle `Sizing_Was_Capped`/`Sizing_Binding_Constraint` columns
+ * already surfaced elsewhere -- this is the DURABLE history across cycles.
+ */
+export interface SizingCapEvent {
+  id: number;
+  timestamp: string | null;
+  cycle_id: string | null;
+  symbol: string;
+  strategy_id: string | null;
+  raw_weight: number | null;
+  final_weight: number | null;
+  binding_constraint: string | null;
+  was_capped: boolean;
+}
+
+/**
+ * GET /observability/summary's `sizing_cap_audit` key -- the last N (default
+ * 100) durable sizing-cap events, ported from the legacy Streamlit
+ * Observability tab's "Sizing Cap-Event Audit Trail" section
+ * (`gui/panels/observability.py::_render_observability_sizing_cap_audit`).
+ * `events` is empty (never fabricated) when `SIZING_CAP_AUDIT_ENABLED` is
+ * off or nothing has been recorded yet -- `reason` explains which.
+ */
+export interface SizingCapAuditTrail {
+  events: SizingCapEvent[];
+  count: number;
+  capped_count: number;
+  audit_enabled: boolean;
+  escalation_enabled: boolean;
+  escalation_threshold_cycles: number;
+  escalation_factor: number | null;
+  reason: string | null;
+}
+
+/**
+ * One symbol's ETF volatility-transmission telemetry (Ben-David, Franzoni &
+ * Moussawi 2018) -- mirrors `gui.observability_panel_helpers
+ * .etf_transmission_rows`'s output shape exactly (that pure helper is reused
+ * server-side, not reimplemented).
+ */
+export interface EtfTransmissionRow {
+  symbol: string;
+  etf_ownership_pct: number | null;
+  etf_comovement_r2: number | null;
+  etf_primary_wrapper: string | null;
+  etf_transmission_multiplier: number | null;
+}
+
+/**
+ * GET /observability/summary's `etf_transmission` key -- read-only per-symbol
+ * ETF volatility-transmission diagnostic view, ported from the legacy
+ * Streamlit Observability tab's "ETF Volatility Transmission" section. Three
+ * INDEPENDENT master switches: `measurement_enabled` gates whether `rows` can
+ * be non-empty at all; `sizing_enabled`/`portfolio_enabled` describe whether
+ * the measured multiplier actually derates Kelly sizing / feeds the portfolio
+ * covariance overlay elsewhere in the platform (this view never writes).
+ * `rows` excludes any symbol with zero ETF-transmission fields (an
+ * all-disabled cycle renders an empty list, not a wall of "--").
+ */
+export interface EtfTransmissionSummary {
+  rows: EtfTransmissionRow[];
+  measurement_enabled: boolean;
+  sizing_enabled: boolean;
+  portfolio_enabled: boolean;
+  reason: string | null;
+}
+
+/**
+ * GET /observability/summary's `heartbeat` key -- the CURRENT orchestrator
+ * heartbeat age (seconds since `output/heartbeat.txt` was last written by
+ * `main_orchestrator.py`'s async heartbeat task) + a freshness label
+ * (`gui.observability_panel_helpers.heartbeat_status`).
+ *
+ * Deliberately carries NO trend/history: the legacy Streamlit "Heartbeat Age
+ * Trend" sparkline is a 60-sample ring buffer held only in
+ * `st.session_state` -- never persisted to disk -- so there is nothing
+ * durable for this stateless HTTP endpoint to honestly serve as a series
+ * (CONSTRAINT #4: no fabricated single-point "trend"). `history_available`
+ * is always `false`; `history_note` explains why, so the UI can render that
+ * honestly instead of a one-point sparkline that implies more than it shows.
+ */
+export interface HeartbeatSummary {
+  age_seconds: number | null;
+  status: string | null; // e.g. "🟢 Fresh" / "🟡 Slow" / "🔴 Stale" / "⚪ No heartbeat"
+  history_available: false;
+  history_note: string;
+  reason: string | null; // present when age_seconds is null
+}
+
+/** One strategy's realized P&L bucket (`strategy_id: null` is a REAL bucket
+ * for untagged trades -- never dropped, never merged into another row). */
+export interface StrategyPnlRow {
+  strategy_id: string | null;
+  realized_pnl: number | null;
+  trade_count: number;
+}
+
+/**
+ * GET /observability/summary's `strategy_pnl` key -- realized P&L grouped by
+ * strategy from `transactions_store.TransactionsStore`. This is the
+ * FUNCTIONAL replacement for the legacy Streamlit "Strategy P&L" section,
+ * which is dead code against real data (it groups by a `strategy_id` column
+ * that has never existed on the `Trade` model, and reads a `realized_pnl`
+ * column that was never stored -- see `pilots/observability.py
+ * ::strategy_pnl_summary`'s docstring for the full honesty note). Rows are
+ * sorted most-profitable-first.
+ */
+export interface StrategyPnlSummary {
+  rows: StrategyPnlRow[];
+  total_realized_pnl: number | null;
+  reason: string | null;
+}
+
 export interface ObservabilitySummary {
   portfolio_risk: PortfolioRiskMetrics;
   portfolio_heat: PortfolioHeatMetric;
@@ -1879,6 +1995,25 @@ export interface ObservabilitySummary {
   risk_gate_blocks: RiskGateBlockLog;
   circuit_breakers: CircuitBreakerSummary;
   system_telemetry: SystemTelemetry;
+  sizing_cap_audit: SizingCapAuditTrail;
+  etf_transmission: EtfTransmissionSummary;
+  heartbeat: HeartbeatSummary;
+  strategy_pnl: StrategyPnlSummary;
+}
+
+/**
+ * GET /portfolio/equity-curve — account equity curve + a PARALLEL buying-power
+ * series (G14 -- the webapp port of the legacy Streamlit Analytics tab's
+ * buying-power overlay checkbox). Both series independently drop a point
+ * whose own value is missing/non-finite rather than truncating the OTHER
+ * series to match (CONSTRAINT #4) -- `buying_power_curve` can legitimately
+ * have fewer points than `curve`, or vice-versa. `buying_power_curve` is
+ * `[]` -- never fabricated -- on the same cold-start conditions as `curve`.
+ */
+export interface EquityCurveResponse {
+  range: PerfRange;
+  curve: CurvePoint[];
+  buying_power_curve: CurvePoint[];
 }
 
 // ---------------------------------------------------------------------------
@@ -2516,6 +2651,47 @@ export interface WatchResult {
   watchlist_file: string;
   applies: "next_pipeline_run";
   note: string;
+}
+
+// ---------------------------------------------------------------------------
+// GET /data/ai/disagreements — G15: durable per-symbol Claude-vs-Gemini
+// verdict comparison. The legacy Streamlit AI Insights tab's "Aggregate
+// Claude vs Gemini disagreement" table is built from TWO st.session_state
+// mirrors that only exist within one browser session -- there is no durable
+// backend source for THAT exact table. This endpoint answers the same
+// question from a genuinely durable source instead: the on-disk LLM
+// commentary cache (llm/cache.py's output/llm_commentary_cache.json) both
+// the Claude-analyst-note and Gemini-chart-pattern buttons already write
+// through. See pilots-parity plan G15 / api/data_api.py::get_ai_disagreements
+// for the full honesty note. Distinct from StrategyHealth's existing
+// GravityAiAuditStatus.ai_audit (a durably-computed AGGREGATE disagreement
+// COUNT from the structural Gravity audit) -- this is a PER-SYMBOL table
+// from real analyst/chart calls, a different thing entirely.
+// ---------------------------------------------------------------------------
+
+/** One symbol's Claude-vs-Gemini comparison. `claude_verdict`/`gemini_verdict`
+ * are `null` -- never fabricated -- whenever that side was never generated
+ * for the symbol (or its cache entry has since been cleared). `disagreement`
+ * is `true` only when BOTH sides are present and differ. */
+export interface AiDisagreementRow {
+  symbol: string;
+  advisory_action: string;
+  claude_verdict: string | null;
+  gemini_verdict: string | null;
+  disagreement: boolean;
+}
+
+export interface AiDisagreementSummary {
+  total_symbols: number;
+  both_present: number;
+  agreements: number;
+  disagreements: number;
+}
+
+export interface AiDisagreementsResponse {
+  rows: AiDisagreementRow[];
+  summary: AiDisagreementSummary;
+  reason: string | null; // present when rows is empty
 }
 
 // ---------------------------------------------------------------------------

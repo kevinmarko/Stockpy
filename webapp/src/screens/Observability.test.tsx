@@ -11,7 +11,14 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Observability } from "./Observability";
 import { api } from "../api/client";
-import { mockEmptyLogAggregation, mockSystemTelemetryUnavailable } from "../api/mock";
+import {
+  mockEmptyLogAggregation,
+  mockEtfTransmissionDisabled,
+  mockHeartbeatNoData,
+  mockSizingCapAuditDisabled,
+  mockStrategyPnlEmpty,
+  mockSystemTelemetryUnavailable,
+} from "../api/mock";
 import type { LogAggregation, ObservabilitySummary } from "../api/types";
 
 function renderScreen() {
@@ -79,6 +86,13 @@ const COLD_START: ObservabilitySummary = {
   // same object keeps this test pinned to the mock's own copy rather than a
   // separate one that could silently drift from it.
   system_telemetry: mockSystemTelemetryUnavailable(),
+  // Same rationale as system_telemetry above -- each mock*Disabled/*Empty/
+  // *NoData helper is the canonical mirror of its corresponding
+  // pilots/observability.py _empty_* shape.
+  sizing_cap_audit: mockSizingCapAuditDisabled(),
+  etf_transmission: mockEtfTransmissionDisabled(),
+  heartbeat: mockHeartbeatNoData(),
+  strategy_pnl: mockStrategyPnlEmpty(),
 };
 
 // mock.ts's mockEmptyLogAggregation() is the canonical shape for this branch
@@ -345,6 +359,93 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     );
     renderScreen();
     expect(await screen.findByText(/network unreachable/)).toBeInTheDocument();
+  });
+
+  // ---- G7: Sizing cap-event audit trail, ETF transmission, heartbeat, strategy P&L ----
+
+  it("renders the sizing cap-event audit trail rows and escalation state from the mock", async () => {
+    renderScreen();
+    expect(await screen.findByText("Sizing cap-event audit trail")).toBeInTheDocument();
+    const rows = await screen.findAllByTestId("sizing-cap-event-row");
+    // mock.ts's mockSizingCapEvents: 3 events, 2 capped (NVDA kelly_cap, SPY portfolio_gross).
+    expect(rows.length).toBe(3);
+    expect(within(rows[0]).getByText("NVDA")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("kelly_cap")).toBeInTheDocument();
+    // TSLA event carries no strategy_id -- renders "—", never a fabricated label.
+    expect(within(rows[1]).getByText("—")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("not capped")).toBeInTheDocument();
+    expect(await screen.findByText(/ON \(5c/)).toBeInTheDocument();
+  });
+
+  it("a disabled sizing cap audit renders the honest reason, never a fabricated table", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(
+      await screen.findByText(/SIZING_CAP_AUDIT_ENABLED is False/)
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("sizing-cap-event-row")).not.toBeInTheDocument();
+  });
+
+  it("renders ETF transmission rows and the three master-switch tiles from the mock", async () => {
+    renderScreen();
+    expect(await screen.findByText("ETF volatility transmission")).toBeInTheDocument();
+    const rows = await screen.findAllByTestId("etf-transmission-row");
+    expect(rows.length).toBe(3);
+    // SPY's row shows "SPY" twice (symbol column + primary-wrapper column,
+    // since SPY IS its own wrapper) -- use getAllByText to avoid ambiguity.
+    expect(within(rows[0]).getAllByText("SPY").length).toBe(2);
+    expect(within(rows[0]).getByText("100.0%")).toBeInTheDocument();
+    // SPY's own multiplier is null (it IS the wrapper) and sizing is ON, so
+    // this renders the honest "—", not a fabricated 1.00x.
+    expect(within(rows[0]).getByText("—")).toBeInTheDocument();
+    expect(await screen.findByText("Portfolio covariance")).toBeInTheDocument();
+  });
+
+  it("a disabled ETF transmission measurement gate renders the honest reason, never a fabricated table", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(
+      await screen.findByText(/ETF_TRANSMISSION_ENABLED is False/)
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("etf-transmission-row")).not.toBeInTheDocument();
+  });
+
+  it("renders the current heartbeat age and status from the mock, with the no-history honesty note", async () => {
+    renderScreen();
+    expect(await screen.findByText("Heartbeat")).toBeInTheDocument();
+    expect(await screen.findByText("24s")).toBeInTheDocument();
+    expect(await screen.findByText("🟢 Fresh")).toBeInTheDocument();
+    // Never a fabricated trend/sparkline -- the honesty note is always shown.
+    expect(await screen.findByText(/session_state -- never persisted to disk/)).toBeInTheDocument();
+  });
+
+  it("a missing heartbeat file renders the honest empty status, never a fabricated age", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(await screen.findByText("⚪ No heartbeat")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No heartbeat file yet/)
+    ).toBeInTheDocument();
+  });
+
+  it("renders strategy P&L rows including the untagged (strategy_id: null) bucket from the mock", async () => {
+    renderScreen();
+    expect(await screen.findByText("Strategy P&L")).toBeInTheDocument();
+    const rows = await screen.findAllByTestId("strategy-pnl-row");
+    expect(rows.length).toBe(3);
+    expect(within(rows[0]).getByText("timeseries_momentum")).toBeInTheDocument();
+    // Untagged trades are a REAL bucket, rendered as "Untagged", never dropped.
+    expect(within(rows[2]).getByText("Untagged")).toBeInTheDocument();
+    expect(await screen.findByText("Total realized P&L")).toBeInTheDocument();
+  });
+
+  it("no closed trades yet renders the honest reason, never a fabricated P&L table", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(
+      await screen.findByText("No closed trades in the transactions store yet.")
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("strategy-pnl-row")).not.toBeInTheDocument();
   });
 });
 

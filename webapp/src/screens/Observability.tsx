@@ -9,6 +9,8 @@ import type {
   ObservabilitySummary,
   PerfRange,
   RiskGateBlockEntry,
+  SizingCapEvent,
+  StrategyPnlRow,
 } from "../api/types";
 import { LOG_LEVELS } from "../api/types";
 import { useApi } from "../hooks/useApi";
@@ -489,6 +491,193 @@ function SystemTelemetrySection({ telemetry }: { telemetry: ObservabilitySummary
   );
 }
 
+/**
+ * SizingCapAuditSection — durable position-sizing guardrail events (last
+ * ~100), the webapp port of gui/panels/observability.py
+ * ::_render_observability_sizing_cap_audit. Distinct from the per-cycle
+ * Sizing_Was_Capped column already surfaced elsewhere (e.g. Strategy
+ * Matrix) -- this is the DURABLE cross-cycle history.
+ */
+function SizingCapAuditSection({
+  audit,
+}: {
+  audit: ObservabilitySummary["sizing_cap_audit"];
+}) {
+  if (audit.events.length === 0) {
+    return <div className="empty" style={{ padding: "var(--s-5)" }}>{audit.reason ?? "No cap events recorded yet."}</div>;
+  }
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
+        <Tile label="Events" value={audit.count} />
+        <Tile label="Capped" value={audit.capped_count} tone={audit.capped_count > 0 ? "neg" : undefined} />
+        <Tile
+          label="Escalation"
+          value={audit.escalation_enabled ? `ON (${audit.escalation_threshold_cycles}c × ${fmtNum(audit.escalation_factor, 2)})` : "OFF"}
+        />
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <Table style={{ fontSize: "var(--t-caption)" }}>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Strategy</th>
+              <th className="num">Final weight</th>
+              <th>Constraint</th>
+              <th>When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {audit.events.map((e: SizingCapEvent) => (
+              <tr key={e.id} data-testid="sizing-cap-event-row">
+                <td>{e.symbol}</td>
+                <td>{e.strategy_id ?? "—"}</td>
+                <td className="num">{e.final_weight == null ? "—" : fmtPct(e.final_weight, 1, { fromFraction: true })}</td>
+                <td>
+                  {e.was_capped ? (
+                    <span className="badge badge-warn">{e.binding_constraint ?? "capped"}</span>
+                  ) : (
+                    <span className="badge badge-neutral">not capped</span>
+                  )}
+                </td>
+                <td>{e.timestamp ? timeAgo(e.timestamp) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * EtfTransmissionSection — per-symbol ETF volatility-transmission diagnostic
+ * (Ben-David, Franzoni & Moussawi 2018), the webapp port of
+ * gui/panels/observability.py::_render_observability_etf_transmission. Three
+ * independent master switches are shown even when rows is empty, so the
+ * operator can distinguish "off" from "on but no coverage yet".
+ */
+function EtfTransmissionSection({
+  etf,
+}: {
+  etf: ObservabilitySummary["etf_transmission"];
+}) {
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
+        <Tile label="Measurement" value={etf.measurement_enabled ? "ON" : "OFF"} />
+        <Tile label="Sizing derate" value={etf.sizing_enabled ? "ON" : "OFF"} />
+        <Tile label="Portfolio covariance" value={etf.portfolio_enabled ? "ON" : "OFF"} />
+      </div>
+      {etf.rows.length === 0 ? (
+        <div className="empty" style={{ padding: "var(--s-4)" }}>{etf.reason ?? "No ETF-transmission coverage yet."}</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <Table style={{ fontSize: "var(--t-caption)" }}>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th className="num">Ownership</th>
+                <th className="num">Comovement R²</th>
+                <th>Wrapper</th>
+                <th className="num">Multiplier</th>
+              </tr>
+            </thead>
+            <tbody>
+              {etf.rows.map((r) => (
+                <tr key={r.symbol} data-testid="etf-transmission-row">
+                  <td>{r.symbol}</td>
+                  <td className="num">{r.etf_ownership_pct == null ? "—" : fmtPct(r.etf_ownership_pct, 1, { fromFraction: true })}</td>
+                  <td className="num">{fmtNum(r.etf_comovement_r2, 2)}</td>
+                  <td>{r.etf_primary_wrapper ?? "—"}</td>
+                  <td className="num">
+                    {r.etf_transmission_multiplier == null
+                      ? etf.sizing_enabled
+                        ? "—"
+                        : "N/A"
+                      : `${fmtNum(r.etf_transmission_multiplier, 2)}x`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * HeartbeatSection — current orchestrator heartbeat age + freshness label
+ * ONLY. The legacy Streamlit panel's "Heartbeat Age Trend" sparkline has no
+ * durable backing store (a session-only ring buffer) -- see
+ * ObservabilitySummary["heartbeat"]'s doc comment in types.ts -- so this
+ * deliberately renders a single current-value tile plus that honesty note,
+ * never a fabricated one-point "trend".
+ */
+function HeartbeatSection({ heartbeat }: { heartbeat: ObservabilitySummary["heartbeat"] }) {
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", alignItems: "center" }}>
+        <Tile
+          label="Heartbeat age"
+          value={heartbeat.age_seconds == null ? "—" : `${fmtNum(heartbeat.age_seconds, 0)}s`}
+          tone={heartbeat.age_seconds != null && heartbeat.age_seconds > 120 ? "neg" : undefined}
+        />
+        <Tile label="Status" value={heartbeat.status ?? "—"} />
+      </div>
+      {heartbeat.reason && (
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>{heartbeat.reason}</p>
+      )}
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-2)" }}>
+        {heartbeat.history_note}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * StrategyPnlSection — realized P&L grouped by strategy
+ * (transactions_store.TransactionsStore), the FUNCTIONAL webapp port of the
+ * legacy Streamlit "Strategy P&L" section (which is dead code against real
+ * data server-side -- see pilots/observability.py::strategy_pnl_summary's
+ * docstring). A `strategy_id: null` row (untagged trades) renders "Untagged",
+ * never dropped -- it's real realized money either way.
+ */
+function StrategyPnlSection({ pnl }: { pnl: ObservabilitySummary["strategy_pnl"] }) {
+  if (pnl.rows.length === 0) {
+    return <div className="empty" style={{ padding: "var(--s-5)" }}>{pnl.reason ?? "No closed trades yet."}</div>;
+  }
+  return (
+    <div>
+      <Tile
+        label="Total realized P&L"
+        value={pnl.total_realized_pnl == null ? "—" : `$${fmtNum(pnl.total_realized_pnl, 2)}`}
+        tone={pnl.total_realized_pnl != null ? (pnl.total_realized_pnl >= 0 ? "pos" : "neg") : undefined}
+      />
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+        {pnl.rows.map((r: StrategyPnlRow) => (
+          <div
+            key={r.strategy_id ?? "__untagged__"}
+            data-testid="strategy-pnl-row"
+            className="card card-pad"
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}
+          >
+            <span style={{ fontWeight: 700, fontSize: 13.5 }}>{r.strategy_id ?? "Untagged"}</span>
+            <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>{r.trade_count} trade(s)</span>
+            <span
+              className="num"
+              style={{ fontWeight: 700, color: (r.realized_pnl ?? 0) >= 0 ? theme.growth : theme.decline }}
+            >
+              {r.realized_pnl == null ? "—" : `$${fmtNum(r.realized_pnl, 2)}`}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
   DEBUG: 0,
   INFO: 1,
@@ -790,6 +979,29 @@ export function Observability() {
             sub="Host and process resource usage — reload the screen to re-sample"
           />
           <SystemTelemetrySection telemetry={data.system_telemetry} />
+
+          {/* Sizing cap-event audit trail — durable cross-cycle guardrail
+              history from sizing/cap_audit_store.py. */}
+          <SectionHeading
+            title="Sizing cap-event audit trail"
+            sub="Durable position-sizing guardrail events, newest first"
+          />
+          <SizingCapAuditSection audit={data.sizing_cap_audit} />
+
+          {/* ETF volatility transmission — per-symbol diagnostic view. */}
+          <SectionHeading
+            title="ETF volatility transmission"
+            sub="Ben-David, Franzoni &amp; Moussawi (2018) — non-diversifiable variance from heavy ETF wrapping"
+          />
+          <EtfTransmissionSection etf={data.etf_transmission} />
+
+          {/* Heartbeat age — current sample only, no fabricated trend. */}
+          <SectionHeading title="Heartbeat" sub="Orchestrator liveness — current sample only" />
+          <HeartbeatSection heartbeat={data.heartbeat} />
+
+          {/* Strategy P&L — realized P&L grouped by strategy. */}
+          <SectionHeading title="Strategy P&amp;L" sub="Realized P&amp;L by strategy, from closed trades" />
+          <StrategyPnlSection pnl={data.strategy_pnl} />
 
           {/* 7. Log aggregation — bounded, parsed tail of logs/investyo.log.
               Its own fetch (GET /observability/logs), independent of the

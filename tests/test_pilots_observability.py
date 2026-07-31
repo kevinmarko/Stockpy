@@ -885,7 +885,8 @@ class TestObservabilitySummary:
         assert set(out) == {
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
             "forecast_skill", "risk_gate_blocks", "circuit_breakers",
-            "system_telemetry",
+            "system_telemetry", "sizing_cap_audit", "etf_transmission",
+            "heartbeat", "strategy_pnl",
         }
 
     def test_one_section_failure_never_blocks_the_others(self, tmp_path):
@@ -923,3 +924,244 @@ class TestObservabilitySummary:
         # the section still degrades honestly rather than raising.
         assert out["circuit_breakers"]["trips"] == []
         assert out["circuit_breakers"]["reason"]
+
+
+# ---------------------------------------------------------------------------
+# sizing_cap_audit_summary — reuses sizing.cap_audit_store.CapAuditStore
+# directly.
+# ---------------------------------------------------------------------------
+
+
+class TestSizingCapAuditSummary:
+    def test_audit_disabled_is_honest_empty(self):
+        with mock.patch.object(settings, "SIZING_CAP_AUDIT_ENABLED", False):
+            out = obs.sizing_cap_audit_summary()
+        assert out["events"] == []
+        assert out["count"] == 0
+        assert out["audit_enabled"] is False
+        assert "SIZING_CAP_AUDIT_ENABLED" in out["reason"]
+
+    def test_store_unavailable_degrades_to_empty(self):
+        with mock.patch.object(settings, "SIZING_CAP_AUDIT_ENABLED", True):
+            with mock.patch(
+                "sizing.cap_audit_store.CapAuditStore",
+                side_effect=RuntimeError("db locked"),
+            ):
+                out = obs.sizing_cap_audit_summary()
+        assert out["events"] == []
+        assert out["reason"]
+
+    def test_no_events_yet_is_honest_empty(self):
+        class _Store:
+            def get_recent(self, limit=100):
+                return []
+
+        with mock.patch.object(settings, "SIZING_CAP_AUDIT_ENABLED", True):
+            with mock.patch("sizing.cap_audit_store.CapAuditStore", return_value=_Store()):
+                out = obs.sizing_cap_audit_summary()
+        assert out["events"] == []
+        assert out["count"] == 0
+        assert out["reason"] and "No cap events" in out["reason"]
+
+    def test_warm_path_reports_events_and_capped_count(self):
+        events = [
+            {
+                "id": 1, "timestamp": "2026-07-30T00:00:00", "cycle_id": "c1",
+                "symbol": "AAPL", "strategy_id": None, "raw_weight": 0.3,
+                "final_weight": 0.2, "binding_constraint": "kelly_cap", "was_capped": True,
+            },
+            {
+                "id": 2, "timestamp": "2026-07-29T00:00:00", "cycle_id": "c1",
+                "symbol": "MSFT", "strategy_id": None, "raw_weight": 0.1,
+                "final_weight": 0.1, "binding_constraint": None, "was_capped": False,
+            },
+        ]
+
+        class _Store:
+            def get_recent(self, limit=100):
+                return events
+
+        with mock.patch.object(settings, "SIZING_CAP_AUDIT_ENABLED", True):
+            with mock.patch.object(settings, "SIZING_CAP_ESCALATION_ENABLED", True):
+                with mock.patch("sizing.cap_audit_store.CapAuditStore", return_value=_Store()):
+                    out = obs.sizing_cap_audit_summary()
+        assert out["events"] == events
+        assert out["count"] == 2
+        assert out["capped_count"] == 1
+        assert out["escalation_enabled"] is True
+        assert out["reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# etf_transmission_summary — reuses gui.observability_panel_helpers
+# .etf_transmission_rows directly.
+# ---------------------------------------------------------------------------
+
+
+class TestEtfTransmissionSummary:
+    def test_measurement_disabled_is_honest_empty(self):
+        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", False):
+            out = obs.etf_transmission_summary({"signals": [{"symbol": "AAPL", "etf_ownership_pct": 0.5}]})
+        assert out["rows"] == []
+        assert out["measurement_enabled"] is False
+        assert "ETF_TRANSMISSION_ENABLED" in out["reason"]
+
+    def test_no_coverage_in_snapshot_is_honest_empty(self):
+        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", True):
+            out = obs.etf_transmission_summary({"signals": [{"symbol": "AAPL"}]})
+        assert out["rows"] == []
+        assert out["measurement_enabled"] is True
+        assert out["reason"] and "coverage" in out["reason"]
+
+    def test_none_snapshot_is_honest_empty(self):
+        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", True):
+            out = obs.etf_transmission_summary(None)
+        assert out["rows"] == []
+        assert out["reason"]
+
+    def test_warm_path_surfaces_rows_and_switches(self):
+        snapshot = {
+            "signals": [
+                {
+                    "symbol": "SPY", "etf_ownership_pct": 0.42, "etf_comovement_r2": 0.81,
+                    "etf_primary_wrapper": "SPY", "etf_transmission_multiplier": 0.75,
+                },
+                {"symbol": "ZZZZ"},  # no ETF fields -> filtered out by etf_transmission_rows
+            ]
+        }
+        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", True):
+            with mock.patch.object(settings, "ETF_TRANSMISSION_SIZING_ENABLED", True):
+                with mock.patch.object(settings, "ETF_TRANSMISSION_PORTFOLIO_ENABLED", False):
+                    out = obs.etf_transmission_summary(snapshot)
+        assert len(out["rows"]) == 1
+        assert out["rows"][0]["symbol"] == "SPY"
+        assert out["measurement_enabled"] is True
+        assert out["sizing_enabled"] is True
+        assert out["portfolio_enabled"] is False
+        assert out["reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# heartbeat_summary — current sample + freshness classification only (no
+# fabricated trend/history).
+# ---------------------------------------------------------------------------
+
+
+class TestHeartbeatSummary:
+    def test_no_heartbeat_file_is_honest_empty(self):
+        with mock.patch("gui.orchestrator_runner.heartbeat_age_seconds", return_value=None):
+            out = obs.heartbeat_summary()
+        assert out["age_seconds"] is None
+        assert out["status"] == "⚪ No heartbeat"
+        assert out["history_available"] is False
+        assert out["history_note"]
+        assert out["reason"]
+
+    def test_fresh_heartbeat_reports_status(self):
+        with mock.patch("gui.orchestrator_runner.heartbeat_age_seconds", return_value=12.5):
+            out = obs.heartbeat_summary()
+        assert out["age_seconds"] == pytest.approx(12.5)
+        assert out["status"] == "🟢 Fresh"
+        assert out["history_available"] is False
+        assert out["reason"] is None
+
+    def test_stale_heartbeat_reports_status(self):
+        with mock.patch("gui.orchestrator_runner.heartbeat_age_seconds", return_value=200.0):
+            out = obs.heartbeat_summary()
+        assert out["status"] == "🔴 Stale"
+
+    def test_import_failure_degrades_to_empty(self):
+        with mock.patch.dict(
+            "sys.modules",
+            {"gui.orchestrator_runner": None},
+        ):
+            out = obs.heartbeat_summary()
+        assert out["age_seconds"] is None
+        assert out["history_available"] is False
+        assert out["reason"]
+
+
+# ---------------------------------------------------------------------------
+# strategy_pnl_summary — the FUNCTIONAL replacement for the legacy Streamlit
+# section, which is dead code against real data (groups by a "strategy_id"
+# column the Trade model has never had).
+# ---------------------------------------------------------------------------
+
+
+def _closed_trades_df(rows):
+    return pd.DataFrame(rows)
+
+
+class TestStrategyPnlSummary:
+    def test_store_unavailable_degrades_to_empty(self):
+        with mock.patch(
+            "transactions_store.TransactionsStore", side_effect=RuntimeError("db locked")
+        ):
+            out = obs.strategy_pnl_summary()
+        assert out["rows"] == []
+        assert out["total_realized_pnl"] is None
+        assert out["reason"]
+
+    def test_no_closed_trades_is_honest_empty(self):
+        class _Store:
+            def closed_trades_df(self):
+                return pd.DataFrame()
+
+        with mock.patch("transactions_store.TransactionsStore", return_value=_Store()):
+            out = obs.strategy_pnl_summary()
+        assert out["rows"] == []
+        assert out["reason"] and "No closed trades" in out["reason"]
+
+    def test_warm_path_groups_by_strategy_and_derives_pnl(self):
+        rows = [
+            {
+                "trade_id": 1, "symbol": "AAPL", "side": "long",
+                "entry_price": 100.0, "exit_price": 110.0, "shares": 10.0,
+                "exit_ts": "2026-07-01", "strategy": "momentum",
+            },
+            {
+                "trade_id": 2, "symbol": "MSFT", "side": "short",
+                "entry_price": 200.0, "exit_price": 190.0, "shares": 5.0,
+                "exit_ts": "2026-07-02", "strategy": "momentum",
+            },
+            {
+                "trade_id": 3, "symbol": "TSLA", "side": "long",
+                "entry_price": 300.0, "exit_price": 290.0, "shares": 2.0,
+                "exit_ts": "2026-07-03", "strategy": None,
+            },
+        ]
+
+        class _Store:
+            def closed_trades_df(self):
+                return _closed_trades_df(rows)
+
+        with mock.patch("transactions_store.TransactionsStore", return_value=_Store()):
+            out = obs.strategy_pnl_summary()
+
+        assert out["reason"] is None
+        by_id = {r["strategy_id"]: r for r in out["rows"]}
+        # long AAPL: (110-100)*10 = 100; short MSFT: (190-200)*5*-1 = 50 -> momentum = 150
+        assert by_id["momentum"]["realized_pnl"] == pytest.approx(150.0)
+        assert by_id["momentum"]["trade_count"] == 2
+        # untagged TSLA: (290-300)*2 = -20, grouped under strategy_id=None, never dropped
+        assert by_id[None]["realized_pnl"] == pytest.approx(-20.0)
+        assert by_id[None]["trade_count"] == 1
+        assert out["total_realized_pnl"] == pytest.approx(130.0)
+
+    def test_missing_price_fields_are_dropped_not_fatal(self):
+        rows = [
+            {
+                "trade_id": 1, "symbol": "AAPL", "side": "long",
+                "entry_price": None, "exit_price": 110.0, "shares": 10.0,
+                "exit_ts": "2026-07-01", "strategy": "momentum",
+            },
+        ]
+
+        class _Store:
+            def closed_trades_df(self):
+                return _closed_trades_df(rows)
+
+        with mock.patch("transactions_store.TransactionsStore", return_value=_Store()):
+            out = obs.strategy_pnl_summary()
+        assert out["rows"] == []
+        assert out["reason"]

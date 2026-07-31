@@ -62,6 +62,8 @@ export function PerfLine({
   data,
   benchmark,
   macroBenchmark,
+  macroLabel = "S&P 500",
+  macroSecondaryAxis = false,
   valueLabel = "Pilot",
   yTickDecimals = 0,
 }: {
@@ -70,6 +72,20 @@ export function PerfLine({
   // SEPARATE, explicitly-labeled SPY (broad-market) overlay — distinct from
   // `benchmark` (the strategy's own underlying). Omitted/null renders no line.
   macroBenchmark?: CurvePoint[] | null;
+  // Tooltip name for the `macroBenchmark` series -- defaults to "S&P 500"
+  // (the original, only caller, PilotDetail.tsx's SPY overlay) so existing
+  // usages are unaffected. Pass an explicit label when the series isn't
+  // actually SPY (e.g. Portfolio.tsx's buying-power overlay, G14) so the
+  // tooltip never mislabels the value.
+  macroLabel?: string;
+  // `macroBenchmark` defaults to sharing the primary (left) Y-axis, correct
+  // when it's on the same scale as `data` (PilotDetail.tsx's indexed-to-100
+  // SPY overlay). Set true when the two series are on genuinely different
+  // scales (e.g. Portfolio.tsx's raw-dollar buying-power overlay vs. raw-
+  // dollar equity, G14) so `macroBenchmark` gets its OWN right-side axis and
+  // auto-scaled domain -- without this, a much-smaller series would render
+  // clipped flat against the bottom of the primary axis's fixed domain.
+  macroSecondaryAxis?: boolean;
   // Tooltip name for the primary series — defaults to "Pilot" (the original,
   // only caller) so existing usages are unaffected. Pass an explicit label for
   // non-Pilot series (e.g. "Beta") so the tooltip never mislabels the value.
@@ -100,6 +116,11 @@ export function PerfLine({
   const max = Math.max(...values);
   const pad = (max - min) * 0.08 || 1;
 
+  const macroValues = (macroBenchmark ?? []).map((p) => p.value);
+  const macroMin = macroValues.length ? Math.min(...macroValues) : 0;
+  const macroMax = macroValues.length ? Math.max(...macroValues) : 0;
+  const macroPad = (macroMax - macroMin) * 0.08 || 1;
+
   return (
     <div style={{ width: "100%", height: 200 }}>
       <ResponsiveContainer>
@@ -126,12 +147,24 @@ export function PerfLine({
             minTickGap={44}
           />
           <YAxis
+            yAxisId="left"
             domain={[min - pad, max + pad]}
             tick={chartAxisTick}
             {...chartAxisLine}
             width={34}
             tickFormatter={(v: number) => v.toFixed(yTickDecimals)}
           />
+          {macroSecondaryAxis && macroBenchmark && macroBenchmark.length > 0 && (
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              domain={[macroMin - macroPad, macroMax + macroPad]}
+              tick={chartAxisTick}
+              {...chartAxisLine}
+              width={34}
+              tickFormatter={(v: number) => v.toFixed(yTickDecimals)}
+            />
+          )}
           <Tooltip
             contentStyle={chartTooltipStyle}
             labelFormatter={(l) => fmtDate(String(l))}
@@ -140,12 +173,13 @@ export function PerfLine({
               name === "value"
                 ? valueLabel
                 : name === "macro"
-                  ? "S&P 500"
+                  ? macroLabel
                   : "Benchmark",
             ]}
           />
           {benchmark && benchmark.length > 0 && (
             <Line
+              yAxisId="left"
               type="monotone"
               dataKey="bench"
               stroke={theme.textMuted}
@@ -158,6 +192,7 @@ export function PerfLine({
           )}
           {macroBenchmark && macroBenchmark.length > 0 && (
             <Line
+              yAxisId={macroSecondaryAxis ? "right" : "left"}
               type="monotone"
               dataKey="macro"
               stroke={theme.accent}
@@ -169,6 +204,7 @@ export function PerfLine({
             />
           )}
           <Area
+            yAxisId="left"
             type="monotone"
             dataKey="value"
             stroke={stroke}

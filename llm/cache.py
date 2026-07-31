@@ -35,7 +35,7 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from settings import settings
 
@@ -163,3 +163,34 @@ def cache_clear() -> None:
             path.unlink()
     except Exception as exc:
         logger.warning("LLM commentary cache clear failed: %s", exc)
+
+
+def read_all_entries() -> List[Dict[str, Any]]:
+    """Return every cache entry as ``{"payload", "meta", "stored_at"}`` dicts.
+
+    Read-only introspection over the whole cache — for callers building a
+    per-symbol/per-provider VIEW over cached results (e.g. the AI Insights
+    aggregate Claude-vs-Gemini disagreement table, ``gui.ai_insights_panel
+    .latest_verdict_maps_from_cache``) rather than looking up one known key
+    via :func:`cache_get`. Each entry's opaque hash key is intentionally
+    NOT returned — callers must key off ``meta``/``payload`` content, matching
+    this module's own key-derivation contract (the hash is a cache-internal
+    implementation detail, not a stable identifier).
+
+    Degrades to ``[]`` on any read failure (missing file, corrupt JSON) —
+    never raises (CONSTRAINT #6), mirroring :func:`_read_all`."""
+    data = _read_all()
+    out: List[Dict[str, Any]] = []
+    for entry in data.values():
+        if not isinstance(entry, dict):
+            continue
+        payload = entry.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        meta = entry.get("meta")
+        out.append({
+            "payload": payload,
+            "meta": meta if isinstance(meta, dict) else {},
+            "stored_at": entry.get("stored_at"),
+        })
+    return out

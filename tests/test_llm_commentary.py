@@ -33,7 +33,7 @@ import pytest
 
 from llm import cache as cache_mod
 from llm import commentary as commentary_mod
-from llm.cache import cache_clear, cache_get, cache_put, make_cache_key
+from llm.cache import cache_clear, cache_get, cache_put, make_cache_key, read_all_entries
 from llm.commentary import generate_alert_commentary, generate_analyst_rationale
 from llm.schemas import AlertCommentary, AnalystRationale
 
@@ -200,6 +200,55 @@ class TestCacheStore:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("[1, 2, 3]", encoding="utf-8")
         assert cache_get("anything") is None
+
+
+# ---------------------------------------------------------------------------
+# TestReadAllEntries — introspection over the whole cache (G15's durable
+# Claude-vs-Gemini disagreement view reads through this).
+# ---------------------------------------------------------------------------
+
+
+class TestReadAllEntries:
+    def test_empty_cache_returns_empty_list(self):
+        assert read_all_entries() == []
+
+    def test_returns_payload_meta_and_stored_at_for_every_entry(self):
+        cache_put("k1", {"headline": "hi"}, meta={"provider": "claude", "symbol": "AAPL"})
+        cache_put("k2", {"trend_direction": "bullish"}, meta={"provider": "gemini", "symbol": "MSFT"})
+        entries = read_all_entries()
+        assert len(entries) == 2
+        by_symbol = {e["meta"].get("symbol"): e for e in entries}
+        assert by_symbol["AAPL"]["payload"] == {"headline": "hi"}
+        assert by_symbol["AAPL"]["meta"]["provider"] == "claude"
+        assert by_symbol["AAPL"]["stored_at"]  # a real ISO timestamp, not empty
+        assert by_symbol["MSFT"]["payload"] == {"trend_direction": "bullish"}
+
+    def test_entry_with_no_meta_still_returns_an_empty_dict_not_none(self):
+        # cache_put's own default (meta=None) -> stored as {} on disk.
+        cache_put("k1", {"headline": "hi"})
+        entries = read_all_entries()
+        assert entries[0]["meta"] == {}
+
+    def test_corrupt_json_degrades_to_empty_list_not_raise(self):
+        p = Path(cache_mod.settings.LLM_COMMENTARY_CACHE_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("not json at all", encoding="utf-8")
+        assert read_all_entries() == []
+
+    def test_malformed_entry_shape_is_skipped_not_fatal(self):
+        p = Path(cache_mod.settings.LLM_COMMENTARY_CACHE_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps({
+                "good": {"payload": {"headline": "hi"}, "meta": {"symbol": "AAPL"}, "stored_at": "t"},
+                "bad_payload_type": {"payload": "not-a-dict", "meta": {}, "stored_at": "t"},
+                "not_a_dict_entry": "just-a-string",
+            }),
+            encoding="utf-8",
+        )
+        entries = read_all_entries()
+        assert len(entries) == 1
+        assert entries[0]["payload"] == {"headline": "hi"}
 
 
 # ---------------------------------------------------------------------------

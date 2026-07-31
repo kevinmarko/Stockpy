@@ -112,4 +112,79 @@ describe("Portfolio screen (real mock API)", () => {
     expect(await screen.findByText("You aren't following any Pilots yet.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Browse Pilots" })).toBeInTheDocument();
   });
+
+  // ---- G12: held-vs-signal reconciliation (client-side, no backend change) ----
+
+  it("both reconciliation buckets render '—', never a fabricated symbol, when every held position has a signal and no BUY signal is unheld", async () => {
+    // The real mock's default fixtures happen to have every held position
+    // (AAPL/MSFT/NVDA/V/COST/DUK) already in GET /universe, and the only two
+    // BUY-tagged universe symbols (AAPL, NVDA) are both already held -- so
+    // this is the honest, un-forced empty-both-buckets case.
+    renderPortfolio();
+    expect(await screen.findByText("Reconciliation")).toBeInTheDocument();
+    // "Held, no signal" / "Signalled, not held" each appear twice (KPI tile
+    // label + list sub-heading) -- assert presence via getAllByText.
+    expect((await screen.findAllByText("Held, no signal")).length).toBe(2);
+    expect(screen.getAllByText("Signalled, not held").length).toBe(2);
+    const heldList = screen.getByTestId("held-no-signal-list");
+    const signalledList = screen.getByTestId("signalled-not-held-list");
+    expect(heldList).toHaveTextContent("—");
+    expect(signalledList).toHaveTextContent("—");
+  });
+
+  it("a held position absent from the tracked universe surfaces under 'Held, no signal'", async () => {
+    vi.spyOn(api, "getUniverse").mockResolvedValueOnce({
+      symbols: [{ symbol: "AAPL", action: "BUY" }], // MSFT/NVDA/V/COST/DUK (all held) are absent
+    });
+    renderPortfolio();
+    const heldList = await screen.findByTestId("held-no-signal-list");
+    expect(heldList).toHaveTextContent("MSFT");
+    expect(heldList).toHaveTextContent("DUK");
+    // AAPL IS in the universe -- must not appear in "held, no signal".
+    expect(heldList).not.toHaveTextContent("AAPL");
+  });
+
+  it("an unheld BUY-signalled symbol surfaces under 'Signalled, not held'; a non-BUY unheld symbol does not", async () => {
+    vi.spyOn(api, "getUniverse").mockResolvedValueOnce({
+      symbols: [
+        { symbol: "AAPL", action: "BUY" }, // held -- must not appear
+        { symbol: "TSLA", action: "STRONG BUY" }, // unheld BUY -- must appear
+        { symbol: "XOM", action: "HOLD" }, // unheld but not BUY -- must not appear
+        { symbol: "T", action: null }, // unheld, no action at all -- must not appear
+      ],
+    });
+    renderPortfolio();
+    const signalledList = await screen.findByTestId("signalled-not-held-list");
+    expect(signalledList).toHaveTextContent("TSLA");
+    expect(signalledList).not.toHaveTextContent("AAPL");
+    expect(signalledList).not.toHaveTextContent("XOM");
+    expect(signalledList).not.toHaveTextContent(/\bT\b/);
+  });
+
+  // ---- G14: buying-power overlay on the equity curve ----
+
+  it("renders a buying-power overlay checkbox, enabled when the curve has data", async () => {
+    renderPortfolio();
+    const checkbox = await screen.findByTestId("buying-power-overlay-checkbox");
+    expect(checkbox).not.toBeChecked();
+    expect(checkbox).not.toBeDisabled();
+    await userEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+    // Data exists, so the "no history" caption must not show once toggled on.
+    expect(screen.queryByText("No buying-power history in the selected range.")).not.toBeInTheDocument();
+  });
+
+  it("disables the buying-power overlay checkbox and never fabricates an overlay when the curve is empty", async () => {
+    vi.spyOn(api, "getEquityCurve").mockResolvedValue({
+      range: "3M",
+      curve: [
+        { date: "2026-07-01", value: 1000 },
+        { date: "2026-07-02", value: 1010 },
+      ],
+      buying_power_curve: [],
+    });
+    renderPortfolio();
+    const checkbox = await screen.findByTestId("buying-power-overlay-checkbox");
+    expect(checkbox).toBeDisabled();
+  });
 });
