@@ -285,7 +285,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   commands: {
     title: "Commands",
     description:
-      "An autocomplete composer over the platform's full CLI manifest — type or pick a command, resolve its options, and copy the exact string to run in your own terminal. This screen never executes anything itself, by design: running platform CLIs from a browser would bypass the advisory quarantine. Also hosts the read-only Robinhood execution queue below it.",
+      "An autocomplete composer over the platform's full CLI manifest — type or pick a command, resolve its options, then copy the exact string to run in your own terminal or run it here directly (gated behind an operator-enabled flag, off by default). High-stakes commands — the kill switch, a forced broker re-login — require an extra confirmation before they execute. Also hosts the read-only Robinhood execution queue below it.",
     keyConcepts: ["advisory only", "kill switch", "notional cap"],
   },
   observability: {
