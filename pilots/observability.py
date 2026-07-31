@@ -84,6 +84,54 @@ Center's "Observability / Mission Control" tab
    on every Mission Control page load. See :func:`log_aggregation`'s
    docstring for the deliberately-narrowed scope (counts, not the legacy
    panel's full per-symbol message drilldown).
+8. **Sizing cap-event audit trail** — the last ``limit`` (default 100) durable
+   position-sizing guardrail events from ``sizing/cap_audit_store.py``'s
+   ``sizing_cap_events`` table, ported from ``gui/panels/observability.py
+   ::_render_observability_sizing_cap_audit``. Reuses ``CapAuditStore``/
+   ``_row_to_dict`` directly (no reimplementation) via a ``readonly=True``
+   database-level read-only engine, matching that store's own convention.
+   Degrades to an empty list + a ``reason`` when ``SIZING_CAP_AUDIT_ENABLED``
+   is off or the store is unavailable — never raises.
+9. **ETF volatility transmission** — the read-only per-symbol diagnostic view
+   ported from ``gui/panels/observability.py
+   ::_render_observability_etf_transmission``. Reuses
+   ``gui.observability_panel_helpers.etf_transmission_rows`` directly (already
+   pure/Streamlit-free and unit-tested) against the current state snapshot's
+   ``signals`` list, plus the three independent master-switch states
+   (``ETF_TRANSMISSION_ENABLED``/``_SIZING_ENABLED``/``_PORTFOLIO_ENABLED``).
+10. **Heartbeat age** — the CURRENT orchestrator heartbeat age (seconds) +
+    freshness classification, via ``gui.orchestrator_runner.heartbeat_age_seconds``
+    and ``gui.observability_panel_helpers.heartbeat_status`` (both already
+    reused elsewhere in this module/its sibling GUI panel). Deliberately does
+    NOT attempt to reproduce the legacy Streamlit panel's "Heartbeat Age
+    Trend" sparkline: that trend is a 60-sample ring buffer held ONLY in
+    ``st.session_state`` (``gui.observability_telemetry.HeartbeatTrendStore``)
+    — never persisted to disk — so there is no durable series this stateless
+    HTTP endpoint could honestly serve. See :func:`heartbeat_summary`'s
+    docstring for the full honesty note (``history_available=False`` always,
+    with an explanatory ``history_note`` — never a fabricated single-point
+    "trend").
+11. **Strategy P&L** — realized P&L grouped by ``strategy`` from
+    ``transactions_store.TransactionsStore.closed_trades_df()``. The legacy
+    Streamlit section (``gui/panels/observability.py`` lines ~276-291) is
+    itself DEAD CODE in practice — it groups by a ``strategy_id`` column that
+    has never existed on the ``Trade`` model (the real column is
+    ``strategy``) and reads a ``realized_pnl`` column that is never stored
+    either (every other panel in that same file derives it on the fly from
+    ``entry_price``/``exit_price``/``shares``/``side``) — so its
+    ``{"realized_pnl", "strategy_id"} <= set(closed.columns)`` guard is always
+    False against real data and the section always falls through to "No
+    closed trades in transactions store yet.", regardless of how many closed
+    trades actually exist. :func:`strategy_pnl_summary` below is the
+    FUNCTIONAL version: it derives ``realized_pnl`` the same way
+    ``gui/panels/observability.py::_render_observability_equity_curve``
+    already does (``(exit_price - entry_price) * shares``, sign-flipped for
+    shorts) and groups by the real ``strategy`` column, exposed on the wire as
+    ``strategy_id`` for naming consistency with the rest of this API surface
+    (``pilots/strategy_health.py`` et al.). Untagged trades (``strategy IS
+    NULL``) are grouped under a real ``strategy_id: null`` bucket — never
+    dropped, never mislabeled — since a trade's P&L is real money regardless
+    of whether it was tagged.
 
 Design invariants (identical to the rest of the Pilots read layer):
 
@@ -125,6 +173,10 @@ __all__ = [
     "circuit_breaker_summary",
     "system_telemetry_summary",
     "log_aggregation",
+    "sizing_cap_audit_summary",
+    "etf_transmission_summary",
+    "heartbeat_summary",
+    "strategy_pnl_summary",
 ]
 
 # Approximate calendar-day windows for the equity-curve zoom, matching
@@ -978,6 +1030,275 @@ def log_aggregation(limit: int = 300) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 8. Sizing cap-event audit trail — durable history from sizing/cap_audit_store.py.
+# Reuses CapAuditStore directly (no reimplementation) — see module docstring
+# section 8.
+# ---------------------------------------------------------------------------
+
+
+def _empty_sizing_cap_audit(reason: str) -> Dict[str, Any]:
+    return {
+        "events": [],
+        "count": 0,
+        "capped_count": 0,
+        "audit_enabled": bool(settings.SIZING_CAP_AUDIT_ENABLED),
+        "escalation_enabled": bool(settings.SIZING_CAP_ESCALATION_ENABLED),
+        "escalation_threshold_cycles": int(settings.SIZING_CAP_ESCALATION_THRESHOLD_CYCLES),
+        "escalation_factor": _finite_or_none(settings.SIZING_CAP_ESCALATION_FACTOR),
+        "reason": reason,
+    }
+
+
+def sizing_cap_audit_summary(limit: int = 100) -> Dict[str, Any]:
+    """Last ``limit`` durable position-sizing guardrail events (newest first),
+    the PWA's port of ``gui/panels/observability.py
+    ::_render_observability_sizing_cap_audit``.
+
+    Reuses ``sizing.cap_audit_store.CapAuditStore.get_recent`` directly (a
+    ``readonly=True`` database-level read-only engine, matching that store's
+    own convention) — this function does not re-derive the row shape.
+
+    Returns the honest empty shape (CONSTRAINT #4) — never fabricated — when
+    ``settings.SIZING_CAP_AUDIT_ENABLED`` is off (the durable log isn't being
+    written this run), the store is unavailable, or no events have been
+    recorded yet. Never raises (CONSTRAINT #6): ``CapAuditStore.get_recent``
+    already degrades to ``[]`` on any DB error internally, but the
+    construction call itself is also guarded here.
+    """
+    if not settings.SIZING_CAP_AUDIT_ENABLED:
+        return _empty_sizing_cap_audit(
+            "SIZING_CAP_AUDIT_ENABLED is False — the durable cap-event log is "
+            "not being written this run."
+        )
+
+    try:
+        from sizing.cap_audit_store import CapAuditStore
+
+        events = CapAuditStore(readonly=True).get_recent(limit=limit)
+    except Exception as exc:  # noqa: BLE001 — dead-letter: import/construction failure
+        logger.debug("sizing_cap_audit_summary: CapAuditStore unavailable: %s", exc)
+        return _empty_sizing_cap_audit("Sizing cap-event audit store unavailable.")
+
+    if not events:
+        return _empty_sizing_cap_audit("No cap events recorded yet — they accumulate as cycles run.")
+
+    capped_count = sum(1 for e in events if e.get("was_capped"))
+    return {
+        "events": events,
+        "count": len(events),
+        "capped_count": capped_count,
+        "audit_enabled": True,
+        "escalation_enabled": bool(settings.SIZING_CAP_ESCALATION_ENABLED),
+        "escalation_threshold_cycles": int(settings.SIZING_CAP_ESCALATION_THRESHOLD_CYCLES),
+        "escalation_factor": _finite_or_none(settings.SIZING_CAP_ESCALATION_FACTOR),
+        "reason": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 9. ETF volatility transmission — read-only diagnostic view.
+# Reuses gui.observability_panel_helpers.etf_transmission_rows directly — see
+# module docstring section 9.
+# ---------------------------------------------------------------------------
+
+
+def _empty_etf_transmission(reason: str) -> Dict[str, Any]:
+    return {
+        "rows": [],
+        "measurement_enabled": bool(settings.ETF_TRANSMISSION_ENABLED),
+        "sizing_enabled": bool(settings.ETF_TRANSMISSION_SIZING_ENABLED),
+        "portfolio_enabled": bool(settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED),
+        "reason": reason,
+    }
+
+
+def etf_transmission_summary(snapshot: Optional[dict]) -> Dict[str, Any]:
+    """Per-symbol ETF volatility-transmission telemetry + the three
+    independent master-switch states, the PWA's port of
+    ``gui/panels/observability.py::_render_observability_etf_transmission``.
+
+    Reuses ``gui.observability_panel_helpers.etf_transmission_rows`` directly
+    (already pure/Streamlit-free and unit-tested) against ``snapshot``'s
+    ``signals`` list. Returns the honest empty shape (CONSTRAINT #4) —
+    never a table of fabricated nulls — when ``ETF_TRANSMISSION_ENABLED`` is
+    off or no symbol in the snapshot has any ETF-transmission coverage yet.
+    Never raises (CONSTRAINT #6)."""
+    measurement_on = bool(settings.ETF_TRANSMISSION_ENABLED)
+    if not measurement_on:
+        return _empty_etf_transmission(
+            "ETF_TRANSMISSION_ENABLED is False — measurement columns are not "
+            "computed this cycle."
+        )
+
+    try:
+        from gui.observability_panel_helpers import etf_transmission_rows
+    except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
+        logger.debug("etf_transmission_summary import failed: %s", exc)
+        return _empty_etf_transmission("ETF transmission helper module unavailable.")
+
+    try:
+        signals = (snapshot or {}).get("signals", []) or []
+        rows = etf_transmission_rows(signals)
+    except Exception as exc:  # noqa: BLE001 — dead-letter: malformed snapshot
+        logger.debug("etf_transmission_summary: row extraction failed: %s", exc)
+        return _empty_etf_transmission("ETF transmission telemetry unreadable.")
+
+    return {
+        "rows": rows,
+        "measurement_enabled": True,
+        "sizing_enabled": bool(settings.ETF_TRANSMISSION_SIZING_ENABLED),
+        "portfolio_enabled": bool(settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED),
+        "reason": None if rows else (
+            "No symbols have ETF-transmission coverage in the last snapshot yet."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 10. Heartbeat age — CURRENT sample + freshness classification only. See
+# module docstring section 10 for why no trend/history is served here.
+# ---------------------------------------------------------------------------
+
+_NO_HEARTBEAT_HISTORY_NOTE = (
+    "The legacy Streamlit \"Heartbeat Age Trend\" sparkline is a 60-sample "
+    "ring buffer held only in st.session_state — never persisted to disk — "
+    "so there is no durable history for this endpoint to serve honestly. "
+    "Only the current sample is real."
+)
+
+
+def heartbeat_summary() -> Dict[str, Any]:
+    """Current orchestrator heartbeat age (seconds) + freshness label.
+
+    Sourced from ``gui.orchestrator_runner.heartbeat_age_seconds()`` (reads
+    ``output/heartbeat.txt``'s mtime — written only by
+    ``main_orchestrator.py``'s async heartbeat task) and classified via
+    ``gui.observability_panel_helpers.heartbeat_status`` — both already
+    reused elsewhere in this codebase, not re-derived here.
+
+    ``history_available`` is always ``False`` here — see
+    :data:`_NO_HEARTBEAT_HISTORY_NOTE` / module docstring section 10 for why
+    a durable trend can't be honestly served (CONSTRAINT #4: no fabricated
+    single-point "trend"). Never raises (CONSTRAINT #6)."""
+    try:
+        from gui.observability_panel_helpers import heartbeat_status
+        from gui.orchestrator_runner import heartbeat_age_seconds
+    except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
+        logger.debug("heartbeat_summary import failed: %s", exc)
+        return {
+            "age_seconds": None,
+            "status": None,
+            "history_available": False,
+            "history_note": _NO_HEARTBEAT_HISTORY_NOTE,
+            "reason": "Heartbeat helper module unavailable.",
+        }
+
+    try:
+        age = heartbeat_age_seconds()
+    except Exception as exc:  # noqa: BLE001 — dead-letter
+        logger.debug("heartbeat_summary: heartbeat_age_seconds failed: %s", exc)
+        age = None
+
+    if age is None:
+        return {
+            "age_seconds": None,
+            "status": heartbeat_status(float("nan")),
+            "history_available": False,
+            "history_note": _NO_HEARTBEAT_HISTORY_NOTE,
+            "reason": (
+                "No heartbeat file yet — output/heartbeat.txt is written only "
+                "by main_orchestrator.py's async heartbeat task."
+            ),
+        }
+
+    age_f = _finite_or_none(age)
+    return {
+        "age_seconds": age_f,
+        "status": heartbeat_status(age_f if age_f is not None else float("nan")),
+        "history_available": False,
+        "history_note": _NO_HEARTBEAT_HISTORY_NOTE,
+        "reason": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 11. Strategy P&L by strategy — see module docstring section 11 for why this
+# is the FUNCTIONAL replacement of the legacy Streamlit section (which is
+# dead code against real data: it groups by a column, "strategy_id", that
+# doesn't exist on the Trade model).
+# ---------------------------------------------------------------------------
+
+
+def _empty_strategy_pnl(reason: str) -> Dict[str, Any]:
+    return {"rows": [], "total_realized_pnl": None, "reason": reason}
+
+
+def strategy_pnl_summary() -> Dict[str, Any]:
+    """Realized P&L grouped by strategy, from
+    ``transactions_store.TransactionsStore.closed_trades_df()``.
+
+    Derives ``realized_pnl`` per closed trade exactly the way
+    ``gui/panels/observability.py::_render_observability_equity_curve``
+    already does — ``(exit_price - entry_price) * shares``, sign-flipped for
+    a ``short`` — since ``realized_pnl`` is not itself a stored column on the
+    ``Trade`` model. Groups by the REAL ``strategy`` column (exposed on the
+    wire as ``strategy_id`` for naming consistency with the rest of this API
+    — see module docstring section 11). Untagged trades (``strategy`` is
+    ``None``/empty) are grouped under one ``strategy_id: null`` row — real
+    money, never dropped or mislabeled (CONSTRAINT #4).
+
+    Returns the honest empty shape when the store is unavailable or has no
+    closed trades yet. Never raises (CONSTRAINT #6)."""
+    try:
+        from transactions_store import TransactionsStore
+    except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
+        logger.debug("strategy_pnl_summary import failed: %s", exc)
+        return _empty_strategy_pnl("Transactions store unavailable.")
+
+    try:
+        closed = TransactionsStore(readonly=True).closed_trades_df()
+    except Exception as exc:  # noqa: BLE001 — dead-letter: cold/unreadable DB
+        logger.warning("strategy_pnl_summary: closed_trades_df failed: %s", exc)
+        return _empty_strategy_pnl("Transactions store unavailable.")
+
+    required = {"entry_price", "exit_price", "shares", "exit_ts"}
+    if closed is None or closed.empty or not required.issubset(set(closed.columns)):
+        return _empty_strategy_pnl("No closed trades in the transactions store yet.")
+
+    try:
+        df = closed.dropna(subset=["entry_price", "exit_price", "shares"]).copy()
+        if df.empty:
+            return _empty_strategy_pnl("No closed trades with complete price/quantity fields yet.")
+
+        side = df["side"].fillna("long").astype(str).str.lower() if "side" in df.columns else "long"
+        sign = side.map(lambda s: -1.0 if s == "short" else 1.0) if hasattr(side, "map") else 1.0
+        df["_realized_pnl"] = (df["exit_price"] - df["entry_price"]) * df["shares"] * sign
+        strategy_col = df["strategy"] if "strategy" in df.columns else None
+        df["_strategy_id"] = (
+            strategy_col.where(strategy_col.notna() & (strategy_col.astype(str).str.strip() != ""), None)
+            if strategy_col is not None
+            else None
+        )
+
+        grouped = df.groupby("_strategy_id", dropna=False)["_realized_pnl"].agg(["sum", "count"])
+        rows = [
+            {
+                "strategy_id": (None if (isinstance(idx, float) and idx != idx) or idx is None else str(idx)),
+                "realized_pnl": _finite_or_none(row["sum"]),
+                "trade_count": int(row["count"]),
+            }
+            for idx, row in grouped.iterrows()
+        ]
+        rows.sort(key=lambda r: (r["realized_pnl"] is None, -(r["realized_pnl"] or 0.0)))
+        total = _finite_or_none(df["_realized_pnl"].sum())
+    except Exception as exc:  # noqa: BLE001 — dead-letter: computation failure
+        logger.warning("strategy_pnl_summary: computation failed: %s", exc)
+        return _empty_strategy_pnl("Strategy P&L computation failed.")
+
+    return {"rows": rows, "total_realized_pnl": total, "reason": None}
+
+
+# ---------------------------------------------------------------------------
 # Composite
 # ---------------------------------------------------------------------------
 
@@ -988,7 +1309,7 @@ def observability_summary(
     horizon_days: int = 30,
     snapshot: Optional[dict] = None,
 ) -> Dict[str, Any]:
-    """Bundle all SEVEN Mission-Control sections into one payload for
+    """Bundle all ELEVEN Mission-Control sections into one payload for
     ``GET /observability/summary``. Each section degrades independently
     (CONSTRAINT #6) — a failure in one never blocks the others. Log
     aggregation (section 7) is deliberately NOT part of this composite — see
@@ -1003,4 +1324,8 @@ def observability_summary(
         "risk_gate_blocks": risk_gate_block_log(),
         "circuit_breakers": circuit_breaker_summary(),
         "system_telemetry": system_telemetry_summary(),
+        "sizing_cap_audit": sizing_cap_audit_summary(),
+        "etf_transmission": etf_transmission_summary(snapshot),
+        "heartbeat": heartbeat_summary(),
+        "strategy_pnl": strategy_pnl_summary(),
     }

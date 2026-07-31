@@ -676,8 +676,9 @@ def test_equity_curve_envelope_empty_when_none():
     with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
         resp = client.get("/portfolio/equity-curve")
     assert resp.status_code == 200
-    # {range, curve:[]} envelope — never a bare list, never null (Mismatch 1).
-    assert resp.json() == {"range": "1Y", "curve": []}
+    # {range, curve:[], buying_power_curve:[]} envelope — never a bare list,
+    # never null (Mismatch 1).
+    assert resp.json() == {"range": "1Y", "curve": [], "buying_power_curve": []}
 
 
 def test_equity_curve_envelope_rows():
@@ -702,6 +703,33 @@ def test_equity_curve_envelope_rows():
     assert all(set(p) == {"date", "value"} for p in curve)
     assert curve[0] == {"date": "2026-07-09", "value": 1380.0}
     assert curve[1] == {"date": "2026-07-10", "value": 1400.0}
+    # buying_power_curve is a PARALLEL series (G14 buying-power overlay),
+    # sourced from the same rows' buying_power column.
+    bp_curve = body["buying_power_curve"]
+    assert isinstance(bp_curve, list) and len(bp_curve) == 2
+    assert bp_curve[0] == {"date": "2026-07-09", "value": 500.0}
+    assert bp_curve[1] == {"date": "2026-07-10", "value": 500.0}
+
+
+def test_equity_curve_buying_power_missing_value_drops_only_that_point():
+    """A row with a missing/non-finite buying_power must not truncate the
+    equity curve, and vice-versa -- the two series degrade independently."""
+    class _Store:
+        def account_snapshot_history(self, since=None):
+            return pd.DataFrame(
+                [
+                    ["2026-07-09T00:00:00+00:00", None, 1380.0, 8.0],
+                    ["2026-07-10T00:00:00+00:00", 500.0, 1400.0, 10.0],
+                ],
+                columns=["fetched_at", "buying_power", "total_equity", "total_dividends"],
+            )
+
+    with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
+        resp = client.get("/portfolio/equity-curve?range=1M")
+    body = resp.json()
+    assert len(body["curve"]) == 2  # equity series unaffected by the missing buying_power
+    assert len(body["buying_power_curve"]) == 1
+    assert body["buying_power_curve"][0] == {"date": "2026-07-10", "value": 500.0}
 
 
 # ---------------------------------------------------------------------------
@@ -1432,7 +1460,8 @@ class TestObservabilitySummary:
         assert set(body) == {
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
             "forecast_skill", "risk_gate_blocks", "circuit_breakers",
-            "system_telemetry",
+            "system_telemetry", "sizing_cap_audit", "etf_transmission",
+            "heartbeat", "strategy_pnl",
         }
         # system_telemetry is a LIVE psutil sample (point-in-time, not read
         # from a cold-start fixture) -- psutil is a hard requirements.txt

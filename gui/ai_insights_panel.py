@@ -289,3 +289,67 @@ def disagreement_summary(rows: Iterable[DisagreementRow]) -> Dict[str, int]:
         "agreements": both - disagree if both else 0,
         "disagreements": disagree,
     }
+
+
+# ---------------------------------------------------------------------------
+# Durable (webapp) equivalent of the Streamlit tab's session-state mirrors.
+# ---------------------------------------------------------------------------
+
+
+def latest_verdict_maps_from_cache(
+    entries: Iterable[Mapping[str, Any]],
+) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """Reconstruct ``{symbol: verdict_dict}`` maps for the Claude analyst
+    rationale and Gemini chart-pattern-read sides of the aggregate
+    disagreement view, from the DURABLE on-disk LLM cache
+    (``llm/cache.py::read_all_entries``) rather than the Streamlit tab's
+    ``st.session_state`` mirrors (``ai_insights_claude_by_symbol`` /
+    ``ai_insights_gemini_by_symbol``) that only exist within one browser
+    session and are never persisted.
+
+    ``entries`` is the list ``llm.cache.read_all_entries()`` returns —
+    ``[{"payload", "meta", "stored_at"}, ...]``. This function does no I/O
+    itself (mirrors this module's own "Streamlit-free pure helper" contract);
+    the caller is responsible for the actual cache read.
+
+    Disambiguates entries by PAYLOAD SHAPE, not ``schema_name`` (which
+    ``llm/cache.py``'s ``meta`` dict does not record): a Gemini
+    ``ChartPatternRead`` payload always carries ``trend_direction``; a Claude
+    ``AnalystRationale`` payload carries ``headline``/``why_now`` and never
+    ``trend_direction``. Alert commentary (``body``) and Opal research briefs
+    (``thesis_context``) match neither and are skipped — this view is
+    Claude-analyst-vs-Gemini-chart only, same scope as
+    :func:`derive_disagreement_overview`.
+
+    When a symbol has more than one cached entry on a side (e.g. re-scored on
+    a different day, or a different score bucket the same day), only the
+    entry with the LATEST ``stored_at`` is kept — the "last real call" view,
+    matching ``llm/status_store.py``'s own convention. A malformed/missing
+    ``symbol`` in ``meta`` is skipped (never raises — CONSTRAINT #6)."""
+    claude_map: Dict[str, Dict[str, Any]] = {}
+    claude_latest: Dict[str, str] = {}
+    gemini_map: Dict[str, Dict[str, Any]] = {}
+    gemini_latest: Dict[str, str] = {}
+
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        payload = entry.get("payload")
+        meta = entry.get("meta")
+        if not isinstance(payload, Mapping) or not isinstance(meta, Mapping):
+            continue
+        symbol = str(meta.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        stored_at = str(entry.get("stored_at") or "")
+
+        if "trend_direction" in payload:
+            if stored_at >= gemini_latest.get(symbol, ""):
+                gemini_latest[symbol] = stored_at
+                gemini_map[symbol] = dict(payload)
+        elif "headline" in payload and "why_now" in payload:
+            if stored_at >= claude_latest.get(symbol, ""):
+                claude_latest[symbol] = stored_at
+                claude_map[symbol] = dict(payload)
+
+    return claude_map, gemini_map

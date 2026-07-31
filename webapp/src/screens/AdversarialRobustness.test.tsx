@@ -258,7 +258,8 @@ describe("Adversarial Robustness and Edge Case Suite", () => {
   it("handles a non-array curve response for getEquityCurve in Dashboard without crashing", async () => {
     vi.spyOn(api, "getEquityCurve").mockResolvedValueOnce({
       range: "3M",
-      curve: { notAnArray: true } as any
+      curve: { notAnArray: true } as any,
+      buying_power_curve: []
     });
 
     renderDashboard();

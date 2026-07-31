@@ -276,7 +276,12 @@ describe("StrategyHealth screen — Gravity Audit section (real mock API)", () =
     expect(screen.getByText("Gemini 7✓ / 1✗")).toBeInTheDocument();
     expect(screen.getByText("1 disagreement(s)")).toBeInTheDocument();
     expect(screen.getByText(/Options Pricing Engine/)).toBeInTheDocument();
-    expect(screen.getByText("⚠ disagree")).toBeInTheDocument();
+    // Scoped to the AI Gravity Audit step table specifically -- the newer
+    // "AI Verdict Disagreements" section (G15) below also renders its own
+    // "⚠ disagree" badge from a different (per-symbol) mock fixture.
+    const stepTable = screen.getByText(/Options Pricing Engine/).closest("table");
+    expect(stepTable).not.toBeNull();
+    expect(within(stepTable as HTMLElement).getByText("⚠ disagree")).toBeInTheDocument();
   });
 
   it("renders the mock fixture's legacy audit with one genuinely failing step", async () => {
@@ -363,5 +368,55 @@ describe("StrategyHealth screen — Gravity Audit section (real mock API)", () =
     renderScreen();
     await screen.findByText("Trend Follower"); // pilot cards still render independently
     expect(await screen.findByText(/offline/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * AI Verdict Disagreements section (G15) — the durable, per-symbol
+ * Claude-vs-Gemini comparison read from the on-disk LLM commentary cache,
+ * distinct from the Gravity Audit card's own aggregate disagreement count.
+ */
+describe("StrategyHealth screen — AI Verdict Disagreements section (real mock API)", () => {
+  beforeEach(() => __resetThresholdsCache());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("renders the per-symbol table and KPI chips from the mock, including a null-verdict honesty branch", async () => {
+    renderScreen();
+    expect(await screen.findByText(/AI Verdict Disagreements/)).toBeInTheDocument();
+    expect(await screen.findByText("4 symbols")).toBeInTheDocument();
+    const rows = await screen.findAllByTestId("ai-disagreement-row");
+    expect(rows.length).toBe(4);
+    // NVDA is the mock's one real disagreement (bullish vs bearish).
+    const nvda = rows.find((r) => within(r).queryByText("NVDA"));
+    expect(nvda).toBeTruthy();
+    expect(within(nvda as HTMLElement).getByText("⚠ disagree")).toBeInTheDocument();
+    expect(within(nvda as HTMLElement).getByText("bullish")).toBeInTheDocument();
+    expect(within(nvda as HTMLElement).getByText("bearish")).toBeInTheDocument();
+    // MSFT has a Claude verdict but no cached Gemini read -- honest "—", not
+    // a fabricated verdict or a spurious disagreement flag.
+    const msft = rows.find((r) => within(r).queryByText("MSFT"));
+    expect(within(msft as HTMLElement).getByText("—")).toBeInTheDocument();
+    expect(within(msft as HTMLElement).queryByText("⚠ disagree")).not.toBeInTheDocument();
+  });
+
+  it("no cached verdicts / no snapshot yet renders the honest reason, never a fabricated table", async () => {
+    vi.spyOn(api, "getAiDisagreements").mockResolvedValueOnce({
+      rows: [],
+      summary: { total_symbols: 0, both_present: 0, agreements: 0, disagreements: 0 },
+      reason: "No state snapshot yet — run the pipeline to populate the signal universe.",
+    });
+    renderScreen();
+    expect(
+      await screen.findByText("No state snapshot yet — run the pipeline to populate the signal universe.")
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("ai-disagreement-row")).not.toBeInTheDocument();
+  });
+
+  it("an endpoint error renders its own ErrorState with a retry action, independent of the Gravity Audit section", async () => {
+    vi.spyOn(api, "getAiDisagreements").mockRejectedValueOnce(new Error("cache unreadable"));
+    renderScreen();
+    expect(await screen.findByText(/cache unreadable/)).toBeInTheDocument();
+    // The unrelated Gravity Audit section (a separate fetch) still renders.
+    expect(await screen.findByText("AI Gravity Audit (Claude + Gemini)")).toBeInTheDocument();
   });
 });

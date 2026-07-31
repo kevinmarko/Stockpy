@@ -34,6 +34,7 @@ from gui.ai_insights_panel import (
     disagreement_summary,
     format_chart_pattern_markdown,
     insights_status,
+    latest_verdict_maps_from_cache,
 )
 
 
@@ -208,6 +209,82 @@ class TestSummary:
         assert s["both_present"] == 2
         assert s["agreements"] == 1
         assert s["disagreements"] == 1
+
+
+# ---------------------------------------------------------------------------
+# TestLatestVerdictMapsFromCache — G15: the durable (webapp) equivalent of
+# the legacy tab's st.session_state Claude/Gemini mirrors.
+# ---------------------------------------------------------------------------
+
+
+def _entry(symbol, payload, stored_at="2026-07-30T00:00:00+00:00"):
+    return {"payload": payload, "meta": {"symbol": symbol, "provider": "x"}, "stored_at": stored_at}
+
+
+class TestLatestVerdictMapsFromCache:
+    def test_empty_entries_yields_empty_maps(self):
+        claude_map, gemini_map = latest_verdict_maps_from_cache([])
+        assert claude_map == {}
+        assert gemini_map == {}
+
+    def test_classifies_by_payload_shape_not_meta(self):
+        entries = [
+            _entry("AAPL", {"headline": "h", "why_now": "w"}),
+            _entry("MSFT", {"pattern_name": "flag", "trend_direction": "bullish"}),
+        ]
+        claude_map, gemini_map = latest_verdict_maps_from_cache(entries)
+        assert "AAPL" in claude_map
+        assert "AAPL" not in gemini_map
+        assert "MSFT" in gemini_map
+        assert "MSFT" not in claude_map
+
+    def test_ignores_alert_and_research_payloads(self):
+        entries = [
+            _entry("AAPL", {"body": "push text"}),
+            _entry("AAPL", {"thesis_context": "thesis"}),
+        ]
+        claude_map, gemini_map = latest_verdict_maps_from_cache(entries)
+        assert claude_map == {}
+        assert gemini_map == {}
+
+    def test_keeps_only_the_most_recent_entry_per_symbol_and_side(self):
+        entries = [
+            _entry("AAPL", {"headline": "old", "why_now": "w"}, stored_at="2026-07-01T00:00:00"),
+            _entry("AAPL", {"headline": "new", "why_now": "w"}, stored_at="2026-07-29T00:00:00"),
+        ]
+        claude_map, _ = latest_verdict_maps_from_cache(entries)
+        assert claude_map["AAPL"]["headline"] == "new"
+
+    def test_missing_symbol_in_meta_is_skipped_not_fatal(self):
+        entries = [{"payload": {"headline": "h", "why_now": "w"}, "meta": {}, "stored_at": "t"}]
+        claude_map, gemini_map = latest_verdict_maps_from_cache(entries)
+        assert claude_map == {}
+        assert gemini_map == {}
+
+    def test_malformed_entry_is_skipped_not_fatal(self):
+        entries = [
+            "not-a-dict",
+            {"payload": "not-a-dict-either", "meta": {"symbol": "AAPL"}},
+            {"payload": {"headline": "h", "why_now": "w"}, "meta": "not-a-dict"},
+        ]
+        claude_map, gemini_map = latest_verdict_maps_from_cache(entries)
+        assert claude_map == {}
+        assert gemini_map == {}
+
+    def test_round_trips_into_derive_disagreement_overview(self):
+        entries = [
+            _entry("AAPL", {"headline": "Breakout above the range", "why_now": "w"}),
+            _entry("AAPL", {"pattern_name": "flag", "trend_direction": "bearish"}),
+        ]
+        claude_map, gemini_map = latest_verdict_maps_from_cache(entries)
+        rows = derive_disagreement_overview(
+            signals=[{"symbol": "AAPL", "action": "BUY"}],
+            claude_map=claude_map,
+            gemini_map=gemini_map,
+        )
+        assert rows[0].claude_verdict == "bullish"
+        assert rows[0].gemini_verdict == "bearish"
+        assert rows[0].disagreement is True
 
 
 # ---------------------------------------------------------------------------

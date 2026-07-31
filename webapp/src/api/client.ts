@@ -60,7 +60,6 @@ import type {
   PilotSummary,
   Portfolio,
   PortfolioAttribution,
-  CurvePoint,
   RealizedPerformance,
   RollingBeta,
   RunRecord,
@@ -98,6 +97,8 @@ import type {
   ScanConfigRequest,
   ScanConfigResult,
   WatchResult,
+  EquityCurveResponse,
+  AiDisagreementsResponse,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 
@@ -248,9 +249,7 @@ const liveApi = {
     ),
   getPortfolio: () => http<Portfolio>("/portfolio"),
   getEquityCurve: (range: PerfRange) =>
-    http<{ range: PerfRange; curve: CurvePoint[] | null }>(
-      `/portfolio/equity-curve?range=${range}`
-    ),
+    http<EquityCurveResponse>(`/portfolio/equity-curve?range=${range}`),
   getRealized: () => http<RealizedPerformance>("/portfolio/realized"),
   getPortfolioAttribution: (lookbackDays = 60) =>
     http<PortfolioAttribution>(
@@ -593,6 +592,8 @@ const liveApi = {
     http<RestartDaemonResult>("/daemon/restart", {
       method: "POST",
     }),
+  // ---- G15: durable per-symbol Claude-vs-Gemini disagreement (data base, :8603) ----
+  getAiDisagreements: () => http<AiDisagreementsResponse>("/data/ai/disagreements"),
 };
 
 /**

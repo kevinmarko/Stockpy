@@ -1110,12 +1110,16 @@ def get_equity_curve(
 ) -> Dict[str, Any]:
     """Account equity curve from stored snapshots, oldest→newest.
 
-    Returns the ``{range, curve}`` envelope the PWA expects (client.ts
-    ``getEquityCurve`` / ``CurvePoint``), mapping each stored snapshot to
-    ``{date: <fetched_at ISO date>, value: <total_equity>}``. ``curve`` is an
-    empty list — never fabricated — when nothing has been stored yet or the DB is
-    cold (CONSTRAINT #4). An unknown ``range`` is treated leniently as "all
-    history"."""
+    Returns the ``{range, curve, buying_power_curve}`` envelope the PWA
+    expects (client.ts ``getEquityCurve`` / ``CurvePoint``), mapping each
+    stored snapshot to ``{date: <fetched_at ISO date>, value: <total_equity>}``
+    (and, in parallel, ``<buying_power>`` for ``buying_power_curve`` — the
+    webapp Analytics tab's buying-power overlay toggle, G14). Both are an
+    empty list — never fabricated — when nothing has been stored yet or the DB
+    is cold (CONSTRAINT #4); either series independently drops a point whose
+    own value is missing/non-finite rather than dropping the whole date, so a
+    gap in ONE series never truncates the other. An unknown ``range`` is
+    treated leniently as "all history"."""
     since: Optional[datetime] = None
     days = _RANGE_DAYS.get(range)
     if days:
@@ -1125,27 +1129,35 @@ def get_equity_curve(
         df = store.account_snapshot_history(since=since)
     except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> empty curve
         logger.warning("pilots_api: account_snapshot_history failed: %s", exc)
-        return {"range": range, "curve": []}
+        return {"range": range, "curve": [], "buying_power_curve": []}
     if df is None or df.empty:
-        return {"range": range, "curve": []}
+        return {"range": range, "curve": [], "buying_power_curve": []}
     # account_snapshot_history is ordered ascending by fetched_at, so records are
     # already oldest→newest. Normalize fetched_at to an ISO date (YYYY-MM-DD) to
     # match CurvePoint's "ISO date" semantics.
     df = df.copy()
     df["fetched_at"] = df["fetched_at"].astype(str).str[:10]
-    curve: List[Dict[str, Any]] = []
-    for row in df.to_dict(orient="records"):
-        equity = row.get("total_equity")
-        if equity is None:
-            continue
-        try:
-            value = float(equity)
-        except (TypeError, ValueError):
-            continue
-        if value != value:  # NaN guard — skip rather than fabricate a point
-            continue
-        curve.append({"date": row.get("fetched_at"), "value": value})
-    return {"range": range, "curve": curve}
+
+    def _point_series(column: str) -> List[Dict[str, Any]]:
+        points: List[Dict[str, Any]] = []
+        for row in df.to_dict(orient="records"):
+            raw = row.get(column)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if value != value:  # NaN guard — skip rather than fabricate a point
+                continue
+            points.append({"date": row.get("fetched_at"), "value": value})
+        return points
+
+    return {
+        "range": range,
+        "curve": _point_series("total_equity"),
+        "buying_power_curve": _point_series("buying_power"),
+    }
 
 
 @app.get("/portfolio/realized", dependencies=[Depends(require_read_token)])
@@ -1331,7 +1343,7 @@ def get_observability_summary(
     horizon: int = Query(30, ge=1, le=365),
 ) -> Dict[str, Any]:
     """Composite Mission-Control summary — the PWA's port of the retired
-    Streamlit Command Center's Observability tab (bounded to seven sections):
+    Streamlit Command Center's Observability tab (now ELEVEN sections):
     portfolio risk metrics (Sharpe/Calmar/MaxDD/MaxDD-duration/CAGR), the
     live portfolio heat (aggregate adverse open P&L vs. total equity, against
     ``MAX_PORTFOLIO_HEAT``), the account equity curve + drawdown, the current
@@ -1343,16 +1355,27 @@ def get_observability_summary(
     /gravity_audit.py::_render_circuit_breaker_dashboard`` via
     ``gui.circuit_breakers`` (see ``pilots/observability.py
     ::circuit_breaker_summary`` — no new endpoint, this rides the existing
-    composite), and (NEW) host/process **system telemetry** (CPU/memory/disk
+    composite), host/process **system telemetry** (CPU/memory/disk
     %, load average, process RSS/CPU%/threads) via ``gui.observability_telemetry
     .collect_system_telemetry`` (see ``pilots/observability.py
     ::system_telemetry_summary`` — also rides the existing composite, since
-    it's a cheap, scalar-only, point-in-time sample). The sibling **log
-    aggregation** section of that same legacy tab is served by a separate
-    ``GET /observability/logs`` endpoint below (see that endpoint's docstring
-    for why it's not folded in here).
+    it's a cheap, scalar-only, point-in-time sample), the durable **sizing
+    cap-event audit trail** (``sizing_cap_audit``, reusing ``sizing
+    .cap_audit_store.CapAuditStore`` directly), the **ETF volatility
+    transmission** per-symbol diagnostic view (``etf_transmission``, reusing
+    ``gui.observability_panel_helpers.etf_transmission_rows`` directly), the
+    CURRENT **heartbeat age** + freshness classification (``heartbeat`` —
+    deliberately no trend/history; see ``pilots/observability.py
+    ::heartbeat_summary``'s docstring for why the legacy Streamlit sparkline
+    has no durable equivalent), and realized **strategy P&L** grouped by
+    strategy (``strategy_pnl`` — the functional replacement for a legacy
+    Streamlit section that is dead code against real data; see
+    ``pilots/observability.py::strategy_pnl_summary``'s docstring). The
+    sibling **log aggregation** section of that same legacy tab is served by
+    a separate ``GET /observability/logs`` endpoint below (see that
+    endpoint's docstring for why it's not folded in here).
 
-    Composes SEVEN independently-degrading sections (``pilots.observability
+    Composes ELEVEN independently-degrading sections (``pilots.observability
     .observability_summary`` — see that module's docstring for the full
     per-section contract); one section's cold-start/failure never blocks the
     others, and every section carries its own honest ``reason`` when

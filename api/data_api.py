@@ -57,7 +57,12 @@ import pairs_ondemand
 # None of these modules import streamlit at module top (verified) and this
 # file carries no AST import guard (unlike ``api/pilots_api.py`` /
 # ``api/state_api.py``), so importing them here is safe and intentional.
-from gui.ai_insights_panel import insights_status
+from gui.ai_insights_panel import (
+    derive_disagreement_overview,
+    disagreement_summary,
+    insights_status,
+    latest_verdict_maps_from_cache,
+)
 from gui.llm_commentary_panel import commentary_status, generate_for_symbol_row
 from llm.chart_insight import generate_chart_pattern_read, render_price_chart_png
 from llm.research import generate_research_brief
@@ -860,3 +865,94 @@ def generate_research(symbol: str) -> Dict[str, Any]:
 
     payload = result.model_dump() if hasattr(result, "model_dump") else result
     return _clean_nan({"available": True, "reason": None, "payload": payload})
+
+
+# ---------------------------------------------------------------------------
+# G15 — Aggregate Claude-vs-Gemini disagreement (per-symbol), DURABLE variant.
+#
+# The legacy Streamlit AI Insights tab's "Aggregate Claude vs Gemini
+# disagreement" table (gui/panels/ai_insights.py, Section 3) is built from
+# TWO st.session_state mirrors (`ai_insights_claude_by_symbol` /
+# `ai_insights_gemini_by_symbol`) populated only when the operator clicks the
+# Claude-analyst-note / Gemini-chart-pattern buttons during that browser
+# session — never persisted, so a stateless HTTP endpoint has no equivalent
+# of THAT exact table. What IS durable is the on-disk LLM commentary cache
+# both buttons already write through (llm/cache.py's
+# output/llm_commentary_cache.json, a real file, not session state) --
+# gui.ai_insights_panel.latest_verdict_maps_from_cache reconstructs the same
+# {symbol: verdict} maps derive_disagreement_overview needs FROM that cache,
+# so this endpoint answers the same question ("where do Claude and Gemini
+# disagree, per symbol") from a genuinely durable source instead of
+# fabricating one. This is a NEW, small addition to the AST-guard-free
+# api/data_api.py (which already imports gui.ai_insights_panel above), not a
+# reuse of api/pilots_api.py's dependency-light pilots/*.py read layer.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/data/ai/disagreements", dependencies=[Depends(require_token)])
+def get_ai_disagreements() -> Dict[str, Any]:
+    """Durable per-symbol Claude-vs-Gemini verdict comparison.
+
+    Reads every entry ever written to ``output/llm_commentary_cache.json``
+    (``llm.cache.read_all_entries`` — real disk state, not
+    ``st.session_state``), keeps the MOST RECENT Claude analyst-rationale and
+    Gemini chart-pattern-read entry per symbol
+    (``gui.ai_insights_panel.latest_verdict_maps_from_cache``), and compares
+    them against the current snapshot's tracked symbol universe
+    (``gui.ai_insights_panel.derive_disagreement_overview`` /
+    ``disagreement_summary`` — the SAME pure comparison logic the legacy
+    Streamlit tab used, just fed from a durable source instead of a
+    per-browser-session dict).
+
+    A row's ``claude_verdict``/``gemini_verdict`` is ``None`` — never a
+    fabricated verdict — whenever that side was never generated for the
+    symbol, or was generated but its cache entry has since aged out (a fresh
+    LLM cache is possible any time an operator clears
+    ``output/llm_commentary_cache.json``). ``disagreement`` is ``True`` only
+    when BOTH sides are present and differ (CONSTRAINT #4: partial coverage
+    never flags a disagreement).
+
+    Fail-open read (no ``LLM_COMMENTARY_ENABLED``/AI-generation gate): this
+    endpoint spends nothing and calls no provider — it only reads already-
+    cached results, so it degrades to an honest all-``None``-verdicts table
+    rather than a 403 when the capability is off. Returns
+    ``{"rows": [], "summary": ..., "reason": "..."}`` when there is no
+    current snapshot (nothing to compare against) or the helper module can't
+    be imported. Never raises (CONSTRAINT #6)."""
+    snapshot = load_snapshot()
+    signals = snapshot.get("signals") if isinstance(snapshot, dict) else None
+    if not isinstance(signals, list) or not signals:
+        return {
+            "rows": [],
+            "summary": {"total_symbols": 0, "both_present": 0, "agreements": 0, "disagreements": 0},
+            "reason": "No state snapshot yet — run the pipeline to populate the signal universe.",
+        }
+
+    try:
+        from llm.cache import read_all_entries
+
+        entries = read_all_entries()
+        claude_map, gemini_map = latest_verdict_maps_from_cache(entries)
+        rows = derive_disagreement_overview(
+            signals=signals, claude_map=claude_map, gemini_map=gemini_map
+        )
+        summary = disagreement_summary(rows)
+    except Exception as exc:  # noqa: BLE001 - dead-letter: cache/helper failure
+        logger.warning("data_api: get_ai_disagreements failed: %s", exc)
+        return {
+            "rows": [],
+            "summary": {"total_symbols": 0, "both_present": 0, "agreements": 0, "disagreements": 0},
+            "reason": "AI disagreement view unavailable.",
+        }
+
+    row_dicts = [
+        {
+            "symbol": r.symbol,
+            "advisory_action": r.advisory_action,
+            "claude_verdict": r.claude_verdict,
+            "gemini_verdict": r.gemini_verdict,
+            "disagreement": r.disagreement,
+        }
+        for r in rows
+    ]
+    return {"rows": row_dicts, "summary": summary, "reason": None}
