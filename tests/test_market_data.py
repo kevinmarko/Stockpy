@@ -614,20 +614,28 @@ class TestYahooFundamentalsProvider:
 # ---------------------------------------------------------------------------
 
 class TestCompositeProviderSelection:
-    """Verifies provider auto-selection based on env vars."""
+    """Verifies provider auto-selection based on settings.settings fields.
 
-    def _env(self, **kw):
-        base = {
-            "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": "",
-            "MARKET_DATA_PROVIDER": "", "FINNHUB_API_KEY": "",
-        }
-        base.update(kw)
-        return base
+    Patches ``settings.settings`` directly (NOT ``os.environ``) -- pydantic-
+    settings' ``env_file=".env"`` loading populates ``settings.settings``
+    but does not copy values into the real ``os.environ``, so a test that
+    only mutates ``os.environ`` would pass even if ``CompositeProvider``
+    regressed back to reading ``os.environ.get(...)`` directly. See the
+    2026-07 ``os.environ`` -> ``settings.settings`` fix (mirrors the
+    ``signals/news_catalyst.py::build_finnhub_client`` precedent).
+    """
+
+    def _patched(self, **overrides):
+        base = dict(
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+            MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+        )
+        base.update(overrides)
+        return patch.multiple("settings.settings", **base)
 
     def test_selects_yfinance_when_no_keys(self):
         from data.market_data import CompositeProvider, YFinanceProvider
-        env = self._env()
-        with patch.dict(os.environ, env, clear=False):
+        with self._patched():
             cp = CompositeProvider()
         assert isinstance(cp._quote_provider, YFinanceProvider)
 
@@ -635,9 +643,8 @@ class TestCompositeProviderSelection:
         from data.market_data import AlpacaProvider
 
         fake_client = MagicMock()
-        with patch.dict(
-            os.environ,
-            self._env(ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456"),
+        with self._patched(
+            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
         ), patch(
             "alpaca.data.historical.StockHistoricalDataClient",
             return_value=fake_client,
@@ -649,32 +656,55 @@ class TestCompositeProviderSelection:
 
     def test_explicit_yfinance_overrides_alpaca_keys(self):
         from data.market_data import CompositeProvider, YFinanceProvider
-        env = self._env(
+        with self._patched(
             ALPACA_API_KEY="key", ALPACA_SECRET_KEY="sec",
             MARKET_DATA_PROVIDER="yfinance",
-        )
-        with patch.dict(os.environ, env):
+        ):
             cp = CompositeProvider()
         assert isinstance(cp._quote_provider, YFinanceProvider)
 
     def test_unknown_provider_raises(self):
-        env = self._env(MARKET_DATA_PROVIDER="bloomberg")
-        with patch.dict(os.environ, env):
+        with self._patched(MARKET_DATA_PROVIDER="bloomberg"):
             from data.market_data import CompositeProvider
             with pytest.raises(RuntimeError, match="Unknown MARKET_DATA_PROVIDER"):
                 CompositeProvider()
 
     def test_is_realtime_false_for_yfinance(self):
         from data.market_data import CompositeProvider
-        with patch.dict(os.environ, self._env()):
+        with self._patched():
             cp = CompositeProvider()
         assert cp.is_realtime is False
 
     def test_quote_source_string(self):
         from data.market_data import CompositeProvider
-        with patch.dict(os.environ, self._env()):
+        with self._patched():
             cp = CompositeProvider()
         assert cp.quote_source == "yfinance"
+
+    def test_settings_object_alone_selects_alpaca_without_os_environ(self):
+        """Regression: provider selection must come from settings.settings,
+        never os.environ. os.environ is deliberately blanked/wrong here so a
+        regression back to os.environ.get() would silently fall through to
+        yfinance (or crash) instead of honouring the settings.settings values
+        an operator set only in .env."""
+        from data.market_data import AlpacaProvider, CompositeProvider
+
+        fake_client = MagicMock()
+        with patch.dict(
+            os.environ,
+            {"MARKET_DATA_PROVIDER": "", "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": ""},
+            clear=False,
+        ), self._patched(
+            MARKET_DATA_PROVIDER="alpaca",
+            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
+        ), patch(
+            "alpaca.data.historical.StockHistoricalDataClient",
+            return_value=fake_client,
+        ):
+            cp = CompositeProvider()
+
+        assert isinstance(cp._quote_provider, AlpacaProvider)
+        assert cp.is_realtime is True
 
 
 # ---------------------------------------------------------------------------
@@ -838,7 +868,7 @@ class TestSingleton:
     def test_singleton_returns_same_instance(self):
         from data.market_data import get_provider, reset_provider
         reset_provider()
-        with patch.dict(os.environ, {"ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": ""}):
+        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None):
             p1 = get_provider()
             p2 = get_provider()
         assert p1 is p2
@@ -846,10 +876,10 @@ class TestSingleton:
     def test_reset_forces_new_instance(self):
         from data.market_data import get_provider, reset_provider
         reset_provider()
-        with patch.dict(os.environ, {"ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": ""}):
+        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None):
             p1 = get_provider()
         reset_provider()
-        with patch.dict(os.environ, {"ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": ""}):
+        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None):
             p2 = get_provider()
         assert p1 is not p2
 
@@ -995,9 +1025,10 @@ class TestCompositeProviderFundamentalsCache:
 
     def test_composite_caches_final_result(self):
         from data.market_data import CompositeProvider
-        with patch.dict(os.environ, {
-            "FINNHUB_API_KEY": "", "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": "",
-        }):
+        with patch.multiple(
+            "settings.settings",
+            FINNHUB_API_KEY=None, ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+        ):
             cp = CompositeProvider()
             call_count = {"n": 0}
 
@@ -1051,3 +1082,93 @@ class TestRobinhoodOutputSuppression:
         with _suppress_rs_output():
             assert _rs_helper.get_output() is not original
         assert _rs_helper.get_output() is original
+
+
+# ---------------------------------------------------------------------------
+# 11. CompositeProvider config sourced from settings.settings, not os.environ
+#     (2026-07 fix -- mirrors signals/news_catalyst.py::build_finnhub_client
+#     and prompt_registry/registry.py's precedent: pydantic-settings'
+#     env_file=".env" loading populates settings.settings directly, NOT the
+#     real os.environ, so every knob CompositeProvider reads must come from
+#     settings.settings.X. Each test below patches settings.settings ONLY
+#     (never os.environ) with a value that differs from the hard-coded
+#     fallback default, so a regression back to os.environ.get(...) would
+#     make the assertion observe the stale default instead and fail.
+# ---------------------------------------------------------------------------
+
+class TestCompositeProviderSettingsWiring:
+    def _patched(self, **overrides):
+        base = dict(
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+        )
+        base.update(overrides)
+        return patch.multiple("settings.settings", **base)
+
+    def test_quote_ttl_sourced_from_settings(self):
+        from data.market_data import CompositeProvider
+        with self._patched(MARKET_DATA_QUOTE_TTL_SECONDS=77):
+            cp = CompositeProvider()
+        assert cp._cache._ttl == 77
+
+    def test_bars_ttl_sourced_from_settings(self):
+        from data.market_data import CompositeProvider
+        with self._patched(MARKET_DATA_BARS_TTL_SECONDS=123):
+            cp = CompositeProvider()
+        assert cp._bars_cache._ttl == 123
+
+    def test_bars_ttl_lazy_init_fallback_sourced_from_settings(self):
+        """get_intraday_bars' __new__-fixture lazy-init branch must also read
+        settings.settings, not just __init__'s primary path."""
+        from data.market_data import CompositeProvider, YFinanceProvider
+        with self._patched(MARKET_DATA_BARS_TTL_SECONDS=456):
+            cp = CompositeProvider.__new__(CompositeProvider)
+            cp._quote_provider = MagicMock(spec=YFinanceProvider)
+            cp._quote_provider.get_intraday_bars.return_value = pd.DataFrame(
+                {"Open": [1.0], "High": [1.0], "Low": [1.0], "Close": [1.0], "Volume": [1]},
+                index=pd.DatetimeIndex(["2025-01-01"]),
+            )
+            cp.get_intraday_bars("AAPL")
+        assert cp._bars_cache._ttl == 456
+
+    def test_fundamentals_cache_ttls_sourced_from_settings(self):
+        from data.market_data import CompositeProvider
+        with self._patched(
+            FUNDAMENTALS_CACHE_TTL_SECONDS=5000, FUNDAMENTALS_NEG_CACHE_TTL_SECONDS=50,
+        ):
+            cp = CompositeProvider()
+        assert cp._fundamentals_cache._ttl == 5000
+        assert cp._fundamentals_cache._neg_ttl == 50
+
+    def test_fundamentals_cache_ttls_lazy_init_fallback_sourced_from_settings(self):
+        """get_fundamentals' __new__-fixture lazy-init branch must also read
+        settings.settings, not just __init__'s primary path."""
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider
+        with self._patched(
+            FUNDAMENTALS_CACHE_TTL_SECONDS=6000, FUNDAMENTALS_NEG_CACHE_TTL_SECONDS=60,
+        ):
+            cp = CompositeProvider.__new__(CompositeProvider)
+            cp._quote_provider = MagicMock()
+            cp._fundamentals_provider = MagicMock(spec=YahooFundamentalsProvider)
+            cp._fundamentals_provider.get_fundamentals.return_value = {"trailingPE": 1.0}
+            cp.get_fundamentals("AAPL")
+        assert cp._fundamentals_cache._ttl == 6000
+        assert cp._fundamentals_cache._neg_ttl == 60
+
+    def test_fundamentals_source_yfinance_info_sourced_from_settings(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+        with self._patched(FUNDAMENTALS_SOURCE="yfinance_info"):
+            cp = CompositeProvider()
+        assert isinstance(cp._fundamentals_provider, YFinanceProvider)
+
+    def test_fundamentals_source_yahoo_sourced_from_settings(self):
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider
+        with self._patched(FUNDAMENTALS_SOURCE="yahoo"):
+            cp = CompositeProvider()
+        assert isinstance(cp._fundamentals_provider, YahooFundamentalsProvider)
+
+    def test_beta_lookback_days_sourced_from_settings(self):
+        from data.market_data import YahooFundamentalsProvider
+        with patch("settings.settings.BETA_LOOKBACK_DAYS", 90):
+            assert YahooFundamentalsProvider._beta_period() == "3mo"
+        with patch("settings.settings.BETA_LOOKBACK_DAYS", 1260):
+            assert YahooFundamentalsProvider._beta_period() == "5y"
