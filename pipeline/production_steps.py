@@ -1198,6 +1198,12 @@ def _apply_fmp_insider(dashboard_df: pd.DataFrame) -> None:
     That 45 is a conservative judgment call, not a constant derived from any
     SEC rule. A symbol with no sufficiently-lagged quarter gets NaN, never a
     fabricated ratio. Never raises (CONSTRAINT #6).
+
+    Wall-clock budget: ``settings.FMP_MAX_SECONDS_PER_CYCLE`` bounds the
+    whole per-symbol loop (measured via ``time.monotonic()``, matching the
+    ``data/etf_holdings.py`` precedent). Once the budget is spent the loop
+    stops outright and every symbol not yet reached that cycle stays NaN --
+    an honest gap, never a fabricated value.
     """
     for col in _FMP_INSIDER_COLUMNS:
         dashboard_df[col] = float('nan')
@@ -1208,14 +1214,97 @@ def _apply_fmp_insider(dashboard_df: pd.DataFrame) -> None:
         return
 
     try:
-        # TODO(wave-1, agent F4): fetch via data/fmp_feeds_market.py --
-        # cadence-gate on HistoricalStore.latest_insider_fetched_at(symbol) vs
-        # settings.FMP_INSIDER_REFRESH_DAYS, persist via
-        # HistoricalStore.upsert_insider_stats(), then read back and APPLY THE
-        # MINIMUM-LAG FILTER (settings.FMP_INSIDER_MIN_LAG_DAYS) before
-        # deriving the ratio. A quarter ending 10 days ago must be EXCLUDED;
-        # one ending 100 days ago included.
-        return
+        import time as _time
+        from datetime import date as _date
+
+        from data.fmp_feeds_market import fetch_insider_stats
+        from data.historical_store import HistoricalStore
+
+        symbols = sorted({
+            str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
+            if str(s).strip()
+        })
+        if not symbols:
+            return
+
+        store = HistoricalStore()
+        refresh_days = int(getattr(settings, "FMP_INSIDER_REFRESH_DAYS", 7) or 7)
+        min_lag_days = int(getattr(settings, "FMP_INSIDER_MIN_LAG_DAYS", 45) or 45)
+        max_seconds = float(getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", 120.0) or 120.0)
+        # (month, day) of the last calendar day of each fiscal quarter --
+        # the causal anchor the minimum-lag filter measures from.
+        quarter_end = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
+
+        def _to_int(value: Any) -> Optional[int]:
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        as_of = _date.today()
+        deadline = _time.monotonic() + max_seconds
+        ratio_map: dict = {}
+
+        for sym in symbols:
+            if _time.monotonic() >= deadline:
+                logger.warning(
+                    "FMP insider feed: wall-clock ceiling (%.0fs) reached "
+                    "after %d/%d symbols; remaining symbols stay NaN this "
+                    "cycle.", max_seconds, len(ratio_map), len(symbols),
+                )
+                break
+
+            # ── Cadence gate (per symbol, in DAYS -- not the hour-based
+            # cadence the analyst/earnings feeds use) ──────────────────────
+            due = True
+            try:
+                last_fetched_str = store.latest_insider_fetched_at(sym)
+            except Exception:
+                last_fetched_str = None
+            if last_fetched_str:
+                try:
+                    last_fetched = datetime.fromisoformat(str(last_fetched_str))
+                    if last_fetched.tzinfo is None:
+                        last_fetched = last_fetched.replace(tzinfo=timezone.utc)
+                    age_days = (
+                        datetime.now(timezone.utc) - last_fetched
+                    ).total_seconds() / 86400.0
+                    due = age_days >= refresh_days
+                except Exception:
+                    due = True
+
+            if due:
+                fetched_rows = fetch_insider_stats(sym)
+                if fetched_rows:
+                    store.upsert_insider_stats(fetched_rows)
+
+            # ── Read back the FULL archive and apply the minimum-lag filter
+            # ourselves -- get_insider_stats() deliberately does not, so the
+            # archive stays a complete, auditable record of what was
+            # fetched. Rows come back newest-quarter-first, so the first row
+            # whose quarter ended >= min_lag_days ago IS the most recent
+            # surviving quarter. ──────────────────────────────────────────
+            stored_rows = store.get_insider_stats(sym)
+            for row in stored_rows:
+                month_day = quarter_end.get(_to_int(row.get('quarter')))
+                year = _to_int(row.get('year'))
+                if month_day is None or year is None:
+                    continue
+                try:
+                    q_end = _date(year, month_day[0], month_day[1])
+                except (TypeError, ValueError):
+                    continue
+                if (as_of - q_end).days >= min_lag_days:
+                    ratio = row.get('acquired_disposed_ratio')
+                    ratio_map[sym] = float(ratio) if ratio is not None else float('nan')
+                    break
+            else:
+                ratio_map[sym] = float('nan')
+
+        _upper = dashboard_df['Symbol'].astype(str).str.upper().str.strip()
+        dashboard_df['Insider_Buy_Sell_Ratio'] = _upper.map(ratio_map)
     except Exception as exc:
         logger.warning("FMP insider feed failed (non-fatal): %s", exc)
         for col in _FMP_INSIDER_COLUMNS:
@@ -1242,6 +1331,18 @@ def _apply_fmp_sector(dashboard_df: pd.DataFrame) -> None:
     A symbol whose ``sector`` is missing/unknown, or a sector the snapshot did
     not cover, gets NaN -- never a universe-average stand-in. Never raises
     (CONSTRAINT #6).
+
+    **Cadence gate, and the setting that does not exist.** This feed is
+    cycle-wide (2 requests total), so it is gated ONCE per cycle via
+    ``HistoricalStore.latest_sector_snapshot_date()`` rather than per symbol.
+    There is no dedicated ``FMP_SECTOR_*_REFRESH_*`` setting in this series --
+    this function was written by an agent that does not own ``settings.py``
+    and is not authorized to add one -- so the cadence used here is a fixed
+    "once per calendar day": if the most recent stored snapshot date is not
+    TODAY, fetch; otherwise read the archive only. This is a deliberate
+    substitute for a missing setting, not a discovered constant, and it should
+    be promoted to a real ``FMP_SECTOR_SNAPSHOT_REFRESH_HOURS`` setting if an
+    operator ever wants intraday sector-snapshot refreshes.
     """
     for col in _FMP_SECTOR_COLUMNS:
         dashboard_df[col] = float('nan')
@@ -1252,14 +1353,51 @@ def _apply_fmp_sector(dashboard_df: pd.DataFrame) -> None:
         return
 
     try:
-        # TODO(wave-1, agent F4): fetch via data/fmp_feeds_market.py --
-        # ALWAYS call the dated endpoint form, persist via
-        # HistoricalStore.upsert_sector_snapshots() stamping the SOURCE's
-        # snapshot date (not today's fetch time), then map
-        # dashboard_df['sector'] -> {sector: pe/change_pct}. Cadence-gate on
-        # HistoricalStore.latest_sector_snapshot_date() so an intraday
-        # --interval loop doesn't re-spend the 2 requests every pass.
-        return
+        from datetime import date as _date
+
+        from data.fmp_feeds_market import fetch_sector_snapshot
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore()
+        today_str = _date.today().isoformat()
+
+        # Cadence gate ONCE per cycle (not per symbol) -- see the docstring
+        # for why "once per calendar day" rather than a settings-driven
+        # refresh window.
+        latest_date = store.latest_sector_snapshot_date()
+        if latest_date != today_str:
+            fetched_rows = fetch_sector_snapshot(today_str)
+            if fetched_rows:
+                store.upsert_sector_snapshots(fetched_rows)
+
+        snapshot_map = store.get_sector_snapshots(as_of=today_str)
+        if not snapshot_map:
+            return
+
+        def _to_float(value: Any) -> float:
+            if value is None:
+                return float('nan')
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float('nan')
+
+        pe_by_sector = {
+            sector: _to_float(data.get('pe')) for sector, data in snapshot_map.items()
+        }
+        change_by_sector = {
+            sector: _to_float(data.get('change_pct'))
+            for sector, data in snapshot_map.items()
+        }
+
+        # Exactly the _apply_sector_heat_factor write-back idiom: map the
+        # existing 'sector' column through a {sector: value} dict. A symbol
+        # whose sector is missing/unknown, or not present in the snapshot,
+        # is not a key in either dict and .map() naturally leaves it NaN
+        # (CONSTRAINT #4) -- never a universe-average or neighboring-sector
+        # stand-in.
+        dashboard_df['Sector_PE'] = dashboard_df['sector'].map(pe_by_sector)
+        dashboard_df['Sector_1D_Change'] = dashboard_df['sector'].map(change_by_sector)
     except Exception as exc:
         logger.warning("FMP sector snapshot feed failed (non-fatal): %s", exc)
         for col in _FMP_SECTOR_COLUMNS:
