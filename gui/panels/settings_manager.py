@@ -110,6 +110,40 @@ _SETTINGS_LAYOUT: List[tuple[str, str]] = [
     ("ETF_HOLDINGS_TICKERS", "tickers"),
     ("ETF_TRANSMISSION_WRAPPERS", "tickers"),
     ("ETF_TRANSMISSION_EXCLUDED_SYMBOLS", "tickers"),
+    # Financial Modeling Prep (data/fmp_client.py + its consumers). The
+    # credential FMP_API_KEY is deliberately ABSENT here -- it is a SECRET_KEY,
+    # masked and never GUI-writable (CONSTRAINT #3). Every switch below
+    # defaults to False / today's exact behavior; see gui/env_io.py's
+    # ALLOWED_KEYS block for the family docstring and the two-gate pairings
+    # (quotes/bars also need MARKET_DATA_PROVIDER=fmp; fundamentals also needs
+    # FUNDAMENTALS_SOURCE=fmp).
+    ("FMP_QUOTES_ENABLED", "bool"),
+    ("FMP_BARS_ENABLED", "bool"),
+    ("FMP_FUNDAMENTALS_ENABLED", "bool"),
+    ("FMP_ANALYST_ENABLED", "bool"),
+    ("FMP_EARNINGS_ENABLED", "bool"),
+    ("FMP_MACRO_ENABLED", "bool"),
+    ("FMP_INSIDER_ENABLED", "bool"),
+    ("FMP_SECTOR_SNAPSHOT_ENABLED", "bool"),
+    ("FMP_FALLBACK_ENABLED", "bool"),
+    ("FMP_QUOTES_REALTIME", "bool"),
+    ("FMP_MAX_RETRIES", "int"),
+    ("FMP_COOLDOWN_THRESHOLD", "int"),
+    ("FMP_ANALYST_REFRESH_HOURS", "int"),
+    ("FMP_EARNINGS_REFRESH_HOURS", "int"),
+    ("FMP_INSIDER_REFRESH_DAYS", "int"),
+    ("FMP_INSIDER_MIN_LAG_DAYS", "int"),
+    ("FMP_TIMEOUT_SECONDS", "number"),
+    ("FMP_MIN_REQUEST_INTERVAL_SECONDS", "number"),
+    ("FMP_RETRY_BACKOFF_SECONDS", "number"),
+    ("FMP_COOLDOWN_SECONDS", "number"),
+    ("FMP_MAX_SECONDS_PER_CYCLE", "number"),
+    ("FMP_BASE_URL", "text"),
+    # 'dividend-adjusted' is the ONLY variant matching the incumbent yfinance
+    # auto_adjust=True convention -- see settings.FMP_BARS_ADJUSTMENT before
+    # changing it; 'full' is the obvious-looking pick and it is wrong.
+    ("FMP_BARS_ADJUSTMENT", "text"),
+    ("FMP_ECON_INDICATORS", "text"),
 ]
 
 

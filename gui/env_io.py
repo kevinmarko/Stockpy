@@ -229,6 +229,38 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
     "ETF_TRANSMISSION_COV_INFLATION",
     "ETF_TRANSMISSION_COV_WINDOW_DAYS",
+    # Financial Modeling Prep (data/fmp_client.py + its consumers). All 24 keys
+    # below are non-secret operational tunables; the credential itself
+    # (FMP_API_KEY) is in SECRET_KEYS — CONSTRAINT #3, never GUI-writable.
+    # Every default reproduces today's exact behavior: the eight feed master
+    # switches default False, and the client-tuning knobs are only ever
+    # consulted once a request is actually being made. FMP_ECON_INDICATORS is a
+    # comma-separated STRING (the SENTIMENT_SOURCES convention), NOT a
+    # _JSON_KEY — do not add it there.
+    "FMP_BASE_URL",                       # str  — API base (the '/stable' family)
+    "FMP_TIMEOUT_SECONDS",                # float — per-request HTTP timeout
+    "FMP_MIN_REQUEST_INTERVAL_SECONDS",   # float — issuance spacing (0.25 = 240/min)
+    "FMP_MAX_RETRIES",                    # int  — retries on 429/5xx only
+    "FMP_RETRY_BACKOFF_SECONDS",          # float — exponential-backoff base
+    "FMP_COOLDOWN_THRESHOLD",             # int  — consecutive failures that open the breaker
+    "FMP_COOLDOWN_SECONDS",               # float — how long the breaker stays open
+    "FMP_QUOTES_ENABLED",                 # bool — also needs MARKET_DATA_PROVIDER=fmp
+    "FMP_BARS_ENABLED",                   # bool — also needs MARKET_DATA_PROVIDER=fmp
+    "FMP_FUNDAMENTALS_ENABLED",           # bool — also needs FUNDAMENTALS_SOURCE=fmp
+    "FMP_ANALYST_ENABLED",                # bool — diagnostic analyst columns
+    "FMP_EARNINGS_ENABLED",               # bool — Earnings_Date second source + surprises
+    "FMP_MACRO_ENABLED",                  # bool — treasury/econ into macro_history
+    "FMP_INSIDER_ENABLED",                # bool — per-symbol insider statistics
+    "FMP_SECTOR_SNAPSHOT_ENABLED",        # bool — 2 dated sector snapshots per cycle
+    "FMP_FALLBACK_ENABLED",               # bool — fall through to Alpaca/yfinance/Yahoo
+    "FMP_QUOTES_REALTIME",                # bool — label FMP quotes real-time (unverified on Starter)
+    "FMP_BARS_ADJUSTMENT",                # str  — EOD variant; 'dividend-adjusted' matches yfinance
+    "FMP_ANALYST_REFRESH_HOURS",          # int  — analyst cadence gate
+    "FMP_EARNINGS_REFRESH_HOURS",         # int  — earnings cadence gate
+    "FMP_INSIDER_REFRESH_DAYS",           # int  — insider cadence gate
+    "FMP_INSIDER_MIN_LAG_DAYS",           # int  — quarter-close lag before an aggregate is read
+    "FMP_ECON_INDICATORS",                # str  — comma-separated series names (not JSON)
+    "FMP_MAX_SECONDS_PER_CYCLE",          # float — per-cycle wall-clock budget
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -297,6 +329,10 @@ SECRET_KEYS: tuple[str, ...] = (
     # that shouldn't be GUI-editable any more than the other source configs
     # above; classified here rather than ALLOWED_KEYS for the same reason.
     "EDGAR_USER_AGENT",
+    # Financial Modeling Prep credential (data/fmp_client.py). CONSTRAINT #3 —
+    # masked in the GUI, never GUI-writable; hand-edit .env to set/rotate it.
+    # Its 24 non-secret operational tunables live in ALLOWED_KEYS above.
+    "FMP_API_KEY",
 )
 
 # Keys whose values are JSON-encoded structures (lists/dicts) in .env.
