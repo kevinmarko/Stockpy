@@ -849,6 +849,561 @@ def _apply_etf_transmission_multiplier(dashboard_df: pd.DataFrame) -> None:
         dashboard_df['ETF_Transmission_Multiplier'] = float('nan')
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Financial Modeling Prep diagnostic feeds
+#
+# Four writers for the eight FMP columns in config.COLUMN_SCHEMA's "FMP
+# DIAGNOSTIC FEEDS" section. All four follow the ``_apply_sector_heat_factor``
+# template above EXACTLY, and the ordering discipline is load-bearing:
+#
+#   1. NaN-fill the columns FIRST, before ANY branch. Every early return --
+#      gate off, empty universe, missing column, total failure -- must leave
+#      genuinely-missing cells NaN rather than a fabricated default
+#      (CONSTRAINT #4), and the only way to guarantee that across every exit
+#      path is to write the NaNs before the first `if`.
+#   2. Then the settings gate, read via ``getattr(settings, ..., False)``.
+#   3. Then a LAZY import of the feed module inside the try block.
+#   4. Plain module ``logger``, never the ``telemetry`` proxy -- ``telemetry
+#      .__getattr__`` lazily imports ``main_orchestrator`` (and its whole heavy
+#      engine chain) on first attribute access, defeating the light import
+#      footprint that makes these functions unit-testable in isolation.
+#   5. ``except Exception`` that RE-NaNs the columns. Never raises
+#      (CONSTRAINT #6): a feed failure degrades the column, not the cycle.
+#
+# **Diagnostic only, structurally.** No SignalModule reads any of these
+# columns, none has a SIGNAL_WEIGHTS entry, and none enters dto_models.py or
+# signals/ -- see the COLUMN_SCHEMA section comment for why that is also the
+# no-lookahead guarantee mechanism for this whole series.
+#
+# As of this commit these are COMPLETE, WORKING NO-OPS: every gate defaults
+# False, so each function NaN-fills and returns having performed zero I/O.
+# The fetch/populate logic lands in wave 1 at the marked TODO in each body.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FMP_ANALYST_COLUMNS = (
+    'Analyst_Target_Consensus',
+    'Analyst_Target_Upside',
+    'Analyst_Grade_Score',
+)
+
+_FMP_EARNINGS_COLUMNS = (
+    'Days_To_Earnings',
+    'Last_EPS_Surprise_Pct',
+)
+
+_FMP_INSIDER_COLUMNS = (
+    'Insider_Buy_Sell_Ratio',
+)
+
+_FMP_SECTOR_COLUMNS = (
+    'Sector_PE',
+    'Sector_1D_Change',
+)
+
+
+def _apply_fmp_analyst(dashboard_df: pd.DataFrame) -> None:
+    """Populate the three FMP analyst-consensus columns.
+
+    ``Analyst_Target_Consensus`` (currency), ``Analyst_Target_Upside``
+    (percent, consensus vs. current Price), ``Analyst_Grade_Score`` (number).
+    Sources: FMP ``/price-target-consensus`` and ``/grades-summary``, on a
+    ``settings.FMP_ANALYST_REFRESH_HOURS`` (24h) cadence so a steady-state
+    cycle spends zero requests here.
+
+    **NO POINT-IN-TIME GUARANTEE, and that is enforced structurally rather
+    than by convention:** FMP serves only the CURRENT consensus, and price
+    targets get revised, so a target read today for a past date is the
+    post-revision number and not what the market saw. Nothing may promote
+    these columns into ``dto_models.py`` or ``signals/`` until
+    ``HistoricalStore.analyst_history`` has accumulated its own real forward
+    archive (see that table's DDL comment).
+
+    NaN on every failure path, never 0.0 (CONSTRAINT #4) -- "no analyst
+    coverage" and "a consensus target of zero" are different facts. Never
+    raises (CONSTRAINT #6).
+    """
+    for col in _FMP_ANALYST_COLUMNS:
+        dashboard_df[col] = float('nan')
+
+    if not getattr(settings, "FMP_ANALYST_ENABLED", False):
+        return
+    if dashboard_df.empty or 'Symbol' not in dashboard_df.columns:
+        return
+
+    try:
+        import time as _time
+
+        from data.fmp_feeds_company import fetch_analyst_snapshot
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore()
+        refresh_hours = float(getattr(settings, "FMP_ANALYST_REFRESH_HOURS", 24) or 24)
+        raw_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", None)
+        max_seconds = max(0.0, float(120.0 if raw_budget is None else raw_budget))
+        deadline = _time.monotonic() + max_seconds
+
+        symbols = sorted({
+            str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
+            if str(s).strip()
+        })
+        if not symbols:
+            return
+
+        today_str = datetime.now(timezone.utc).date().isoformat()
+
+        def _hours_since_as_of(as_of_str: str) -> Optional[float]:
+            try:
+                as_of_date = datetime.strptime(str(as_of_str)[:10], "%Y-%m-%d")
+            except (TypeError, ValueError):
+                return None
+            now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+            return (now_naive - as_of_date).total_seconds() / 3600.0
+
+        consensus_map: dict[str, float] = {}
+        grade_map: dict[str, float] = {}
+        budget_exhausted = False
+
+        for sym in symbols:
+            if not budget_exhausted and _time.monotonic() >= deadline:
+                budget_exhausted = True
+                logger.warning(
+                    "FMP analyst feed: cycle time budget (%.0fs) reached; "
+                    "remaining symbols served from archive/NaN only this cycle.",
+                    max_seconds,
+                )
+
+            latest_as_of = store.latest_analyst_as_of(sym)
+            age_hours = _hours_since_as_of(latest_as_of) if latest_as_of else None
+            fresh_enough = age_hours is not None and age_hours < refresh_hours
+
+            if not fresh_enough and not budget_exhausted:
+                fetched = fetch_analyst_snapshot(sym)
+                if fetched:
+                    store.upsert_analyst_snapshot(
+                        sym,
+                        today_str,
+                        target_consensus=fetched.get("target_consensus"),
+                        target_median=fetched.get("target_median"),
+                        target_high=fetched.get("target_high"),
+                        target_low=fetched.get("target_low"),
+                        grade_score=fetched.get("grade_score"),
+                        source=fetched.get("source", "fmp"),
+                    )
+
+            snapshot = store.get_analyst_snapshot(sym)
+            if not snapshot:
+                continue
+            tc = snapshot.get("target_consensus")
+            if tc is not None:
+                consensus_map[sym] = float(tc)
+            gs = snapshot.get("grade_score")
+            if gs is not None:
+                grade_map[sym] = float(gs)
+
+        upper_symbol = dashboard_df['Symbol'].astype(str).str.upper().str.strip()
+        dashboard_df['Analyst_Target_Consensus'] = upper_symbol.map(consensus_map)
+        dashboard_df['Analyst_Grade_Score'] = upper_symbol.map(grade_map)
+
+        if 'Price' in dashboard_df.columns:
+            def _upside(sym: str, price: Any) -> float:
+                tc = consensus_map.get(sym)
+                if tc is None:
+                    return float('nan')
+                try:
+                    price_f = float(price)
+                except (TypeError, ValueError):
+                    return float('nan')
+                if price_f <= 0:
+                    return float('nan')
+                return (tc / price_f) - 1.0
+
+            dashboard_df['Analyst_Target_Upside'] = [
+                _upside(sym, price)
+                for sym, price in zip(upper_symbol, dashboard_df['Price'])
+            ]
+    except Exception as exc:
+        logger.warning("FMP analyst feed failed (non-fatal): %s", exc)
+        for col in _FMP_ANALYST_COLUMNS:
+            dashboard_df[col] = float('nan')
+
+
+def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
+    """Populate the FMP earnings columns.
+
+    ``Days_To_Earnings`` (number) and ``Last_EPS_Surprise_Pct`` (percent) are
+    new; the EXISTING ``Earnings_Date`` column is ALSO written when this gate
+    is on, making FMP a SECOND source for it alongside Finnhub's news-catalyst
+    path (and unlike Finnhub, FMP is not limited to a 30-day forward window).
+    That column is deliberately shared rather than duplicated -- see
+    config.COLUMN_SCHEMA's FMP section.
+
+    **Why a future-dated row is not lookahead.** A scheduled earnings DATE is
+    publicly announced in advance, so knowing it is legitimate; knowing the
+    RESULT is not. The four rules that keep those apart (each with a test in
+    the wave-1 feed module, and restated on the ``earnings_events`` DDL):
+
+      1. A row counts as "actual" IFF ``eps_actual`` is not None. NULL is
+         never read as 0.0 -- that would turn an unreported quarter into a
+         100% miss (CONSTRAINT #4).
+      2. ``Last_EPS_Surprise_Pct`` uses only rows with ``event_date <= as_of``
+         AND a non-null actual -- BOTH, so a vendor bug populating an actual
+         on a future row cannot slip through the date filter alone.
+      3. ``Days_To_Earnings`` / the next date come from ``event_date > as_of``.
+         Deliberate. Do not "fix" this later.
+      4. The vendor's ``lastUpdated`` is persisted verbatim to make a future
+         PIT replay possible -- an IMPERFECT defense, not a guarantee (a
+         backfilled actual with a stale stamp defeats it).
+
+    Never raises (CONSTRAINT #6); every failure path leaves NaN.
+    """
+    for col in _FMP_EARNINGS_COLUMNS:
+        dashboard_df[col] = float('nan')
+
+    if not getattr(settings, "FMP_EARNINGS_ENABLED", False):
+        return
+    if dashboard_df.empty or 'Symbol' not in dashboard_df.columns:
+        return
+
+    try:
+        import time as _time
+
+        from data.fmp_feeds_company import fetch_earnings_rows
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore()
+        refresh_hours = float(getattr(settings, "FMP_EARNINGS_REFRESH_HOURS", 12) or 12)
+        raw_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", None)
+        max_seconds = max(0.0, float(120.0 if raw_budget is None else raw_budget))
+        deadline = _time.monotonic() + max_seconds
+
+        symbols = sorted({
+            str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
+            if str(s).strip()
+        })
+        if not symbols:
+            return
+
+        as_of = datetime.now(timezone.utc).date().isoformat()
+
+        def _hours_since_fetched_at(fetched_at_str: str) -> Optional[float]:
+            try:
+                fetched_dt = datetime.fromisoformat(str(fetched_at_str))
+            except (TypeError, ValueError):
+                return None
+            if fetched_dt.tzinfo is None:
+                now_cmp = datetime.now(timezone.utc).replace(tzinfo=None)
+            else:
+                now_cmp = datetime.now(timezone.utc)
+            return (now_cmp - fetched_dt).total_seconds() / 3600.0
+
+        days_map: dict[str, float] = {}
+        surprise_map: dict[str, float] = {}
+        next_date_map: dict[str, str] = {}
+        budget_exhausted = False
+
+        for sym in symbols:
+            if not budget_exhausted and _time.monotonic() >= deadline:
+                budget_exhausted = True
+                logger.warning(
+                    "FMP earnings feed: cycle time budget (%.0fs) reached; "
+                    "remaining symbols served from archive/NaN only this cycle.",
+                    max_seconds,
+                )
+
+            latest_fetched_at = store.latest_earnings_fetched_at(sym)
+            age_hours = (
+                _hours_since_fetched_at(latest_fetched_at) if latest_fetched_at else None
+            )
+            fresh_enough = age_hours is not None and age_hours < refresh_hours
+
+            if not fresh_enough and not budget_exhausted:
+                rows = fetch_earnings_rows(sym)
+                if rows:
+                    store.upsert_earnings_events(rows)
+
+            # Trailing surprise: rules 1 + 2 -- event_date <= as_of AND a
+            # non-null actual, BOTH filters, so a vendor bug populating an
+            # actual on a future row cannot slip through the date filter
+            # alone. Never treat a null actual as 0.0 (CONSTRAINT #4).
+            past_rows = store.get_earnings_events(
+                sym, on_or_before=as_of, actuals_only=True, limit=1,
+            )
+            if past_rows:
+                row = past_rows[0]
+                eps_actual = row.get("eps_actual")
+                eps_estimated = row.get("eps_estimated")
+                if eps_actual is not None and eps_estimated not in (None, 0, 0.0):
+                    try:
+                        surprise_map[sym] = (
+                            (float(eps_actual) - float(eps_estimated))
+                            / abs(float(eps_estimated))
+                        )
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        pass
+
+            # Next scheduled date: rule 3 -- event_date > as_of. A publicly
+            # announced future date is not lookahead; the RESULT would be.
+            future_rows = store.get_earnings_events(sym, after=as_of, limit=1)
+            if future_rows:
+                row = future_rows[0]
+                event_date = row.get("event_date")
+                if event_date:
+                    next_date_map[sym] = str(event_date)
+                    try:
+                        d_next = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").date()
+                        d_as_of = datetime.strptime(as_of, "%Y-%m-%d").date()
+                        days_map[sym] = float((d_next - d_as_of).days)
+                    except (TypeError, ValueError):
+                        pass
+
+        upper_symbol = dashboard_df['Symbol'].astype(str).str.upper().str.strip()
+        dashboard_df['Days_To_Earnings'] = upper_symbol.map(days_map)
+        dashboard_df['Last_EPS_Surprise_Pct'] = upper_symbol.map(surprise_map)
+
+        # Rule 4 / the shared-column discipline: only overwrite 'Earnings_Date'
+        # for symbols FMP actually covered (a real next-event date) this
+        # cycle -- a NaN/absent FMP row must never blank a date the Finnhub
+        # news-catalyst write-back already resolved earlier in this same
+        # cycle. If the column doesn't exist yet (unit tests calling this
+        # function standalone), there is nothing to preserve or overwrite.
+        if next_date_map and 'Earnings_Date' in dashboard_df.columns:
+            dashboard_df['Earnings_Date'] = [
+                next_date_map.get(sym, current)
+                for sym, current in zip(upper_symbol, dashboard_df['Earnings_Date'])
+            ]
+    except Exception as exc:
+        logger.warning("FMP earnings feed failed (non-fatal): %s", exc)
+        for col in _FMP_EARNINGS_COLUMNS:
+            dashboard_df[col] = float('nan')
+
+
+def _apply_fmp_insider(dashboard_df: pd.DataFrame) -> None:
+    """Populate ``Insider_Buy_Sell_Ratio`` from FMP insider-trading statistics.
+
+    Source: ``/insider-trading/statistics``, quarterly aggregates keyed
+    ``(symbol, year, quarter)``, on a ``settings.FMP_INSIDER_REFRESH_DAYS``
+    (7d) cadence.
+
+    **The leakage trap here is not the date filter.** A quarter's aggregate
+    KEEPS CHANGING after the quarter ends, because Form 4s continue to land
+    (late filings, amendments) for weeks afterwards. Reading the most recent
+    quarter therefore reads a number that did not exist in that form at the
+    time. The consumer must apply a minimum-lag filter -- only consume a
+    quarter that ended at least ``settings.FMP_INSIDER_MIN_LAG_DAYS`` (default
+    45) days ago -- rather than simply taking the latest stored quarter.
+    ``HistoricalStore.get_insider_stats`` deliberately does NOT apply that
+    filter itself (a storage helper that silently dropped rows would make the
+    archive un-auditable); it belongs here.
+
+    That 45 is a conservative judgment call, not a constant derived from any
+    SEC rule. A symbol with no sufficiently-lagged quarter gets NaN, never a
+    fabricated ratio. Never raises (CONSTRAINT #6).
+
+    Wall-clock budget: ``settings.FMP_MAX_SECONDS_PER_CYCLE`` bounds the
+    whole per-symbol loop (measured via ``time.monotonic()``, matching the
+    ``data/etf_holdings.py`` precedent). Once the budget is spent the loop
+    stops outright and every symbol not yet reached that cycle stays NaN --
+    an honest gap, never a fabricated value.
+    """
+    for col in _FMP_INSIDER_COLUMNS:
+        dashboard_df[col] = float('nan')
+
+    if not getattr(settings, "FMP_INSIDER_ENABLED", False):
+        return
+    if dashboard_df.empty or 'Symbol' not in dashboard_df.columns:
+        return
+
+    try:
+        import time as _time
+        from datetime import date as _date
+
+        from data.fmp_feeds_market import fetch_insider_stats
+        from data.historical_store import HistoricalStore
+
+        symbols = sorted({
+            str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
+            if str(s).strip()
+        })
+        if not symbols:
+            return
+
+        store = HistoricalStore()
+        refresh_days = int(getattr(settings, "FMP_INSIDER_REFRESH_DAYS", 7) or 7)
+        min_lag_days = int(getattr(settings, "FMP_INSIDER_MIN_LAG_DAYS", 45) or 45)
+        max_seconds = float(getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", 120.0) or 120.0)
+        # (month, day) of the last calendar day of each fiscal quarter --
+        # the causal anchor the minimum-lag filter measures from.
+        quarter_end = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
+
+        def _to_int(value: Any) -> Optional[int]:
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        as_of = _date.today()
+        deadline = _time.monotonic() + max_seconds
+        ratio_map: dict = {}
+
+        for sym in symbols:
+            if _time.monotonic() >= deadline:
+                logger.warning(
+                    "FMP insider feed: wall-clock ceiling (%.0fs) reached "
+                    "after %d/%d symbols; remaining symbols stay NaN this "
+                    "cycle.", max_seconds, len(ratio_map), len(symbols),
+                )
+                break
+
+            # ── Cadence gate (per symbol, in DAYS -- not the hour-based
+            # cadence the analyst/earnings feeds use) ──────────────────────
+            due = True
+            try:
+                last_fetched_str = store.latest_insider_fetched_at(sym)
+            except Exception:
+                last_fetched_str = None
+            if last_fetched_str:
+                try:
+                    last_fetched = datetime.fromisoformat(str(last_fetched_str))
+                    if last_fetched.tzinfo is None:
+                        last_fetched = last_fetched.replace(tzinfo=timezone.utc)
+                    age_days = (
+                        datetime.now(timezone.utc) - last_fetched
+                    ).total_seconds() / 86400.0
+                    due = age_days >= refresh_days
+                except Exception:
+                    due = True
+
+            if due:
+                fetched_rows = fetch_insider_stats(sym)
+                if fetched_rows:
+                    store.upsert_insider_stats(fetched_rows)
+
+            # ── Read back the FULL archive and apply the minimum-lag filter
+            # ourselves -- get_insider_stats() deliberately does not, so the
+            # archive stays a complete, auditable record of what was
+            # fetched. Rows come back newest-quarter-first, so the first row
+            # whose quarter ended >= min_lag_days ago IS the most recent
+            # surviving quarter. ──────────────────────────────────────────
+            stored_rows = store.get_insider_stats(sym)
+            for row in stored_rows:
+                month_day = quarter_end.get(_to_int(row.get('quarter')))
+                year = _to_int(row.get('year'))
+                if month_day is None or year is None:
+                    continue
+                try:
+                    q_end = _date(year, month_day[0], month_day[1])
+                except (TypeError, ValueError):
+                    continue
+                if (as_of - q_end).days >= min_lag_days:
+                    ratio = row.get('acquired_disposed_ratio')
+                    ratio_map[sym] = float(ratio) if ratio is not None else float('nan')
+                    break
+            else:
+                ratio_map[sym] = float('nan')
+
+        _upper = dashboard_df['Symbol'].astype(str).str.upper().str.strip()
+        dashboard_df['Insider_Buy_Sell_Ratio'] = _upper.map(ratio_map)
+    except Exception as exc:
+        logger.warning("FMP insider feed failed (non-fatal): %s", exc)
+        for col in _FMP_INSIDER_COLUMNS:
+            dashboard_df[col] = float('nan')
+
+
+def _apply_fmp_sector(dashboard_df: pd.DataFrame) -> None:
+    """Populate ``Sector_PE`` and ``Sector_1D_Change`` from FMP sector snapshots.
+
+    Sources: ``/sector-pe-snapshot`` and ``/sector-performance-snapshot`` --
+    2 requests per CYCLE total for the whole universe, not per symbol, which
+    is why this carries its own settings gate separate from the per-symbol
+    insider feed. Values are mapped onto every ticker row via its ``sector``
+    column, exactly like ``_apply_sector_heat_factor`` above.
+
+    **The one new feed with a real point-in-time story.** Both endpoints are
+    DATE-PARAMETERIZED, so a dated request returns that date's figures rather
+    than today's; the dated form must ALWAYS be used, and the stored ``date``
+    is the source's own snapshot date, never the fetch time. That makes this
+    the only plausible future signal candidate of the four -- but it is still
+    diagnostic-only in v1, because "could be backtested in principle" is not
+    the same as "has accumulated history and has been".
+
+    A symbol whose ``sector`` is missing/unknown, or a sector the snapshot did
+    not cover, gets NaN -- never a universe-average stand-in. Never raises
+    (CONSTRAINT #6).
+
+    **Cadence gate, and the setting that does not exist.** This feed is
+    cycle-wide (2 requests total), so it is gated ONCE per cycle via
+    ``HistoricalStore.latest_sector_snapshot_date()`` rather than per symbol.
+    There is no dedicated ``FMP_SECTOR_*_REFRESH_*`` setting in this series --
+    this function was written by an agent that does not own ``settings.py``
+    and is not authorized to add one -- so the cadence used here is a fixed
+    "once per calendar day": if the most recent stored snapshot date is not
+    TODAY, fetch; otherwise read the archive only. This is a deliberate
+    substitute for a missing setting, not a discovered constant, and it should
+    be promoted to a real ``FMP_SECTOR_SNAPSHOT_REFRESH_HOURS`` setting if an
+    operator ever wants intraday sector-snapshot refreshes.
+    """
+    for col in _FMP_SECTOR_COLUMNS:
+        dashboard_df[col] = float('nan')
+
+    if not getattr(settings, "FMP_SECTOR_SNAPSHOT_ENABLED", False):
+        return
+    if dashboard_df.empty or 'sector' not in dashboard_df.columns:
+        return
+
+    try:
+        from datetime import date as _date
+
+        from data.fmp_feeds_market import fetch_sector_snapshot
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore()
+        today_str = _date.today().isoformat()
+
+        # Cadence gate ONCE per cycle (not per symbol) -- see the docstring
+        # for why "once per calendar day" rather than a settings-driven
+        # refresh window.
+        latest_date = store.latest_sector_snapshot_date()
+        if latest_date != today_str:
+            fetched_rows = fetch_sector_snapshot(today_str)
+            if fetched_rows:
+                store.upsert_sector_snapshots(fetched_rows)
+
+        snapshot_map = store.get_sector_snapshots(as_of=today_str)
+        if not snapshot_map:
+            return
+
+        def _to_float(value: Any) -> float:
+            if value is None:
+                return float('nan')
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float('nan')
+
+        pe_by_sector = {
+            sector: _to_float(data.get('pe')) for sector, data in snapshot_map.items()
+        }
+        change_by_sector = {
+            sector: _to_float(data.get('change_pct'))
+            for sector, data in snapshot_map.items()
+        }
+
+        # Exactly the _apply_sector_heat_factor write-back idiom: map the
+        # existing 'sector' column through a {sector: value} dict. A symbol
+        # whose sector is missing/unknown, or not present in the snapshot,
+        # is not a key in either dict and .map() naturally leaves it NaN
+        # (CONSTRAINT #4) -- never a universe-average or neighboring-sector
+        # stand-in.
+        dashboard_df['Sector_PE'] = dashboard_df['sector'].map(pe_by_sector)
+        dashboard_df['Sector_1D_Change'] = dashboard_df['sector'].map(change_by_sector)
+    except Exception as exc:
+        logger.warning("FMP sector snapshot feed failed (non-fatal): %s", exc)
+        for col in _FMP_SECTOR_COLUMNS:
+            dashboard_df[col] = float('nan')
+
+
 def _build_etf_transmission_cov_matrix(
     symbols: list, tech_raw: dict,
 ) -> Optional[pd.DataFrame]:
@@ -1150,6 +1705,23 @@ class StrategyEvalStep(PipelineStep):
         # False, which every consumer reads as the exact 1.0 no-op, making
         # the disabled path byte-identical to the pre-feature behavior.
         _apply_etf_transmission_multiplier(ctx.dashboard_df)
+
+        # Financial Modeling Prep diagnostic feeds -- eight columns across
+        # four independently-gated feeds (analyst / earnings / insider /
+        # sector snapshot). Complete no-ops (zero network calls, every column
+        # NaN) while their FMP_*_ENABLED gates are False, which is the
+        # default, so this block is byte-identical to the pre-feature
+        # behavior until an operator flips a flag in .env. Placed here, next
+        # to the other _apply_* feature writers and AFTER the Earnings_Date
+        # write-back above, because _apply_fmp_earnings becomes a SECOND
+        # source for that shared column. None of these eight is read by
+        # scoring, sizing, or execution -- see config.COLUMN_SCHEMA's "FMP
+        # DIAGNOSTIC FEEDS" section for why that is also the no-lookahead
+        # guarantee for this series.
+        _apply_fmp_analyst(ctx.dashboard_df)
+        _apply_fmp_earnings(ctx.dashboard_df)
+        _apply_fmp_insider(ctx.dashboard_df)
+        _apply_fmp_sector(ctx.dashboard_df)
 
         # Wikipedia-pageviews investor-attention feature (follow-on branch
         # to PR #416/#417) -- data/attention_sources.py

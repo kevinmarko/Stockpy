@@ -479,6 +479,181 @@ CREATE INDEX IF NOT EXISTS idx_etf_holdings_holding
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DDL — analyst_history (FORWARD-ARCHIVE ONLY; Financial Modeling Prep)
+#
+# Same rationale as ``news_history`` above, and for the same reason: FMP serves
+# only the *current* analyst consensus. There is no as-of snapshot endpoint on
+# the Starter plan, and price targets get REVISED — a target you read today for
+# a date six months ago is the post-revision number, not what the market saw.
+#
+# So: there is NO honest way to backtest a signal built on this table until it
+# has accumulated its own real history going forward from whenever this ships.
+# That is the whole point of the table existing while the corresponding
+# dashboard columns stay diagnostic-only (config.COLUMN_SCHEMA's FMP section):
+# after ~6-12+ months of accumulated rows a genuine point-in-time study becomes
+# possible, and until then nothing in signals/ or dto_models.py may read it.
+#
+# ``as_of`` is the cycle's own observation date (when WE saw this consensus),
+# NOT any vendor-supplied revision date — the vendor does not publish one, and
+# inventing a more precise-looking anchor than we actually have would be worse
+# than an honest observation stamp. ``fetched_at`` is the separate wall-clock
+# stamp used for the 24h cadence check; the two must never be conflated.
+#
+# NULL (read back as NaN, never 0.0 — CONSTRAINT #4) for any figure the vendor
+# did not report: "no coverage" and "a consensus target of zero" are different
+# facts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ANALYST_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS analyst_history (
+    symbol            TEXT NOT NULL,
+    as_of             TEXT NOT NULL,
+    target_consensus  REAL,
+    target_median     REAL,
+    target_high       REAL,
+    target_low        REAL,
+    grade_score       REAL,
+    source            TEXT,
+    fetched_at        TEXT NOT NULL,
+    PRIMARY KEY (symbol, as_of)
+)
+"""
+
+_ANALYST_HISTORY_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_analyst_history_symbol
+    ON analyst_history (symbol, as_of)
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — earnings_events (Financial Modeling Prep earnings calendar + surprises)
+#
+# Rows may be FUTURE-DATED with NULL actuals, and that is normal and correct:
+# a scheduled earnings DATE is publicly announced in advance, so knowing it is
+# not lookahead. Knowing the RESULT is. Concretely, the read-side rules any
+# consumer must apply (each has a test in the wave-1 feed module):
+#
+#   1. A row counts as "actual" IFF ``eps_actual IS NOT NULL``. NULL is never
+#      to be read as 0.0 — that would turn every unreported quarter into a
+#      100%-miss (CONSTRAINT #4).
+#   2. A trailing surprise uses only rows with ``event_date <= as_of`` AND
+#      ``eps_actual IS NOT NULL`` — BOTH, so a vendor bug that populates an
+#      actual on a future row cannot slip through the date filter alone.
+#   3. The next scheduled date / days-to-earnings come from
+#      ``event_date > as_of``. That is deliberate; do not "fix" it later.
+#   4. ``last_updated`` is the vendor's own row-revision stamp and is persisted
+#      SPECIFICALLY to make a future point-in-time replay possible.
+#
+# Honest limitation on (4): it is an IMPERFECT defense, not a PIT guarantee. A
+# row the vendor backfills with an actual while leaving ``last_updated`` stale
+# defeats it entirely, and we cannot detect that from our side. Say so rather
+# than claiming this table is point-in-time safe — it is not.
+#
+# PK is ``(symbol, event_date)`` so a re-fetch upgrades a scheduled row in
+# place once the result lands, rather than accumulating two rows for one event.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EARNINGS_EVENTS_DDL = """
+CREATE TABLE IF NOT EXISTS earnings_events (
+    symbol             TEXT NOT NULL,
+    event_date         TEXT NOT NULL,
+    eps_actual         REAL,
+    eps_estimated      REAL,
+    revenue_actual     REAL,
+    revenue_estimated  REAL,
+    last_updated       TEXT,
+    source             TEXT,
+    fetched_at         TEXT NOT NULL,
+    PRIMARY KEY (symbol, event_date)
+)
+"""
+
+_EARNINGS_EVENTS_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_earnings_events_symbol_date
+    ON earnings_events (symbol, event_date)
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — insider_stats (Financial Modeling Prep /insider-trading/statistics)
+#
+# Quarterly aggregates of Form 4 insider transactions, keyed
+# ``(symbol, year, quarter)``.
+#
+# The leakage trap here is NOT the date filter — it is that a quarter's
+# aggregate KEEPS CHANGING after the quarter ends, because Form 4s continue to
+# land (late filings, amendments) for weeks afterwards. Reading the most recent
+# quarter therefore reads a number that did not exist in that form at the time,
+# and would not have existed for a backtest positioned then.
+#
+# Consumers must therefore apply a MINIMUM-LAG filter — only consume a quarter
+# that ended at least ``settings.FMP_INSIDER_MIN_LAG_DAYS`` (default 45) days
+# ago — rather than simply taking ``MAX(year, quarter)``. That 45 is a
+# deliberate conservative judgment call, not a constant derived from any SEC
+# rule; it is documented as such in settings.py.
+#
+# NULL (→ NaN, never 0.0) for any unreported figure — CONSTRAINT #4.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_INSIDER_STATS_DDL = """
+CREATE TABLE IF NOT EXISTS insider_stats (
+    symbol                  TEXT    NOT NULL,
+    year                    INTEGER NOT NULL,
+    quarter                 INTEGER NOT NULL,
+    acquired_transactions   INTEGER,
+    disposed_transactions   INTEGER,
+    acquired_disposed_ratio REAL,
+    total_acquired          REAL,
+    total_disposed          REAL,
+    total_purchases         INTEGER,
+    total_sales             INTEGER,
+    source                  TEXT,
+    fetched_at              TEXT    NOT NULL,
+    PRIMARY KEY (symbol, year, quarter)
+)
+"""
+
+_INSIDER_STATS_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_insider_stats_symbol_period
+    ON insider_stats (symbol, year, quarter)
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DDL — sector_snapshots (FMP sector-PE + sector-performance snapshots)
+#
+# The one genuinely point-in-time new feed in this series: both FMP endpoints
+# behind it are DATE-PARAMETERIZED, so a dated request returns that date's
+# figures rather than today's. Consumers must always use the dated form, and
+# ``date`` here is the SOURCE's own snapshot date (part of the PK), never the
+# fetch time — ``fetched_at`` is the separate wall-clock stamp.
+#
+# Because of that, this is also the only one of the four new feeds that is a
+# plausible future signal candidate. It is still diagnostic-only in v1: it has
+# no accumulated history yet either, and "could be backtested in principle"
+# is not the same as "has been".
+#
+# Keyed by sector NAME (the 11-name GICS-style taxonomy shared with
+# data/sector_descriptions.yaml), not by symbol — this is 2 requests per cycle
+# for the whole universe, which is why it carries its own settings gate
+# separate from the per-symbol insider feed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SECTOR_SNAPSHOTS_DDL = """
+CREATE TABLE IF NOT EXISTS sector_snapshots (
+    sector      TEXT NOT NULL,
+    date        TEXT NOT NULL,
+    pe          REAL,
+    change_pct  REAL,
+    source      TEXT,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (sector, date)
+)
+"""
+
+_SECTOR_SNAPSHOTS_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_sector_snapshots_date
+    ON sector_snapshots (date)
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
 # schema_version -- a single-row stamp for this DB file's schema shape.
 #
 # `_ensure_tables()`'s per-table `_migrate_*` helpers are all ADDITIVE
@@ -632,6 +807,20 @@ class HistoricalStore:
                 conn.execute(_RAG_INDEXED_DOCS_INDEX_DDL)
                 conn.execute(_ETF_HOLDINGS_DDL)
                 conn.execute(_ETF_HOLDINGS_INDEX_DDL)
+                # FMP feed tables (analyst / earnings / insider / sector).
+                # Purely additive CREATE TABLE IF NOT EXISTS — no
+                # CURRENT_SCHEMA_VERSION bump needed (see that constant's
+                # comment: additive DDL is the documented upgrade mechanism,
+                # and the stamp exists only for the drift additive migration
+                # cannot self-detect).
+                conn.execute(_ANALYST_HISTORY_DDL)
+                conn.execute(_ANALYST_HISTORY_INDEX_DDL)
+                conn.execute(_EARNINGS_EVENTS_DDL)
+                conn.execute(_EARNINGS_EVENTS_INDEX_DDL)
+                conn.execute(_INSIDER_STATS_DDL)
+                conn.execute(_INSIDER_STATS_INDEX_DDL)
+                conn.execute(_SECTOR_SNAPSHOTS_DDL)
+                conn.execute(_SECTOR_SNAPSHOTS_INDEX_DDL)
                 conn.execute(_SCHEMA_VERSION_DDL)
                 conn.commit()
                 self._migrate_add_report_date_column(conn)
@@ -1095,7 +1284,12 @@ class HistoricalStore:
             return typed
 
         try:
-            self._upsert_fundamentals(symbol, typed, raw, source=_source_name(_provider))
+            # ``raw`` is passed so a per-symbol ``_source`` key (embedded by a
+            # fallback-capable provider) wins over the provider object's own
+            # chain-level label. Absent the key this is unchanged behavior.
+            self._upsert_fundamentals(
+                symbol, typed, raw, source=_source_name(_provider, raw)
+            )
         except Exception as exc:
             logger.warning(
                 "HistoricalStore.get_fundamentals(%s): DB write failed: %s "
@@ -1217,7 +1411,11 @@ class HistoricalStore:
         # ── Step 3: upsert into DB (same write path get_fundamentals() uses) ──
         try:
             typed = _raw_to_typed_fundamentals(raw)
-            self._upsert_fundamentals(symbol, typed, raw, source=_source_name(_provider))
+            # See get_fundamentals() above: the per-symbol ``_source`` key in
+            # ``raw`` wins over the provider object's chain-level label.
+            self._upsert_fundamentals(
+                symbol, typed, raw, source=_source_name(_provider, raw)
+            )
         except Exception as exc:
             logger.warning(
                 "HistoricalStore.get_fundamentals_raw(%s): DB write failed: %s "
@@ -2206,6 +2404,595 @@ class HistoricalStore:
             return None
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Public API — FMP feeds (analyst / earnings / insider / sector)
+    #
+    # Scaffolding for the Financial Modeling Prep integration: the tables and
+    # these accessors exist, but nothing in the platform writes to them until
+    # the corresponding ``pipeline/production_steps.py::_apply_fmp_*`` bodies
+    # are filled in. Every method follows this module's house rules — per-call
+    # try/except, an empty sentinel (``0``/``[]``/``{}``/``None``) on ANY
+    # failure and NEVER a raise (CONSTRAINT #6), and NULL rather than 0.0 for
+    # an unreported figure (CONSTRAINT #4, via ``_nan_to_null``).
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def upsert_analyst_snapshot(
+        self,
+        symbol: str,
+        as_of: str,
+        *,
+        target_consensus: Optional[float] = None,
+        target_median: Optional[float] = None,
+        target_high: Optional[float] = None,
+        target_low: Optional[float] = None,
+        grade_score: Optional[float] = None,
+        source: Optional[str] = None,
+    ) -> int:
+        """Archive ONE cycle's analyst consensus observation for *symbol*.
+
+        Forward-archive only — see the ``analyst_history`` DDL comment for why
+        this table can never be backfilled honestly (FMP serves only the
+        current consensus, and targets get revised).
+
+        ``as_of`` is OUR observation date (``YYYY-MM-DD``), not a vendor
+        revision date. ``INSERT OR REPLACE`` on ``(symbol, as_of)`` so a second
+        cycle on the same day refreshes rather than duplicating.
+
+        Returns 1 on write, 0 on skip or ANY failure (CONSTRAINT #6).
+        """
+        sym = (symbol or "").strip().upper()
+        as_of_str = str(as_of or "").strip()
+        if not sym or not as_of_str:
+            return 0
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO analyst_history
+                            (symbol, as_of, target_consensus, target_median,
+                             target_high, target_low, grade_score, source, fetched_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            sym,
+                            as_of_str,
+                            self._nan_to_null(target_consensus),
+                            self._nan_to_null(target_median),
+                            self._nan_to_null(target_high),
+                            self._nan_to_null(target_low),
+                            self._nan_to_null(grade_score),
+                            str(source) if source else None,
+                            self._now_utc_iso(),
+                        ),
+                    )
+            return 1
+        except Exception as exc:
+            logger.warning(
+                "HistoricalStore.upsert_analyst_snapshot(%s) failed: %s", sym, exc
+            )
+            self._safe_rollback()
+            return 0
+
+    def get_analyst_snapshot(
+        self, symbol: str, *, as_of: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Return the most recent archived analyst observation for *symbol*.
+
+        With ``as_of`` supplied, rows dated AFTER the cutoff are excluded — the
+        storage-layer half of the causality contract, matching
+        ``get_etf_holdings``. With ``as_of=None`` the newest row is returned.
+
+        ``{}`` when nothing is archived OR on any read failure (CONSTRAINT #6).
+        Unreported figures come back as ``None`` (the caller rehydrates to NaN,
+        never 0.0).
+        """
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return {}
+        try:
+            from db_config import session_scope, get_dbapi_connection
+
+            params: List[Any] = [sym]
+            date_clause = ""
+            if as_of:
+                date_clause = " AND as_of <= ?"
+                params.append(str(as_of))
+
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    row = conn.execute(
+                        "SELECT symbol, as_of, target_consensus, target_median, "
+                        "target_high, target_low, grade_score, source, fetched_at "
+                        f"FROM analyst_history WHERE symbol = ?{date_clause} "
+                        "ORDER BY as_of DESC LIMIT 1",
+                        tuple(params),
+                    ).fetchone()
+            if not row:
+                return {}
+            return {
+                "symbol": row[0],
+                "as_of": row[1],
+                "target_consensus": row[2],
+                "target_median": row[3],
+                "target_high": row[4],
+                "target_low": row[5],
+                "grade_score": row[6],
+                "source": row[7],
+                "fetched_at": row[8],
+            }
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_analyst_snapshot(%s) failed: %s", sym, exc)
+            return {}
+
+    def latest_analyst_as_of(self, symbol: str) -> Optional[str]:
+        """Most recent archived ``as_of`` for *symbol*, for the cadence check.
+
+        Deliberately unfiltered by any cutoff — this answers "how current is
+        the archive", which the ``FMP_ANALYST_REFRESH_HOURS`` gate uses to
+        decide whether to spend a request. ``None`` when nothing is stored OR
+        on any read failure (CONSTRAINT #6).
+        """
+        return self._latest_scalar(
+            "SELECT MAX(as_of) FROM analyst_history WHERE symbol = ?",
+            (symbol or "").strip().upper(),
+            label="latest_analyst_as_of",
+        )
+
+    def upsert_earnings_events(self, rows: List[Dict[str, Any]]) -> int:
+        """Persist a batch of earnings-calendar rows.
+
+        Each dict may carry ``symbol``, ``event_date``, ``eps_actual``,
+        ``eps_estimated``, ``revenue_actual``, ``revenue_estimated``,
+        ``last_updated``, ``source``. A row missing ``symbol`` or
+        ``event_date`` is SKIPPED (no PK anchor => it could never be
+        causality-filtered on read), not defaulted.
+
+        A FUTURE-dated row with ``eps_actual=None`` is expected and correct —
+        see the DDL comment. ``None``/NaN actuals are stored as SQL NULL and
+        must never be read back as 0.0 (CONSTRAINT #4).
+
+        ``last_updated`` is the vendor's own revision stamp, persisted verbatim
+        to make a future point-in-time replay possible. It is an imperfect
+        defense (a backfilled actual with a stale stamp defeats it) — this is
+        not a PIT guarantee.
+
+        Returns the number of rows written, or 0 on ANY failure.
+        """
+        if not rows:
+            return 0
+        try:
+            now_ts = self._now_utc_iso()
+            prepared: List[tuple] = []
+            for row in rows:
+                sym = str(row.get("symbol") or "").strip().upper()
+                event_date = str(row.get("event_date") or "").strip()
+                if not sym or not event_date:
+                    continue
+                prepared.append(
+                    (
+                        sym,
+                        event_date,
+                        self._nan_to_null(row.get("eps_actual")),
+                        self._nan_to_null(row.get("eps_estimated")),
+                        self._nan_to_null(row.get("revenue_actual")),
+                        self._nan_to_null(row.get("revenue_estimated")),
+                        str(row["last_updated"]) if row.get("last_updated") else None,
+                        str(row["source"]) if row.get("source") else None,
+                        now_ts,
+                    )
+                )
+            if not prepared:
+                return 0
+
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO earnings_events
+                            (symbol, event_date, eps_actual, eps_estimated,
+                             revenue_actual, revenue_estimated, last_updated,
+                             source, fetched_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        prepared,
+                    )
+            logger.debug("HistoricalStore: upserted %d earnings_events rows.", len(prepared))
+            return len(prepared)
+        except Exception as exc:
+            logger.warning("HistoricalStore.upsert_earnings_events failed: %s", exc)
+            self._safe_rollback()
+            return 0
+
+    def get_earnings_events(
+        self,
+        symbol: str,
+        *,
+        on_or_before: Optional[str] = None,
+        after: Optional[str] = None,
+        actuals_only: bool = False,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return *symbol*'s stored earnings events, newest first.
+
+        The two date filters are deliberately separate rather than one
+        as-of cutoff, because the two legitimate reads have OPPOSITE
+        directions (see the DDL comment):
+
+        * ``on_or_before=<as_of>`` + ``actuals_only=True`` — the trailing
+          surprise read. BOTH filters, never the date filter alone: a vendor
+          bug populating an actual on a future row would otherwise slip
+          through.
+        * ``after=<as_of>`` — the next-scheduled-date read. A publicly
+          announced future date is not lookahead; the RESULT would be.
+
+        ``[]`` on an empty table OR any read failure (CONSTRAINT #6). Every
+        unreported numeric field comes back ``None``, never 0.0.
+        """
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return []
+        try:
+            from db_config import session_scope, get_dbapi_connection
+
+            params: List[Any] = [sym]
+            clauses = ""
+            if on_or_before:
+                clauses += " AND event_date <= ?"
+                params.append(str(on_or_before))
+            if after:
+                clauses += " AND event_date > ?"
+                params.append(str(after))
+            if actuals_only:
+                clauses += " AND eps_actual IS NOT NULL"
+
+            order = " ORDER BY event_date ASC" if after else " ORDER BY event_date DESC"
+            limit_clause = ""
+            if limit is not None:
+                limit_clause = " LIMIT ?"
+                params.append(int(limit))
+
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    db_rows = conn.execute(
+                        "SELECT symbol, event_date, eps_actual, eps_estimated, "
+                        "revenue_actual, revenue_estimated, last_updated, source, fetched_at "
+                        f"FROM earnings_events WHERE symbol = ?{clauses}{order}{limit_clause}",
+                        tuple(params),
+                    ).fetchall()
+
+            return [
+                {
+                    "symbol": r[0],
+                    "event_date": r[1],
+                    "eps_actual": r[2],
+                    "eps_estimated": r[3],
+                    "revenue_actual": r[4],
+                    "revenue_estimated": r[5],
+                    "last_updated": r[6],
+                    "source": r[7],
+                    "fetched_at": r[8],
+                }
+                for r in db_rows
+            ]
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_earnings_events(%s) failed: %s", sym, exc)
+            return []
+
+    def latest_earnings_fetched_at(self, symbol: str) -> Optional[str]:
+        """Most recent ``fetched_at`` across *symbol*'s earnings rows.
+
+        Wall-clock, NOT an event date — this is the ``FMP_EARNINGS_REFRESH_HOURS``
+        cadence input. ``None`` when nothing is stored OR on any read failure.
+        """
+        return self._latest_scalar(
+            "SELECT MAX(fetched_at) FROM earnings_events WHERE symbol = ?",
+            (symbol or "").strip().upper(),
+            label="latest_earnings_fetched_at",
+        )
+
+    def upsert_insider_stats(self, rows: List[Dict[str, Any]]) -> int:
+        """Persist a batch of quarterly insider-transaction aggregates.
+
+        Keys per dict: ``symbol``, ``year``, ``quarter``, plus any of
+        ``acquired_transactions``, ``disposed_transactions``,
+        ``acquired_disposed_ratio``, ``total_acquired``, ``total_disposed``,
+        ``total_purchases``, ``total_sales``, ``source``. A row without a
+        resolvable ``(symbol, year, quarter)`` is skipped, not defaulted.
+
+        ``INSERT OR REPLACE`` is the right semantic here specifically BECAUSE a
+        quarter's aggregate keeps changing as late Form 4s land — the newest
+        read of a quarter supersedes the older one. That is also exactly why
+        consumers must apply the minimum-lag filter (see the DDL comment)
+        rather than reading the most recent quarter.
+
+        Returns rows written, or 0 on ANY failure (CONSTRAINT #6).
+        """
+        if not rows:
+            return 0
+        try:
+            now_ts = self._now_utc_iso()
+            prepared: List[tuple] = []
+            for row in rows:
+                sym = str(row.get("symbol") or "").strip().upper()
+                year = _int_or_none(row.get("year"))
+                quarter = _int_or_none(row.get("quarter"))
+                if not sym or year is None or quarter is None:
+                    continue
+                prepared.append(
+                    (
+                        sym,
+                        year,
+                        quarter,
+                        _int_or_none(row.get("acquired_transactions")),
+                        _int_or_none(row.get("disposed_transactions")),
+                        self._nan_to_null(row.get("acquired_disposed_ratio")),
+                        self._nan_to_null(row.get("total_acquired")),
+                        self._nan_to_null(row.get("total_disposed")),
+                        _int_or_none(row.get("total_purchases")),
+                        _int_or_none(row.get("total_sales")),
+                        str(row["source"]) if row.get("source") else None,
+                        now_ts,
+                    )
+                )
+            if not prepared:
+                return 0
+
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO insider_stats
+                            (symbol, year, quarter, acquired_transactions,
+                             disposed_transactions, acquired_disposed_ratio,
+                             total_acquired, total_disposed, total_purchases,
+                             total_sales, source, fetched_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        prepared,
+                    )
+            logger.debug("HistoricalStore: upserted %d insider_stats rows.", len(prepared))
+            return len(prepared)
+        except Exception as exc:
+            logger.warning("HistoricalStore.upsert_insider_stats failed: %s", exc)
+            self._safe_rollback()
+            return 0
+
+    def get_insider_stats(
+        self, symbol: str, *, limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Return *symbol*'s stored quarterly insider aggregates, newest first.
+
+        Deliberately does NOT apply the minimum-lag filter itself — that is a
+        consumer-side judgment call driven by ``settings.FMP_INSIDER_MIN_LAG_DAYS``
+        (see the DDL comment), and a storage helper that silently dropped rows
+        would make the archive un-auditable. Read what is stored; filter in the
+        feed module.
+
+        ``[]`` on an empty table OR any read failure (CONSTRAINT #6).
+        """
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return []
+        try:
+            from db_config import session_scope, get_dbapi_connection
+
+            params: List[Any] = [sym]
+            limit_clause = ""
+            if limit is not None:
+                limit_clause = " LIMIT ?"
+                params.append(int(limit))
+
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    db_rows = conn.execute(
+                        "SELECT symbol, year, quarter, acquired_transactions, "
+                        "disposed_transactions, acquired_disposed_ratio, total_acquired, "
+                        "total_disposed, total_purchases, total_sales, source, fetched_at "
+                        "FROM insider_stats WHERE symbol = ? "
+                        f"ORDER BY year DESC, quarter DESC{limit_clause}",
+                        tuple(params),
+                    ).fetchall()
+
+            return [
+                {
+                    "symbol": r[0],
+                    "year": r[1],
+                    "quarter": r[2],
+                    "acquired_transactions": r[3],
+                    "disposed_transactions": r[4],
+                    "acquired_disposed_ratio": r[5],
+                    "total_acquired": r[6],
+                    "total_disposed": r[7],
+                    "total_purchases": r[8],
+                    "total_sales": r[9],
+                    "source": r[10],
+                    "fetched_at": r[11],
+                }
+                for r in db_rows
+            ]
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_insider_stats(%s) failed: %s", sym, exc)
+            return []
+
+    def latest_insider_fetched_at(self, symbol: str) -> Optional[str]:
+        """Most recent ``fetched_at`` across *symbol*'s insider rows.
+
+        Wall-clock cadence input for ``FMP_INSIDER_REFRESH_DAYS`` — distinct
+        from the ``(year, quarter)`` period, which is the causality anchor.
+        ``None`` when nothing is stored OR on any read failure.
+        """
+        return self._latest_scalar(
+            "SELECT MAX(fetched_at) FROM insider_stats WHERE symbol = ?",
+            (symbol or "").strip().upper(),
+            label="latest_insider_fetched_at",
+        )
+
+    def upsert_sector_snapshots(self, rows: List[Dict[str, Any]]) -> int:
+        """Persist a batch of dated per-sector PE / 1-day-change snapshots.
+
+        Keys per dict: ``sector``, ``date``, and any of ``pe``, ``change_pct``,
+        ``source``. A row without both ``sector`` and ``date`` is skipped.
+
+        ``date`` MUST be the source's own snapshot date, not the fetch time —
+        both FMP endpoints behind this are date-parameterized, which is the
+        only reason this feed has a real point-in-time story at all. Passing
+        today's date for a backfilled snapshot would throw that away silently.
+
+        Returns rows written, or 0 on ANY failure (CONSTRAINT #6).
+        """
+        if not rows:
+            return 0
+        try:
+            now_ts = self._now_utc_iso()
+            prepared: List[tuple] = []
+            for row in rows:
+                sector = str(row.get("sector") or "").strip()
+                date_str = str(row.get("date") or "").strip()
+                if not sector or not date_str:
+                    continue
+                prepared.append(
+                    (
+                        sector,
+                        date_str,
+                        self._nan_to_null(row.get("pe")),
+                        self._nan_to_null(row.get("change_pct")),
+                        str(row["source"]) if row.get("source") else None,
+                        now_ts,
+                    )
+                )
+            if not prepared:
+                return 0
+
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.executemany(
+                        """
+                        INSERT OR REPLACE INTO sector_snapshots
+                            (sector, date, pe, change_pct, source, fetched_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        prepared,
+                    )
+            logger.debug("HistoricalStore: upserted %d sector_snapshots rows.", len(prepared))
+            return len(prepared)
+        except Exception as exc:
+            logger.warning("HistoricalStore.upsert_sector_snapshots failed: %s", exc)
+            self._safe_rollback()
+            return 0
+
+    def get_sector_snapshots(self, *, as_of: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+        """Return the latest per-sector snapshot at or before *as_of*.
+
+        Keyed by sector name. With ``as_of`` supplied, rows dated after the
+        cutoff are excluded — genuinely point-in-time here, unlike the other
+        three FMP feeds (see the DDL comment). Each sector independently
+        resolves to ITS OWN most recent qualifying date, so a sector missing
+        from the cutoff date's snapshot falls back to its last known one rather
+        than disappearing.
+
+        ``{}`` on an empty table OR any read failure (CONSTRAINT #6). ``pe`` /
+        ``change_pct`` are ``None`` when unreported, never 0.0.
+        """
+        try:
+            from db_config import session_scope, get_dbapi_connection
+
+            params: List[Any] = []
+            date_clause = ""
+            if as_of:
+                date_clause = " WHERE date <= ?"
+                params.append(str(as_of))
+
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    db_rows = conn.execute(
+                        "SELECT s.sector, s.date, s.pe, s.change_pct, s.source, s.fetched_at "
+                        "FROM sector_snapshots s "
+                        "JOIN (SELECT sector, MAX(date) AS max_date FROM sector_snapshots"
+                        f"{date_clause} GROUP BY sector) m "
+                        "ON s.sector = m.sector AND s.date = m.max_date",
+                        tuple(params),
+                    ).fetchall()
+
+            return {
+                str(r[0]): {
+                    "sector": r[0],
+                    "date": r[1],
+                    "pe": r[2],
+                    "change_pct": r[3],
+                    "source": r[4],
+                    "fetched_at": r[5],
+                }
+                for r in db_rows
+            }
+        except Exception as exc:
+            logger.warning("HistoricalStore.get_sector_snapshots failed: %s", exc)
+            return {}
+
+    def latest_sector_snapshot_date(self) -> Optional[str]:
+        """Most recent stored sector-snapshot ``date`` across all sectors.
+
+        The cadence input for the sector feed (2 requests per cycle total, so
+        it is gated per-cycle rather than per-symbol). ``None`` when nothing is
+        stored OR on any read failure (CONSTRAINT #6).
+        """
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    row = conn.execute("SELECT MAX(date) FROM sector_snapshots").fetchone()
+            if not row or row[0] is None:
+                return None
+            return str(row[0])
+        except Exception as exc:
+            logger.warning("HistoricalStore.latest_sector_snapshot_date failed: %s", exc)
+            return None
+
+    def _latest_scalar(self, sql: str, key: str, *, label: str) -> Optional[str]:
+        """Shared MAX(...) helper for the per-symbol FMP cadence accessors.
+
+        ``None`` on an empty key, an empty result, OR any read failure — the
+        cadence caller treats all three identically ("no idea how current this
+        is, go fetch"), so collapsing them here loses nothing.
+        """
+        if not key:
+            return None
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    row = conn.execute(sql, (key,)).fetchone()
+            if not row or row[0] is None:
+                return None
+            return str(row[0])
+        except Exception as exc:
+            logger.warning("HistoricalStore.%s(%s) failed: %s", label, key, exc)
+            return None
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Public API — sentiment_ingestion_audit (Sentiment Pipeline Phase 2)
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -2760,7 +3547,7 @@ class HistoricalStore:
             from data_engine import DataEngine
             from settings import settings as _s
             if _s.FRED_API_KEY:
-                return DataEngine()
+                return DataEngine(fred_api_key=_s.FRED_API_KEY)
         except Exception as exc:
             logger.debug(
                 "HistoricalStore._resolve_data_engine: could not construct "
@@ -3007,6 +3794,28 @@ def _raw_to_typed_fundamentals(raw: Dict[str, Any]) -> Dict[str, float]:
     return typed
 
 
-def _source_name(provider) -> str:
-    """Return a human-readable source label for the given provider object."""
+def _source_name(provider, raw: Optional[Dict[str, Any]] = None) -> str:
+    """Return a human-readable source label for a fundamentals fetch.
+
+    Prefers a PER-SYMBOL ``"_source"`` key embedded in the provider's own
+    response dict, falling back to the provider OBJECT's label
+    (``provider.source_name``, else its lowercased class name) when the key is
+    absent — which is exactly today's behavior, so passing ``raw=None`` or a
+    dict without the key is byte-identical to before.
+
+    Why the raw dict wins: once a composite provider can fall back between
+    backends per symbol, the provider object's own label describes the CHAIN,
+    not the backend that actually served this particular response. Stamping
+    the chain's name on a fallback row makes ``fundamentals_history.source``
+    silently claim a provenance that isn't true — and that column is the
+    ground-truth operator query for "did the chain fall back on me?"
+    (``SELECT source, COUNT(*) FROM fundamentals_history
+    WHERE as_of = DATE('now') GROUP BY 1``). A per-response key is also
+    thread-safe by construction (no shared mutable state), which matters
+    because ``data_engine.py`` calls this path under an 8-thread pool.
+    """
+    if isinstance(raw, dict):
+        embedded = raw.get("_source")
+        if embedded:
+            return str(embedded)
     return getattr(provider, "source_name", type(provider).__name__.lower())

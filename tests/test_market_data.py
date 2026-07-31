@@ -45,6 +45,29 @@ def _reload_module():
     return md
 
 
+def _make_fake_quote(symbol: str, source: str):
+    """A minimal, valid ``Quote`` for stubbing a chain member's return value
+    in the FMP quote/bars fallback-chain tests below."""
+    from data.market_data import Quote
+    return Quote(
+        symbol=symbol, price=100.0, bid=float("nan"), ask=float("nan"),
+        timestamp=datetime.now(timezone.utc), is_stale=True, source=source,
+    )
+
+
+def _make_fake_bars_df() -> pd.DataFrame:
+    """A minimal, valid OHLCV bars DataFrame (already in the ABC's bar-shape
+    contract) for stubbing a chain member's return value."""
+    idx = pd.date_range("2026-01-01", periods=5, freq="B")
+    return pd.DataFrame(
+        {
+            "Open": [100.0] * 5, "High": [101.0] * 5, "Low": [99.0] * 5,
+            "Close": [100.5] * 5, "Volume": [1000] * 5,
+        },
+        index=idx,
+    )
+
+
 class _FakeFastInfo:
     """Stand-in for yfinance's real ``FastInfo`` scraper object.
 
@@ -708,6 +731,78 @@ class TestCompositeProviderSelection:
 
 
 # ---------------------------------------------------------------------------
+# 6b. Provider provenance class attributes (SOURCE / IS_REALTIME)
+# ---------------------------------------------------------------------------
+
+class TestProviderProvenanceAttributes:
+    """``CompositeProvider.is_realtime`` / ``.quote_source`` used to be two
+    hardcoded ``isinstance(self._quote_provider, AlpacaProvider)`` ternaries.
+    That is fine for exactly two backends and silently wrong for a third:
+    ``quote_source`` would report the literal string ``"yfinance"`` for a quote
+    served by ANY other provider, and that string is dashboard / Google Sheet
+    attribution -- a mislabeling bug, not a cosmetic one.
+
+    Both now read the provider's own ``SOURCE`` / ``IS_REALTIME`` class
+    attributes. These two tests pin the EQUIVALENCE for the two backends that
+    exist today, which is the whole safety claim of that refactor.
+    """
+
+    def _patched(self, **overrides):
+        base = dict(
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+            MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+        )
+        base.update(overrides)
+        return patch.multiple("settings.settings", **base)
+
+    def test_alpaca_reports_realtime_true_and_source_alpaca(self):
+        from data.market_data import AlpacaProvider, CompositeProvider
+
+        fake_client = MagicMock()
+        with self._patched(
+            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
+        ), patch(
+            "alpaca.data.historical.StockHistoricalDataClient",
+            return_value=fake_client,
+        ):
+            cp = CompositeProvider()
+
+        assert isinstance(cp._quote_provider, AlpacaProvider)
+        assert (cp.is_realtime, cp.quote_source) == (True, "alpaca")
+
+    def test_yfinance_reports_realtime_false_and_source_yfinance(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched():
+            cp = CompositeProvider()
+
+        assert isinstance(cp._quote_provider, YFinanceProvider)
+        assert (cp.is_realtime, cp.quote_source) == (False, "yfinance")
+
+    def test_abc_declares_safe_defaults(self):
+        """A provider that forgets to declare them must degrade to "unknown"
+        and NOT-realtime -- never to a confident wrong attribution, and never
+        to an optimistic real-time claim for a delayed feed."""
+        from data.market_data import MarketDataProvider
+
+        assert MarketDataProvider.SOURCE == "unknown"
+        assert MarketDataProvider.IS_REALTIME is False
+
+    def test_accessors_tolerate_a_ducktyped_provider_without_the_attributes(self):
+        """``CompositeProvider`` is built via ``__new__`` in several tests and
+        some providers (``YahooFundamentalsProvider``) are duck-typed rather
+        than ABC subclasses, so both accessors must use ``getattr`` with a
+        default rather than assuming the attribute exists."""
+        from data.market_data import CompositeProvider
+
+        cp = CompositeProvider.__new__(CompositeProvider)
+        cp._quote_provider = SimpleNamespace()  # no SOURCE, no IS_REALTIME
+
+        assert cp.is_realtime is False
+        assert cp.quote_source == "unknown"
+
+
+# ---------------------------------------------------------------------------
 # 7. CompositeProvider caching behaviour
 # ---------------------------------------------------------------------------
 
@@ -1172,3 +1267,464 @@ class TestCompositeProviderSettingsWiring:
             assert YahooFundamentalsProvider._beta_period() == "3mo"
         with patch("settings.settings.BETA_LOOKBACK_DAYS", 1260):
             assert YahooFundamentalsProvider._beta_period() == "5y"
+
+
+# ---------------------------------------------------------------------------
+# 12. FMP fundamentals wiring: FUNDAMENTALS_SOURCE=fmp selection + the
+#     ordered fallback chain in CompositeProvider.get_fundamentals (wave 1).
+#     The pure mapping layer (data/fmp_fundamentals.py) and FMPProvider's own
+#     I/O-shell behavior have their own dedicated test files
+#     (tests/test_fmp_fundamentals.py, tests/test_fmp_provider.py); this
+#     class only covers CompositeProvider's SELECTION and CHAIN logic.
+# ---------------------------------------------------------------------------
+
+class TestFMPFundamentalsChain:
+    """The single most important invariant here: with FUNDAMENTALS_SOURCE at
+    its default, the pre-existing Yahoo -> yfinance chain is BYTE-IDENTICAL
+    to before FMP existed, even when FMP_API_KEY is set and FMP is fully
+    configured to fail. FMP_API_KEY alone must never elect FMP."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_serve_counts(self):
+        from data.market_data import reset_provider_serve_counts
+        reset_provider_serve_counts()
+        yield
+        reset_provider_serve_counts()
+
+    def _patched(self, **overrides):
+        base = dict(
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
+        )
+        base.update(overrides)
+        return patch.multiple("settings.settings", **base)
+
+    # -- 1. Flag-off byte-identical -----------------------------------
+    def test_flag_off_fmp_key_set_but_source_not_fmp_selects_yahoo(self):
+        """FMP_API_KEY alone must NEVER elect FMP -- FUNDAMENTALS_SOURCE must
+        ALSO be explicitly 'fmp' (the two-gate convention)."""
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider
+
+        with self._patched(FMP_API_KEY="a-real-looking-key", FUNDAMENTALS_SOURCE="yahoo"):
+            cp = CompositeProvider()
+        assert isinstance(cp._fundamentals_provider, YahooFundamentalsProvider)
+
+    def test_flag_off_get_fundamentals_never_touches_fmp_network(self):
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider
+
+        # The settings patch stays open across BOTH construction and the
+        # get_fundamentals() call: FMP_FALLBACK_ENABLED (irrelevant on this
+        # branch, but the general pattern below relies on it) and the
+        # provider-selection settings are read at different times.
+        with self._patched(FMP_API_KEY="a-real-looking-key", FUNDAMENTALS_SOURCE="yahoo"):
+            cp = CompositeProvider()
+            with patch("data.fmp_client.requests.get") as mock_get, \
+                 patch.object(
+                     YahooFundamentalsProvider, "get_fundamentals",
+                     return_value={"trailingPE": 1.0},
+                 ):
+                cp.get_fundamentals("AAPL")
+            mock_get.assert_not_called()
+
+    # -- 2. FUNDAMENTALS_SOURCE=fmp without a key -> RuntimeError -------
+    def test_fmp_source_without_api_key_raises_at_construction(self):
+        from data.market_data import CompositeProvider
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY=None):
+            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
+                CompositeProvider()
+
+    def test_fmp_source_with_blank_api_key_also_raises(self):
+        from data.market_data import CompositeProvider
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="   "):
+            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
+                CompositeProvider()
+
+    def test_fmp_source_with_key_selects_fmp_provider(self):
+        from data.market_data import CompositeProvider, FMPProvider
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+        assert isinstance(cp._fundamentals_provider, FMPProvider)
+
+    # -- 3. FMP empty -> Yahoo serves, tagged, counted, WARNING logged --
+    def test_fmp_empty_falls_back_to_yahoo_then_serves_and_counts(self, caplog):
+        import logging
+        from data.market_data import (
+            CompositeProvider,
+            FMPProvider,
+            YahooFundamentalsProvider,
+            get_provider_serve_counts,
+        )
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+
+            yahoo_fund = {"trailingPE": 28.5}
+            with patch.object(FMPProvider, "get_fundamentals", return_value={}), \
+                 patch.object(YahooFundamentalsProvider, "get_fundamentals", return_value=yahoo_fund), \
+                 caplog.at_level(logging.WARNING, logger="data.market_data"):
+                out = cp.get_fundamentals("AAPL")
+
+        assert out["_source"] == "yahoo_computed"
+        assert out["trailingPE"] == 28.5
+        assert any(
+            r.levelno == logging.WARNING and "returned nothing for AAPL" in r.message
+            for r in caplog.records
+        )
+        assert get_provider_serve_counts()[("fundamentals", "yahoo_computed")] == 1
+
+    # -- 4. All three chain members empty -> {} cached at negative TTL --
+    def test_all_three_chain_members_empty_returns_empty_and_caches_negative(self):
+        from data.market_data import (
+            CompositeProvider,
+            FMPProvider,
+            YahooFundamentalsProvider,
+            YFinanceProvider,
+        )
+        with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+
+            with patch.object(FMPProvider, "get_fundamentals", return_value={}), \
+                 patch.object(YahooFundamentalsProvider, "get_fundamentals", return_value={}), \
+                 patch.object(YFinanceProvider, "get_fundamentals", return_value={}):
+                out = cp.get_fundamentals("AAPL")
+            assert out == {}
+
+            # Cached at the negative TTL -- a second call hits the cache,
+            # never re-consulting any chain member.
+            with patch.object(FMPProvider, "get_fundamentals", return_value={}) as fmp_mock, \
+                 patch.object(YahooFundamentalsProvider, "get_fundamentals", return_value={}) as yahoo_mock, \
+                 patch.object(YFinanceProvider, "get_fundamentals", return_value={}) as yf_mock:
+                cp.get_fundamentals("AAPL")
+            fmp_mock.assert_not_called()
+            yahoo_mock.assert_not_called()
+            yf_mock.assert_not_called()
+
+    # -- 5. FMP_FALLBACK_ENABLED=False -> chain length 1 ----------------
+    def test_fallback_disabled_chain_is_fmp_only(self):
+        from data.market_data import CompositeProvider, FMPProvider, YahooFundamentalsProvider
+        with self._patched(
+            FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+
+            with patch.object(FMPProvider, "get_fundamentals", return_value={}), \
+                 patch.object(
+                     YahooFundamentalsProvider, "get_fundamentals",
+                     return_value={"trailingPE": 1.0},
+                 ) as yahoo_mock:
+                out = cp.get_fundamentals("AAPL")
+
+            assert out == {}
+            yahoo_mock.assert_not_called()
+
+    def test_fallback_disabled_but_fmp_succeeds_still_serves_and_tags(self):
+        from data.market_data import CompositeProvider, FMPProvider
+        with self._patched(
+            FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+
+            with patch.object(FMPProvider, "get_fundamentals", return_value={"trailingPE": 9.0}):
+                out = cp.get_fundamentals("AAPL")
+            assert out["trailingPE"] == 9.0
+            assert out["_source"] == "fmp"
+
+    # -- 6. Existing Yahoo -> yfinance chain completely untouched -------
+    def test_default_config_chain_untouched_even_with_fmp_fully_configured(self):
+        """Regression guard: even with FMP fully configured (a real-looking
+        key present) but FUNDAMENTALS_SOURCE left at its default, the
+        existing 2-element Yahoo -> yfinance chain must be exactly what it
+        is today -- FMP must never appear in it, and no FMP network call is
+        ever attempted."""
+        from data.market_data import CompositeProvider, YahooFundamentalsProvider, YFinanceProvider
+
+        with self._patched(FMP_API_KEY="a-real-looking-key", FUNDAMENTALS_SOURCE="yahoo"):
+            cp = CompositeProvider()
+
+            with patch.object(YahooFundamentalsProvider, "get_fundamentals", return_value={}), \
+                 patch.object(
+                     YFinanceProvider, "get_fundamentals",
+                     return_value={"trailingPE": 2.0},
+                 ) as yf_mock, \
+                 patch("data.fmp_client.requests.get") as fmp_get_mock:
+                out = cp.get_fundamentals("AAPL")
+
+            assert out == {"trailingPE": 2.0}
+            yf_mock.assert_called_once()
+            fmp_get_mock.assert_not_called()
+            # No "_source" tagging on the legacy path -- the returned dict is
+            # exactly what YFinanceProvider.get_fundamentals returned, byte
+            # for byte (existing tests pin this same no-extra-keys contract).
+            assert "_source" not in out
+
+    def test_default_config_yfinance_info_source_also_untouched(self):
+        """The other pre-existing non-FMP branch (FUNDAMENTALS_SOURCE=
+        yfinance_info) must be equally unaffected by FMP's existence."""
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched(FMP_API_KEY="a-real-looking-key", FUNDAMENTALS_SOURCE="yfinance_info"):
+            cp = CompositeProvider()
+            assert isinstance(cp._fundamentals_provider, YFinanceProvider)
+
+            with patch.object(
+                YFinanceProvider, "get_fundamentals", return_value={"trailingPE": 3.0},
+            ), patch("data.fmp_client.requests.get") as fmp_get_mock:
+                out = cp.get_fundamentals("AAPL")
+            assert out == {"trailingPE": 3.0}
+            fmp_get_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 10. FMP quote/bars fallback chain (wave 2).
+# ---------------------------------------------------------------------------
+
+class TestFMPQuoteBarsChain:
+    """The single most important invariant here: with MARKET_DATA_PROVIDER at
+    its default, the pre-existing Alpaca/yfinance quote/bars path is
+    BYTE-IDENTICAL to before FMP existed, even when FMP_API_KEY is set and
+    FMP is fully configured to fail. FMP_API_KEY alone must never elect FMP.
+    Mirrors ``TestFMPFundamentalsChain``'s structure exactly, one level up
+    the stack (quotes/bars instead of fundamentals)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_serve_counts(self):
+        from data.market_data import reset_provider_serve_counts
+        reset_provider_serve_counts()
+        yield
+        reset_provider_serve_counts()
+
+    def _patched(self, **overrides):
+        base = dict(
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
+        )
+        base.update(overrides)
+        return patch.multiple("settings.settings", **base)
+
+    # -- 1. Flag-off byte-identical -------------------------------------
+    def test_flag_off_fmp_key_set_but_provider_not_fmp_selects_yfinance(self):
+        """FMP_API_KEY alone must NEVER elect FMP -- MARKET_DATA_PROVIDER
+        must ALSO be explicitly 'fmp' (the two-gate convention)."""
+        from data.market_data import CompositeProvider, YFinanceProvider
+        with self._patched(FMP_API_KEY="a-real-looking-key", MARKET_DATA_PROVIDER=None):
+            cp = CompositeProvider()
+        assert isinstance(cp._quote_provider, YFinanceProvider)
+
+    def test_flag_off_never_touches_fmp_network(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+        with self._patched(FMP_API_KEY="a-real-looking-key", MARKET_DATA_PROVIDER=None):
+            cp = CompositeProvider()
+            with patch("data.fmp_client.requests.get") as mock_get, \
+                 patch.object(
+                     YFinanceProvider, "get_latest_quote",
+                     return_value=_make_fake_quote("AAPL", "yfinance"),
+                 ), \
+                 patch.object(
+                     YFinanceProvider, "get_intraday_bars",
+                     return_value=_make_fake_bars_df(),
+                 ):
+                cp.get_latest_quote("AAPL")
+                cp.get_intraday_bars("AAPL")
+            mock_get.assert_not_called()
+
+    # -- 2. MARKET_DATA_PROVIDER=fmp without a key -> RuntimeError -------
+    def test_fmp_provider_without_api_key_raises_at_construction(self):
+        from data.market_data import CompositeProvider
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY=None):
+            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
+                CompositeProvider()
+
+    def test_fmp_provider_with_blank_api_key_also_raises(self):
+        from data.market_data import CompositeProvider
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="   "):
+            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
+                CompositeProvider()
+
+    def test_fmp_provider_with_key_selects_fmp_provider(self):
+        from data.market_data import CompositeProvider, FMPProvider
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+        assert isinstance(cp._quote_provider, FMPProvider)
+
+    def test_fmp_selection_logs_info_reminder_about_verify_script(self, caplog):
+        """Deliverable 5: an INFO startup line naming the active
+        FMP_BARS_ADJUSTMENT variant and a reminder that
+        scripts/verify_fmp_bars.py should have been run and passed."""
+        import logging
+        from data.market_data import CompositeProvider
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key"), \
+             caplog.at_level(logging.INFO, logger="data.market_data"):
+            CompositeProvider()
+        assert any(
+            "verify_fmp_bars.py" in r.message and "FMP_BARS_ADJUSTMENT" in r.message
+            for r in caplog.records
+        )
+
+    # -- 3. FMP quote/bars raise -> yfinance serves, counted, WARNING ----
+    def test_fmp_quote_failure_falls_back_to_yfinance_then_serves_and_counts(self, caplog):
+        import logging
+        from data.market_data import (
+            CompositeProvider, FMPProvider, YFinanceProvider,
+            MarketDataError, get_provider_serve_counts,
+        )
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+
+            yf_quote = _make_fake_quote("AAPL", "yfinance")
+            with patch.object(
+                     FMPProvider, "get_latest_quote",
+                     side_effect=MarketDataError("FMP down"),
+                 ), \
+                 patch.object(YFinanceProvider, "get_latest_quote", return_value=yf_quote), \
+                 caplog.at_level(logging.WARNING, logger="data.market_data"):
+                out = cp.get_latest_quote("AAPL")
+
+        assert out.source == "yfinance"
+        assert any(
+            r.levelno == logging.WARNING and "trying next in chain" in r.message
+            for r in caplog.records
+        )
+        assert get_provider_serve_counts()[("quote", "yfinance")] == 1
+
+    def test_fmp_bars_failure_falls_back_to_yfinance_then_serves_and_counts(self, caplog):
+        import logging
+        from data.market_data import (
+            CompositeProvider, FMPProvider, YFinanceProvider,
+            MarketDataError, get_provider_serve_counts,
+        )
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+
+            yf_bars = _make_fake_bars_df()
+            with patch.object(
+                     FMPProvider, "get_intraday_bars",
+                     side_effect=MarketDataError("FMP down"),
+                 ), \
+                 patch.object(YFinanceProvider, "get_intraday_bars", return_value=yf_bars), \
+                 caplog.at_level(logging.WARNING, logger="data.market_data"):
+                out = cp.get_intraday_bars("AAPL")
+
+        pd.testing.assert_frame_equal(out, yf_bars)
+        assert any(
+            r.levelno == logging.WARNING and "trying next in chain" in r.message
+            for r in caplog.records
+        )
+        assert get_provider_serve_counts()[("bars", "yfinance")] == 1
+
+    # -- 4. FMP_FALLBACK_ENABLED=False -> chain length 1 -----------------
+    def test_fallback_disabled_quote_chain_is_fmp_only(self):
+        from data.market_data import (
+            CompositeProvider, FMPProvider, YFinanceProvider, MarketDataError,
+        )
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+            with patch.object(
+                     FMPProvider, "get_latest_quote",
+                     side_effect=MarketDataError("FMP down"),
+                 ), \
+                 patch.object(YFinanceProvider, "get_latest_quote") as yf_mock:
+                with pytest.raises(MarketDataError):
+                    cp.get_latest_quote("AAPL")
+            yf_mock.assert_not_called()
+
+    def test_fallback_disabled_bars_chain_is_fmp_only(self):
+        from data.market_data import (
+            CompositeProvider, FMPProvider, YFinanceProvider, MarketDataError,
+        )
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+            with patch.object(
+                     FMPProvider, "get_intraday_bars",
+                     side_effect=MarketDataError("FMP down"),
+                 ), \
+                 patch.object(YFinanceProvider, "get_intraday_bars") as yf_mock:
+                with pytest.raises(MarketDataError):
+                    cp.get_intraday_bars("AAPL")
+            yf_mock.assert_not_called()
+
+    def test_fallback_disabled_but_fmp_succeeds_still_serves(self):
+        from data.market_data import CompositeProvider, FMPProvider
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_FALLBACK_ENABLED=False,
+        ):
+            cp = CompositeProvider()
+            fmp_quote = _make_fake_quote("AAPL", "fmp")
+            with patch.object(FMPProvider, "get_latest_quote", return_value=fmp_quote):
+                out = cp.get_latest_quote("AAPL")
+            assert out.source == "fmp"
+
+    # -- 5. Cache-then-chain ordering -------------------------------------
+    def test_cached_quote_never_triggers_chain(self):
+        from data.market_data import CompositeProvider, FMPProvider, YFinanceProvider
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+            fmp_quote = _make_fake_quote("AAPL", "fmp")
+            with patch.object(FMPProvider, "get_latest_quote", return_value=fmp_quote) as fmp_mock:
+                cp.get_latest_quote("AAPL")  # populates the cache
+            assert fmp_mock.call_count == 1
+
+            with patch.object(FMPProvider, "get_latest_quote") as fmp_mock2, \
+                 patch.object(YFinanceProvider, "get_latest_quote") as yf_mock2:
+                cp.get_latest_quote("AAPL")  # must be served from cache
+            fmp_mock2.assert_not_called()
+            yf_mock2.assert_not_called()
+
+    def test_cached_bars_never_trigger_chain(self):
+        from data.market_data import CompositeProvider, FMPProvider, YFinanceProvider
+        with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key"):
+            cp = CompositeProvider()
+            fmp_bars = _make_fake_bars_df()
+            with patch.object(FMPProvider, "get_intraday_bars", return_value=fmp_bars) as fmp_mock:
+                cp.get_intraday_bars("AAPL", lookback_days=50)  # populates the cache
+            assert fmp_mock.call_count == 1
+
+            with patch.object(FMPProvider, "get_intraday_bars") as fmp_mock2, \
+                 patch.object(YFinanceProvider, "get_intraday_bars") as yf_mock2:
+                cp.get_intraday_bars("AAPL", lookback_days=50)  # must be served from cache
+            fmp_mock2.assert_not_called()
+            yf_mock2.assert_not_called()
+
+    # -- 6. Existing Alpaca/yfinance quote/bars path completely untouched --
+    def test_default_config_quote_path_untouched_even_with_fmp_fully_configured(self):
+        """Regression guard: even with FMP fully configured (a real-looking
+        key present) but MARKET_DATA_PROVIDER left at its default, the
+        existing single-provider quote path must be exactly what it is
+        today -- no chain, no FMP network call ever attempted."""
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched(FMP_API_KEY="a-real-looking-key", MARKET_DATA_PROVIDER=None):
+            cp = CompositeProvider()
+            yf_quote = _make_fake_quote("AAPL", "yfinance")
+            with patch.object(
+                     YFinanceProvider, "get_latest_quote", return_value=yf_quote,
+                 ) as yf_mock, \
+                 patch("data.fmp_client.requests.get") as fmp_get_mock:
+                out = cp.get_latest_quote("AAPL")
+
+            assert out.source == "yfinance"
+            yf_mock.assert_called_once()
+            fmp_get_mock.assert_not_called()
+
+    def test_default_config_bars_path_untouched_even_with_fmp_fully_configured(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched(FMP_API_KEY="a-real-looking-key", MARKET_DATA_PROVIDER=None):
+            cp = CompositeProvider()
+            yf_bars = _make_fake_bars_df()
+            with patch.object(
+                     YFinanceProvider, "get_intraday_bars", return_value=yf_bars,
+                 ) as yf_mock, \
+                 patch("data.fmp_client.requests.get") as fmp_get_mock:
+                out = cp.get_intraday_bars("AAPL")
+
+            pd.testing.assert_frame_equal(out, yf_bars)
+            yf_mock.assert_called_once()
+            fmp_get_mock.assert_not_called()

@@ -112,6 +112,7 @@ class Settings(BaseSettings):
     #   22. News catalyst ...................... lookback, FinBERT, earnings gate
     #   23. Correlation clusters ............... lookback, threshold
     #   24. Dual-momentum overlay .............. safe/risky assets
+    #   25. Financial Modeling Prep ............ key, client tuning, 8 feed gates
     #
     # NOTE: field names are intentionally FLAT (e.g. settings.KELLY_CAP). The
     # sections are documentation only — do NOT nest fields into sub-models, as
@@ -222,11 +223,20 @@ class Settings(BaseSettings):
     # --- Market-data layer (data/market_data.py) ---
     # Explicit provider override.  When absent the platform auto-selects:
     # Alpaca (if keys present) → yfinance (zero config, ~15-min delayed).
+    # NOTE: FMP is deliberately NOT part of that auto-select ladder — see the
+    # description below and section 25.
     MARKET_DATA_PROVIDER: Optional[str] = Field(
         default=None,
         description=(
-            "Force a specific market-data backend: 'alpaca' or 'yfinance'. "
-            "When unset the platform auto-selects based on key availability."
+            "Force a specific market-data backend: 'fmp', 'alpaca' or "
+            "'yfinance'. When unset the platform auto-selects based on key "
+            "availability (Alpaca if its keys are present, else yfinance). "
+            "Setting FMP_API_KEY alone NEVER auto-elects FMP: unlike the "
+            "Alpaca ladder, FMP is chosen only by explicitly setting this to "
+            "'fmp', so an operator who adds the key to enable the analyst or "
+            "earnings feed does not silently have their quote/bars source "
+            "change underneath them. FMP quotes/bars additionally require "
+            "FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention)."
         ),
     )
     FINNHUB_API_KEY: Optional[str] = Field(
@@ -363,10 +373,339 @@ class Settings(BaseSettings):
     FUNDAMENTALS_SOURCE: str = Field(
         default="yahoo",
         description=(
-            "Primary fundamentals backend: 'yahoo' (statement-derived, default) or "
-            "'yfinance_info' (raw .info fallback). Finnhub is no longer a fundamentals source."
+            "Primary fundamentals backend: 'yahoo' (statement-derived, default), "
+            "'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling "
+            "Prep — see section 25). Finnhub is no longer a fundamentals source. "
+            "Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen "
+            "explicitly here, so adding the key for one feed cannot silently "
+            "change what every valuation metric is computed from. 'fmp' "
+            "additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate "
+            "convention); with either half missing the Yahoo path is used, "
+            "exactly as today."
         ),
     )
+
+    # --- 25. Financial Modeling Prep (data/fmp_client.py) ---
+    # One HTTP seam (data/fmp_client.py) shared by every FMP consumer, because
+    # the rate limit is per-ACCOUNT: per-concern limiters would blow the budget
+    # by construction. Every gate below defaults to False / today's exact
+    # behavior — nothing here is active until an operator explicitly enables it
+    # in .env after eyeballing a side-by-side run.
+    FMP_API_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "Financial Modeling Prep API key (https://financialmodelingprep.com). "
+            "SECRET — masked in the GUI, never GUI-writable (CONSTRAINT #3). "
+            "When absent, data/fmp_client.py short-circuits every request with "
+            "zero network cost and every FMP-backed feed degrades to its "
+            "existing source or to NaN — no crash, no fabricated default. "
+            "Setting it alone changes NOTHING: each feed also needs its own "
+            "FMP_*_ENABLED gate (and, for quotes/bars/fundamentals, an "
+            "explicit MARKET_DATA_PROVIDER / FUNDAMENTALS_SOURCE of 'fmp')."
+        ),
+    )
+    # ── FMP client tuning (throttle / retry / breaker) ───────────────────
+    # FMP's Starter tier publishes 300 req/min, but the enforcement semantics
+    # (per-key vs. per-IP, burst-tolerant vs. strict) could not be verified
+    # from this sandbox — so these are a conservative choice targeting ~240/min
+    # (80% of the ceiling), NOT a documented contract. They are settings
+    # precisely so an operator can tune them against observed behaviour.
+    # FMP_MIN_REQUEST_INTERVAL_SECONDS=0 with FMP_MAX_RETRIES=0 and
+    # FMP_COOLDOWN_THRESHOLD=0 reproduces un-throttled behaviour exactly.
+    FMP_BASE_URL: str = Field(
+        default="https://financialmodelingprep.com/stable",
+        description=(
+            "Base URL every data/fmp_client.py request is built from "
+            "(f'{FMP_BASE_URL}/{path}'). The '/stable' family is the one the "
+            "verified endpoint paths belong to; pointing this at the legacy "
+            "'/api/v3' family would 404 or return a different response shape."
+        ),
+    )
+    FMP_TIMEOUT_SECONDS: float = Field(
+        default=10.0,
+        description=(
+            "Per-request HTTP timeout (seconds) for data/fmp_client.py. A "
+            "timeout is treated as a transport error: never retried (an "
+            "immediate retry of a timeout just times out again at full cost) "
+            "but it does count toward FMP_COOLDOWN_THRESHOLD."
+        ),
+    )
+    FMP_MIN_REQUEST_INTERVAL_SECONDS: float = Field(
+        default=0.25,
+        description=(
+            "Minimum seconds between FMP request ISSUANCE, shared process-wide "
+            "across every FMP consumer (the budget is per-ACCOUNT, so one "
+            "limiter is the only correct design). 0.25 s = 240 req/min by "
+            "construction, 80% of the published Starter ceiling. Honest cost: "
+            "~100 requests/cycle at this spacing is ~25 s of SERIALIZED "
+            "issuance — FMP turns N parallel yfinance calls into N serialized "
+            "ones, so DATA_FETCH_MAX_CONCURRENCY buys nothing on this path "
+            "(FMP_MAX_SECONDS_PER_CYCLE is the guard). 0 disables spacing "
+            "entirely; with FMP_MAX_RETRIES=0 and FMP_COOLDOWN_THRESHOLD=0 "
+            "that reproduces un-throttled behaviour exactly."
+        ),
+    )
+    FMP_MAX_RETRIES: int = Field(
+        default=2,
+        description=(
+            "Retries after an FMP HTTP 429/5xx before the request is given up "
+            "on, with exponential backoff from FMP_RETRY_BACKOFF_SECONDS (a "
+            "Retry-After response header, when present and parseable, takes "
+            "precedence over the computed wait). Only 429/5xx are retried: a "
+            "404 is a bad symbol rather than an overloaded host, a 401 is a "
+            "rejected key, and a 403 is a plan entitlement — none of the three "
+            "improves by being asked again. 0 disables retrying; with "
+            "FMP_MIN_REQUEST_INTERVAL_SECONDS=0 and FMP_COOLDOWN_THRESHOLD=0 "
+            "that reproduces un-throttled behaviour exactly."
+        ),
+    )
+    FMP_RETRY_BACKOFF_SECONDS: float = Field(
+        default=2.0,
+        description=(
+            "Base seconds for the FMP retry backoff; attempt N waits "
+            "FMP_RETRY_BACKOFF_SECONDS * 2**N unless the server sent a "
+            "Retry-After header. The backoff counts toward the issuance "
+            "spacing rather than being added on top of it."
+        ),
+    )
+    FMP_COOLDOWN_THRESHOLD: int = Field(
+        default=5,
+        description=(
+            "Consecutive FAILED FMP requests — 429, 5xx, or transport error "
+            "alike — after which FMP calls are SKIPPED outright (no sleep, no "
+            "request) for FMP_COOLDOWN_SECONDS, so an outage costs one round "
+            "of failures and then falls straight through to the existing "
+            "provider instead of paying a full timeout per symbol. Counting "
+            "transport errors too is deliberate: from the caller's side "
+            "'refusing us' and 'not answering us' have identical cost and "
+            "identical remedy. 401 and 403 deliberately do NOT count — neither "
+            "is evidence the host is unhealthy, and a cooldown cannot fix "
+            "either. Requiring CONSECUTIVE failures keeps one flaky socket "
+            "from opening it; a single served response clears the run and any "
+            "open cooldown. 0 disables the cooldown; with "
+            "FMP_MIN_REQUEST_INTERVAL_SECONDS=0 and FMP_MAX_RETRIES=0 that "
+            "reproduces un-throttled behaviour exactly."
+        ),
+    )
+    FMP_COOLDOWN_SECONDS: float = Field(
+        default=300.0,
+        description=(
+            "How long the FMP cooldown stays open once FMP_COOLDOWN_THRESHOLD "
+            "consecutive failed requests have been seen. Affects FMP only — "
+            "every other data source keeps running normally throughout, and "
+            "the cooldown self-expires so a recovered account resumes without "
+            "operator action (unlike a per-process latch, which would pin a "
+            "multi-hour daemon on the fallback after a single bad minute)."
+        ),
+    )
+    # ── FMP feed master gates (all default False = complete no-op) ───────
+    FMP_QUOTES_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for FMP-sourced quotes. False (the default) is a "
+            "complete no-op reproducing today's exact behavior: no FMP quote "
+            "request is ever attempted and the incumbent Alpaca/yfinance path "
+            "is untouched. Two-gate convention — this flag alone does not "
+            "elect FMP; MARKET_DATA_PROVIDER must ALSO be set to 'fmp'."
+        ),
+    )
+    FMP_BARS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for FMP-sourced OHLCV bars. False (the default) is "
+            "a complete no-op reproducing today's exact behavior. Two-gate "
+            "convention — this flag alone does not elect FMP; "
+            "MARKET_DATA_PROVIDER must ALSO be set to 'fmp'. Read "
+            "FMP_BARS_ADJUSTMENT before enabling: an adjustment-convention "
+            "mismatch corrupts every return series, indicator, GARCH fit and "
+            "backtest, and does so PLAUSIBLY (nothing fails loudly)."
+        ),
+    )
+    FMP_FUNDAMENTALS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for FMP-sourced fundamentals. False (the default) "
+            "is a complete no-op reproducing today's exact behavior — the "
+            "Yahoo statement-derived path is untouched. Two-gate convention — "
+            "this flag alone does not elect FMP; FUNDAMENTALS_SOURCE must ALSO "
+            "be set to 'fmp'."
+        ),
+    )
+    FMP_ANALYST_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the FMP analyst feed (price-target consensus + "
+            "grades summary) as DIAGNOSTIC dashboard columns. False (the "
+            "default) is a complete no-op reproducing today's exact behavior: "
+            "the columns stay NaN and no request is attempted. Single gate — "
+            "no provider selector applies, since this feed replaces nothing. "
+            "Deliberately never a SignalModule and never in SIGNAL_WEIGHTS: "
+            "FMP serves only the CURRENT consensus and targets get revised, so "
+            "there is no point-in-time history to backtest against."
+        ),
+    )
+    FMP_EARNINGS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the FMP earnings calendar/surprise feed. False "
+            "(the default) is a complete no-op reproducing today's exact "
+            "behavior — Earnings_Date keeps its existing Finnhub-only source "
+            "(blank without a Finnhub key). When on, FMP becomes a SECOND "
+            "source for the existing Earnings_Date column and, unlike Finnhub, "
+            "is not limited to a 30-day forward window. Single gate — no "
+            "provider selector applies."
+        ),
+    )
+    FMP_MACRO_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the FMP macro feed (treasury rates + the named "
+            "series in FMP_ECON_INDICATORS), written into the EXISTING "
+            "macro_history table under FRED-compatible series IDs. False (the "
+            "default) is a complete no-op reproducing today's exact behavior. "
+            "FMP SUPPLEMENTS FRED, it cannot replace it: VIXCLS and "
+            "BAMLH0A0HYM2 (HY OAS) have no Starter equivalent and "
+            "compute_hmm_risk_on_probability needs VIXCLS. Single gate — no "
+            "provider selector applies."
+        ),
+    )
+    FMP_INSIDER_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the FMP insider-trading statistics feed "
+            "(diagnostic Insider_Buy_Sell_Ratio column). False (the default) "
+            "is a complete no-op reproducing today's exact behavior. Separate "
+            "from FMP_SECTOR_SNAPSHOT_ENABLED on purpose: insider stats are "
+            "one request PER SYMBOL while sector snapshots are two requests "
+            "per cycle total, so they carry very different rate-limit costs "
+            "and deserve independent switches. Single gate."
+        ),
+    )
+    FMP_SECTOR_SNAPSHOT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the dated FMP sector P/E + sector performance "
+            "snapshots (diagnostic Sector_PE / Sector_1D_Change columns). "
+            "False (the default) is a complete no-op reproducing today's exact "
+            "behavior. Two requests per cycle total regardless of universe "
+            "size — hence its own switch, separate from the per-symbol "
+            "FMP_INSIDER_ENABLED. Single gate."
+        ),
+    )
+    # ── FMP behavior knobs ───────────────────────────────────────────────
+    FMP_FALLBACK_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "When True (default), an FMP failure falls through to the existing "
+            "provider chain for that kind (quotes/bars: FMP → Alpaca if keyed "
+            "→ yfinance; fundamentals: FMP → Yahoo statement-derived → raw "
+            "yfinance .info), logging a WARNING naming the provider, symbol "
+            "and exception so a silent fallback can never masquerade as "
+            "success. When False the chain is [primary] only and a failure "
+            "propagates exactly as it does today — use it to prove FMP is "
+            "actually serving, rather than being quietly rescued."
+        ),
+    )
+    FMP_QUOTES_REALTIME: bool = Field(
+        default=False,
+        description=(
+            "Whether FMP-served quotes may be labelled real-time (is_stale=False). "
+            "Defaults False because whether /quote is genuinely real-time on "
+            "the Starter tier could NOT be verified from this sandbox — and "
+            "claiming freshness we have not measured is exactly the kind of "
+            "quiet fabrication CONSTRAINT #4 exists to prevent. Set True only "
+            "after confirming it against a live market open."
+        ),
+    )
+    FMP_BARS_ADJUSTMENT: str = Field(
+        default="dividend-adjusted",
+        description=(
+            "Which /historical-price-eod variant FMP bars are pulled from: "
+            "'dividend-adjusted' (default), 'light', 'full', or "
+            "'non-split-adjusted'. THIS IS NOT A COSMETIC CHOICE. 'light' and "
+            "'full' are SPLIT-ONLY, while the incumbent yfinance path uses "
+            "history(auto_adjust=True) — split AND dividend adjusted — so "
+            "'dividend-adjusted' is the variant that MATCHES today's data. "
+            "'full' is the obvious-looking pick and it is wrong. Changing this "
+            "silently corrupts every return series, every indicator, every "
+            "GARCH fit and every backtest, and it does so plausibly: nothing "
+            "fails loudly, the numbers just quietly stop meaning what they "
+            "did. Run scripts/verify_fmp_bars.py (max abs relative close diff "
+            "< 1e-4) before trusting any value here, and note that price_bars "
+            "has a (symbol, date) PK — flipping this on an existing DB SPLICES "
+            "two adjustment conventions into one series at the cutover date, "
+            "which no test catches. Delete price_bars and re-backfill instead."
+        ),
+    )
+    FMP_ANALYST_REFRESH_HOURS: int = Field(
+        default=24,
+        description=(
+            "Hours before a symbol's cached FMP analyst consensus is "
+            "re-fetched. Analyst targets move on a multi-day cadence, so a "
+            "24 h cadence costs one request per symbol per DAY instead of per "
+            "cycle — the single largest steady-state rate-limit saving after "
+            "batch-quote. Only consulted when FMP_ANALYST_ENABLED is True."
+        ),
+    )
+    FMP_EARNINGS_REFRESH_HOURS: int = Field(
+        default=12,
+        description=(
+            "Hours before a symbol's cached FMP earnings rows are re-fetched. "
+            "Shorter than the analyst cadence because a reported actual lands "
+            "on a known day and is worth picking up the same session. Only "
+            "consulted when FMP_EARNINGS_ENABLED is True."
+        ),
+    )
+    FMP_INSIDER_REFRESH_DAYS: int = Field(
+        default=7,
+        description=(
+            "Days before a symbol's cached FMP insider statistics are "
+            "re-fetched. Quarterly aggregates that only move as late Form 4s "
+            "land, so a weekly cadence loses nothing. Only consulted when "
+            "FMP_INSIDER_ENABLED is True."
+        ),
+    )
+    FMP_INSIDER_MIN_LAG_DAYS: int = Field(
+        default=45,
+        description=(
+            "Minimum days a quarter must have been CLOSED before its FMP "
+            "insider aggregate is consumed. Form 4s keep landing after a "
+            "quarter ends, so a freshly-closed quarter's aggregate is still "
+            "changing underneath us and reading it early means reading a "
+            "number that will be revised. 45 is a deliberate CONSERVATIVE "
+            "JUDGMENT CALL, not a derived constant — there is no published "
+            "filing-completeness curve behind it; it is set here so an "
+            "operator can widen it if they observe late revisions."
+        ),
+    )
+    FMP_ECON_INDICATORS: str = Field(
+        default="unemploymentRate",
+        description=(
+            "Comma-separated FMP /economic-indicators series names fetched "
+            "when FMP_MACRO_ENABLED is True (e.g. "
+            "'unemploymentRate,GDP,CPI'). A comma-separated STRING parsed by "
+            "the consumer, matching the SENTIMENT_SOURCES / "
+            "EDGAR_FULLTEXT_FORMS convention — deliberately not a JSON list, "
+            "so it is not a gui/env_io.py _JSON_KEY. Note these series ARE "
+            "revised and FMP serves the latest vintage, so they are not "
+            "point-in-time safe (the same limitation FRED already has here) "
+            "and must stay out of the PIT audit."
+        ),
+    )
+    FMP_MAX_SECONDS_PER_CYCLE: float = Field(
+        default=120.0,
+        description=(
+            "Wall-clock budget (seconds) for ALL FMP requests in one pipeline "
+            "cycle, following the ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE "
+            "precedent. Needed because FMP_MIN_REQUEST_INTERVAL_SECONDS makes "
+            "issuance serial: ~100 requests at 0.25 s spacing is ~25 s of pure "
+            "waiting, and a cold cache is several times that. Once the budget "
+            "is spent, the remaining symbols degrade to NaN for that cycle "
+            "rather than overrunning it — an honest gap, never a fabricated "
+            "value (CONSTRAINT #4)."
+        ),
+    )
+
     # --- Robinhood Integration (legacy data/robinhood_client.py — SMS login) ---
     ROBINHOOD_USERNAME: Optional[str] = Field(default=None, description="Robinhood username (email).")
     ROBINHOOD_PASSWORD: Optional[str] = Field(default=None, description="Robinhood password.")

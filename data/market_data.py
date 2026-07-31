@@ -6,14 +6,16 @@ abstraction that hides the concrete source (Alpaca vs yfinance) from all
 signal, indicator, and forecasting code.
 
 Provider selection (evaluated at ``CompositeProvider`` construction time):
-  1. ``MARKET_DATA_PROVIDER`` env-var set to "alpaca" → ``AlpacaProvider``
-  2. ``MARKET_DATA_PROVIDER`` env-var set to "yfinance" → ``YFinanceProvider``
-  3. Env-var absent, ``ALPACA_API_KEY`` + ``ALPACA_SECRET_KEY`` present → Alpaca
-  4. Otherwise → ``YFinanceProvider`` (zero config, ~15-min delayed, free)
+  1. ``MARKET_DATA_PROVIDER`` env-var set to "fmp" → ``FMPProvider`` (never
+     auto-elected by ``FMP_API_KEY`` alone — see ``FMPProvider``'s docstring)
+  2. ``MARKET_DATA_PROVIDER`` env-var set to "alpaca" → ``AlpacaProvider``
+  3. ``MARKET_DATA_PROVIDER`` env-var set to "yfinance" → ``YFinanceProvider``
+  4. Env-var absent, ``ALPACA_API_KEY`` + ``ALPACA_SECRET_KEY`` present → Alpaca
+  5. Otherwise → ``YFinanceProvider`` (zero config, ~15-min delayed, free)
 
-Fundamentals are always sourced from ``FinnhubProvider`` when
-``FINNHUB_API_KEY`` is present; otherwise they degrade to an empty dict with a
-logged warning (never a crash).
+Fundamentals are Yahoo statement-derived (``YahooFundamentalsProvider``,
+primary) with a raw yfinance ``.info`` fallback, or FMP-sourced when
+``FUNDAMENTALS_SOURCE=fmp`` — see ``CompositeProvider.get_fundamentals``.
 
 In-process quote cache:
   Live quotes (get_latest_quote) are cached in a plain dict keyed by symbol for
@@ -31,13 +33,14 @@ Bar shape contract (matches existing pipeline):
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -105,7 +108,27 @@ class MarketDataProvider(ABC):
     Callers import this type for type annotations; they receive a
     ``CompositeProvider`` instance at runtime and never need to know the
     concrete backend.
+
+    Class attributes
+    ~~~~~~~~~~~~~~~~
+    ``SOURCE``:
+        Short provenance string surfaced to the dashboard / Google Sheet and
+        stamped on every ``Quote.source`` this provider emits (e.g.
+        ``"alpaca"``, ``"yfinance"``). ``CompositeProvider.quote_source`` reads
+        it off the *selected* provider rather than hardcoding a name, so adding
+        a backend can never silently mislabel its quotes as another provider's.
+    ``IS_REALTIME``:
+        ``False`` for any delayed or unofficial feed (the safe default —
+        nothing downstream should treat a delayed price as real-time). Only a
+        genuine real-time feed sets this ``True``.
+
+    Both are read via ``getattr(..., default)`` at the call sites so a
+    duck-typed provider (e.g. ``YahooFundamentalsProvider``, which is not an
+    ABC subclass) never breaks the accessor.
     """
+
+    SOURCE: str = "unknown"
+    IS_REALTIME: bool = False
 
     @abstractmethod
     def get_latest_quote(self, symbol: str) -> Quote:
@@ -173,6 +196,9 @@ class AlpacaProvider(MarketDataProvider):
     stale_threshold_seconds:
         Age (seconds) beyond which a quote is considered stale.  Default 60.
     """
+
+    SOURCE = "alpaca"
+    IS_REALTIME = True
 
     def __init__(
         self,
@@ -320,6 +346,9 @@ class YFinanceProvider(MarketDataProvider):
     """
 
     SOURCE = "yfinance"
+    # Delayed by design (~15 min, unofficial) — every Quote it emits also
+    # carries ``is_stale=True``.
+    IS_REALTIME = False
 
     def get_latest_quote(self, symbol: str) -> Quote:
         """Fetch last price via ``Ticker.fast_info`` (avoids the slow .info round-trip)."""
@@ -648,6 +677,544 @@ class YahooFundamentalsProvider:
 
 
 # ---------------------------------------------------------------------------
+# FMP (Financial Modeling Prep) provider
+# ---------------------------------------------------------------------------
+
+def _fmp_eod_payload_to_daily_returns(payload: Any) -> Optional[pd.Series]:
+    """Convert an FMP ``/historical-price-eod/{variant}`` payload (a list of
+    daily OHLCV dicts) into a tz-naive, ascending daily pct-change Series.
+
+    Field-name note (verified live, 2026-07-31, FMP MCP connector, symbol
+    AAPL): the ``dividend-adjusted`` variant — the one
+    ``settings.FMP_BARS_ADJUSTMENT`` and this beta computation both use —
+    returns ``adjClose`` (not ``close``). ``adjClose`` is preferred when
+    present so a dividend-adjusted payload is never accidentally read from an
+    unadjusted field; ``close`` is accepted as a fallback for the other
+    (split-only) variants. Row order is NOT assumed — the Series is always
+    explicitly sorted ascending by parsed date before the pct-change, so an
+    API that answers descending (as observed live) or ascending is handled
+    identically. Returns ``None`` (never raises) on any structural problem,
+    letting the caller keep a previously cached good series rather than
+    clobbering it with junk.
+    """
+    try:
+        if not isinstance(payload, list) or not payload:
+            return None
+        dates: List[Any] = []
+        closes: List[Any] = []
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            d = row.get("date")
+            c = row.get("adjClose", row.get("close"))
+            if d is None or c is None:
+                continue
+            dates.append(d)
+            closes.append(c)
+        if not dates:
+            return None
+        idx = pd.to_datetime(pd.Index(dates), errors="coerce")
+        ser = pd.Series(closes, index=idx, dtype="float64")
+        ser = ser[~ser.index.isna()]
+        if ser.empty:
+            return None
+        ser = ser.sort_index()
+        rets = ser.pct_change().dropna()
+        return rets if not rets.empty else None
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _fmp_first_row(payload: Any) -> Optional[Dict[str, Any]]:
+    """Normalise an FMP quote-shaped response (a list wrapping one dict, or
+    occasionally a bare dict) to a single dict, or ``None`` when
+    empty/malformed. Mirrors ``data/fmp_fundamentals.py::_first`` exactly
+    (kept as a small local duplicate here rather than importing a private,
+    underscore-prefixed helper across a module-ownership boundary — this one
+    function is a few lines and not worth that coupling). Never raises.
+    """
+    try:
+        if isinstance(payload, list):
+            return payload[0] if payload and isinstance(payload[0], dict) else None
+        if isinstance(payload, dict):
+            return payload if payload else None
+    except Exception:  # pragma: no cover - defensive
+        return None
+    return None
+
+
+def _fmp_quote_timestamp_to_datetime(ts_raw: Any) -> datetime:
+    """Convert FMP's ``/quote`` ``timestamp`` field (Unix epoch seconds) to a
+    UTC-AWARE ``datetime`` — matching the ``Quote`` dataclass's own
+    documented contract ("timestamp: UTC-aware datetime of the quote") and
+    both existing providers' convention (``AlpacaProvider`` converts its
+    real quote timestamp to tz-aware UTC; ``YFinanceProvider`` uses
+    ``datetime.now(timezone.utc)``, tz-aware since ``fast_info`` exposes no
+    usable timestamp). Falls back to "now" (UTC-aware) when the field is
+    missing or unparsable — an approximate-but-honestly-aware timestamp beats
+    raising over a field whose presence FMP does not guarantee for every
+    account tier, and beats silently emitting a naive datetime that breaks
+    every downstream ``(now - timestamp).total_seconds()`` staleness check.
+    """
+    if ts_raw is not None:
+        try:
+            return datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _fmp_bars_payload_to_df(payload: Any) -> Optional[pd.DataFrame]:
+    """Reshape an FMP OHLCV payload (EOD or intraday chart — both are a list
+    of per-bar dicts) into the ABC's bar-shape contract: columns exactly
+    ``['Open', 'High', 'Low', 'Close', 'Volume']``. The index is left
+    tz-naive but UNSORTED and UN-normalised here — callers apply their own
+    interval-specific sort/normalize/truncate semantics (daily bars get
+    ``.normalize()`` + ``.tail(lookback_days)``; hourly bars keep their real
+    intraday timestamp). Returns ``None`` (never raises) on any structural
+    problem, so the caller can raise a single, clearly-worded
+    ``MarketDataError`` instead of a bespoke parse error.
+
+    Field-name handling (EOD; per F5's live probe — see
+    ``scripts/verify_fmp_bars.py``'s module docstring): the
+    ``dividend-adjusted`` / ``non-split-adjusted`` variants return
+    ``adjOpen``/``adjHigh``/``adjLow``/``adjClose``; the (NOT the
+    recommended default) ``full`` variant returns plain
+    ``open``/``high``/``low``/``close``. ``adjX`` is preferred when present,
+    falling back to plain ``X``, so a payload from either variant reshapes
+    correctly — this mirrors ``scripts/verify_fmp_bars.py::_extract_close``'s
+    own defensive field-name handling. A row missing any of open/high/low/
+    close (e.g. every row of a ``light``-variant payload, which is
+    close/price-only with no OHLC breakdown at all) is skipped rather than
+    filled with a fabricated value; an all-skipped payload returns ``None``,
+    which the caller turns into ``MarketDataError`` rather than a silently
+    empty frame. The intraday chart endpoint's field names were NOT
+    live-probed (only ``/historical-price-eod``'s close field was); the same
+    ``adjX``-or-``X`` fallback is applied defensively in case FMP ever serves
+    an adjusted intraday variant, but the documented/expected shape there is
+    plain ``open``/``high``/``low``/``close``/``volume``.
+
+    ``Volume`` is used as-is from the ``volume`` field; a row with no volume
+    field falls back to ``0`` (matching ``YFinanceProvider.get_intraday_bars``'s
+    own precedent of filling an entirely-missing Volume column with ``0``
+    rather than NaN, since a bar's volume is a count, not a valuation input).
+    """
+    try:
+        if not isinstance(payload, list) or not payload:
+            return None
+        dates: List[Any] = []
+        opens: List[Any] = []
+        highs: List[Any] = []
+        lows: List[Any] = []
+        closes: List[Any] = []
+        vols: List[Any] = []
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            d = row.get("date")
+            o = row.get("adjOpen", row.get("open"))
+            h = row.get("adjHigh", row.get("high"))
+            l = row.get("adjLow", row.get("low"))
+            c = row.get("adjClose", row.get("close"))
+            if d is None or o is None or h is None or l is None or c is None:
+                continue
+            v = row.get("volume")
+            dates.append(d)
+            opens.append(o)
+            highs.append(h)
+            lows.append(l)
+            closes.append(c)
+            vols.append(v if v is not None else 0)
+        if not dates:
+            return None
+        idx = pd.to_datetime(pd.Index(dates), errors="coerce")
+        df = pd.DataFrame(
+            {"Open": opens, "High": highs, "Low": lows, "Close": closes, "Volume": vols},
+            index=idx,
+        )
+        df = df[~df.index.isna()]
+        if df.empty:
+            return None
+        df = df.astype("float64")
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+        return df
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+# Once-per-process latch for the FMP_BARS_ADJUSTMENT mismatch warning — mirrors
+# data/fmp_client.py's own _fmp_auth_error_logged pattern (a module-level bool,
+# not a class attribute, since it is about the PROCESS's configuration, not
+# any one FMPProvider instance). An operator who set this once should not have
+# their log flooded once per symbol per cycle.
+_fmp_bars_adjustment_warned: bool = False
+
+
+def _warn_once_if_fmp_bars_adjustment_mismatched(variant: str) -> None:
+    """Log a WARNING exactly once per process when ``settings.FMP_BARS_ADJUSTMENT``
+    is anything other than the recommended ``"dividend-adjusted"`` default.
+
+    This is the single highest silent-corruption risk in the whole FMP
+    integration (see ``scripts/verify_fmp_bars.py``'s module docstring):
+    ``"light"`` and ``"full"`` are SPLIT-ONLY and do NOT match yfinance's
+    ``auto_adjust=True`` (split AND dividend adjusted) convention that every
+    downstream return series, indicator, GARCH fit and backtest is built
+    against — and the mismatch corrupts silently, never failing loudly. This
+    warning exists to make an operator's misconfiguration hard to miss rather
+    than merely documented in a settings description nobody re-reads.
+    """
+    global _fmp_bars_adjustment_warned
+    if variant != "dividend-adjusted" and not _fmp_bars_adjustment_warned:
+        logger.warning(
+            "FMPProvider: FMP_BARS_ADJUSTMENT=%r is NOT the recommended "
+            "'dividend-adjusted' default. 'light' and 'full' are SPLIT-ONLY "
+            "and do NOT match yfinance's auto_adjust=True (split+dividend) "
+            "convention -- this WILL silently corrupt every return series, "
+            "indicator, GARCH fit, and backtest built on these bars. Run "
+            "scripts/verify_fmp_bars.py (max abs relative close diff < 1e-4 "
+            "across KO/JNJ/AAPL) before trusting this setting.",
+            variant,
+        )
+        _fmp_bars_adjustment_warned = True
+
+
+def reset_fmp_bars_adjustment_warning() -> None:
+    """Test-only: reset the once-per-process ``FMP_BARS_ADJUSTMENT`` mismatch
+    warning latch so a test can assert the WARNING fires again."""
+    global _fmp_bars_adjustment_warned
+    _fmp_bars_adjustment_warned = False
+
+
+class FMPProvider(MarketDataProvider):
+    """Financial Modeling Prep (FMP) market-data provider.
+
+    Implements the full ``MarketDataProvider`` ABC: fundamentals (wave 1),
+    quotes, and daily/hourly bars (wave 2). FMP becomes selectable as
+    ``MARKET_DATA_PROVIDER=fmp`` only via an EXPLICIT setting — ``FMP_API_KEY``
+    alone never elects it (the same two-gate discipline as
+    ``FUNDAMENTALS_SOURCE=fmp``), so an operator who adds the key to light up
+    one diagnostic feed never has their quote/bars source silently change.
+
+    Fetches every fundamentals payload via the ``data.fmp_client`` wrappers
+    (each in its own try/except so one missing endpoint — e.g. an
+    Ultimate-only one on the Starter plan — never blanks the rest) and
+    delegates ALL math/scale conversion to
+    ``data.fmp_fundamentals.map_fundamentals`` (pure, offline-testable). This
+    class is an I/O shell only, matching ``AlpacaProvider`` /
+    ``YahooFundamentalsProvider``'s division of labor.
+
+    Parameters
+    ----------
+    api_key:
+        Non-empty FMP API key. Validated at construction (``RuntimeError`` on
+        empty) as a fail-fast guard; the actual HTTP calls always read
+        ``settings.FMP_API_KEY`` internally via ``data/fmp_client.py`` (the
+        one-seam design — see that module's docstring), so this argument is
+        effectively a construction-time sanity check rather than a value
+        threaded through to each request.
+    """
+
+    SOURCE = "fmp"
+    # IS_REALTIME is NOT a fixed class constant like Alpaca/yfinance's — FMP's
+    # real-time-ness on the Starter plan could not be verified live (see the
+    # plan's Risks section), so it is operator-controlled via
+    # settings.FMP_QUOTES_REALTIME and read PER INSTANCE at construction
+    # time, never frozen at import.
+    IS_REALTIME: bool = False
+
+    # Refetch SPY market-return series at most every ~6h — mirrors
+    # YahooFundamentalsProvider._SPY_CACHE_TTL_SECONDS exactly, so a
+    # multi-symbol cycle fetches the benchmark leg once, not once per ticker.
+    _SPY_CACHE_TTL_SECONDS = 6 * 3600
+
+    def __init__(self, api_key: str) -> None:
+        if not api_key:
+            raise RuntimeError("FMPProvider requires a non-empty api_key.")
+        self._api_key = api_key
+        from settings import settings as _settings
+        self.IS_REALTIME = bool(getattr(_settings, "FMP_QUOTES_REALTIME", False))
+        # (fetched_at, pd.Series) semantics via two attributes, matching
+        # YahooFundamentalsProvider's cache shape exactly.
+        self._spy_returns_cache: Optional[pd.Series] = None
+        self._spy_cached_at: float = 0.0
+
+    def get_latest_quote(self, symbol: str) -> Quote:
+        """Fetch the latest quote via FMP's ``/quote`` endpoint.
+
+        ``bid``/``ask`` are always ``float('nan')`` — never fabricated
+        ``0.0`` — because the Starter plan's ``/quote`` response carries no
+        NBBO data (confirmed during planning). ``is_stale`` is
+        ``not self.IS_REALTIME`` (operator-controlled via
+        ``settings.FMP_QUOTES_REALTIME``, defaulting to ``False`` i.e.
+        stale=True, since real-time-ness on Starter could not be verified
+        live). Never raises anything but ``MarketDataError`` (ABC contract,
+        CONSTRAINT #6): the entire body is wrapped in a broad
+        ``try/except Exception``, converting any ``FMPUnavailable`` or other
+        unexpected failure into ``MarketDataError`` with the original
+        exception chained.
+        """
+        try:
+            from data import fmp_client
+
+            payload = fmp_client.quote(symbol)
+            row = _fmp_first_row(payload)
+            if row is None:
+                raise MarketDataError(
+                    f"FMP returned an empty/malformed quote payload for {symbol}"
+                )
+
+            price = row.get("price")
+            if price is None:
+                raise MarketDataError(
+                    f"FMP quote payload for {symbol} has no 'price' field"
+                )
+
+            timestamp = _fmp_quote_timestamp_to_datetime(row.get("timestamp"))
+
+            return Quote(
+                symbol=symbol.upper(),
+                price=float(price),
+                bid=float("nan"),
+                ask=float("nan"),
+                timestamp=timestamp,
+                is_stale=not self.IS_REALTIME,
+                source=self.SOURCE,
+            )
+        except MarketDataError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — converted to MarketDataError below
+            logger.error("FMPProvider.get_latest_quote(%s) failed: %s", symbol, exc)
+            raise MarketDataError(f"FMP quote fetch failed for {symbol}: {exc}") from exc
+
+    def get_intraday_bars(
+        self, symbol: str, lookback_days: int = 252, interval: str = "1d"
+    ) -> pd.DataFrame:
+        """Fetch OHLCV bars via FMP.
+
+        ``interval="1d"`` (default) uses FMP's
+        ``/historical-price-eod/{settings.FMP_BARS_ADJUSTMENT}`` (default
+        ``"dividend-adjusted"``, the ONLY variant verified to match
+        yfinance's ``auto_adjust=True`` convention — see
+        ``scripts/verify_fmp_bars.py``). The lookback window is
+        ``date.today() - timedelta(days=ceil(lookback_days * 1.45))``, a
+        calendar-to-trading-day buffer matching the plan's convention.
+        ``interval="1h"`` uses FMP's ``/historical-chart/1hour`` over a
+        bounded trailing ~30-calendar-day window (FMP intraday history is
+        not unlimited, unlike EOD which goes back to 2008) — mirroring
+        ``YFinanceProvider.get_intraday_bars``'s own bounded-hourly-window
+        precedent. Any other ``interval`` raises ``MarketDataError``,
+        mirroring ``YFinanceProvider``'s exact handling of an unsupported
+        interval.
+
+        Reshapes the payload to the ABC's exact bar-shape contract: columns
+        exactly ``['Open', 'High', 'Low', 'Close', 'Volume']``, tz-naive
+        ascending ``DatetimeIndex``. An empty/malformed payload always raises
+        ``MarketDataError`` — this method never returns an empty DataFrame
+        silently (ABC contract, same as every other provider).
+
+        Never raises anything but ``MarketDataError`` (CONSTRAINT #6): the
+        entire body is wrapped in a broad ``try/except Exception``,
+        converting any ``FMPUnavailable`` or other unexpected failure into
+        ``MarketDataError`` with the original exception chained.
+        """
+        try:
+            from data import fmp_client
+
+            if interval == "1d":
+                variant = str(
+                    getattr(settings, "FMP_BARS_ADJUSTMENT", "dividend-adjusted")
+                    or "dividend-adjusted"
+                )
+                _warn_once_if_fmp_bars_adjustment_mismatched(variant)
+
+                to_date = date.today()
+                from_date = to_date - timedelta(days=math.ceil(lookback_days * 1.45))
+                payload = fmp_client.historical_eod(
+                    symbol,
+                    variant=variant,
+                    from_date=from_date.isoformat(),
+                    to_date=to_date.isoformat(),
+                )
+                df = _fmp_bars_payload_to_df(payload)
+                if df is None or df.empty:
+                    raise MarketDataError(
+                        f"FMP returned an empty/malformed EOD bars payload for "
+                        f"{symbol} (variant={variant!r})"
+                    )
+                df.index = df.index.normalize()
+                df.sort_index(inplace=True)
+                return df.tail(lookback_days)
+
+            elif interval == "1h":
+                to_date = date.today()
+                from_date = to_date - timedelta(days=30)
+                payload = fmp_client.intraday(
+                    symbol,
+                    interval="1hour",
+                    from_date=from_date.isoformat(),
+                    to_date=to_date.isoformat(),
+                )
+                df = _fmp_bars_payload_to_df(payload)
+                if df is None or df.empty:
+                    raise MarketDataError(
+                        f"FMP returned an empty/malformed intraday bars payload "
+                        f"for {symbol}"
+                    )
+                df.sort_index(inplace=True)
+                return df
+
+            else:
+                raise MarketDataError(
+                    f"FMPProvider.get_intraday_bars: unsupported interval "
+                    f"{interval!r} (supported: '1d', '1h')"
+                )
+
+        except MarketDataError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — converted to MarketDataError below
+            logger.error("FMPProvider.get_intraday_bars(%s) failed: %s", symbol, exc)
+            raise MarketDataError(f"FMP bars fetch failed for {symbol}: {exc}") from exc
+
+    @staticmethod
+    def _beta_lookback_calendar_days() -> int:
+        """Calendar days to request so ``BETA_LOOKBACK_DAYS`` TRADING days are
+        covered, e.g. ``int(504 * 1.6)`` ~= 806 calendar days for the 504
+        (~2y) default. The 1.6x buffer absorbs weekends + holidays."""
+        try:
+            trading_days = int(settings.BETA_LOOKBACK_DAYS)
+        except Exception:
+            trading_days = 504
+        return int(trading_days * 1.6)
+
+    def _fetch_daily_returns(self, symbol: str) -> Optional[pd.Series]:
+        """One symbol's daily-return series via FMP's dividend-adjusted EOD
+        bars, covering ``settings.BETA_LOOKBACK_DAYS`` trading days. Returns
+        ``None`` (never raises) on any failure — the caller degrades beta to
+        NaN rather than fabricating a neutral value."""
+        try:
+            from data import fmp_client
+            from data.fmp_client import FMPUnavailable
+
+            to_date = date.today()
+            from_date = to_date - timedelta(days=self._beta_lookback_calendar_days())
+            payload = fmp_client.historical_eod(
+                symbol,
+                variant="dividend-adjusted",
+                from_date=from_date.isoformat(),
+                to_date=to_date.isoformat(),
+            )
+            return _fmp_eod_payload_to_daily_returns(payload)
+        except FMPUnavailable:
+            return None
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+    def _spy_returns(self) -> Optional[pd.Series]:
+        """Fetch SPY daily returns once, cached with a ~6h monotonic TTL —
+        shared across every symbol within a run so a multi-symbol cycle does
+        not refetch the benchmark leg once per ticker. Returns ``None`` on
+        any failure (:func:`_fetch_daily_returns` already dead-letters), in
+        which case any prior good cached series is kept rather than cleared."""
+        now = time.monotonic()
+        if (
+            self._spy_returns_cache is not None
+            and (now - self._spy_cached_at) <= self._SPY_CACHE_TTL_SECONDS
+        ):
+            return self._spy_returns_cache
+        fresh = self._fetch_daily_returns("SPY")
+        if fresh is None or fresh.empty:
+            return self._spy_returns_cache  # keep any prior good series
+        self._spy_returns_cache = fresh
+        self._spy_cached_at = now
+        return fresh
+
+    def _compute_beta(self, symbol: str) -> float:
+        """``Cov(stock, SPY) / Var(SPY)`` via ``data.fmp_fundamentals.compute_beta``.
+        Never fabricates a neutral 1.0 on failure — degrades to NaN."""
+        try:
+            from data.fmp_fundamentals import compute_beta as _compute_beta_fn
+
+            stock_returns = self._fetch_daily_returns(symbol)
+            market_returns = self._spy_returns()
+            return _compute_beta_fn(stock_returns, market_returns)
+        except Exception:  # pragma: no cover - defensive
+            return float("nan")
+
+    def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
+        """Fetch every FMP fundamentals payload for ``symbol`` and delegate
+        all math/scale conversion to ``data.fmp_fundamentals.map_fundamentals``.
+
+        Never raises (ABC contract, CONSTRAINT #6): the entire body is
+        wrapped in ``try/except Exception``, returning ``{}`` + a logged
+        WARNING on any top-level failure. Each individual FMP call is ALSO
+        isolated in its own ``try/except FMPUnavailable`` so one missing
+        endpoint (an Ultimate-only one on the Starter plan, a transient
+        outage, ...) degrades only its own fields to NaN rather than blanking
+        the whole response.
+        """
+        try:
+            from data import fmp_client
+            from data.fmp_client import FMPUnavailable
+            from data.fmp_fundamentals import FMP_FUNDAMENTAL_KEYS, map_fundamentals
+
+            def _safe(fetch_fn, *args, **kwargs):
+                try:
+                    return fetch_fn(*args, **kwargs)
+                except FMPUnavailable:
+                    return None
+
+            quote = _safe(fmp_client.quote, symbol)
+            profile = _safe(fmp_client.profile, symbol)
+            key_metrics_ttm = _safe(fmp_client.key_metrics_ttm, symbol)
+            ratios_ttm = _safe(fmp_client.ratios_ttm, symbol)
+            income_statement_ttm = _safe(fmp_client.income_statement_ttm, symbol)
+            dividends = _safe(fmp_client.dividends, symbol)
+            shares_float = _safe(fmp_client.shares_float, symbol)
+
+            beta = self._compute_beta(symbol)
+
+            result = map_fundamentals(
+                symbol,
+                quote=quote,
+                profile=profile,
+                key_metrics_ttm=key_metrics_ttm,
+                ratios_ttm=ratios_ttm,
+                income_statement_ttm=income_statement_ttm,
+                shares_float=shares_float,
+                dividends=dividends,
+                beta=beta,
+            )
+
+            # A degraded-but-nonempty response (majority of numeric fields
+            # NaN) is still "worked" from CompositeProvider's perspective — a
+            # non-empty dict never triggers the fallback chain — so it is
+            # worth a WARNING (not debug/info) to keep it visible in logs.
+            numeric_keys = [
+                k for k in FMP_FUNDAMENTAL_KEYS if k not in ("shortName", "sector")
+            ]
+            nan_count = sum(
+                1 for k in numeric_keys
+                if isinstance(result.get(k), float) and result.get(k) != result.get(k)
+            )
+            if numeric_keys and nan_count > len(numeric_keys) // 2:
+                logger.warning(
+                    "FMPProvider.get_fundamentals(%s): %d/%d numeric fields "
+                    "are NaN -- a degraded-but-nonempty response (this will "
+                    "NOT trigger the fallback chain, since the dict is not "
+                    "empty).",
+                    symbol, nan_count, len(numeric_keys),
+                )
+            return result
+        except Exception as exc:  # noqa: BLE001 — dead-letter, never raise
+            logger.warning(
+                "FMPProvider.get_fundamentals(%s) failed: %s — returning empty dict",
+                symbol, exc,
+            )
+            return {}
+
+
+# ---------------------------------------------------------------------------
 # Finnhub provider (fundamentals only)
 # ---------------------------------------------------------------------------
 
@@ -804,6 +1371,13 @@ class FinnhubProvider:
         Sliding-window call budget per 60 s.  Defaults to
         ``FINNHUB_RATE_LIMIT_PER_MIN`` env-var (int) or 50.
     """
+
+    # Provenance attributes for completeness — this class is deprecated and
+    # unwired (nothing constructs it inside CompositeProvider), so neither is
+    # read in production today. Declared so a future re-wiring inherits the
+    # same attribute contract every other provider follows.
+    SOURCE = "finnhub"
+    IS_REALTIME = False
 
     # Mapping from Finnhub metric names to yfinance .info key names so that
     # FundamentalDataDTO.from_raw_dict() doesn't need to know the source.
@@ -1126,16 +1700,22 @@ class CompositeProvider(MarketDataProvider):
 
     Provider selection order
     ~~~~~~~~~~~~~~~~~~~~~~~~
-    1. ``MARKET_DATA_PROVIDER=alpaca`` → ``AlpacaProvider``
-    2. ``MARKET_DATA_PROVIDER=yfinance`` → ``YFinanceProvider``
-    3. Env-var absent, ``ALPACA_API_KEY`` + ``ALPACA_SECRET_KEY`` set → Alpaca
-    4. Otherwise → ``YFinanceProvider``
+    1. ``MARKET_DATA_PROVIDER=fmp`` → ``FMPProvider`` (never auto-elected by
+       ``FMP_API_KEY`` alone; quotes/bars then run through an ordered
+       fallback chain — see ``_get_quote_via_fmp_chain`` /
+       ``_get_bars_via_fmp_chain`` — gated by ``FMP_FALLBACK_ENABLED``)
+    2. ``MARKET_DATA_PROVIDER=alpaca`` → ``AlpacaProvider``
+    3. ``MARKET_DATA_PROVIDER=yfinance`` → ``YFinanceProvider``
+    4. Env-var absent, ``ALPACA_API_KEY`` + ``ALPACA_SECRET_KEY`` set → Alpaca
+    5. Otherwise → ``YFinanceProvider``
 
     Fundamentals come from the Yahoo-derived statement-computed engine
     (``YahooFundamentalsProvider``) as the primary source, with a raw yfinance
     ``.info`` fallback (``YFinanceProvider.get_fundamentals()``) when the primary
     returns nothing. ``FUNDAMENTALS_SOURCE=yfinance_info`` forces the raw
-    ``.info`` provider as primary. Finnhub is no longer wired in.
+    ``.info`` provider as primary; ``FUNDAMENTALS_SOURCE=fmp`` routes through
+    its own ordered fallback chain (``_get_fundamentals_via_fmp_chain``).
+    Finnhub is no longer wired in.
 
     Parameters
     ----------
@@ -1161,11 +1741,22 @@ class CompositeProvider(MarketDataProvider):
             neg_ttl_seconds=int(settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS),
         )
         self._quote_provider: MarketDataProvider = self._select_quote_provider()
-        # Fundamentals source: Yahoo-derived statement engine (primary) or raw
-        # yfinance .info when FUNDAMENTALS_SOURCE=yfinance_info.
+        # Fundamentals source: Yahoo-derived statement engine (primary), raw
+        # yfinance .info when FUNDAMENTALS_SOURCE=yfinance_info, or FMP when
+        # FUNDAMENTALS_SOURCE=fmp. FMP_API_KEY being set is NEVER sufficient
+        # on its own -- an explicit FUNDAMENTALS_SOURCE=fmp is required, so
+        # adding the key for one feed (e.g. the analyst feed) can never
+        # silently change what every valuation metric is computed from.
         src = (settings.FUNDAMENTALS_SOURCE or "yahoo").strip().lower()
         if src == "yfinance_info":
             self._fundamentals_provider = YFinanceProvider()
+        elif src == "fmp":
+            fmp_key = (getattr(settings, "FMP_API_KEY", None) or "").strip()
+            if not fmp_key:
+                raise RuntimeError(
+                    "FUNDAMENTALS_SOURCE=fmp but FMP_API_KEY is not set. Add it to .env."
+                )
+            self._fundamentals_provider = FMPProvider(api_key=fmp_key)
         else:
             self._fundamentals_provider = YahooFundamentalsProvider()
         # Log startup banner once
@@ -1180,6 +1771,36 @@ class CompositeProvider(MarketDataProvider):
         alpaca_key = (settings.ALPACA_API_KEY or "").strip()
         alpaca_secret = (settings.ALPACA_SECRET_KEY or "").strip()
 
+        # FMP is selected ONLY by an explicit MARKET_DATA_PROVIDER=fmp — never
+        # by FMP_API_KEY's mere presence (unlike the Alpaca ladder just below,
+        # which DOES auto-elect on key presence alone). This is deliberate:
+        # an operator adding FMP_API_KEY to light up the analyst/earnings
+        # diagnostic feeds must never silently have their quote/bars source
+        # change underneath them.
+        if explicit == "fmp":
+            fmp_key = (getattr(settings, "FMP_API_KEY", None) or "").strip()
+            if not fmp_key:
+                raise RuntimeError(
+                    "MARKET_DATA_PROVIDER=fmp but FMP_API_KEY is not set. Add it to .env."
+                )
+            provider = FMPProvider(api_key=fmp_key)
+            variant = str(
+                getattr(settings, "FMP_BARS_ADJUSTMENT", "dividend-adjusted")
+                or "dividend-adjusted"
+            )
+            logger.info(
+                "MarketData: MARKET_DATA_PROVIDER=fmp selected -- "
+                "FMP_BARS_ADJUSTMENT=%r is the active daily-bars variant. "
+                "Reminder: scripts/verify_fmp_bars.py should have been run "
+                "and PASSED (max abs relative close diff < 1e-4 across "
+                "KO/JNJ/AAPL) before this was enabled in a live environment "
+                "-- an adjustment-convention mismatch corrupts every return "
+                "series, indicator, GARCH fit and backtest PLAUSIBLY, "
+                "without failing loudly.",
+                variant,
+            )
+            return provider
+
         if explicit == "alpaca" or (not explicit and alpaca_key and alpaca_secret):
             if not alpaca_key or not alpaca_secret:
                 raise RuntimeError(
@@ -1193,21 +1814,25 @@ class CompositeProvider(MarketDataProvider):
 
         raise RuntimeError(
             f"Unknown MARKET_DATA_PROVIDER value: {explicit!r}.  "
-            "Valid values: 'alpaca', 'yfinance'."
+            "Valid values: 'fmp', 'alpaca', 'yfinance'."
         )
 
     def _log_startup_banner(self) -> None:
+        # Read the provenance off the selected providers' class attributes
+        # rather than isinstance-ing against a fixed list of classes: an
+        # isinstance ladder silently mislabels any backend it doesn't know
+        # about, and this banner is the operator's first (often only) look at
+        # which source a run is actually using.
         provider_name = type(self._quote_provider).__name__
-        is_realtime = isinstance(self._quote_provider, AlpacaProvider)
-        latency_note = "real-time (IEX)" if is_realtime else "delayed (~15 min, unofficial)"
-        fundamentals_note = (
-            "yfinance .info"
-            if isinstance(self._fundamentals_provider, YFinanceProvider)
-            else "Yahoo-derived (statement-computed)"
+        is_realtime = bool(getattr(self._quote_provider, "IS_REALTIME", False))
+        quote_source = str(getattr(self._quote_provider, "SOURCE", "unknown"))
+        latency_note = "real-time" if is_realtime else "delayed (unofficial)"
+        fundamentals_note = str(
+            getattr(self._fundamentals_provider, "SOURCE", "unknown")
         )
         logger.info(
-            "MarketData: quotes/bars via %s [%s]; fundamentals via %s",
-            provider_name, latency_note, fundamentals_note,
+            "MarketData: quotes/bars via %s [source=%s, %s]; fundamentals via %s",
+            provider_name, quote_source, latency_note, fundamentals_note,
         )
 
     # ------------------------------------------------------------------
@@ -1254,7 +1879,11 @@ class CompositeProvider(MarketDataProvider):
             return cached
         logger.debug("CompositeProvider: quote cache MISS for %s; fetching live.", sym)
 
-        quote = self._quote_provider.get_latest_quote(sym)
+        if isinstance(self._quote_provider, FMPProvider):
+            quote = self._get_quote_via_fmp_chain(sym)
+        else:
+            # ORIGINAL PATH — byte-identical to pre-FMP behavior.
+            quote = self._quote_provider.get_latest_quote(sym)
         self._cache.put(quote)
         return quote
 
@@ -1298,27 +1927,193 @@ class CompositeProvider(MarketDataProvider):
             sym, lookback_days, interval,
         )
 
-        bars = self._quote_provider.get_intraday_bars(
-            symbol=sym, lookback_days=lookback_days, interval=interval
-        )
+        if isinstance(self._quote_provider, FMPProvider):
+            bars = self._get_bars_via_fmp_chain(sym, lookback_days, interval)
+        else:
+            # ORIGINAL PATH — byte-identical to pre-FMP behavior.
+            bars = self._quote_provider.get_intraday_bars(
+                symbol=sym, lookback_days=lookback_days, interval=interval
+            )
         self._bars_cache.put(sym, lookback_days, bars, interval)
         return bars
+
+    def _build_fmp_fallback_tail(self) -> List[MarketDataProvider]:
+        """Build the [AlpacaProvider?, YFinanceProvider] tail shared by the
+        quote and bars FMP fallback chains, honoring ``FMP_FALLBACK_ENABLED``.
+
+        Returns an empty list when ``settings.FMP_FALLBACK_ENABLED`` is
+        ``False`` — the caller's chain then collapses to ``[FMPProvider]``
+        only, and a primary failure propagates as ``MarketDataError`` with no
+        fallback attempted. Alpaca is only appended when BOTH
+        ``ALPACA_API_KEY`` and ``ALPACA_SECRET_KEY`` are set; its
+        construction is defensively wrapped (unlike
+        ``YahooFundamentalsProvider``/``YFinanceProvider`` in the
+        fundamentals chain, ``AlpacaProvider.__init__`` does real I/O-free
+        but import-dependent work via ``alpaca-py`` and can raise
+        ``ImportError``) so a broken/missing Alpaca install degrades to
+        "skip Alpaca, keep yfinance" rather than crashing chain construction
+        itself.
+        """
+        tail: List[MarketDataProvider] = []
+        if not bool(getattr(settings, "FMP_FALLBACK_ENABLED", True)):
+            return tail
+        alpaca_key = (settings.ALPACA_API_KEY or "").strip()
+        alpaca_secret = (settings.ALPACA_SECRET_KEY or "").strip()
+        if alpaca_key and alpaca_secret:
+            try:
+                tail.append(AlpacaProvider(api_key=alpaca_key, secret_key=alpaca_secret))
+            except Exception as exc:  # noqa: BLE001 — defensive: keep the chain alive
+                logger.warning(
+                    "CompositeProvider: AlpacaProvider unavailable for the FMP "
+                    "quote/bars fallback chain (%s); skipping it.", exc,
+                )
+        tail.append(YFinanceProvider())
+        return tail
+
+    def _get_quote_via_fmp_chain(self, sym: str) -> Quote:
+        """Ordered-chain quote fetch used ONLY when ``self._quote_provider``
+        is an ``FMPProvider`` (i.e. ``MARKET_DATA_PROVIDER=fmp``).
+
+        Chain: ``[FMPProvider, AlpacaProvider (only if both Alpaca keys are
+        set), YFinanceProvider]``, unless ``settings.FMP_FALLBACK_ENABLED`` is
+        ``False``, in which case the chain is ``[FMPProvider]`` only and a
+        primary failure propagates as ``MarketDataError`` with no fallback
+        attempted — the sibling of
+        :meth:`_get_fundamentals_via_fmp_chain`, mirrored exactly.
+
+        ``Quote.source`` already carries per-quote provenance (unlike the
+        fundamentals dict, which needs a synthetic ``"_source"`` key bolted
+        on), so the winning provider's own ``Quote`` is returned as-is. The
+        module-level ``_PROVIDER_SERVE_COUNTS[("quote", source)]`` counter is
+        bumped on success. Every fallback step logs a WARNING naming the
+        provider, the symbol, and the exception — never DEBUG/INFO — so a
+        silent fallback can never masquerade as success.
+        """
+        chain: List[MarketDataProvider] = [self._quote_provider]
+        chain.extend(self._build_fmp_fallback_tail())
+
+        last_exc: Optional[BaseException] = None
+        for provider in chain:
+            source = str(getattr(provider, "SOURCE", type(provider).__name__.lower()))
+            try:
+                quote = provider.get_latest_quote(sym)
+            except Exception as exc:  # defense-in-depth; providers already dead-letter internally
+                last_exc = exc
+                logger.warning(
+                    "CompositeProvider: quote provider %s raised for %s (%s); "
+                    "trying next in chain.",
+                    source, sym, exc,
+                )
+                continue
+            _bump_provider_serve_count("quote", source)
+            return quote
+
+        raise MarketDataError(
+            f"All quote providers in the FMP fallback chain failed for {sym}: {last_exc}"
+        ) from last_exc
+
+    def _get_bars_via_fmp_chain(
+        self, sym: str, lookback_days: int, interval: str
+    ) -> pd.DataFrame:
+        """Ordered-chain bars fetch — the sibling of
+        :meth:`_get_quote_via_fmp_chain`, same chain and same
+        ``FMP_FALLBACK_ENABLED`` gate, used ONLY when ``self._quote_provider``
+        is an ``FMPProvider``.
+
+        Bars have no per-row source field (a documented limitation — see the
+        plan's "Bars have no per-row source field" note), so observability
+        relies entirely on ``_PROVIDER_SERVE_COUNTS[("bars", source)]`` plus
+        the WARNING logged on every fallback step; there is no analogue to
+        ``Quote.source`` or the fundamentals dict's ``"_source"`` key here.
+        """
+        chain: List[MarketDataProvider] = [self._quote_provider]
+        chain.extend(self._build_fmp_fallback_tail())
+
+        last_exc: Optional[BaseException] = None
+        for provider in chain:
+            source = str(getattr(provider, "SOURCE", type(provider).__name__.lower()))
+            try:
+                bars = provider.get_intraday_bars(
+                    symbol=sym, lookback_days=lookback_days, interval=interval
+                )
+            except Exception as exc:  # defense-in-depth; providers already dead-letter internally
+                last_exc = exc
+                logger.warning(
+                    "CompositeProvider: bars provider %s raised for %s (%s); "
+                    "trying next in chain.",
+                    source, sym, exc,
+                )
+                continue
+            _bump_provider_serve_count("bars", source)
+            return bars
+
+        raise MarketDataError(
+            f"All bars providers in the FMP fallback chain failed for {sym}: {last_exc}"
+        ) from last_exc
+
+    def _get_fundamentals_via_fmp_chain(self, sym: str) -> Dict[str, Any]:
+        """Ordered-chain fundamentals fetch used ONLY when
+        ``self._fundamentals_provider`` is an ``FMPProvider`` (i.e.
+        ``FUNDAMENTALS_SOURCE=fmp``).
+
+        Chain: ``[FMPProvider, YahooFundamentalsProvider, YFinanceProvider]``,
+        unless ``settings.FMP_FALLBACK_ENABLED`` is ``False``, in which case
+        the chain is ``[FMPProvider]`` only and a primary failure/empty
+        result returns ``{}`` with no fallback attempted.
+
+        The first provider to return a non-empty dict wins; before returning,
+        the dict is tagged ``fund["_source"] = provider.SOURCE`` (per-response
+        provenance — see ``data/historical_store.py::_source_name``) and the
+        module-level ``_PROVIDER_SERVE_COUNTS[("fundamentals", source)]``
+        counter is incremented. Every fallback step logs a WARNING naming the
+        provider, the symbol, and the reason (not debug/info) so a silent
+        fallback can never masquerade as success.
+        """
+        chain: List[MarketDataProvider] = [self._fundamentals_provider]
+        if bool(getattr(settings, "FMP_FALLBACK_ENABLED", True)):
+            chain.append(YahooFundamentalsProvider())
+            chain.append(YFinanceProvider())
+
+        for provider in chain:
+            source = str(getattr(provider, "SOURCE", type(provider).__name__.lower()))
+            try:
+                fund = provider.get_fundamentals(sym) or {}
+            except Exception as exc:  # defense-in-depth; providers already dead-letter internally
+                logger.warning(
+                    "CompositeProvider: fundamentals provider %s raised for %s "
+                    "(%s); trying next in chain.",
+                    source, sym, exc,
+                )
+                continue
+            if fund:
+                tagged = dict(fund)
+                tagged["_source"] = source
+                _bump_provider_serve_count("fundamentals", source)
+                return tagged
+            logger.warning(
+                "CompositeProvider: fundamentals provider %s returned nothing "
+                "for %s; trying next in chain.",
+                source, sym,
+            )
+        return {}
 
     def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
         """Return fundamental metrics shaped as a yfinance .info dict.
 
-        Source priority: the Yahoo-derived statement-computed engine
-        (``YahooFundamentalsProvider``, or raw yfinance ``.info`` when
-        ``FUNDAMENTALS_SOURCE=yfinance_info``) → raw yfinance ``.info`` emergency
-        fallback when the primary returns nothing. Always returns a dict, never
-        raises.
+        Source priority depends on ``FUNDAMENTALS_SOURCE``:
 
-        Results — including empty dicts — are cached for
-        ``FUNDAMENTALS_CACHE_TTL_SECONDS`` (default 6 h) so the statement frames
-        are not re-fetched within the window. The Yahoo-derived output's
-        ``dividendYield`` is already a fraction and is NEVER routed through
-        ``normalize_yfinance_dividend_yield``; only the raw ``.info`` fallback
-        normalises, and it does so internally.
+        * **Default (``"yahoo"``) or ``"yfinance_info"``** — BYTE-IDENTICAL to
+          pre-FMP behavior: the Yahoo-derived statement-computed engine (or
+          raw yfinance ``.info`` when ``FUNDAMENTALS_SOURCE=yfinance_info``) →
+          raw yfinance ``.info`` emergency fallback when the primary returns
+          nothing. This branch's code is untouched by the FMP integration.
+        * **``"fmp"``** — an ordered chain via
+          :meth:`_get_fundamentals_via_fmp_chain`: FMP → Yahoo → yfinance
+          (or FMP-only when ``FMP_FALLBACK_ENABLED=False``).
+
+        Always returns a dict, never raises. Results — including empty dicts
+        — are cached for ``FUNDAMENTALS_CACHE_TTL_SECONDS`` (default 6h) so
+        the underlying payloads are not re-fetched within the window.
         """
         # Lazy-init for instances constructed via ``__new__`` (test fixtures).
         if not hasattr(self, "_fundamentals_cache"):
@@ -1335,21 +2130,29 @@ class CompositeProvider(MarketDataProvider):
             return cached
         logger.debug("CompositeProvider: fundamentals cache MISS for %s; fetching live.", sym)
 
-        fund = self._fundamentals_provider.get_fundamentals(sym) or {}
-        if not fund:
-            # emergency fallback to raw yfinance .info (keeps its own
-            # dividendYield normalization)
-            logger.warning(
-                "CompositeProvider: primary fundamentals provider (%s) returned "
-                "nothing for %s; falling back to raw yfinance .info.",
-                self.source_name, sym,
-            )
-            fund = YFinanceProvider().get_fundamentals(sym)
+        if isinstance(self._fundamentals_provider, FMPProvider):
+            fund = self._get_fundamentals_via_fmp_chain(sym)
+        else:
+            # ORIGINAL PATH — byte-identical to pre-FMP behavior. Untouched
+            # on purpose: existing tests pin this exact log wording and the
+            # exact returned-dict shape (no "_source" tagging here), and
+            # "flag-off is byte-identical" is the single most important
+            # invariant of the whole FMP integration.
+            fund = self._fundamentals_provider.get_fundamentals(sym) or {}
             if not fund:
+                # emergency fallback to raw yfinance .info (keeps its own
+                # dividendYield normalization)
                 logger.warning(
-                    "CompositeProvider: yfinance .info fallback also returned "
-                    "nothing for %s; caching empty result.", sym,
+                    "CompositeProvider: primary fundamentals provider (%s) returned "
+                    "nothing for %s; falling back to raw yfinance .info.",
+                    self.source_name, sym,
                 )
+                fund = YFinanceProvider().get_fundamentals(sym)
+                if not fund:
+                    logger.warning(
+                        "CompositeProvider: yfinance .info fallback also returned "
+                        "nothing for %s; caching empty result.", sym,
+                    )
         self._fundamentals_cache.put(sym, fund)
         return fund
 
@@ -1372,17 +2175,33 @@ class CompositeProvider(MarketDataProvider):
 
     @property
     def is_realtime(self) -> bool:
-        """True when the active quote provider delivers real-time data."""
-        return isinstance(self._quote_provider, AlpacaProvider)
+        """True when the active quote provider delivers real-time data.
+
+        Reads the provider's own ``IS_REALTIME`` class attribute rather than
+        isinstance-ing against ``AlpacaProvider``. The old ternary defaulted
+        every non-Alpaca backend to "delayed", which happened to be right, but
+        the mirror-image accessor (``quote_source``) defaulted every non-Alpaca
+        backend to the literal string ``"yfinance"`` — see below.
+
+        ``getattr`` with a default is deliberate: ``CompositeProvider`` is
+        constructed via ``__new__`` in some tests (no ``_quote_provider``
+        assigned by ``__init__``) and duck-typed providers need not subclass
+        the ABC.
+        """
+        return bool(getattr(self._quote_provider, "IS_REALTIME", False))
 
     @property
     def quote_source(self) -> str:
-        """Provider name string, e.g. "alpaca" or "yfinance"."""
-        return (
-            "alpaca"
-            if isinstance(self._quote_provider, AlpacaProvider)
-            else "yfinance"
-        )
+        """Provider name string, e.g. "alpaca" or "yfinance".
+
+        This string is dashboard / Google Sheet attribution, so it has to be
+        the provider's own name and not a two-way guess. The previous
+        implementation was a hardcoded ternary that reported ``"yfinance"``
+        for anything that wasn't ``AlpacaProvider`` — correct only for as long
+        as exactly two backends existed. Byte-identical for both of those:
+        Alpaca → ``"alpaca"``, yfinance → ``"yfinance"``.
+        """
+        return str(getattr(self._quote_provider, "SOURCE", "unknown"))
 
     def invalidate_quote(self, symbol: str) -> None:
         """Evict a symbol's quote from the TTL cache (e.g. after a fill)."""
@@ -1426,6 +2245,46 @@ class CompositeProvider(MarketDataProvider):
 def _isnan(v: float) -> bool:
     """Return True for float('nan') without importing math."""
     return v != v
+
+
+# ---------------------------------------------------------------------------
+# Provider serve-count telemetry
+# ---------------------------------------------------------------------------
+# Ground-truth "who actually served this response" counter, keyed
+# (kind, source) e.g. ("fundamentals", "fmp") / ("fundamentals", "yahoo_computed").
+# Generic across every provider kind on purpose — not FMP-specific — so it is
+# equally useful (and testable) against today's Yahoo/yfinance fundamentals
+# chain once quotes/bars grow their own chains in wave 2. Module-level and
+# lock-guarded because data_engine.py calls get_fundamentals under an
+# 8-thread pool.
+
+_provider_serve_counts_lock = threading.Lock()
+_PROVIDER_SERVE_COUNTS: Dict[Tuple[str, str], int] = {}
+
+
+def _bump_provider_serve_count(kind: str, source: str) -> None:
+    """Increment the ``(kind, source)`` serve counter by one (thread-safe)."""
+    with _provider_serve_counts_lock:
+        key = (kind, source)
+        _PROVIDER_SERVE_COUNTS[key] = _PROVIDER_SERVE_COUNTS.get(key, 0) + 1
+
+
+def get_provider_serve_counts() -> Dict[Tuple[str, str], int]:
+    """Snapshot copy of every ``(kind, source) -> count`` serve counter.
+
+    The ground-truth operator/test query for "did the chain actually fall
+    back on me?" — complements ``data/historical_store.py::_source_name``'s
+    per-response ``"_source"`` tagging with an in-process aggregate.
+    """
+    with _provider_serve_counts_lock:
+        return dict(_PROVIDER_SERVE_COUNTS)
+
+
+def reset_provider_serve_counts() -> None:
+    """Clear every serve counter. Tests call this for isolation; a long-lived
+    process never needs to (the counters are cheap and monotonic)."""
+    with _provider_serve_counts_lock:
+        _PROVIDER_SERVE_COUNTS.clear()
 
 
 # ---------------------------------------------------------------------------
