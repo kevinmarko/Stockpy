@@ -44,7 +44,6 @@ environment variables.  :func:`reset_registry` clears it (used by tests).
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import Dict, Optional, Union
@@ -437,58 +436,69 @@ def reset_registry() -> None:
 
 
 def _build_registry_from_settings() -> PromptRegistry:
-    """Build a :class:`PromptRegistry` from environment variables.
+    """Build a :class:`PromptRegistry` from ``settings.settings`` (pydantic-settings).
 
-    Reads the ``PROMPT_*`` env vars that Stage 6 will wire into
-    ``settings.py``.  Using ``os.environ`` directly keeps Stage 3 independent
-    of Stage 6 and avoids circular imports with pydantic-settings.
+    Reads every ``PROMPT_REGISTRY_*`` / ``PROMPT_CACHE_*`` field from the
+    process-wide ``settings.settings`` singleton — **not** ``os.environ``
+    directly.  pydantic-settings' ``env_file=".env"`` loads ``.env`` values
+    into the ``Settings`` model object but does **not** copy them into the
+    real ``os.environ``; reading ``os.environ`` here silently ignores every
+    value an operator set only via ``.env`` (the documented, normal case for
+    this codebase), producing a baseline-only, pins-ignored registry with no
+    error. This is the exact bug class already fixed and documented in
+    ``signals/news_catalyst.py::build_finnhub_client`` — see CLAUDE.md's
+    2026-07 Finnhub fix for the full precedent.
 
-    When ``PROMPT_REGISTRY_ENABLED`` is absent or ``false``, returns a
+    ``PROMPT_REGISTRY_CREDENTIALS`` (Firestore backend only) has no
+    corresponding ``settings.py`` field yet, so it still reads ``os.environ``
+    directly — narrowly scoped to that one optional backend.
+
+    When ``settings.PROMPT_REGISTRY_ENABLED`` is falsy, returns a
     baseline-only registry with no store (zero network calls, CONSTRAINT #5).
     """
-    enabled_raw = os.environ.get("PROMPT_REGISTRY_ENABLED", "false").strip().lower()
-    enabled = enabled_raw in ("true", "1", "yes")
+    from settings import settings as _settings  # lazy import — avoids import-order coupling
+
+    enabled = bool(_settings.PROMPT_REGISTRY_ENABLED)
 
     # Always parse pins — a pin to a cached version is useful even when the
     # remote is disabled (allows offline rollback via PROMPT_REGISTRY_PINS).
-    pins_raw = os.environ.get("PROMPT_REGISTRY_PINS", "{}").strip()
-    try:
-        pins: Dict[str, str] = json.loads(pins_raw)
-        if not isinstance(pins, dict):
-            logger.warning("_build_registry: PROMPT_REGISTRY_PINS is not a JSON object — ignoring")
-            pins = {}
-    except Exception as exc:
-        logger.warning("_build_registry: could not parse PROMPT_REGISTRY_PINS: %s", exc)
+    # settings.PROMPT_REGISTRY_PINS is already dict[str, str] — pydantic-settings
+    # parses the .env JSON string for us; no json.loads needed here.
+    pins_raw = _settings.PROMPT_REGISTRY_PINS
+    if isinstance(pins_raw, dict):
+        pins: Dict[str, str] = dict(pins_raw)
+    else:
+        logger.warning("_build_registry: PROMPT_REGISTRY_PINS is not a dict — ignoring")
         pins = {}
 
     if not enabled:
         logger.debug(
             "_build_registry_from_settings: PROMPT_REGISTRY_ENABLED=%r — baseline-only registry",
-            enabled_raw,
+            enabled,
         )
         return PromptRegistry(enabled=False, pins=pins)
 
     # ── Signing key ──────────────────────────────────────────────────────────
-    signing_key = os.environ.get("PROMPT_REGISTRY_SIGNING_KEY") or None
+    signing_key = _settings.PROMPT_REGISTRY_SIGNING_KEY or None
 
     # (pins already parsed above, before the enabled check)
 
     # ── Cache ────────────────────────────────────────────────────────────────
-    cache_dir = os.environ.get("PROMPT_CACHE_DIR", "output/prompt_cache")
+    cache_dir = _settings.PROMPT_CACHE_DIR or "output/prompt_cache"
     try:
-        keep = int(os.environ.get("PROMPT_CACHE_KEEP_VERSIONS", "5"))
+        keep = int(_settings.PROMPT_CACHE_KEEP_VERSIONS)
     except (ValueError, TypeError):
         keep = 5
     cache = CacheManager(cache_dir, keep_versions=keep)
 
     # ── Backend / store ───────────────────────────────────────────────────────
-    backend = os.environ.get("PROMPT_REGISTRY_BACKEND", "http").strip().lower()
+    backend = (_settings.PROMPT_REGISTRY_BACKEND or "http").strip().lower()
     store: Optional[PromptStore] = None
 
     try:
         if backend == "http":
-            url = os.environ.get("PROMPT_REGISTRY_URL") or None
-            token = os.environ.get("PROMPT_REGISTRY_TOKEN") or None
+            url = _settings.PROMPT_REGISTRY_URL or None
+            token = _settings.PROMPT_REGISTRY_TOKEN or None
             if url:
                 store = HTTPStore(url, token)
             else:
@@ -497,9 +507,11 @@ def _build_registry_from_settings() -> PromptRegistry:
                     "PROMPT_REGISTRY_URL is not set — store unavailable"
                 )
         elif backend == "local":
-            path = os.environ.get("PROMPT_REGISTRY_URL", "registry.json")
+            path = _settings.PROMPT_REGISTRY_URL or "registry.json"
             store = LocalJSONStore(path)
         elif backend == "firestore":
+            # No settings.py field exists yet for this Firestore-only credential —
+            # os.environ is the only source until one is added.
             creds = os.environ.get("PROMPT_REGISTRY_CREDENTIALS") or None
             store = FirestoreStore(credentials_path=creds)
         else:
