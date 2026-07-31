@@ -1741,6 +1741,22 @@ class CompositeProvider(MarketDataProvider):
             neg_ttl_seconds=int(settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS),
         )
         self._quote_provider: MarketDataProvider = self._select_quote_provider()
+        # Two-gate capability convention: MARKET_DATA_PROVIDER=fmp selects
+        # FMPProvider as the underlying object, but FMP_QUOTES_ENABLED /
+        # FMP_BARS_ENABLED each independently gate whether it actually SERVES
+        # quotes vs. bars (they are separate settings on purpose -- an
+        # operator may want FMP fundamentals live while quotes/bars stay on
+        # the incumbent path). Pre-resolve once what serves a call whose gate
+        # is off -- the exact same Alpaca-if-keyed-else-yfinance default the
+        # non-FMP branch below would have produced -- so
+        # _effective_quote_provider / _effective_bars_provider don't
+        # reconstruct a provider on every call. None when MARKET_DATA_PROVIDER
+        # isn't 'fmp' (the overwhelmingly common case): no wasted work.
+        self._default_quote_provider: Optional[MarketDataProvider] = (
+            self._select_default_quote_provider()
+            if isinstance(self._quote_provider, FMPProvider)
+            else None
+        )
         # Fundamentals source: Yahoo-derived statement engine (primary), raw
         # yfinance .info when FUNDAMENTALS_SOURCE=yfinance_info, or FMP when
         # FUNDAMENTALS_SOURCE=fmp. FMP_API_KEY being set is NEVER sufficient
@@ -1748,9 +1764,7 @@ class CompositeProvider(MarketDataProvider):
         # adding the key for one feed (e.g. the analyst feed) can never
         # silently change what every valuation metric is computed from.
         src = (settings.FUNDAMENTALS_SOURCE or "yahoo").strip().lower()
-        if src == "yfinance_info":
-            self._fundamentals_provider = YFinanceProvider()
-        elif src == "fmp":
+        if src == "fmp":
             fmp_key = (getattr(settings, "FMP_API_KEY", None) or "").strip()
             if not fmp_key:
                 raise RuntimeError(
@@ -1758,7 +1772,14 @@ class CompositeProvider(MarketDataProvider):
                 )
             self._fundamentals_provider = FMPProvider(api_key=fmp_key)
         else:
-            self._fundamentals_provider = YahooFundamentalsProvider()
+            self._fundamentals_provider = self._select_default_fundamentals_provider(src)
+        # Same pre-resolution as _default_quote_provider above, for the
+        # independent FMP_FUNDAMENTALS_ENABLED gate.
+        self._default_fundamentals_provider: Optional[MarketDataProvider] = (
+            self._select_default_fundamentals_provider()
+            if isinstance(self._fundamentals_provider, FMPProvider)
+            else None
+        )
         # Log startup banner once
         self._log_startup_banner()
 
@@ -1768,8 +1789,6 @@ class CompositeProvider(MarketDataProvider):
 
     def _select_quote_provider(self) -> MarketDataProvider:
         explicit = (settings.MARKET_DATA_PROVIDER or "").strip().lower()
-        alpaca_key = (settings.ALPACA_API_KEY or "").strip()
-        alpaca_secret = (settings.ALPACA_SECRET_KEY or "").strip()
 
         # FMP is selected ONLY by an explicit MARKET_DATA_PROVIDER=fmp — never
         # by FMP_API_KEY's mere presence (unlike the Alpaca ladder just below,
@@ -1791,15 +1810,37 @@ class CompositeProvider(MarketDataProvider):
             logger.info(
                 "MarketData: MARKET_DATA_PROVIDER=fmp selected -- "
                 "FMP_BARS_ADJUSTMENT=%r is the active daily-bars variant. "
-                "Reminder: scripts/verify_fmp_bars.py should have been run "
-                "and PASSED (max abs relative close diff < 1e-4 across "
-                "KO/JNJ/AAPL) before this was enabled in a live environment "
-                "-- an adjustment-convention mismatch corrupts every return "
-                "series, indicator, GARCH fit and backtest PLAUSIBLY, "
-                "without failing loudly.",
+                "Note this selects the FMPProvider OBJECT; whether it actually "
+                "SERVES quotes/bars still depends on FMP_QUOTES_ENABLED / "
+                "FMP_BARS_ENABLED respectively (see _log_startup_banner below "
+                "for what's really active). Reminder: scripts/verify_fmp_bars.py "
+                "should have been run and PASSED (max abs relative close diff "
+                "< 1e-4 across KO/JNJ/AAPL) before FMP_BARS_ENABLED is set in a "
+                "live environment -- an adjustment-convention mismatch corrupts "
+                "every return series, indicator, GARCH fit and backtest "
+                "PLAUSIBLY, without failing loudly.",
                 variant,
             )
             return provider
+
+        return self._select_default_quote_provider(explicit)
+
+    def _select_default_quote_provider(self, explicit: str = "") -> MarketDataProvider:
+        """The Alpaca-or-yfinance ladder, with no ``'fmp'`` branch.
+
+        Two call sites: (1) :meth:`_select_quote_provider`, which passes the
+        REAL ``MARKET_DATA_PROVIDER`` value through once it has already ruled
+        out ``'fmp'`` — preserves byte-identical behavior (including the
+        "unknown value" error) for every non-FMP config. (2) ``__init__``,
+        with the default empty-string argument, to pre-resolve what should
+        serve a call when ``MARKET_DATA_PROVIDER=fmp`` but the specific
+        capability gate (``FMP_QUOTES_ENABLED`` / ``FMP_BARS_ENABLED``) is
+        off — the same auto-select (Alpaca if keyed, else yfinance) an unset
+        ``MARKET_DATA_PROVIDER`` would produce, since ``'fmp'`` itself is not
+        a meaningful value here.
+        """
+        alpaca_key = (settings.ALPACA_API_KEY or "").strip()
+        alpaca_secret = (settings.ALPACA_SECRET_KEY or "").strip()
 
         if explicit == "alpaca" or (not explicit and alpaca_key and alpaca_secret):
             if not alpaca_key or not alpaca_secret:
@@ -1817,23 +1858,112 @@ class CompositeProvider(MarketDataProvider):
             "Valid values: 'fmp', 'alpaca', 'yfinance'."
         )
 
+    def _select_default_fundamentals_provider(self, src: str = "") -> MarketDataProvider:
+        """The Yahoo-or-yfinance_info ladder, with no ``'fmp'`` branch.
+
+        Same two-call-site pattern as :meth:`_select_default_quote_provider`:
+        called from ``__init__``'s main fundamentals-selection branch with
+        the real ``FUNDAMENTALS_SOURCE`` value (once ``'fmp'`` has already
+        been ruled out), and again with the default empty-string argument to
+        pre-resolve the ``FMP_FUNDAMENTALS_ENABLED``-off fallback.
+        """
+        if src == "yfinance_info":
+            return YFinanceProvider()
+        return YahooFundamentalsProvider()
+
+    # ------------------------------------------------------------------
+    # Effective-provider resolution (the FMP_*_ENABLED capability gates)
+    # ------------------------------------------------------------------
+    #
+    # self._quote_provider / self._fundamentals_provider reflect PROVIDER
+    # SELECTION (MARKET_DATA_PROVIDER / FUNDAMENTALS_SOURCE) only. When either
+    # is an FMPProvider, whether it actually SERVES a given capability is a
+    # second, independent decision -- FMP_QUOTES_ENABLED / FMP_BARS_ENABLED /
+    # FMP_FUNDAMENTALS_ENABLED. The three properties below are the single
+    # place that combines "which provider was selected" with "is this
+    # specific capability's gate on", and everything else (get_latest_quote,
+    # get_intraday_bars, get_fundamentals, the startup banner, and the
+    # is_realtime/quote_source/source_name accessors) reads through them
+    # rather than re-deriving the same logic in five places.
+    #
+    # getattr(self, "_quote_provider", None) (not a direct attribute read) is
+    # deliberate: CompositeProvider is constructed via __new__ in some test
+    # fixtures, which never run __init__ and so never set these attributes.
+
+    @property
+    def _effective_quote_provider(self) -> Optional[MarketDataProvider]:
+        """Provider that actually serves ``get_latest_quote`` right now."""
+        provider = getattr(self, "_quote_provider", None)
+        if isinstance(provider, FMPProvider) and not bool(
+            getattr(settings, "FMP_QUOTES_ENABLED", False)
+        ):
+            return getattr(self, "_default_quote_provider", None) or provider
+        return provider
+
+    @property
+    def _effective_bars_provider(self) -> Optional[MarketDataProvider]:
+        """Provider that actually serves ``get_intraday_bars`` right now.
+
+        Independent of :attr:`_effective_quote_provider` — the same
+        underlying ``self._quote_provider`` object can serve bars via FMP
+        while quotes fall back to the incumbent path, or vice versa, since
+        ``FMP_QUOTES_ENABLED`` and ``FMP_BARS_ENABLED`` are separate gates.
+        """
+        provider = getattr(self, "_quote_provider", None)
+        if isinstance(provider, FMPProvider) and not bool(
+            getattr(settings, "FMP_BARS_ENABLED", False)
+        ):
+            return getattr(self, "_default_quote_provider", None) or provider
+        return provider
+
+    @property
+    def _effective_fundamentals_provider(self) -> Optional[MarketDataProvider]:
+        """Provider that actually serves ``get_fundamentals`` right now."""
+        provider = getattr(self, "_fundamentals_provider", None)
+        if isinstance(provider, FMPProvider) and not bool(
+            getattr(settings, "FMP_FUNDAMENTALS_ENABLED", False)
+        ):
+            return getattr(self, "_default_fundamentals_provider", None) or provider
+        return provider
+
     def _log_startup_banner(self) -> None:
         # Read the provenance off the selected providers' class attributes
         # rather than isinstance-ing against a fixed list of classes: an
         # isinstance ladder silently mislabels any backend it doesn't know
         # about, and this banner is the operator's first (often only) look at
-        # which source a run is actually using.
-        provider_name = type(self._quote_provider).__name__
-        is_realtime = bool(getattr(self._quote_provider, "IS_REALTIME", False))
-        quote_source = str(getattr(self._quote_provider, "SOURCE", "unknown"))
+        # which source a run is actually using. Reads the EFFECTIVE providers
+        # (not self._quote_provider/_fundamentals_provider directly) so the
+        # banner never claims FMP is active for a capability whose
+        # FMP_*_ENABLED gate is actually off.
+        quote_provider = self._effective_quote_provider
+        bars_provider = self._effective_bars_provider
+        fundamentals_provider = self._effective_fundamentals_provider
+
+        is_realtime = bool(getattr(quote_provider, "IS_REALTIME", False))
+        quote_source = str(getattr(quote_provider, "SOURCE", "unknown"))
+        bars_source = str(getattr(bars_provider, "SOURCE", "unknown"))
         latency_note = "real-time" if is_realtime else "delayed (unofficial)"
-        fundamentals_note = str(
-            getattr(self._fundamentals_provider, "SOURCE", "unknown")
-        )
-        logger.info(
-            "MarketData: quotes/bars via %s [source=%s, %s]; fundamentals via %s",
-            provider_name, quote_source, latency_note, fundamentals_note,
-        )
+        fundamentals_note = str(getattr(fundamentals_provider, "SOURCE", "unknown"))
+
+        if quote_source == bars_source:
+            # The common case, including every pre-existing config: quotes
+            # and bars come from the same backend. Wording unchanged from
+            # before the capability gates existed.
+            logger.info(
+                "MarketData: quotes/bars via %s [source=%s, %s]; fundamentals via %s",
+                type(quote_provider).__name__, quote_source, latency_note, fundamentals_note,
+            )
+        else:
+            # MARKET_DATA_PROVIDER=fmp with only one of FMP_QUOTES_ENABLED /
+            # FMP_BARS_ENABLED set -- quotes and bars now genuinely come from
+            # different backends and must be reported separately rather than
+            # claiming a single unified source.
+            logger.info(
+                "MarketData: quotes via %s [source=%s, %s]; bars via %s [source=%s]; "
+                "fundamentals via %s",
+                type(quote_provider).__name__, quote_source, latency_note,
+                type(bars_provider).__name__, bars_source, fundamentals_note,
+            )
 
     # ------------------------------------------------------------------
     # Public interface
@@ -1879,11 +2009,17 @@ class CompositeProvider(MarketDataProvider):
             return cached
         logger.debug("CompositeProvider: quote cache MISS for %s; fetching live.", sym)
 
-        if isinstance(self._quote_provider, FMPProvider):
+        provider = self._effective_quote_provider
+        if isinstance(provider, FMPProvider):
             quote = self._get_quote_via_fmp_chain(sym)
         else:
-            # ORIGINAL PATH — byte-identical to pre-FMP behavior.
-            quote = self._quote_provider.get_latest_quote(sym)
+            # ORIGINAL PATH — byte-identical to pre-FMP behavior when
+            # MARKET_DATA_PROVIDER isn't 'fmp'. Also reached when it IS 'fmp'
+            # but FMP_QUOTES_ENABLED is off, in which case `provider` is the
+            # pre-resolved default (self._default_quote_provider), not
+            # self._quote_provider -- so this still correctly serves from
+            # Alpaca/yfinance rather than ever calling into FMP.
+            quote = provider.get_latest_quote(sym)
         self._cache.put(quote)
         return quote
 
@@ -1927,11 +2063,16 @@ class CompositeProvider(MarketDataProvider):
             sym, lookback_days, interval,
         )
 
-        if isinstance(self._quote_provider, FMPProvider):
+        provider = self._effective_bars_provider
+        if isinstance(provider, FMPProvider):
             bars = self._get_bars_via_fmp_chain(sym, lookback_days, interval)
         else:
-            # ORIGINAL PATH — byte-identical to pre-FMP behavior.
-            bars = self._quote_provider.get_intraday_bars(
+            # ORIGINAL PATH — byte-identical to pre-FMP behavior when
+            # MARKET_DATA_PROVIDER isn't 'fmp'. Also reached when it IS 'fmp'
+            # but FMP_BARS_ENABLED is off (independent of FMP_QUOTES_ENABLED
+            # -- see _effective_bars_provider), in which case `provider` is
+            # the pre-resolved default, never FMP.
+            bars = provider.get_intraday_bars(
                 symbol=sym, lookback_days=lookback_days, interval=interval
             )
         self._bars_cache.put(sym, lookback_days, bars, interval)
@@ -2130,15 +2271,20 @@ class CompositeProvider(MarketDataProvider):
             return cached
         logger.debug("CompositeProvider: fundamentals cache MISS for %s; fetching live.", sym)
 
-        if isinstance(self._fundamentals_provider, FMPProvider):
+        provider = self._effective_fundamentals_provider
+        if isinstance(provider, FMPProvider):
             fund = self._get_fundamentals_via_fmp_chain(sym)
         else:
-            # ORIGINAL PATH — byte-identical to pre-FMP behavior. Untouched
-            # on purpose: existing tests pin this exact log wording and the
-            # exact returned-dict shape (no "_source" tagging here), and
-            # "flag-off is byte-identical" is the single most important
-            # invariant of the whole FMP integration.
-            fund = self._fundamentals_provider.get_fundamentals(sym) or {}
+            # ORIGINAL PATH — byte-identical to pre-FMP behavior when
+            # FUNDAMENTALS_SOURCE isn't 'fmp'. Untouched on purpose: existing
+            # tests pin this exact log wording and the exact returned-dict
+            # shape (no "_source" tagging here), and "flag-off is
+            # byte-identical" is the single most important invariant of the
+            # whole FMP integration. Also reached when FUNDAMENTALS_SOURCE IS
+            # 'fmp' but FMP_FUNDAMENTALS_ENABLED is off, in which case
+            # `provider` is the pre-resolved default (YahooFundamentalsProvider
+            # or YFinanceProvider), never self._fundamentals_provider (FMP).
+            fund = provider.get_fundamentals(sym) or {}
             if not fund:
                 # emergency fallback to raw yfinance .info (keeps its own
                 # dividendYield normalization)
@@ -2165,12 +2311,16 @@ class CompositeProvider(MarketDataProvider):
         """Provider name string for the active fundamentals source.
 
         Downstream (e.g. ``data/historical_store.py``) reads this to label the
-        provenance of cached fundamentals rows.
+        provenance of cached fundamentals rows. Reads through
+        :attr:`_effective_fundamentals_provider` so this never claims FMP
+        when ``FUNDAMENTALS_SOURCE=fmp`` but ``FMP_FUNDAMENTALS_ENABLED`` is
+        actually off.
         """
+        provider = self._effective_fundamentals_provider
         return getattr(
-            self._fundamentals_provider,
+            provider,
             "source_name",
-            type(self._fundamentals_provider).__name__.lower(),
+            type(provider).__name__.lower(),
         )
 
     @property
@@ -2183,12 +2333,15 @@ class CompositeProvider(MarketDataProvider):
         the mirror-image accessor (``quote_source``) defaulted every non-Alpaca
         backend to the literal string ``"yfinance"`` — see below.
 
-        ``getattr`` with a default is deliberate: ``CompositeProvider`` is
-        constructed via ``__new__`` in some tests (no ``_quote_provider``
-        assigned by ``__init__``) and duck-typed providers need not subclass
-        the ABC.
+        Reads through :attr:`_effective_quote_provider` (not
+        ``self._quote_provider`` directly) so this never claims FMP's
+        real-time-ness when ``MARKET_DATA_PROVIDER=fmp`` but
+        ``FMP_QUOTES_ENABLED`` is actually off; that property's own
+        ``getattr(self, "_quote_provider", None)`` already handles
+        ``CompositeProvider`` instances constructed via ``__new__`` in some
+        tests (no ``_quote_provider`` assigned by ``__init__``).
         """
-        return bool(getattr(self._quote_provider, "IS_REALTIME", False))
+        return bool(getattr(self._effective_quote_provider, "IS_REALTIME", False))
 
     @property
     def quote_source(self) -> str:
@@ -2199,9 +2352,11 @@ class CompositeProvider(MarketDataProvider):
         implementation was a hardcoded ternary that reported ``"yfinance"``
         for anything that wasn't ``AlpacaProvider`` — correct only for as long
         as exactly two backends existed. Byte-identical for both of those:
-        Alpaca → ``"alpaca"``, yfinance → ``"yfinance"``.
+        Alpaca → ``"alpaca"``, yfinance → ``"yfinance"``. Reads through
+        :attr:`_effective_quote_provider` for the same reason as
+        :attr:`is_realtime` above.
         """
-        return str(getattr(self._quote_provider, "SOURCE", "unknown"))
+        return str(getattr(self._effective_quote_provider, "SOURCE", "unknown"))
 
     def invalidate_quote(self, symbol: str) -> None:
         """Evict a symbol's quote from the TTL cache (e.g. after a fill)."""
