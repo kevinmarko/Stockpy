@@ -111,7 +111,7 @@ function PremiumLabel({ d }: { d: OptionsDirective }) {
 function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void }) {
   return (
     <div
-      className="card card-pad"
+      className="glass-card card-pad"
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -180,11 +180,23 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
 
 
 
-function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; onClose: () => void }) {
+function DetailSheet({ d, dte, asOf, onClose }: { d: OptionsDirective; dte: number; asOf?: string | null; onClose: () => void }) {
   const theta = realizableTheta(d);
   const legs = Array.isArray(d.Legs) ? d.Legs : [];
   const spotPrice = d.Price ?? 0;
   const sigma = d.Sigma_GARCH ?? 0;
+
+  const expiryDate = useMemo(() => {
+    const base = asOf || d.as_of || d.AsOf; // support fallback properties
+    if (typeof base !== "string") return null;
+    try {
+      const date = new Date(base);
+      date.setDate(date.getDate() + dte);
+      return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    } catch {
+      return null;
+    }
+  }, [asOf, d.as_of, d.AsOf, dte]);
 
   // Compute options metrics
   const expectedMove = computeExpectedMove(spotPrice, sigma, dte);
@@ -222,9 +234,10 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
         <h2 style={{ fontSize: 18, margin: 0 }}>{d.Symbol}</h2>
         <span className="num" style={{ color: theme.textSecondary }}>{fmtUsd(d.Price ?? null)}</span>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginTop: "var(--s-1-5)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginTop: "var(--s-1-5)", flexWrap: "wrap" }}>
         <span style={{ fontWeight: 600 }}>{d.Strategy ?? "—"}</span>
         <span className={`badge ${actionBadgeClass(d.Action)}`}>{d.Action ?? "—"}</span>
+        {expiryDate && <span className="badge badge-neutral">Expiry: {expiryDate} ({dte} DTE)</span>}
         {d.Stale === true && <span className="badge badge-warn">stale</span>}
       </div>
 
@@ -352,6 +365,35 @@ function DetailSheet({ d, dte, onClose }: { d: OptionsDirective; dte: number; on
         </section>
       )}
 
+      {/* Technical Profile */}
+      {(d.Trend_Bias || d.Aroon_Oscillator != null || d.Coppock_Curve != null) && (
+        <section style={{ marginTop: "var(--s-4)" }}>
+          <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1-5)" }}>Indicators & Bias</h3>
+          <div className="options-greeks-grid">
+            {d.Trend_Bias && (
+              <div className="options-greek-card-vis">
+                <div className="options-greek-label-vis">Trend Bias</div>
+                <div className="options-greek-value-vis" style={{ color: d.Trend_Bias.toLowerCase().includes("bull") ? theme.growth : d.Trend_Bias.toLowerCase().includes("bear") ? theme.decline : theme.textSecondary, fontWeight: 700 }}>
+                  {d.Trend_Bias}
+                </div>
+              </div>
+            )}
+            {d.Aroon_Oscillator != null && (
+              <div className="options-greek-card-vis">
+                <div className="options-greek-label-vis">Aroon Osc</div>
+                <div className="options-greek-value-vis" style={{ fontWeight: 700 }}>{fmtNum(d.Aroon_Oscillator, 1)}</div>
+              </div>
+            )}
+            {d.Coppock_Curve != null && (
+              <div className="options-greek-card-vis">
+                <div className="options-greek-label-vis">Coppock</div>
+                <div className="options-greek-value-vis" style={{ fontWeight: 700 }}>{fmtNum(d.Coppock_Curve, 2)}</div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Greeks Grid */}
       <section style={{ marginTop: "var(--s-4)" }}>
         <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Greeks</h3>
@@ -465,7 +507,7 @@ function GreeksRollup({ directives }: { directives: OptionsDirective[] }) {
   }, [included]);
 
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+    <section className="glass-panel" style={{ marginTop: "var(--s-4)", padding: "var(--s-4)", borderRadius: "var(--r-md)" }}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -587,7 +629,7 @@ function OptionsRecomputeSection() {
     : null;
 
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+    <section className="glass-panel" style={{ marginTop: "var(--s-4)", padding: "var(--s-4)", borderRadius: "var(--r-md)" }}>
       <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Recompute with custom parameters</h2>
       <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Compute a fresh premium-selling directive for up to {RECOMPUTE_MAX_SYMBOLS} symbols you
@@ -742,6 +784,7 @@ function OptionsRecomputeSection() {
         <DetailSheet
           d={openDirective}
           dte={result?.target_dte ?? 30}
+          asOf={new Date().toISOString()}
           onClose={() => setOpenSymbol(null)}
         />
       )}
@@ -759,6 +802,7 @@ export function OptionsMatrix() {
   const [sort, setSort] = useState<Sort>("premium");
   const [openSymbol, setOpenSymbol] = useState<string | null>(null);
   const [showRecompute, setShowRecompute] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
@@ -769,14 +813,16 @@ export function OptionsMatrix() {
 
   const visible = useMemo(() => {
     const activeFilter = FILTERS.find((f) => f.key === filter)!;
-    const rows = directives.filter(activeFilter.test);
+    const rows = directives.filter(
+      (d) => activeFilter.test(d) && d.Symbol.toLowerCase().includes(searchQuery.toLowerCase())
+    );
     const sorted = [...rows];
     if (sort === "premium") sorted.sort(byNum((d) => d.Net_Premium));
     else if (sort === "ivr") sorted.sort(byNum((d) => d.IVR_Proxy));
     else if (sort === "sigma") sorted.sort(byNum((d) => d.Sigma_GARCH));
     else sorted.sort((a, b) => a.Symbol.localeCompare(b.Symbol));
     return sorted;
-  }, [directives, filter, sort]);
+  }, [directives, filter, sort, searchQuery]);
 
   const openDirective = openSymbol
     ? directives.find((d) => d.Symbol === openSymbol) ?? null
@@ -847,27 +893,50 @@ export function OptionsMatrix() {
             </span>
           </Notice>
 
-          {/* Integrity strip */}
-          <div style={{ fontSize: "var(--t-body)", marginBottom: "var(--s-3)" }}>
-            {flaggedCount === 0 ? (
-              <span style={{ color: theme.growth }}>✅ {cleanCount}/{directives.length} legs clean</span>
-            ) : (
-              <span style={{ color: theme.caution }}>
-                ⚠️ {flaggedCount} of {directives.length} flagged
-              </span>
-            )}
+          {/* Summary Metrics Banner */}
+          <div className="glass-panel" style={{ display: "flex", gap: "var(--s-4)", padding: "var(--s-3) var(--s-4)", borderRadius: "var(--r-md)", marginBottom: "var(--s-4)", alignItems: "center" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, textTransform: "uppercase", letterSpacing: "0.5px" }}>Actionable Premium</div>
+              <div className="num" style={{ fontSize: "var(--t-display)", fontWeight: 700, color: theme.growth }}>
+                {fmtUsd(directives.filter(isActionable).reduce((sum, d) => sum + (d.Net_Premium || 0), 0))}
+              </div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, textTransform: "uppercase", letterSpacing: "0.5px" }}>Integrity</div>
+              <div style={{ fontSize: "var(--t-subhead)", fontWeight: 700 }}>
+                {flaggedCount === 0 ? (
+                  <span style={{ color: theme.growth }}>✅ All Clean</span>
+                ) : (
+                  <span style={{ color: theme.caution }}>⚠️ {flaggedCount} Flagged</span>
+                )}
+              </div>
+            </div>
           </div>
 
-          {/* Filter chips */}
-          <div
-            style={{
-              display: "flex",
-              gap: "var(--s-2)",
-              overflowX: "auto",
-              paddingBottom: 4,
-              marginBottom: "var(--s-2-5)",
-            }}
-          >
+          <div style={{ display: "flex", gap: "var(--s-3)", marginBottom: "var(--s-3)", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: "200px" }}>
+              <Input
+                label="Search Symbol"
+                type="text"
+                placeholder="e.g. AAPL"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="glass-input"
+              />
+            </div>
+            <div style={{ flex: 1, minWidth: "200px" }}>
+              <Select
+                label="Sort"
+                value={sort}
+                onChange={(e) => setSort(e.target.value as Sort)}
+                options={SORT_OPTIONS}
+                className="glass-input"
+              />
+            </div>
+          </div>
+
+          {/* Filter Segmented Control */}
+          <div className="segmented" style={{ marginBottom: "var(--s-4)", overflowX: "auto" }}>
             {FILTERS.map((f) => {
               const count = directives.filter(f.test).length;
               const active = filter === f.key;
@@ -876,31 +945,16 @@ export function OptionsMatrix() {
                   key={f.key}
                   type="button"
                   onClick={() => setFilter(f.key)}
-                  aria-pressed={active}
-                  className="chip"
-                  style={{
-                    cursor: "pointer",
-                    background: active ? theme.accent : "var(--surface-2)",
-                    color: active ? "#04121e" : theme.textSecondary,
-                    borderColor: active ? theme.accent : "var(--border)",
-                    fontWeight: active ? 700 : 600,
-                  }}
+                  className={active ? "on" : ""}
+                  style={{ padding: "0 var(--s-2)", whiteSpace: "nowrap" }}
                 >
-                  {f.label} {count}
+                  {f.label} <span className="num" style={{ fontSize: "0.85em", opacity: 0.7 }}>{count}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* Sort */}
-          <div style={{ marginBottom: "var(--s-3)" }}>
-            <Select
-              label="Sort"
-              value={sort}
-              onChange={(e) => setSort(e.target.value as Sort)}
-              options={SORT_OPTIONS}
-            />
-          </div>
+
 
           {visible.length === 0 ? (
             <div className="empty" style={{ padding: "var(--s-6)" }}>
@@ -920,6 +974,7 @@ export function OptionsMatrix() {
         <DetailSheet
           d={openDirective}
           dte={data?.target_dte ?? 30}
+          asOf={data?.as_of}
           onClose={() => setOpenSymbol(null)}
         />
       )}

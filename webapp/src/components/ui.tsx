@@ -468,6 +468,8 @@ export function Input({
   min,
   max,
   step,
+  placeholder,
+  className,
 }: {
   label: string;
   value: string | number;
@@ -481,6 +483,8 @@ export function Input({
   min?: number;
   max?: number;
   step?: number;
+  placeholder?: string;
+  className?: string;
 }) {
   const autoId = useId();
   const inputId = id ?? autoId;
@@ -497,7 +501,7 @@ export function Input({
       </label>
       <input
         id={inputId}
-        className="input"
+        className={`input ${className ?? ""}`}
         type={type}
         inputMode={inputMode}
         value={value}
@@ -506,6 +510,7 @@ export function Input({
         min={min}
         max={max}
         step={step}
+        placeholder={placeholder}
         aria-invalid={invalid ? "true" : undefined}
         aria-describedby={hintId}
       />
@@ -552,6 +557,7 @@ export function Select({
   id,
   disabled,
   testId,
+  className,
 }: {
   label: string;
   hideLabel?: boolean;
@@ -563,6 +569,7 @@ export function Select({
   id?: string;
   disabled?: boolean;
   testId?: string;
+  className?: string;
 }) {
   const autoId = useId();
   const selectId = id ?? autoId;
@@ -579,10 +586,10 @@ export function Select({
           {label}
         </label>
       )}
-      <div className="select-wrap">
+      <div className={`select-wrap ${className ?? ""}`}>
         <select
           id={selectId}
-          className="select"
+          className={`select ${className ?? ""}`}
           value={value}
           onChange={onChange}
           disabled={disabled}
