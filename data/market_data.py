@@ -327,9 +327,18 @@ class YFinanceProvider(MarketDataProvider):
             t = yf.Ticker(symbol)
             fi = t.fast_info
 
-            price = float(fi.get("last_price") or fi.get("previous_close") or float("nan"))
-            bid = float(fi.get("bid") or float("nan"))
-            ask = float(fi.get("ask") or float("nan"))
+            # FastInfo's dict-style .get() only recognizes its camelCase keys
+            # (e.g. "lastPrice") -- the snake_case names below are exposed
+            # only as attributes. getattr(..., default) mirrors .get()'s
+            # None-on-missing semantics without the camelCase trap, and
+            # tolerates keys (bid/ask) FastInfo doesn't expose at all.
+            price = float(
+                getattr(fi, "last_price", None)
+                or getattr(fi, "previous_close", None)
+                or float("nan")
+            )
+            bid = float(getattr(fi, "bid", None) or float("nan"))
+            ask = float(getattr(fi, "ask", None) or float("nan"))
 
             # fast_info doesn't always expose a precise intraday timestamp
             ts = datetime.now(timezone.utc)
@@ -550,9 +559,12 @@ class YahooFundamentalsProvider:
                 info = {}
 
             # --- price + shares via fast_info (cheap, avoids .info round-trip) -
+            # last_price/previous_close are attribute-only on FastInfo (its
+            # .get() only recognizes camelCase keys) -- see YFinanceProvider.
+            # get_latest_quote's comment for the full explanation.
             try:
                 fi = t.fast_info
-                price = fi.get("last_price") or fi.get("previous_close")
+                price = getattr(fi, "last_price", None) or getattr(fi, "previous_close", None)
             except Exception:
                 fi = None
                 price = None

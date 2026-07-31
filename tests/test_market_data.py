@@ -45,6 +45,30 @@ def _reload_module():
     return md
 
 
+class _FakeFastInfo:
+    """Stand-in for yfinance's real ``FastInfo`` scraper object.
+
+    Real ``FastInfo`` exposes ``last_price``/``previous_close`` ONLY as
+    attributes -- its dict-style ``.get()`` recognizes just its camelCase
+    keys (``lastPrice``/``previousClose``), so ``fi.get("last_price")``
+    silently returns ``None`` on the real object even though it looks like
+    it should work. A mock that only implements ``.get()`` with snake_case
+    keys (the bug this class replaces) would mask that exact regression.
+    ``shares`` has no underscore so the real object's ``.get()`` does
+    recognize it verbatim -- reproduced here for the fundamentals path.
+    """
+
+    def __init__(self, last_price=None, previous_close=None, bid=None, ask=None, shares=None):
+        self.last_price = last_price
+        self.previous_close = previous_close
+        self.bid = bid
+        self.ask = ask
+        self.shares = shares
+
+    def get(self, key, default=None):
+        return self.shares if key == "shares" else default
+
+
 # ---------------------------------------------------------------------------
 # 1. Quote dataclass
 # ---------------------------------------------------------------------------
@@ -282,11 +306,7 @@ class TestAlpacaProvider:
 
 class TestYFinanceProvider:
     def _mock_fast_info(self, last_price=150.0, bid=149.9, ask=150.1):
-        mock_fi = MagicMock()
-        mock_fi.get = lambda k, *a: {
-            "last_price": last_price, "bid": bid, "ask": ask,
-        }.get(k, a[0] if a else None)
-        return mock_fi
+        return _FakeFastInfo(last_price=last_price, bid=bid, ask=ask)
 
     def test_is_stale_always_true(self):
         from data.market_data import YFinanceProvider
@@ -305,6 +325,39 @@ class TestYFinanceProvider:
         with patch("yfinance.Ticker", return_value=mock_ticker):
             q = provider.get_latest_quote("AAPL")
         assert q.source == "yfinance"
+
+    def test_get_latest_quote_reads_price_from_fast_info_attributes(self):
+        """Regression: FastInfo.get("last_price") always returns None on the
+        real object (only its camelCase keys are dict-gettable); the price
+        must come from attribute access instead, or every quote degrades to
+        NaN and everything downstream (options matrix, etc.) goes blank."""
+        from data.market_data import YFinanceProvider
+        provider = YFinanceProvider()
+        mock_ticker = MagicMock()
+        mock_ticker.fast_info = self._mock_fast_info(last_price=150.0, bid=149.9, ask=150.1)
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            q = provider.get_latest_quote("AAPL")
+        assert q.price == 150.0
+        assert q.bid == 149.9
+        assert q.ask == 150.1
+
+    def test_get_latest_quote_falls_back_to_previous_close(self):
+        from data.market_data import YFinanceProvider
+        provider = YFinanceProvider()
+        mock_ticker = MagicMock()
+        mock_ticker.fast_info = _FakeFastInfo(last_price=None, previous_close=142.0)
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            q = provider.get_latest_quote("AAPL")
+        assert q.price == 142.0
+
+    def test_get_latest_quote_price_is_nan_when_unavailable(self):
+        from data.market_data import YFinanceProvider
+        provider = YFinanceProvider()
+        mock_ticker = MagicMock()
+        mock_ticker.fast_info = _FakeFastInfo(last_price=None, previous_close=None)
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            q = provider.get_latest_quote("AAPL")
+        assert q.price != q.price  # NaN
 
     def test_quote_raises_market_data_error_on_exception(self):
         from data.market_data import YFinanceProvider, MarketDataError
@@ -505,7 +558,7 @@ class TestYahooFundamentalsProvider:
             "longName": "Apple Inc.",
             "sharesOutstanding": 100.0,
         }
-        m.fast_info = {"last_price": 150.0, "previous_close": 149.0, "shares": 100.0}
+        m.fast_info = _FakeFastInfo(last_price=150.0, previous_close=149.0, shares=100.0)
         m.income_stmt = self._annual()
         m.quarterly_income_stmt = self._quarterly()
         m.balance_sheet = self._balance_sheet()

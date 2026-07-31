@@ -299,24 +299,7 @@ class ProcessingStep(PipelineStep):
         ctx.dashboard_df = pe.compile_dashboard(tech_metrics, fund_metrics, regime_metrics)
 
         tech_opt_indicators = ctx.context_extras.get("tech_opt_indicators", {})
-        ctx.dashboard_df['GARCH_Vol'] = 0.0
-        ctx.dashboard_df['Realized_Vol_Rank'] = 0.0
-        ctx.dashboard_df['True_IVR'] = 0.0
-        ctx.dashboard_df['VRP'] = 0.0
-        ctx.dashboard_df['Aroon Oscillator'] = 0.0
-        ctx.dashboard_df['Coppock Curve'] = 0.0
-        ctx.dashboard_df['Chandelier Exit'] = 0.0
-        
-        for col_key, mapped_key in [
-            ('GARCH_Vol', 'GARCH_Vol'),
-            ('Realized_Vol_Rank', 'Realized_Vol_Rank'),
-            ('True_IVR', 'True_IVR'),
-            ('VRP', 'VRP'),
-            ('Aroon Oscillator', 'Aroon_Oscillator'),
-            ('Coppock Curve', 'Coppock_Curve'),
-            ('Chandelier Exit', 'Chandelier_Long')
-        ]:
-            ctx.dashboard_df[col_key] = ctx.dashboard_df['Symbol'].map(lambda x: tech_opt_indicators.get(x, {}).get(mapped_key, 0.0))
+        _apply_options_columns(ctx.dashboard_df, tech_opt_indicators)
 
 
 class ForecastingStep(PipelineStep):
@@ -401,6 +384,43 @@ class ForecastingStep(PipelineStep):
 
         for col in forecast_cols:
             ctx.dashboard_df[col] = ctx.dashboard_df['Symbol'].map(lambda x: forecast_results.get(x, {}).get(col, 0.0))
+
+
+_OPTIONS_COLUMN_MAP = (
+    ('GARCH_Vol', 'GARCH_Vol'),
+    ('Realized_Vol_Rank', 'Realized_Vol_Rank'),
+    ('True_IVR', 'True_IVR'),
+    ('VRP', 'VRP'),
+    ('Aroon Oscillator', 'Aroon_Oscillator'),
+    ('Coppock Curve', 'Coppock_Curve'),
+    ('Chandelier Exit', 'Chandelier_Long'),
+)
+
+
+def _apply_options_columns(dashboard_df: pd.DataFrame, tech_opt_indicators: dict) -> None:
+    """Map OptionsAnalysisStep's per-ticker ``tech_opt_indicators`` dict onto
+    ``dashboard_df``'s GARCH/IVR/VRP/Aroon/Coppock/Chandelier columns.
+
+    NaN-fills every column first, then overlays whatever each ticker actually
+    has in ``tech_opt_indicators``. A ticker absent from that dict (its
+    ``OptionsAnalysisStep._options_one()`` call failed or was dead-lettered
+    this cycle) or missing an individual key stays NaN for that cell --
+    "uncomputable" must never read as "zero VRP" / "zero True IVR"
+    (CONSTRAINT #4); a fabricated 0.0 there is indistinguishable from a
+    genuinely-computed, legitimately-zero value.
+
+    Deliberately a module-level function (same pattern as
+    ``_apply_sector_heat_factor`` above) so it's testable without going
+    through ``ProcessingStep.run()``'s heavy ``main_orchestrator`` import
+    chain.
+    """
+    nan = float("nan")
+    for col_key, _ in _OPTIONS_COLUMN_MAP:
+        dashboard_df[col_key] = nan
+    for col_key, mapped_key in _OPTIONS_COLUMN_MAP:
+        dashboard_df[col_key] = dashboard_df['Symbol'].map(
+            lambda x: tech_opt_indicators.get(x, {}).get(mapped_key, nan)
+        )
 
 
 def _apply_sector_heat_factor(dashboard_df: pd.DataFrame) -> None:
