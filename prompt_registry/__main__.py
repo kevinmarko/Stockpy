@@ -245,8 +245,8 @@ def cmd_pin(reg: PromptRegistry, prompt_id: str, version: str) -> int:
     # Persist to .env via gui.env_io (allowlist-bounded)
     try:
         from gui.env_io import write_setting  # noqa: PLC0415
-        pins_json = json.dumps(dict(sorted(reg._pins.items())))
-        write_setting("PROMPT_REGISTRY_PINS", pins_json)
+        pins_dict = dict(sorted(reg._pins.items()))
+        write_setting("PROMPT_REGISTRY_PINS", pins_dict)
         print(f"Pinned {prompt_id!r} → {version!r}  (saved to .env).")
     except Exception as exc:
         # The in-memory pin is live; the .env write may fail when
@@ -279,8 +279,8 @@ def cmd_rollback(reg: PromptRegistry, prompt_id: str) -> int:
     # Persist to .env via gui.env_io
     try:
         from gui.env_io import write_setting  # noqa: PLC0415
-        pins_json = json.dumps(dict(sorted(reg._pins.items())))
-        write_setting("PROMPT_REGISTRY_PINS", pins_json)
+        pins_dict = dict(sorted(reg._pins.items()))
+        write_setting("PROMPT_REGISTRY_PINS", pins_dict)
         print(f"Rolled back {prompt_id!r} → {previous!r}  (saved to .env).")
     except Exception as exc:
         print(
