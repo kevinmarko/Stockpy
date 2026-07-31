@@ -659,6 +659,105 @@ class TestInvalidKeyState:
             assert status_badge(token)
 
 
+# ---------------------------------------------------------------------------
+# Section A toggle dedup — regression for the "can't change anything" bug.
+# claude_commentary / gemini_alerts / gemini_vision all share the SAME
+# toggle_key (LLM_COMMENTARY_ENABLED). Rendering one st.toggle per capability
+# for that shared key meant each row's own (sticky) session_state clobbered
+# the others' writes on every rerun — the setting could never actually
+# change except via whichever row happened to render last. See
+# gui/panels/ai_control_center.py::_render_capability_row's docstring.
+# ---------------------------------------------------------------------------
+def _capability_grid_script() -> str:
+    """Minimal Streamlit script exercising Section A's row renderer directly
+    (via ``streamlit.testing.v1.AppTest``), without the rest of the tab's
+    heavier dependencies (state snapshot, Gravity runner, scheduled-run
+    launcher, …)."""
+    return (
+        "import streamlit as st\n"
+        "from settings import settings\n"
+        "from gui.ai_control_center import (\n"
+        "    CAPABILITIES,\n"
+        "    _PROVIDER_KEY_MAP,\n"
+        "    control_center_overview,\n"
+        "    status_badge,\n"
+        "    validate_toggle_write,\n"
+        ")\n"
+        "from gui.panels.ai_control_center import _render_capability_row\n"
+        "\n"
+        "overview = control_center_overview(settings, last_calls=None)\n"
+        "cap_by_key = {c.key: c for c in CAPABILITIES}\n"
+        "toggle_owner = {}\n"
+        "for rowinfo in overview:\n"
+        "    _render_capability_row(\n"
+        "        rowinfo,\n"
+        "        cap_by_key[rowinfo['key']],\n"
+        "        toggle_owner,\n"
+        "        last_calls=None,\n"
+        "        status_badge_fn=status_badge,\n"
+        "        validate_toggle_write_fn=validate_toggle_write,\n"
+        "        provider_key_map=_PROVIDER_KEY_MAP,\n"
+        "    )\n"
+    )
+
+
+class TestCapabilityRowToggleDedup:
+    def _isolated_env(self, tmp_path: Path, monkeypatch) -> Path:
+        from gui import env_io
+
+        env_path = tmp_path / ".env"
+        env_path.write_text("LLM_COMMENTARY_ENABLED=false\n", encoding="utf-8")
+        monkeypatch.setattr(env_io, "ENV_PATH", env_path)
+        return env_path
+
+    def test_only_one_widget_for_the_shared_toggle_key(self, tmp_path, monkeypatch) -> None:
+        from streamlit.testing.v1 import AppTest
+
+        self._isolated_env(tmp_path, monkeypatch)
+        at = AppTest.from_string(_capability_grid_script())
+        at.run(timeout=15)
+        assert not at.exception
+
+        shared = [t for t in at.toggle if t.key == "acc_toggle_shared_LLM_COMMENTARY_ENABLED"]
+        assert len(shared) == 1
+
+    def test_enabling_it_sticks_instead_of_being_reverted(self, tmp_path, monkeypatch) -> None:
+        from streamlit.testing.v1 import AppTest
+        from gui import env_io
+
+        self._isolated_env(tmp_path, monkeypatch)
+        at = AppTest.from_string(_capability_grid_script())
+        at.run(timeout=15)
+
+        toggle = next(t for t in at.toggle if t.key == "acc_toggle_shared_LLM_COMMENTARY_ENABLED")
+        assert toggle.value is False
+
+        toggle.set_value(True).run(timeout=15)
+        assert not at.exception
+
+        # Before the fix this write got silently clobbered back to "false" by
+        # the sibling capability rows' stale session_state on this SAME rerun.
+        assert env_io.get_value("LLM_COMMENTARY_ENABLED", "") == "true"
+
+    def test_disabling_it_after_enabling_also_sticks(self, tmp_path, monkeypatch) -> None:
+        from streamlit.testing.v1 import AppTest
+        from gui import env_io
+
+        env_path = tmp_path / ".env"
+        env_path.write_text("LLM_COMMENTARY_ENABLED=true\n", encoding="utf-8")
+        monkeypatch.setattr(env_io, "ENV_PATH", env_path)
+
+        at = AppTest.from_string(_capability_grid_script())
+        at.run(timeout=15)
+
+        toggle = next(t for t in at.toggle if t.key == "acc_toggle_shared_LLM_COMMENTARY_ENABLED")
+        assert toggle.value is True
+
+        toggle.set_value(False).run(timeout=15)
+        assert not at.exception
+        assert env_io.get_value("LLM_COMMENTARY_ENABLED", "") == "false"
+
+
 def test_ai_control_center_never_imports_status_store() -> None:
     """The headless status module must stay filesystem-free (no store import):
     it must be testable cold with a bare SimpleNamespace, and control_center_

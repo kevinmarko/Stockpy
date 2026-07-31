@@ -83,6 +83,138 @@ def _scheduled_log_fragment_static(handle: Optional[orchestrator_runner.RunHandl
     _render_scheduled_log_body(handle)
 
 
+def _render_capability_row(
+    rowinfo: Dict[str, Any],
+    cap: Any,
+    toggle_owner: Dict[str, str],
+    *,
+    last_calls: Optional[Dict[str, Any]],
+    status_badge_fn,
+    validate_toggle_write_fn,
+    provider_key_map: Dict[str, str],
+) -> None:
+    """Render one capability row in Section A's grid.
+
+    Extracted from :func:`render_ai_control_center` so this — the piece that
+    actually writes to ``.env`` — is directly testable via
+    ``streamlit.testing.v1.AppTest`` without pulling in the rest of the tab's
+    heavier dependencies (state snapshot, Gravity runner, scheduled-run
+    launcher, …).
+
+    Several capabilities SHARE one ``toggle_key`` (e.g. rationale commentary /
+    alert commentary / chart vision all gate on ``LLM_COMMENTARY_ENABLED``).
+    Rendering an independent ``st.toggle`` per capability for the same
+    ``.env`` key is a bug: once created, each row's own ``session_state`` is
+    sticky, so on the very next rerun the *other* rows compare their stale
+    ``session_state`` against the freshly-written value, see a mismatch, and
+    immediately write their own (unchanged) value back — the setting can
+    never actually stick except via whichever row happens to render last.
+    ``toggle_owner`` (one fresh dict per tab render, threaded in by the
+    caller) tracks which capability has already claimed a given
+    ``toggle_key`` so only ONE widget instance is ever created for it; every
+    other capability sharing that key gets a caption pointing at the owning
+    row instead of its own (fighting) toggle.
+    """
+    c1, c2, c3, c4 = st.columns([3, 2, 2, 3])
+    c1.markdown(f"**{rowinfo['label']}**")
+    c1.caption(cap.help)
+    c2.markdown(status_badge_fn(rowinfo["status"]))
+    keys_present = rowinfo["key_present"]
+    key_names = ", ".join(rowinfo["provider_keys"])
+    c3.markdown(("🔑 set" if keys_present else "🔓 missing") + f"  \n`{key_names}`")
+    active_provider = rowinfo.get("active_provider")
+    if active_provider:
+        c3.caption(f"via: **{active_provider}**")
+    # Last-real-call telemetry, rendered PAST-TENSE + timestamped (we never
+    # claim a key is invalid *now*, only that the last call was rejected).
+    inv = rowinfo.get("invalid_provider")
+    if inv:
+        inv_key = provider_key_map.get(inv, inv)
+        c3.caption(f"⚠️ last real {inv} call was rejected — check `{inv_key}` in `.env`")
+    for prov in ((active_provider,) if active_provider else ()):
+        lc = (last_calls or {}).get(prov) or {}
+        src = lc.get("source")
+        if src == "last_call":
+            verdict = "ok" if lc.get("ok") else f"failed: {lc.get('error_kind')}"
+            c3.caption(f"last call: {verdict} · {lc.get('checked_at')}")
+        elif src == "key_rotated":
+            c3.caption("key changed since the last recorded call — no telemetry yet")
+    # Toggle (only for capabilities with a writable master switch that is built)
+    tkey = rowinfo["toggle_key"]
+    if tkey and rowinfo["built"]:
+        owner = toggle_owner.get(tkey)
+        if owner is None:
+            # First capability to claim this toggle_key renders the ONE
+            # widget that controls it (see docstring above for why).
+            raw = env_io.get_value(tkey, "").strip().lower()
+            if raw in ("true", "1", "yes", "on"):
+                cur = True
+            elif raw in ("false", "0", "no", "off"):
+                cur = False
+            else:  # key absent from .env → fall back to the runtime default
+                cur = bool(getattr(settings, tkey, False))
+            new = c4.toggle(
+                f"Enable ({tkey})",
+                value=cur,
+                key=f"acc_toggle_shared_{tkey}",
+            )
+            if new != cur:
+                try:
+                    validate_toggle_write_fn(tkey)
+                    env_io.write_setting(tkey, "true" if new else "false")
+                    c4.success("Saved — effective next launch.")
+                except Exception as exc:
+                    c4.error(f"Write refused: {exc}")
+            toggle_owner[tkey] = rowinfo["label"]
+        else:
+            c4.caption(f"Controlled by **{owner}**'s toggle above (shares `{tkey}`).")
+
+        # Provider selector — only for capabilities that carry a flexible
+        # per-job provider setting (rationale / alert commentary, Opal).
+        # Non-secret ALLOWED_KEYS only; provider API keys stay secret-only.
+        sel_key = cap.provider_selector_setting
+        if sel_key:
+            options = list(_PROVIDER_SELECTOR_OPTIONS.get(sel_key, []))
+            raw_sel = env_io.get_value(sel_key, "").strip()
+            cur_sel = (raw_sel or str(getattr(settings, sel_key, "none") or "none")).strip()
+            if cur_sel not in options:
+                options = [cur_sel] + options
+            new_sel = c4.selectbox(
+                f"Provider ({sel_key})",
+                options=options,
+                index=options.index(cur_sel),
+                key=f"acc_provider_{rowinfo['key']}",
+            )
+            if new_sel != cur_sel:
+                try:
+                    env_io.write_setting(sel_key, new_sel)
+                    c4.success("Provider saved — effective next launch.")
+                except Exception as exc:
+                    c4.error(f"Provider write refused: {exc}")
+
+        # Opal also exposes a free-form model id (e.g. gpt-4o /
+        # gemini-2.5-flash) via the non-secret OPAL_RESEARCH_MODEL key.
+        if cap.key == "opal_research":
+            raw_model = env_io.get_value("OPAL_RESEARCH_MODEL", "").strip()
+            cur_model = (raw_model or str(getattr(settings, "OPAL_RESEARCH_MODEL", "") or "")).strip()
+            new_model = c4.text_input(
+                "Model (OPAL_RESEARCH_MODEL)",
+                value=cur_model,
+                key=f"acc_model_{rowinfo['key']}",
+                placeholder="e.g. gpt-4o or gemini-2.5-flash",
+            )
+            if new_model.strip() != cur_model:
+                try:
+                    env_io.write_setting("OPAL_RESEARCH_MODEL", new_model.strip())
+                    c4.success("Model saved — effective next launch.")
+                except Exception as exc:
+                    c4.error(f"Model write refused: {exc}")
+    elif not rowinfo["built"]:
+        c4.caption("🚧 requires build — see `docs/OPAL_BUILD_SPEC.md`")
+    else:
+        c4.caption("—")
+
+
 def render_ai_control_center() -> None:
     """Single operator-facing surface for every AI option on the platform.
 
@@ -140,102 +272,17 @@ def render_ai_control_center() -> None:
         _last_calls = None
     overview = control_center_overview(settings, last_calls=_last_calls)
     cap_by_key = {c.key: c for c in CAPABILITIES}
+    toggle_owner: Dict[str, str] = {}
     for rowinfo in overview:
-        cap = cap_by_key[rowinfo["key"]]
-        c1, c2, c3, c4 = st.columns([3, 2, 2, 3])
-        c1.markdown(f"**{rowinfo['label']}**")
-        c1.caption(cap.help)
-        c2.markdown(status_badge(rowinfo["status"]))
-        keys_present = rowinfo["key_present"]
-        key_names = ", ".join(rowinfo["provider_keys"])
-        c3.markdown(("🔑 set" if keys_present else "🔓 missing") + f"  \n`{key_names}`")
-        active_provider = rowinfo.get("active_provider")
-        if active_provider:
-            c3.caption(f"via: **{active_provider}**")
-        # Last-real-call telemetry, rendered PAST-TENSE + timestamped (we never
-        # claim a key is invalid *now*, only that the last call was rejected).
-        inv = rowinfo.get("invalid_provider")
-        if inv:
-            inv_key = _PROVIDER_KEY_MAP.get(inv, inv)
-            c3.caption(f"⚠️ last real {inv} call was rejected — check `{inv_key}` in `.env`")
-        for prov in ((active_provider,) if active_provider else ()):
-            lc = (_last_calls or {}).get(prov) or {}
-            src = lc.get("source")
-            if src == "last_call":
-                verdict = "ok" if lc.get("ok") else f"failed: {lc.get('error_kind')}"
-                c3.caption(f"last call: {verdict} · {lc.get('checked_at')}")
-            elif src == "key_rotated":
-                c3.caption("key changed since the last recorded call — no telemetry yet")
-        # Toggle (only for capabilities with a writable master switch that is built)
-        tkey = rowinfo["toggle_key"]
-        if tkey and rowinfo["built"]:
-            # Read the CURRENT value from .env (not the import-frozen `settings`
-            # singleton) so that after a write the next rerun sees the updated
-            # value and does not spuriously re-write on every unrelated rerun.
-            raw = env_io.get_value(tkey, "").strip().lower()
-            if raw in ("true", "1", "yes", "on"):
-                cur = True
-            elif raw in ("false", "0", "no", "off"):
-                cur = False
-            else:  # key absent from .env → fall back to the runtime default
-                cur = bool(getattr(settings, tkey, False))
-            new = c4.toggle(
-                f"Enable ({tkey})",
-                value=cur,
-                key=f"acc_toggle_{rowinfo['key']}",
-            )
-            if new != cur:
-                try:
-                    validate_toggle_write(tkey)
-                    env_io.write_setting(tkey, "true" if new else "false")
-                    c4.success("Saved — effective next launch.")
-                except Exception as exc:
-                    c4.error(f"Write refused: {exc}")
-
-            # Provider selector — only for capabilities that carry a flexible
-            # per-job provider setting (rationale / alert commentary, Opal).
-            # Non-secret ALLOWED_KEYS only; provider API keys stay secret-only.
-            sel_key = cap.provider_selector_setting
-            if sel_key:
-                options = list(_PROVIDER_SELECTOR_OPTIONS.get(sel_key, []))
-                raw_sel = env_io.get_value(sel_key, "").strip()
-                cur_sel = (raw_sel or str(getattr(settings, sel_key, "none") or "none")).strip()
-                if cur_sel not in options:
-                    options = [cur_sel] + options
-                new_sel = c4.selectbox(
-                    f"Provider ({sel_key})",
-                    options=options,
-                    index=options.index(cur_sel),
-                    key=f"acc_provider_{rowinfo['key']}",
-                )
-                if new_sel != cur_sel:
-                    try:
-                        env_io.write_setting(sel_key, new_sel)
-                        c4.success("Provider saved — effective next launch.")
-                    except Exception as exc:
-                        c4.error(f"Provider write refused: {exc}")
-
-            # Opal also exposes a free-form model id (e.g. gpt-4o /
-            # gemini-2.5-flash) via the non-secret OPAL_RESEARCH_MODEL key.
-            if cap.key == "opal_research":
-                raw_model = env_io.get_value("OPAL_RESEARCH_MODEL", "").strip()
-                cur_model = (raw_model or str(getattr(settings, "OPAL_RESEARCH_MODEL", "") or "")).strip()
-                new_model = c4.text_input(
-                    "Model (OPAL_RESEARCH_MODEL)",
-                    value=cur_model,
-                    key=f"acc_model_{rowinfo['key']}",
-                    placeholder="e.g. gpt-4o or gemini-2.5-flash",
-                )
-                if new_model.strip() != cur_model:
-                    try:
-                        env_io.write_setting("OPAL_RESEARCH_MODEL", new_model.strip())
-                        c4.success("Model saved — effective next launch.")
-                    except Exception as exc:
-                        c4.error(f"Model write refused: {exc}")
-        elif not rowinfo["built"]:
-            c4.caption("🚧 requires build — see `docs/OPAL_BUILD_SPEC.md`")
-        else:
-            c4.caption("—")
+        _render_capability_row(
+            rowinfo,
+            cap_by_key[rowinfo["key"]],
+            toggle_owner,
+            last_calls=_last_calls,
+            status_badge_fn=status_badge,
+            validate_toggle_write_fn=validate_toggle_write,
+            provider_key_map=_PROVIDER_KEY_MAP,
+        )
 
     st.divider()
 
