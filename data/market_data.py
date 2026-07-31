@@ -105,7 +105,27 @@ class MarketDataProvider(ABC):
     Callers import this type for type annotations; they receive a
     ``CompositeProvider`` instance at runtime and never need to know the
     concrete backend.
+
+    Class attributes
+    ~~~~~~~~~~~~~~~~
+    ``SOURCE``:
+        Short provenance string surfaced to the dashboard / Google Sheet and
+        stamped on every ``Quote.source`` this provider emits (e.g.
+        ``"alpaca"``, ``"yfinance"``). ``CompositeProvider.quote_source`` reads
+        it off the *selected* provider rather than hardcoding a name, so adding
+        a backend can never silently mislabel its quotes as another provider's.
+    ``IS_REALTIME``:
+        ``False`` for any delayed or unofficial feed (the safe default —
+        nothing downstream should treat a delayed price as real-time). Only a
+        genuine real-time feed sets this ``True``.
+
+    Both are read via ``getattr(..., default)`` at the call sites so a
+    duck-typed provider (e.g. ``YahooFundamentalsProvider``, which is not an
+    ABC subclass) never breaks the accessor.
     """
+
+    SOURCE: str = "unknown"
+    IS_REALTIME: bool = False
 
     @abstractmethod
     def get_latest_quote(self, symbol: str) -> Quote:
@@ -173,6 +193,9 @@ class AlpacaProvider(MarketDataProvider):
     stale_threshold_seconds:
         Age (seconds) beyond which a quote is considered stale.  Default 60.
     """
+
+    SOURCE = "alpaca"
+    IS_REALTIME = True
 
     def __init__(
         self,
@@ -320,6 +343,9 @@ class YFinanceProvider(MarketDataProvider):
     """
 
     SOURCE = "yfinance"
+    # Delayed by design (~15 min, unofficial) — every Quote it emits also
+    # carries ``is_stale=True``.
+    IS_REALTIME = False
 
     def get_latest_quote(self, symbol: str) -> Quote:
         """Fetch last price via ``Ticker.fast_info`` (avoids the slow .info round-trip)."""
@@ -805,6 +831,13 @@ class FinnhubProvider:
         ``FINNHUB_RATE_LIMIT_PER_MIN`` env-var (int) or 50.
     """
 
+    # Provenance attributes for completeness — this class is deprecated and
+    # unwired (nothing constructs it inside CompositeProvider), so neither is
+    # read in production today. Declared so a future re-wiring inherits the
+    # same attribute contract every other provider follows.
+    SOURCE = "finnhub"
+    IS_REALTIME = False
+
     # Mapping from Finnhub metric names to yfinance .info key names so that
     # FundamentalDataDTO.from_raw_dict() doesn't need to know the source.
     _METRIC_MAP: Dict[str, str] = {
@@ -1197,17 +1230,21 @@ class CompositeProvider(MarketDataProvider):
         )
 
     def _log_startup_banner(self) -> None:
+        # Read the provenance off the selected providers' class attributes
+        # rather than isinstance-ing against a fixed list of classes: an
+        # isinstance ladder silently mislabels any backend it doesn't know
+        # about, and this banner is the operator's first (often only) look at
+        # which source a run is actually using.
         provider_name = type(self._quote_provider).__name__
-        is_realtime = isinstance(self._quote_provider, AlpacaProvider)
-        latency_note = "real-time (IEX)" if is_realtime else "delayed (~15 min, unofficial)"
-        fundamentals_note = (
-            "yfinance .info"
-            if isinstance(self._fundamentals_provider, YFinanceProvider)
-            else "Yahoo-derived (statement-computed)"
+        is_realtime = bool(getattr(self._quote_provider, "IS_REALTIME", False))
+        quote_source = str(getattr(self._quote_provider, "SOURCE", "unknown"))
+        latency_note = "real-time" if is_realtime else "delayed (unofficial)"
+        fundamentals_note = str(
+            getattr(self._fundamentals_provider, "SOURCE", "unknown")
         )
         logger.info(
-            "MarketData: quotes/bars via %s [%s]; fundamentals via %s",
-            provider_name, latency_note, fundamentals_note,
+            "MarketData: quotes/bars via %s [source=%s, %s]; fundamentals via %s",
+            provider_name, quote_source, latency_note, fundamentals_note,
         )
 
     # ------------------------------------------------------------------
@@ -1372,17 +1409,33 @@ class CompositeProvider(MarketDataProvider):
 
     @property
     def is_realtime(self) -> bool:
-        """True when the active quote provider delivers real-time data."""
-        return isinstance(self._quote_provider, AlpacaProvider)
+        """True when the active quote provider delivers real-time data.
+
+        Reads the provider's own ``IS_REALTIME`` class attribute rather than
+        isinstance-ing against ``AlpacaProvider``. The old ternary defaulted
+        every non-Alpaca backend to "delayed", which happened to be right, but
+        the mirror-image accessor (``quote_source``) defaulted every non-Alpaca
+        backend to the literal string ``"yfinance"`` — see below.
+
+        ``getattr`` with a default is deliberate: ``CompositeProvider`` is
+        constructed via ``__new__`` in some tests (no ``_quote_provider``
+        assigned by ``__init__``) and duck-typed providers need not subclass
+        the ABC.
+        """
+        return bool(getattr(self._quote_provider, "IS_REALTIME", False))
 
     @property
     def quote_source(self) -> str:
-        """Provider name string, e.g. "alpaca" or "yfinance"."""
-        return (
-            "alpaca"
-            if isinstance(self._quote_provider, AlpacaProvider)
-            else "yfinance"
-        )
+        """Provider name string, e.g. "alpaca" or "yfinance".
+
+        This string is dashboard / Google Sheet attribution, so it has to be
+        the provider's own name and not a two-way guess. The previous
+        implementation was a hardcoded ternary that reported ``"yfinance"``
+        for anything that wasn't ``AlpacaProvider`` — correct only for as long
+        as exactly two backends existed. Byte-identical for both of those:
+        Alpaca → ``"alpaca"``, yfinance → ``"yfinance"``.
+        """
+        return str(getattr(self._quote_provider, "SOURCE", "unknown"))
 
     def invalidate_quote(self, symbol: str) -> None:
         """Evict a symbol's quote from the TTL cache (e.g. after a fill)."""

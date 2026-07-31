@@ -218,6 +218,49 @@ COLUMN_SCHEMA = [
     {"header": "ETF Primary Wrapper", "key": "ETF_Primary_Wrapper", "format": "string"},
 
     # ==========================================================
+    # --- FMP DIAGNOSTIC FEEDS (Financial Modeling Prep, data/fmp_client.py) ---
+    # Four new feeds surfaced as dashboard columns only: analyst consensus,
+    # earnings calendar/surprises, insider transaction statistics, and sector
+    # PE / 1-day performance snapshots.
+    #
+    # DIAGNOSTIC ONLY, and structurally so -- exactly the ETF-transmission
+    # precedent above. NO SignalModule reads any of these, NO SIGNAL_WEIGHTS
+    # entry exists for any of them, and none enters dto_models.py or signals/.
+    # That is deliberate and is also the no-lookahead guarantee mechanism:
+    # nothing new enters the perturbation harness because nothing new enters
+    # scoring. A signal this repo cannot backtest cannot earn a weight, and
+    # none of these four has point-in-time history on day one (analyst targets
+    # get revised and FMP serves only the CURRENT consensus; insider quarterly
+    # aggregates keep changing as Form 4s land; only the date-parameterized
+    # sector snapshots have a real PIT story).
+    #
+    # Every column below is NaN (never a fabricated 0.0 -- CONSTRAINT #4)
+    # unless the corresponding FMP_*_ENABLED gate is True AND the fetch
+    # succeeded for that symbol this cycle. Populated by the _apply_fmp_*
+    # helpers in pipeline/production_steps.py.
+    #
+    # NOTE: the earnings feed deliberately does NOT add an "Earnings Date"
+    # column -- it becomes a SECOND source for the existing news-catalyst
+    # "Earnings Date" key above (unlike Finnhub it is not limited to a 30-day
+    # forward window).
+    # ==========================================================
+    # --- Analyst (FMP_ANALYST_ENABLED) ---
+    {"header": "Analyst Target Consensus", "key": "Analyst_Target_Consensus", "format": "currency"},
+    {"header": "Analyst Target Upside", "key": "Analyst_Target_Upside", "format": "percent"},
+    {"header": "Analyst Grade Score", "key": "Analyst_Grade_Score", "format": "number"},
+    # --- Earnings (FMP_EARNINGS_ENABLED) ---
+    # Days_To_Earnings is derived from the NEXT scheduled date (date > as_of).
+    # Knowing a publicly-announced future earnings DATE is not lookahead;
+    # knowing the RESULT is -- see _apply_fmp_earnings for the four rules.
+    {"header": "Days To Earnings", "key": "Days_To_Earnings", "format": "number"},
+    {"header": "Last EPS Surprise %", "key": "Last_EPS_Surprise_Pct", "format": "percent"},
+    # --- Insider (FMP_INSIDER_ENABLED) ---
+    {"header": "Insider Buy/Sell Ratio", "key": "Insider_Buy_Sell_Ratio", "format": "number"},
+    # --- Sector snapshot (FMP_SECTOR_SNAPSHOT_ENABLED) ---
+    {"header": "Sector PE", "key": "Sector_PE", "format": "number"},
+    {"header": "Sector 1D Change", "key": "Sector_1D_Change", "format": "percent"},
+
+    # ==========================================================
     # --- CORRELATION CLUSTER (Tier 2.5, research_engine.py) ---
     # Populated on-demand by the GUI Reports tab; NaN in the main
     # orchestrator run (no historical batch fetch required).

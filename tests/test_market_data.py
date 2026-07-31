@@ -708,6 +708,78 @@ class TestCompositeProviderSelection:
 
 
 # ---------------------------------------------------------------------------
+# 6b. Provider provenance class attributes (SOURCE / IS_REALTIME)
+# ---------------------------------------------------------------------------
+
+class TestProviderProvenanceAttributes:
+    """``CompositeProvider.is_realtime`` / ``.quote_source`` used to be two
+    hardcoded ``isinstance(self._quote_provider, AlpacaProvider)`` ternaries.
+    That is fine for exactly two backends and silently wrong for a third:
+    ``quote_source`` would report the literal string ``"yfinance"`` for a quote
+    served by ANY other provider, and that string is dashboard / Google Sheet
+    attribution -- a mislabeling bug, not a cosmetic one.
+
+    Both now read the provider's own ``SOURCE`` / ``IS_REALTIME`` class
+    attributes. These two tests pin the EQUIVALENCE for the two backends that
+    exist today, which is the whole safety claim of that refactor.
+    """
+
+    def _patched(self, **overrides):
+        base = dict(
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+            MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+        )
+        base.update(overrides)
+        return patch.multiple("settings.settings", **base)
+
+    def test_alpaca_reports_realtime_true_and_source_alpaca(self):
+        from data.market_data import AlpacaProvider, CompositeProvider
+
+        fake_client = MagicMock()
+        with self._patched(
+            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
+        ), patch(
+            "alpaca.data.historical.StockHistoricalDataClient",
+            return_value=fake_client,
+        ):
+            cp = CompositeProvider()
+
+        assert isinstance(cp._quote_provider, AlpacaProvider)
+        assert (cp.is_realtime, cp.quote_source) == (True, "alpaca")
+
+    def test_yfinance_reports_realtime_false_and_source_yfinance(self):
+        from data.market_data import CompositeProvider, YFinanceProvider
+
+        with self._patched():
+            cp = CompositeProvider()
+
+        assert isinstance(cp._quote_provider, YFinanceProvider)
+        assert (cp.is_realtime, cp.quote_source) == (False, "yfinance")
+
+    def test_abc_declares_safe_defaults(self):
+        """A provider that forgets to declare them must degrade to "unknown"
+        and NOT-realtime -- never to a confident wrong attribution, and never
+        to an optimistic real-time claim for a delayed feed."""
+        from data.market_data import MarketDataProvider
+
+        assert MarketDataProvider.SOURCE == "unknown"
+        assert MarketDataProvider.IS_REALTIME is False
+
+    def test_accessors_tolerate_a_ducktyped_provider_without_the_attributes(self):
+        """``CompositeProvider`` is built via ``__new__`` in several tests and
+        some providers (``YahooFundamentalsProvider``) are duck-typed rather
+        than ABC subclasses, so both accessors must use ``getattr`` with a
+        default rather than assuming the attribute exists."""
+        from data.market_data import CompositeProvider
+
+        cp = CompositeProvider.__new__(CompositeProvider)
+        cp._quote_provider = SimpleNamespace()  # no SOURCE, no IS_REALTIME
+
+        assert cp.is_realtime is False
+        assert cp.quote_source == "unknown"
+
+
+# ---------------------------------------------------------------------------
 # 7. CompositeProvider caching behaviour
 # ---------------------------------------------------------------------------
 
