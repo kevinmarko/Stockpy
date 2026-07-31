@@ -33,6 +33,7 @@ from gui.panels._shared import (  # noqa: E402
 from gui.panels import load_state_snapshot
 from gui.observability_panel_helpers import (
     compute_portfolio_heat,
+    etf_transmission_rows,
     format_rmse,
     format_skill_weight,
     heartbeat_status,
@@ -315,6 +316,9 @@ def render_observability() -> None:
 
     st.divider()
     _render_observability_sizing_cap_audit()
+
+    st.divider()
+    _render_observability_etf_transmission(snap)
 
     st.divider()
     _render_observability_heartbeat_trend()
@@ -1225,6 +1229,86 @@ def _render_observability_sizing_cap_audit() -> None:
         )
     else:
         st.caption("⚪ Cap-aware escalation disabled (`SIZING_CAP_ESCALATION_ENABLED = False`).")
+
+
+# ---------------------------------------------------------------------------
+# Observability — Section: ETF Volatility Transmission (risk/etf_transmission.py)
+# ---------------------------------------------------------------------------
+
+
+def _render_observability_etf_transmission(snap: Dict[str, Any]) -> None:
+    """Read-only diagnostic view of ETF volatility-transmission telemetry.
+
+    Three independent, opt-in layers (Ben-David, Franzoni & Moussawi 2018):
+    measurement columns (``ETF_TRANSMISSION_ENABLED``), the per-name sizing
+    derate (``ETF_TRANSMISSION_SIZING_ENABLED``), and the portfolio-level
+    covariance overlay (``ETF_TRANSMISSION_PORTFOLIO_ENABLED``) — see
+    ``docs/signals/etf_transmission.md``. This panel is purely for operator
+    visibility; it never writes anything.
+
+    Degrades to an info message (never a table of fabricated nulls,
+    CONSTRAINT #4) when the measurement gate is off or no symbol in the last
+    snapshot has any ETF-transmission coverage yet.
+    """
+    st.markdown("### 🧺 ETF Volatility Transmission")
+    help_widgets.section_caption("observability.etf_transmission")
+
+    measurement_on = bool(settings.ETF_TRANSMISSION_ENABLED)
+    sizing_on = bool(settings.ETF_TRANSMISSION_SIZING_ENABLED)
+    portfolio_on = bool(settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Measurement", "🟢 ON" if measurement_on else "⚪ OFF")
+    col2.metric("Sizing derate", "🟢 ON" if sizing_on else "⚪ OFF")
+    col3.metric("Portfolio covariance", "🟢 ON" if portfolio_on else "⚪ OFF")
+
+    if not measurement_on:
+        st.info(
+            "⚪ `ETF_TRANSMISSION_ENABLED = False` — measurement columns "
+            "(`ETF_Ownership_Pct` / `ETF_Comovement_R2` / `ETF_Primary_Wrapper`) "
+            "are not computed this cycle. Enable it (Settings tab / `.env`) "
+            "to start surfacing per-symbol ETF exposure."
+        )
+        return
+
+    rows = etf_transmission_rows(snap.get("signals", []) or [])
+    if not rows:
+        st.info(
+            "No symbols have ETF-transmission coverage in the last "
+            "snapshot yet. This can mean the holdings source "
+            "(`ETF_HOLDINGS_ENABLED`) has no basket data for this universe, "
+            "or the pipeline hasn't run a cycle since the flag was enabled."
+        )
+        return
+
+    df = pd.DataFrame(rows)
+    display = pd.DataFrame({
+        "Symbol": df["symbol"],
+        "ETF Ownership %": df["etf_ownership_pct"].apply(
+            lambda v: f"{v * 100:.1f}%" if v is not None else "—"
+        ),
+        "Comovement R²": df["etf_comovement_r2"].apply(
+            lambda v: f"{v:.2f}" if v is not None else "—"
+        ),
+        "Primary Wrapper": df["etf_primary_wrapper"].apply(lambda v: v or "—"),
+        "Sizing Multiplier": df["etf_transmission_multiplier"].apply(
+            lambda v: f"{v:.2f}x" if v is not None else ("—" if sizing_on else "N/A (disabled)")
+        ),
+    })
+    st.dataframe(display, width="stretch", hide_index=True)
+
+    if not sizing_on:
+        st.caption(
+            "⚪ Sizing derate disabled (`ETF_TRANSMISSION_SIZING_ENABLED = False`) "
+            "— the Sizing Multiplier column above is not applied to Kelly Target."
+        )
+    if not portfolio_on:
+        st.caption(
+            "⚪ Portfolio covariance overlay disabled "
+            "(`ETF_TRANSMISSION_PORTFOLIO_ENABLED = False`) — the portfolio "
+            "gross-exposure cap uses the sum-of-|weight| fallback, not an "
+            "ETF-co-ownership-inflated covariance matrix."
+        )
 
 
 # ---------------------------------------------------------------------------

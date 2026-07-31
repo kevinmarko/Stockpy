@@ -34,6 +34,7 @@ __all__ = [
     "heartbeat_status",
     "format_rmse",
     "format_skill_weight",
+    "etf_transmission_rows",
 ]
 
 
@@ -171,3 +172,58 @@ def format_rmse(r: Optional[float]) -> str:
 def format_skill_weight(w: Optional[float]) -> str:
     """Skill-weight cell: percent string, or "—" when ``None`` (cold start)."""
     return f"{w:.1%}" if w is not None else "—"
+
+
+# ── ETF volatility-transmission table rows ───────────────────────────────────
+
+
+def etf_transmission_rows(signals: list) -> list:
+    """Extract per-symbol ETF-transmission telemetry from state-snapshot signals.
+
+    ``signals`` is ``state_snapshot.json``'s ``"signals"`` list (one dict per
+    symbol). Filters OUT any symbol carrying none of the four ``etf_*`` fields
+    (``etf_ownership_pct`` / ``etf_comovement_r2`` / ``etf_primary_wrapper`` /
+    ``etf_transmission_multiplier``) — an all-disabled cycle renders an empty
+    list rather than a wall of nulls (CONSTRAINT #4: showing a table full of
+    "—" would read as "measured, and there's nothing here" rather than "never
+    computed").
+
+    Sorted so the operator sees the names ETF transmission is actually
+    affecting at the top: ascending by ``etf_transmission_multiplier`` (most
+    heavily derated first) when the sizing derate is active for that symbol;
+    symbols with no multiplier (sizing derate disabled, or no coverage) sort
+    after, by descending ``etf_ownership_pct``.
+
+    Never raises: a malformed row (missing ``symbol``, wrong types) is
+    skipped rather than propagated (CONSTRAINT #6).
+    """
+    rows = []
+    for entry in signals or []:
+        if not isinstance(entry, dict):
+            continue
+        symbol = entry.get("symbol")
+        if not symbol:
+            continue
+        ownership = entry.get("etf_ownership_pct")
+        comovement = entry.get("etf_comovement_r2")
+        wrapper = entry.get("etf_primary_wrapper")
+        multiplier = entry.get("etf_transmission_multiplier")
+        if ownership is None and comovement is None and wrapper is None and multiplier is None:
+            continue
+        rows.append({
+            "symbol": symbol,
+            "etf_ownership_pct": ownership,
+            "etf_comovement_r2": comovement,
+            "etf_primary_wrapper": wrapper,
+            "etf_transmission_multiplier": multiplier,
+        })
+
+    def _sort_key(row: dict):
+        multiplier = row["etf_transmission_multiplier"]
+        if multiplier is not None:
+            return (0, multiplier)
+        ownership = row["etf_ownership_pct"] or 0.0
+        return (1, -ownership)
+
+    rows.sort(key=_sort_key)
+    return rows

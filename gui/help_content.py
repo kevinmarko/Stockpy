@@ -158,6 +158,9 @@ _PROGRESS_POLL_SECONDS = settings.PROGRESS_POLL_SECONDS
 _SIZING_CAP_ALERT_THRESHOLD_PCT = int(settings.SIZING_CAP_ALERT_THRESHOLD_PCT * 100)
 _SIZING_CAP_ESCALATION_THRESHOLD_CYCLES = settings.SIZING_CAP_ESCALATION_THRESHOLD_CYCLES
 _SIZING_CAP_ESCALATION_FACTOR = settings.SIZING_CAP_ESCALATION_FACTOR
+_ETF_TRANSMISSION_MAX_DERATE_PCT = int(settings.ETF_TRANSMISSION_MAX_DERATE * 100)
+_ETF_TRANSMISSION_OWNERSHIP_REFERENCE_PCT = int(settings.ETF_TRANSMISSION_OWNERSHIP_REFERENCE * 100)
+_ETF_TRANSMISSION_MIN_MULTIPLIER = settings.ETF_TRANSMISSION_MIN_MULTIPLIER
 # Retrain window (days) used by the Analytics ML-model-monitoring section to
 # flag a stale model. No dedicated setting exists, so this mirrors the default
 # ml.meta_labeling.MetaLabeler(retrain_freq_days=30) cadence and the LGBM ranker's
@@ -1250,6 +1253,20 @@ SECTION_HELP: Dict[str, str] = {
         "Values are sourced from the last orchestrator run's state snapshot "
         "(FRED data).  They reflect conditions at pipeline execution time, "
         "not real-time — run the orchestrator to refresh."
+    ),
+    "observability.etf_transmission": (
+        "Ben-David, Franzoni & Moussawi (2018): ETF arbitrage transmits a "
+        "shock in one constituent to its otherwise-healthy basket peers, so "
+        "a heavily ETF-wrapped name carries extra non-fundamental, "
+        "non-diversifiable variance. Three independent, opt-in layers: "
+        "measurement (`ETF_Ownership_Pct`/`ETF_Comovement_R2`/"
+        "`ETF_Primary_Wrapper`), a per-name sizing derate (up to "
+        f"{_ETF_TRANSMISSION_MAX_DERATE_PCT}% at "
+        f"{_ETF_TRANSMISSION_OWNERSHIP_REFERENCE_PCT}%+ ETF ownership, "
+        f"floored at {_ETF_TRANSMISSION_MIN_MULTIPLIER:.2f}x), and a "
+        "portfolio-level covariance overlay that inflates co-movement "
+        "between co-held names in the gross-exposure cap. This panel is "
+        "read-only — it never writes a setting."
     ),
     "observability.sizing_cap_audit": (
         "Durable log of position-sizing guardrail events — `sizing/"

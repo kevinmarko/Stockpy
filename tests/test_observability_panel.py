@@ -26,6 +26,7 @@ import pytest
 from gui.observability_panel_helpers import (
     IndicatorBadge,
     compute_portfolio_heat,
+    etf_transmission_rows,
     format_rmse,
     format_skill_weight,
     heartbeat_status,
@@ -204,3 +205,81 @@ class TestForecastCellFormatters:
 
     def test_skill_weight_none_is_dash(self):
         assert format_skill_weight(None) == "—"
+
+
+class TestEtfTransmissionRows:
+    """gui.observability_panel_helpers.etf_transmission_rows -- the pure
+    row-extraction/sort logic behind the Observability tab's ETF Volatility
+    Transmission section (gui/panels/observability.py)."""
+
+    def test_symbol_with_no_etf_fields_is_filtered_out(self):
+        signals = [
+            {"symbol": "AAPL", "etf_ownership_pct": 0.1},
+            {"symbol": "ZZZ", "etf_ownership_pct": None, "etf_comovement_r2": None,
+             "etf_primary_wrapper": None, "etf_transmission_multiplier": None},
+        ]
+        rows = etf_transmission_rows(signals)
+        assert [r["symbol"] for r in rows] == ["AAPL"]
+
+    def test_symbol_missing_entirely_is_also_filtered_out(self):
+        # A symbol dict that never carries any etf_* key at all (e.g. an
+        # older snapshot, or a signal type this feature never touches).
+        signals = [{"symbol": "AAPL"}]
+        assert etf_transmission_rows(signals) == []
+
+    def test_empty_signals_list_returns_empty(self):
+        assert etf_transmission_rows([]) == []
+
+    def test_none_signals_returns_empty_never_raises(self):
+        assert etf_transmission_rows(None) == []
+
+    def test_row_missing_symbol_is_skipped(self):
+        signals = [{"symbol": None, "etf_ownership_pct": 0.5}]
+        assert etf_transmission_rows(signals) == []
+
+    def test_malformed_entry_is_skipped_not_raised(self):
+        signals = ["not a dict", {"symbol": "AAPL", "etf_ownership_pct": 0.1}]
+        rows = etf_transmission_rows(signals)
+        assert [r["symbol"] for r in rows] == ["AAPL"]
+
+    def test_all_four_fields_are_carried_through(self):
+        signals = [{
+            "symbol": "AAPL",
+            "etf_ownership_pct": 0.15,
+            "etf_comovement_r2": 0.8,
+            "etf_primary_wrapper": "XLK",
+            "etf_transmission_multiplier": 0.85,
+        }]
+        row = etf_transmission_rows(signals)[0]
+        assert row == {
+            "symbol": "AAPL",
+            "etf_ownership_pct": 0.15,
+            "etf_comovement_r2": 0.8,
+            "etf_primary_wrapper": "XLK",
+            "etf_transmission_multiplier": 0.85,
+        }
+
+    def test_sorted_ascending_by_multiplier_most_derated_first(self):
+        signals = [
+            {"symbol": "LOW_DERATE", "etf_transmission_multiplier": 0.95},
+            {"symbol": "HIGH_DERATE", "etf_transmission_multiplier": 0.50},
+            {"symbol": "MID_DERATE", "etf_transmission_multiplier": 0.75},
+        ]
+        rows = etf_transmission_rows(signals)
+        assert [r["symbol"] for r in rows] == ["HIGH_DERATE", "MID_DERATE", "LOW_DERATE"]
+
+    def test_rows_without_multiplier_sort_after_rows_with_one(self):
+        signals = [
+            {"symbol": "NO_MULTIPLIER", "etf_ownership_pct": 0.99},
+            {"symbol": "HAS_MULTIPLIER", "etf_transmission_multiplier": 0.50},
+        ]
+        rows = etf_transmission_rows(signals)
+        assert [r["symbol"] for r in rows] == ["HAS_MULTIPLIER", "NO_MULTIPLIER"]
+
+    def test_rows_without_multiplier_sort_by_descending_ownership(self):
+        signals = [
+            {"symbol": "SMALL_OWNERSHIP", "etf_ownership_pct": 0.05},
+            {"symbol": "BIG_OWNERSHIP", "etf_ownership_pct": 0.40},
+        ]
+        rows = etf_transmission_rows(signals)
+        assert [r["symbol"] for r in rows] == ["BIG_OWNERSHIP", "SMALL_OWNERSHIP"]
