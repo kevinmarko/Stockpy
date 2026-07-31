@@ -31,7 +31,17 @@ def sharpe_ratio(returns: pd.Series, freq: int = 252) -> float:
         return np.nan
     mean_ret = returns.mean()
     std_ret = returns.std()
-    if std_ret == 0 or np.isnan(std_ret):
+    # A degenerate (flat/no-signal) returns series -- e.g. an all-zero book
+    # after a flat per-day cost deduction -- is mathematically constant, but
+    # pandas' two-pass std() accumulates floating-point rounding noise over
+    # many rows, so it lands near (not bit-identical to) 0.0 rather than
+    # exactly 0.0. An exact `== 0` check misses that, and mean/std then
+    # explodes into an absurd, unbounded "Sharpe" (observed: ~1e16 magnitude)
+    # instead of the honest NaN (CONSTRAINT #4). 1e-12 mirrors the
+    # degenerate-std threshold already used by risk/etf_transmission.py --
+    # far above float noise (~1e-16 to 1e-20) and far below any real
+    # strategy's daily-return std.
+    if np.isnan(std_ret) or std_ret < 1e-12:
         return np.nan
     return (mean_ret / std_ret) * np.sqrt(freq)
 
@@ -304,7 +314,13 @@ def run_cpcv_evaluation(
         per_path_max_dd.append(compute_max_drawdown(oos_returns))
         downside = oos_returns[oos_returns < 0]
         downside_std = downside.std()
-        sortino = (oos_returns.mean() / downside_std * np.sqrt(freq)) if downside_std > 0 else np.nan
+        # Same degenerate-std guard as sharpe_ratio() above -- a near-zero
+        # (but not exactly zero) downside std is floating-point noise from a
+        # constant/near-constant downside series, not real signal.
+        sortino = (
+            (oos_returns.mean() / downside_std * np.sqrt(freq))
+            if downside_std >= 1e-12 else np.nan
+        )
         per_path_sortino.append(sortino)
         trade_days = oos_returns != 0
         per_path_hit_rate.append(float((oos_returns[trade_days] > 0).mean()) if trade_days.any() else np.nan)

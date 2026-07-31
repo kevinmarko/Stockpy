@@ -740,7 +740,15 @@ class StrategyValidationHarness:
         # Sortino
         downside_returns = full_returns[full_returns < 0]
         downside_std = downside_returns.std()
-        sortino = (full_returns.mean() / downside_std * np.sqrt(252)) if downside_std > 0 else np.nan
+        # Same degenerate-std guard as validation.metrics.sharpe_ratio -- a
+        # near-zero (but not exactly zero) downside std is floating-point
+        # noise from a constant/near-constant downside series (e.g. an
+        # all-zero book after a flat per-day cost deduction), not real
+        # signal; dividing by it would explode into an absurd ratio.
+        sortino = (
+            (full_returns.mean() / downside_std * np.sqrt(252))
+            if downside_std >= 1e-12 else np.nan
+        )
         
         # Max Drawdown — reuse the shared computation (returns NaN, not a
         # fabricated 0.0, on empty input; the Calmar guard below tolerates NaN).
