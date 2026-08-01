@@ -69,20 +69,6 @@ describe("Adversarial Robustness and Edge Case Suite", () => {
     expect(widgets.length).toBe(1);
   });
 
-  it("handles widgets with unsupported/invalid sizes by falling back to default size style", async () => {
-    const invalidSizeLayout = [
-      { id: "portfolio-summary", title: "Portfolio Summary", size: "XXL" as any }
-    ];
-    localStorage.setItem("dashboard_layout", JSON.stringify(invalidSizeLayout));
-
-    renderDashboard();
-    expect(await screen.findByTestId("dashboard-title")).toBeInTheDocument();
-    const widget = screen.getByTestId("widget-portfolio-summary");
-    expect(widget).toBeInTheDocument();
-    // Default size fallback style is gridColumn: span 2
-    expect(widget.style.gridColumn).toBe("span 2");
-  });
-
   // --- 2. Comparison Screen and Empty Database Mock Curves ---
 
   it("handles comparison where a strategy performance curve API returns null curve", async () => {

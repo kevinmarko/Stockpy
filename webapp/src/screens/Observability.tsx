@@ -249,7 +249,7 @@ function ForecastSkillSection({
   const weights = Object.entries(skill.skill_weights).sort((a, b) => b[1] - a[1]);
   return (
     <div>
-      <div style={{ display: "flex", gap: "var(--s-4)", marginBottom: "var(--s-3)", flexWrap: "wrap" }}>
+      <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
         <Tile label="Pending" value={skill.pending} />
         <Tile label="Completed" value={skill.completed} />
         <Tile label="Window" value={`${skill.window_days}d`} />
@@ -395,7 +395,7 @@ function CircuitBreakerSection({
 }) {
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
+      <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
         <Tile
           label="Critical trips"
           value={breakers.counts.critical}
@@ -456,7 +456,7 @@ function SystemTelemetrySection({ telemetry }: { telemetry: ObservabilitySummary
 
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-2)" }}>
+      <div className="tiles" style={{ marginBottom: "var(--s-2)" }}>
         <Tile label="Host CPU" value={fmtPct(telemetry.cpu_percent, 1)} tone={cpuHot ? "neg" : undefined} />
         <Tile label="Host memory" value={fmtPct(telemetry.memory_percent, 1)} tone={memHot ? "neg" : undefined} />
         <Tile label="Host disk" value={fmtPct(telemetry.disk_percent, 1)} />
@@ -509,7 +509,7 @@ function SizingCapAuditSection({
   }
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
+      <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
         <Tile label="Events" value={audit.count} />
         <Tile label="Capped" value={audit.capped_count} tone={audit.capped_count > 0 ? "neg" : undefined} />
         <Tile
@@ -565,7 +565,7 @@ function EtfTransmissionSection({
 }) {
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
+      <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
         <Tile label="Measurement" value={etf.measurement_enabled ? "ON" : "OFF"} />
         <Tile label="Sizing derate" value={etf.sizing_enabled ? "ON" : "OFF"} />
         <Tile label="Portfolio covariance" value={etf.portfolio_enabled ? "ON" : "OFF"} />
@@ -619,7 +619,7 @@ function EtfTransmissionSection({
 function HeartbeatSection({ heartbeat }: { heartbeat: ObservabilitySummary["heartbeat"] }) {
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", alignItems: "center" }}>
+      <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
         <Tile
           label="Heartbeat age"
           value={heartbeat.age_seconds == null ? "—" : `${fmtNum(heartbeat.age_seconds, 0)}s`}
@@ -720,7 +720,7 @@ function LogEntryRow({ entry }: { entry: LogAggregationEntry }) {
         {entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "—"}
       </span>
       <LogLevelBadge level={entry.level} />
-      <span style={{ color: theme.textSecondary, wordBreak: "break-word" }}>
+      <span style={{ color: "#10b981", wordBreak: "break-word" }}>
         {entry.parsed ? entry.message : entry.raw}
       </span>
     </div>
@@ -765,7 +765,7 @@ function LogAggregationSection({ logs }: { logs: LogAggregation }) {
 
   return (
     <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
+      <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
         <Tile label="Critical" value={logs.tally.CRITICAL} tone={logs.tally.CRITICAL > 0 ? "neg" : undefined} />
         <Tile label="Error" value={logs.tally.ERROR} tone={logs.tally.ERROR > 0 ? "neg" : undefined} />
         <Tile label="Warning" value={logs.tally.WARNING} tone={logs.tally.WARNING > 0 ? "neg" : undefined} />
@@ -800,12 +800,13 @@ function LogAggregationSection({ logs }: { logs: LogAggregation }) {
       ) : (
         <div
           style={{
-            background: theme.surface,
-            border: `1px solid ${theme.border}`,
-            borderRadius: "var(--r-xs)",
-            padding: "var(--s-1-5) var(--s-2-5)",
+            background: "#0b0e11",
+            border: `1px solid ${theme.borderStrong}`,
+            borderRadius: "var(--r-sm)",
+            padding: "var(--s-3)",
             maxHeight: 320,
             overflowY: "auto",
+            scrollBehavior: "smooth",
           }}
         >
           {filtered.map((e, i) => (
@@ -872,7 +873,7 @@ export function Observability() {
         <>
           {/* 1. Portfolio risk metrics */}
           <SectionHeading title="Portfolio risk" sub="Over the full account equity history" />
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)" }}>
+          <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
             <Tile label="Sharpe" value={fmtNum(data.portfolio_risk.sharpe_ratio, 2)} />
             <Tile label="Calmar" value={fmtNum(data.portfolio_risk.calmar_ratio, 2)} />
             <Tile

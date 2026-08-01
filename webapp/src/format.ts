@@ -53,6 +53,19 @@ export function fmtDate(iso: string | null | undefined): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
+export function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  // If the ISO string contains a time (e.g. has 'T' and isn't just YYYY-MM-DD)
+  // then format with time, otherwise just date.
+  if (iso.includes("T")) {
+    return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+}
+
+
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return "unknown";
   const then = new Date(iso).getTime();

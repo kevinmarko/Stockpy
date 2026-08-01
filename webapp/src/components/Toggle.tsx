@@ -22,6 +22,7 @@ export function Toggle({
   disabled = false,
   pending = false,
   describedBy,
+  dataTestId,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
@@ -29,6 +30,7 @@ export function Toggle({
   disabled?: boolean;
   pending?: boolean;
   describedBy?: string;
+  dataTestId?: string;
 }) {
   const labelId = useId();
 
@@ -43,6 +45,7 @@ export function Toggle({
       disabled={disabled || pending}
       className="switch-wrap"
       onClick={() => onChange(!checked)}
+      data-testid={dataTestId}
     >
       <span className={`switch-track${checked ? " on" : ""}`}>
         <span className="switch-thumb" />

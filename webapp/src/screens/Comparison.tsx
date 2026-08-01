@@ -3,7 +3,8 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api } from "../api/client";
 import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Notice, Table } from "../components/ui";
+import { ErrorState, Loading, Notice } from "../components/ui";
+import { Toggle } from "../components/Toggle";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
 import { SymbolComparison } from "../components/SymbolComparison";
@@ -198,31 +199,26 @@ export function Comparison() {
               const checked = selectedIds.includes(p.id);
               const disabled = !checked && selectedIds.length >= 5;
               return (
-                <label
+                <div
                   key={p.id}
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "var(--s-1-5)",
                     background: checked ? theme.surface3 : theme.surface2,
                     padding: "var(--s-1-5) var(--s-3)",
                     borderRadius: 20,
                     border: `1px solid ${checked ? theme.accent : theme.border}`,
-                    cursor: disabled ? "not-allowed" : "pointer",
                     opacity: disabled ? 0.5 : 1,
-                    fontSize: "var(--t-body)",
                   }}
                 >
-                  <input
-                    type="checkbox"
+                  <Toggle
+                    label={p.name}
                     checked={checked}
-                    disabled={disabled}
                     onChange={() => toggleSelect(p.id)}
-                    style={{ cursor: "pointer" }}
-                    data-testid={`comparison-checkbox-${p.id}`}
+                    disabled={disabled}
+                    dataTestId={`comparison-checkbox-${p.id}`}
                   />
-                  {p.name}
-                </label>
+                </div>
               );
             })}
           </div>
@@ -314,100 +310,134 @@ export function Comparison() {
             )}
           </section>
 
-          {/* Comparison Table */}
-          <section className="card card-pad" style={{ overflowX: "auto" }}>
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Key Metrics Comparison</h2>
-            <Table>
-              <thead>
-                <tr>
-                  <th>Metric</th>
-                  {selectedPilots.map(p => (
-                    <th
-                      key={p.id}
-                      style={{
-                        color: theme.accent,
-                        whiteSpace: "normal",
-                        wordBreak: "break-word",
-                        maxWidth: 120
-                      }}
-                    >
-                      {p.name}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>Category</td>
-                  {selectedPilots.map(p => (
-                    <td key={p.id}>{p.category}</td>
-                  ))}
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>Sharpe Ratio</td>
-                  {selectedPilots.map(p => (
-                    <td key={p.id} className="num">
-                      {p.headline.sharpe == null ? "—" : fmtNum(p.headline.sharpe, 2)}
-                    </td>
-                  ))}
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>PBO</td>
-                  {selectedPilots.map(p => (
-                    <td key={p.id} className="num">
-                      {p.headline.pbo == null ? "—" : fmtNum(p.headline.pbo, 2)}
-                    </td>
-                  ))}
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>Max Drawdown</td>
-                  {selectedPilots.map(p => (
-                    <td key={p.id} className="num">
-                      {p.headline.max_drawdown == null ? "—" : fmtPct(p.headline.max_drawdown, 0, { fromFraction: true })}
-                    </td>
-                  ))}
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>DSR</td>
-                  {selectedPilots.map(p => (
-                    <td key={p.id} className="num">
-                      {p.headline.dsr == null ? "—" : fmtNum(p.headline.dsr, 3)}
-                    </td>
-                  ))}
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>AUM Proxy</td>
-                  {selectedPilots.map(p => (
-                    <td key={p.id} className="num">
-                      {p.aum_proxy == null ? "—" : fmtUsd(p.aum_proxy)}
-                    </td>
-                  ))}
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>Followers</td>
-                  {selectedPilots.map(p => (
-                    <td key={p.id} className="num">
-                      {p.followers_proxy == null ? "—" : p.followers_proxy}
-                    </td>
-                  ))}
-                </tr>
-                <tr>
-                  <td style={{ fontWeight: 700 }}>Actions</td>
-                  {selectedPilots.map(p => (
-                    <td key={p.id}>
-                      <button
-                        className="btn btn-primary"
-                        onClick={() => setFollowPilot(p)}
-                        style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
-                        data-testid={`follow-pilot-btn-${p.id}`}
-                      >
-                        Follow
-                      </button>
-                    </td>
-                  ))}
-                </tr>
-              </tbody>
-            </Table>
+          {/* Comparison Grid */}
+          <section className="card card-pad" style={{ overflowX: "auto", padding: 0 }}>
+            <div style={{ padding: "var(--s-3)" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Key Metrics Comparison</h2>
+            </div>
+            
+            {(() => {
+              const sharpes = selectedPilots.map(p => p.headline.sharpe).filter((v): v is number => v != null);
+              const maxSharpe = sharpes.length > 0 ? Math.max(...sharpes) : -Infinity;
+              
+              const pbos = selectedPilots.map(p => p.headline.pbo).filter((v): v is number => v != null);
+              const minPbo = pbos.length > 0 ? Math.min(...pbos) : Infinity;
+              
+              const dsrs = selectedPilots.map(p => p.headline.dsr).filter((v): v is number => v != null);
+              const maxDsr = dsrs.length > 0 ? Math.max(...dsrs) : -Infinity;
+
+              const dds = selectedPilots.map(p => p.headline.max_drawdown).filter((v): v is number => v != null);
+              // Max drawdown is usually a negative fraction (-0.2 for -20%), so highest (closest to 0) is best. If positive, lowest is best.
+              // Assuming it's negative fraction as usual in this app based on fmtPct defaults.
+              const bestDd = dds.length > 0 ? Math.max(...dds) : -Infinity; 
+
+              const getHeatmap = (val: number | null | undefined, best: number) => {
+                if (val == null || best === Infinity || best === -Infinity) return {};
+                if (val === best) return { backgroundColor: "rgba(16, 185, 129, 0.1)", color: theme.growth, fontWeight: 700 };
+                return {};
+              };
+
+              const cellStyle = { padding: "var(--s-2) var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, display: "flex", alignItems: "center" };
+              const headerStyle = { ...cellStyle, fontWeight: 700, backgroundColor: theme.surface2, color: theme.textSecondary, fontSize: "var(--t-caption)", whiteSpace: "normal" as const, wordBreak: "break-word" as const };
+              const stickyColStyle = { ...headerStyle, position: "sticky" as const, left: 0, zIndex: 10, borderRight: `1px solid ${theme.borderStrong}` };
+
+              return (
+                <div style={{ minWidth: 600, display: "grid", gridTemplateColumns: `140px repeat(${selectedPilots.length}, minmax(120px, 1fr))` }} role="table" aria-label="Key Metrics Comparison">
+                  {/* Headers */}
+                  <div style={{ display: "contents" }} role="row">
+                    <div role="columnheader" style={{ ...stickyColStyle, borderBottom: `1px solid ${theme.borderStrong}` }}>Metric</div>
+                    {selectedPilots.map(p => (
+                      <div role="columnheader" key={`head-${p.id}`} style={{ ...headerStyle, color: theme.accent, borderBottom: `1px solid ${theme.borderStrong}` }}>{p.name}</div>
+                    ))}
+                  </div>
+
+                  {/* Category */}
+                  <div style={{ display: "contents" }} role="row">
+                    <div role="cell" style={stickyColStyle}>Category</div>
+                    {selectedPilots.map(p => (
+                      <div role="cell" key={`cat-${p.id}`} style={cellStyle}>{p.category}</div>
+                    ))}
+                  </div>
+
+                  {/* Sharpe */}
+                  <div style={{ display: "contents" }} role="row">
+                    <div role="cell" style={stickyColStyle}>Sharpe Ratio</div>
+                    {selectedPilots.map(p => (
+                      <div role="cell" key={`shr-${p.id}`} className="num" style={{ ...cellStyle, ...getHeatmap(p.headline.sharpe, maxSharpe) }}>
+                        {p.headline.sharpe == null ? "—" : fmtNum(p.headline.sharpe, 2)}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* PBO */}
+                  <div style={{ display: "contents" }} role="row">
+                    <div role="cell" style={stickyColStyle}>PBO</div>
+                    {selectedPilots.map(p => (
+                      <div role="cell" key={`pbo-${p.id}`} className="num" style={{ ...cellStyle, ...getHeatmap(p.headline.pbo, minPbo) }}>
+                        {p.headline.pbo == null ? "—" : fmtNum(p.headline.pbo, 2)}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Max Drawdown */}
+                  <div style={{ display: "contents" }} role="row">
+                    <div role="cell" style={stickyColStyle}>Max Drawdown</div>
+                    {selectedPilots.map(p => (
+                      <div role="cell" key={`mdd-${p.id}`} className="num" style={{ ...cellStyle, ...getHeatmap(p.headline.max_drawdown, bestDd) }}>
+                        {p.headline.max_drawdown == null ? "—" : fmtPct(p.headline.max_drawdown, 0, { fromFraction: true })}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* DSR */}
+                  <div style={{ display: "contents" }} role="row">
+                    <div role="cell" style={stickyColStyle}>DSR</div>
+                    {selectedPilots.map(p => (
+                      <div role="cell" key={`dsr-${p.id}`} className="num" style={{ ...cellStyle, ...getHeatmap(p.headline.dsr, maxDsr) }}>
+                        {p.headline.dsr == null ? "—" : fmtNum(p.headline.dsr, 3)}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* AUM Proxy */}
+                  <div style={{ display: "contents" }} role="row">
+                    <div role="cell" style={stickyColStyle}>AUM Proxy</div>
+                    {selectedPilots.map(p => (
+                      <div role="cell" key={`aum-${p.id}`} className="num" style={cellStyle}>
+                        {p.aum_proxy == null ? "—" : fmtUsd(p.aum_proxy)}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Followers */}
+                  <div style={{ display: "contents" }} role="row">
+                    <div role="cell" style={{ ...stickyColStyle, borderBottom: "none" }}>Followers</div>
+                    {selectedPilots.map(p => (
+                      <div role="cell" key={`fol-${p.id}`} className="num" style={{ ...cellStyle, borderBottom: "none" }}>
+                        {p.followers_proxy == null ? "—" : p.followers_proxy}
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Actions */}
+                  <div style={{ display: "contents" }} role="row">
+                    <div role="cell" style={{ ...stickyColStyle, borderBottom: "none", borderTop: `1px solid ${theme.borderStrong}` }}>Actions</div>
+                    {selectedPilots.map(p => (
+                      <div role="cell" key={`act-${p.id}`} style={{ ...cellStyle, borderBottom: "none", borderTop: `1px solid ${theme.borderStrong}` }}>
+                        <button
+                          className="btn btn-primary"
+                          onClick={() => setFollowPilot(p)}
+                          style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
+                          data-testid={`follow-pilot-btn-${p.id}`}
+                        >
+                          Follow
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </section>
 
           {/* Recent pilot alerts */}
