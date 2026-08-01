@@ -67,10 +67,12 @@ from execution.broker_base import (
     OrderStatus,
 )
 from execution.kill_switch import GlobalKillSwitch, KillSwitchActiveError
+from execution.leaky_bucket_queue import LeakyBucketQueue
 from execution.risk_gate import PreTradeRiskGate, RiskContext
 from settings import settings
 
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Deterministic order-id generation
@@ -182,6 +184,13 @@ class OrderManager:
         # Set of client_order_ids already submitted this process lifetime.
         # Prevents a double-call bug even when the broker's dedup window expires.
         self._submitted: set[str] = set()
+        # Rate-limiting queue — sheds low-priority (BUY) requests under load;
+        # high-priority (SELL / stop-loss) are allowed to wait for a token.
+        self._queue: LeakyBucketQueue = LeakyBucketQueue(
+            capacity=200,      # Alpaca ~200 req/min on the free IEX feed
+            refill_rate=3.33,  # 200 tokens / 60 seconds
+        )
+
 
     # ------------------------------------------------------------------
     # Public API
@@ -257,6 +266,25 @@ class OrderManager:
                     status=OrderStatus.ERROR,
                     error_message=f"PRE-TRADE GATE [{failing.check_name}]: {failing.reason}",
                 )
+
+        # 4. Rate-limit gate via LeakyBucketQueue.
+        # SELL / STOP orders (side contains 'sell') are high-priority (1) and
+        # will spin-wait for the next available token. BUY orders are
+        # low-priority (0) and are shed (dropped) when utilization > 80 %.
+        order_side = intent.side.value.lower() if hasattr(intent.side, "value") else str(intent.side).lower()
+        is_sell = "sell" in order_side
+        priority = 1 if is_sell else 0
+        if not self._queue.wait_or_shed(priority=priority):
+            logger.warning(
+                "LeakyBucketQueue: shedding low-priority %s order for %s (API rate limit > 80%%).",
+                order_side, intent.symbol,
+            )
+            return OrderResult(
+                client_order_id=coid,
+                broker_order_id=None,
+                status=OrderStatus.ERROR,
+                error_message="Rate-limit load-shed: API utilization above threshold. Retry later.",
+            )
 
         result = await self._submit_with_retry(intent)
 

@@ -2961,3 +2961,50 @@ export interface DeadLetterRetryResult {
   applies: "immediately";
   note: string;
 }
+
+export interface MacroIndicatorItem {
+  subject: string;
+  value: number;
+  trend: "up" | "down" | "flat";
+}
+
+export interface MacroSentimentResponse {
+  macro_data: MacroIndicatorItem[];
+}
+
+export interface OrderBookLevel {
+  price: number;
+  size: number;
+  type: "bid" | "ask";
+}
+
+export interface OrderBookLadderResponse {
+  symbol: string;
+  current_price: number;
+  bids: OrderBookLevel[];
+  asks: OrderBookLevel[];
+}
+
+export interface ModelComparisonRow {
+  name: string;
+  [modelName: string]: string | number;
+}
+
+export interface ModelComparisonResponse {
+  data: ModelComparisonRow[];
+}
+
+export interface IntradayThetaPoint {
+  time: string;
+  hour: number;
+  theta: number;
+  gamma: number;
+}
+
+export interface OptionsAnalyticsSummaryResponse {
+  symbol: string;
+  net_dealer_premium: number;
+  regime: string;
+  intraday_series: IntradayThetaPoint[];
+}
+

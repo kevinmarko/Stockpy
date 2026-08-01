@@ -49,6 +49,8 @@ import { api } from "./api/client";
 import type { LlmStatus } from "./api/types";
 import { Modal } from "./components/Modal";
 import { theme } from "./theme";
+import AIChatInterface from "./components/AIChatInterface";
+import { MessageSquare } from "lucide-react";
 
 /**
  * Which nav group a screen belongs to. Replaces the old MOBILE_PRIMARY_COUNT
@@ -241,6 +243,36 @@ function SettingsButton() {
           }}
         />
       )}
+    </button>
+  );
+}
+
+/** Fixed chat button to toggle the global AI Chat Interface. */
+function ChatButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      className="btn"
+      onClick={onClick}
+      aria-label="Toggle AI Chat"
+      data-testid="chat-button"
+      style={{
+        position: "fixed",
+        right: 64, // Positioned to the left of SettingsButton
+        bottom: 76,
+        zIndex: 40,
+        width: 40,
+        height: 40,
+        borderRadius: "50%",
+        padding: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: theme.surface2,
+        border: `1px solid ${theme.borderStrong}`,
+        color: theme.textPrimary,
+      }}
+    >
+      <MessageSquare size={18} />
     </button>
   );
 }
@@ -455,6 +487,7 @@ export default function App() {
   // TokenGate reloads the page after storing a token (see its own comment),
   // so this only ever needs to be read once per mount -- no setter to wire.
   const [tokenGated] = useState(() => needsTokenEntry());
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   if (tokenGated) {
     return <TokenGate />;
@@ -512,7 +545,9 @@ export default function App() {
         </Routes>
       </div>
       <BottomNav />
+      <ChatButton onClick={() => setIsChatOpen(!isChatOpen)} />
       <SettingsButton />
+      <AIChatInterface isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
     </div>
   );
 }

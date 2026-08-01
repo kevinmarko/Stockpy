@@ -5941,9 +5941,60 @@ function notFoundSymbol(sym: string) {
   return new ApiError(`No such symbol '${sym}' in the latest snapshot.`, 404);
 }
 
+  getMacroSentiment: async () => ({
+    macro_data: [
+      { subject: "Interest Rates", value: 80, trend: "up" as const },
+      { subject: "Inflation (CPI)", value: 65, trend: "flat" as const },
+      { subject: "Employment", value: 40, trend: "down" as const },
+      { subject: "Consumer Sentiment", value: 55, trend: "flat" as const },
+      { subject: "Manufacturing (PMI)", value: 35, trend: "down" as const },
+      { subject: "Housing Starts", value: 70, trend: "up" as const },
+    ]
+  }),
+  getOrderBookLadder: async (symbol: string) => {
+    const sym = symbol.upper();
+    const current_price = sym === "SPY" ? 450.00 : 150.00;
+    return {
+      symbol: sym,
+      current_price,
+      bids: [
+        { price: current_price - 0.05, size: 1200, type: "bid" as const },
+        { price: current_price - 0.10, size: 850, type: "bid" as const },
+        { price: current_price - 0.15, size: 2100, type: "bid" as const },
+      ],
+      asks: [
+        { price: current_price + 0.05, size: 900, type: "ask" as const },
+        { price: current_price + 0.10, size: 1500, type: "ask" as const },
+        { price: current_price + 0.15, size: 600, type: "ask" as const },
+      ]
+    };
+  },
+  getModelComparison: async () => ({
+    data: [
+      { name: "Jan", "SF-GARCH-LSTM": 2.1, "Bond-BERT": 1.8, "Benchmark (SPY)": 1.5 },
+      { name: "Feb", "SF-GARCH-LSTM": 4.5, "Bond-BERT": 3.2, "Benchmark (SPY)": 3.0 },
+      { name: "Mar", "SF-GARCH-LSTM": 3.8, "Bond-BERT": 4.0, "Benchmark (SPY)": 2.8 },
+      { name: "Apr", "SF-GARCH-LSTM": 6.2, "Bond-BERT": 5.5, "Benchmark (SPY)": 4.2 },
+      { name: "May", "SF-GARCH-LSTM": 8.0, "Bond-BERT": 6.8, "Benchmark (SPY)": 5.5 },
+      { name: "Jun", "SF-GARCH-LSTM": 10.5, "Bond-BERT": 8.2, "Benchmark (SPY)": 6.1 },
+    ]
+  }),
+  getOptionsAnalytics: async (symbol: string) => ({
+    symbol: symbol.toUpperCase(),
+    net_dealer_premium: -45.2,
+    regime: "Negative Gamma (Volatile)",
+    intraday_series: [
+      { time: "9:00 AM", hour: 9, theta: 0.0, gamma: 3.68 },
+      { time: "12:00 PM", hour: 12, theta: 12.5, gamma: 10.0 },
+      { time: "4:00 PM", hour: 16, theta: 100.0, gamma: 73.89 },
+    ]
+  }),
+};
+
 export const MOCK_META = {
   mode: MOCK_MODE,
   notionalCap: NOTIONAL_CAP,
   minAmount: MIN_AMOUNT,
   sectors: SECTORS,
 };
+

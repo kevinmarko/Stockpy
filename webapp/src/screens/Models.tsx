@@ -8,6 +8,8 @@ import { TabGuide } from "../components/TabGuide";
 import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum } from "../format";
 import { theme } from "../theme";
+import SignalDriverWeights from "../components/SignalDriverWeights";
+import ModelComparisonChart from "../components/ModelComparisonChart";
 
 /**
  * `thresholds` is live from `GET /thresholds` (`dsr_min`/`pbo_max`, mirroring
@@ -116,6 +118,15 @@ export function Models() {
       </p>
 
       <TabGuide tabKey="models" />
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 mt-4">
+        <div className="h-[400px]">
+          <ModelComparisonChart />
+        </div>
+        <div className="h-[400px]">
+          <SignalDriverWeights />
+        </div>
+      </div>
 
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}

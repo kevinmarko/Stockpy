@@ -31,8 +31,10 @@ import {
   Tooltip as ChartTooltip,
   ResponsiveContainer,
   ReferenceLine,
+  ReferenceLine,
   ReferenceArea,
 } from "recharts";
+import OptionsAnalyticsDashboard from "../components/OptionsAnalyticsDashboard";
 
 
 function isCredit(d: OptionsDirective): boolean {
@@ -1023,6 +1025,10 @@ export function OptionsMatrix() {
       </button>
 
       {showRecompute && <OptionsRecomputeSection />}
+
+      <div className="mt-8 mb-4">
+        <OptionsAnalyticsDashboard />
+      </div>
     </div>
   );
 }

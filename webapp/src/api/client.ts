@@ -625,10 +625,13 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify(req),
     }),
-  // ---- Universe sync write (data base, :8603) — webapp parity gap G8 ----
-  postDataSync: () => http<DataSyncResult>("/data/sync", { method: "POST" }),
   // ---- Market Data provider status (data base, :8603) — webapp parity gap G9 ----
   getProviderStatus: () => http<ProviderStatus>("/data/provider-status"),
+  // ---- Phase 6 additions ----
+  getMacroSentiment: () => http<any>("/data/macro/sentiment"),
+  getOrderBookLadder: (symbol: string) => http<any>(`/data/ladder/${encodeURIComponent(symbol)}`),
+  getModelComparison: () => http<any>("/metrics/models/comparison"),
+  getOptionsAnalytics: (symbol: string) => http<any>(`/metrics/options/analytics/${encodeURIComponent(symbol)}`),
 };
 
 /**

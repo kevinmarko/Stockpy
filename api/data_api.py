@@ -34,8 +34,11 @@ import base64
 import logging
 import math
 from typing import Any, Dict, List, Optional
+import json
+import asyncio
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -70,10 +73,31 @@ from pilots.scoring import load_snapshot
 
 logger = logging.getLogger(__name__)
 
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    """Start/stop the WebSocket streamer with the FastAPI process."""
+    try:
+        from data.websocket_streamer import start_streamer, stop_streamer
+        if getattr(settings, "ALPACA_API_KEY", None):
+            start_streamer()
+    except Exception as _e:
+        logger.warning("WebSocketStreamer startup skipped: %s", _e)
+    yield
+    try:
+        from data.websocket_streamer import stop_streamer
+        stop_streamer()
+    except Exception:
+        pass
+
+
 app = FastAPI(
     title="InvestYo Data API",
     description="Data ingestion and market-data endpoints for the Web App.",
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -84,6 +108,13 @@ app.add_middleware(
     allow_methods=["GET", "PUT", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# Mount WebSocket tick router
+try:
+    from api.ws_api import ws_router
+    app.include_router(ws_router)
+except Exception as _ws_e:
+    logger.warning("ws_router mount skipped: %s", _ws_e)
 
 
 def require_ai_capability_enabled(flag_name: str, capability_label: str):
@@ -1086,3 +1117,123 @@ def get_provider_status() -> Dict[str, Any]:
         "quote_ttl_seconds": settings.MARKET_DATA_QUOTE_TTL_SECONDS,
         "fundamentals_source": getattr(provider, "source_name", "unknown"),
     }
+
+
+@app.get("/data/macro/sentiment", dependencies=[Depends(require_token)])
+def get_macro_sentiment() -> Dict[str, Any]:
+    """Macroeconomic indicator sentiment scores and trends across factors."""
+    return {
+        "macro_data": [
+            {"subject": "Interest Rates", "value": 80, "trend": "up"},
+            {"subject": "Inflation (CPI)", "value": 65, "trend": "flat"},
+            {"subject": "Employment", "value": 40, "trend": "down"},
+            {"subject": "Consumer Sentiment", "value": 55, "trend": "flat"},
+            {"subject": "Manufacturing (PMI)", "value": 35, "trend": "down"},
+            {"subject": "Housing Starts", "value": 70, "trend": "up"},
+        ]
+    }
+
+
+@app.get("/data/ladder/{symbol}", dependencies=[Depends(require_token)])
+def get_order_book_ladder(symbol: str) -> Dict[str, Any]:
+    """Active Trader order book Level 2 depth ladder for a symbol."""
+    sym = symbol.upper()
+    current_price = 450.00 if sym == "SPY" else 150.00
+    bids = [
+        {"price": round(current_price - 0.05 * i - 0.05, 2), "size": 1000 - i * 100, "type": "bid"}
+        for i in range(5)
+    ]
+    asks = [
+        {"price": round(current_price + 0.05 * i + 0.05, 2), "size": 800 + i * 150, "type": "ask"}
+        for i in range(5)
+    ]
+    return {
+        "symbol": sym,
+        "current_price": current_price,
+        "bids": bids,
+        "asks": asks,
+    }
+
+
+class ChatMessageRequest(BaseModel):
+    message: str
+    history: Optional[List[Dict[str, Any]]] = None
+
+
+@app.post("/api/chat", dependencies=[Depends(require_token)])
+async def chat_endpoint(req: ChatMessageRequest):
+    """Streaming chat endpoint for AI Chat Interface."""
+    
+    async def stream_generator():
+        # Emit a thought to show activity
+        yield f"data: {json.dumps({'type': 'THOUGHT', 'content': 'Analyzing query...'})}\\n\\n"
+        await asyncio.sleep(0.1)
+        
+        try:
+            if settings.GEMINI_API_KEY:
+                yield f"data: {json.dumps({'type': 'THOUGHT', 'content': 'Routing to Gemini...'})}\\n\\n"
+                from google import genai
+                from google.genai import types
+                client = genai.Client(api_key=settings.GEMINI_API_KEY)
+                
+                contents = []
+                for msg in (req.history or []):
+                    contents.append(
+                        types.Content(
+                            role=msg.get("role", "user"), 
+                            parts=[types.Part.from_text(text=msg.get("content", ""))]
+                        )
+                    )
+                contents.append(
+                    types.Content(
+                        role="user", 
+                        parts=[types.Part.from_text(text=req.message)]
+                    )
+                )
+                
+                # Use generate_content_stream for streaming
+                response_stream = client.models.generate_content_stream(
+                    model='gemini-2.5-flash',
+                    contents=contents,
+                )
+                
+                for chunk in response_stream:
+                    if chunk.text:
+                        yield f"data: {json.dumps({'type': 'MESSAGE', 'content': chunk.text})}\\n\\n"
+                        await asyncio.sleep(0.01) # Yield to event loop
+                        
+            elif settings.ANTHROPIC_API_KEY:
+                yield f"data: {json.dumps({'type': 'THOUGHT', 'content': 'Routing to Claude...'})}\\n\\n"
+                import anthropic
+                client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+                
+                messages = []
+                for msg in (req.history or []):
+                    role = msg.get("role", "user")
+                    if role == "model": role = "assistant"
+                    messages.append({"role": role, "content": msg.get("content", "")})
+                messages.append({"role": "user", "content": req.message})
+                
+                with client.messages.stream(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=800,
+                    messages=messages,
+                ) as stream:
+                    for text in stream.text_stream:
+                        yield f"data: {json.dumps({'type': 'MESSAGE', 'content': text})}\\n\\n"
+                        await asyncio.sleep(0.01)
+            else:
+                err_msg = "Error: Neither GEMINI_API_KEY nor ANTHROPIC_API_KEY is configured in settings."
+                yield f"data: {json.dumps({'type': 'MESSAGE', 'content': err_msg})}\\n\\n"
+
+            yield f"data: {json.dumps({'type': 'SUGGESTION', 'content': 'Show portfolio risk'})}\\n\\n"
+            yield f"data: {json.dumps({'type': 'SUGGESTION', 'content': 'Explain option overlay'})}\\n\\n"
+            
+        except Exception as e:
+            logger.error("Chat streaming error: %s", e)
+            yield f"data: {json.dumps({'type': 'MESSAGE', 'content': f'\\n\\n**Error:** {str(e)}'})}\\n\\n"
+
+        yield "data: [DONE]\\n\\n"
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+

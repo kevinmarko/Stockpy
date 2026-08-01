@@ -46,6 +46,15 @@ import pandas as pd
 
 from settings import settings
 
+# WebSocketStreamer integration — imported with a guard so the module
+# degrades gracefully when websockets is not installed.
+try:
+    from data.websocket_streamer import _STREAMER as _WS_STREAMER
+    _WS_AVAILABLE = True
+except Exception:
+    _WS_STREAMER = None  # type: ignore[assignment]
+    _WS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -226,7 +235,41 @@ class AlpacaProvider(MarketDataProvider):
             ) from exc
 
     def get_latest_quote(self, symbol: str) -> Quote:
-        """Fetch the best bid/ask via Alpaca's IEX real-time feed."""
+        """Fetch the best bid/ask via Alpaca's IEX real-time feed.
+
+        WS-first: checks the in-process ``WebSocketStreamer`` cache (TTL 2 s)
+        before making a REST round-trip. Falls back transparently to REST on
+        cache miss, keeping latency low for actively-streamed symbols without
+        any code changes in callers.
+        """
+        sym_upper = symbol.upper()
+
+        # --- WS fast path ---------------------------------------------------
+        if _WS_AVAILABLE and _WS_STREAMER is not None:
+            # Subscribe the symbol on first access so the stream picks it up
+            if sym_upper not in _WS_STREAMER._subscribed:
+                _WS_STREAMER.subscribe([sym_upper])
+
+            ws_tick = _WS_STREAMER.get_quote(sym_upper)
+            if ws_tick is not None:
+                bid = float(ws_tick.get("bp", float("nan")) or float("nan"))
+                ask = float(ws_tick.get("ap", float("nan")) or float("nan"))
+                price = (
+                    (bid + ask) / 2
+                    if (not _isnan(bid) and not _isnan(ask))
+                    else (bid if not _isnan(bid) else ask)
+                )
+                ts = datetime.now(timezone.utc)
+                return Quote(
+                    symbol=sym_upper,
+                    price=price,
+                    bid=bid,
+                    ask=ask,
+                    timestamp=ts,
+                    is_stale=False,
+                    source="alpaca-ws",
+                )
+        # --- REST fallback --------------------------------------------------
         try:
             from alpaca.data.requests import StockLatestQuoteRequest  # type: ignore
 
@@ -247,7 +290,7 @@ class AlpacaProvider(MarketDataProvider):
             price = (bid + ask) / 2 if (not _isnan(bid) and not _isnan(ask)) else (bid if not _isnan(bid) else ask)
 
             return Quote(
-                symbol=symbol.upper(),
+                symbol=sym_upper,
                 price=price,
                 bid=bid,
                 ask=ask,
