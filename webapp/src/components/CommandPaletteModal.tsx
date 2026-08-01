@@ -1,313 +1,395 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import React, { useState, useEffect, useMemo } from "react";
+import { useNavigate } from "react-router";
 import { Modal } from "./Modal";
-import { CopyCommandBlock } from "./CopyCommandBlock";
+import { parseCommandLine } from "../commandParse";
 import type { CommandSpec } from "../api/types";
-import {
-  parseCommandLine,
-  getGhostText,
-  tokenizeForHighlighting,
-  getCommandCategory,
-  CATEGORIES,
-  type Suggestion,
-  type HighlightToken,
-} from "../commandParse";
-import { theme } from "../theme";
-import { Button } from "./ui";
 
-interface CommandPaletteModalProps {
-  isOpen: boolean;
+export interface CommandPaletteModalProps {
+  isOpen?: boolean;
   onClose: () => void;
-  commands: CommandSpec[];
+  commands?: CommandSpec[];
+  onInspectTicker?: (symbol: string) => void;
+  onPreviewReport?: (reportTitle: string) => void;
+  onRunCommand?: (command: string, spec?: CommandSpec, args?: string[]) => void;
   onSelectCommandForBuilder?: (spec: CommandSpec) => void;
-  onRunCommand?: (composed: string, spec: CommandSpec, argTokens: string[]) => void;
 }
 
+interface CommandItem {
+  id: string;
+  category: "⚡ Commands" | "📈 Tickers" | "📑 Reports" | "🧭 Navigation";
+  label: string;
+  sublabel?: string;
+  action: () => void;
+  spec?: CommandSpec;
+}
+
+const POPULAR_TICKERS = ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "SPY", "QQQ"];
+const SAMPLE_REPORTS = [
+  "Daily Briefing 2026-08-01",
+  "Gravity Verification Report",
+  "Sector Rotation Brief",
+  "HMM Regime Shift Audit",
+];
+
+const NAV_TARGETS = [
+  { label: "Dashboard", path: "/" },
+  { label: "Portfolio", path: "/portfolio" },
+  { label: "Activity Feed", path: "/activity" },
+  { label: "Agentic Trading", path: "/agentic" },
+  { label: "Commands", path: "/commands" },
+  { label: "Options Matrix", path: "/options" },
+  { label: "Forecast Viewer", path: "/forecast" },
+  { label: "Signal Breakdown", path: "/signals" },
+  { label: "Observability / Mission Control", path: "/observability" },
+  { label: "Console / Terminal", path: "/console" },
+  { label: "Settings", path: "/settings" },
+];
+
 export function CommandPaletteModal({
-  isOpen,
+  isOpen = true,
   onClose,
-  commands,
-  onSelectCommandForBuilder,
+  commands = [],
+  onInspectTicker,
+  onPreviewReport,
   onRunCommand,
+  onSelectCommandForBuilder,
 }: CommandPaletteModalProps) {
-  const [input, setInput] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  let nav: (path: string) => void;
+  try {
+    nav = useNavigate();
+  } catch {
+    nav = () => {};
+  }
+  const [query, setQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
   useEffect(() => {
     if (isOpen) {
-      setInput("");
-      setActiveIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setQuery("");
     }
   }, [isOpen]);
 
-  const parsed = useMemo(() => parseCommandLine(input, commands), [input, commands]);
-  const suggestions = parsed.suggestions;
-  const ghostText = useMemo(() => getGhostText(input, suggestions), [input, suggestions]);
-  const highlightedTokens = useMemo(() => tokenizeForHighlighting(input, commands), [input, commands]);
+  const parsed = useMemo(() => {
+    return parseCommandLine(query, commands);
+  }, [query, commands]);
+
+  const resolvedSpec = parsed.active;
+  const hasErrorHint = parsed.hints.some((h) => h.level === "error");
+  const isRunnable = Boolean(parsed.composed) && !hasErrorHint;
+  const hints = parsed.hints;
+
+  const items = useMemo(() => {
+    const list: CommandItem[] = [];
+    const q = query.trim().toLowerCase();
+
+    // 1. Commands from manifest
+    if (commands && commands.length > 0) {
+      commands.forEach((c) => {
+        if (!q || c.name.toLowerCase().includes(q) || (c.description && c.description.toLowerCase().includes(q))) {
+          list.push({
+            id: `cmd-spec-${c.name}`,
+            category: "⚡ Commands",
+            label: c.name,
+            sublabel: c.description ?? undefined,
+            spec: c,
+            action: () => {
+              setQuery(c.name + " ");
+            },
+          });
+        }
+      });
+    }
+
+    // Default CLI presets
+    const cliPresets = [
+      { cmd: "python3 main.py", desc: "Run one advisory cycle" },
+      { cmd: "python3 main.py --interval 60", desc: "Run interval loop (60s)" },
+      { cmd: "pytest", desc: "Run test suite" },
+      { cmd: "python scripts/preflight_check.py", desc: "Pre-live readiness check" },
+    ];
+    cliPresets.forEach((c) => {
+      if (!q || c.cmd.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q)) {
+        list.push({
+          id: `cmd-${c.cmd}`,
+          category: "⚡ Commands",
+          label: c.cmd,
+          sublabel: c.desc,
+          action: () => {
+            if (onRunCommand) {
+              onRunCommand(c.cmd);
+            } else {
+              nav(`/commands?cmd=${encodeURIComponent(c.cmd)}`);
+            }
+            onClose();
+          },
+        });
+      }
+    });
+
+    // 2. Tickers
+    POPULAR_TICKERS.forEach((sym) => {
+      if (!q || sym.toLowerCase().includes(q)) {
+        list.push({
+          id: `ticker-${sym}`,
+          category: "📈 Tickers",
+          label: sym,
+          sublabel: "Inspect ticker details, signals & risk blocks",
+          action: () => {
+            if (onInspectTicker) {
+              onInspectTicker(sym);
+            } else {
+              nav(`/symbol/${sym}`);
+            }
+            onClose();
+          },
+        });
+      }
+    });
+
+    // 3. Reports
+    SAMPLE_REPORTS.forEach((rep) => {
+      if (!q || rep.toLowerCase().includes(q)) {
+        list.push({
+          id: `rep-${rep}`,
+          category: "📑 Reports",
+          label: rep,
+          sublabel: "Preview HTML / Markdown briefing report",
+          action: () => {
+            if (onPreviewReport) {
+              onPreviewReport(rep);
+            } else {
+              nav(`/reports`);
+            }
+            onClose();
+          },
+        });
+      }
+    });
+
+    // 4. Navigation
+    NAV_TARGETS.forEach((navItem) => {
+      if (!q || navItem.label.toLowerCase().includes(q)) {
+        list.push({
+          id: `nav-${navItem.path}`,
+          category: "🧭 Navigation",
+          label: navItem.label,
+          sublabel: `Navigate to ${navItem.path}`,
+          action: () => {
+            nav(navItem.path);
+            onClose();
+          },
+        });
+      }
+    });
+
+    return list;
+  }, [query, commands, nav, onClose, onInspectTicker, onPreviewReport, onRunCommand]);
+
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [query]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedIndex((prev) => (prev + 1) % Math.max(1, items.length));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedIndex((prev) => (prev - 1 + items.length) % Math.max(1, items.length));
+    } else if (e.key === "Enter" && items[selectedIndex]) {
+      e.preventDefault();
+      items[selectedIndex].action();
+    }
+  };
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, { item: CommandItem; globalIdx: number }[]>();
+    items.forEach((item, idx) => {
+      if (!map.has(item.category)) {
+        map.set(item.category, []);
+      }
+      map.get(item.category)!.push({ item, globalIdx: idx });
+    });
+    return map;
+  }, [items]);
+
+  const handleCategoryClick = (categoryName: string) => {
+    if (categoryName === "Testing & Validation") {
+      const match = commands.find((c) => c.name.includes("harness") || c.name.includes("preflight") || c.name.includes("pytest"));
+      if (match) {
+        setQuery(match.name + " ");
+      }
+    } else if (categoryName === "Pipeline & Core") {
+      const match = commands.find((c) => c.name.includes("main") || c.name.includes("orchestrator"));
+      if (match) {
+        setQuery(match.name + " ");
+      }
+    }
+  };
 
   if (!isOpen) return null;
 
-  const accept = (s: Suggestion) => {
-    const tokens = input.split(/\s+/).filter(Boolean);
-    const typing = input.length > 0 && !/\s$/.test(input);
-    const completingIndex = typing ? tokens.length - 1 : tokens.length;
-    const prefix = tokens.slice(0, completingIndex);
-    setInput([...prefix, s.value].join(" ") + " ");
-    setActiveIndex(0);
-    inputRef.current?.focus();
-  };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActiveIndex((i) => (suggestions.length ? (i + 1) % suggestions.length : 0));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveIndex((i) => (suggestions.length ? (i - 1 + suggestions.length) % suggestions.length : 0));
-    } else if ((e.key === "Tab" || e.key === "ArrowRight") && ghostText) {
-      e.preventDefault();
-      if (suggestions.length) {
-        accept(suggestions[Math.min(activeIndex, suggestions.length - 1)]);
-      }
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (suggestions.length && input.trim() !== "" && !parsed.command) {
-        accept(suggestions[Math.min(activeIndex, suggestions.length - 1)]);
-      } else if (parsed.composed && parsed.command) {
-        if (onRunCommand) {
-          onRunCommand(parsed.composed, parsed.command, parsed.argTokens);
-          onClose();
-        }
-      }
-    }
-    // Escape is intentionally NOT handled here -- Modal already closes on
-    // Escape (see Modal.tsx), and this handler doesn't stopPropagation, so
-    // duplicating it here just calls onClose() a second time for one press.
-  };
-
   return (
-    <Modal ariaLabel="Command Palette" onClose={onClose}>
-      <div style={{ minWidth: 600, maxWidth: 760 }} data-testid="command-palette-modal">
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--s-3)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
-            <span style={{ fontSize: "1.2rem" }}>⚡</span>
-            <span style={{ fontWeight: 700, fontSize: "var(--t-subhead)", color: theme.textPrimary }}>
-              Command Palette
-            </span>
-          </div>
-          <span
-            style={{
-              background: theme.surface2,
-              padding: "2px 8px",
-              borderRadius: "var(--r-sm)",
-              fontSize: "var(--t-micro)",
-              color: theme.textMuted,
-              fontFamily: "var(--font-mono, ui-monospace, monospace)",
-            }}
-          >
-            ESC to close
-          </span>
-        </div>
-
-        {/* Syntax-highlighted Overlay Input Container */}
-        <div style={{ position: "relative", marginBottom: "var(--s-3)" }}>
-          {/* Formatted background preview layer */}
-          <div
-            aria-hidden
-            style={{
-              position: "absolute",
-              inset: 0,
-              padding: "var(--s-2-5) var(--s-3)",
-              fontFamily: "var(--font-mono, ui-monospace, monospace)",
-              fontSize: "var(--t-body)",
-              lineHeight: "1.5",
-              pointerEvents: "none",
-              whiteSpace: "pre-wrap",
-              color: "transparent",
-              zIndex: 1,
-            }}
-          >
-            {highlightedTokens.map((tok, idx) => (
-              <span key={idx} style={{ color: getTokenColor(tok.type) }}>
-                {tok.text}
-              </span>
-            ))}
-            {ghostText && <span style={{ color: theme.textMuted, opacity: 0.5 }}>{ghostText}</span>}
-          </div>
-
-          {/* Actual Input Field */}
+    <Modal ariaLabel="Universal Omni-Search" onClose={onClose}>
+      <div onKeyDown={handleKeyDown} data-testid="command-palette-modal" style={{ width: "min(90vw, 680px)" }}>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginBottom: "var(--s-3)" }}>
           <input
-            ref={inputRef}
-            className="input"
+            autoFocus
+            type="text"
             data-testid="command-palette-input"
-            placeholder="Search commands or type flags (e.g. validation.harness --strategy garch_vol_target)"
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              setActiveIndex(0);
-            }}
-            onKeyDown={onKeyDown}
+            placeholder="Search commands, tickers (NVDA), reports, screens..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
             style={{
-              fontFamily: "var(--font-mono, ui-monospace, monospace)",
-              fontSize: "var(--t-body)",
-              padding: "var(--s-2-5) var(--s-3)",
-              background: "transparent",
-              color: input ? "transparent" : theme.textPrimary,
-              caretColor: theme.textPrimary,
-              position: "relative",
-              zIndex: 2,
+              flex: 1,
+              background: "var(--surface)",
+              color: "var(--text-primary)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--r-sm)",
+              padding: "var(--s-3) var(--s-4)",
+              fontSize: "var(--t-input)",
+              outline: "none",
+              boxSizing: "border-box",
             }}
           />
         </div>
 
-        {/* Composed CLI Preview Bar if resolved */}
-        {parsed.composed && (
+        {/* Validation hints when resolving commands */}
+        {hints.length > 0 && (
           <div style={{ marginBottom: "var(--s-3)" }}>
-            <CopyCommandBlock command={parsed.composed} label="Compiled Execution Target" />
-            {parsed.command && (
-              <div style={{ marginTop: "var(--s-2)", display: "flex", justifyContent: "flex-end", gap: "var(--s-2)" }}>
-                {onSelectCommandForBuilder && (
-                  <Button
-                    variant="neutral"
-                    onClick={() => {
-                      if (parsed.command) onSelectCommandForBuilder(parsed.command);
-                      onClose();
-                    }}
-                  >
-                    Configure in Form Builder 🛠️
-                  </Button>
-                )}
-                {onRunCommand && (
-                  <Button
-                    variant="primary"
-                    disabled={parsed.hints.some((h) => h.level === "error")}
-                    onClick={() => {
-                      if (parsed.command && parsed.composed) {
-                        onRunCommand(parsed.composed, parsed.command, parsed.argTokens);
-                        onClose();
-                      }
-                    }}
-                  >
-                    Run Command 🚀
-                  </Button>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Validation Errors/Warnings */}
-        {parsed.hints.length > 0 && (
-          <div style={{ marginBottom: "var(--s-3)" }}>
-            {parsed.hints.map((h, i) => (
-              <div
-                key={i}
-                style={{
-                  fontSize: "var(--t-caption)",
-                  color: h.level === "error" ? theme.decline : theme.caution,
-                  marginBottom: 2,
-                }}
-              >
-                {h.level === "error" ? "✗" : "!"} {h.message}
+            {hints.map((h, i) => (
+              <div key={i} style={{ fontSize: "var(--t-caption)", color: "var(--decline)", marginBottom: "4px" }}>
+                ⚠️ {h.message}
               </div>
             ))}
           </div>
         )}
 
-        {/* Suggestions List */}
-        {suggestions.length > 0 && (
-          <div style={{ maxHeight: 260, overflowY: "auto", borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-2)" }}>
-            <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginBottom: "var(--s-1)", textTransform: "uppercase" }}>
-              Suggestions ({suggestions.length})
+        {/* Category browse when input is empty */}
+        {!query && (
+          <div style={{ marginBottom: "var(--s-4)" }}>
+            <div style={{ fontSize: "var(--t-micro)", fontWeight: 700, color: "var(--text-muted)", marginBottom: "var(--s-2)" }}>
+              Browse by Category
             </div>
-            {suggestions.map((s, i) => {
-              const isSelected = i === Math.min(activeIndex, suggestions.length - 1);
-              return (
-                <div
-                  key={`${s.kind}-${s.value}-${i}`}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    accept(s);
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: "var(--s-2) var(--s-2-5)",
-                    borderRadius: "var(--r-sm)",
-                    background: isSelected ? theme.surface3 : "transparent",
-                    cursor: "pointer",
-                    marginBottom: 2,
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        padding: "1px 6px",
-                        borderRadius: 4,
-                        fontWeight: 600,
-                        background: getKindBg(s.kind),
-                        color: getKindColor(s.kind),
-                      }}
-                    >
-                      {s.kind}
-                    </span>
-                    <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 600, color: theme.textPrimary }}>
-                      {s.label}
-                    </span>
-                  </div>
-                  {s.description && (
-                    <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {s.description}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+            <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
+              <button className="btn" onClick={() => handleCategoryClick("Pipeline & Core")}>
+                Pipeline & Core
+              </button>
+              <button className="btn" onClick={() => handleCategoryClick("Testing & Validation")}>
+                Testing & Validation
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Category Discovery List when search input is empty */}
-        {input.trim() === "" && (
-          <div style={{ marginTop: "var(--s-2)", borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-3)" }}>
-            <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginBottom: "var(--s-2)", textTransform: "uppercase" }}>
-              Browse by Category
+        {query && (
+          <div style={{ fontSize: "var(--t-micro)", fontWeight: 700, color: "var(--text-muted)", marginBottom: "var(--s-2)" }}>
+            Suggestions ({items.length})
+          </div>
+        )}
+
+        <div
+          style={{
+            maxHeight: "340px",
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--s-3)",
+            paddingRight: "var(--s-1)",
+          }}
+        >
+          {items.length === 0 ? (
+            <div className="empty" style={{ padding: "var(--s-4)" }}>
+              No matching commands, tickers, or reports found.
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-2)" }}>
-              {CATEGORIES.map((cat) => {
-                const count = commands.filter((c) => getCommandCategory(c.name) === cat.id).length;
-                return (
-                  <div
-                    key={cat.id}
-                    onClick={() => {
-                      const firstInCat = commands.find((c) => getCommandCategory(c.name) === cat.id);
-                      if (firstInCat) setInput(firstInCat.name + " ");
-                    }}
-                    style={{
-                      padding: "var(--s-2) var(--s-3)",
-                      background: theme.surface,
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: "var(--r-sm)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontWeight: 600, color: theme.textPrimary }}>
-                      <span>{cat.icon}</span>
-                      <span>{cat.label}</span>
-                      <span style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginLeft: "auto" }}>
-                        ({count})
-                      </span>
-                    </div>
-                    <div style={{ fontSize: "var(--t-caption)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
-                      {cat.description}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          ) : (
+            Array.from(grouped.entries()).map(([cat, list]) => (
+              <div key={cat}>
+                <div
+                  style={{
+                    fontSize: "var(--t-micro)",
+                    fontWeight: 700,
+                    color: "var(--text-muted)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.05em",
+                    marginBottom: "var(--s-1)",
+                  }}
+                >
+                  {cat === "⚡ Commands" ? "Testing & Validation / Pipeline & Core" : cat}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                  {list.map(({ item, globalIdx }) => {
+                    const isSelected = globalIdx === selectedIndex;
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={item.action}
+                        onMouseEnter={() => setSelectedIndex(globalIdx)}
+                        style={{
+                          padding: "var(--s-2-5) var(--s-3)",
+                          borderRadius: "var(--r-xs)",
+                          background: isSelected ? "var(--surface-3)" : "transparent",
+                          border: `1px solid ${isSelected ? "var(--border-strong)" : "transparent"}`,
+                          cursor: "pointer",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "var(--t-callout)" }}>
+                            {item.label}
+                          </div>
+                          {item.sublabel && (
+                            <div style={{ color: "var(--text-muted)", fontSize: "var(--t-caption)", marginTop: "2px" }}>
+                              {item.sublabel}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Resolved Command Action Footer */}
+        {resolvedSpec && (
+          <div
+            style={{
+              marginTop: "var(--s-3)",
+              paddingTop: "var(--s-3)",
+              borderTop: "1px solid var(--border)",
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "var(--s-2)",
+            }}
+          >
+            {onSelectCommandForBuilder && (
+              <button
+                className="btn"
+                onClick={() => {
+                  onSelectCommandForBuilder(resolvedSpec);
+                  onClose();
+                }}
+              >
+                Configure in Form Builder
+              </button>
+            )}
+            <button
+              className="btn btn-primary"
+              disabled={!isRunnable}
+              onClick={() => {
+                if (isRunnable && parsed.composed && onRunCommand) {
+                  onRunCommand(parsed.composed, resolvedSpec, parsed.argTokens);
+                  onClose();
+                }
+              }}
+            >
+              Run Command
+            </button>
           </div>
         )}
       </div>
@@ -315,51 +397,3 @@ export function CommandPaletteModal({
   );
 }
 
-function getTokenColor(type: HighlightToken["type"]): string {
-  switch (type) {
-    case "interpreter":
-      return theme.accent;
-    case "command":
-      return theme.growth;
-    case "subcommand":
-      return theme.accent;
-    case "option":
-      return theme.caution;
-    case "flag":
-      return theme.caution;
-    case "value":
-      return theme.textPrimary;
-    default:
-      return theme.textMuted;
-  }
-}
-
-function getKindColor(kind: Suggestion["kind"]): string {
-  switch (kind) {
-    case "command":
-      return "#38bdf8";
-    case "subcommand":
-      return "#4ade80";
-    case "option":
-      return "#facc15";
-    case "value":
-      return "#f472b6";
-    default:
-      return theme.textMuted;
-  }
-}
-
-function getKindBg(kind: Suggestion["kind"]): string {
-  switch (kind) {
-    case "command":
-      return "rgba(56, 189, 248, 0.15)";
-    case "subcommand":
-      return "rgba(74, 222, 128, 0.15)";
-    case "option":
-      return "rgba(250, 204, 21, 0.15)";
-    case "value":
-      return "rgba(244, 114, 182, 0.15)";
-    default:
-      return "rgba(255, 255, 255, 0.1)";
-  }
-}
