@@ -12,7 +12,8 @@ import {
 import { api } from "../api/client";
 import type { SymbolCompareResponse, UniverseResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Table } from "./ui";
+import { ErrorState, Loading, Table,  } from "./ui";
+import { Toggle } from "./Toggle";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "./charts";
 import { seriesColor, theme } from "../theme";
 import { fmtNum, fmtPct } from "../format";
@@ -140,31 +141,26 @@ export function SymbolComparison() {
             const checked = selected.includes(row.symbol);
             const disabled = !checked && selected.length >= MAX_SELECTED;
             return (
-              <label
+              <div
                 key={row.symbol}
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: "var(--s-1-5)",
                   background: checked ? theme.surface3 : theme.surface2,
                   padding: "var(--s-1-5) var(--s-3)",
                   borderRadius: 20,
                   border: `1px solid ${checked ? theme.accent : theme.border}`,
-                  cursor: disabled ? "not-allowed" : "pointer",
                   opacity: disabled ? 0.5 : 1,
-                  fontSize: "var(--t-body)",
                 }}
               >
-                <input
-                  type="checkbox"
+                <Toggle
+                  label={row.symbol}
                   checked={checked}
-                  disabled={disabled}
                   onChange={() => toggleSelect(row.symbol)}
-                  style={{ cursor: "pointer" }}
-                  data-testid={`symbol-comparison-checkbox-${row.symbol}`}
+                  disabled={disabled}
+                  dataTestId={`symbol-comparison-checkbox-${row.symbol}`}
                 />
-                {row.symbol}
-              </label>
+              </div>
             );
           })}
         </div>

@@ -1280,6 +1280,34 @@ button:focus-visible {
   border-color: var(--accent);
 }
 
+/* ---- Dashboard Grid ---- */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--s-4);
+  align-items: start;
+}
+
+@media (min-width: 768px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .dashboard-widget-wide {
+    grid-column: span 2;
+  }
+}
+
+@media (min-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  
+  .dashboard-widget-full {
+    grid-column: span 3;
+  }
+}
+
 /* ---- Reduced motion ----
    Kills every animation/transition in the file, including the two `infinite`
    loops (.skeleton shimmer, .spinner spin) that are exactly the class of
@@ -1297,3 +1325,4 @@ button:focus-visible {
   }
 }
 
+.hide-scrollbar::-webkit-scrollbar { display: none; }

@@ -16,8 +16,66 @@ import {
 } from "recharts";
 import type { Bar, CurvePoint, EquityDrawdownPoint, ForecastAttention, SectorSlice } from "../api/types";
 import { sectorColor, theme } from "../theme";
-import { fmtDate, fmtPct } from "../format";
+import { fmtDate, fmtPct, fmtUsd, fmtDateTime } from "../format";
 import { InfoTip } from "./ui";
+
+export function CustomTooltip({
+  active,
+  payload,
+  label,
+  valueFormat = "number",
+  valueLabel = "Pilot",
+  macroLabel = "S&P 500",
+  yTickDecimals = 0,
+}: any) {
+  if (active && payload && payload.length) {
+    const formatValue = (v: number) => {
+      if (valueFormat === "currency") return fmtUsd(v);
+      if (valueFormat === "percent") return fmtPct(v, yTickDecimals, { fromFraction: true });
+      return v.toFixed(yTickDecimals);
+    };
+
+    return (
+      <div
+        style={{
+          background: theme.surface3,
+          border: `1px solid ${theme.borderStrong}`,
+          borderRadius: 10,
+          padding: "var(--s-2) var(--s-3)",
+          color: theme.textPrimary,
+          fontSize: "var(--t-caption)",
+          boxShadow: "var(--shadow-card)",
+          minWidth: 160,
+        }}
+      >
+        <div style={{ marginBottom: "var(--s-1-5)", fontWeight: 600, color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, paddingBottom: 4 }}>
+          {fmtDateTime(String(label))}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-1-5)" }}>
+          {payload.map((entry: any, index: number) => {
+            let name = "Benchmark";
+            if (entry.dataKey === "value") name = valueLabel;
+            else if (entry.dataKey === "macro") name = macroLabel;
+
+            return (
+              <div key={index} style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: entry.color || theme.textSecondary }}></span>
+                  <span style={{ color: theme.textSecondary }}>{name}</span>
+                </div>
+                <span className="num" style={{ fontWeight: 700, color: entry.color || theme.textPrimary }}>
+                  {formatValue(Number(entry.value))}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
 
 /**
  * Shared chart chrome — the grid/axis/tooltip config every Recharts chart in
@@ -66,6 +124,7 @@ export function PerfLine({
   macroSecondaryAxis = false,
   valueLabel = "Pilot",
   yTickDecimals = 0,
+  valueFormat = "number",
 }: {
   data: CurvePoint[];
   benchmark?: CurvePoint[] | null;
@@ -93,6 +152,7 @@ export function PerfLine({
   // Y-axis tick decimal places — 0 fits a base-100 indexed curve; a series
   // with a narrow range (e.g. beta, typically 0-2) needs more precision.
   yTickDecimals?: number;
+  valueFormat?: "number" | "currency" | "percent";
 }) {
   if (data.length === 0) return null;
   const first = data[0].value;
@@ -100,6 +160,12 @@ export function PerfLine({
   const up = last >= first;
   const stroke = up ? theme.growth : theme.decline;
   const gradId = up ? "gradUp" : "gradDown";
+
+  const formatValue = (v: number) => {
+    if (valueFormat === "currency") return fmtUsd(v);
+    if (valueFormat === "percent") return fmtPct(v, yTickDecimals, { fromFraction: true });
+    return v.toFixed(yTickDecimals);
+  };
 
   // merge benchmark + macro overlay onto the same date axis for one <AreaChart>
   const benchMap = new Map((benchmark ?? []).map((p) => [p.date, p.value]));
@@ -151,8 +217,8 @@ export function PerfLine({
             domain={[min - pad, max + pad]}
             tick={chartAxisTick}
             {...chartAxisLine}
-            width={34}
-            tickFormatter={(v: number) => v.toFixed(yTickDecimals)}
+            width={valueFormat === "currency" ? 50 : 34}
+            tickFormatter={formatValue}
           />
           {macroSecondaryAxis && macroBenchmark && macroBenchmark.length > 0 && (
             <YAxis
@@ -161,21 +227,13 @@ export function PerfLine({
               domain={[macroMin - macroPad, macroMax + macroPad]}
               tick={chartAxisTick}
               {...chartAxisLine}
-              width={34}
-              tickFormatter={(v: number) => v.toFixed(yTickDecimals)}
+              width={valueFormat === "currency" ? 50 : 34}
+              tickFormatter={formatValue}
             />
           )}
           <Tooltip
-            contentStyle={chartTooltipStyle}
-            labelFormatter={(l) => fmtDate(String(l))}
-            formatter={(val, name) => [
-              Number(val).toFixed(2),
-              name === "value"
-                ? valueLabel
-                : name === "macro"
-                  ? macroLabel
-                  : "Benchmark",
-            ]}
+            content={<CustomTooltip valueFormat={valueFormat} valueLabel={valueLabel} macroLabel={macroLabel} yTickDecimals={yTickDecimals} />}
+            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
           />
           {benchmark && benchmark.length > 0 && (
             <Line
@@ -351,8 +409,9 @@ export function DrawdownArea({ data }: { data: EquityDrawdownPoint[] }) {
           />
           <Tooltip
             contentStyle={chartTooltipStyle}
-            labelFormatter={(l) => fmtDate(String(l))}
+            labelFormatter={(l) => fmtDateTime(String(l))}
             formatter={(val) => [fmtPct(Number(val), 1, { fromFraction: true }), "Drawdown"]}
+            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
           />
           <Area
             type="monotone"
@@ -566,7 +625,7 @@ export function ForecastCandleChart({
           />
           <Tooltip
             contentStyle={chartTooltipStyle}
-            labelFormatter={(l) => fmtDate(String(l))}
+            labelFormatter={(l) => fmtDateTime(String(l))}
             formatter={(val, name, entry: { payload?: Row }) => {
               const p: Row = entry?.payload ?? { date: "" };
               if (name === "range")
@@ -582,6 +641,7 @@ export function ForecastCandleChart({
                 ];
               return [typeof val === "number" ? val.toFixed(2) : "—", name];
             }}
+            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
           />
           {/* Confidence cone — stacked-area trick: an invisible baseline at
               `coneLower` plus a visible band of `coneBand = upper - lower`

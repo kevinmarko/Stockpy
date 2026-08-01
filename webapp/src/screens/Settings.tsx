@@ -96,65 +96,67 @@ export function Settings() {
 
       <TabGuide tabKey="settings" />
 
-      <PipelineStatusSection
-        status={status}
-        loading={statusLoading}
-        error={statusError}
-        httpStatus={statusHttpStatus}
-        onRetry={reloadStatus}
-      />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(350px, 1fr))", gap: "var(--s-4)", alignItems: "start", marginTop: "var(--s-4)" }}>
+        
+        {/* Column 1: System, Pipeline & Execution */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
+          <PipelineStatusSection
+            status={status}
+            loading={statusLoading}
+            error={statusError}
+            httpStatus={statusHttpStatus}
+            onRetry={reloadStatus}
+          />
 
-      <ScheduleSection
-        schedule={schedule}
-        loading={scheduleLoading}
-        error={scheduleError}
-        httpStatus={scheduleHttpStatus}
-        onRetry={reloadSchedule}
-      />
+          <ScheduleSection
+            schedule={schedule}
+            loading={scheduleLoading}
+            error={scheduleError}
+            httpStatus={scheduleHttpStatus}
+            onRetry={reloadSchedule}
+          />
 
-      {status && (
-        <SignalGenerationSection
-          active={status.kill_switch.active}
-          reason={status.kill_switch.reason}
-          advisoryOnly={status.advisory_only}
-          onChanged={reloadStatus}
-        />
-      )}
+          {status && (
+            <SignalGenerationSection
+              active={status.kill_switch.active}
+              reason={status.kill_switch.reason}
+              advisoryOnly={status.advisory_only}
+              onChanged={reloadStatus}
+            />
+          )}
 
-      {status && (
-        <ExecutionModeSection
-          advisoryOnly={status.advisory_only}
-          dryRun={status.dry_run}
-          alpacaPaper={status.alpaca_paper}
-          onChanged={reloadStatus}
-        />
-      )}
+          {status && (
+            <ExecutionModeSection
+              advisoryOnly={status.advisory_only}
+              dryRun={status.dry_run}
+              alpacaPaper={status.alpaca_paper}
+              onChanged={reloadStatus}
+            />
+          )}
 
-      <SectionCard
-        title="Tracked universe"
-        sub="Add or remove any stock. Changes take effect on the next pipeline run — raw data for any symbol is explorable immediately in Data Explorer."
-      >
-        <UniverseManager />
-        <UniverseCoverage />
-      </SectionCard>
+          <PwaStatusSection />
+          <ResetOnboardingSection />
+        </div>
 
-      <SignalModulesLink />
+        {/* Column 2: Data, Tunables & Integrations */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
+          <SectionCard
+            title="Tracked universe"
+            sub="Add or remove any stock. Changes take effect on the next pipeline run — raw data for any symbol is explorable immediately in Data Explorer."
+          >
+            <UniverseManager />
+            <UniverseCoverage />
+          </SectionCard>
 
-      <TunablesLink />
+          <SignalModulesLink />
+          <TunablesLink />
+          <PromptRegistryLink />
+          <ActiveFollowsSection />
+          <BrokerageSection />
+          <AiControlCenterLink />
+        </div>
 
-      <PromptRegistryLink />
-
-      <ActiveFollowsSection />
-
-      <BrokerageSection />
-
-      <AiControlCenterLink />
-
-      <div style={{ marginTop: "var(--s-4)" }}>
-        <PwaStatusSection />
       </div>
-
-      <ResetOnboardingSection />
 
       <p
         style={{
@@ -191,7 +193,7 @@ function AiControlCenterLink() {
     <Link
       to="/settings/ai"
       className="card card-pad"
-      style={{ display: "block", textDecoration: "none", marginTop: "var(--s-4)" }}
+      style={{ display: "block", textDecoration: "none" }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
@@ -430,7 +432,7 @@ function SectionCard({
   children: ReactNode;
 }) {
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+    <section className="card card-pad">
       <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>{title}</h2>
       {sub && (
         <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
@@ -455,7 +457,7 @@ function SignalModulesLink() {
     <Link
       to="/settings/strategy"
       className="card card-pad"
-      style={{ display: "block", textDecoration: "none", marginTop: "var(--s-4)" }}
+      style={{ display: "block", textDecoration: "none" }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
@@ -487,7 +489,7 @@ function TunablesLink() {
     <Link
       to="/settings/tunables"
       className="card card-pad"
-      style={{ display: "block", textDecoration: "none", marginTop: "var(--s-4)" }}
+      style={{ display: "block", textDecoration: "none" }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
@@ -522,7 +524,7 @@ function PromptRegistryLink() {
     <Link
       to="/settings/prompts"
       className="card card-pad"
-      style={{ display: "block", textDecoration: "none", marginTop: "var(--s-4)" }}
+      style={{ display: "block", textDecoration: "none" }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
