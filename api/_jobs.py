@@ -19,6 +19,7 @@ import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from gui.orchestrator_runner import (
@@ -71,6 +72,7 @@ class JobRecord:
     handle: RunHandle
     cancelled: bool = False
     command_name: Optional[str] = None
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property

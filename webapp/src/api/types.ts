@@ -23,6 +23,13 @@ export interface JobRecord {
   exit_code?: number | null;
   is_running?: boolean;
   cancellable: boolean;
+  /** Only set for job_type === "command" -- the manifest command name that
+   *  was launched (e.g. "validation.harness"). null/undefined for every
+   *  other job type, which has exactly one instance so job_type alone is
+   *  already an unambiguous label. */
+  command_name?: string | null;
+  /** ISO 8601 timestamp captured when the job was launched, for `timeAgo()`. */
+  created_at?: string;
 }
 
 /**

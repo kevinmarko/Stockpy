@@ -558,6 +558,8 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
         "job_type": rec.job_type.value,
         "status": rec.status(),
         "cancellable": rec.cancellable,
+        "command_name": rec.command_name,
+        "created_at": rec.created_at,
     }
 
 
@@ -580,6 +582,8 @@ def get_job_status(job_id: str) -> Dict[str, Any]:
         "exit_code": rec.exit_code(),
         "is_running": rec.handle.is_running(),
         "cancellable": rec.cancellable,
+        "command_name": rec.command_name,
+        "created_at": rec.created_at,
     }
 
 
