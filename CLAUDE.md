@@ -46,30 +46,62 @@ InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative ana
 | `docs/test_coverage_analysis.md` | Test-coverage audit — suite inventory, module-level gap table, and prioritized roadmap for improving test coverage |
 | `docs/VALIDATION_STRATEGY_FIX_LOG.md` | Dated rollup of `STRATEGY_REGISTRY` deployability-gate fix attempts (`scripts/refresh_validations.py`) — before/after PBO/DSR/Sharpe/MaxDD per strategy, the causal lever used, and (for strategies that stayed honestly `deployable=False`) the measured, evidence-backed reason why. Cross-references the fixing PR and each strategy's `docs/signals/<name>.md` **Backtest Validation** section |
 
+## Frontend strategy: web app only — desktop app decommissioned
+
+**The Pilots PWA (`webapp/`) is the platform's one actively-developed frontend.** All new
+features, UI improvements, and bug fixes for the operator-facing surface go into `webapp/`
+going forward. If a `gui/`-only feature has no `webapp/` equivalent yet, treat closing that
+gap as `webapp/` work — not as a reason to extend `gui/`.
+
+**The desktop app is decommissioned — do not develop it further.** This covers:
+- `gui/` — the Streamlit "InvestYo Command Center" (all 18 tabs, `gui/panels*.py`, `gui/app.py`).
+- `app_shell.py` and `desktop/`'s native-shell support modules (`net_util.py`, `ui_server.py`,
+  `engine_supervisor.py`) — the pywebview wrapper that pops `gui/` into a native window.
+- Their launchers: `launch_app.command`, `launch_gui.command`, `scripts/build_macos_app.command`.
+
+These remain in the repo and still run for existing local setups — a severe bug blocking use
+of the platform entirely may still be patched — but treat them as frozen: no new tabs, panels,
+settings widgets, or capability.
+
+**Unaffected — this is the data/compute layer both frontends sit on, and `webapp/` depends on
+it being maintained:** `main.py`, `main_orchestrator.py`, every `api/*.py` service, and the
+orchestrator daemon (`desktop/daemon_runtime.py`, `desktop/orchestrator_daemon.py`,
+`desktop/run_history_store.py` — these live under `desktop/` alongside the decommissioned
+native-shell modules but are backend infrastructure the web app's Control/Pilots API depends
+on, not part of the desktop app). Only the Streamlit GUI and its native-window wrapper are
+being sunset.
+
 ## Commands
 
 ```bash
-# ── macOS double-click launcher ────────────────────────────────────────────────
-# One-time setup (already done — recorded here for reference):
-#   chmod +x launch.command launch_app.command
-# ./launch_app.command is now the recommended everyday launcher (see below);
-# launch.command (headless interval loop) and launch_gui.command (browser-tab
-# GUI) remain valid standalone entry points.
+# ── Web app (primary interface) ────────────────────────────────────────────────
+cd webapp && npm install
+npm run dev                          # http://localhost:5173 — offline mock data by default
+VITE_USE_MOCK=false npm run dev      # against the live backend (see below)
+uvicorn api.pilots_api:app --port 8602    # backend the PWA talks to (+ data_api:8603 / metrics_api:8604 as needed)
+
+# ── Legacy desktop app — decommissioned, no new development ───────────────────
+# gui/ (Streamlit "InvestYo Command Center") and app_shell.py/desktop/'s native-shell
+# modules are frozen; see "Frontend strategy" above. Kept runnable for existing setups.
+#   chmod +x launch.command launch_app.command   # one-time setup, already done
 # REFRESH_INTERVAL_SECONDS at the top of launch.command controls single-run (=0)
 # vs interval-loop (>0, default 60 s) mode.
 # The script verifies .venv exists and that Python is exactly 3.12.x before
 # launching, then pauses ("Press any key") on exit so errors are always visible.
 
-./launch_app.command                 # NEW primary entry point: opens the unified Command Center
-                                      # in a native desktop window (pywebview) with an always-on
-                                      # background refresh loop tied to the window's lifecycle —
-                                      # replaces separately running launch.command + launch_gui.command
+./launch_app.command                 # legacy: opens the unified Command Center in a native
+                                      # desktop window (pywebview) with an always-on
+                                      # background refresh loop tied to the window's lifecycle
 python3 app_shell.py [--interval N]  # what launch_app.command runs under the hood
-./scripts/build_macos_app.command    # ONE-TIME: builds InvestYo.app (real macOS app bundle, custom
-                                      # icon, no Terminal flash) that runs launch_app.command — drag
-                                      # the result into /Applications or the Dock; not committed to git
-                                      # (bakes in an absolute path — see .gitignore)
+./scripts/build_macos_app.command    # ONE-TIME (legacy): builds InvestYo.app (real macOS app
+                                      # bundle, custom icon, no Terminal flash) that runs
+                                      # launch_app.command — drag the result into /Applications
+                                      # or the Dock; not committed to git (bakes in an absolute
+                                      # path — see .gitignore)
+streamlit run gui/app.py             # legacy: InvestYo Command Center — full 18-tab operational GUI
+./launch_gui.command                 # legacy: same as above, macOS double-click launcher
 
+# ── Backend pipeline (unaffected by the frontend decommission) ────────────────
 ./setup.sh                       # creates .venv (Python 3.12), installs requirements.txt
 source .venv/bin/activate
 python3 main.py                  # clean advisory orchestrator — runs one full cycle (or loops with --interval N); use --refresh-account to force Robinhood re-auth
@@ -83,8 +115,6 @@ python3 database_setup.py        # (re)build the SQLite schema in quant_platform
 python3 -m validation.harness --strategy <name> --start YYYY-MM-DD --end YYYY-MM-DD # run strategy validation harness
 python scripts/preflight_check.py            # pre-live readiness gate (exit 0 = all pass)
 python scripts/preflight_check.py --json     # machine-readable JSON output
-streamlit run gui/app.py                     # InvestYo Command Center — full 18-tab operational GUI; still valid standalone/headless-dev entry point
-./launch_gui.command                         # same as above, macOS double-click launcher; still valid standalone entry point
 python -m execution.kill_switch --status     # check / activate / deactivate the global kill switch
 make verify                                  # env-var check + pytest + one live run_once() + print summary
 ./verify.command                             # same as make verify, macOS double-click

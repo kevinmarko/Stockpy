@@ -17,6 +17,13 @@ an HTML report.
 > based on incomplete data, and is not a recommendation to buy or sell any
 > security. Nothing here is investment, financial, or legal advice. You are
 > solely responsible for any decision made using this platform's output.
+>
+> **Web app is the primary interface; the desktop app is decommissioned.** All
+> new UI development targets the [Pilots PWA](webapp/README.md) (`webapp/`). The
+> Streamlit "InvestYo Command Center" (`gui/`) and its native desktop wrapper
+> (`app_shell.py`, `launch_app.command`, `launch_gui.command`) are frozen/legacy —
+> they still run for existing setups, but get no new tabs, panels, or features.
+> See "Launching" below.
 
 ## Quick start (fresh machine)
 
@@ -137,28 +144,48 @@ false "no data" result for the full TTL.
 
 ## Launching
 
-```bash
-./launch_app.command                      # recommended: unified Command Center in a native
-                                           # desktop window, always-on background refresh
-./launch.command                          # double-click from Finder — runs main.py
-./launch_gui.command                      # InvestYo Command Center (Streamlit GUI)
+**Web app (primary interface):**
 
+```bash
+cd webapp
+npm install
+npm run dev              # http://localhost:5173 — offline mock data by default
+```
+
+That alone is enough to browse the UI with mock data, no backend required. To point it at
+real data, start the backend it talks to and flip the mock flag:
+
+```bash
+uvicorn api.pilots_api:app --port 8602      # + api.data_api (8603) / api.metrics_api (8604) as needed
+cd webapp && VITE_USE_MOCK=false npm run dev
+```
+
+See [`webapp/README.md`](webapp/README.md) for the full mock↔live flag reference and
+[`docs/architecture/webapp-and-gui.md`](docs/architecture/webapp-and-gui.md) for what each
+backend service does.
+
+**Pipeline (unchanged — the data/compute layer the web app's backend depends on):**
+
+```bash
+./launch.command                          # double-click from Finder — runs main.py in a loop
 .venv/bin/python3 main.py                 # single advisory cycle
 .venv/bin/python3 main.py --interval 60   # refresh every 60 s
 .venv/bin/python3 main.py --refresh-account   # force fresh Robinhood snapshot
 .venv/bin/python3 main_orchestrator.py    # async orchestrator (HTML report)
 ```
 
-**`./launch_app.command`** is the recommended everyday launcher — it opens the unified
-Command Center in a native desktop window (pywebview) with an always-on background
-refresh loop tied to the window's lifecycle. On every double-click it also best-effort
-safe-restarts any still-running previous instance and auto-syncs the checkout to its
-upstream branch (fast-forward-only, never touching local edits) before starting —
-see `docs/RUNBOOK.md` §0 for the exact behavior. `./launch.command` (headless interval loop)
-and `./launch_gui.command` / `streamlit run gui/app.py` (the Streamlit Command Center GUI,
-Launcher/Reports/Settings/Strategy Matrix/Paper-Trading Monitor/Gravity Audit/Technical
-Options Matrix/Market Data/Live Inventory/Observability tabs) remain valid standalone
-entry points for headless/dev use — no async broker calls from the GUI either way.
+**Legacy — decommissioned, no new development:**
+
+```bash
+./launch_app.command    # native desktop window (pywebview) wrapping the Streamlit GUI
+./launch_gui.command    # InvestYo Command Center (Streamlit GUI) in a browser tab
+```
+
+Both still run for existing local setups (see `docs/RUNBOOK.md` §0 for `launch_app.command`'s
+exact startup behavior), but the platform's frontend strategy has moved to the web app above.
+`gui/` (the Streamlit Command Center's 18 tabs) and `app_shell.py`/`desktop/`'s native-window
+support code (`net_util.py`, `ui_server.py`, `engine_supervisor.py`) get no new tabs, panels,
+or capability going forward — new UI work goes into `webapp/`.
 
 ---
 
@@ -224,7 +251,7 @@ make verify          # env check → test suite → one live cycle → print sum
 pytest                                      # full test suite
 pytest tests/test_pipeline_smoke.py -v     # end-to-end smoke tests only
 make smoke                                  # same
-streamlit run gui/app.py                    # full Command Center GUI (10 tabs, incl. Observability)
+streamlit run gui/app.py                    # legacy Command Center GUI (10 tabs, incl. Observability) — decommissioned, see "Launching"
 python scripts/preflight_check.py           # pre-live readiness gate (exit 0 = pass)
 python scripts/preflight_check.py --json    # machine-readable output
 python -m execution.kill_switch --status    # check / toggle the advisory pause gate

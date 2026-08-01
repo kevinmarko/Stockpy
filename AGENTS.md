@@ -20,6 +20,18 @@ sits on top for day-to-day operation.
 his own capital. There is no team, no other users, no SLA — optimize for
 correctness and honesty over polish or speed.
 
+**Frontend strategy: web app only, desktop app decommissioned.** The Pilots PWA
+(`webapp/`) is the one actively-developed frontend — all new UI features and
+fixes go there. The Streamlit "InvestYo Command Center" (`gui/`) and its native
+desktop wrapper (`app_shell.py`, `desktop/net_util.py`, `desktop/ui_server.py`,
+`desktop/engine_supervisor.py`, `launch_app.command`, `launch_gui.command`) are
+frozen/legacy — still runnable, but get no new tabs, panels, or capability. This
+does NOT include the backend pipeline (`main.py`, `main_orchestrator.py`,
+`api/*.py`, or the orchestrator daemon in `desktop/daemon_runtime.py`/
+`desktop/orchestrator_daemon.py`) — those keep being developed normally; the
+web app's backend depends on them. See `CLAUDE.md`'s "Frontend strategy"
+section for the full detail.
+
 ## 2. Safety posture — read this before touching execution code
 
 - **`ADVISORY_ONLY=true` is the default and the normal operating mode.** In this
@@ -91,7 +103,8 @@ Data (Yahoo/FRED/Alpaca/Robinhood)
   → StrategyEngine (scoring, sizing via sizing/ — fractional Kelly / vol-target)
   → Advisory (engine/advisory.py — holding-aware recommendation engine, the primary output)
   → [Execution — quarantined behind ADVISORY_ONLY + kill switch + risk gate]
-  → Reporting (Google Sheets, HTML report, Streamlit Command Center, SQLite)
+  → Reporting (Google Sheets, HTML report, SQLite, api/*.py → webapp/ Pilots PWA
+     [primary frontend] — the Streamlit Command Center is legacy, see §1)
 ```
 
 Two orchestrator entry points exist side by side:
@@ -123,6 +136,7 @@ duplicate that detail here; this file is the map, not the territory.
 | Pre-live readiness checklist | `docs/GO_LIVE_CHECKLIST.md`, `scripts/preflight_check.py` |
 | Test-coverage gaps and roadmap | `docs/test_coverage_analysis.md` |
 | Quick-start / required `.env` keys | `README.md` |
+| Web app (primary frontend) — run, structure, mock↔live flag | `webapp/README.md` |
 
 ## 6. Common commands
 
@@ -132,7 +146,8 @@ python3 main.py                     # one advisory cycle (add --interval N to lo
 python3 main_orchestrator.py        # full async pipeline
 pytest                              # full test suite
 pytest tests/test_foo.py -k bar     # one test
-streamlit run gui/app.py            # Command Center GUI standalone
+cd webapp && npm run dev            # Pilots PWA (primary frontend) — mock data by default
+streamlit run gui/app.py            # legacy Command Center GUI — decommissioned, see §1
 python scripts/preflight_check.py   # pre-live readiness gate (exit 0 = all pass)
 python -m execution.kill_switch --status   # check the global kill switch
 make verify                         # env check + tests + one live cycle
