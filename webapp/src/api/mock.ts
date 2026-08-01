@@ -4326,10 +4326,24 @@ export const mockApi = {
                 "Daily: Full pipeline refresh (weekdays, 1 hour after market close) Fetches latest price bars, EDGAR filings, macro indicators, and computes composite signals for the active universe.",
             },
             {
+              schedule: "0 8 * * *",
+              command:
+                "cd /opt/investyo && .venv/bin/python scripts/preflight_check.py --validation-staleness-only >> /opt/investyo/logs/validation_staleness.log 2>&1",
+              comment:
+                "Daily: Strategy validation staleness/deployability alert (08:00 UTC)",
+            },
+            {
               schedule: "0 6 * * 0",
               command:
                 "cd /opt/investyo && .venv/bin/python scripts/backfill_edgar_fundamentals.py --tickers all >> /opt/investyo/logs/edgar_backfill.log 2>&1",
               comment: "Weekly: Full EDGAR backfill sweep (Sundays at 06:00 UTC / 2 AM ET)",
+            },
+            {
+              schedule: "0 7 3 * *",
+              command:
+                "cd /opt/investyo && ./scripts/refresh_validations.sh >> /opt/investyo/logs/validations.log 2>&1",
+              comment:
+                "Monthly: Strategy validation harness re-run (3rd of month, 07:00 UTC)",
             },
           ],
         },

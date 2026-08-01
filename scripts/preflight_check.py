@@ -1445,7 +1445,33 @@ def main(argv: list[str] | None = None) -> int:
             "this script."
         ),
     )
+    parser.add_argument(
+        "--validation-staleness-only",
+        action="store_true",
+        help=(
+            "Run ONLY the validation_reports check (strategy backtest staleness "
+            "and deployability), bypassing the ADVISORY_ONLY auto-skip that "
+            "applies to the full go-live gate, and always firing an alert on "
+            "FAIL (fire_alert=True). Intended for a daily scheduled cron "
+            "invocation independent of the go-live gate below — strategy "
+            "health is worth monitoring whether or not the platform is "
+            "submitting live orders. Ignores --skip and --fire-alerts."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    if args.validation_staleness_only:
+        result = check_validation_reports(fire_alert=True)
+        if args.json:
+            print(json.dumps({
+                "name": result.name,
+                "passed": result.passed,
+                "warning": result.warning,
+                "reason": result.reason,
+            }, indent=2))
+        else:
+            _print_table([result])
+        return 0 if result.passed else 1
 
     results = run_checks(skip=args.skip, fire_alerts=args.fire_alerts)
 

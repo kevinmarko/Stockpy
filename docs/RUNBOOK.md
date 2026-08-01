@@ -423,18 +423,32 @@ informational only — do not act on single-bin anomalies.
 ### 3.4 Validation Report Missing for Active Strategy
 
 **Symptom**: Dashboard shows "No validation reports" OR `preflight_check.py` fails
-`check_validation_reports`.
+`check_validation_reports` — OR you receive the daily
+`scripts/preflight_check.py --validation-staleness-only` CRITICAL alert
+(§5.4).
+
+Reports are re-generated automatically every month (§5.4) and checked for
+staleness every day, so seeing this should now mean the monthly cron job
+itself stopped running (crontab not installed on the host, `.venv` broken,
+network/yfinance outage, etc.) rather than someone simply forgetting to run
+it — check `logs/validations.log` on the host first.
 
 **Immediate action**:
 
 1. Do NOT weight the strategy heavily until a fresh report is generated.
-2. Run the harness:
+2. Re-run the harness by hand rather than waiting for next month's cron slot:
    ```bash
    python -m validation.harness --strategy <name> --start 2015-01-01 --end 2024-12-31
+   # or, to re-run every registered strategy at once:
+   ./scripts/refresh_validations.sh
    ```
 3. If the strategy fails validation (PBO ≥ 0.50 OR DSR < 0.95 OR Sharpe < 0.50 OR
    MaxDD ≥ 30%), set its weight to 0 in `settings.SIGNAL_WEIGHTS` via the Strategy
    Matrix tab.
+4. If the report was simply stale (the strategy itself still passes once
+   re-run), also check why the monthly cron job didn't produce it —
+   confirm `crontab -l` on the host actually contains the entries from
+   `deploy/crontab.txt` (§5.4).
 
 ---
 
@@ -727,9 +741,9 @@ Covered by `tests/test_orchestrator_daemon.py::TestShutdownBudget`,
 
 | Frequency | Task |
 |-----------|------|
-| Daily | Review HTML report Δ band; check Observability tab heartbeat and recession telemetry |
+| Daily | Review HTML report Δ band; check Observability tab heartbeat and recession telemetry. Validation-report staleness/deployability is now checked automatically (see §3.4 and §5.4) — no manual glance needed unless it alerts. |
 | Weekly | Glance at Conviction Calibration MAE; review any Dead-Letter Queue entries |
-| Monthly | Re-run validation harness for all active strategies; rotate API keys (FRED, Robinhood) |
+| Monthly | Rotate API keys (FRED, Robinhood). Validation harness re-run is now automatic (§5.4) — spot-check the webapp Strategy Health screen rather than re-running it by hand. |
 | Quarterly | Full review of `MAX_POSITION_WEIGHT`, `KELLY_FRACTION`, `KELLY_CAP`; check calibration curve for systematic bias |
 | Annually | Full stress-test re-run for options-selling strategies; re-review `ADVISORY_ONLY` status if broker execution is intended |
 
@@ -830,6 +844,52 @@ list `reddit`/`stocktwits` with a non-zero `document_count`, and Sector
 Selection's `degraded_reason` will read `None` instead of
 `"review_unavailable"` for sectors with real comment coverage. No GUI
 widget exists for either flag — both are hand-set in `.env` only.
+
+### 5.4 Automatic strategy validation (backtest) cadence
+
+Strategy health no longer requires a manual `python -m validation.harness` or
+`python -m scripts.refresh_validations` run. Two jobs in `deploy/crontab.txt`
+(installed via `deploy/setup_gcp_vm.sh`, or `crontab deploy/crontab.txt` on
+any host that runs the pipeline) keep `reports/*_validation_summary.json`
+fresh and page you if it stops working:
+
+* **Monthly full re-validation** (3rd of the month, 07:00 UTC) —
+  `./scripts/refresh_validations.sh` walk-forward re-validates every strategy
+  in `STRATEGY_REGISTRY` (PBO / DSR / net-of-cost Sharpe / MaxDD, plus the
+  tail-scenario stress gate for options-selling strategies) and overwrites
+  `reports/*_validation_summary.json`. Offset two days from the model-retrain
+  job (1st of the month) so the two heavy, long-running jobs don't contend
+  for CPU/network on the same night. Matches the cadence the harness's own
+  docstring has always recommended — this job is what actually makes that
+  cadence happen instead of relying on someone remembering to run it.
+* **Daily staleness/deployability alert** (08:00 UTC) —
+  `python scripts/preflight_check.py --validation-staleness-only` re-runs
+  just the `check_validation_reports` check (>30-day-old or non-deployable
+  report → FAIL) and fires a CRITICAL alert through whatever channel(s) are
+  configured (`ALERT_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`,
+  `SLACK_WEBHOOK_URL`, `NTFY_TOPIC` — see §1.1) if it fails. This flag
+  deliberately bypasses the full preflight gate's `ADVISORY_ONLY` auto-skip
+  (`check_validation_reports` is normally skipped there because it's framed
+  as a live-order-submission gate) — strategy health is worth monitoring
+  even while `ADVISORY_ONLY=true` (the default), since a stale or
+  now-non-deployable strategy is exactly the kind of thing that should
+  change how much weight you give its signal.
+
+**Where to see it**: the webapp Settings screen's "Automation" panel renders
+both jobs directly from `deploy/crontab.txt` (via `GET /automation/schedule`
+→ `pilots.run_status.parse_crontab`) — no code change needed when this file
+changes. The Strategy Health screen's per-strategy `report_date` reflects the
+monthly job's last successful run.
+
+**Caveat**: `deploy/crontab.txt` is the checked-in *intended* schedule, not
+proof of what's installed on any given host — `GET /automation/schedule`'s
+`cron.installed` field is always `null` for exactly this reason (this API
+never shells out to `crontab -l`). If you're not running on a host that has
+`crontab deploy/crontab.txt` installed (e.g. a pure local macOS setup with no
+GCP VM), install it yourself on whatever host runs the pipeline, or run
+`./scripts/refresh_validations.sh` by hand until you do.
+
+**If it stops working**: see §3.4.
 
 ---
 
