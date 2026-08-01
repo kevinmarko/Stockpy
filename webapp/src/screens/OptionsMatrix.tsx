@@ -31,7 +31,6 @@ import {
   Tooltip as ChartTooltip,
   ResponsiveContainer,
   ReferenceLine,
-  ReferenceLine,
   ReferenceArea,
 } from "recharts";
 import OptionsAnalyticsDashboard from "../components/OptionsAnalyticsDashboard";

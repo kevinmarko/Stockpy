@@ -48,6 +48,15 @@ class WebSocketStreamer:
         # symbol → {raw event dict, "_ts": monotonic timestamp}
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._subscribed: set[str] = set()
+        # Symbols already flushed to the broker on the CURRENT connection —
+        # reset to empty on every (re)connect so a fresh connect's initial
+        # flush re-sends everything, and subscribe() only needs to send the
+        # delta for symbols added after that.
+        self._flushed_on_current_connection: set[str] = set()
+        # The live connection, set while _stream_loop holds one open. Lets
+        # subscribe() push a delta subscribe message immediately instead of
+        # only updating _subscribed and waiting for the next reconnect.
+        self._ws: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Public API used by AlpacaProvider
@@ -71,12 +80,19 @@ class WebSocketStreamer:
         """Register *symbols* for real-time streaming.
 
         Safe to call before ``start()`` — the subscription list is replayed on
-        every (re)connect so no messages are lost.
+        every (re)connect so no messages are lost. If a connection is already
+        open, newly-added symbols are also flushed to the broker immediately
+        (as a delta subscribe message) rather than waiting for the next
+        reconnect, which could otherwise be an unbounded wait on a healthy
+        connection.
         """
         for sym in symbols:
             self._subscribed.add(sym.upper())
         if self._task and not self._task.done():
-            # Schedule a subscribe message on the running loop if available
+            # Schedule the delta flush on the streamer's own loop. subscribe()
+            # may be called from a different thread/loop than _stream_loop
+            # runs on, so this must go through call_soon_threadsafe rather
+            # than assuming the caller's running loop is the right one.
             try:
                 loop = asyncio.get_running_loop()
                 loop.call_soon_threadsafe(self._schedule_subscribe_flush)
@@ -84,8 +100,27 @@ class WebSocketStreamer:
                 pass  # No running loop; subscriptions will be sent on next connect
 
     def _schedule_subscribe_flush(self) -> None:
-        """Placeholder; actual flush happens inside _stream_loop on connect."""
-        pass
+        """Create a task to send any not-yet-flushed subscriptions over the live connection."""
+        if self._ws is not None:
+            asyncio.create_task(self._flush_new_subscriptions())
+
+    async def _flush_new_subscriptions(self) -> None:
+        """Send a delta subscribe message for symbols added since the last flush on this connection."""
+        if self._ws is None:
+            return
+        new_symbols = self._subscribed - self._flushed_on_current_connection
+        if not new_symbols:
+            return
+        try:
+            await self._ws.send(json.dumps({
+                "action": "subscribe",
+                "quotes": sorted(new_symbols),
+                "trades": sorted(new_symbols),
+            }))
+            self._flushed_on_current_connection |= new_symbols
+            logger.info("WS delta-subscribed to %d new symbol(s)", len(new_symbols))
+        except Exception as exc:
+            logger.warning("WS delta subscribe failed (will retry on next reconnect): %s", exc)
 
     # ------------------------------------------------------------------
     # Internal streaming loop
@@ -112,14 +147,19 @@ class WebSocketStreamer:
                         logger.info("WS auth response: %s", auth_resp)
 
                     # Flush any accumulated subscriptions
+                    self._flushed_on_current_connection = set()
                     if self._subscribed:
                         await ws.send(json.dumps({
                             "action": "subscribe",
                             "quotes": sorted(self._subscribed),
                             "trades": sorted(self._subscribed),
                         }))
+                        self._flushed_on_current_connection = set(self._subscribed)
                         logger.info("WS subscribed to %d symbols", len(self._subscribed))
 
+                    # Publish the live connection so subscribe() can push
+                    # delta subscribes without waiting for a reconnect.
+                    self._ws = ws
                     backoff = 1.0  # reset on successful connect
 
                     async for message in ws:
@@ -144,6 +184,12 @@ class WebSocketStreamer:
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)
+            finally:
+                # Whether this iteration ended cleanly (is_running went False)
+                # or via an exception, the connection this iteration held is
+                # no longer live — clear it so subscribe()'s delta-flush path
+                # doesn't try to send on a closed/stale websocket.
+                self._ws = None
 
     # ------------------------------------------------------------------
     # Lifecycle (called by FastAPI lifespan or orchestrator)
@@ -176,6 +222,13 @@ class WebSocketStreamer:
 # ---------------------------------------------------------------------------
 # Module-level singleton — imported by AlpacaProvider and api/ws_api.py
 # ---------------------------------------------------------------------------
+
+# True whenever this module itself imported successfully (the `websockets`
+# package is a hard top-level import above, so reaching this line already
+# proves it's installed). Exported so callers — api/ws_api.py, data/market_data.py
+# — can gate on it the same way market_data.py's own try/except-derived flag
+# already does, without needing to re-derive "is streaming available" themselves.
+_WS_AVAILABLE: bool = True
 
 _STREAMER: WebSocketStreamer = WebSocketStreamer()
 

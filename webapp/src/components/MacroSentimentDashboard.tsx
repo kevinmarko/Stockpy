@@ -1,12 +1,13 @@
-import React from 'react';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
 import { Globe, TrendingDown, TrendingUp, Minus, Loader2 } from 'lucide-react';
 import { useApi } from '../hooks/useApi';
-import api from '../api/client';
+import { api } from '../api/client';
+import type { MacroSentimentResponse } from '../api/types';
+import DemoDataBadge from './DemoDataBadge';
 
 export default function MacroSentimentDashboard() {
-  const { data, loading, error } = useApi<any>(() => api.getMacroSentiment(), []);
-  
+  const { data, loading, error } = useApi<MacroSentimentResponse>(() => api.getMacroSentiment(), []);
+
   const macroData = data?.macro_data || [];
 
   const renderTrendIcon = (trend: string) => {
@@ -22,6 +23,7 @@ export default function MacroSentimentDashboard() {
       <div className="flex items-center gap-2 mb-6 border-b border-slate-200 dark:border-slate-800 pb-4">
         <Globe className="w-5 h-5 text-teal-500" />
         <h3 className="font-semibold text-slate-900 dark:text-white">Macroeconomic Sentiment</h3>
+        {data?.is_synthetic && <DemoDataBadge />}
       </div>
       
       <div className="flex-1 flex flex-col lg:flex-row gap-6">

@@ -2970,6 +2970,11 @@ export interface MacroIndicatorItem {
 
 export interface MacroSentimentResponse {
   macro_data: MacroIndicatorItem[];
+  // Always true today -- these categories aren't indicators the platform
+  // actually computes (see api/data_api.py::get_macro_sentiment docstring).
+  // Surfaced so the UI can render an honest "Demo Data" badge instead of
+  // presenting a fixed fixture as a live measurement.
+  is_synthetic: boolean;
 }
 
 export interface OrderBookLevel {
@@ -2980,9 +2985,14 @@ export interface OrderBookLevel {
 
 export interface OrderBookLadderResponse {
   symbol: string;
+  // Real quote when available (CompositeProvider), a fixed fallback otherwise.
   current_price: number;
+  // Depth (bid/ask SIZES) is always synthetic -- no L2/consolidated order
+  // book feed is wired in this codebase. is_synthetic covers the ladder as
+  // a whole, not just current_price.
   bids: OrderBookLevel[];
   asks: OrderBookLevel[];
+  is_synthetic: boolean;
 }
 
 export interface ModelComparisonRow {
@@ -3003,8 +3013,11 @@ export interface IntradayThetaPoint {
 
 export interface OptionsAnalyticsSummaryResponse {
   symbol: string;
+  // Deterministic per-symbol hash, not a real options-chain/OI measurement
+  // (see execution/options_analytics.py docstring) -- always is_synthetic.
   net_dealer_premium: number;
   regime: string;
   intraday_series: IntradayThetaPoint[];
+  is_synthetic: boolean;
 }
 

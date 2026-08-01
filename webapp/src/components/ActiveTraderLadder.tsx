@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { ArrowUp, ArrowDown, Activity } from 'lucide-react';
+import { Activity } from 'lucide-react';
 
 interface OrderBookLevel {
   price: number;

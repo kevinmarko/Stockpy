@@ -5,8 +5,18 @@ Claude Code MCP read-only tools for market discovery and screening.
 Provides create_scan, run_scan, and update_scan_filters.
 
 ``run_scan`` cross-references scan criteria against the live advisory
-engine's ``Score`` (Advisory Score) column, RSI, and fundamentals from
-the SQLite ``quant_platform.db`` — no hardcoded tickers.
+engine's per-symbol ``score``/``action`` output in
+``output/state_snapshot.json`` — no hardcoded tickers. This is the same
+file the Pilots API's ``/state`` endpoint and the GUI Observability tab
+read (see ``api/state_api.py``), not a raw SQL table: this codebase has no
+live, actively-written SQL table holding a per-cycle dashboard (the legacy
+``DailySignals`` table defined in ``database_setup.py`` is not populated by
+either orchestrator — the real per-cycle signal output only ever reaches
+Google Sheets, the HTML report, and this JSON snapshot). RSI is NOT
+filterable here — it is not one of the fields the advisory engine writes
+into the snapshot (see ``reporting/state_snapshot.py``); a ``max_rsi``
+criterion is accepted but logged as unsupported rather than silently
+no-op'd or fabricated.
 
 Security: an AST guard prevents any execution/order-submission module
 from appearing in the discovery call stack.
@@ -18,6 +28,8 @@ import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
+
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -60,38 +72,35 @@ def _ast_guard_no_submission() -> None:
 # ---------------------------------------------------------------------------
 
 def _db_advisory_scores(min_score: float = 0.0) -> List[Dict[str, Any]]:
-    """Query the SQLite DB for tickers with Score >= min_score.
+    """Read the live advisory engine's per-symbol scores from
+    ``output/state_snapshot.json`` for symbols with ``score >= min_score``.
 
-    Returns a list of dicts with keys: symbol, score, rsi, recommendation.
-    Dead-letter safe: returns [] on any DB/import error.
+    Returns a list of dicts with keys: symbol, score, recommendation (the
+    advisory engine's actual BUY/SELL/HOLD action). Dead-letter safe:
+    returns [] when the snapshot is absent, unreadable, or malformed —
+    matching api/state_api.py's own read pattern for this same file.
     """
     try:
-        import sqlite3
-        db_path = os.environ.get("DATABASE_URL", "quant_platform.db")
-        if db_path.startswith("sqlite:///"):
-            db_path = db_path[len("sqlite:///"):]
-        if not os.path.exists(db_path):
-            logger.warning("discovery_skill: DB not found at '%s'. Run the pipeline first.", db_path)
+        path = settings.OUTPUT_DIR / "state_snapshot.json"
+        if not path.exists():
+            logger.warning(
+                "discovery_skill: no state snapshot at '%s'. Run the pipeline first.", path
+            )
             return []
 
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        rows = conn.execute(
-            """
-            SELECT symbol, score, rsi, recommendation
-            FROM   dashboard
-            WHERE  score >= ?
-            ORDER  BY score DESC
-            """,
-            (min_score,),
-        ).fetchall()
-        conn.close()
+        snapshot = json.loads(path.read_text(encoding="utf-8"))
+        signals = snapshot.get("signals") or []
         return [
-            {"symbol": r[0], "score": r[1], "rsi": r[2], "recommendation": r[3]}
-            for r in rows
-            if r[0]  # skip null symbols
+            {
+                "symbol": str(sig["symbol"]),
+                "score": float(sig.get("score", 0.0) or 0.0),
+                "recommendation": sig.get("action") or None,
+            }
+            for sig in signals
+            if sig.get("symbol") and float(sig.get("score", 0.0) or 0.0) >= min_score
         ]
     except Exception as exc:
-        logger.error("_db_advisory_scores query failed: %s", exc)
+        logger.error("_db_advisory_scores: failed to read state snapshot: %s", exc)
         return []
 
 
@@ -129,14 +138,20 @@ def run_scan(scan_id: str) -> str:
 
     criteria = _SCANS[scan_id]
 
-    # Pull live advisory scores from the DB
+    # Pull live advisory scores from the state snapshot
     min_score = float(criteria.get("min_score", 0.0))
     candidates = _db_advisory_scores(min_score=min_score)
 
-    # Apply optional criteria filters
-    max_rsi = criteria.get("max_rsi")
-    if max_rsi is not None:
-        candidates = [c for c in candidates if c.get("rsi") is not None and c["rsi"] <= float(max_rsi)]
+    # max_rsi is NOT applied — RSI isn't one of the fields the advisory
+    # engine writes into state_snapshot.json (see module docstring). Log
+    # rather than silently ignore, so a scan config author isn't misled
+    # into thinking this criterion did anything.
+    if criteria.get("max_rsi") is not None:
+        logger.warning(
+            "Scan '%s': 'max_rsi' criterion is not supported (no RSI field "
+            "in the live state snapshot) — ignored.",
+            scan_id,
+        )
 
     recommendation_filter = criteria.get("recommendation")
     if recommendation_filter:

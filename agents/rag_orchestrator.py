@@ -61,20 +61,27 @@ class RAGState(TypedDict):
 # ---------------------------------------------------------------------------
 
 def fetch_portfolio_context(state: RAGState) -> Dict[str, Any]:
-    """Queries SQLite account_positions table for currently held symbols."""
+    """Queries the account_positions table for currently held symbols.
+
+    Routed through db_config.create_readonly_db_engine() (settings.DATABASE_URL,
+    with the SQLite/Postgres dual-backend handling and database-level read-only
+    enforcement db_config.py already provides) rather than a hand-rolled
+    sqlite3.connect() against os.environ — this codebase's settings.py, loaded
+    via pydantic-settings' env_file, does not populate real os.environ, so an
+    operator whose only source for DATABASE_URL is .env would otherwise be
+    silently routed to the wrong DB file with no error.
+    """
     held: List[str] = []
     try:
-        import sqlite3
-        db_path = os.environ.get("DATABASE_URL", "quant_platform.db")
-        if db_path.startswith("sqlite:///"):
-            db_path = db_path[len("sqlite:///"):]
-        if os.path.exists(db_path):
-            conn = sqlite3.connect(db_path)
+        from sqlalchemy import text
+        from db_config import create_readonly_db_engine
+
+        engine = create_readonly_db_engine()
+        with engine.connect() as conn:
             rows = conn.execute(
-                "SELECT symbol, qty FROM account_positions WHERE qty != 0"
+                text("SELECT symbol, qty FROM account_positions WHERE qty != 0")
             ).fetchall()
-            conn.close()
-            held = [f"{r[0]} (qty={r[1]})" for r in rows]
+        held = [f"{r[0]} (qty={r[1]})" for r in rows]
     except Exception as exc:
         logger.warning("fetch_portfolio_context: DB query failed: %s", exc)
     return {"portfolio_context": held}

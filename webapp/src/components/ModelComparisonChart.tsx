@@ -1,11 +1,11 @@
-import React from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { GitBranch, Loader2 } from 'lucide-react';
 import { useApi } from '../hooks/useApi';
-import api from '../api/client';
+import { api } from '../api/client';
+import type { ModelComparisonResponse } from '../api/types';
 
 export default function ModelComparisonChart() {
-  const { data: responseData, loading, error } = useApi<any>(() => api.getModelComparison(), []);
+  const { data: responseData, loading, error } = useApi<ModelComparisonResponse>(() => api.getModelComparison(), []);
   const data = responseData?.data || [];
 
   return (

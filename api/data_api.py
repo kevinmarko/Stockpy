@@ -1121,7 +1121,21 @@ def get_provider_status() -> Dict[str, Any]:
 
 @app.get("/data/macro/sentiment", dependencies=[Depends(require_token)])
 def get_macro_sentiment() -> Dict[str, Any]:
-    """Macroeconomic indicator sentiment scores and trends across factors."""
+    """Macroeconomic indicator sentiment scores and trends across factors.
+
+    SYNTHETIC DEMO DATA (``is_synthetic: True``). These six categories
+    (Interest Rates, CPI, Employment, Consumer Sentiment, PMI, Housing
+    Starts) are not indicators this platform actually computes -- the real
+    macro telemetry this codebase tracks (VIX, Sahm Rule, High-Yield OAS,
+    yield curve, market regime -- see output/state_snapshot.json and
+    MacroEconomicDTO) uses different units/scales per metric with no
+    principled way to normalize them onto one comparable 0-100 axis without
+    inventing a scoring methodology. Rather than fabricate that
+    normalization unilaterally, this endpoint stays a fixed demo fixture,
+    honestly flagged, until a real recession-telemetry radar's category set
+    and scaling are explicitly designed (CONSTRAINT #4 -- never fabricate
+    data as if it were a real measurement).
+    """
     return {
         "macro_data": [
             {"subject": "Interest Rates", "value": 80, "trend": "up"},
@@ -1130,15 +1144,36 @@ def get_macro_sentiment() -> Dict[str, Any]:
             {"subject": "Consumer Sentiment", "value": 55, "trend": "flat"},
             {"subject": "Manufacturing (PMI)", "value": 35, "trend": "down"},
             {"subject": "Housing Starts", "value": 70, "trend": "up"},
-        ]
+        ],
+        "is_synthetic": True,
     }
 
 
 @app.get("/data/ladder/{symbol}", dependencies=[Depends(require_token)])
 def get_order_book_ladder(symbol: str) -> Dict[str, Any]:
-    """Active Trader order book Level 2 depth ladder for a symbol."""
+    """Active Trader order book depth ladder for a symbol.
+
+    ``current_price`` is a REAL quote (via CompositeProvider, same source
+    api/ws_api.py's REST fallback uses) when available. The depth ladder
+    itself (bid/ask sizes at each price level) is SYNTHETIC
+    (``is_synthetic: True``) -- this platform has no Level 2 / consolidated
+    order book feed to compute real depth from (CLAUDE.md: Alpaca's free
+    IEX feed and yfinance are both top-of-book only). Never present the
+    sizes as real liquidity.
+    """
     sym = symbol.upper()
-    current_price = 450.00 if sym == "SPY" else 150.00
+    current_price: Optional[float] = None
+    try:
+        from data.market_data import CompositeProvider
+        quote = CompositeProvider().get_latest_quote(sym)
+        if quote.price is not None and not math.isnan(quote.price):
+            current_price = float(quote.price)
+    except Exception as exc:
+        logger.warning("get_order_book_ladder: quote fetch failed for %s: %s", sym, exc)
+
+    if current_price is None:
+        current_price = 450.00 if sym == "SPY" else 150.00
+
     bids = [
         {"price": round(current_price - 0.05 * i - 0.05, 2), "size": 1000 - i * 100, "type": "bid"}
         for i in range(5)
@@ -1152,6 +1187,7 @@ def get_order_book_ladder(symbol: str) -> Dict[str, Any]:
         "current_price": current_price,
         "bids": bids,
         "asks": asks,
+        "is_synthetic": True,
     }
 
 
@@ -1160,80 +1196,115 @@ class ChatMessageRequest(BaseModel):
     history: Optional[List[Dict[str, Any]]] = None
 
 
+async def _iter_blocking(sync_iterable):
+    """Bridge a blocking/synchronous iterator into an async generator.
+
+    Each ``next()`` call runs in the default threadpool executor instead of
+    the event loop thread, so waiting on the next network chunk from a
+    synchronous SDK (Gemini's generate_content_stream, Anthropic's
+    text_stream) never blocks other coroutines sharing this loop — a chat
+    stream in flight would otherwise serialize every other request the Data
+    API is handling.
+    """
+    it = iter(sync_iterable)
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            item = await loop.run_in_executor(None, next, it)
+        except StopIteration:
+            return
+        yield item
+
+
+def _sse(event_type: str, content: str) -> str:
+    """Format one Server-Sent Event frame. Real newlines, not the literal
+    two-character sequence '\\n' -- SSE delimits messages on an actual blank
+    line, and the frontend parses with buffer.split('\\n')."""
+    return f"data: {json.dumps({'type': event_type, 'content': content})}\n\n"
+
+
 @app.post("/api/chat", dependencies=[Depends(require_token)])
 async def chat_endpoint(req: ChatMessageRequest):
     """Streaming chat endpoint for AI Chat Interface."""
-    
+
     async def stream_generator():
         # Emit a thought to show activity
-        yield f"data: {json.dumps({'type': 'THOUGHT', 'content': 'Analyzing query...'})}\\n\\n"
+        yield _sse("THOUGHT", "Analyzing query...")
         await asyncio.sleep(0.1)
-        
+
         try:
             if settings.GEMINI_API_KEY:
-                yield f"data: {json.dumps({'type': 'THOUGHT', 'content': 'Routing to Gemini...'})}\\n\\n"
+                yield _sse("THOUGHT", "Routing to Gemini...")
                 from google import genai
                 from google.genai import types
                 client = genai.Client(api_key=settings.GEMINI_API_KEY)
-                
+
                 contents = []
                 for msg in (req.history or []):
                     contents.append(
                         types.Content(
-                            role=msg.get("role", "user"), 
+                            role=msg.get("role", "user"),
                             parts=[types.Part.from_text(text=msg.get("content", ""))]
                         )
                     )
                 contents.append(
                     types.Content(
-                        role="user", 
+                        role="user",
                         parts=[types.Part.from_text(text=req.message)]
                     )
                 )
-                
+
                 # Use generate_content_stream for streaming
                 response_stream = client.models.generate_content_stream(
                     model='gemini-2.5-flash',
                     contents=contents,
                 )
-                
-                for chunk in response_stream:
+
+                async for chunk in _iter_blocking(response_stream):
                     if chunk.text:
-                        yield f"data: {json.dumps({'type': 'MESSAGE', 'content': chunk.text})}\\n\\n"
-                        await asyncio.sleep(0.01) # Yield to event loop
-                        
+                        yield _sse("MESSAGE", chunk.text)
+
             elif settings.ANTHROPIC_API_KEY:
-                yield f"data: {json.dumps({'type': 'THOUGHT', 'content': 'Routing to Claude...'})}\\n\\n"
+                yield _sse("THOUGHT", "Routing to Claude...")
                 import anthropic
                 client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-                
+
                 messages = []
                 for msg in (req.history or []):
                     role = msg.get("role", "user")
                     if role == "model": role = "assistant"
                     messages.append({"role": role, "content": msg.get("content", "")})
                 messages.append({"role": "user", "content": req.message})
-                
-                with client.messages.stream(
+
+                # client.messages.stream(...) itself just constructs the
+                # manager (no I/O), but __enter__ opens the connection and
+                # __exit__ waits for it to close -- both are blocking SDK
+                # calls, so both are offloaded to the executor too, not just
+                # the per-chunk iteration.
+                loop = asyncio.get_running_loop()
+                stream_cm = client.messages.stream(
                     model="claude-3-5-sonnet-20241022",
                     max_tokens=800,
                     messages=messages,
-                ) as stream:
-                    for text in stream.text_stream:
-                        yield f"data: {json.dumps({'type': 'MESSAGE', 'content': text})}\\n\\n"
-                        await asyncio.sleep(0.01)
+                )
+                stream = await loop.run_in_executor(None, stream_cm.__enter__)
+                try:
+                    async for text in _iter_blocking(stream.text_stream):
+                        yield _sse("MESSAGE", text)
+                finally:
+                    await loop.run_in_executor(None, stream_cm.__exit__, None, None, None)
             else:
                 err_msg = "Error: Neither GEMINI_API_KEY nor ANTHROPIC_API_KEY is configured in settings."
-                yield f"data: {json.dumps({'type': 'MESSAGE', 'content': err_msg})}\\n\\n"
+                yield _sse("MESSAGE", err_msg)
 
-            yield f"data: {json.dumps({'type': 'SUGGESTION', 'content': 'Show portfolio risk'})}\\n\\n"
-            yield f"data: {json.dumps({'type': 'SUGGESTION', 'content': 'Explain option overlay'})}\\n\\n"
-            
+            yield _sse("SUGGESTION", "Show portfolio risk")
+            yield _sse("SUGGESTION", "Explain option overlay")
+
         except Exception as e:
             logger.error("Chat streaming error: %s", e)
-            yield f"data: {json.dumps({'type': 'MESSAGE', 'content': f'\\n\\n**Error:** {str(e)}'})}\\n\\n"
+            yield _sse("MESSAGE", f"\n\n**Error:** {str(e)}")
 
-        yield "data: [DONE]\\n\\n"
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
 

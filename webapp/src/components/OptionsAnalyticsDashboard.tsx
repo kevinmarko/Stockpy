@@ -1,11 +1,12 @@
-import React from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Clock, TrendingUp, AlertTriangle, Loader2 } from 'lucide-react';
 import { useApi } from '../hooks/useApi';
-import api from '../api/client';
+import { api } from '../api/client';
+import type { OptionsAnalyticsSummaryResponse } from '../api/types';
+import DemoDataBadge from './DemoDataBadge';
 
 export default function OptionsAnalyticsDashboard({ symbol = 'SPY' }: { symbol?: string }) {
-  const { data, loading, error } = useApi<any>(() => api.getOptionsAnalytics(symbol), [symbol]);
+  const { data, loading, error } = useApi<OptionsAnalyticsSummaryResponse>(() => api.getOptionsAnalytics(symbol), [symbol]);
 
   const intradayData = data?.intraday_series || [];
   const netDealerPremium = data?.net_dealer_premium || 0;
@@ -18,9 +19,13 @@ export default function OptionsAnalyticsDashboard({ symbol = 'SPY' }: { symbol?:
           <Clock className="w-5 h-5 text-indigo-500" />
           <h3 className="font-semibold text-slate-900 dark:text-white">0DTE Options Analytics</h3>
         </div>
-        <div className="text-xs font-medium bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded">
-          Live Intraday
-        </div>
+        {data?.is_synthetic ? (
+          <DemoDataBadge />
+        ) : (
+          <div className="text-xs font-medium bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded">
+            Live Intraday
+          </div>
+        )}
       </div>
 
       {loading ? (

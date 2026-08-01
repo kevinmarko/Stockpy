@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Send, Bot, User, Loader2, BrainCircuit, ChevronDown, ChevronRight, X } from 'lucide-react';
 import { getEffectiveToken } from '../auth/apiToken';
+import { chatUrl } from '../api/client';
 
 
 // Required component to catch ReactMarkdown v10+ crash parsing errors
@@ -39,7 +40,12 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Optional chaining on the call itself, not just the ref: jsdom (used by
+    // the test suite) doesn't implement scrollIntoView at all, and this
+    // component is always mounted (App.tsx renders it unconditionally, just
+    // CSS-hidden), so an unguarded call here broke every test that mounts
+    // <App />.
+    bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
   useEffect(() => {
@@ -81,7 +87,7 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
 
     try {
       const token = getEffectiveToken();
-      const response = await fetch('/api/chat', {
+      const response = await fetch(chatUrl(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

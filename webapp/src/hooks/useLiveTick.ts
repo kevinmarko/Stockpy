@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { getEffectiveToken } from '../auth/apiToken';
+import { liveTickWsUrl } from '../api/client';
 
 export interface LiveTick {
   symbol: string;
@@ -48,11 +48,7 @@ export function useLiveTick(symbol: string): LiveTick {
       wsRef.current = null;
     }
 
-    const token = getEffectiveToken();
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-    const url = `${protocol}//${host}/ws/ticks/${symbol.toUpperCase()}${tokenParam}`;
+    const url = liveTickWsUrl(symbol);
 
     const ws = new WebSocket(url);
     wsRef.current = ws;

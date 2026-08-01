@@ -1,24 +1,34 @@
-import React from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Activity } from 'lucide-react';
+import DemoDataBadge from './DemoDataBadge';
 
 interface SHAPFeature {
   name: string;
   value: number;
 }
 
+// No caller currently passes `data` (see screens/Models.tsx) -- this always
+// renders as the synthetic fallback below. Kept as fixed illustrative
+// numbers, not wired to signals/multifactor.py's real weights, since doing
+// that is a real integration (api/metrics_api.py::get_symbol_signals
+// already exposes a per-module breakdown, but it's per-symbol, not the
+// universe-wide aggregate this component's own copy claims to show) rather
+// than a one-line fix. The DemoDataBadge below exists so this is never
+// mistaken for real telemetry (CONSTRAINT #4) until that wiring lands.
+const PLACEHOLDER_DATA: SHAPFeature[] = [
+  { name: 'FinBERT Sentiment', value: 0.286 },
+  { name: 'GARCH Volatility', value: 0.214 },
+  { name: 'RSI(14)', value: 0.173 },
+  { name: 'MACD', value: -0.125 },
+  { name: 'Sector Heat', value: 0.082 },
+  { name: 'Retail Flow (Emoji)', value: 0.055 },
+  { name: 'SMA(50) Cross', value: -0.045 },
+  { name: 'Housing Starts', value: 0.020 },
+];
+
 export default function SignalDriverWeights({ data }: { data?: SHAPFeature[] }) {
-  // Placeholder data if none provided
-  const plotData = data || [
-    { name: 'FinBERT Sentiment', value: 0.286 },
-    { name: 'GARCH Volatility', value: 0.214 },
-    { name: 'RSI(14)', value: 0.173 },
-    { name: 'MACD', value: -0.125 },
-    { name: 'Sector Heat', value: 0.082 },
-    { name: 'Retail Flow (Emoji)', value: 0.055 },
-    { name: 'SMA(50) Cross', value: -0.045 },
-    { name: 'Housing Starts', value: 0.020 },
-  ];
+  const isSynthetic = !data;
+  const plotData = data || PLACEHOLDER_DATA;
 
   // Sort by absolute value for standard SHAP display
   const sortedData = [...plotData].sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
@@ -44,9 +54,13 @@ export default function SignalDriverWeights({ data }: { data?: SHAPFeature[] }) 
       <div className="flex items-center gap-2 mb-4">
         <Activity className="w-5 h-5 text-purple-500" />
         <h3 className="font-semibold text-slate-900 dark:text-white">Signal Driver Weights</h3>
+        {isSynthetic && <DemoDataBadge />}
       </div>
       <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
-        Displays mean absolute contribution (score × weight) per signal module across the universe. Linear weight decomposition — not Shapley marginal contributions.
+        {isSynthetic
+          ? 'Illustrative example only — not wired to live per-symbol signal weights yet.'
+          : 'Displays mean absolute contribution (score × weight) per signal module across the universe.'}
+        {' '}Linear weight decomposition — not Shapley marginal contributions.
       </p>
       
       <div className="flex-1 min-h-[300px]">

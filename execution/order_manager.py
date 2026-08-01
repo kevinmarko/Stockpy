@@ -271,10 +271,14 @@ class OrderManager:
         # SELL / STOP orders (side contains 'sell') are high-priority (1) and
         # will spin-wait for the next available token. BUY orders are
         # low-priority (0) and are shed (dropped) when utilization > 80 %.
+        # Uses the async await_or_shed (asyncio.sleep spin-wait), not the
+        # sync wait_or_shed (time.sleep) -- this call site runs inside the
+        # event loop, and a blocking time.sleep here would stall every other
+        # coroutine sharing it for the duration of the wait.
         order_side = intent.side.value.lower() if hasattr(intent.side, "value") else str(intent.side).lower()
         is_sell = "sell" in order_side
         priority = 1 if is_sell else 0
-        if not self._queue.wait_or_shed(priority=priority):
+        if not await self._queue.await_or_shed(priority=priority):
             logger.warning(
                 "LeakyBucketQueue: shedding low-priority %s order for %s (API rate limit > 80%%).",
                 order_side, intent.symbol,

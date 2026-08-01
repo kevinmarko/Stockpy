@@ -70,6 +70,13 @@ class LeakyBucketQueue:
         Consume a token. If load shedding is active, low priority tasks (priority=0)
         are shed (returns False). High priority tasks (priority>0 like stop-loss/sell-to-close)
         will wait for a token.
+
+        Synchronous, blocking variant — safe to call from plain sync code.
+        Callers running inside an asyncio event loop (e.g. the async order
+        submission path in execution/order_manager.py) MUST use
+        ``await_or_shed`` instead: this method's ``time.sleep`` spin-wait
+        would otherwise block the whole event loop for the duration of the
+        wait, stalling every other coroutine sharing it.
         """
         # If we are heavily utilized and this is a low-priority request (e.g. balance check)
         if self.should_shed_load() and priority == 0:
@@ -77,10 +84,24 @@ class LeakyBucketQueue:
             return False
 
         # Consume a token (spin-wait if high priority and exhausted)
-        # Note: In a true async environment, this would await asyncio.sleep
         while not self.bucket.consume(1):
             if priority == 0:
                 return False
             time.sleep(0.1)
-        
+
+        return True
+
+    async def await_or_shed(self, priority: int = 0) -> bool:
+        """Async counterpart of ``wait_or_shed`` — identical semantics, but
+        spin-waits via ``asyncio.sleep`` instead of ``time.sleep`` so a
+        high-priority wait yields the event loop instead of blocking it."""
+        if self.should_shed_load() and priority == 0:
+            logger.warning("LeakyBucketQueue: Shedding load for low priority request.")
+            return False
+
+        while not self.bucket.consume(1):
+            if priority == 0:
+                return False
+            await asyncio.sleep(0.1)
+
         return True
