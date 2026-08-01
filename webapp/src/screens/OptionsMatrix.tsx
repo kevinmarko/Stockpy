@@ -34,6 +34,22 @@ import {
   ReferenceArea,
 } from "recharts";
 
+function heatmapStyle(val: number | null | undefined, min: number, max: number, invert = false) {
+  if (val == null || isNaN(val)) return {};
+  const ratio = Math.max(0, Math.min(1, (val - min) / (max - min)));
+  const hot = invert ? "var(--decline)" : "var(--growth)";
+  const cold = invert ? "var(--growth)" : "var(--decline)";
+  // If > 0.5, mix towards hot. If < 0.5, mix towards cold.
+  if (ratio >= 0.5) {
+    const p = Math.round((ratio - 0.5) * 2 * 100);
+    return { backgroundColor: `color-mix(in srgb, var(--surface-3) ${100 - p}%, ${hot} 20%)` };
+  } else {
+    const p = Math.round((0.5 - ratio) * 2 * 100);
+    return { backgroundColor: `color-mix(in srgb, var(--surface-3) ${100 - p}%, ${cold} 20%)` };
+  }
+}
+
+
 
 function isCredit(d: OptionsDirective): boolean {
   return typeof d.Net_Premium === "number" && d.Net_Premium > 0;
@@ -123,10 +139,11 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
         }
       }}
       style={{
-        display: "block",
+        display: "flex",
+        flexDirection: "column",
         width: "100%",
+        height: "100%",
         textAlign: "left",
-        marginBottom: "var(--s-2-5)",
         cursor: "pointer",
         border: "1px solid var(--border)",
       }}
@@ -165,8 +182,16 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
         }}
       >
         <PremiumLabel d={d} />
-        <span style={{ fontSize: "var(--t-body)", color: theme.textSecondary }}>
-          IVR <span className="num">{fmtNum(ivr.value, 0)}</span>
+        <span 
+          style={{ 
+            fontSize: "var(--t-body)", 
+            color: theme.textSecondary,
+            padding: "2px 6px",
+            borderRadius: "var(--r-sm)",
+            ...heatmapStyle(ivr.value, 0, 100)
+          }}
+        >
+          IVR <span className="num" style={{ fontWeight: 600, color: theme.textPrimary }}>{fmtNum(ivr.value, 0)}</span>
           {ivr.value != null && (
             <span
               style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginLeft: 3 }}
@@ -414,19 +439,19 @@ function DetailSheet({ d, dte, asOf, onClose }: { d: OptionsDirective; dte: numb
       <section style={{ marginTop: "var(--s-4)" }}>
         <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Greeks</h3>
         <div className="options-greeks-grid">
-          <div className="options-greek-card-vis">
+          <div className="options-greek-card-vis" style={heatmapStyle(d.ATM_Delta, -1, 1)}>
             <div className="options-greek-label-vis">Delta</div>
             <div className="options-greek-value-vis">{fmtNum(d.ATM_Delta ?? null, 3)}</div>
           </div>
-          <div className="options-greek-card-vis">
+          <div className="options-greek-card-vis" style={heatmapStyle(d.ATM_Gamma, 0, 0.2)}>
             <div className="options-greek-label-vis">Gamma</div>
             <div className="options-greek-value-vis">{fmtNum(d.ATM_Gamma ?? null, 3)}</div>
           </div>
-          <div className="options-greek-card-vis">
+          <div className="options-greek-card-vis" style={heatmapStyle(d.ATM_Vega, 0, 2)}>
             <div className="options-greek-label-vis">Vega</div>
             <div className="options-greek-value-vis">{fmtNum(d.ATM_Vega ?? null, 3)}</div>
           </div>
-          <div className="options-greek-card-vis">
+          <div className="options-greek-card-vis" style={heatmapStyle(d.ATM_Theta_Daily, -0.5, 0.5)}>
             <div className="options-greek-label-vis">Theta</div>
             <div className="options-greek-value-vis">{fmtNum(d.ATM_Theta_Daily ?? null, 3)}</div>
           </div>
@@ -994,9 +1019,11 @@ export function OptionsMatrix() {
               No directives match this filter.
             </div>
           ) : (
-            visible.map((d) => (
-              <DirectiveCard key={d.Symbol} d={d} onOpen={() => setOpenSymbol(d.Symbol)} />
-            ))
+            <div className="tiles">
+              {visible.map((d) => (
+                <DirectiveCard key={d.Symbol} d={d} onOpen={() => setOpenSymbol(d.Symbol)} />
+              ))}
+            </div>
           )}
 
           <GreeksRollup directives={directives} />

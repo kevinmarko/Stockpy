@@ -45,10 +45,10 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
     expect(await screen.findByTestId("comparison-title")).toBeInTheDocument();
 
     // Checkboxes render once the pilots list resolves — wait for the first.
-    const trendFollowingCheckbox = (await screen.findByTestId("comparison-checkbox-trend-following")) as HTMLInputElement;
-    const dipBuyerCheckbox = screen.getByTestId("comparison-checkbox-dip-buyer") as HTMLInputElement;
-    expect(trendFollowingCheckbox.checked).toBe(true);
-    expect(dipBuyerCheckbox.checked).toBe(true);
+    const trendFollowingCheckbox = (await screen.findByTestId("comparison-checkbox-trend-following"));
+    const dipBuyerCheckbox = screen.getByTestId("comparison-checkbox-dip-buyer");
+    expect(trendFollowingCheckbox).toHaveAttribute("aria-checked", "true");
+    expect(dipBuyerCheckbox).toHaveAttribute("aria-checked", "true");
   });
 
   // T3.4: Context-Sensitive Comparative Alerts (R2+R3)

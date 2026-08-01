@@ -2,7 +2,8 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { api } from "../api/client";
 import type { AlertEntry, AlertsFeed } from "../api/types";
 import { ApiError } from "../api/types";
-import { ErrorState, Loading } from "./ui";
+import { ErrorState, Loading,  } from "./ui";
+import { Toggle } from "./Toggle";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -203,15 +204,12 @@ export function ActivityFeed({
           >
             Refresh
           </button>
-          <label style={{ fontSize: "var(--t-micro)", color: theme.textSecondary, display: "flex", alignItems: "center", gap: "var(--s-1)" }}>
-            <input
-              type="checkbox"
-              checked={pollingActive}
-              onChange={(e) => setPollingActive(e.target.checked)}
-              data-testid="toggle-polling-checkbox"
-            />
-            Auto-poll
-          </label>
+          <Toggle
+            label="Auto-poll"
+            checked={pollingActive}
+            onChange={setPollingActive}
+            dataTestId="toggle-polling-checkbox"
+          />
         </div>
       </div>
 

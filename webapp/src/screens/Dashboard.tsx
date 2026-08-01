@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { Portfolio, PilotSummary, PerfRange, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Notice, Tile } from "../components/ui";
+import { Toggle } from "../components/Toggle";
 import { TabGuide } from "../components/TabGuide";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { NotebookMLExport } from "../components/NotebookMLExport";
@@ -303,13 +304,14 @@ function PilotRow({
 
   return (
     <div className="row" style={{ padding: "var(--s-2) 0", display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
-      <input
-        type="checkbox"
-        checked={isChecked}
-        onChange={onToggle}
-        data-testid={`top-pilot-checkbox-${pilot.id}`}
-        style={{ cursor: "pointer", flexShrink: 0 }}
-      />
+      <div style={{ flexShrink: 0 }}>
+        <Toggle
+          label=""
+          checked={isChecked}
+          onChange={(val) => onToggle()}
+          dataTestId={`top-pilot-checkbox-${pilot.id}`}
+        />
+      </div>
       <div className="row-main" style={{ flex: 1, minWidth: 100 }}>
         <span className="row-title">{pilot.name}</span>
         <span className="row-sub" style={{ fontSize: "var(--t-micro)", color: theme.textSecondary }}>{pilot.category}</span>

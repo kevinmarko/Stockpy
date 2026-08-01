@@ -15,6 +15,7 @@ import { PerfLine } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
 import { TabGuide } from "../components/TabGuide";
 import { ErrorState, Loading, Tile, InfoTip } from "../components/ui";
+import { Toggle } from "../components/Toggle";
 import { fmtNum, fmtPct, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -212,16 +213,13 @@ export function Portfolio() {
         )}
         <div style={{ marginTop: "var(--s-3)", display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "var(--s-3)" }}>
           <RangeToggle value={range} onChange={setRange} />
-          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)", fontSize: "var(--t-footnote)", color: theme.textSecondary, cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={showBuyingPower}
-              onChange={(e) => setShowBuyingPower(e.target.checked)}
-              data-testid="buying-power-overlay-checkbox"
-              disabled={!equity.data?.buying_power_curve || equity.data.buying_power_curve.length === 0}
-            />
-            Overlay buying power
-          </label>
+          <Toggle
+            label="Overlay buying power"
+            checked={showBuyingPower}
+            onChange={setShowBuyingPower}
+            disabled={!equity.data?.buying_power_curve || equity.data.buying_power_curve.length === 0}
+            dataTestId="buying-power-overlay-checkbox"
+          />
         </div>
         {showBuyingPower && (!equity.data?.buying_power_curve || equity.data.buying_power_curve.length === 0) && (
           <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>
@@ -344,32 +342,46 @@ export function Portfolio() {
       {/* Positions */}
       <section className="card card-pad">
         <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Positions</h2>
-        <div className="list">
-          {p.positions.map((pos) => (
-            <Link className="row" key={pos.symbol} to={`/symbol/${pos.symbol}`}>
-              <div className="row-main">
-                <span className="row-title">{pos.symbol}</span>
-                <span className="row-sub">
-                  {pos.qty} sh @ {fmtUsd(pos.avg_cost)}
-                </span>
-              </div>
-              <div className="row-end">
-                <div className="num" style={{ fontWeight: 700 }}>
-                  {fmtUsd(pos.market_value)}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "var(--s-3)" }}>
+          {p.positions.map((pos) => {
+            const isPositive = (pos.unrealized_pl ?? 0) >= 0;
+            const bgColor = isPositive ? "rgba(16, 185, 129, 0.05)" : "rgba(239, 68, 68, 0.05)";
+            const borderColor = isPositive ? "rgba(16, 185, 129, 0.2)" : "rgba(239, 68, 68, 0.2)";
+            return (
+              <Link
+                key={pos.symbol}
+                to={`/symbol/${pos.symbol}`}
+                className="card card-pad"
+                style={{
+                  backgroundColor: bgColor,
+                  borderColor: borderColor,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "var(--s-2)",
+                  textDecoration: "none"
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                  <span style={{ fontSize: "var(--t-title)", fontWeight: 700, color: theme.textPrimary }}>{pos.symbol}</span>
+                  <span className="num" style={{ fontWeight: 700, fontSize: "var(--t-subhead)", color: theme.textPrimary }}>
+                    {fmtUsd(pos.market_value)}
+                  </span>
                 </div>
-                <div
-                  className="num row-sub"
-                  style={{
-                    color:
-                      (pos.unrealized_pl ?? 0) >= 0 ? theme.growth : theme.decline,
-                  }}
-                >
-                  {fmtSignedUsd(pos.unrealized_pl)} (
-                  {fmtPct(pos.unrealized_pl_pct, 1, { signed: true })})
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", color: theme.textMuted, fontSize: "var(--t-body)" }}>
+                  <span>{pos.qty} sh @ {fmtUsd(pos.avg_cost)}</span>
+                  <div
+                    className="num"
+                    style={{
+                      color: isPositive ? theme.growth : theme.decline,
+                      fontWeight: 600
+                    }}
+                  >
+                    {fmtSignedUsd(pos.unrealized_pl)} ({fmtPct(pos.unrealized_pl_pct, 1, { signed: true })})
+                  </div>
                 </div>
-              </div>
-            </Link>
-          ))}
+              </Link>
+            );
+          })}
         </div>
       </section>
     </div>
