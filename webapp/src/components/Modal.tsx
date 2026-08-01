@@ -31,11 +31,16 @@ export function Modal({
   onClose,
   children,
   closeOnBackdropClick = true,
+  size = "default",
 }: {
   ariaLabel: string;
   onClose: () => void;
   children: ReactNode;
   closeOnBackdropClick?: boolean;
+  /** "wide" raises the desktop max-width (see `.sheet--wide` in index.css)
+   *  for content-heavy dialogs. Below the 900px breakpoint both sizes are
+   *  identical -- `.sheet`'s own `width: 100%` already fits the viewport. */
+  size?: "default" | "wide";
 }) {
   const sheetRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
@@ -89,7 +94,7 @@ export function Modal({
     >
       <div
         ref={sheetRef}
-        className="sheet"
+        className={size === "wide" ? "sheet sheet--wide" : "sheet"}
         role="dialog"
         aria-modal="true"
         aria-label={ariaLabel}

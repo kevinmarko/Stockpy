@@ -11,6 +11,16 @@
 # composite signals for the active universe.
 0 21 * * 1-5 cd /opt/investyo && .venv/bin/python scripts/daily_briefing.py >> /opt/investyo/logs/daily_briefing.log 2>&1
 
+# ── Daily: Strategy validation staleness/deployability alert (08:00 UTC) ────
+# Fires a CRITICAL alert (via ALERT_WEBHOOK_URL / DISCORD_WEBHOOK_URL /
+# SLACK_WEBHOOK_URL / NTFY_TOPIC, through observability.alerts.send_alert) if
+# any strategy's validation report is stale (>30 days) or non-deployable.
+# Runs independently of ADVISORY_ONLY — see
+# scripts/preflight_check.py::check_validation_reports's docstring for why
+# this bypasses that check's normal auto-skip in advisory mode: strategy
+# health is worth monitoring whether or not the platform submits live orders.
+0 8 * * * cd /opt/investyo && .venv/bin/python scripts/preflight_check.py --validation-staleness-only >> /opt/investyo/logs/validation_staleness.log 2>&1
+
 # ── Weekly: Full EDGAR backfill sweep (Sundays at 06:00 UTC / 2 AM ET) ──────
 # Catches any missed filings and backfills new tickers added to the universe.
 # "all" resolves (data.portfolio_sync.resolve_universe) to held ∪ watchlists ∪
@@ -21,6 +31,18 @@
 
 # ── Monthly: ML model retraining (1st of month at 07:00 UTC / 3 AM ET) ──────
 0 7 1 * * cd /opt/investyo && .venv/bin/python scripts/retrain_models.py >> /opt/investyo/logs/retrain.log 2>&1
+
+# ── Monthly: Strategy validation harness re-run (3rd of month, 07:00 UTC) ───
+# Walk-forward re-validation (PBO / DSR / net-of-cost Sharpe / MaxDD, plus the
+# tail-scenario stress gate for options-selling strategies) for every strategy
+# in scripts/refresh_validations.py's STRATEGY_REGISTRY, via the venv-checking
+# wrapper scripts/refresh_validations.sh. Overwrites reports/*_validation_
+# summary.json (read by the webapp Strategy Health screen and this file's own
+# daily staleness-alert job above) and appends one row per strategy to
+# reports/history/<strategy>_validation_history.jsonl. Scheduled 2 days after
+# the model-retrain job above (same monthly cadence, offset day) so the two
+# heavy, long-running jobs don't contend for CPU/network on the same night.
+0 7 3 * * cd /opt/investyo && ./scripts/refresh_validations.sh >> /opt/investyo/logs/validations.log 2>&1
 
 # ── Daily: SQLite database backup (03:00 UTC) ──────────────────────────────
 0 3 * * * cp /opt/investyo/quant_platform.db /opt/investyo/backups/quant_platform_$(date +\%Y\%m\%d).db 2>/dev/null; find /opt/investyo/backups -name "*.db" -mtime +7 -delete

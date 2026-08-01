@@ -61,6 +61,13 @@ if [ ! -d "${INSTALL_DIR}" ]; then
     mkdir -p "${INSTALL_DIR}"
 fi
 tar -xzf /tmp/investyo.tar.gz -C "${INSTALL_DIR}"
+
+# deploy/crontab.txt's jobs all redirect into logs/ (and one backs up into
+# backups/) via `>>` — a shell append-redirect fails outright (job never
+# runs) if its target directory doesn't exist yet, so these must exist
+# before cron ever fires the first job.
+mkdir -p "${INSTALL_DIR}/logs" "${INSTALL_DIR}/backups"
+
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 
 # ─── 4. Python Virtual Environment & Webapp Build ────────────────────────────

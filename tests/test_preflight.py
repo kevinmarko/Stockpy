@@ -584,6 +584,114 @@ class TestValidationReportsFireAlert:
         assert captured["fire_alert"] is False
 
 
+class TestValidationStalenessOnlyFlag:
+    """``main(["--validation-staleness-only"])`` runs check_validation_reports
+    directly — bypassing both ``run_checks``'s ADVISORY_ONLY auto-skip and the
+    rest of ``ALL_CHECKS`` — and always fires alerts on FAIL. This is the
+    wiring ``deploy/crontab.txt``'s daily cron job depends on to alert when a
+    strategy's validation report goes stale or non-deployable, independent of
+    the (advisory-only-by-default) go-live gate.
+    """
+
+    def _bad_reports_dir(self, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        summary = {
+            "strategy_id": "bad_strat", "deployable": False,
+            "report_date": date.today().isoformat(),
+        }
+        (reports_dir / "bad_strat_validation_summary.json").write_text(
+            json.dumps(summary), encoding="utf-8"
+        )
+
+    def _good_reports_dir(self, tmp_path):
+        reports_dir = tmp_path / "reports"
+        reports_dir.mkdir()
+        summary = {
+            "strategy_id": "good_strat", "deployable": True,
+            "report_date": date.today().isoformat(),
+        }
+        (reports_dir / "good_strat_validation_summary.json").write_text(
+            json.dumps(summary), encoding="utf-8"
+        )
+
+    def test_exits_0_on_pass(self, tmp_path):
+        from scripts.preflight_check import main
+        self._good_reports_dir(tmp_path)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            code = main(["--validation-staleness-only"])
+        assert code == 0
+
+    def test_exits_1_on_fail(self, tmp_path):
+        from scripts.preflight_check import main
+        self._bad_reports_dir(tmp_path)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            code = main(["--validation-staleness-only"])
+        assert code == 1
+
+    def test_fires_alert_on_fail_without_needing_fire_alerts_flag(self, tmp_path):
+        """Always fire_alert=True — a scheduled cron invocation shouldn't need
+        to also remember to pass the separate --fire-alerts flag."""
+        from scripts.preflight_check import main
+        self._bad_reports_dir(tmp_path)
+        calls = []
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            with patch(
+                "observability.alerts.send_alert",
+                side_effect=lambda *a, **kw: calls.append((a, kw)),
+            ):
+                main(["--validation-staleness-only"])
+        assert len(calls) == 1
+
+    def test_does_not_fire_alert_on_pass(self, tmp_path):
+        from scripts.preflight_check import main
+        self._good_reports_dir(tmp_path)
+        calls = []
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            with patch(
+                "observability.alerts.send_alert",
+                side_effect=lambda *a, **kw: calls.append((a, kw)),
+            ):
+                main(["--validation-staleness-only"])
+        assert calls == []
+
+    def test_bypasses_advisory_only_auto_skip(self, tmp_path):
+        """The full go-live gate auto-skips validation_reports when
+        ADVISORY_ONLY=True (see _ADVISORY_AUTO_SKIP) since it's framed there
+        as a live-order-submission gate. This flag must NOT inherit that
+        skip — strategy-health staleness is worth alerting on in advisory
+        mode too (the platform's default, per README), which is the whole
+        reason this flag exists instead of just scheduling --fire-alerts."""
+        from scripts.preflight_check import main
+        self._bad_reports_dir(tmp_path)
+        s = _settings(tmp_path, ADVISORY_ONLY=True)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            with patch("scripts.preflight_check.settings", s):
+                code = main(["--validation-staleness-only"])
+        assert code == 1  # NOT silently auto-skipped to a passing 0
+
+    def test_ignores_skip_flag(self, tmp_path):
+        """--skip validation_reports must not suppress this flag's check —
+        it is an entirely separate code path from run_checks/ALL_CHECKS."""
+        from scripts.preflight_check import main
+        self._bad_reports_dir(tmp_path)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            code = main(["--validation-staleness-only", "--skip", "validation_reports"])
+        assert code == 1
+
+    def test_json_output_format(self, tmp_path, capsys):
+        from scripts.preflight_check import main
+        self._good_reports_dir(tmp_path)
+        with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
+            main(["--validation-staleness-only", "--json"])
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data == {
+            "name": "validation_reports", "passed": True,
+            "warning": False, "reason": data["reason"],
+        }
+
+
 # ---------------------------------------------------------------------------
 # env_no_duplicate_keys
 # ---------------------------------------------------------------------------

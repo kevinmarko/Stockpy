@@ -1,0 +1,253 @@
+import { useEffect, useState } from "react";
+import { useToast } from "./ToastContext";
+import { Modal } from "./Modal";
+import { DensityToggle } from "./DensityToggle";
+import { api } from "../api/client";
+import { useApi } from "../hooks/useApi";
+import { useMutation } from "../hooks/useMutation";
+import { usePoll } from "../hooks/usePoll";
+import type { AutomationStatus, ObservabilitySummary } from "../api/types";
+
+const AUTOMATION_POLL_MS = 30_000;
+// Regime is a slow-moving macro read (recomputed once per pipeline cycle,
+// not per request) sourced from the heavier observability summary -- polled
+// far less often than the kill-switch/heartbeat status so this always-on bar
+// doesn't pay for portfolio-risk/equity-curve computation every 30s on every
+// screen.
+const REGIME_POLL_MS = 300_000;
+
+/** Exported for direct unit testing (see TopStatusBar.test.tsx) -- easier to
+ *  drive with fixed Date instances than mocking the system clock/timezone
+ *  through the whole rendered component. */
+export function computeMarketSession(now: Date): "RTH (Open)" | "PRE/POST" | "CLOSED" {
+  // NYSE hours are defined in Eastern Time regardless of the operator's own
+  // timezone -- deriving from the browser's local hour (the original bug
+  // here) reads as "market open" for a non-ET operator at the wrong moment.
+  // This is a real, deterministic function of wall-clock time (not fabricated
+  // data), but it IS just a schedule approximation -- it doesn't know about
+  // early closes or exchange holidays.
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+    weekday: "short",
+  }).formatToParts(now);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const weekday = get("weekday");
+  const hour = Number(get("hour"));
+  const minute = Number(get("minute"));
+  const minutesSinceMidnight = hour * 60 + minute;
+
+  if (weekday === "Sat" || weekday === "Sun") return "CLOSED";
+  if (minutesSinceMidnight >= 9 * 60 + 30 && minutesSinceMidnight < 16 * 60) return "RTH (Open)";
+  if (minutesSinceMidnight >= 4 * 60 && minutesSinceMidnight < 20 * 60) return "PRE/POST";
+  return "CLOSED";
+}
+
+export function TopStatusBar() {
+  const { addToast } = useToast();
+  const [marketSession, setMarketSession] = useState(() => computeMarketSession(new Date()));
+  const [showKillSwitchModal, setShowKillSwitchModal] = useState(false);
+  const [reason, setReason] = useState("");
+
+  const automation = useApi<AutomationStatus>(() => api.getAutomationStatus(), []);
+  usePoll(automation.reload, AUTOMATION_POLL_MS, true);
+
+  const regime = useApi<ObservabilitySummary>(() => api.getObservabilitySummary("1M", 30), []);
+  usePoll(regime.reload, REGIME_POLL_MS, true);
+
+  useEffect(() => {
+    const interval = setInterval(() => setMarketSession(computeMarketSession(new Date())), 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const pauseMutation = useMutation((r: string) => api.pauseAutomation(r));
+  const resumeMutation = useMutation((r: string) => api.resumeAutomation(r));
+
+  const killSwitchActive = automation.data?.kill_switch.active ?? null;
+  const advisoryOnly = automation.data?.advisory_only ?? true;
+  const daemonAlive = automation.data?.daemon.alive ?? null;
+  const snapshotAgeSeconds = automation.data?.pipeline.snapshot_age_seconds ?? null;
+  const resumeBlocked = killSwitchActive === false ? false : !advisoryOnly;
+  const busy = pauseMutation.pending || resumeMutation.pending;
+
+  const marketRegime = regime.data?.regime.market_regime ?? null;
+
+  const openConfirm = () => {
+    setReason("");
+    setShowKillSwitchModal(true);
+  };
+
+  const confirmToggle = async () => {
+    if (!reason.trim()) return;
+    const result = killSwitchActive
+      ? await resumeMutation.run(reason)
+      : await pauseMutation.run(reason);
+    if (!result) return; // mutation error -- Notice below stays visible via the toast fallback
+    setShowKillSwitchModal(false);
+    automation.reload();
+    addToast({
+      type: killSwitchActive ? "success" : "error",
+      title: killSwitchActive ? "Kill Switch RESET (resumed)" : "Kill Switch TRIPPED (paused)",
+      description: killSwitchActive
+        ? "Recommendations resume on the next scheduled or manual run."
+        : "New recommendations stop until resumed. The schedule keeps running.",
+    });
+  };
+
+  const heartbeatLabel = daemonAlive == null ? "Unknown" : daemonAlive ? "Live" : "Offline";
+  const heartbeatIcon = daemonAlive == null ? "⚪" : daemonAlive ? "🟢" : "🔴";
+  const heartbeatColor = daemonAlive == null ? "var(--text-muted)" : daemonAlive ? "var(--growth)" : "var(--decline)";
+  const snapshotAgeLabel =
+    snapshotAgeSeconds == null
+      ? "no snapshot yet"
+      : snapshotAgeSeconds < 120
+      ? `${Math.round(snapshotAgeSeconds)}s ago`
+      : `${Math.round(snapshotAgeSeconds / 60)}m ago`;
+
+  return (
+    <>
+      <header
+        style={{
+          height: "40px",
+          minHeight: "40px",
+          background: "var(--surface)",
+          borderBottom: "1px solid var(--border)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 var(--s-4)",
+          fontSize: "var(--t-caption)",
+          color: "var(--text-secondary)",
+          gap: "var(--s-3)",
+          overflowX: "auto",
+          whiteSpace: "nowrap",
+          scrollbarWidth: "none",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-4)" }}>
+          {/* Heartbeat — real daemon liveness + snapshot age, GET /automation/status */}
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }} title={automation.error ?? undefined}>
+            <span style={{ color: heartbeatColor }}>{heartbeatIcon}</span>
+            <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{heartbeatLabel}</span>
+            <span style={{ color: "var(--text-muted)", fontSize: "var(--t-micro)" }}>({snapshotAgeLabel})</span>
+          </div>
+
+          {/* Macro Regime — read-only; there is no operator override for the
+              computed regime, only for the gate that acts on it (Observability
+              tab). Showing an editable dropdown here would be fake control. */}
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+            <span style={{ color: "var(--text-muted)" }}>Regime:</span>
+            <span
+              style={{
+                fontWeight: 600,
+                color: marketRegime == null ? "var(--text-muted)" : "var(--text-primary)",
+              }}
+            >
+              {marketRegime ?? "—"}
+            </span>
+          </div>
+
+          {/* Kill Switch Indicator — real state, GET /automation/status */}
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+            <span style={{ color: "var(--text-muted)" }}>Kill Switch:</span>
+            {killSwitchActive == null ? (
+              <span style={{ color: "var(--text-muted)" }}>—</span>
+            ) : (
+              <span
+                style={{
+                  padding: "2px 6px",
+                  borderRadius: "var(--r-xs)",
+                  fontSize: "var(--t-micro)",
+                  fontWeight: 700,
+                  background: killSwitchActive ? "rgba(239, 68, 68, 0.2)" : "rgba(16, 185, 129, 0.15)",
+                  color: killSwitchActive ? "var(--decline)" : "var(--growth)",
+                  border: `1px solid ${killSwitchActive ? "rgba(239, 68, 68, 0.4)" : "rgba(16, 185, 129, 0.3)"}`,
+                }}
+              >
+                {killSwitchActive ? "TRIPPED (PAUSED)" : "ACTIVE (RUNNING)"}
+              </span>
+            )}
+          </div>
+
+          {/* Market Session — pure client-side clock, real ET time */}
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+            <span style={{ color: "var(--text-muted)" }}>Session:</span>
+            <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{marketSession}</span>
+          </div>
+        </div>
+
+        {/* Quick Actions */}
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <DensityToggle />
+          <button
+            onClick={openConfirm}
+            disabled={killSwitchActive == null || (killSwitchActive === true && resumeBlocked)}
+            title={killSwitchActive === true && resumeBlocked ? "Resume must be done at the console while live trading is enabled." : undefined}
+            style={{
+              background: killSwitchActive ? "rgba(16, 185, 129, 0.15)" : "var(--surface-2)",
+              color: killSwitchActive ? "var(--growth)" : "var(--decline)",
+              border: `1px solid ${killSwitchActive ? "var(--growth)" : "var(--decline)"}`,
+              borderRadius: "var(--r-xs)",
+              padding: "3px 8px",
+              fontSize: "var(--t-micro)",
+              fontWeight: 600,
+              cursor: killSwitchActive == null ? "default" : "pointer",
+              opacity: killSwitchActive == null ? 0.5 : 1,
+            }}
+          >
+            {killSwitchActive ? "🛡️ Reset Kill Switch" : "🚨 Trip Kill Switch"}
+          </button>
+        </div>
+      </header>
+
+      {showKillSwitchModal && (
+        <Modal
+          ariaLabel={killSwitchActive ? "Reset Global Kill Switch?" : "Trip Global Kill Switch?"}
+          onClose={() => setShowKillSwitchModal(false)}
+        >
+          <div style={{ padding: "var(--s-4)", width: "min(90vw, 420px)" }}>
+            <h3 style={{ margin: "0 0 var(--s-2)", color: killSwitchActive ? "var(--growth)" : "var(--decline)" }}>
+              {killSwitchActive ? "Reset Global Kill Switch?" : "Trip Global Kill Switch?"}
+            </h3>
+            <p style={{ fontSize: "var(--t-body)", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+              {killSwitchActive
+                ? "Recommendations resume on the next scheduled or manual run."
+                : "New recommendations stop until resumed. The schedule keeps running -- cycles still run, they just produce no recommendations."}
+            </p>
+            <label style={{ display: "block", marginTop: "var(--s-3)" }}>
+              <span style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>Reason (required)</span>
+              <input
+                className="input"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                style={{ width: "100%", marginTop: "var(--s-1)" }}
+              />
+            </label>
+            {(pauseMutation.error || resumeMutation.error) && (
+              <p style={{ color: "var(--decline)", fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
+                {pauseMutation.error ?? resumeMutation.error}
+              </p>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
+              <button className="btn" onClick={() => setShowKillSwitchModal(false)}>Cancel</button>
+              <button
+                className="btn"
+                onClick={confirmToggle}
+                disabled={!reason.trim() || busy}
+                style={{
+                  background: killSwitchActive ? "var(--growth)" : "var(--decline)",
+                  color: "#fff",
+                  fontWeight: 600,
+                }}
+              >
+                {busy ? "Working…" : killSwitchActive ? "Reset Kill Switch" : "Trip Kill Switch"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
