@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ChangeEvent } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type {
@@ -10,7 +10,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Loading, Notice, StaleDataNotice, Table, Tile } from "../components/ui";
+import { Button, EmptyState, ErrorState, Loading, Notice, StaleDataNotice, Table, Textarea, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -179,6 +179,113 @@ function clientSideBrinsonWarnings(rows: BrinsonFachlerRow[]): string[] {
   return warnings;
 }
 
+// ---------------------------------------------------------------------------
+// Paste-from-spreadsheet -- a TS port of the legacy Streamlit Command
+// Center's `parse_pasted_sector_matrix` (gui/report_viewer_helpers.py). Same
+// contract, deliberately: delimiter auto-detected from the FIRST line only
+// (tab if present, else comma); the header row is OPTIONAL, detected by
+// sniffing whether the first line's 4 numeric-column cells all parse as
+// numbers (if so, the line is data, not a header); an exact-match header
+// (case-insensitive) reorders columns, any non-exact-match header falls back
+// to positional order -- there is no fuzzy/partial alias matching, mirroring
+// the Python "all 5 canonical names present, or none of them count" rule.
+// Sector names are free text, NOT validated against the fixed GICS-11 list
+// (the Python version doesn't either); a non-numeric cell coerces to 0
+// rather than rejecting the whole paste (CONSTRAINT #4/#6 shape: a bad CELL
+// degrades, a bad SHAPE errors). Blank-sector rows are dropped silently. Row
+// count is not constrained to 11 -- fewer or more are both accepted.
+const BF_CANONICAL_HEADERS: Record<string, keyof BrinsonFachlerRow> = {
+  sector: "sector",
+  "portfolio weight (%)": "portfolio_weight_pct",
+  "portfolio return (%)": "portfolio_return_pct",
+  "benchmark weight (%)": "benchmark_weight_pct",
+  "benchmark return (%)": "benchmark_return_pct",
+};
+const BF_POSITIONAL_ORDER: (keyof BrinsonFachlerRow)[] = [
+  "sector",
+  "portfolio_weight_pct",
+  "portfolio_return_pct",
+  "benchmark_weight_pct",
+  "benchmark_return_pct",
+];
+
+function parseNumericPasteCell(raw: string): number {
+  const n = Number(raw.trim().replace(/%/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Splits on the SAME delimiter throughout (sniffed once from the first
+ * line), so a file with tabs on line 1 but commas in later data rows is not
+ * specially handled -- matches the Python original's behavior exactly. */
+function splitPasteLine(line: string, delimiter: string): string[] {
+  return line.split(delimiter).map((c) => c.trim());
+}
+
+export function parsePastedSectorMatrix(text: string): BrinsonFachlerRow[] {
+  if (!text || !text.trim()) {
+    throw new Error("Pasted text is empty.");
+  }
+  const lines = text
+    .trim()
+    .split(/\r\n|\r|\n/)
+    .filter((l) => l.trim().length > 0);
+  if (lines.length === 0) {
+    throw new Error("Pasted text is empty.");
+  }
+
+  const delimiter = lines[0].includes("\t") ? "\t" : ",";
+  const firstCells = splitPasteLine(lines[0], delimiter);
+
+  // Header-vs-data sniff: if the first line's 4 numeric-column cells (index
+  // 1-4) ALL parse as numbers, treat the first line as data, not a header.
+  let hasHeader = true;
+  if (firstCells.length >= 5) {
+    const numericCells = firstCells.slice(1, 5).map((c) => c.replace(/%/g, ""));
+    hasHeader = !numericCells.every((c) => c !== "" && Number.isFinite(Number(c)));
+  }
+
+  const expectedColumnCount = hasHeader ? firstCells.length : 5;
+  if (expectedColumnCount !== 5) {
+    throw new Error(
+      `Expected 5 columns (Sector, P-Weight, P-Return, B-Weight, B-Return); got ${expectedColumnCount}.`
+    );
+  }
+
+  // Column order: an EXACT match (case-insensitive) on all 5 canonical
+  // header names reorders columns; anything else (including a partial
+  // match) falls back to positional order -- the header line is consumed
+  // either way once hasHeader was decided above, never re-treated as data.
+  let columnOrder = BF_POSITIONAL_ORDER;
+  if (hasHeader) {
+    const mapped = firstCells.map((c) => BF_CANONICAL_HEADERS[c.toLowerCase().trim()]);
+    if (mapped.every((m) => m !== undefined)) {
+      columnOrder = mapped as (keyof BrinsonFachlerRow)[];
+    }
+  }
+
+  const dataLines = hasHeader ? lines.slice(1) : lines;
+  const rows: BrinsonFachlerRow[] = [];
+  for (const line of dataLines) {
+    const cells = splitPasteLine(line, delimiter);
+    if (cells.length !== 5) {
+      throw new Error(
+        `Expected 5 columns (Sector, P-Weight, P-Return, B-Weight, B-Return); got ${cells.length}.`
+      );
+    }
+    const row: Partial<Record<keyof BrinsonFachlerRow, string | number>> = {};
+    columnOrder.forEach((field, i) => {
+      row[field] = field === "sector" ? cells[i].trim() : parseNumericPasteCell(cells[i]);
+    });
+    if (!row.sector) continue; // blank-sector rows dropped silently
+    rows.push(row as unknown as BrinsonFachlerRow);
+  }
+
+  if (rows.length === 0) {
+    throw new Error("No data rows found after parsing.");
+  }
+  return rows;
+}
+
 function EffectTile({ label, fraction }: { label: string; fraction: number }) {
   return (
     <Tile
@@ -228,12 +335,40 @@ const _BF_COLUMNS: {
 
 function BrinsonFachlerSection() {
   const [rows, setRows] = useState<BrinsonFachlerRow[]>(emptyBrinsonRows);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteError, setPasteError] = useState<string | null>(null);
+  const [pasteSuccess, setPasteSuccess] = useState<string | null>(null);
   const mutation = useMutation((r: BrinsonFachlerRow[]) => api.getBrinsonFachlerAttribution(r));
   const clientWarnings = useMemo(() => clientSideBrinsonWarnings(rows), [rows]);
   const result: BrinsonFachlerResult | null = mutation.result ?? null;
 
   function updateCell(index: number, field: keyof Omit<BrinsonFachlerRow, "sector">, value: number) {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
+  }
+
+  function handlePasteTextChange(e: ChangeEvent<HTMLTextAreaElement>) {
+    setPasteText(e.target.value);
+    setPasteError(null);
+    setPasteSuccess(null);
+  }
+
+  function handleParsePaste() {
+    try {
+      const parsed = parsePastedSectorMatrix(pasteText);
+      setRows(parsed);
+      setPasteError(null);
+      setPasteSuccess(`Parsed ${parsed.length} sector row(s) -- table updated below.`);
+    } catch (e) {
+      setPasteError(e instanceof Error ? e.message : "Could not parse pasted data.");
+      setPasteSuccess(null);
+    }
+  }
+
+  function handleResetToDefault() {
+    setRows(emptyBrinsonRows());
+    setPasteText("");
+    setPasteError(null);
+    setPasteSuccess(null);
   }
 
   return (
@@ -284,6 +419,47 @@ function BrinsonFachlerSection() {
             </ul>
           </Notice>
         )}
+
+        <details style={{ marginTop: "var(--s-3-5)" }}>
+          <summary style={{ cursor: "pointer", fontSize: "var(--t-callout)", color: theme.textSecondary }}>
+            Bulk paste from spreadsheet (TSV / CSV)
+          </summary>
+          <div style={{ marginTop: "var(--s-2-5)" }}>
+            <p className="screen-sub" style={{ marginTop: 0, marginBottom: "var(--s-2)" }}>
+              Copy a 5-column block (Sector, P-Weight%, P-Return%, B-Weight%, B-Return%) from Excel
+              / Google Sheets and paste here. The header row is optional.
+            </p>
+            <Textarea
+              label="Pasted sector matrix"
+              value={pasteText}
+              onChange={handlePasteTextChange}
+              rows={6}
+              monospace
+              placeholder={
+                "Sector\tPortfolio Weight (%)\tPortfolio Return (%)\tBenchmark Weight (%)\tBenchmark Return (%)\n" +
+                "Information Technology\t28\t12.4\t26\t10.1"
+              }
+            />
+            <div style={{ marginTop: "var(--s-2-5)", display: "flex", gap: "var(--s-2)" }}>
+              <Button variant="neutral" onClick={handleParsePaste}>
+                Parse pasted data
+              </Button>
+              <Button variant="neutral" onClick={handleResetToDefault}>
+                Reset to GICS 11 default
+              </Button>
+            </div>
+            {pasteSuccess && (
+              <Notice variant="success" style={{ marginTop: "var(--s-3)" }}>
+                <span>{pasteSuccess}</span>
+              </Notice>
+            )}
+            {pasteError && (
+              <Notice variant="warn" style={{ marginTop: "var(--s-3)" }} data-testid="brinson-paste-error">
+                <span>Could not parse pasted data: {pasteError}</span>
+              </Notice>
+            )}
+          </div>
+        </details>
 
         <div style={{ marginTop: "var(--s-3-5)" }}>
           <Button variant="primary" pending={mutation.pending} onClick={() => mutation.run(rows)}>
