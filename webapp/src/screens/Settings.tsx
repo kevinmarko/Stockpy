@@ -617,13 +617,19 @@ function PipelineStatusSection({
   httpStatus: number | null;
   onRetry: () => void;
 }) {
+  // Gated on `!status` (no data yet), not `loading`/`error` alone -- a
+  // background reload (e.g. RunNowButton's onTriggered() re-fetching status
+  // right after a trigger) sets `loading` true again for an instant. Hiding
+  // the whole block on every `loading` flip would unmount RunNowButton mid
+  // reload and discard the "Run queued" confirmation it had just rendered
+  // (stale-while-revalidate keeps showing the last-known `status` instead).
   return (
     <SectionCard title="Pipeline status">
-      {loading && <Loading lines={3} />}
-      {!loading && error && (
+      {loading && !status && <Loading lines={3} />}
+      {!loading && error && !status && (
         <ErrorState message={error} status={httpStatus} onRetry={onRetry} />
       )}
-      {!loading && !error && status && (
+      {status && (
         <div className="list">
           <div className="row">
             <span className="row-title">Daemon</span>
