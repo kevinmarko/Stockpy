@@ -23,7 +23,13 @@ from fastapi.testclient import TestClient
 
 from settings import settings
 import api.control_api as control_api
-from desktop.daemon_runtime import RunRecord, RunState, TriggerOutcome, TriggerResult
+from desktop.daemon_runtime import (
+    OrchestratorDaemon,
+    RunRecord,
+    RunState,
+    TriggerOutcome,
+    TriggerResult,
+)
 
 # Starlette's TestClient defaults request.client.host to the literal
 # string "testclient" -- NOT loopback -- which would trip
@@ -42,24 +48,79 @@ def _reset_daemon():
     control_api.set_daemon(None)
 
 
-def _make_fake_daemon(status=None, last_result=None, get_run_map=None, trigger_result=None):
-    """Build a MagicMock standing in for OrchestratorDaemon with the
-    attributes/methods control_api.py actually touches."""
-    daemon = MagicMock(name="fake_daemon")
-    daemon.status.return_value = status or {
-        "is_running": False,
-        "current_run_id": None,
-        "interval_seconds": 60,
-        "last_run": None,
-        "engines_warm": True,
-        "started_at": None,
-    }
-    daemon.last_result = last_result
-    get_run_map = get_run_map or {}
-    daemon.get_run.side_effect = lambda run_id: get_run_map.get(run_id)
-    if trigger_result is not None:
-        daemon.trigger_run.return_value = trigger_result
-    return daemon
+class _FakeDaemon:
+    """Real-shaped stand-in for desktop.daemon_runtime.OrchestratorDaemon.
+
+    A bare MagicMock cannot do this job: every attribute on one is both
+    callable AND truthy, so ``daemon.is_running()`` -- a @property called as a
+    method -- passes silently here while raising
+    ``TypeError: 'bool' object is not callable`` in production. That is
+    exactly the POST /daemon/restart 500 this class exists to make
+    unreproducible.
+
+    ``mock.create_autospec(OrchestratorDaemon, instance=True)`` does NOT help
+    either, despite the folklore: create_autospec explicitly drops the spec
+    for data descriptors ("descriptors don't have a spec because we don't
+    know what type they return") and returns a plain CALLABLE MagicMock for a
+    property -- verified against this repo's Python 3.12, ``d.is_running()``
+    succeeds instead of raising.
+
+    So: METHODS are MagicMocks (every existing assert_called_once_with /
+    assert_not_called assertion keeps working verbatim); PROPERTIES are real
+    @property, set only through __init__.
+    ``test_fake_daemon_mirrors_orchestrator_daemon_member_kinds`` pins this
+    shape against the real class, so a future method<->property flip in
+    daemon_runtime.py fails loudly here instead of silently in a handler.
+    """
+
+    def __init__(
+        self,
+        status=None,
+        last_result=None,
+        get_run_map=None,
+        trigger_result=None,
+        is_running=False,
+    ):
+        self.status = MagicMock(
+            name="status",
+            return_value=status
+            or {
+                "is_running": False,
+                "current_run_id": None,
+                "interval_seconds": 60,
+                "last_run": None,
+                "engines_warm": True,
+                "started_at": None,
+            },
+        )
+        _runs = get_run_map or {}
+        self.get_run = MagicMock(name="get_run", side_effect=lambda run_id: _runs.get(run_id))
+        self.trigger_run = MagicMock(name="trigger_run")
+        if trigger_result is not None:
+            self.trigger_run.return_value = trigger_result
+        self.set_interval = MagicMock(name="set_interval")
+        self.shutdown = MagicMock(name="shutdown")
+        self._is_running = is_running
+        self._last_result = last_result
+
+    @property
+    def is_running(self) -> bool:
+        return self._is_running
+
+    @property
+    def last_result(self):
+        return self._last_result
+
+
+def _make_fake_daemon(status=None, last_result=None, get_run_map=None, trigger_result=None, is_running=False):
+    """Build a real-shaped fake OrchestratorDaemon (see _FakeDaemon)."""
+    return _FakeDaemon(
+        status=status,
+        last_result=last_result,
+        get_run_map=get_run_map,
+        trigger_result=trigger_result,
+        is_running=is_running,
+    )
 
 
 def _make_run_record(run_id="run-1", state=RunState.SUCCEEDED, finished=True, reason="manual", error=None):
@@ -724,8 +785,7 @@ class TestCORSLanTailscale:
 
 class TestDaemonRestart:
     def test_409_while_a_run_is_active(self):
-        daemon = _make_fake_daemon()
-        daemon.is_running.return_value = True
+        daemon = _make_fake_daemon(is_running=True)
         control_api.set_daemon(daemon)
         with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
             resp = client.post(
@@ -738,6 +798,51 @@ class TestDaemonRestart:
             resp = client.post("/daemon/restart")
         assert resp.status_code == 401
 
+    def test_200_with_a_daemon_attached_and_idle(self):
+        """THE regression test for the daemon.is_running() 500.
+
+        Every real deployment HAS a daemon attached
+        (desktop/orchestrator_daemon.py calls control_api.set_daemon(daemon)
+        right after daemon.start()), so this -- not the no-daemon case in
+        test_schedules_a_real_process_exit_not_just_this_thread below -- is
+        the path the webapp Settings screen's "Restart daemon" button
+        (webapp/src/screens/Settings.tsx, PR #532) actually hits. With the
+        bug present, ``daemon.is_running()`` raises
+        ``TypeError: 'bool' object is not callable``; Starlette's TestClient
+        default (raise_server_exceptions=True) re-raises it, so this test
+        would ERROR with that TypeError rather than return any status code
+        at all -- which is what a real client sees as a 500.
+        """
+        import time as _time
+
+        control_api.set_daemon(_make_fake_daemon(is_running=False))
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(control_api.os, "_exit") as fake_exit:
+            resp = client.post(
+                "/daemon/restart", headers={"Authorization": "Bearer cmd-tok"}
+            )
+            assert resp.status_code == 200
+            assert resp.json()["restarting"] is True
+            _time.sleep(0.7)
+            fake_exit.assert_called_once_with(0)
+
+    def test_409_does_not_arm_the_process_exit_timer(self):
+        """A rejected restart that still killed the process 0.5s later would
+        be the worst possible outcome of the 409 guard, so pin that the 409
+        raises BEFORE threading.Timer is armed."""
+        import time as _time
+
+        control_api.set_daemon(_make_fake_daemon(is_running=True))
+        with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(control_api.os, "_exit") as fake_exit:
+            resp = client.post(
+                "/daemon/restart", headers={"Authorization": "Bearer cmd-tok"}
+            )
+            assert resp.status_code == 409
+            assert "currently active" in resp.json()["detail"]
+            _time.sleep(0.7)
+            fake_exit.assert_not_called()
+
     def test_schedules_a_real_process_exit_not_just_this_thread(self):
         """os._exit() (an unconditional OS-level exit) is what actually
         fixes the bug this endpoint exists for -- a bare sys.exit() only
@@ -745,7 +850,18 @@ class TestDaemonRestart:
         which is exactly how uvicorn is hosted inside
         desktop/orchestrator_daemon.py. Patches os._exit to a no-op so this
         test doesn't kill the test runner, and waits out the real
-        threading.Timer delay to prove the call actually happens."""
+        threading.Timer delay to prove the call actually happens.
+
+        Scope note: the autouse _reset_daemon fixture leaves
+        control_api._daemon as None here, so this covers ONLY the
+        no-daemon-attached branch of restart_daemon -- deliberately a 200,
+        not a 503 like every other endpoint in this module, because this API
+        is hosted INSIDE the daemon process, so "no daemon attached" still
+        means this process can be exited and respawned. The daemon-attached
+        branch (what every real deployment hits) is covered by
+        test_200_with_a_daemon_attached_and_idle above; that gap is how the
+        daemon.is_running() 500 shipped in the first place.
+        """
         import time as _time
 
         with mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
@@ -1007,3 +1123,67 @@ def test_control_api_never_imports_pipeline_engines_directly():
     }
     overlap = imported_modules & forbidden_modules
     assert not overlap, f"api/control_api.py must not import {overlap}"
+
+
+def test_daemon_properties_are_never_called_as_methods():
+    """Static guard for the whole bug CLASS behind the POST /daemon/restart
+    500. Derives the property set from the REAL OrchestratorDaemon (never a
+    hardcoded list), then AST-scans api/control_api.py for a Call on one of
+    those names against a daemon-ish Name receiver.
+
+    Scoped to ast.Name receivers on purpose: gui.orchestrator_runner.
+    RunHandle.is_running() IS a method (gui/orchestrator_runner.py), and its
+    call sites here (`rec.handle.is_running()`) have an ast.Attribute
+    receiver, so they are correctly never matched. Known limitation,
+    accepted: a daemon aliased to some other local name would slip past --
+    the real-shaped _FakeDaemon is the runtime half of this defence.
+    """
+    import ast
+    import pathlib
+
+    props = {
+        name for name in dir(OrchestratorDaemon)
+        if isinstance(getattr(OrchestratorDaemon, name, None), property)
+    }
+    assert {"is_running", "last_result"} <= props, (
+        f"OrchestratorDaemon's property set changed: {props}"
+    )
+
+    receivers = {"daemon", "_daemon", "orchestrator_daemon"}
+    src_path = pathlib.Path(control_api.__file__)
+    offenders = [
+        f"{src_path.name}:{node.lineno} {node.func.value.id}.{node.func.attr}()"
+        for node in ast.walk(ast.parse(src_path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in props
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in receivers
+    ]
+    assert not offenders, (
+        "OrchestratorDaemon @property called as a method (drop the parens): "
+        + ", ".join(offenders)
+    )
+
+
+def test_fake_daemon_mirrors_orchestrator_daemon_member_kinds():
+    """Pins _FakeDaemon's shape against the real class, so a future
+    method<->property flip in desktop/daemon_runtime.py fails HERE (loudly,
+    in one place) rather than silently in a handler."""
+    fake = _make_fake_daemon()
+    for name in ("status", "get_run", "set_interval", "trigger_run", "shutdown"):
+        real = getattr(OrchestratorDaemon, name)
+        assert not isinstance(real, property), f"{name} became a property; update _FakeDaemon"
+        assert callable(real) and callable(getattr(fake, name))
+
+    for name in ("is_running", "last_result"):
+        assert isinstance(getattr(OrchestratorDaemon, name), property), (
+            f"{name} is no longer a property; update _FakeDaemon AND the AST guard"
+        )
+        assert isinstance(getattr(_FakeDaemon, name), property)
+
+    loaded = _make_fake_daemon(is_running=True, last_result="rec")
+    assert loaded.is_running is True
+    assert loaded.last_result == "rec"
+    with pytest.raises(TypeError):
+        loaded.is_running()  # the production bug, faithfully reproduced by the fake
