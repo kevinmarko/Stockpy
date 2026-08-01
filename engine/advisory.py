@@ -646,29 +646,36 @@ def evaluate(
         partial_flags.append("quote_unavailable")
 
     try:
-        if _hs is not None:
-            try:
-                bars_df = _hs.get_bars(symbol, lookback_days=252, provider=market)
-                if bars_df is None or bars_df.empty:
-                    # HistoricalStore is itself dead-letter safe (CONSTRAINT #6):
-                    # a provider-level fetch failure inside it degrades to an
-                    # empty DataFrame rather than raising, which would
-                    # otherwise be indistinguishable here from "genuinely no
-                    # bars available". Re-derive directly from the provider
-                    # (unguarded) so a REAL failure still raises and is
-                    # correctly flagged "bars_unavailable" below — preserving
-                    # the pre-HistoricalStore-wiring data_quality semantics
-                    # (PARTIAL only on an actual fetch exception, never on
-                    # legitimately-empty data).
+        # Check if bars can be retrieved from context_extras first to avoid a redundant fetch!
+        if context_extras is not None and "bars" in context_extras and symbol in context_extras["bars"]:
+            full_bars = context_extras["bars"][symbol]
+            if full_bars is not None and not full_bars.empty:
+                bars_df = full_bars.iloc[-252:].copy() if len(full_bars) > 252 else full_bars.copy()
+
+        if bars_df is None or bars_df.empty:
+            if _hs is not None:
+                try:
+                    bars_df = _hs.get_bars(symbol, lookback_days=252, provider=market)
+                    if bars_df is None or bars_df.empty:
+                        # HistoricalStore is itself dead-letter safe (CONSTRAINT #6):
+                        # a provider-level fetch failure inside it degrades to an
+                        # empty DataFrame rather than raising, which would
+                        # otherwise be indistinguishable here from "genuinely no
+                        # bars available". Re-derive directly from the provider
+                        # (unguarded) so a REAL failure still raises and is
+                        # correctly flagged "bars_unavailable" below — preserving
+                        # the pre-HistoricalStore-wiring data_quality semantics
+                        # (PARTIAL only on an actual fetch exception, never on
+                        # legitimately-empty data).
+                        bars_df = market.get_intraday_bars(symbol, lookback_days=252)
+                except Exception as exc:
+                    logger.warning(
+                        "advisory[%s]: HistoricalStore bars fetch failed — %s; "
+                        "falling back to direct provider.", symbol, exc,
+                    )
                     bars_df = market.get_intraday_bars(symbol, lookback_days=252)
-            except Exception as exc:
-                logger.warning(
-                    "advisory[%s]: HistoricalStore bars fetch failed — %s; "
-                    "falling back to direct provider.", symbol, exc,
-                )
+            else:
                 bars_df = market.get_intraday_bars(symbol, lookback_days=252)
-        else:
-            bars_df = market.get_intraday_bars(symbol, lookback_days=252)
 
         if bars_df is not None and not bars_df.empty and current_price == 0.0:
             # Fall back to the last bar's close when the quote endpoint failed.
@@ -712,33 +719,36 @@ def evaluate(
     # Step 3 — Fetch fundamentals and build FundamentalDataDTO
     # ──────────────────────────────────────────────────────────────────────────
     fund_dto: FundamentalDataDTO
-    raw_fund_info: Dict[str, Any] = {}
 
     try:
-        if _hs is not None:
-            try:
-                raw_fund_info = _hs.get_fundamentals_raw(
-                    symbol,
-                    max_age_days=settings.FUNDAMENTALS_REFRESH_DAYS,
-                    provider=market,
-                ) or {}
-                if not raw_fund_info:
-                    # Same rationale as Step 1: HistoricalStore's own
-                    # dead-letter handling swallows a provider-level failure
-                    # into {} — indistinguishable here from "genuinely no
-                    # fundamentals for this symbol". Re-derive directly
-                    # (unguarded) so a REAL failure still raises and is
-                    # correctly flagged "fundamentals_unavailable" below.
-                    raw_fund_info = market.get_fundamentals(symbol) or {}
-            except Exception as exc:
-                logger.warning(
-                    "advisory[%s]: HistoricalStore fundamentals fetch failed — %s; "
-                    "falling back to direct provider.", symbol, exc,
-                )
-                raw_fund_info = market.get_fundamentals(symbol) or {}
+        if context_extras is not None and "fundamentals" in context_extras and symbol in context_extras["fundamentals"]:
+            fund_dto = context_extras["fundamentals"][symbol]
         else:
-            raw_fund_info = market.get_fundamentals(symbol) or {}
-        fund_dto = FundamentalDataDTO.from_raw_dict(symbol, raw_fund_info)
+            raw_fund_info: Dict[str, Any] = {}
+            if _hs is not None:
+                try:
+                    raw_fund_info = _hs.get_fundamentals_raw(
+                        symbol,
+                        max_age_days=settings.FUNDAMENTALS_REFRESH_DAYS,
+                        provider=market,
+                    ) or {}
+                    if not raw_fund_info:
+                        # Same rationale as Step 1: HistoricalStore's own
+                        # dead-letter handling swallows a provider-level failure
+                        # into {} — indistinguishable here from "genuinely no
+                        # fundamentals for this symbol". Re-derive directly
+                        # (unguarded) so a REAL failure still raises and is
+                        # correctly flagged "fundamentals_unavailable" below.
+                        raw_fund_info = market.get_fundamentals(symbol) or {}
+                except Exception as exc:
+                    logger.warning(
+                        "advisory[%s]: HistoricalStore fundamentals fetch failed — %s; "
+                        "falling back to direct provider.", symbol, exc,
+                    )
+                    raw_fund_info = market.get_fundamentals(symbol) or {}
+            else:
+                raw_fund_info = market.get_fundamentals(symbol) or {}
+            fund_dto = FundamentalDataDTO.from_raw_dict(symbol, raw_fund_info)
     except Exception as exc:
         logger.warning("advisory[%s]: fundamentals fetch failed — %s; using defaults.", symbol, exc)
         fund_dto = _default_fund_dto(symbol)
