@@ -529,17 +529,18 @@ def get_symbol_signals(symbol: str) -> Dict[str, Any]:
 
 @app.get("/metrics/models/comparison", dependencies=[Depends(require_token)])
 def get_model_comparison() -> Dict[str, Any]:
-    """Comparative multi-model returns history."""
-    return _clean_nan({
-        "data": [
-            {"name": "Jan", "SF-GARCH-LSTM": 2.1, "Bond-BERT": 1.8, "Benchmark (SPY)": 1.5},
-            {"name": "Feb", "SF-GARCH-LSTM": 4.5, "Bond-BERT": 3.2, "Benchmark (SPY)": 3.0},
-            {"name": "Mar", "SF-GARCH-LSTM": 3.8, "Bond-BERT": 4.0, "Benchmark (SPY)": 2.8},
-            {"name": "Apr", "SF-GARCH-LSTM": 6.2, "Bond-BERT": 5.5, "Benchmark (SPY)": 4.2},
-            {"name": "May", "SF-GARCH-LSTM": 8.0, "Bond-BERT": 6.8, "Benchmark (SPY)": 5.5},
-            {"name": "Jun", "SF-GARCH-LSTM": 10.5, "Bond-BERT": 8.2, "Benchmark (SPY)": 6.1},
-        ]
-    })
+    """Comparative multi-model returns history.
+
+    Honesty (CONSTRAINT #4): "SF-GARCH-LSTM" and "Bond-BERT" are not
+    deployed, tracked models -- ml/models/sf_garch_lstm.py and
+    ml/models/bond_bert.py are closed-form ridge-regression stand-ins (see
+    their module docstrings) with no registry entry and no production
+    caller, so there is no real backtested return history to compare them
+    against a benchmark with. This previously returned a hardcoded fixed
+    curve presented as genuine comparative performance; it now honestly
+    reports no data rather than a plausible-looking fabrication.
+    """
+    return _clean_nan({"data": [], "is_synthetic": True})
 
 
 @app.get("/metrics/options/analytics/{symbol}", dependencies=[Depends(require_token)])
