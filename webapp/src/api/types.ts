@@ -1219,9 +1219,24 @@ export interface AutomationStatus {
  * carries `mode`). Deliberately DISTINCT from GET /automation/status
  * (pilots_api.py), which composes this plus four other sources — this is the
  * raw daemon status the dashboard's trigger buttons act against.
+ *
+ * A discriminated union, not one interface with `boolean` fields: when no
+ * `OrchestratorDaemon` has attached to the Control API process (get_daemon()
+ * is None — a real, reachable state, not hypothetical: startup window, mid
+ * restart, or the Control API served standalone), `get_status()` returns the
+ * bare `{"daemon_alive": false}` and every other key is genuinely absent from
+ * the response, not merely null. Modeling that shape as `daemon_alive:
+ * boolean` plus a dozen always-required fields was a type-level lie — it let
+ * a consumer read `data.run_history` without ever being told the field might
+ * not exist. Consumers MUST narrow on `daemon_alive` before touching any
+ * other field.
  */
-export interface ControlStatus {
-  daemon_alive: boolean;
+export interface ControlStatusOffline {
+  daemon_alive: false;
+}
+
+export interface ControlStatusOnline {
+  daemon_alive: true;
   is_running: boolean;
   current_run_id: string | null;
   interval_seconds: number | null;
@@ -1234,6 +1249,8 @@ export interface ControlStatus {
   advisory_only: boolean;
   dry_run: boolean;
 }
+
+export type ControlStatus = ControlStatusOffline | ControlStatusOnline;
 
 /**
  * GET /runs/history (api/control_api.py) — durable run history read from

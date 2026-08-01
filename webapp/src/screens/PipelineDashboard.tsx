@@ -13,7 +13,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api, ApiError } from "../api/client";
-import type { ControlStatus, DeadLetterQueue, DeadLetterQueueEntry, RunRecord } from "../api/types";
+import type {
+  ControlStatus,
+  ControlStatusOnline,
+  DeadLetterQueue,
+  DeadLetterQueueEntry,
+  RunRecord,
+} from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
 import { useMutation } from "../hooks/useMutation";
@@ -60,7 +66,7 @@ function StateBadge({ state }: { state: RunRecord["state"] }) {
   return <span className={cls}>{state}</span>;
 }
 
-function StatusBanner({ status }: { status: ControlStatus }) {
+function StatusBanner({ status }: { status: ControlStatusOnline }) {
   const running = status.is_running;
   return (
     <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
@@ -114,6 +120,33 @@ function StatusBanner({ status }: { status: ControlStatus }) {
           </span>
         </Notice>
       )}
+    </section>
+  );
+}
+
+/**
+ * The honest render for `{"daemon_alive": false}` — no `OrchestratorDaemon`
+ * is currently attached to the Control API process (startup window, mid
+ * restart, or the API served standalone). Every other `ControlStatus` field
+ * is genuinely absent from that response, not merely null, so this renders
+ * in place of StatusBanner/Controls/RunHistory rather than passing partial
+ * data into components that expect the full `ControlStatusOnline` shape.
+ */
+function DaemonOfflineNotice() {
+  return (
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
+        <span
+          aria-hidden
+          style={{ width: 12, height: 12, borderRadius: "50%", flex: "0 0 auto", background: theme.textMuted }}
+        />
+        <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Daemon offline</div>
+      </div>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", margin: "var(--s-2) 0 0" }}>
+        No orchestrator daemon is attached to the Control API right now, so
+        live status, run triggers, and run history are unavailable until it
+        reconnects.
+      </p>
     </section>
   );
 }
@@ -482,8 +515,12 @@ export function PipelineDashboard() {
   } = useApi<ControlStatus>(() => api.getControlStatus(), []);
 
   // Poll every 3s ONLY while a run is actually in flight — not a phone's radio
-  // budget spent polling a status that changes once every few minutes.
-  const inFlight = Boolean(data?.is_running || data?.current_run_id);
+  // budget spent polling a status that changes once every few minutes. Guard
+  // on daemon_alive first: a bare `{daemon_alive: false}` response has none
+  // of the other fields, so short-circuit before ever reading them.
+  const inFlight = Boolean(
+    data?.daemon_alive && (data.is_running || data.current_run_id)
+  );
   usePoll(reload, 3000, inFlight);
 
   const {
@@ -534,9 +571,15 @@ export function PipelineDashboard() {
         <ErrorState message={error} status={httpStatus} onRetry={reload} />
       ) : data ? (
         <>
-          <StatusBanner status={data} />
-          <Controls disabled={data.is_running} onTriggered={reload} />
-          <RunHistory runs={data.run_history} />
+          {data.daemon_alive ? (
+            <>
+              <StatusBanner status={data} />
+              <Controls disabled={data.is_running} onTriggered={reload} />
+              <RunHistory runs={data.run_history} />
+            </>
+          ) : (
+            <DaemonOfflineNotice />
+          )}
           <DurableRunHistory
             runs={history}
             loading={historyLoading}
