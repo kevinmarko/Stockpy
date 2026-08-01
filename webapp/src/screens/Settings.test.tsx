@@ -347,6 +347,113 @@ describe("Settings screen — Run Now", () => {
   });
 });
 
+describe("Settings screen — Restart daemon", () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, "serviceWorker", { value: {}, configurable: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+  });
+
+  it("happy path: typed RESTART confirm calls restartDaemon and the success notice survives the background status reload it triggers", async () => {
+    const user = userEvent.setup();
+    // mockResolvedValue (not Once): PipelineStatusSection reloads status
+    // after a restart attempt (onRestarted -> reloadStatus), exactly like
+    // RunNowButton's onTriggered -- this exercises the SAME
+    // stale-while-revalidate path b77438cb fixed, so it must not use a
+    // single-shot mock that would leave the second call unresolved.
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    const restartSpy = vi.spyOn(api, "restartDaemon").mockResolvedValueOnce({
+      restarting: true,
+      message: "Process exiting in ~0.5s. Whether it comes back up depends on the process supervisor.",
+    });
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
+    expect(await screen.findByRole("dialog", { name: "Restart daemon" })).toBeInTheDocument();
+
+    // Confirm stays disabled until the typed value exactly matches.
+    const confirmBtn = screen.getByTestId("restart-daemon-confirm");
+    expect(confirmBtn).toBeDisabled();
+    await user.type(screen.getByLabelText('Type "RESTART" to confirm'), "RESTART");
+    expect(confirmBtn).toBeEnabled();
+
+    await user.click(confirmBtn);
+
+    expect(restartSpy).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Process exiting in ~0.5s/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Restart daemon" })).not.toBeInTheDocument();
+
+    // The confirm click also triggers a background status reload -- confirm
+    // it actually happened, then confirm the success notice is STILL there
+    // once it resolves (this is exactly the class of bug b77438cb fixed for
+    // RunNowButton: a background reload must never wipe a just-rendered
+    // confirmation).
+    await waitFor(() => expect(api.getAutomationStatus).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/Process exiting in ~0.5s/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restart daemon" })).toBeInTheDocument();
+  });
+
+  it("cancel: closes the dialog without calling restartDaemon", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    const restartSpy = vi.spyOn(api, "restartDaemon");
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
+    await screen.findByRole("dialog", { name: "Restart daemon" });
+    await user.type(screen.getByLabelText('Type "RESTART" to confirm'), "RESTART");
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog", { name: "Restart daemon" })).not.toBeInTheDocument();
+    expect(restartSpy).not.toHaveBeenCalled();
+  });
+
+  it("a mistyped confirmation value (not an exact match) keeps Restart disabled", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
+    const confirmBtn = screen.getByTestId("restart-daemon-confirm");
+
+    await user.type(screen.getByLabelText('Type "RESTART" to confirm'), "restart please");
+    expect(confirmBtn).toBeDisabled();
+  });
+
+  it("disabled up front while a pipeline run is already in flight (daemon.is_running), mirroring the server's 409 guard", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue({
+      ...HEALTHY_STATUS,
+      daemon: { ...HEALTHY_STATUS.daemon, is_running: true },
+    });
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    renderSettings();
+
+    expect(await screen.findByRole("button", { name: "Restart daemon" })).toBeDisabled();
+    expect(screen.getByText(/Disabled while a pipeline run is active/)).toBeInTheDocument();
+  });
+
+  it("a restart failure (e.g. auth/gating rejected server-side) surfaces the real error, not a crash", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "restartDaemon").mockRejectedValueOnce(new Error("Daemon not available."));
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
+    await user.type(screen.getByLabelText('Type "RESTART" to confirm'), "RESTART");
+    await user.click(screen.getByTestId("restart-daemon-confirm"));
+
+    expect(await screen.findByText("Daemon not available.")).toBeInTheDocument();
+  });
+});
+
 describe("Settings screen — Signal generation (pause/resume)", () => {
   beforeEach(() => {
     Object.defineProperty(navigator, "serviceWorker", { value: {}, configurable: true });
