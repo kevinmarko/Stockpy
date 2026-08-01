@@ -646,6 +646,11 @@ function PipelineStatusSection({
             />
           </div>
 
+          <RestartDaemonControl
+            runInFlight={status.daemon.is_running === true}
+            onRestarted={onRetry}
+          />
+
           <div className="row">
             <span className="row-title">Last run</span>
             {status.last_run ? (
@@ -716,6 +721,154 @@ function PipelineStatusSection({
         </div>
       )}
     </SectionCard>
+  );
+}
+
+/**
+ * RestartDaemonControl — surfaces the already-built, already-wired
+ * `POST /daemon/restart` (`api.restartDaemon()`) here, next to the "Daemon"
+ * status row. Previously this exact action was reachable ONLY from the
+ * Runtime Tunables screen's `env_drift.detected` notice
+ * (`SettingsManager.tsx`), guarded by nothing more than a bare click — no
+ * confirmation step at all, just `onClick={async () => { await
+ * api.restartDaemon(); alert(res.message); }}`. That was tolerable there
+ * because it only appears after the operator has just changed a setting and
+ * is already deep in an edit flow. This is a more prominent, always-visible
+ * placement of the SAME action, so it gets a stronger guard: a
+ * typed-confirmation Modal, reusing the shared `Modal` scaffold (already
+ * generic across 5+ call sites in this file) rather than `KillSwitchToggle`
+ * itself, which is a self-contained pause/resume switch hardwired to a
+ * `reason` string that gets persisted server-side as an audit trail --
+ * `restartDaemon()` takes no parameters at all, so a "reason" input here
+ * would be theater (typed, then discarded). Instead the gate is "type
+ * RESTART to confirm", a stronger fat-finger guard than a free-text reason
+ * (nothing typed in accidentally satisfies it) and an honest one (nothing is
+ * silently sent anywhere).
+ *
+ * The confirmation copy carries forward `/daemon/restart`'s own documented
+ * caveat verbatim (see `api/control_api.py`'s `restart_daemon` docstring):
+ * whether the process actually comes back depends entirely on the process
+ * supervisor it's running under. This is NOT a "stop and don't restart"
+ * control -- it always requests a restart; it just can't promise the OS
+ * will honor it, so the copy says so plainly rather than either hiding the
+ * risk or overstating it.
+ *
+ * `runInFlight` disables the button while `daemon.is_running` -- mirroring
+ * `control_api.py`'s own 409 guard (`restart_daemon` rejects while a run is
+ * active) -- so the UI prevents the doomed request instead of surfacing a
+ * raw 409; the server-side guard remains the authority either way.
+ *
+ * No client-side capability/auth pre-check (e.g. "is `ORCHESTRATOR_DAEMON_
+ * TOKEN` configured") is added here, matching how `SettingsManager.tsx`'s
+ * existing usage handles it: the control always renders, and an auth/gating
+ * failure (missing command token, `Daemon not available`, etc.) surfaces
+ * through the same `mutation.error` path as any other failure -- there is no
+ * status field this screen could read to predict that failure in advance.
+ *
+ * Mounted as a sibling inside `PipelineStatusSection`'s `{status && (...)}`
+ * branch (not gated on `loading`), so it inherits the stale-while-revalidate
+ * fix (see that function's own comment) for free: a background status
+ * reload after a restart attempt never unmounts this component or discards
+ * its confirmation/result state, the same failure mode `RunNowButton` had
+ * before that fix landed.
+ */
+function RestartDaemonControl({
+  runInFlight,
+  onRestarted,
+}: {
+  runInFlight: boolean;
+  onRestarted: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [typed, setTyped] = useState("");
+  const mutation = useMutation(() => api.restartDaemon());
+  const confirmed = typed.trim().toUpperCase() === "RESTART";
+
+  const openConfirm = () => {
+    setTyped("");
+    mutation.reset();
+    setConfirming(true);
+  };
+
+  const confirmRestart = async () => {
+    await mutation.run();
+    setConfirming(false);
+    onRestarted();
+  };
+
+  return (
+    <div style={{ marginTop: "var(--s-2-5)" }}>
+      <Button
+        variant="neutral"
+        onClick={openConfirm}
+        disabled={runInFlight}
+        data-testid="restart-daemon-button"
+      >
+        Restart daemon
+      </Button>
+      {runInFlight && (
+        <p
+          style={{
+            color: theme.textMuted,
+            fontSize: "var(--t-caption)",
+            marginTop: "var(--s-1-5)",
+          }}
+        >
+          Disabled while a pipeline run is active.
+        </p>
+      )}
+
+      {mutation.error && (
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }} data-testid="restart-daemon-error">
+          <span>⚠️</span>
+          <span>{mutation.error}</span>
+        </Notice>
+      )}
+      {mutation.result && (
+        <Notice variant="success" style={{ marginTop: "var(--s-2-5)" }} data-testid="restart-daemon-success">
+          <span>✅</span>
+          <span>{mutation.result.message}</span>
+        </Notice>
+      )}
+
+      {confirming && (
+        <Modal ariaLabel="Restart daemon" onClose={() => setConfirming(false)}>
+          <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
+            Restart the daemon process?
+          </h2>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
+            Exits the running orchestrator process so it can come back up
+            with any freshly-written settings applied. Whether it actually
+            comes back depends on how it's being run: a process supervisor
+            with auto-restart (systemd <code>Restart=always</code>, launchd{" "}
+            <code>KeepAlive</code>) relaunches it automatically. If your
+            deployment doesn't auto-restart the daemon process, you may need
+            to relaunch it manually at the host machine.
+          </p>
+          <Input
+            label='Type "RESTART" to confirm'
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            hint="Required."
+          />
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
+            <Button variant="neutral" onClick={() => setConfirming(false)} style={{ flex: 1 }}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={confirmRestart}
+              disabled={!confirmed}
+              pending={mutation.pending}
+              style={{ flex: 2 }}
+              data-testid="restart-daemon-confirm"
+            >
+              Restart
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }
 
