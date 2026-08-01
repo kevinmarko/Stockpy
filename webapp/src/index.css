@@ -822,6 +822,14 @@ button:focus-visible {
     border-radius: 22px;
     max-width: 440px;
   }
+  /* Opt-in wider variant for content-heavy dialogs (command builder/palette)
+     that need more than 440px on desktop -- still `width: 100%` below this
+     breakpoint and still capped by max-width above it, so it shrinks to fit
+     any viewport instead of forcing overflow the way a child `min-width`
+     would. */
+  .sheet--wide {
+    max-width: 760px;
+  }
 }
 
 @keyframes fade {

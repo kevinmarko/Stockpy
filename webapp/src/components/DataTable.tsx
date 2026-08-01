@@ -70,7 +70,11 @@ export function DataTable<T extends Record<string, any>>({
   }, [sortedData, groupByKey]);
 
   const toggleGroup = (key: string) => {
-    setExpandedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+    // A group with no entry yet is *effectively* expanded (the render below
+    // defaults `isExpanded` to `true` via `?? true`). Inverting the raw
+    // `prev[key]` (`undefined`) gives `true` again -- a no-op on the very
+    // first click of any group. Invert the same effective default instead.
+    setExpandedGroups((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));
   };
 
   const copyRowJson = (row: T, e: React.MouseEvent) => {

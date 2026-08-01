@@ -9,11 +9,17 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Console } from "./Console";
 import { api } from "../api/client";
+import { DensityProvider } from "../components/DensityContext";
+import { ToastProvider } from "../components/ToastContext";
 
 function renderConsole() {
   return render(
     <MemoryRouter>
-      <Console />
+      <ToastProvider>
+        <DensityProvider>
+          <Console />
+        </DensityProvider>
+      </ToastProvider>
     </MemoryRouter>
   );
 }
@@ -40,7 +46,9 @@ describe("Console screen (real mock API)", () => {
     screen.getByText("🛡️ Preflight Check").click();
 
     expect(await screen.findByText(/Active Job:/)).toBeInTheDocument();
-    expect(screen.getByText("running")).toBeInTheDocument();
+    // "running" now appears twice: the Active Job badge and this session's
+    // job-history table below it (both real, both the same job).
+    expect(screen.getAllByText("running").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Cancel Active Job" })).toBeInTheDocument();
   });
 
@@ -78,9 +86,9 @@ describe("Console screen (real mock API)", () => {
 
     renderConsole();
     screen.getByText("🧪 Run Test Suite").click();
-    expect(await screen.findByText("running")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("running").length).toBeGreaterThan(0));
 
-    await waitFor(() => expect(screen.getByText("success")).toBeInTheDocument(), {
+    await waitFor(() => expect(screen.getAllByText("success").length).toBeGreaterThan(0), {
       timeout: 3000,
     });
     // A terminal job has nothing left to cancel.
@@ -105,11 +113,10 @@ describe("Console screen (real mock API)", () => {
 
     expect(await screen.findByText("Strategies (comma-separated ids)")).toBeInTheDocument();
 
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
     screen.getByRole("button", { name: "Run Backtest" }).click();
-    expect(alertSpy).toHaveBeenCalledWith(
-      "Enter at least one strategy id (comma-separated)."
-    );
+    expect(
+      await screen.findByText("Enter at least one strategy id (comma-separated).")
+    ).toBeInTheDocument();
     expect(createJobSpy).not.toHaveBeenCalled();
   });
 

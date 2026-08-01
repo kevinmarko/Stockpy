@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { Bar, ForecastResult } from "../api/types";
 import { useApi } from "../hooks/useApi";
@@ -8,7 +8,6 @@ import { AttentionHeatmapStrip, ForecastCandleChart } from "../components/charts
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { useToast } from "../components/ToastContext";
-import { TickerDrawer } from "../components/TickerDrawer";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -67,26 +66,21 @@ function ForecastView({
 }) {
   const { addToast } = useToast();
   const [selectedHorizon, setSelectedHorizon] = useState<number | null>(30);
-  const [confidenceLevel, setConfidenceLevel] = useState<80 | 90 | 95>(90);
-  const [showSkillDrawer, setShowSkillDrawer] = useState(false);
-  const [benchmarkSymbol, setBenchmarkSymbol] = useState<string>("SPY");
 
-  // Model visibility toggles
-  const [modelToggles, setModelToggles] = useState({
-    arima: true,
-    holtWinters: true,
-    cnnLstm: true,
-    monteCarlo: true,
-  });
-
-  // Export handlers
+  // Export handlers -- both built from the real forecast result `d`, never
+  // fabricated placeholder numbers (CONSTRAINT #4). A horizon that didn't
+  // converge this run is exported as an empty cell, matching the DASH the
+  // tiles above already show for it.
   const handleExportCSV = () => {
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      ["Horizon,Forecast,Lower,Upper", "10d,152.4,148.0,156.8", "30d,158.0,145.2,170.8", "60d,164.2,140.0,188.4", "90d,170.0,135.0,205.0"].join("\n");
-    const encodedUri = encodeURI(csvContent);
+    const rows = HORIZONS.map((h) => {
+      const mid = d[h.key] as number | null;
+      const lower = d[`Forecast_${h.days}_Lower`] as number | null;
+      const upper = d[`Forecast_${h.days}_Upper`] as number | null;
+      return [`${h.days}d`, mid ?? "", lower ?? "", upper ?? ""].join(",");
+    });
+    const csvContent = "data:text/csv;charset=utf-8," + ["Horizon,Forecast,Lower,Upper", ...rows].join("\n");
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", encodeURI(csvContent));
     link.setAttribute("download", `${symbol}_forecast_data.csv`);
     document.body.appendChild(link);
     link.click();
@@ -116,26 +110,29 @@ function ForecastView({
     });
   };
 
+  // Map the 8 named band fields onto ForecastCandleChart's forecast prop. A
+  // null horizon is skipped entirely, never plotted as 0 (CONSTRAINT #4); a
+  // populated horizon with a null band still draws its projection point, just
+  // without a cone at that horizon (ForecastCandleChart's own contract).
   const forecast = HORIZONS.filter((h) => d[h.key] != null).map((h) => ({
     day: h.days,
     mid: d[h.key] as number,
-    lower: (d[`Forecast_${h.days}_Lower`] as number | null)
-      ? (d[`Forecast_${h.days}_Lower`] as number) * (confidenceLevel / 90)
-      : null,
-    upper: (d[`Forecast_${h.days}_Upper`] as number | null)
-      ? (d[`Forecast_${h.days}_Upper`] as number) * (confidenceLevel / 90)
-      : null,
+    lower: d[`Forecast_${h.days}_Lower`] as number | null,
+    upper: d[`Forecast_${h.days}_Upper`] as number | null,
   }));
 
   const hasBand = d.MC_Lower != null && d.MC_Upper != null;
   const noHistory = bars.length === 0 && forecast.length > 0;
   const chartEmpty = bars.length === 0 && forecast.length === 0;
+  const convergedCount = forecast.length;
 
-  // Key derived insights
-  const currentPrice = (bars.length > 0 && bars[bars.length - 1].Close != null) ? (bars[bars.length - 1].Close as number) : 150;
-  const target30d = d.Forecast_30 != null ? Number(d.Forecast_30) : currentPrice;
-  const expectedReturnPct = ((target30d - currentPrice) / currentPrice) * 100;
-  const volatileRangePct = hasBand ? (((Number(d.MC_Upper) - Number(d.MC_Lower)) / currentPrice) * 100) : 12.5;
+  // Key derived insights -- `null` (never a fabricated anchor price) whenever
+  // there's no real last close to derive from.
+  const currentPrice = bars.length > 0 && bars[bars.length - 1].Close != null ? (bars[bars.length - 1].Close as number) : null;
+  const expectedReturnPct =
+    currentPrice != null && d.Forecast_30 != null ? ((Number(d.Forecast_30) - currentPrice) / currentPrice) * 100 : null;
+  const volatileRangePct =
+    currentPrice != null && hasBand ? ((Number(d.MC_Upper) - Number(d.MC_Lower)) / currentPrice) * 100 : null;
 
   return (
     <>
@@ -153,13 +150,13 @@ function ForecastView({
       <section className="card card-pad" style={{ marginBottom: "var(--s-3-5)", background: "var(--surface-2)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)", flexWrap: "wrap", gap: "var(--s-2)" }}>
           <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Horizon & Expected Return Summary</h2>
-          <button
+          <Link
+            to={`/symbol/${symbol}`}
             className="btn"
-            onClick={() => setShowSkillDrawer(true)}
             style={{ fontSize: "var(--t-caption)", background: "var(--surface-3)", color: "var(--accent)" }}
           >
             📊 View Model Skill & Historical Accuracy
-          </button>
+          </Link>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
@@ -188,78 +185,32 @@ function ForecastView({
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "var(--s-2-5)" }}>
-          <Tile label="Expected Return (30d)" value={`${expectedReturnPct >= 0 ? "+" : ""}${fmtNum(expectedReturnPct, 2)}%`} tone={expectedReturnPct >= 0 ? "pos" : "neg"} />
-          <Tile label="Volatile Range Band" value={`±${fmtNum(volatileRangePct / 2, 1)}%`} />
-          <Tile label="Forecast Trend Direction" value={expectedReturnPct > 1.5 ? "BULLISH ↗" : expectedReturnPct < -1.5 ? "BEARISH ↘" : "NEUTRAL ➔"} />
+          <Tile
+            label="Expected Return (30d)"
+            value={expectedReturnPct == null ? DASH : `${expectedReturnPct >= 0 ? "+" : ""}${fmtNum(expectedReturnPct, 2)}%`}
+            tone={expectedReturnPct == null ? undefined : expectedReturnPct >= 0 ? "pos" : "neg"}
+          />
+          <Tile label="Monte Carlo Range Band" value={volatileRangePct == null ? DASH : `±${fmtNum(volatileRangePct / 2, 1)}%`} />
+          <Tile
+            label="Forecast Trend Direction"
+            value={
+              expectedReturnPct == null
+                ? DASH
+                : expectedReturnPct > 1.5
+                ? "BULLISH ↗"
+                : expectedReturnPct < -1.5
+                ? "BEARISH ↘"
+                : "NEUTRAL ➔"
+            }
+          />
         </div>
       </section>
 
       {/* 1. Data Visualization & Chart Enhancements */}
       <section className="card card-pad" style={{ marginBottom: "var(--s-3-5)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
           <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Price & forecast</h2>
-          
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)", flexWrap: "wrap" }}>
-            {/* Confidence Level Selector */}
-            <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)", fontSize: "var(--t-caption)" }}>
-              <span style={{ color: "var(--text-muted)" }}>Monte Carlo Confidence:</span>
-              <select
-                value={confidenceLevel}
-                onChange={(e) => setConfidenceLevel(Number(e.target.value) as any)}
-                style={{
-                  background: "var(--surface-2)",
-                  color: "var(--text-primary)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--r-xs)",
-                  padding: "2px 6px",
-                  fontSize: "var(--t-caption)",
-                }}
-              >
-                <option value={80}>80%</option>
-                <option value={90}>90%</option>
-                <option value={95}>95%</option>
-              </select>
-            </div>
-
-            <LookbackToggle value={lookbackDays} onChange={onLookbackChange} />
-          </div>
-        </div>
-
-        {/* Model Layer Toggles & Benchmark Selector */}
-        <div style={{ display: "flex", gap: "var(--s-3)", flexWrap: "wrap", alignItems: "center", padding: "var(--s-2) var(--s-3)", background: "var(--surface-2)", borderRadius: "var(--r-xs)", marginBottom: "var(--s-3)", fontSize: "var(--t-caption)" }}>
-          <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>Model Layers:</span>
-          <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
-            <input type="checkbox" checked={modelToggles.arima} onChange={() => setModelToggles(prev => ({ ...prev, arima: !prev.arima }))} />
-            <span style={{ color: theme.growth }}>ARIMA</span>
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
-            <input type="checkbox" checked={modelToggles.cnnLstm} onChange={() => setModelToggles(prev => ({ ...prev, cnnLstm: !prev.cnnLstm }))} />
-            <span style={{ color: theme.accent }}>CNN-LSTM</span>
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
-            <input type="checkbox" checked={modelToggles.monteCarlo} onChange={() => setModelToggles(prev => ({ ...prev, monteCarlo: !prev.monteCarlo }))} />
-            <span style={{ color: theme.caution }}>Monte Carlo Cone</span>
-          </label>
-
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
-            <span style={{ color: "var(--text-muted)" }}>Benchmark Overlay:</span>
-            <select
-              value={benchmarkSymbol}
-              onChange={(e) => setBenchmarkSymbol(e.target.value)}
-              style={{
-                background: "var(--surface)",
-                color: "var(--text-primary)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--r-xs)",
-                padding: "2px 6px",
-                fontSize: "var(--t-micro)",
-              }}
-            >
-              <option value="SPY">SPY (S&P 500)</option>
-              <option value="QQQ">QQQ (Nasdaq 100)</option>
-              <option value="NONE">None</option>
-            </select>
-          </div>
+          <LookbackToggle value={lookbackDays} onChange={onLookbackChange} />
         </div>
 
         {chartEmpty ? (
@@ -300,37 +251,30 @@ function ForecastView({
             }
           />
         </div>
-        
-        {/* Model weights */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)", marginBottom: "var(--s-4)" }}>
-          <div style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>Ensemble Contribution Weighting:</div>
-          <div style={{ display: "flex", height: "12px", borderRadius: "var(--r-pill)", overflow: "hidden", background: "var(--surface-3)" }}>
-            <div style={{ width: "35%", background: "var(--growth)" }} title="ARIMA (35%)" />
-            <div style={{ width: "30%", background: "var(--accent)" }} title="CNN-LSTM (30%)" />
-            <div style={{ width: "20%", background: "var(--caution)" }} title="Holt-Winters (20%)" />
-            <div style={{ width: "15%", background: "var(--text-muted)" }} title="Monte Carlo (15%)" />
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--t-micro)", color: "var(--text-secondary)" }}>
-            <span>🟩 ARIMA 35%</span>
-            <span>🟦 CNN-LSTM 30%</span>
-            <span>🟧 Holt-Winters 20%</span>
-            <span>⬜ Monte Carlo 15%</span>
-          </div>
-        </div>
 
         {/* Drivers summary */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--s-3)" }}>
           <div style={{ background: "var(--surface-2)", padding: "var(--s-3)", borderRadius: "var(--r-xs)" }}>
             <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "var(--t-callout)" }}>Volatility Drivers</div>
             <div style={{ fontSize: "var(--t-caption)", color: "var(--text-secondary)", marginTop: "4px" }}>
-              GARCH annual volatility at 18.2%. Monte Carlo daily sigma derived with /sqrt(252) scaling.
+              Monte Carlo daily sigma is GARCH annualized volatility scaled by
+              /sqrt(252). {hasBand ? "" : "No Monte Carlo band converged this run."}
             </div>
           </div>
 
           <div style={{ background: "var(--surface-2)", padding: "var(--s-3)", borderRadius: "var(--r-xs)" }}>
             <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "var(--t-callout)" }}>Convergence Status</div>
-            <div style={{ fontSize: "var(--t-caption)", color: "var(--growth)", marginTop: "4px", fontWeight: 600 }}>
-              ✓ All 4 horizons (10d, 30d, 60d, 90d) converged cleanly without structural breaks.
+            <div
+              style={{
+                fontSize: "var(--t-caption)",
+                color: convergedCount === HORIZONS.length ? "var(--growth)" : "var(--caution)",
+                marginTop: "4px",
+                fontWeight: 600,
+              }}
+            >
+              {convergedCount === HORIZONS.length
+                ? `✓ All ${HORIZONS.length} horizons converged this run.`
+                : `⚠ ${convergedCount} of ${HORIZONS.length} horizons converged this run.`}
             </div>
           </div>
         </div>
@@ -345,10 +289,6 @@ function ForecastView({
           📥 Export JSON
         </button>
       </div>
-
-      {showSkillDrawer && (
-        <TickerDrawer symbol={symbol} onClose={() => setShowSkillDrawer(false)} />
-      )}
     </>
   );
 }

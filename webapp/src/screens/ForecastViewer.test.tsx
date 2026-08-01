@@ -26,7 +26,7 @@ describe("ForecastViewer screen (real mock API)", () => {
   it("renders the horizon tiles for the default symbol", async () => {
     renderScreen();
     expect(await screen.findByText("Model detail")).toBeInTheDocument();
-    expect(screen.getAllByText("ARIMA").length).toBeGreaterThan(0);
+    expect(screen.getByText("ARIMA")).toBeInTheDocument();
   });
 
   it("a null horizon (Forecast_90) renders '—', never a fabricated level", async () => {

@@ -53,7 +53,7 @@ import { needsTokenEntry } from "./auth/apiToken";
 import { usePwaStatus } from "./hooks/usePwaStatus";
 import { useApi } from "./hooks/useApi";
 import { api } from "./api/client";
-import type { LlmStatus } from "./api/types";
+import type { CommandManifest, LlmStatus } from "./api/types";
 
 import { theme } from "./theme";
 import AIChatInterface from "./components/AIChatInterface";
@@ -167,8 +167,11 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [inspectedTicker, setInspectedTicker] = useState<string | null>(null);
-  const [previewReportTitle, setPreviewReportTitle] = useState<string | null>(null);
+  const [previewReportName, setPreviewReportName] = useState<string | null>(null);
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const { data: commandManifest } = useApi<CommandManifest>(() => api.getCommands(), []);
 
   useEffect(() => {
     const handleKeyDown = (e: globalThis.KeyboardEvent) => {
@@ -246,19 +249,24 @@ export default function App() {
           <SettingsButton />
           <AIChatInterface isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
 
-          {isPaletteOpen && (
-            <CommandPaletteModal
-              onClose={() => setIsPaletteOpen(false)}
-              onInspectTicker={(sym) => {
-                setInspectedTicker(sym);
-                setIsPaletteOpen(false);
-              }}
-              onPreviewReport={(rep) => {
-                setPreviewReportTitle(rep);
-                setIsPaletteOpen(false);
-              }}
-            />
-          )}
+          <CommandPaletteModal
+            isOpen={isPaletteOpen}
+            onClose={() => setIsPaletteOpen(false)}
+            commands={commandManifest?.commands ?? []}
+            onSelectCommandForBuilder={(spec) => {
+              setIsPaletteOpen(false);
+              navigate(`/commands?builder=${spec.name}`);
+            }}
+            onInspectTicker={(sym) => {
+              setInspectedTicker(sym);
+              setIsPaletteOpen(false);
+            }}
+            onPreviewReport={(name) => {
+              setPreviewReportName(name);
+              setIsPaletteOpen(false);
+            }}
+            onNavigate={navigate}
+          />
 
           {inspectedTicker && (
             <TickerDrawer
@@ -267,10 +275,10 @@ export default function App() {
             />
           )}
 
-          {previewReportTitle && (
+          {previewReportName && (
             <ReportPreviewModal
-              title={previewReportTitle}
-              onClose={() => setPreviewReportTitle(null)}
+              name={previewReportName}
+              onClose={() => setPreviewReportName(null)}
             />
           )}
         </div>
