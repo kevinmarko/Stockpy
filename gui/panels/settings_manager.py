@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
-from settings import settings
+from settings import (
+    DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS,
+    DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS,
+    settings,
+)
 from gui import env_io, orchestrator_runner, help_widgets
 from gui.symbol_search import filter_by_symbol
 from gui.orchestrator_runner import StageStatus
@@ -155,6 +159,22 @@ _SETTINGS_LAYOUT: List[tuple[str, str]] = [
 ]
 
 
+# Per-key [min, max] for "number" widgets whose valid range is enforced by a
+# real settings.py field_validator -- constraining the WIDGET itself (rather
+# than only validating after submit) means it can never submit a value that
+# would fail Settings() construction on the daemon's next launch, which
+# could otherwise lock the operator out of this very Settings Manager tab
+# needing to fix it. Deliberately a narrow, explicit allowlist rather than a
+# blanket rule for every "number" entry above -- most of those have no
+# real validator to violate.
+_NUMBER_BOUNDS: Dict[str, Tuple[float, float]] = {
+    "DAEMON_SHUTDOWN_TIMEOUT_SECONDS": (
+        DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS,
+        DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS,
+    ),
+}
+
+
 def _current_scalar(key: str, fallback: Any) -> Any:
     """Best-effort current value of ``key`` (from .env, else live settings)."""
     try:
@@ -182,10 +202,22 @@ def render_settings_manager() -> None:
         for key, kind in _SETTINGS_LAYOUT:
             cur = _current_scalar(key, getattr(settings, key, ""))
             if kind == "number":
+                bounds = _NUMBER_BOUNDS.get(key)
+                bound_kwargs: Dict[str, float] = (
+                    {"min_value": bounds[0], "max_value": bounds[1]} if bounds else {}
+                )
+                # Fallback default must itself respect the bounds -- 0.0 would
+                # raise a SECOND StreamlitAPIException for a key like
+                # DAEMON_SHUTDOWN_TIMEOUT_SECONDS whose valid range excludes 0.
+                fallback_val = bounds[0] if bounds else 0.0
                 try:
-                    val = st.number_input(key, value=float(cur), step=0.01, format="%.4f")
+                    val = st.number_input(
+                        key, value=float(cur), step=0.01, format="%.4f", **bound_kwargs
+                    )
                 except Exception:
-                    val = st.number_input(key, value=0.0, step=0.01, format="%.4f")
+                    val = st.number_input(
+                        key, value=fallback_val, step=0.01, format="%.4f", **bound_kwargs
+                    )
                 updates[key] = val
             elif kind == "int":
                 try:

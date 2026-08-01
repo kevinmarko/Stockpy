@@ -498,6 +498,40 @@ class TestShutdownWaitsForInFlightRun:
         assert record.state == RunState.SUCCEEDED
         assert d.is_running is False
 
+    def test_shutdown_poll_loop_does_not_overshoot_a_small_timeout(self, monkeypatch):
+        """Regression guard (Copilot review, PR #536): the in-flight-run poll
+        loop used to sleep a FIXED 0.1s per iteration regardless of how much
+        of `timeout` actually remained -- so a small timeout (e.g. 0.01s)
+        could overshoot by up to 10x while still correctly reporting the run
+        as in-flight. Each sleep slice must be clamped to what's left on the
+        deadline."""
+        import time as _time
+
+        async def _never_finishes(*_a, **_k):
+            import asyncio
+            # Comfortably longer than the 0.01s shutdown timeout under test,
+            # but short enough not to leave a slow background worker thread
+            # lingering for the rest of the test session.
+            await asyncio.sleep(0.5)
+
+        monkeypatch.setattr(main_orchestrator, "_main_body", _never_finishes)
+
+        d = OrchestratorDaemon()
+        d.start()
+        result = d.trigger_run(reason="manual")
+        assert result.outcome == TriggerOutcome.ACCEPTED
+
+        started = _time.monotonic()
+        d.shutdown(timeout=0.01)
+        elapsed = _time.monotonic() - started
+
+        # Generous margin over the 0.01s budget -- this is a regression
+        # guard against a full extra 0.1s sleep slice, not a tight timing
+        # assertion. Before the fix this reliably took ~0.1s; after, it
+        # should return in a few milliseconds.
+        assert elapsed < 0.08
+        assert d.is_running is True  # the 0.5s run hasn't finished yet
+
 
 class TestShutdownTimerJoinBudget:
     """Regression tests for the 2026-07 shutdown-budget fix: the timer

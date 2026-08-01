@@ -86,3 +86,22 @@ def test_daemon_shutdown_timeout_has_a_settings_manager_widget():
     layout = dict(_SETTINGS_LAYOUT)
     assert KEY in layout
     assert layout[KEY] == "number"
+
+
+def test_daemon_shutdown_timeout_widget_bounds_match_the_real_validator():
+    """Regression guard: the Settings Manager widget's min/max for this key
+    must stay in lockstep with settings.py's own field_validator bounds.
+    Before this, the widget accepted any float -- submitting e.g. 0 would
+    write successfully to .env, then fail Settings() construction on the
+    daemon's next launch, potentially locking the operator out of this very
+    UI needing to fix it."""
+    from gui.panels.settings_manager import _NUMBER_BOUNDS
+    from settings import (
+        DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS,
+        DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS,
+    )
+
+    assert _NUMBER_BOUNDS[KEY] == (
+        DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS,
+        DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS,
+    )

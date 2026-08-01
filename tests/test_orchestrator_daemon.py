@@ -992,6 +992,41 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
         _, kwargs = instance.shutdown.call_args
         self.assertAlmostEqual(kwargs["timeout"], settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS, delta=1.0)
 
+    def test_shut_down_cleanly_log_only_fires_when_daemon_confirms_not_running(self):
+        """Regression guard (Copilot review, PR #536): daemon.shutdown() does
+        NOT raise when its own timeout elapses with a run still in flight --
+        it logs its own WARNING and returns normally. Logging "shut down
+        cleanly" unconditionally after that call would contradict that
+        warning in the same log and falsely signal a clean exit to anyone
+        following docs/RUNBOOK.md's diagnostic. The INFO line must only
+        fire when daemon.is_running actually reads False afterward."""
+        daemon_cls, instance = self._make_mock_daemon_class()
+        instance.is_running = False  # confirms nothing left running
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             self.assertLogs(self.mod.logger, level="INFO") as log_ctx:
+            self.mod.run_forever(60)
+
+        joined = "\n".join(log_ctx.output)
+        self.assertIn("Orchestrator daemon shut down cleanly.", joined)
+        self.assertNotIn("still in flight", joined)
+
+    def test_shutdown_budget_elapsed_with_run_in_flight_logs_a_warning_not_clean_exit(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+        instance.is_running = True  # the run genuinely never finished
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             self.assertLogs(self.mod.logger, level="WARNING") as log_ctx:
+            self.mod.run_forever(60)
+
+        joined = "\n".join(log_ctx.output)
+        self.assertIn("still in flight", joined)
+        self.assertNotIn("Orchestrator daemon shut down cleanly.", joined)
+
 
 class TestArgparse(BaseDaemonEntrypointTest):
     def test_interval_defaults_to_none(self):

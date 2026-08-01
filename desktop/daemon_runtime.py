@@ -214,7 +214,12 @@ class OrchestratorDaemon:
 
         deadline = _entry + timeout
         while self.is_running and time.monotonic() < deadline:
-            time.sleep(0.1)
+            # Clamp each sleep slice to whatever's actually left on the
+            # deadline -- a fixed 0.1s sleep can itself overshoot `timeout`
+            # (e.g. timeout=0.01: the while-check passes once, then a flat
+            # 0.1s sleep blows the 10ms budget by 10x), which would make
+            # shutdown(timeout=T) not actually honor T for small T.
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
 
         if self.is_running:
             logger.warning(

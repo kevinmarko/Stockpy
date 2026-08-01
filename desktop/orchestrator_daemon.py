@@ -381,7 +381,22 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
                 logger.error("Error shutting down Pilots API: %s", exc)
         try:
             daemon.shutdown(timeout=_remaining())
-            logger.info("Orchestrator daemon shut down cleanly.")
+            # daemon.shutdown() does NOT raise when its own timeout elapses
+            # with a run still in flight -- it logs its own WARNING and
+            # returns normally (see desktop/daemon_runtime.py). Logging
+            # "shut down cleanly" unconditionally here would then contradict
+            # that warning in the very same log, and would make this line a
+            # false-positive "clean shutdown" signal for anyone diagnosing a
+            # forced exit via docs/RUNBOOK.md. Only log it when the daemon
+            # actually confirms nothing is still running.
+            if daemon.is_running:
+                logger.warning(
+                    "Orchestrator daemon shutdown budget elapsed with a run "
+                    "still in flight; proceeding to force-exit anyway (see "
+                    "OrchestratorDaemon.shutdown()'s own warning above)."
+                )
+            else:
+                logger.info("Orchestrator daemon shut down cleanly.")
         except Exception as exc:  # noqa: BLE001
             logger.error("Error shutting down orchestrator daemon: %s", exc)
         # Terminal discovery-file write -- LAST, after daemon.shutdown() has
