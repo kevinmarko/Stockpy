@@ -17,7 +17,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PipelineDashboard } from "./PipelineDashboard";
 import { api, ApiError } from "../api/client";
-import type { ControlStatus, DeadLetterQueue, RunRecord } from "../api/types";
+import type { ControlStatusOnline, DeadLetterQueue, RunRecord } from "../api/types";
 
 function renderScreen() {
   return render(
@@ -27,7 +27,9 @@ function renderScreen() {
   );
 }
 
-function statusFixture(overrides: Partial<ControlStatus> = {}): ControlStatus {
+function statusFixture(
+  overrides: Partial<ControlStatusOnline> = {}
+): ControlStatusOnline {
   return {
     daemon_alive: true,
     is_running: false,
@@ -53,6 +55,22 @@ describe("PipelineDashboard (real mock API)", () => {
     // The default mock daemon is idle.
     expect(await screen.findByText("Idle")).toBeInTheDocument();
     expect(screen.getByText(/Engines warm/)).toBeInTheDocument();
+  });
+
+  it("a bare {daemon_alive: false} status (no attached daemon) renders the offline notice, not a crash", async () => {
+    // GET /status's real response when no OrchestratorDaemon has attached to
+    // the Control API process -- every other field is genuinely absent, not
+    // merely null. This used to throw (RunHistory read `.length` off
+    // `data.run_history`, which doesn't exist on this shape) and blank the
+    // whole screen with no error boundary to catch it.
+    vi.spyOn(api, "getControlStatus").mockResolvedValue({ daemon_alive: false });
+    renderScreen();
+    expect(await screen.findByText("Daemon offline")).toBeInTheDocument();
+    expect(screen.queryByText("Idle")).not.toBeInTheDocument();
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+    // The durable (GET /runs/history) and dead-letter sections read from
+    // independent endpoints and still render normally.
+    expect(await screen.findByText("Full run history")).toBeInTheDocument();
   });
 
   it("renders the run-history table with honest mode/error branches", async () => {

@@ -3,6 +3,7 @@ import {
   Navigate,
   Route,
   Routes,
+  useLocation,
   useNavigate,
 } from "react-router";
 import { Dashboard } from "./screens/Dashboard";
@@ -41,6 +42,7 @@ import { Help } from "./screens/Help";
 import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 import { TokenGate } from "./components/TokenGate";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { needsTokenEntry } from "./auth/apiToken";
 import { usePwaStatus } from "./hooks/usePwaStatus";
 import { useApi } from "./hooks/useApi";
@@ -188,6 +190,7 @@ export default function App() {
   // so this only ever needs to be read once per mount -- no setter to wire.
   const [tokenGated] = useState(() => needsTokenEntry());
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const location = useLocation();
 
   if (tokenGated) {
     return <TokenGate />;
@@ -207,42 +210,44 @@ export default function App() {
     <div className="app app-shell">
       <Sidebar />
       <div className="app-main">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/marketplace" element={<Marketplace />} />
-          <Route path="/compare" element={<Comparison />} />
-          <Route path="/pilots/:id" element={<PilotDetail />} />
-          <Route path="/symbol/:ticker" element={<SymbolDetail />} />
-          <Route path="/activity" element={<Activity />} />
-          <Route path="/models" element={<Models />} />
-          <Route path="/pairs" element={<PairsRadar />} />
-          <Route path="/options" element={<OptionsMatrix />} />
-          <Route path="/attribution" element={<Attribution />} />
-          <Route path="/observability" element={<Observability />} />
-          <Route path="/strategy-health" element={<StrategyHealth />} />
-          <Route path="/calibration" element={<Calibration />} />
-          <Route path="/pipeline" element={<PipelineDashboard />} />
-          <Route path="/data-explorer" element={<DataExplorer />} />
-          <Route path="/signals" element={<SignalBreakdown />} />
-          <Route path="/sentiment" element={<SentimentDynamics />} />
-          <Route path="/forecast" element={<ForecastViewer />} />
-          <Route path="/sector-selection" element={<SectorSelection />} />
-          <Route path="/commands" element={<Commands />} />
-          <Route path="/console" element={<Console />} />
-          <Route path="/operations/reports" element={<ReportLibrary />} />
-          <Route path="/help" element={<Help />} />
-          <Route path="/agentic" element={<AgenticTrading />} />
-          <Route path="/research" element={<ResearchHub />} />
-          <Route path="/trading" element={<TradingHub />} />
-          <Route path="/operations" element={<OperationsHub />} />
-          <Route path="/portfolio" element={<Portfolio />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/settings/strategy" element={<StrategyMatrix />} />
-          <Route path="/settings/tunables" element={<SettingsManager />} />
-          <Route path="/settings/ai" element={<AIControlCenter />} />
-          <Route path="/settings/prompts" element={<PromptRegistry />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <ErrorBoundary key={location.pathname}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/marketplace" element={<Marketplace />} />
+            <Route path="/compare" element={<Comparison />} />
+            <Route path="/pilots/:id" element={<PilotDetail />} />
+            <Route path="/symbol/:ticker" element={<SymbolDetail />} />
+            <Route path="/activity" element={<Activity />} />
+            <Route path="/models" element={<Models />} />
+            <Route path="/pairs" element={<PairsRadar />} />
+            <Route path="/options" element={<OptionsMatrix />} />
+            <Route path="/attribution" element={<Attribution />} />
+            <Route path="/observability" element={<Observability />} />
+            <Route path="/strategy-health" element={<StrategyHealth />} />
+            <Route path="/calibration" element={<Calibration />} />
+            <Route path="/pipeline" element={<PipelineDashboard />} />
+            <Route path="/data-explorer" element={<DataExplorer />} />
+            <Route path="/signals" element={<SignalBreakdown />} />
+            <Route path="/sentiment" element={<SentimentDynamics />} />
+            <Route path="/forecast" element={<ForecastViewer />} />
+            <Route path="/sector-selection" element={<SectorSelection />} />
+            <Route path="/commands" element={<Commands />} />
+            <Route path="/console" element={<Console />} />
+            <Route path="/operations/reports" element={<ReportLibrary />} />
+            <Route path="/help" element={<Help />} />
+            <Route path="/agentic" element={<AgenticTrading />} />
+            <Route path="/research" element={<ResearchHub />} />
+            <Route path="/trading" element={<TradingHub />} />
+            <Route path="/operations" element={<OperationsHub />} />
+            <Route path="/portfolio" element={<Portfolio />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/settings/strategy" element={<StrategyMatrix />} />
+            <Route path="/settings/tunables" element={<SettingsManager />} />
+            <Route path="/settings/ai" element={<AIControlCenter />} />
+            <Route path="/settings/prompts" element={<PromptRegistry />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ErrorBoundary>
       </div>
       <BottomNav />
       <ChatButton onClick={() => setIsChatOpen(!isChatOpen)} />
