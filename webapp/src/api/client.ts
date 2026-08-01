@@ -109,6 +109,10 @@ import type {
   PromptPinResult,
   DataSyncResult,
   ProviderStatus,
+  MacroSentimentResponse,
+  OrderBookLadderResponse,
+  ModelComparisonResponse,
+  OptionsAnalyticsSummaryResponse,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 
@@ -159,7 +163,38 @@ function baseFor(path: string): string {
   ) {
     return CONTROL_BASE_URL;
   }
+  // AI chat streaming and live-tick WS both live on the Data API (:8603)
+  // alongside the other "/data/*" Phase-6 endpoints, but keep their own
+  // top-level paths ("/api/chat", "/ws/ticks/*") rather than a "/data/"
+  // prefix, so they need an explicit match here.
+  if (path === "/api/chat" || path.startsWith("/ws/ticks/")) {
+    return DATA_BASE_URL;
+  }
   return BASE_URL;
+}
+
+/**
+ * Full URL for the streaming chat endpoint. A dedicated helper (matching
+ * jobStreamUrl's precedent) because this is a raw `fetch()` + ReadableStream
+ * consumer, not a `http<T>()` JSON call — it still needs to resolve against
+ * the Data API's base URL rather than the webapp's own origin.
+ */
+export function chatUrl(): string {
+  return `${baseFor("/api/chat")}/api/chat`;
+}
+
+/**
+ * Full ws:// (or wss:// on an https origin) URL for the live-tick endpoint.
+ * The browser WebSocket API cannot set an Authorization header, so the token
+ * travels as a `?token=` query param — same convention as jobStreamUrl.
+ */
+export function liveTickWsUrl(symbol: string): string {
+  const httpBase = baseFor("/ws/ticks/");
+  const wsBase = httpBase.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+  const params = new URLSearchParams();
+  if (TOKEN) params.set("token", TOKEN);
+  const qs = params.toString();
+  return `${wsBase}/ws/ticks/${encodeURIComponent(symbol.toUpperCase())}${qs ? `?${qs}` : ""}`;
 }
 
 /**
@@ -629,6 +664,13 @@ const liveApi = {
   postDataSync: () => http<DataSyncResult>("/data/sync", { method: "POST" }),
   // ---- Market Data provider status (data base, :8603) — webapp parity gap G9 ----
   getProviderStatus: () => http<ProviderStatus>("/data/provider-status"),
+  // ---- Phase 6 additions ----
+  getMacroSentiment: () => http<MacroSentimentResponse>("/data/macro/sentiment"),
+  getOrderBookLadder: (symbol: string) =>
+    http<OrderBookLadderResponse>(`/data/ladder/${encodeURIComponent(symbol)}`),
+  getModelComparison: () => http<ModelComparisonResponse>("/metrics/models/comparison"),
+  getOptionsAnalytics: (symbol: string) =>
+    http<OptionsAnalyticsSummaryResponse>(`/metrics/options/analytics/${encodeURIComponent(symbol)}`),
 };
 
 /**

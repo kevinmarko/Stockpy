@@ -33,7 +33,7 @@ import { seriesColor, theme } from "../theme";
 import { realizableTheta, effectiveIvr } from "../optionsHonesty";
 import { useState } from "react";
 import type { DecisionEntry } from "../api/types";
-
+import ActiveTraderLadder from "../components/ActiveTraderLadder";
 /** News sentiment (FinBERT, ~[-1,1]) → colored bullish/neutral/bearish badge. */
 function NewsBadge({ value }: { value: number | null }) {
   if (value == null) return <span style={{ color: theme.textMuted }}>—</span>;
@@ -614,6 +614,10 @@ export function SymbolDetail() {
           </div>
         )}
       </section>
+
+      <div className="mt-8 mb-4">
+        <ActiveTraderLadder symbol={data.symbol} currentPrice={identity.price} />
+      </div>
     </div>
   );
 }

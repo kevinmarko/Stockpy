@@ -34,8 +34,11 @@ import base64
 import logging
 import math
 from typing import Any, Dict, List, Optional
+import json
+import asyncio
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -70,10 +73,31 @@ from pilots.scoring import load_snapshot
 
 logger = logging.getLogger(__name__)
 
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    """Start/stop the WebSocket streamer with the FastAPI process."""
+    try:
+        from data.websocket_streamer import start_streamer, stop_streamer
+        if getattr(settings, "ALPACA_API_KEY", None):
+            start_streamer()
+    except Exception as _e:
+        logger.warning("WebSocketStreamer startup skipped: %s", _e)
+    yield
+    try:
+        from data.websocket_streamer import stop_streamer
+        stop_streamer()
+    except Exception:
+        pass
+
+
 app = FastAPI(
     title="InvestYo Data API",
     description="Data ingestion and market-data endpoints for the Web App.",
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -84,6 +108,13 @@ app.add_middleware(
     allow_methods=["GET", "PUT", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# Mount WebSocket tick router
+try:
+    from api.ws_api import ws_router
+    app.include_router(ws_router)
+except Exception as _ws_e:
+    logger.warning("ws_router mount skipped: %s", _ws_e)
 
 
 def require_ai_capability_enabled(flag_name: str, capability_label: str):
@@ -1086,3 +1117,307 @@ def get_provider_status() -> Dict[str, Any]:
         "quote_ttl_seconds": settings.MARKET_DATA_QUOTE_TTL_SECONDS,
         "fundamentals_source": getattr(provider, "source_name", "unknown"),
     }
+
+
+def _clamp01_to_100(x: float) -> float:
+    return max(0.0, min(100.0, x))
+
+
+# Normalization anchors are this codebase's OWN authoritative, already-load-
+# bearing kill-switch/regime thresholds (dto_models.py::MacroEconomicDTO.
+# killSwitch / market_regime), not invented cutoffs: Sahm Rule kill switch at
+# >= 0.5, VIX kill switch at > 30, credit spread ("high_yield_oas") RISK ON
+# <= 4.5 / CREDIT EVENT >= 6.0, yield curve RECESSION signal at < -0.25. Each
+# metric maps its own bad-threshold to 0 and a representative calm value to
+# 100, linearly, clamped -- a real (if necessarily approximate) health score,
+# not a fabricated one, because the anchors are the platform's own numbers.
+def _vix_score(vix: float) -> float:
+    return _clamp01_to_100(100.0 - (vix - 15.0) / (30.0 - 15.0) * 100.0)
+
+
+def _sahm_score(sahm: float) -> float:
+    return _clamp01_to_100(100.0 - (sahm / 0.5) * 100.0)
+
+
+def _credit_spread_score(spread: float) -> float:
+    return _clamp01_to_100(100.0 - (spread - 4.5) / (6.0 - 4.5) * 100.0)
+
+
+def _yield_curve_score(spread: float) -> float:
+    return _clamp01_to_100((spread - (-0.25)) / (0.5 - (-0.25)) * 100.0)
+
+
+_REGIME_SCORE = {"RISK ON": 100.0, "NEUTRAL": 60.0, "CREDIT EVENT": 25.0, "RECESSION": 0.0}
+_REGIME_ORDER = {"RECESSION": 0, "CREDIT EVENT": 1, "NEUTRAL": 2, "RISK ON": 3}
+
+
+def _trend_from_delta(delta: float, higher_is_better: bool, epsilon: float) -> str:
+    if abs(delta) < epsilon:
+        return "flat"
+    improved = delta > 0 if higher_is_better else delta < 0
+    return "up" if improved else "down"
+
+
+def _read_json_or_none(path) -> Optional[Dict[str, Any]]:
+    try:
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+@app.get("/data/macro/sentiment", dependencies=[Depends(require_token)])
+def get_macro_sentiment() -> Dict[str, Any]:
+    """Macroeconomic indicator sentiment scores and trends, from the real
+    macro telemetry this platform tracks (VIX, Sahm Rule, High-Yield OAS,
+    yield curve, market regime -- output/state_snapshot.json, itself sourced
+    from MacroEconomicDTO). Each 0-100 "value" is a health score normalized
+    against this codebase's own kill-switch/regime thresholds (see
+    dto_models.py::MacroEconomicDTO.killSwitch/market_regime) -- not an
+    invented scale. "trend" compares against the most recently rotated prior
+    snapshot in output/history/ (scripts/snapshot_diff.py's own reader) --
+    "flat" (never fabricated up/down) when there is no prior snapshot to
+    compare against yet.
+    """
+    current = _read_json_or_none(settings.OUTPUT_DIR / "state_snapshot.json")
+    if current is None:
+        return {"macro_data": [], "is_synthetic": False, "reason": "No state snapshot yet — run the pipeline first."}
+
+    previous: Optional[Dict[str, Any]] = None
+    try:
+        from scripts.snapshot_diff import list_rotated_snapshots, load_snapshot
+        rotated = list_rotated_snapshots(settings.OUTPUT_DIR)
+        if rotated:
+            previous = load_snapshot(rotated[-1])
+    except Exception as exc:
+        logger.warning("get_macro_sentiment: history read failed: %s", exc)
+
+    vix = float(current.get("vix", 0.0) or 0.0)
+    sahm = float(current.get("sahm_rule", 0.0) or 0.0)
+    spread = float(current.get("high_yield_oas", 0.0) or 0.0)
+    curve = float(current.get("yield_curve", 0.0) or 0.0)
+    regime = str(current.get("market_regime", "UNKNOWN") or "UNKNOWN")
+
+    prev_vix = float(previous.get("vix", vix) or vix) if previous else vix
+    prev_sahm = float(previous.get("sahm_rule", sahm) or sahm) if previous else sahm
+    prev_spread = float(previous.get("high_yield_oas", spread) or spread) if previous else spread
+    prev_curve = float(previous.get("yield_curve", curve) or curve) if previous else curve
+    prev_regime = str(previous.get("market_regime", regime) or regime) if previous else regime
+
+    macro_data = [
+        {
+            "subject": "VIX (Volatility)",
+            "value": round(_vix_score(vix), 1),
+            "trend": _trend_from_delta(vix - prev_vix, higher_is_better=False, epsilon=0.5) if previous else "flat",
+        },
+        {
+            "subject": "Sahm Rule (Recession Signal)",
+            "value": round(_sahm_score(sahm), 1),
+            "trend": _trend_from_delta(sahm - prev_sahm, higher_is_better=False, epsilon=0.02) if previous else "flat",
+        },
+        {
+            "subject": "High-Yield OAS (Credit Stress)",
+            "value": round(_credit_spread_score(spread), 1),
+            "trend": _trend_from_delta(spread - prev_spread, higher_is_better=False, epsilon=0.05) if previous else "flat",
+        },
+        {
+            "subject": "Yield Curve (10Y-2Y)",
+            "value": round(_yield_curve_score(curve), 1),
+            "trend": _trend_from_delta(curve - prev_curve, higher_is_better=True, epsilon=0.02) if previous else "flat",
+        },
+    ]
+    if regime in _REGIME_SCORE:
+        regime_trend = "flat"
+        if previous and prev_regime in _REGIME_ORDER and regime in _REGIME_ORDER:
+            order_delta = _REGIME_ORDER[regime] - _REGIME_ORDER[prev_regime]
+            regime_trend = "flat" if order_delta == 0 else ("up" if order_delta > 0 else "down")
+        macro_data.append({
+            "subject": "Market Regime",
+            "value": _REGIME_SCORE[regime],
+            "trend": regime_trend,
+        })
+
+    return {"macro_data": macro_data, "is_synthetic": False, "reason": None}
+
+
+@app.get("/data/ladder/{symbol}", dependencies=[Depends(require_token)])
+def get_order_book_ladder(symbol: str) -> Dict[str, Any]:
+    """Active Trader order book depth ladder for a symbol.
+
+    ``current_price`` is a REAL quote (via CompositeProvider, same source
+    api/ws_api.py's REST fallback uses) when available. The depth ladder
+    itself (bid/ask sizes at each price level) is SYNTHETIC
+    (``is_synthetic: True``) -- this platform has no Level 2 / consolidated
+    order book feed to compute real depth from (CLAUDE.md: Alpaca's free
+    IEX feed and yfinance are both top-of-book only). Never present the
+    sizes as real liquidity.
+    """
+    sym = symbol.upper()
+    current_price: Optional[float] = None
+    try:
+        # get_provider() (the module singleton every other endpoint in this
+        # file already uses), not a fresh CompositeProvider() -- the latter
+        # constructs its own brand-new, cold TTL cache on every call,
+        # silently defeating MARKET_DATA_QUOTE_TTL_SECONDS and re-hitting the
+        # underlying network provider on every request.
+        quote = get_provider().get_latest_quote(sym)
+        if quote.price is not None and not math.isnan(quote.price):
+            current_price = float(quote.price)
+    except Exception as exc:
+        logger.warning("get_order_book_ladder: quote fetch failed for %s: %s", sym, exc)
+
+    if current_price is None:
+        current_price = 450.00 if sym == "SPY" else 150.00
+
+    bids = [
+        {"price": round(current_price - 0.05 * i - 0.05, 2), "size": 1000 - i * 100, "type": "bid"}
+        for i in range(5)
+    ]
+    asks = [
+        {"price": round(current_price + 0.05 * i + 0.05, 2), "size": 800 + i * 150, "type": "ask"}
+        for i in range(5)
+    ]
+    return {
+        "symbol": sym,
+        "current_price": current_price,
+        "bids": bids,
+        "asks": asks,
+        "is_synthetic": True,
+    }
+
+
+class ChatMessageRequest(BaseModel):
+    message: str
+    history: Optional[List[Dict[str, Any]]] = None
+
+
+async def _iter_blocking(sync_iterable):
+    """Bridge a blocking/synchronous iterator into an async generator.
+
+    Each ``next()`` call runs in the default threadpool executor instead of
+    the event loop thread, so waiting on the next network chunk from a
+    synchronous SDK (Gemini's generate_content_stream, Anthropic's
+    text_stream) never blocks other coroutines sharing this loop — a chat
+    stream in flight would otherwise serialize every other request the Data
+    API is handling.
+    """
+    it = iter(sync_iterable)
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            item = await loop.run_in_executor(None, next, it)
+        except StopIteration:
+            return
+        yield item
+
+
+def _sse(event_type: str, content: str) -> str:
+    """Format one Server-Sent Event frame. Real newlines, not the literal
+    two-character sequence '\\n' -- SSE delimits messages on an actual blank
+    line, and the frontend parses with buffer.split('\\n')."""
+    return f"data: {json.dumps({'type': event_type, 'content': content})}\n\n"
+
+
+@app.post(
+    "/api/chat",
+    dependencies=[Depends(require_token), Depends(_require_ai_generation_enabled)],
+)
+async def chat_endpoint(req: ChatMessageRequest):
+    """Streaming chat endpoint for AI Chat Interface.
+
+    Gated by _require_ai_generation_enabled (settings.AI_GENERATION_API_ENABLED)
+    in addition to require_token, matching the three /data/ai/* generation
+    endpoints above -- this endpoint calls out to paid external LLM APIs
+    (Gemini/Anthropic) exactly like those do, and this API is fail-open by
+    design when STATE_API_TOKEN is unset, so the capability flag is the ONLY
+    thing stopping it from being remotely, repeatedly triggerable the moment
+    an operator sets GEMINI_API_KEY/ANTHROPIC_API_KEY for their own local use.
+    """
+
+    async def stream_generator():
+        # Emit a thought to show activity
+        yield _sse("THOUGHT", "Analyzing query...")
+        await asyncio.sleep(0.1)
+
+        try:
+            if settings.GEMINI_API_KEY:
+                yield _sse("THOUGHT", "Routing to Gemini...")
+                from google import genai
+                from google.genai import types
+                client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+                contents = []
+                for msg in (req.history or []):
+                    contents.append(
+                        types.Content(
+                            role=msg.get("role", "user"),
+                            parts=[types.Part.from_text(text=msg.get("content", ""))]
+                        )
+                    )
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=req.message)]
+                    )
+                )
+
+                # Use generate_content_stream for streaming
+                response_stream = client.models.generate_content_stream(
+                    model='gemini-2.5-flash',
+                    contents=contents,
+                )
+
+                async for chunk in _iter_blocking(response_stream):
+                    if chunk.text:
+                        yield _sse("MESSAGE", chunk.text)
+
+            elif settings.ANTHROPIC_API_KEY:
+                yield _sse("THOUGHT", "Routing to Claude...")
+                import anthropic
+                client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+                messages = []
+                for msg in (req.history or []):
+                    role = msg.get("role", "user")
+                    if role == "model": role = "assistant"
+                    messages.append({"role": role, "content": msg.get("content", "")})
+                messages.append({"role": "user", "content": req.message})
+
+                # client.messages.stream(...) itself just constructs the
+                # manager (no I/O), but __enter__ opens the connection and
+                # __exit__ waits for it to close -- both are blocking SDK
+                # calls, so both are offloaded to the executor too, not just
+                # the per-chunk iteration.
+                loop = asyncio.get_running_loop()
+                stream_cm = client.messages.stream(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=800,
+                    messages=messages,
+                )
+                stream = await loop.run_in_executor(None, stream_cm.__enter__)
+                try:
+                    async for text in _iter_blocking(stream.text_stream):
+                        yield _sse("MESSAGE", text)
+                finally:
+                    await loop.run_in_executor(None, stream_cm.__exit__, None, None, None)
+            else:
+                err_msg = "Error: Neither GEMINI_API_KEY nor ANTHROPIC_API_KEY is configured in settings."
+                yield _sse("MESSAGE", err_msg)
+
+            yield _sse("SUGGESTION", "Show portfolio risk")
+            yield _sse("SUGGESTION", "Explain option overlay")
+
+        except Exception as e:
+            # Full detail stays server-side (CodeQL: information exposure
+            # through an exception) -- the raw exception string can carry
+            # internal detail (a file path, part of a request payload, or an
+            # LLM SDK's own error body) that must never reach an external
+            # chat client. Only a generic, safe message is streamed back.
+            logger.error("Chat streaming error: %s", e, exc_info=True)
+            yield _sse("MESSAGE", "\n\n**Error:** something went wrong generating a response. Please try again.")
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+

@@ -67,10 +67,12 @@ from execution.broker_base import (
     OrderStatus,
 )
 from execution.kill_switch import GlobalKillSwitch, KillSwitchActiveError
+from execution.leaky_bucket_queue import LeakyBucketQueue
 from execution.risk_gate import PreTradeRiskGate, RiskContext
 from settings import settings
 
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Deterministic order-id generation
@@ -182,6 +184,13 @@ class OrderManager:
         # Set of client_order_ids already submitted this process lifetime.
         # Prevents a double-call bug even when the broker's dedup window expires.
         self._submitted: set[str] = set()
+        # Rate-limiting queue — sheds low-priority (BUY) requests under load;
+        # high-priority (SELL / stop-loss) are allowed to wait for a token.
+        self._queue: LeakyBucketQueue = LeakyBucketQueue(
+            capacity=200,      # Alpaca ~200 req/min on the free IEX feed
+            refill_rate=3.33,  # 200 tokens / 60 seconds
+        )
+
 
     # ------------------------------------------------------------------
     # Public API
@@ -201,7 +210,8 @@ class OrderManager:
         1. Kill-switch check — raises ``KillSwitchActiveError`` if active.
         2. Derive ``client_order_id``; return ACCEPTED early if already submitted.
         3. Pre-trade risk gate — returns ERROR result if any check fails.
-        4. ``_submit_with_retry`` → broker.
+        4. ``_submit_with_retry`` → rate-limit gate + broker (see that method's
+           docstring for why the LeakyBucketQueue gate lives there, not here).
 
         Parameters
         ----------
@@ -363,7 +373,18 @@ class OrderManager:
     # ------------------------------------------------------------------
 
     async def _submit_with_retry(self, intent: OrderIntent) -> OrderResult:
-        # Dry-run interception at manager level so MockBroker tests also see the guard.
+        """Dry-run check, then the rate-limit gate + retry loop around the real broker call.
+
+        The LeakyBucketQueue gate lives HERE, not in submit_order_with_idempotency,
+        and is checked immediately before EACH broker.submit_order attempt (not
+        once per intent): applying it once per intent meant a dry-run consumed a
+        token for zero real API calls, while a retried intent made multiple real
+        broker calls off a single token check -- the limiter neither protected
+        the broker's actual request volume under a retry storm nor freed the
+        token budget a dry-run never spent.
+        """
+        # Dry-run interception at manager level so MockBroker tests also see the
+        # guard. No token is consumed -- no real broker request is ever made.
         if intent.dry_run:
             logger.info(
                 "[DRY-RUN] Would submit %s %s x %.4f @ %s (strategy=%s, coid=%s)",
@@ -382,8 +403,32 @@ class OrderManager:
                 submitted_at=datetime.now(timezone.utc).replace(tzinfo=None),
             )
 
+        # SELL / STOP orders (side contains 'sell') are high-priority (1) and
+        # will spin-wait for the next available token. BUY orders are
+        # low-priority (0) and are shed (dropped) when utilization > 80 %.
+        order_side = intent.side.value.lower() if hasattr(intent.side, "value") else str(intent.side).lower()
+        is_sell = "sell" in order_side
+        priority = 1 if is_sell else 0
+
         last_result: Optional[OrderResult] = None
         for attempt in range(self._max_retries + 1):
+            # Gated immediately before each real broker call, using the async
+            # await_or_shed (asyncio.sleep spin-wait), not the sync wait_or_shed
+            # (time.sleep) -- this loop runs inside the event loop, and a
+            # blocking time.sleep here would stall every other coroutine
+            # sharing it for the duration of the wait.
+            if not await self._queue.await_or_shed(priority=priority):
+                logger.warning(
+                    "LeakyBucketQueue: shedding low-priority %s order for %s (API rate limit > 80%%).",
+                    order_side, intent.symbol,
+                )
+                return OrderResult(
+                    client_order_id=intent.client_order_id or "",
+                    broker_order_id=None,
+                    status=OrderStatus.ERROR,
+                    error_message="Rate-limit load-shed: API utilization above threshold. Retry later.",
+                )
+
             result = await self._broker.submit_order(intent)
             if result.status != OrderStatus.ERROR:
                 return result

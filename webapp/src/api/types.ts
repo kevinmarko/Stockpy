@@ -2978,3 +2978,75 @@ export interface DeadLetterRetryResult {
   applies: "immediately";
   note: string;
 }
+
+export interface MacroIndicatorItem {
+  subject: string;
+  value: number;
+  trend: "up" | "down" | "flat";
+}
+
+export interface MacroSentimentResponse {
+  // Real telemetry (VIX, Sahm Rule, High-Yield OAS, yield curve, market
+  // regime) from output/state_snapshot.json, normalized against this
+  // codebase's own kill-switch/regime thresholds — see
+  // api/data_api.py::get_macro_sentiment. Empty when no snapshot exists yet
+  // (see `reason`), not fabricated. Market Regime is present only when the
+  // snapshot's regime string is a recognized value.
+  macro_data: MacroIndicatorItem[];
+  // False now that this reads real macro telemetry; kept (rather than
+  // removed) for symmetry with the other synthetic-data endpoints and so a
+  // future genuinely-fabricated variant would still have a place to signal it.
+  is_synthetic: boolean;
+  // Non-null (e.g. "No state snapshot yet — run the pipeline first.") when
+  // macro_data is empty because there's nothing to read yet.
+  reason: string | null;
+}
+
+export interface OrderBookLevel {
+  price: number;
+  size: number;
+  type: "bid" | "ask";
+}
+
+export interface OrderBookLadderResponse {
+  symbol: string;
+  // Real quote when available (CompositeProvider), a fixed fallback otherwise.
+  current_price: number;
+  // Depth (bid/ask SIZES) is always synthetic -- no L2/consolidated order
+  // book feed is wired in this codebase. is_synthetic covers the ladder as
+  // a whole, not just current_price.
+  bids: OrderBookLevel[];
+  asks: OrderBookLevel[];
+  is_synthetic: boolean;
+}
+
+export interface ModelComparisonRow {
+  name: string;
+  [modelName: string]: string | number;
+}
+
+export interface ModelComparisonResponse {
+  data: ModelComparisonRow[];
+}
+
+export interface IntradayThetaPoint {
+  time: string;
+  hour: number;
+  theta: number;
+  gamma: number;
+}
+
+export interface OptionsAnalyticsSummaryResponse {
+  symbol: string;
+  // Always null/[] from the live backend today -- no real options-chain/OI
+  // feed exists in this codebase to compute a real measurement from (see
+  // execution/options_analytics.py docstring), so it honestly reports
+  // unavailable rather than a plausible-looking placeholder number.
+  // is_synthetic is always true; kept for API-shape parity with the other
+  // synthetic-data endpoints.
+  net_dealer_premium: number | null;
+  regime: string | null;
+  intraday_series: IntradayThetaPoint[];
+  is_synthetic: boolean;
+}
+

@@ -5748,6 +5748,69 @@ export const mockApi = {
       fundamentals_source: "yahoo_computed",
     });
   },
+
+  // ---- Phase 6 additions ----
+  // Mirrors the shape api/data_api.py::get_macro_sentiment actually returns
+  // (VIX/Sahm/credit-spread/yield-curve/regime health scores) -- not the
+  // old fictional CPI/PMI/Employment categories the live endpoint never
+  // computed.
+  async getMacroSentiment() {
+    return delay({
+      macro_data: [
+        { subject: "VIX (Volatility)", value: 78, trend: "up" as const },
+        { subject: "Sahm Rule (Recession Signal)", value: 92, trend: "flat" as const },
+        { subject: "High-Yield OAS (Credit Stress)", value: 84, trend: "down" as const },
+        { subject: "Yield Curve (10Y-2Y)", value: 61, trend: "flat" as const },
+        { subject: "Market Regime", value: 100, trend: "flat" as const },
+      ],
+      is_synthetic: false,
+      reason: null,
+    });
+  },
+  async getOrderBookLadder(symbol: string) {
+    const sym = symbol.toUpperCase();
+    const current_price = sym === "SPY" ? 450.0 : 150.0;
+    return delay({
+      symbol: sym,
+      current_price,
+      bids: [
+        { price: current_price - 0.05, size: 1200, type: "bid" as const },
+        { price: current_price - 0.1, size: 850, type: "bid" as const },
+        { price: current_price - 0.15, size: 2100, type: "bid" as const },
+      ],
+      asks: [
+        { price: current_price + 0.05, size: 900, type: "ask" as const },
+        { price: current_price + 0.1, size: 1500, type: "ask" as const },
+        { price: current_price + 0.15, size: 600, type: "ask" as const },
+      ],
+      is_synthetic: true,
+    });
+  },
+  async getModelComparison() {
+    return delay({
+      data: [
+        { name: "Jan", "SF-GARCH-LSTM": 2.1, "Bond-BERT": 1.8, "Benchmark (SPY)": 1.5 },
+        { name: "Feb", "SF-GARCH-LSTM": 4.5, "Bond-BERT": 3.2, "Benchmark (SPY)": 3.0 },
+        { name: "Mar", "SF-GARCH-LSTM": 3.8, "Bond-BERT": 4.0, "Benchmark (SPY)": 2.8 },
+        { name: "Apr", "SF-GARCH-LSTM": 6.2, "Bond-BERT": 5.5, "Benchmark (SPY)": 4.2 },
+        { name: "May", "SF-GARCH-LSTM": 8.0, "Bond-BERT": 6.8, "Benchmark (SPY)": 5.5 },
+        { name: "Jun", "SF-GARCH-LSTM": 10.5, "Bond-BERT": 8.2, "Benchmark (SPY)": 6.1 },
+      ],
+    });
+  },
+  async getOptionsAnalytics(symbol: string) {
+    return delay({
+      symbol: symbol.toUpperCase(),
+      net_dealer_premium: -45.2,
+      regime: "Negative Gamma (Volatile)",
+      intraday_series: [
+        { time: "9:00 AM", hour: 9, theta: 0.0, gamma: 3.68 },
+        { time: "12:00 PM", hour: 12, theta: 12.5, gamma: 10.0 },
+        { time: "4:00 PM", hour: 16, theta: 100.0, gamma: 73.89 },
+      ],
+      is_synthetic: true,
+    });
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -5948,3 +6011,4 @@ export const MOCK_META = {
   minAmount: MIN_AMOUNT,
   sectors: SECTORS,
 };
+

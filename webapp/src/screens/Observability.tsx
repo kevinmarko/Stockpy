@@ -23,6 +23,7 @@ import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
+import MacroSentimentDashboard from "../components/MacroSentimentDashboard";
 
 const HORIZONS: readonly number[] = [10, 30, 60, 90];
 
@@ -1015,6 +1016,10 @@ export function Observability() {
             <ErrorState message={logsError} status={logsStatus} onRetry={logsReload} />
           )}
           {!logsLoading && !logsError && logsData && <LogAggregationSection logs={logsData} />}
+
+          <div className="mt-8 mb-4">
+            <MacroSentimentDashboard />
+          </div>
         </>
       )}
     </div>
