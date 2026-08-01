@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Modal } from "./Modal";
 import { CopyCommandBlock } from "./CopyCommandBlock";
-import type { CommandSpec } from "../api/types";
+import type { CommandSpec, ReportFile, UniverseSymbol } from "../api/types";
 import {
   parseCommandLine,
   getGhostText,
@@ -13,6 +13,8 @@ import {
 } from "../commandParse";
 import { theme } from "../theme";
 import { Button } from "./ui";
+import { api } from "../api/client";
+import { loadUniverse } from "./SymbolInput";
 
 interface CommandPaletteModalProps {
   isOpen: boolean;
@@ -20,7 +22,32 @@ interface CommandPaletteModalProps {
   commands: CommandSpec[];
   onSelectCommandForBuilder?: (spec: CommandSpec) => void;
   onRunCommand?: (composed: string, spec: CommandSpec, argTokens: string[]) => void;
+  /** Universal-search extras (Ticker/Report/Navigation categories) — all
+   *  optional so the palette degrades to command-only search when a caller
+   *  (or a test) doesn't wire them. */
+  onInspectTicker?: (symbol: string) => void;
+  onPreviewReport?: (reportName: string) => void;
+  onNavigate?: (path: string) => void;
 }
+
+/** Real, in-app routes only — never invented paths. Kept in sync with
+ *  App.tsx's <Routes> by hand (small, stable list). */
+const NAV_TARGETS: { label: string; path: string }[] = [
+  { label: "Dashboard", path: "/" },
+  { label: "Portfolio", path: "/portfolio" },
+  { label: "Activity Feed", path: "/activity" },
+  { label: "Agentic Trading", path: "/agentic" },
+  { label: "Commands", path: "/commands" },
+  { label: "Options Matrix", path: "/options" },
+  { label: "Forecast Viewer", path: "/forecast" },
+  { label: "Signal Breakdown", path: "/signals" },
+  { label: "Observability / Mission Control", path: "/observability" },
+  { label: "Console / Terminal", path: "/console" },
+  { label: "Settings", path: "/settings" },
+];
+
+const MAX_TICKER_MATCHES = 6;
+const MAX_REPORT_MATCHES = 5;
 
 export function CommandPaletteModal({
   isOpen,
@@ -28,23 +55,61 @@ export function CommandPaletteModal({
   commands,
   onSelectCommandForBuilder,
   onRunCommand,
+  onInspectTicker,
+  onPreviewReport,
+  onNavigate,
 }: CommandPaletteModalProps) {
   const [input, setInput] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [universe, setUniverse] = useState<UniverseSymbol[]>([]);
+  const [reports, setReports] = useState<ReportFile[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      setInput("");
-      setActiveIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
+    if (!isOpen) return;
+    setInput("");
+    setActiveIndex(0);
+    setTimeout(() => inputRef.current?.focus(), 50);
+
+    let alive = true;
+    // Both real, already-cached-elsewhere reads -- never fabricated ticker/
+    // report lists. A failure here just means those two search categories
+    // stay empty; the CLI command search below is unaffected.
+    void loadUniverse().then((u) => {
+      if (alive) setUniverse(u);
+    });
+    void api
+      .getReports()
+      .then((r) => {
+        if (alive) setReports(r.reports ?? []);
+      })
+      .catch(() => {
+        if (alive) setReports([]);
+      });
+    return () => {
+      alive = false;
+    };
   }, [isOpen]);
 
   const parsed = useMemo(() => parseCommandLine(input, commands), [input, commands]);
   const suggestions = parsed.suggestions;
   const ghostText = useMemo(() => getGhostText(input, suggestions), [input, suggestions]);
   const highlightedTokens = useMemo(() => tokenizeForHighlighting(input, commands), [input, commands]);
+
+  const q = input.trim().toLowerCase();
+  const tickerMatches = useMemo(() => {
+    if (!q) return [];
+    return universe.filter((u) => u.symbol.toLowerCase().includes(q)).slice(0, MAX_TICKER_MATCHES);
+  }, [q, universe]);
+  const reportMatches = useMemo(() => {
+    if (!q) return [];
+    return reports.filter((r) => r.name.toLowerCase().includes(q)).slice(0, MAX_REPORT_MATCHES);
+  }, [q, reports]);
+  const navMatches = useMemo(() => {
+    if (!q) return [];
+    return NAV_TARGETS.filter((n) => n.label.toLowerCase().includes(q));
+  }, [q]);
+  const hasOmniMatches = tickerMatches.length > 0 || reportMatches.length > 0 || navMatches.length > 0;
 
   if (!isOpen) return null;
 
@@ -56,6 +121,20 @@ export function CommandPaletteModal({
     setInput([...prefix, s.value].join(" ") + " ");
     setActiveIndex(0);
     inputRef.current?.focus();
+  };
+
+  const goTicker = (symbol: string) => {
+    onClose();
+    onInspectTicker?.(symbol);
+  };
+  const goReport = (name: string) => {
+    onClose();
+    onPreviewReport?.(name);
+  };
+  const goNav = (path: string) => {
+    onClose();
+    if (onNavigate) onNavigate(path);
+    else window.location.assign(path);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -79,6 +158,15 @@ export function CommandPaletteModal({
           onRunCommand(parsed.composed, parsed.command, parsed.argTokens);
           onClose();
         }
+      } else if (!parsed.command && tickerMatches[0]) {
+        // No CLI command resolved and nothing left to autocomplete -- if the
+        // top ticker/report/nav match is unambiguous, Enter accepts it too,
+        // matching a conventional omni-search's "Enter picks the top hit".
+        goTicker(tickerMatches[0].symbol);
+      } else if (!parsed.command && !tickerMatches.length && reportMatches[0]) {
+        goReport(reportMatches[0].name);
+      } else if (!parsed.command && !tickerMatches.length && !reportMatches.length && navMatches[0]) {
+        goNav(navMatches[0].path);
       }
     }
     // Escape is intentionally NOT handled here -- Modal already closes on
@@ -142,7 +230,7 @@ export function CommandPaletteModal({
             ref={inputRef}
             className="input"
             data-testid="command-palette-input"
-            placeholder="Search commands or type flags (e.g. validation.harness --strategy garch_vol_target)"
+            placeholder="Search commands, tickers (NVDA), reports, screens, or type flags..."
             value={input}
             onChange={(e) => {
               setInput(e.target.value);
@@ -216,9 +304,9 @@ export function CommandPaletteModal({
           </div>
         )}
 
-        {/* Suggestions List */}
+        {/* Suggestions List (CLI command/subcommand/option/value completions) */}
         {suggestions.length > 0 && (
-          <div style={{ maxHeight: 260, overflowY: "auto", borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-2)" }}>
+          <div style={{ maxHeight: 220, overflowY: "auto", borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-2)" }}>
             <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginBottom: "var(--s-1)", textTransform: "uppercase" }}>
               Suggestions ({suggestions.length})
             </div>
@@ -270,6 +358,45 @@ export function CommandPaletteModal({
           </div>
         )}
 
+        {/* Universal quick-results: tickers / reports / navigation. Additive
+            to the CLI suggestions above -- typing "NVDA" surfaces the ticker
+            even though it never resolves as a CLI suggestion. */}
+        {input.trim() !== "" && hasOmniMatches && (
+          <div style={{ marginTop: "var(--s-2)", borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-2)" }}>
+            {tickerMatches.length > 0 && (
+              <OmniSection title="📈 Tickers">
+                {tickerMatches.map((t) => (
+                  <OmniRow
+                    key={t.symbol}
+                    label={t.symbol}
+                    sublabel={t.action ? `Tracked · ${t.action}` : "Inspect ticker details, signals & risk blocks"}
+                    onClick={() => goTicker(t.symbol)}
+                  />
+                ))}
+              </OmniSection>
+            )}
+            {reportMatches.length > 0 && (
+              <OmniSection title="📑 Reports">
+                {reportMatches.map((r) => (
+                  <OmniRow
+                    key={r.name}
+                    label={r.name}
+                    sublabel="Preview report content"
+                    onClick={() => goReport(r.name)}
+                  />
+                ))}
+              </OmniSection>
+            )}
+            {navMatches.length > 0 && (
+              <OmniSection title="🧭 Navigation">
+                {navMatches.map((n) => (
+                  <OmniRow key={n.path} label={n.label} sublabel={`Navigate to ${n.path}`} onClick={() => goNav(n.path)} />
+                ))}
+              </OmniSection>
+            )}
+          </div>
+        )}
+
         {/* Category Discovery List when search input is empty */}
         {input.trim() === "" && (
           <div style={{ marginTop: "var(--s-2)", borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-3)" }}>
@@ -308,10 +435,85 @@ export function CommandPaletteModal({
                 );
               })}
             </div>
+
+            {(universe.length > 0 || reports.length > 0) && (
+              <div style={{ marginTop: "var(--s-3)" }}>
+                <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginBottom: "var(--s-2)", textTransform: "uppercase" }}>
+                  Quick jump
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-1-5)" }}>
+                  {universe.slice(0, MAX_TICKER_MATCHES).map((u) => (
+                    <button
+                      key={u.symbol}
+                      className="btn"
+                      style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2-5)" }}
+                      onClick={() => goTicker(u.symbol)}
+                    >
+                      📈 {u.symbol}
+                    </button>
+                  ))}
+                  {reports.slice(0, 3).map((r) => (
+                    <button
+                      key={r.name}
+                      className="btn"
+                      style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2-5)" }}
+                      onClick={() => goReport(r.name)}
+                    >
+                      📑 {r.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
     </Modal>
+  );
+}
+
+function OmniSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div style={{ marginBottom: "var(--s-2-5)" }}>
+      <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginBottom: "var(--s-1)", textTransform: "uppercase" }}>
+        {title}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>{children}</div>
+    </div>
+  );
+}
+
+function OmniRow({ label, sublabel, onClick }: { label: string; sublabel?: string; onClick: () => void }) {
+  return (
+    <div
+      onMouseDown={(e) => {
+        e.preventDefault();
+        onClick();
+      }}
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        padding: "var(--s-2) var(--s-2-5)",
+        borderRadius: "var(--r-sm)",
+        cursor: "pointer",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLDivElement).style.background = theme.surface3;
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLDivElement).style.background = "transparent";
+      }}
+    >
+      <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 600, color: theme.textPrimary }}>
+        {label}
+      </span>
+      {sublabel && (
+        <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {sublabel}
+        </span>
+      )}
+    </div>
   );
 }
 

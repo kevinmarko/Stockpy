@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { Bar, ForecastResult } from "../api/types";
 import { useApi } from "../hooks/useApi";
@@ -7,6 +7,7 @@ import { ErrorState, Loading, Tile } from "../components/ui";
 import { AttentionHeatmapStrip, ForecastCandleChart } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
+import { useToast } from "../components/ToastContext";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -18,9 +19,6 @@ const HORIZONS: { key: keyof ForecastResult; days: number }[] = [
   { key: "Forecast_90", days: 90 },
 ];
 
-// Price-history lookback presets for the chart's range toggle. Same idiom as
-// components/RangeToggle.tsx (.segmented CSS class), but distinct values —
-// this drives a raw day count into GET /data/bars, not a PerfRange enum.
 const LOOKBACK_RANGES: { label: string; days: number }[] = [
   { label: "1M", days: 21 },
   { label: "3M", days: 63 },
@@ -54,16 +52,64 @@ function LookbackToggle({
 }
 
 function ForecastView({
+  symbol,
   d,
   bars,
   lookbackDays,
   onLookbackChange,
 }: {
+  symbol: string;
   d: ForecastResult;
   bars: Bar[];
   lookbackDays: number;
   onLookbackChange: (days: number) => void;
 }) {
+  const { addToast } = useToast();
+  const [selectedHorizon, setSelectedHorizon] = useState<number | null>(30);
+
+  // Export handlers -- both built from the real forecast result `d`, never
+  // fabricated placeholder numbers (CONSTRAINT #4). A horizon that didn't
+  // converge this run is exported as an empty cell, matching the DASH the
+  // tiles above already show for it.
+  const handleExportCSV = () => {
+    const rows = HORIZONS.map((h) => {
+      const mid = d[h.key] as number | null;
+      const lower = d[`Forecast_${h.days}_Lower`] as number | null;
+      const upper = d[`Forecast_${h.days}_Upper`] as number | null;
+      return [`${h.days}d`, mid ?? "", lower ?? "", upper ?? ""].join(",");
+    });
+    const csvContent = "data:text/csv;charset=utf-8," + ["Horizon,Forecast,Lower,Upper", ...rows].join("\n");
+    const link = document.createElement("a");
+    link.setAttribute("href", encodeURI(csvContent));
+    link.setAttribute("download", `${symbol}_forecast_data.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    addToast({
+      type: "success",
+      title: "Exported CSV",
+      description: `Saved ${symbol}_forecast_data.csv to downloads.`,
+    });
+  };
+
+  const handleExportJSON = () => {
+    const jsonContent =
+      "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(d, null, 2));
+    const link = document.createElement("a");
+    link.setAttribute("href", jsonContent);
+    link.setAttribute("download", `${symbol}_forecast_data.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    addToast({
+      type: "success",
+      title: "Exported JSON",
+      description: `Saved ${symbol}_forecast_data.json to downloads.`,
+    });
+  };
+
   // Map the 8 named band fields onto ForecastCandleChart's forecast prop. A
   // null horizon is skipped entirely, never plotted as 0 (CONSTRAINT #4); a
   // populated horizon with a null band still draws its projection point, just
@@ -71,17 +117,22 @@ function ForecastView({
   const forecast = HORIZONS.filter((h) => d[h.key] != null).map((h) => ({
     day: h.days,
     mid: d[h.key] as number,
-    // Always a numeric field (never `attention`) despite ForecastResult's
-    // index signature being widened to admit ForecastAttention too.
     lower: d[`Forecast_${h.days}_Lower`] as number | null,
     upper: d[`Forecast_${h.days}_Upper`] as number | null,
   }));
 
   const hasBand = d.MC_Lower != null && d.MC_Upper != null;
-  // Bars fetch failing/empty never blocks the forecast — this is an honest
-  // inline note, not a page-level error (the forecast is the primary content).
   const noHistory = bars.length === 0 && forecast.length > 0;
   const chartEmpty = bars.length === 0 && forecast.length === 0;
+  const convergedCount = forecast.length;
+
+  // Key derived insights -- `null` (never a fabricated anchor price) whenever
+  // there's no real last close to derive from.
+  const currentPrice = bars.length > 0 && bars[bars.length - 1].Close != null ? (bars[bars.length - 1].Close as number) : null;
+  const expectedReturnPct =
+    currentPrice != null && d.Forecast_30 != null ? ((Number(d.Forecast_30) - currentPrice) / currentPrice) * 100 : null;
+  const volatileRangePct =
+    currentPrice != null && hasBand ? ((Number(d.MC_Upper) - Number(d.MC_Lower)) / currentPrice) * 100 : null;
 
   return (
     <>
@@ -95,20 +146,73 @@ function ForecastView({
         ))}
       </div>
 
+      {/* 4. UI & Layout Optimization: Key Metrics Summary Card & Horizon shortcuts */}
+      <section className="card card-pad" style={{ marginBottom: "var(--s-3-5)", background: "var(--surface-2)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)", flexWrap: "wrap", gap: "var(--s-2)" }}>
+          <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Horizon & Expected Return Summary</h2>
+          <Link
+            to={`/symbol/${symbol}`}
+            className="btn"
+            style={{ fontSize: "var(--t-caption)", background: "var(--surface-3)", color: "var(--accent)" }}
+          >
+            📊 View Model Skill & Historical Accuracy
+          </Link>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
+          {HORIZONS.map((h) => {
+            const isSelected = selectedHorizon === h.days;
+            return (
+              <div
+                key={h.days}
+                onClick={() => setSelectedHorizon(h.days)}
+                style={{
+                  padding: "var(--s-2-5) var(--s-3)",
+                  borderRadius: "var(--r-sm)",
+                  background: isSelected ? "var(--surface-3)" : "var(--surface)",
+                  border: `1px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
+                  cursor: "pointer",
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <div style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>{h.days}d Horizon</div>
+                <div style={{ fontSize: "var(--t-title)", fontWeight: 700, color: "var(--text-primary)", marginTop: "2px" }}>
+                  {d[h.key] == null ? DASH : fmtNum(d[h.key] as number, 2)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "var(--s-2-5)" }}>
+          <Tile
+            label="Expected Return (30d)"
+            value={expectedReturnPct == null ? DASH : `${expectedReturnPct >= 0 ? "+" : ""}${fmtNum(expectedReturnPct, 2)}%`}
+            tone={expectedReturnPct == null ? undefined : expectedReturnPct >= 0 ? "pos" : "neg"}
+          />
+          <Tile label="Monte Carlo Range Band" value={volatileRangePct == null ? DASH : `±${fmtNum(volatileRangePct / 2, 1)}%`} />
+          <Tile
+            label="Forecast Trend Direction"
+            value={
+              expectedReturnPct == null
+                ? DASH
+                : expectedReturnPct > 1.5
+                ? "BULLISH ↗"
+                : expectedReturnPct < -1.5
+                ? "BEARISH ↘"
+                : "NEUTRAL ➔"
+            }
+          />
+        </div>
+      </section>
+
+      {/* 1. Data Visualization & Chart Enhancements */}
       <section className="card card-pad" style={{ marginBottom: "var(--s-3-5)" }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "baseline",
-            flexWrap: "wrap",
-            gap: "var(--s-2)",
-            marginBottom: "var(--s-2)",
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
           <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Price & forecast</h2>
           <LookbackToggle value={lookbackDays} onChange={onLookbackChange} />
         </div>
+
         {chartEmpty ? (
           <div className="empty" style={{ padding: "var(--s-5)" }}>
             Not enough forecast or price data to draw a chart.
@@ -117,8 +221,7 @@ function ForecastView({
           <>
             {noHistory && (
               <div className="empty" style={{ padding: "var(--s-3)", marginBottom: "var(--s-2-5)", fontSize: "var(--t-label)" }}>
-                No price history in the store for this symbol — showing the
-                forecast projection only.
+                No price history in the store for this symbol — showing the forecast projection only.
               </div>
             )}
             <ForecastCandleChart bars={bars} forecast={forecast} />
@@ -134,9 +237,10 @@ function ForecastView({
         )}
       </section>
 
-      <section className="card card-pad">
-        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Model detail</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "var(--s-2-5)" }}>
+      {/* 2. Model Breakdown & Insights */}
+      <section className="card card-pad" style={{ marginBottom: "var(--s-3-5)" }}>
+        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-3)" }}>Model detail</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
           <Tile label="ARIMA" value={d.ARIMA == null ? DASH : fmtNum(d.ARIMA, 2)} />
           <Tile
             label="MC band"
@@ -147,13 +251,44 @@ function ForecastView({
             }
           />
         </div>
-        <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-3)", lineHeight: 1.5 }}>
-          Multi-horizon blended forecast (ARIMA / Monte Carlo / Holt-Winters /
-          CNN-LSTM) with the Monte-Carlo confidence band, plotted above as a
-          widening cone against real price history. A horizon that didn't
-          converge this run shows {DASH}, never a fabricated level.
-        </p>
+
+        {/* Drivers summary */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--s-3)" }}>
+          <div style={{ background: "var(--surface-2)", padding: "var(--s-3)", borderRadius: "var(--r-xs)" }}>
+            <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "var(--t-callout)" }}>Volatility Drivers</div>
+            <div style={{ fontSize: "var(--t-caption)", color: "var(--text-secondary)", marginTop: "4px" }}>
+              Monte Carlo daily sigma is GARCH annualized volatility scaled by
+              /sqrt(252). {hasBand ? "" : "No Monte Carlo band converged this run."}
+            </div>
+          </div>
+
+          <div style={{ background: "var(--surface-2)", padding: "var(--s-3)", borderRadius: "var(--r-xs)" }}>
+            <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "var(--t-callout)" }}>Convergence Status</div>
+            <div
+              style={{
+                fontSize: "var(--t-caption)",
+                color: convergedCount === HORIZONS.length ? "var(--growth)" : "var(--caution)",
+                marginTop: "4px",
+                fontWeight: 600,
+              }}
+            >
+              {convergedCount === HORIZONS.length
+                ? `✓ All ${HORIZONS.length} horizons converged this run.`
+                : `⚠ ${convergedCount} of ${HORIZONS.length} horizons converged this run.`}
+            </div>
+          </div>
+        </div>
       </section>
+
+      {/* 3. User Interaction & Export Capabilities */}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--s-2)" }}>
+        <button className="btn" onClick={handleExportCSV} style={{ fontSize: "var(--t-caption)" }}>
+          📥 Export CSV
+        </button>
+        <button className="btn" onClick={handleExportJSON} style={{ fontSize: "var(--t-caption)" }}>
+          📥 Export JSON
+        </button>
+      </div>
     </>
   );
 }
@@ -166,10 +301,6 @@ export function ForecastViewer() {
     () => api.getForecastResult(symbol),
     [symbol]
   );
-  // Independent second fetch — real price history for the chart. Its own
-  // loading/error state never gates the forecast tiles/model detail; a failed
-  // or empty bars fetch degrades to an inline note inside ForecastView, not a
-  // page-level error (the forecast is the primary, valid content here).
   const { data: barsData } = useApi<Bar[]>(
     () => api.getDataBars(symbol, lookbackDays),
     [symbol, lookbackDays]
@@ -186,9 +317,7 @@ export function ForecastViewer() {
       </button>
       <h1 className="screen-title">Forecast viewer</h1>
       <p className="screen-sub">
-        Multi-horizon price forecast for a symbol — the 10/30/60/90-day blended
-        levels and the Monte-Carlo band. This is the forecast itself; the model
-        skill/accuracy history lives on each symbol's detail page.
+        Multi-horizon price forecast for a symbol — 10/30/60/90-day blended levels, model weighting, drivers, and Monte-Carlo confidence bands.
       </p>
 
       <TabGuide tabKey="forecast" />
@@ -199,6 +328,7 @@ export function ForecastViewer() {
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
         <ForecastView
+          symbol={symbol}
           d={data}
           bars={barsData ?? []}
           lookbackDays={lookbackDays}

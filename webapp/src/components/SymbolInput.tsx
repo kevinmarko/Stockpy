@@ -33,7 +33,9 @@ import type { UniverseSymbol } from "../api/types";
 let universeCache: UniverseSymbol[] | null = null;
 let universePromise: Promise<UniverseSymbol[]> | null = null;
 
-function loadUniverse(): Promise<UniverseSymbol[]> {
+/** Exported so other lookup UIs (e.g. CommandPaletteModal's ticker search)
+ *  share this exact module cache instead of issuing their own GET /universe. */
+export function loadUniverse(): Promise<UniverseSymbol[]> {
   if (universeCache) return Promise.resolve(universeCache);
   if (!universePromise) {
     universePromise = api
