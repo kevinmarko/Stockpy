@@ -45,6 +45,7 @@ const HEALTHY_STATUS: AutomationStatus = {
     alive: true,
     source: "control_api",
     pid: null,
+    pid_alive: null,
     port: 8601,
     started_at: "2026-07-16T10:00:00+00:00",
     interval_seconds: 300,
@@ -129,6 +130,39 @@ describe("Settings screen", () => {
       await screen.findByText(/No run record.*daemon has never triggered/i)
     ).toBeInTheDocument();
     expect(screen.getByText(/Not reachable/)).toBeInTheDocument();
+  });
+
+  it("daemon_json fallback with a confirmed-dead pid renders 'stopped', not the ambiguous 'last known state'", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValueOnce({
+      ...HEALTHY_STATUS,
+      daemon: { ...HEALTHY_STATUS.daemon, alive: false, source: "daemon_json", pid: 99999, pid_alive: false, is_running: null },
+    });
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValueOnce(HEALTHY_SCHEDULE);
+    renderSettings();
+
+    expect(await screen.findByText(/stopped — process not running/)).toBeInTheDocument();
+  });
+
+  it("daemon_json fallback with a live-but-unresponsive pid renders that distinction, not 'stopped'", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValueOnce({
+      ...HEALTHY_STATUS,
+      daemon: { ...HEALTHY_STATUS.daemon, alive: false, source: "daemon_json", pid: 1, pid_alive: true, is_running: null },
+    });
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValueOnce(HEALTHY_SCHEDULE);
+    renderSettings();
+
+    expect(await screen.findByText(/process alive, API not responding/)).toBeInTheDocument();
+  });
+
+  it("daemon_json fallback with an unknowable pid keeps today's 'last known state' copy", async () => {
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValueOnce({
+      ...HEALTHY_STATUS,
+      daemon: { ...HEALTHY_STATUS.daemon, alive: false, source: "daemon_json", pid: null, pid_alive: null, is_running: null },
+    });
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValueOnce(HEALTHY_SCHEDULE);
+    renderSettings();
+
+    expect(await screen.findByText(/last known state/)).toBeInTheDocument();
   });
 
   it("kill switch active renders its real reason, not a generic warning", async () => {

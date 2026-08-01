@@ -3,9 +3,13 @@
 
 Small, dependency-light readers for the two liveness files every pipeline
 entry point writes: ``output/state_snapshot.json`` (both ``main.py`` and
-``main_orchestrator.py``) and ``output/heartbeat.txt`` (``main_orchestrator.py``
-ONLY). Exists so ``api/pilots_api.py``'s ``GET /automation/status`` can answer
-"did it run, and when" with a NUMBER, not a human sentence.
+``main_orchestrator.py``) and ``output/heartbeat.txt`` (``main_orchestrator.
+main()`` ONLY — the persistent orchestrator daemon runs the pipeline via
+``main_orchestrator._main_body()`` directly, deliberately bypassing ``main()``'s
+own per-call heartbeat lifecycle, so heartbeat.txt is permanently absent under
+the daemon; see ``heartbeat_age_seconds``'s docstring). Exists so
+``api/pilots_api.py``'s ``GET /automation/status`` can answer "did it run, and
+when" with a NUMBER, not a human sentence.
 
 Why not import ``scripts/preflight_check.py`` directly
 --------------------------------------------------------
@@ -27,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -96,11 +101,17 @@ def heartbeat_age_seconds() -> Optional[float]:
     """Age of ``output/heartbeat.txt`` in seconds, or ``None`` if missing/unreadable.
 
     ``main_orchestrator._heartbeat()`` writes this file as a bare ISO-8601 UTC
-    string every 60s — but ONLY when running the full async pipeline.
-    ``main.py``'s advisory orchestrator never writes it at all, so ``None`` is
-    the ROUTINE, EXPECTED value in advisory mode (the platform's default
-    posture — see AGENTS.md), not a failure signal. Never render this as
-    "engine down" on its own; pair it with ``HEARTBEAT_ADVISORY_NOTE``.
+    string every 60s, scheduled ONLY from inside ``main_orchestrator.main()``.
+    Neither ``main.py``'s advisory orchestrator NOR the persistent
+    orchestrator daemon (``desktop/daemon_runtime.py`` calls
+    ``main_orchestrator._main_body()`` directly, not ``main()``) ever writes
+    it, so ``None`` is the ROUTINE, EXPECTED value in both advisory mode (the
+    platform's default posture — see AGENTS.md) and under the daemon, not a
+    failure signal. Never render this as "engine down" on its own; pair it
+    with ``HEARTBEAT_ADVISORY_NOTE``. (Considered and rejected as a daemon
+    liveness signal for that reason — see ``daemon_pid_alive``/``pid_alive``
+    on ``read_daemon_json`` instead, which works under the daemon and is
+    exact rather than up-to-60s-stale.)
     """
     hb_path = settings.OUTPUT_DIR / "heartbeat.txt"
     if not hb_path.exists():
@@ -115,20 +126,93 @@ def heartbeat_age_seconds() -> Optional[float]:
         return None
 
 
+def _pid_alive(pid) -> Optional[bool]:
+    """Is ``pid`` a live process on this host? ``True``/``False``, or
+    ``None`` when unknowable. Never raises (CONSTRAINT #6); never guesses
+    ``False`` from an ambiguous input (CONSTRAINT #4) -- an unparseable or
+    absent pid is genuinely unknowable, not evidence of anything.
+
+    Two guards worth explaining, since both are real safety issues rather
+    than pedantry:
+
+    * ``pid <= 0`` is rejected before ever reaching ``os.kill``: signal 0
+      against pid 0 targets the CALLING PROCESS'S ENTIRE GROUP, and a
+      negative pid targets a process group too. A garbage/zero value in a
+      hand-edited or corrupted ``daemon.json`` must never turn into a
+      process-group-wide signal, even a no-op one (signal 0 sends nothing,
+      but the targeting semantics are the hazard, not the signal itself).
+    * ``bool`` is rejected explicitly even though ``isinstance(pid, int)``
+      alone would accept it -- ``bool`` is a subclass of ``int`` in Python,
+      so a JSON ``true`` would otherwise become ``os.kill(1, 0)``: PID 1,
+      which is essentially always alive, silently reporting a dead daemon
+      as alive from a malformed file.
+
+    Deliberately diverges from ``gui.orchestrator_runner._pid_alive``, which
+    returns a plain ``bool`` and maps an unknown ``OSError`` to ``False``.
+    That is correct THERE: its caller (``RunHandle.is_running()``) needs a
+    bool, and "assume finished" is the safe default for a subprocess
+    supervisor deciding whether to reap. It would be WRONG here: a ``False``
+    from this function is rendered straight to an operator as "your daemon
+    is dead," so an unknown/ambiguous case must stay ``None``, never
+    collapse to that stronger claim. Do not "unify" the two.
+
+    PID REUSE: a recycled pid can make this read ``True`` for a daemon that
+    is actually gone. Tolerated deliberately, not fixed: this is only ever
+    consulted (via ``read_daemon_json``'s ``pid_alive`` key) when the
+    Control API is ALREADY unreachable, so a stale ``True`` can never be
+    mistaken for a healthy daemon -- it degrades to the honest "a process
+    exists but is not answering" rather than a false claim of health.
+    Corroborating against the process's actual start time would need
+    ``psutil`` or a ``ps`` subprocess, both out of bounds for this
+    deliberately dependency-light, subprocess-averse module (see
+    ``parse_crontab``'s docstring for the same subprocess-avoidance
+    rationale).
+    """
+    if isinstance(pid, bool) or not isinstance(pid, int):
+        return None
+    if pid <= 0:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by another user -- still "alive"
+    except Exception as exc:  # noqa: BLE001 - never raise (CONSTRAINT #6)
+        logger.debug("run_status._pid_alive: could not probe pid %r: %s", pid, exc)
+        return None  # unknowable -> None, NEVER a fabricated False
+    return True
+
+
 def read_daemon_json() -> Optional[dict]:
-    """Best-effort read of ``output/daemon.json`` (written once at daemon
-    startup by ``desktop/orchestrator_daemon.py``) — the restart-honesty
-    fallback for ``GET /automation/status``: when the Control API isn't
-    reachable (e.g. the daemon process died but the file survives, or it's
-    mid-restart), this still has ``pid``/``interval_seconds``/``started_at``
-    from the last known-good startup. ``None`` on any failure — never raises.
+    """Best-effort read of ``output/daemon.json`` (written at daemon startup,
+    and again with ``state="stopped"`` at a graceful teardown, by
+    ``desktop/orchestrator_daemon.py``) — the restart-honesty fallback for
+    ``GET /automation/status``: when the Control API isn't reachable (e.g.
+    the daemon process died but the file survives, or it's mid-restart),
+    this still has ``pid``/``interval_seconds``/``started_at`` from the last
+    known-good startup. ``None`` on any failure (missing file, unreadable,
+    not a JSON object) — never raises (CONSTRAINT #6).
+
+    The returned dict is the file's contents PLUS one derived key,
+    ``"pid_alive"`` (``True``/``False``/``None`` — see ``_pid_alive``, and
+    CONSTRAINT #4: ``None`` means unknowable, never a fabricated ``False``).
+    This is added here, on the record, rather than via a second public
+    helper a caller could forget to call — a SIGKILLed daemon can never
+    perform the terminal write above, so a stale ``state: "running"`` on
+    disk is NOT proof of life; ``pid_alive`` is the machine-checked signal
+    that covers exactly that gap. Any new consumer of this function
+    automatically gets it; there is no separate liveness call to remember.
     """
     path = settings.OUTPUT_DIR / "daemon.json"
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None
+        data["pid_alive"] = _pid_alive(data.get("pid"))
+        return data
     except Exception as exc:  # noqa: BLE001 - never raise (CONSTRAINT #6)
         logger.debug("run_status.read_daemon_json: could not read daemon.json: %s", exc)
         return None

@@ -4264,6 +4264,7 @@ export const mockApi = {
           alive: true,
           source: "control_api",
           pid: null,
+          pid_alive: null, // consistent with pid: null on this branch, mirroring the live path's invariant
           port: 8601,
           started_at: new Date(now - 6 * 3600_000).toISOString(),
           interval_seconds: 300,

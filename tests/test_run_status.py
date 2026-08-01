@@ -9,8 +9,11 @@ resets) beyond what the one real deploy/crontab.txt exercises."""
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from unittest import mock
+
+import pytest
 
 from settings import settings
 from pilots import run_status
@@ -90,11 +93,17 @@ class TestReadDaemonJson:
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             assert run_status.read_daemon_json() is None
 
-    def test_valid_file_round_trips(self, tmp_path):
+    def test_valid_file_round_trips_plus_derived_pid_alive(self, tmp_path):
+        """read_daemon_json's contract changed deliberately: the returned
+        dict is the file's contents PLUS a derived "pid_alive" key -- see
+        the function's docstring for why this is additive-on-the-record
+        rather than a second helper a caller could forget to call."""
         payload = {"pid": 123, "interval_seconds": 60, "started_at": "x", "port": 8601, "pilots_api_port": None}
         (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            assert run_status.read_daemon_json() == payload
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), \
+             mock.patch.object(run_status.os, "kill", side_effect=ProcessLookupError):
+            result = run_status.read_daemon_json()
+        assert result == {**payload, "pid_alive": False}
 
     def test_malformed_json_degrades_to_none(self, tmp_path):
         (tmp_path / "daemon.json").write_text("{not json", encoding="utf-8")
@@ -105,6 +114,57 @@ class TestReadDaemonJson:
         (tmp_path / "daemon.json").write_text("[1, 2, 3]", encoding="utf-8")
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             assert run_status.read_daemon_json() is None
+
+
+class TestPidAlive:
+    """run_status._pid_alive -- the reader-side half of the daemon.json
+    staleness fix. A SIGKILLed daemon can never update its own file, so
+    this probe is what actually detects that case; read_daemon_json's
+    "pid_alive" key is a thin wrapper around it."""
+
+    def test_own_pid_is_alive(self):
+        assert run_status._pid_alive(os.getpid()) is True
+
+    def test_dead_pid_reports_false(self):
+        with mock.patch.object(run_status.os, "kill", side_effect=ProcessLookupError):
+            assert run_status._pid_alive(123) is False
+
+    def test_foreign_pid_permission_error_reports_true(self):
+        """Owned by another user: the process exists, so this is "alive",
+        not "unknown"."""
+        with mock.patch.object(run_status.os, "kill", side_effect=PermissionError):
+            assert run_status._pid_alive(123) is True
+
+    def test_missing_pid_is_none_never_false(self):
+        """CONSTRAINT #4: absent evidence must never collapse to a
+        fabricated False."""
+        result = run_status._pid_alive(None)
+        assert result is None
+        assert result is not False
+
+    @pytest.mark.parametrize("bad_pid", ["abc", None, 12.5, {}, [], object()])
+    def test_unparseable_pid_is_none(self, bad_pid):
+        assert run_status._pid_alive(bad_pid) is None
+
+    def test_bool_pid_is_none_not_treated_as_int(self):
+        """bool is an int subclass in Python -- a JSON `true` must not
+        silently become os.kill(1, 0) (PID 1, essentially always alive)."""
+        with mock.patch.object(run_status.os, "kill") as mock_kill:
+            assert run_status._pid_alive(True) is None
+        mock_kill.assert_not_called()
+
+    @pytest.mark.parametrize("bad_pid", [0, -1])
+    def test_zero_and_negative_pid_is_none_and_never_signals_a_process_group(self, bad_pid):
+        """pid 0 or a negative pid targets an entire PROCESS GROUP for
+        os.kill -- must be rejected before ever reaching the syscall,
+        regardless of how harmless signal 0 itself is."""
+        with mock.patch.object(run_status.os, "kill") as mock_kill:
+            assert run_status._pid_alive(bad_pid) is None
+        mock_kill.assert_not_called()
+
+    def test_unexpected_oserror_is_none_never_raises(self):
+        with mock.patch.object(run_status.os, "kill", side_effect=OSError("weird")):
+            assert run_status._pid_alive(123) is None
 
 
 class TestReadDeadLetter:

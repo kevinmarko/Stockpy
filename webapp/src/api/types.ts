@@ -1118,6 +1118,23 @@ export interface DaemonInfo {
   alive: boolean;
   source: "control_api" | "daemon_json" | "none";
   pid: number | null;
+  /**
+   * Machine-checked liveness probe (an `os.kill(pid, 0)` existence check on
+   * the backend), distinct from -- and more trustworthy than -- the
+   * `daemon_json` fallback's own self-reported state: a daemon killed with
+   * SIGKILL can never correct its own on-disk record, so a stale file can
+   * say "running" long after the process is gone. `null` = we could not
+   * determine it (no pid to probe on the `control_api` path, or an
+   * unparseable/absent pid on the `daemon_json` path) -- never render
+   * `null` as "dead". `false` on the `daemon_json` path is the only
+   * positive evidence the process is actually gone; `true` there means "a
+   * process with that pid exists" (rendered as "process alive, API not
+   * responding"), which is not quite the same claim as "the daemon is
+   * healthy" (a very unlucky pid reuse could in principle produce a false
+   * `true`) but is the honest signal available without a heavier
+   * dependency (e.g. psutil) on the backend.
+   */
+  pid_alive: boolean | null;
   port: number | null;
   started_at: string | null;
   interval_seconds: number | null;

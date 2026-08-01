@@ -626,6 +626,46 @@ for the full technical writeup.
 
 ---
 
+### 3.13 How to Read `output/daemon.json`
+
+**Symptom**: the Pilots PWA's Settings screen shows the Daemon row as "Not reachable" with
+"last known state" (or, after 2026-07, one of the two new sharper labels below), and you want
+to know from the file itself whether the daemon actually stopped or just crashed.
+
+`output/daemon.json` is written by `desktop/orchestrator_daemon.py` at **startup** (`state:
+"running"`/`"started"`, `stopped_at: null`) and again, since 2026-07, at a **graceful**
+`_teardown()` (`state: "stopped"`, `stopped_at` set — `started_at` is preserved from the
+original startup value, not re-stamped). Read it directly:
+
+```bash
+cat output/daemon.json
+```
+
+| What you see | What it means |
+|---|---|
+| `state: "stopped"`, `stopped_at` non-null | Clean shutdown (SIGTERM handled, teardown completed). Nothing to investigate. |
+| `state: "running"`/`"started"`, `stopped_at: null`, and the daemon IS actually reachable | Normal — still up. |
+| `state: "running"`/`"started"`, `stopped_at: null`, and the daemon is NOT reachable | **The file is stale — it never got to run its terminal write.** This is the expected appearance of a `SIGKILL` or a crash the signal-watcher thread never caught; the file alone cannot distinguish "just killed" from "killed a week ago". |
+
+For that last case, don't trust the file's `state` alone — the PWA's `GET /automation/status`
+also probes the recorded `pid` directly (`os.kill(pid, 0)`, via `pilots.run_status._pid_alive`)
+and surfaces it as `daemon.pid_alive`:
+
+- `pid_alive: false` → the process is confirmed gone. Settings shows **"stopped — process not
+  running"**. Safe to relaunch.
+- `pid_alive: true` → a process with that pid exists but isn't answering the Control API.
+  Settings shows **"process alive, API not responding"** — check `logs/investyo.log` for a
+  hung cycle or a port conflict (`lsof -i :8601`) before force-killing it.
+- `pid_alive: null` → unknowable (no pid recorded, e.g. before this fix, or the Control API
+  path never probed one). Settings shows the older, ambiguous **"last known state"**.
+
+Covered by `tests/test_orchestrator_daemon.py::TestDaemonFileWriting`/`TestSignalHandling` and
+`tests/test_run_status.py::TestPidAlive`; see `docs/architecture/webapp-and-gui.md`'s
+`desktop/orchestrator_daemon.py` entry for the writer side and
+`docs/architecture/observability-and-apis.md`'s `api/pilots_api.py` entry for the reader side.
+
+---
+
 ## 4. Contacts
 
 | Role | Contact | Notes |
