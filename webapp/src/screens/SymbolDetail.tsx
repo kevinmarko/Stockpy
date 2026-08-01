@@ -615,7 +615,7 @@ export function SymbolDetail() {
         )}
       </section>
 
-      <div className="mt-8 mb-4">
+      <div style={{ marginTop: "var(--s-8)", marginBottom: "var(--s-4)" }}>
         <ActiveTraderLadder symbol={data.symbol} currentPrice={identity.price} />
       </div>
     </div>

@@ -9,7 +9,8 @@ export default function DemoDataBadge() {
   return (
     <span
       title="Synthetic placeholder data — not a live measurement"
-      className="text-[10px] font-semibold uppercase tracking-wider bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800/40"
+      className="badge badge-warn"
+      style={{ textTransform: "uppercase", letterSpacing: "0.04em" }}
     >
       Demo Data
     </span>

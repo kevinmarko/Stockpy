@@ -1242,6 +1242,76 @@ button:focus-visible {
   flex: 1;
 }
 
+/* ---- Active Trader Ladder (order book depth ladder) ---- */
+.ladder-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s-4);
+  padding: var(--s-1-5) 0;
+  font-size: var(--t-body);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.ladder-row:hover {
+  background: var(--surface-2);
+}
+.ladder-cell {
+  text-align: center;
+  position: relative;
+}
+.ladder-size-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: var(--r-2xs);
+}
+.ladder-size-bar-bid {
+  left: 0;
+  background: rgba(16, 185, 129, 0.15);
+}
+.ladder-size-bar-ask {
+  right: 0;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+/* ---- Macro Sentiment Dashboard (key-driver rows) ---- */
+.macro-driver-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-2);
+  border-radius: var(--r-sm);
+  transition: background 0.15s ease;
+}
+.macro-driver-row:hover {
+  background: var(--surface-2);
+}
+.macro-driver-track {
+  width: 96px;
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.macro-driver-fill {
+  height: 100%;
+  background: #14b8a6;
+  border-radius: var(--r-pill);
+}
+
+/* ---- Two-up chart grid (Models screen) ---- */
+.chart-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--s-6);
+  margin: var(--s-4) 0 var(--s-8);
+}
+@media (min-width: 900px) {
+  .chart-grid-2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
 /* ---- Glassmorphism ---- */
 .glass-panel {
   background: rgba(26, 33, 43, 0.45); /* slightly transparent surface-2 */

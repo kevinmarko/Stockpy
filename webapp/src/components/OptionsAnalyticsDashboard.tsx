@@ -15,51 +15,59 @@ export default function OptionsAnalyticsDashboard({ symbol = 'SPY' }: { symbol?:
   const regime = data?.regime ?? null;
 
   return (
-    <div className="bg-white dark:bg-[#1a1a1a] rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-5 flex flex-col gap-6">
-      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4">
-        <div className="flex items-center gap-2">
-          <Clock className="w-5 h-5 text-indigo-500" />
-          <h3 className="font-semibold text-slate-900 dark:text-white">0DTE Options Analytics</h3>
+    <div className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: "var(--s-6)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border)", paddingBottom: "var(--s-4)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <Clock style={{ width: 20, height: 20, color: "#6366f1" }} />
+          <h3 style={{ margin: 0, fontWeight: 600, color: "var(--text-primary)" }}>0DTE Options Analytics</h3>
         </div>
         {data?.is_synthetic ? (
           <DemoDataBadge />
         ) : (
-          <div className="text-xs font-medium bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded">
+          <div
+            style={{
+              fontSize: "var(--t-caption)",
+              fontWeight: 600,
+              background: "rgba(99, 102, 241, 0.12)",
+              color: "#a5b4fc",
+              border: "1px solid rgba(99, 102, 241, 0.28)",
+              padding: "var(--s-1) var(--s-2)",
+              borderRadius: "var(--r-xs)",
+            }}
+          >
             Live Intraday
           </div>
         )}
       </div>
 
       {loading ? (
-        <div className="flex-1 flex items-center justify-center min-h-[300px]">
-          <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 300 }}>
+          <Loader2 className="icon-spin" style={{ width: 24, height: 24, color: "var(--text-muted)" }} />
         </div>
       ) : error ? (
-        <div className="flex-1 flex items-center justify-center text-red-500 min-h-[300px]">Failed to load analytics</div>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--decline)", minHeight: 300 }}>Failed to load analytics</div>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4">
-            <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800">
-          <div className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Net Dealer Premium</div>
+          <div className="tile">
+          <div className="tile-label">Net Dealer Premium</div>
           {netDealerPremium === null ? (
-            <div className="text-lg font-medium text-slate-400 dark:text-slate-500">Unavailable</div>
+            <div style={{ fontSize: "var(--t-subhead)", fontWeight: 600, color: "var(--text-muted)" }}>Unavailable</div>
           ) : (
             <>
-              <div className={`text-2xl font-bold ${netDealerPremium < 0 ? 'text-red-500' : 'text-green-500'}`}>
+              <div className="tile-value" style={{ color: netDealerPremium < 0 ? "var(--decline)" : "var(--growth)" }}>
                 ${Math.abs(netDealerPremium)}M {netDealerPremium < 0 ? 'Short' : 'Long'}
               </div>
-              <div className="text-xs mt-2 flex items-center gap-1 text-slate-600 dark:text-slate-400">
-                {netDealerPremium < 0 ? <AlertTriangle className="w-3 h-3 text-red-500" /> : <TrendingUp className="w-3 h-3 text-green-500" />}
+              <div style={{ fontSize: "var(--t-caption)", marginTop: "var(--s-2)", display: "flex", alignItems: "center", gap: "var(--s-1)", color: "var(--text-secondary)" }}>
+                {netDealerPremium < 0 ? <AlertTriangle style={{ width: 12, height: 12, color: "var(--decline)" }} /> : <TrendingUp style={{ width: 12, height: 12, color: "var(--growth)" }} />}
                 Regime: {regime ?? 'Unavailable'}
               </div>
             </>
           )}
         </div>
-      </div>
 
       <div>
-        <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-4">Intraday Theta Decay & Gamma Acceleration</h4>
-        <div className="h-[250px] w-full">
+        <h4 style={{ fontSize: "var(--t-body)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--s-4)" }}>Intraday Theta Decay &amp; Gamma Acceleration</h4>
+        <div style={{ height: 250, width: "100%" }}>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={intradayData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
               <defs>
