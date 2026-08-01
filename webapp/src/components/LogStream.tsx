@@ -105,7 +105,11 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
           gap: "var(--s-1)",
           fontFamily: "var(--font-mono, ui-monospace, monospace)",
           fontSize: "var(--t-caption)",
-          color: theme.textPrimary,
+          color: theme.growth,
+          background: "#000000",
+          padding: "var(--s-3)",
+          borderRadius: "var(--r-sm)",
+          border: `1px solid ${theme.borderStrong}`,
         }}
       >
         {USE_MOCK ? (

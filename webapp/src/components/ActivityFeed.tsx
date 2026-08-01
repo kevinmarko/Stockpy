@@ -41,11 +41,35 @@ function LevelDot({ level }: { level: string | null }) {
   );
 }
 
+export function getAlertCategory(entry: AlertEntry): "SYSTEM" | "EXECUTION" | "RISK" | "REGIME" {
+  const t = entry.extra?.type as string | undefined;
+  if (!t) return "SYSTEM";
+  if (["fill", "order", "trade", "execution"].includes(t)) return "EXECUTION";
+  if (["risk", "constraint"].includes(t)) return "RISK";
+  if (["regime", "hmm", "macro"].includes(t)) return "REGIME";
+  return "SYSTEM";
+}
+
+const CATEGORY_COLORS = {
+  SYSTEM: theme.borderStrong,
+  EXECUTION: theme.accent,
+  RISK: theme.decline,
+  REGIME: theme.caution,
+};
+
 function AlertCard({ entry }: { entry: AlertEntry }) {
+  const category = getAlertCategory(entry);
+  const borderColor = CATEGORY_COLORS[category];
+
   return (
     <div
       className="card card-pad"
-      style={{ marginBottom: "var(--s-2-5)", background: theme.surface, border: `1px solid ${theme.border}` }}
+      style={{
+        marginBottom: "var(--s-2-5)",
+        background: theme.surface,
+        border: `1px solid ${theme.border}`,
+        borderLeft: `4px solid ${borderColor}`,
+      }}
       data-testid="alert-card"
     >
       <div
@@ -64,6 +88,27 @@ function AlertCard({ entry }: { entry: AlertEntry }) {
       <div style={{ fontSize: "var(--t-body)", color: theme.textPrimary, lineHeight: 1.45 }}>
         {entry.message ?? "—"}
       </div>
+      {category === "EXECUTION" && (
+        <div style={{ marginTop: "var(--s-2)" }}>
+          <button className="btn btn-primary" style={{ fontSize: "var(--t-small)", padding: "var(--s-1) var(--s-3)" }}>
+            Review Trade
+          </button>
+        </div>
+      )}
+      {category === "REGIME" && (
+        <div style={{ marginTop: "var(--s-2)" }}>
+          <button className="btn btn-secondary" style={{ fontSize: "var(--t-small)", padding: "var(--s-1) var(--s-3)" }}>
+            View Regime
+          </button>
+        </div>
+      )}
+      {category === "RISK" && (
+        <div style={{ marginTop: "var(--s-2)" }}>
+          <button className="btn btn-secondary" style={{ fontSize: "var(--t-small)", padding: "var(--s-1) var(--s-3)" }}>
+            Risk Details
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -72,7 +117,8 @@ export function ActivityFeed({
   limit = 20,
   pilotIds,
   pollIntervalMs = 30000,
-}: { limit?: number; pilotIds?: string[]; pollIntervalMs?: number }) {
+  categoryFilter,
+}: { limit?: number; pilotIds?: string[]; pollIntervalMs?: number; categoryFilter?: string | null }) {
   const [pollingActive, setPollingActive] = useState(true);
   // Keep the whole feed (not just entries) so the honest `reason` string is
   // available for the empty state instead of a hardcoded placeholder.
@@ -140,6 +186,10 @@ export function ActivityFeed({
       : validEntries;
 
   const isLargeList = filteredAlerts.length > 100;
+  
+  const finalAlerts = categoryFilter && categoryFilter !== "ALL"
+    ? filteredAlerts.filter(a => getAlertCategory(a) === categoryFilter)
+    : filteredAlerts;
 
   return (
     <div data-testid="activity-feed-widget">
@@ -173,7 +223,7 @@ export function ActivityFeed({
 
       {!loading && !error && (
         <>
-          {filteredAlerts.length === 0 ? (
+          {finalAlerts.length === 0 ? (
             <div className="empty" style={{ padding: "var(--s-5)" }} data-testid="empty-alerts">
               {reason ?? "No alerts yet."}
             </div>
@@ -187,7 +237,7 @@ export function ActivityFeed({
                 ...(isLargeList ? { contentVisibility: "auto", containIntrinsicSize: "0 100px" } : {}),
               }}
             >
-              {filteredAlerts.slice(0, limit).map((e, i) => (
+              {finalAlerts.slice(0, limit).map((e, i) => (
                 <AlertCard key={`${e.timestamp ?? i}-${i}`} entry={e} />
               ))}
             </div>

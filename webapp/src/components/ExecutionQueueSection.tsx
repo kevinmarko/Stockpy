@@ -53,7 +53,7 @@ export function ExecutionQueueSection() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
               {data.intents.map((intent) => (
-                <IntentRow key={intent.client_order_id || `${intent.symbol}-${intent.side}`} intent={intent} />
+                <IntentRow key={intent.client_order_id || `${intent.symbol}-${intent.side}`} intent={intent} mode={data.mode} />
               ))}
             </div>
           </div>
@@ -92,7 +92,7 @@ export function Chip({
   );
 }
 
-function IntentRow({ intent }: { intent: ExecutionQueueIntent }) {
+function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: string }) {
   const size =
     intent.qty !== null
       ? `${intent.qty} sh`
@@ -139,6 +139,61 @@ function IntentRow({ intent }: { intent: ExecutionQueueIntent }) {
       {!intent.allow_place && intent.gate_reasons.length > 0 && (
         <div style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
           {intent.gate_reasons.join(", ")}
+        </div>
+      )}
+      {intent.allow_place && mode === "review" && (
+        <div
+          style={{
+            marginTop: "var(--s-3)",
+            padding: "var(--s-3)",
+            borderRadius: "var(--r-sm)",
+            background: "rgba(220, 38, 38, 0.05)",
+            border: `1px solid ${theme.decline}`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "var(--s-3)",
+          }}
+        >
+          <div>
+            <div style={{ color: theme.textPrimary, fontWeight: 700, fontSize: "var(--t-small)", marginBottom: 4 }}>
+              Risk Approval Required
+            </div>
+            <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)" }}>
+              This order requires explicit operator approval before execution.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "var(--s-2)" }}>
+            <button
+              style={{
+                padding: "8px 16px",
+                borderRadius: "var(--r-sm)",
+                background: theme.decline,
+                color: "#ffffff",
+                fontWeight: 700,
+                border: "none",
+                cursor: "pointer",
+                fontSize: "var(--t-small)",
+              }}
+            >
+              REJECT
+            </button>
+            <button
+              style={{
+                padding: "8px 16px",
+                borderRadius: "var(--r-sm)",
+                background: "transparent",
+                color: theme.growth,
+                fontWeight: 700,
+                border: `1px solid ${theme.growth}`,
+                cursor: "pointer",
+                fontSize: "var(--t-small)",
+              }}
+            >
+              APPROVE
+            </button>
+          </div>
         </div>
       )}
     </div>

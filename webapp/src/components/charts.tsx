@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import type { Bar, CurvePoint, EquityDrawdownPoint, ForecastAttention, SectorSlice } from "../api/types";
 import { sectorColor, theme } from "../theme";
-import { fmtDate, fmtPct } from "../format";
+import { fmtDate, fmtPct, fmtUsd, fmtDateTime } from "../format";
 import { InfoTip } from "./ui";
 
 /**
@@ -66,6 +66,7 @@ export function PerfLine({
   macroSecondaryAxis = false,
   valueLabel = "Pilot",
   yTickDecimals = 0,
+  valueFormat = "number",
 }: {
   data: CurvePoint[];
   benchmark?: CurvePoint[] | null;
@@ -93,6 +94,7 @@ export function PerfLine({
   // Y-axis tick decimal places — 0 fits a base-100 indexed curve; a series
   // with a narrow range (e.g. beta, typically 0-2) needs more precision.
   yTickDecimals?: number;
+  valueFormat?: "number" | "currency" | "percent";
 }) {
   if (data.length === 0) return null;
   const first = data[0].value;
@@ -100,6 +102,12 @@ export function PerfLine({
   const up = last >= first;
   const stroke = up ? theme.growth : theme.decline;
   const gradId = up ? "gradUp" : "gradDown";
+
+  const formatValue = (v: number) => {
+    if (valueFormat === "currency") return fmtUsd(v);
+    if (valueFormat === "percent") return fmtPct(v, yTickDecimals, { fromFraction: true });
+    return v.toFixed(yTickDecimals);
+  };
 
   // merge benchmark + macro overlay onto the same date axis for one <AreaChart>
   const benchMap = new Map((benchmark ?? []).map((p) => [p.date, p.value]));
@@ -151,8 +159,8 @@ export function PerfLine({
             domain={[min - pad, max + pad]}
             tick={chartAxisTick}
             {...chartAxisLine}
-            width={34}
-            tickFormatter={(v: number) => v.toFixed(yTickDecimals)}
+            width={valueFormat === "currency" ? 50 : 34}
+            tickFormatter={formatValue}
           />
           {macroSecondaryAxis && macroBenchmark && macroBenchmark.length > 0 && (
             <YAxis
@@ -161,21 +169,22 @@ export function PerfLine({
               domain={[macroMin - macroPad, macroMax + macroPad]}
               tick={chartAxisTick}
               {...chartAxisLine}
-              width={34}
-              tickFormatter={(v: number) => v.toFixed(yTickDecimals)}
+              width={valueFormat === "currency" ? 50 : 34}
+              tickFormatter={formatValue}
             />
           )}
           <Tooltip
             contentStyle={chartTooltipStyle}
-            labelFormatter={(l) => fmtDate(String(l))}
+            labelFormatter={(l) => fmtDateTime(String(l))}
             formatter={(val, name) => [
-              Number(val).toFixed(2),
+              formatValue(Number(val)),
               name === "value"
                 ? valueLabel
                 : name === "macro"
                   ? macroLabel
                   : "Benchmark",
             ]}
+            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
           />
           {benchmark && benchmark.length > 0 && (
             <Line
@@ -351,8 +360,9 @@ export function DrawdownArea({ data }: { data: EquityDrawdownPoint[] }) {
           />
           <Tooltip
             contentStyle={chartTooltipStyle}
-            labelFormatter={(l) => fmtDate(String(l))}
+            labelFormatter={(l) => fmtDateTime(String(l))}
             formatter={(val) => [fmtPct(Number(val), 1, { fromFraction: true }), "Drawdown"]}
+            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
           />
           <Area
             type="monotone"
@@ -566,7 +576,7 @@ export function ForecastCandleChart({
           />
           <Tooltip
             contentStyle={chartTooltipStyle}
-            labelFormatter={(l) => fmtDate(String(l))}
+            labelFormatter={(l) => fmtDateTime(String(l))}
             formatter={(val, name, entry: { payload?: Row }) => {
               const p: Row = entry?.payload ?? { date: "" };
               if (name === "range")
@@ -582,6 +592,7 @@ export function ForecastCandleChart({
                 ];
               return [typeof val === "number" ? val.toFixed(2) : "—", name];
             }}
+            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
           />
           {/* Confidence cone — stacked-area trick: an invisible baseline at
               `coneLower` plus a visible band of `coneBand = upper - lower`
