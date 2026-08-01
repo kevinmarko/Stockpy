@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useSearchParams } from "react-router";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
@@ -7,7 +8,10 @@ import {
   parseCommandLine,
   highStakesReason,
   DISALLOWED_EXECUTE_COMMANDS,
+  getCommandCategory,
+  CATEGORIES,
   type Suggestion,
+  type CommandCategory,
 } from "../commandParse";
 import {
   Button,
@@ -21,39 +25,91 @@ import { ExecutionQueueSection } from "../components/ExecutionQueueSection";
 import { CopyCommandBlock } from "../components/CopyCommandBlock";
 import { Modal } from "../components/Modal";
 import { LogStream } from "../components/LogStream";
+import { CommandFormBuilder } from "../components/CommandFormBuilder";
+import { RecentRunsLog } from "../components/RecentRunsLog";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
 
-/**
- * Commands — an autocomplete command bar over the platform's CLI manifest
- * (GET /commands, built offline by scripts/build_command_manifest.py). It
- * resolves commands/subcommands + aliases, lists options with descriptions,
- * defaults and choices, and validates missing/unknown args before submit.
- *
- * Composing and copying the CLI string always works, with no gate. A Run
- * control additionally executes the composed command via the backend's
- * `"command"` job type on the existing job-execution infrastructure (the same
- * `POST /jobs` used by the Console screen's fixed one-click actions) — but
- * that path is disabled server-side unless the operator has explicitly set
- * `COMMAND_EXECUTION_ENABLED`, so a fresh/default deployment behaves exactly
- * as before (copy-only). High-stakes commands (the kill switch, a forced
- * broker re-login) require an extra confirmation dialog before the run
- * request is even sent (see `commandParse.ts`'s `highStakesReason`).
- * `app_shell.py` pops a native desktop window on the server host, not the
- * browser, so it stays copy-only regardless of the flag.
- */
+const LOCAL_STORAGE_FAVORITES_KEY = "investyo_favorite_commands";
+
+function getFavoriteCommands(): string[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_FAVORITES_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveFavoriteCommands(favs: string[]) {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_FAVORITES_KEY, JSON.stringify(favs));
+  } catch {
+    // ignore
+  }
+}
+
 export function Commands() {
   const { data, loading, error, status, stale, cachedAt, reload } =
     useApi<CommandManifest>(() => api.getCommands(), []);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<"launcher" | "queue">("launcher");
+  const [builderCommand, setBuilderCommand] = useState<CommandSpec | null>(null);
+
+  // Check URL query parameters for builderCommand trigger (e.g. ?builder=validation.harness)
+  useEffect(() => {
+    const builderParam = searchParams.get("builder");
+    if (builderParam && data?.commands) {
+      const matched = data.commands.find((c) => c.name === builderParam);
+      if (matched) {
+        setBuilderCommand(matched);
+      }
+    }
+  }, [searchParams, data]);
+
   return (
     <div className="screen">
-      <div className="rail-head">
+      <div className="rail-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1>Commands</h1>
+        {/* Navigation Sub-Tabs */}
+        <div style={{ display: "flex", gap: "var(--s-1)", background: theme.surface2, padding: "var(--s-1)", borderRadius: "var(--r-sm)" }}>
+          <button
+            onClick={() => setActiveTab("launcher")}
+            style={{
+              padding: "var(--s-1-5) var(--s-3)",
+              borderRadius: "var(--r-sm)",
+              border: "none",
+              background: activeTab === "launcher" ? theme.surface : "transparent",
+              color: activeTab === "launcher" ? theme.textPrimary : theme.textMuted,
+              fontWeight: activeTab === "launcher" ? 600 : 400,
+              cursor: "pointer",
+              fontSize: "var(--t-body)",
+            }}
+          >
+            💻 Command Launcher
+          </button>
+          <button
+            onClick={() => setActiveTab("queue")}
+            style={{
+              padding: "var(--s-1-5) var(--s-3)",
+              borderRadius: "var(--r-sm)",
+              border: "none",
+              background: activeTab === "queue" ? theme.surface : "transparent",
+              color: activeTab === "queue" ? theme.textPrimary : theme.textMuted,
+              fontWeight: activeTab === "queue" ? 600 : 400,
+              cursor: "pointer",
+              fontSize: "var(--t-body)",
+            }}
+          >
+            📋 Staged Execution Queue
+          </button>
+        </div>
       </div>
+
       <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: "var(--s-4)" }}>
-        Autocomplete for the platform's command-line tools. Compose a command,
-        copy it to run in your own terminal, or run it here directly.
+        Autocomplete and parameter builder for the platform's command-line tools. Compose commands,
+        configure flags via Form Mode, or trigger global Command Palette with <kbd style={{ background: theme.surface3, padding: "2px 6px", borderRadius: 4 }}>Cmd + K</kbd>.
         {data && ` Manifest generated ${timeAgo(data.generated_at)}.`}
       </p>
 
@@ -63,6 +119,7 @@ export function Commands() {
 
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+
       {!loading && !error && data && (
         data.commands.length === 0 ? (
           <EmptyState
@@ -70,16 +127,213 @@ export function Commands() {
             hint={data.reason ?? "Run scripts/build_command_manifest.py to generate the manifest."}
           />
         ) : (
-          <CommandBar commands={data.commands} />
+          <>
+            {activeTab === "launcher" && (
+              <CommandLauncher
+                commands={data.commands}
+                onOpenBuilder={(cmd) => setBuilderCommand(cmd)}
+              />
+            )}
+            {(activeTab === "queue" || activeTab === "launcher") && (
+              <div style={{ marginTop: activeTab === "launcher" ? "var(--s-6)" : 0 }}>
+                <ExecutionQueueSection />
+              </div>
+            )}
+          </>
         )
       )}
 
-      <ExecutionQueueSection />
+      {/* Form Mode Builder Modal */}
+      {builderCommand && (
+        <CommandFormBuilder
+          command={builderCommand}
+          onClose={() => {
+            setBuilderCommand(null);
+            if (searchParams.has("builder")) {
+              searchParams.delete("builder");
+              setSearchParams(searchParams);
+            }
+          }}
+          onRunCommand={(_composed, _spec, _argTokens) => {
+            // Managed inside CommandLauncher via job creation
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
+function CommandLauncher({
+  commands,
+  onOpenBuilder,
+}: {
+  commands: CommandManifest["commands"];
+  onOpenBuilder: (cmd: CommandSpec) => void;
+}) {
+  const [selectedCategory, setSelectedCategory] = useState<CommandCategory | "all">("all");
+  const [favorites, setFavorites] = useState<string[]>(() => getFavoriteCommands());
+
+  const toggleFavorite = (name: string) => {
+    setFavorites((prev) => {
+      const next = prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name];
+      saveFavoriteCommands(next);
+      return next;
+    });
+  };
+
+  const filteredCommands = useMemo(() => {
+    if (selectedCategory === "all") return commands;
+    return commands.filter((c) => getCommandCategory(c.name) === selectedCategory);
+  }, [commands, selectedCategory]);
+
+  return (
+    <div>
+      {/* Autocomplete Input Bar */}
+      <CommandBar commands={commands} onOpenBuilder={onOpenBuilder} />
+
+      {/* Category Badges Filter */}
+      <div style={{ display: "flex", gap: "var(--s-2)", margin: "var(--s-5) 0 var(--s-3)", flexWrap: "wrap" }}>
+        <button
+          onClick={() => setSelectedCategory("all")}
+          style={{
+            padding: "var(--s-1-5) var(--s-3)",
+            borderRadius: "var(--r-sm)",
+            border: `1px solid ${selectedCategory === "all" ? theme.accent : theme.border}`,
+            background: selectedCategory === "all" ? theme.surface3 : theme.surface,
+            color: selectedCategory === "all" ? theme.accent : theme.textSecondary,
+            fontWeight: 600,
+            cursor: "pointer",
+            fontSize: "var(--t-caption)",
+          }}
+        >
+          All Commands ({commands.length})
+        </button>
+
+        {CATEGORIES.map((cat) => {
+          const count = commands.filter((c) => getCommandCategory(c.name) === cat.id).length;
+          const isSelected = selectedCategory === cat.id;
+          return (
+            <button
+              key={cat.id}
+              onClick={() => setSelectedCategory(cat.id)}
+              style={{
+                padding: "var(--s-1-5) var(--s-3)",
+                borderRadius: "var(--r-sm)",
+                border: `1px solid ${isSelected ? theme.accent : theme.border}`,
+                background: isSelected ? theme.surface3 : theme.surface,
+                color: isSelected ? theme.accent : theme.textSecondary,
+                fontWeight: 600,
+                cursor: "pointer",
+                fontSize: "var(--t-caption)",
+              }}
+            >
+              {cat.icon} {cat.label} ({count})
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Command Cards Grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "var(--s-3)", marginBottom: "var(--s-6)" }}>
+        {filteredCommands.map((c) => {
+          const isFav = favorites.includes(c.name);
+          const cat = CATEGORIES.find((item) => item.id === getCommandCategory(c.name));
+          return (
+            <div
+              key={c.name}
+              style={{
+                background: theme.surface,
+                border: `1px solid ${theme.border}`,
+                borderRadius: "var(--r-sm)",
+                padding: "var(--s-3-5)",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+                position: "relative",
+              }}
+            >
+              <div>
+                {/* Header row with icon & star */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--s-1-5)" }}>
+                  <span style={{ fontSize: "var(--t-micro)", padding: "2px 6px", borderRadius: 4, background: theme.surface2, color: theme.textMuted }}>
+                    {cat?.icon} {cat?.label}
+                  </span>
+                  <button
+                    onClick={() => toggleFavorite(c.name)}
+                    aria-label={`Favorite ${c.name}`}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "1.1rem",
+                      color: isFav ? "#facc15" : theme.textMuted,
+                    }}
+                  >
+                    {isFav ? "★" : "☆"}
+                  </button>
+                </div>
+
+                <div style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 700, fontSize: "var(--t-body)", color: theme.textPrimary }}>
+                  {c.name}
+                </div>
+
+                {c.description && (
+                  <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1)", lineHeight: "1.4" }}>
+                    {c.description}
+                  </div>
+                )}
+                <div
+                  style={{
+                    color: theme.textSecondary,
+                    fontSize: "var(--t-micro)",
+                    fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                    marginTop: "var(--s-2)",
+                    background: theme.surface2,
+                    padding: "var(--s-1) var(--s-2)",
+                    borderRadius: 4,
+                    overflowX: "auto",
+                  }}
+                >
+                  {c.invocation}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-3)", paddingTop: "var(--s-2)", borderTop: `1px solid ${theme.border}` }}>
+                <Button
+                  variant="neutral"
+                  onClick={() => onOpenBuilder(c)}
+                  aria-label={`Configure ${c.name}`}
+                  style={{ flex: 1, fontSize: "var(--t-caption)" }}
+                >
+                  🛠️ Configure
+                </Button>
+                <Button
+                  variant="neutral"
+                  onClick={() => {
+                    navigator.clipboard.writeText(c.invocation);
+                  }}
+                  aria-label={`Copy ${c.name}`}
+                  style={{ fontSize: "var(--t-caption)" }}
+                >
+                  📋
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CommandBar({
+  commands,
+  onOpenBuilder,
+}: {
+  commands: CommandManifest["commands"];
+  onOpenBuilder: (cmd: CommandSpec) => void;
+}) {
   const [input, setInput] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [open, setOpen] = useState(true);
@@ -119,9 +373,6 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
     }
   };
 
-  // The dropdown is for refining a command being typed; when the field is empty
-  // the reference list below serves discovery, so they never both show the same
-  // command at once.
   const showDropdown = open && suggestions.length > 0 && input.trim() !== "";
   const activeId = suggestions.length ? `cmd-opt-${Math.min(activeIndex, suggestions.length - 1)}` : undefined;
 
@@ -181,7 +432,7 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
                   role="option"
                   aria-selected={selected}
                   onMouseDown={(e) => {
-                    e.preventDefault(); // keep focus in the input
+                    e.preventDefault();
                     accept(s);
                   }}
                   style={{
@@ -236,7 +487,7 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
             label={`Command to run${errors.length ? " (incomplete — see above)" : ""}`}
             resetKey={input}
           />
-          <div style={{ marginTop: "var(--s-3)" }}>
+          <div style={{ marginTop: "var(--s-3)", display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
             <RunCommandControl
               command={parsed.command}
               subcommand={parsed.subcommand}
@@ -245,43 +496,11 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
               composed={parsed.composed}
               resetKey={input}
             />
-          </div>
-        </div>
-      )}
-
-      {/* Reference list when nothing typed yet */}
-      {input.trim() === "" && (
-        <div style={{ marginTop: "var(--s-6)" }}>
-          <div className="tile-label" style={{ marginBottom: "var(--s-2)" }}>
-            Available commands
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-            {commands.map((c) => (
-              <button
-                key={c.name}
-                onClick={() => {
-                  setInput(c.name + " ");
-                  setOpen(true);
-                  inputRef.current?.focus();
-                }}
-                style={{
-                  textAlign: "left",
-                  padding: "var(--s-2-5) var(--s-3)",
-                  background: theme.surface,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: "var(--r-sm)",
-                  cursor: "pointer",
-                }}
-              >
-                <div style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 700, color: theme.textPrimary }}>
-                  {c.name}
-                </div>
-                {c.description && (
-                  <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>{c.description}</div>
-                )}
-                <div style={{ color: theme.textSecondary, fontSize: "var(--t-micro)", marginTop: "var(--s-0-5)" }}>{c.invocation}</div>
-              </button>
-            ))}
+            {parsed.command && (
+              <Button variant="neutral" onClick={() => onOpenBuilder(parsed.command!)}>
+                Configure in Form Mode 🛠️
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -289,18 +508,8 @@ function CommandBar({ commands }: { commands: CommandManifest["commands"] }) {
   );
 }
 
-// Mirrors Console.tsx's own TERMINAL_STATUSES (not exported there) -- the set
-// of JobRecord.status values past which polling stops.
 const TERMINAL_STATUSES = new Set(["success", "failed", "cancelled", "unknown"]);
 
-/**
- * RunCommandControl — executes the command bar's composed command via the
- * backend's gated `"command"` job type, reusing the same job-lifecycle
- * pattern as Console.tsx (createJob -> poll getJobStatus -> LogStream, with a
- * Cancel button while cancellable). A high-stakes command (kill switch
- * activate/deactivate, a forced Robinhood re-login) requires the operator to
- * confirm via a Modal before the run request is ever sent.
- */
 function RunCommandControl({
   command,
   subcommand,
@@ -317,13 +526,10 @@ function RunCommandControl({
   resetKey: unknown;
 }) {
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
+  const [recentJobs, setRecentJobs] = useState<JobRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pendingConfirm, setPendingConfirm] = useState(false);
 
-  // A different composed command (the operator edited the bar) invalidates
-  // whatever job/error/confirmation state belonged to the previous one --
-  // otherwise a stale "success" badge or log stream could linger next to an
-  // unrelated command.
   useEffect(() => {
     setActiveJob(null);
     setError(null);
@@ -334,9 +540,19 @@ function RunCommandControl({
     async () => {
       if (!activeJob) return;
       try {
-        setActiveJob(await api.getJobStatus(activeJob.job_id));
+        const updated = await api.getJobStatus(activeJob.job_id);
+        setActiveJob(updated);
+        setRecentJobs((prev) => {
+          const idx = prev.findIndex((j) => j.job_id === updated.job_id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = updated;
+            return next;
+          }
+          return [updated, ...prev];
+        });
       } catch {
-        // A transient poll failure isn't fatal -- just try again next tick.
+        // ignore transient poll failure
       }
     },
     1500,
@@ -351,13 +567,9 @@ function RunCommandControl({
         args: argTokens,
         confirm: true,
       };
-      // Spread into a fresh object literal: api.createJob's `params` is typed
-      // Record<string, unknown> (the same untyped bag every other job type
-      // shares), and CommandJobParams (no index signature) isn't directly
-      // assignable to that -- but a fresh literal built from it is exempt
-      // from the index-signature check the same way any inline literal is.
-      const job = await api.createJob("command", { ...params });
+      const job = await api.createJob("command", { ...params, command_name: command!.name });
       setActiveJob(job);
+      setRecentJobs((prev) => [job, ...prev]);
       setError(null);
     } catch (err: any) {
       setError(err?.message ?? String(err));
@@ -378,7 +590,8 @@ function RunCommandControl({
     try {
       const res = await api.cancelJob(activeJob.job_id);
       if (res.cancelled) {
-        setActiveJob(await api.getJobStatus(activeJob.job_id));
+        const updated = await api.getJobStatus(activeJob.job_id);
+        setActiveJob(updated);
       } else {
         setError("Cancel was requested but could not be confirmed — the job may still be running.");
       }
@@ -426,6 +639,12 @@ function RunCommandControl({
           <div style={{ marginTop: "var(--s-2-5)" }}>
             <LogStream jobId={activeJob.job_id} isStreaming={Boolean(activeJob)} />
           </div>
+        </div>
+      )}
+
+      {recentJobs.length > 0 && (
+        <div style={{ marginTop: "var(--s-5)" }}>
+          <RecentRunsLog jobs={recentJobs} />
         </div>
       )}
 

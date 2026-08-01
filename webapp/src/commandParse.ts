@@ -103,11 +103,86 @@ function resolveCommand(commands: CommandSpec[], token: string): CommandSpec | n
   );
 }
 
-/** Substring match on any command key — for suggestions while still typing. */
+export type CommandCategory = "pipeline" | "testing" | "database" | "reporting";
+
+export interface CategoryInfo {
+  id: CommandCategory;
+  label: string;
+  icon: string;
+  description: string;
+}
+
+export const CATEGORIES: CategoryInfo[] = [
+  { id: "pipeline", label: "Pipeline & Core", icon: "🚀", description: "Master orchestrators and application shells" },
+  { id: "testing", label: "Testing & Validation", icon: "🧪", description: "Strategy validation, preflight checks, and benchmarks" },
+  { id: "database", label: "Database & Operations", icon: "🗄️", description: "Database migrations, kill switches, and prompt registry" },
+  { id: "reporting", label: "Reporting & Analytics", icon: "📊", description: "Daily briefings, track record status, and HTML reports" },
+];
+
+export function getCommandCategory(name: string): CommandCategory {
+  const n = name.toLowerCase();
+  if (n.includes("main") || n.includes("app_shell") || n.includes("orchestrator")) return "pipeline";
+  if (n.includes("validation") || n.includes("preflight") || n.includes("test")) return "testing";
+  if (n.includes("database") || n.includes("kill_switch") || n.includes("prompt")) return "database";
+  if (n.includes("briefing") || n.includes("track_record") || n.includes("report")) return "reporting";
+  return "pipeline";
+}
+
+/** Fuzzy match score: returns positive score if `pattern` characters match in sequence inside `text`, or 0 if no match. Higher = better match. */
+export function fuzzyScore(pattern: string, text: string): number {
+  if (!pattern) return 1;
+  const p = pattern.toLowerCase();
+  const t = text.toLowerCase();
+  if (t === p) return 1000;
+  if (t.startsWith(p)) return 800;
+  if (t.includes(p)) return 500;
+
+  let pIdx = 0;
+  let score = 0;
+  let consecutive = 0;
+  for (let i = 0; i < t.length && pIdx < p.length; i++) {
+    if (t[i] === p[pIdx]) {
+      pIdx++;
+      consecutive++;
+      score += 10 + consecutive * 5;
+    } else {
+      consecutive = 0;
+    }
+  }
+  return pIdx === p.length ? score : 0;
+}
+
+export function fuzzyMatch(pattern: string, text: string): boolean {
+  return fuzzyScore(pattern, text) > 0;
+}
+
+/** Known strategy names for contextual autocompletion of --strategy option */
+export const REGISTERED_STRATEGIES = [
+  "rsi2_mean_reversion",
+  "garch_vol_target",
+  "cross_sectional_momentum",
+  "faber_sma200",
+  "pairs_trading",
+  "macro_regime_pit",
+  "multifactor_lowvol_size",
+  "quality_value_momentum",
+  "regime_multiplier",
+  "sector_momentum",
+  "trend_following",
+  "options_overlay",
+];
+
+/** Substring or fuzzy match on any command key — for suggestions while still typing. */
 function matchCommands(commands: CommandSpec[], partial: string): CommandSpec[] {
-  const t = partial.toLowerCase();
-  if (!t) return commands;
-  return commands.filter((c) => commandKeys(c).some((k) => k.toLowerCase().includes(t)));
+  if (!partial) return commands;
+  return commands
+    .map((c) => {
+      const bestScore = Math.max(...commandKeys(c).map((k) => fuzzyScore(partial, k)));
+      return { command: c, score: bestScore };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.command);
 }
 
 function findOption(spec: CommandSpec, alias: string): CommandOption | null {
@@ -134,10 +209,25 @@ function commandSuggestions(commands: CommandSpec[], partial: string): Suggestio
 }
 
 function subcommandSuggestions(parent: CommandSpec, partial: string): Suggestion[] {
-  const t = partial.toLowerCase();
+  if (!partial) {
+    return parent.subcommands.map((s) => ({
+      value: s.name,
+      label: s.aliases.length ? `${s.name} (${s.aliases.join(", ")})` : s.name,
+      description: s.description ?? "",
+      kind: "subcommand" as const,
+    }));
+  }
   return parent.subcommands
-    .filter((s) => !t || [s.name, ...s.aliases].some((k) => k.toLowerCase().includes(t)))
-    .map((s) => ({
+    .map((s) => {
+      const bestScore = Math.max(
+        fuzzyScore(partial, s.name),
+        ...s.aliases.map((a) => fuzzyScore(partial, a))
+      );
+      return { subcommand: s, score: bestScore };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(({ subcommand: s }) => ({
       value: s.name,
       label: s.aliases.length ? `${s.name} (${s.aliases.join(", ")})` : s.name,
       description: s.description ?? "",
@@ -146,11 +236,23 @@ function subcommandSuggestions(parent: CommandSpec, partial: string): Suggestion
 }
 
 function optionSuggestions(spec: CommandSpec, usedAliases: Set<string>, partial: string): Suggestion[] {
-  const t = partial.toLowerCase();
-  return spec.options
-    .filter((o) => !o.aliases.some((a) => usedAliases.has(a))) // hide already-used flags
-    .filter((o) => !t || o.aliases.some((a) => a.toLowerCase().includes(t)))
-    .map((o) => ({
+  const availableOptions = spec.options.filter((o) => !o.aliases.some((a) => usedAliases.has(a)));
+  if (!partial) {
+    return availableOptions.map((o) => ({
+      value: o.name,
+      label: o.metavar && o.takes_value ? `${o.name} <${o.metavar}>` : o.name,
+      description: optionDescription(o),
+      kind: "option" as const,
+    }));
+  }
+  return availableOptions
+    .map((o) => {
+      const bestScore = Math.max(...o.aliases.map((a) => fuzzyScore(partial, a)));
+      return { option: o, score: bestScore };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(({ option: o }) => ({
       value: o.name,
       label: o.metavar && o.takes_value ? `${o.name} <${o.metavar}>` : o.name,
       description: optionDescription(o),
@@ -159,11 +261,116 @@ function optionSuggestions(spec: CommandSpec, usedAliases: Set<string>, partial:
 }
 
 function valueSuggestions(option: CommandOption, partial: string): Suggestion[] {
-  if (!option.choices) return [];
-  const t = partial.toLowerCase();
-  return option.choices
-    .filter((c) => !t || c.toLowerCase().includes(t))
-    .map((c) => ({ value: c, label: c, description: `value for ${option.name}`, kind: "value" as const }));
+  let choices = option.choices ?? [];
+  if (choices.length === 0 && option.name.includes("strategy")) {
+    choices = REGISTERED_STRATEGIES;
+  }
+  if (choices.length === 0 && (option.name.includes("start") || option.name.includes("end") || option.name.includes("date"))) {
+    const currentYear = new Date().getFullYear();
+    choices = [`${currentYear - 2}-01-01`, `${currentYear - 1}-01-01`, `${currentYear}-01-01`];
+  }
+  if (!choices || choices.length === 0) return [];
+
+  if (!partial) {
+    return choices.map((c) => ({
+      value: c,
+      label: c,
+      description: `value for ${option.name}`,
+      kind: "value" as const,
+    }));
+  }
+
+  return choices
+    .map((c) => ({ value: c, score: fuzzyScore(partial, c) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(({ value: c }) => ({
+      value: c,
+      label: c,
+      description: `value for ${option.name}`,
+      kind: "value" as const,
+    }));
+}
+
+/** Computes ghost text suffix to display inline behind cursor if top suggestion matches typing */
+export function getGhostText(input: string, suggestions: Suggestion[]): string {
+  if (!input || !suggestions || suggestions.length === 0) return "";
+  if (/\s$/.test(input)) return "";
+  const tokens = tokenize(input);
+  if (tokens.length === 0) return "";
+  const lastToken = tokens[tokens.length - 1];
+  const topMatch = suggestions[0].value;
+  if (topMatch.toLowerCase().startsWith(lastToken.toLowerCase())) {
+    return topMatch.slice(lastToken.length);
+  }
+  return "";
+}
+
+export interface HighlightToken {
+  text: string;
+  type: "interpreter" | "command" | "subcommand" | "option" | "value" | "flag" | "unknown";
+}
+
+export function tokenizeForHighlighting(input: string, commands: CommandSpec[]): HighlightToken[] {
+  const result: HighlightToken[] = [];
+  const parts = input.split(/(\s+)/);
+  let resolvedCommand: CommandSpec | null = null;
+  let resolvedSubcommand: CommandSpec | null = null;
+  let expectingValueForOpt: CommandOption | null = null;
+
+  for (const part of parts) {
+    if (!part) continue;
+    if (/^\s+$/.test(part)) {
+      result.push({ text: part, type: "unknown" });
+      continue;
+    }
+
+    if (!resolvedCommand) {
+      if (part === "python" || part === "python3") {
+        result.push({ text: part, type: "interpreter" });
+        continue;
+      }
+      if (part === "-m") {
+        result.push({ text: part, type: "flag" });
+        continue;
+      }
+      const cmd = resolveCommand(commands, part);
+      if (cmd) {
+        resolvedCommand = cmd;
+        result.push({ text: part, type: "command" });
+        continue;
+      }
+    } else if (resolvedCommand.subcommands.length > 0 && !resolvedSubcommand) {
+      const sub = resolveCommand(resolvedCommand.subcommands, part);
+      if (sub) {
+        resolvedSubcommand = sub;
+        result.push({ text: part, type: "subcommand" });
+        continue;
+      }
+    }
+
+    const activeSpec = resolvedSubcommand ?? resolvedCommand;
+    if (expectingValueForOpt) {
+      result.push({ text: part, type: "value" });
+      expectingValueForOpt = null;
+      continue;
+    }
+
+    if (part.startsWith("-")) {
+      const opt = activeSpec ? findOption(activeSpec, part) : null;
+      if (opt && opt.takes_value) {
+        expectingValueForOpt = opt;
+        result.push({ text: part, type: "option" });
+      } else {
+        result.push({ text: part, type: "flag" });
+      }
+      continue;
+    }
+
+    result.push({ text: part, type: "value" });
+  }
+
+  return result;
 }
 
 /**

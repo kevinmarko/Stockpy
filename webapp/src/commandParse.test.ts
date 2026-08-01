@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseCommandLine } from "./commandParse";
+import {
+  parseCommandLine,
+  getCommandCategory,
+  getGhostText,
+  tokenizeForHighlighting,
+} from "./commandParse";
 import type { CommandSpec } from "./api/types";
 
 const opt = (name: string, extra: Partial<CommandSpec["options"][number]> = {}) => ({
@@ -135,4 +140,28 @@ describe("parseCommandLine", () => {
     const r = parseCommandLine("nope ", COMMANDS);
     expect(r.hints).toContainEqual({ level: "error", message: "unknown command: nope" });
   });
+
+  it("fuzzy matches commands like valhar -> validation.harness", () => {
+    const r = parseCommandLine("valhar", COMMANDS);
+    expect(r.suggestions.map((s) => s.value)).toContain("validation.harness");
+  });
+
+  it("categorizes commands properly", () => {
+    expect(getCommandCategory("main.py")).toBe("pipeline");
+    expect(getCommandCategory("validation.harness")).toBe("testing");
+    expect(getCommandCategory("execution.kill_switch")).toBe("database");
+    expect(getCommandCategory("daily_briefing.py")).toBe("reporting");
+  });
+
+  it("generates ghost text for top suggestions", () => {
+    expect(getGhostText("val", [{ value: "validation.harness", label: "v", description: "", kind: "command" }])).toBe("idation.harness");
+  });
+
+  it("tokenizes commands for syntax highlighting", () => {
+    const tokens = tokenizeForHighlighting("python -m validation.harness --strategy garch_vol_target", COMMANDS);
+    expect(tokens.map((t) => t.type)).toEqual([
+      "interpreter", "unknown", "flag", "unknown", "command", "unknown", "option", "unknown", "value"
+    ]);
+  });
 });
+

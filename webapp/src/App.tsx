@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Navigate,
   Route,
@@ -43,11 +43,12 @@ import { Onboarding } from "./screens/Onboarding";
 import { readOnboarding } from "./onboarding";
 import { TokenGate } from "./components/TokenGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { CommandPaletteModal } from "./components/CommandPaletteModal";
 import { needsTokenEntry } from "./auth/apiToken";
 import { usePwaStatus } from "./hooks/usePwaStatus";
 import { useApi } from "./hooks/useApi";
 import { api } from "./api/client";
-import type { LlmStatus } from "./api/types";
+import type { CommandManifest, LlmStatus } from "./api/types";
 
 import { theme } from "./theme";
 import AIChatInterface from "./components/AIChatInterface";
@@ -190,7 +191,22 @@ export default function App() {
   // so this only ever needs to be read once per mount -- no setter to wire.
   const [tokenGated] = useState(() => needsTokenEntry());
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const { data: commandManifest } = useApi<CommandManifest>(() => api.getCommands(), []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setIsPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   if (tokenGated) {
     return <TokenGate />;
@@ -253,6 +269,15 @@ export default function App() {
       <ChatButton onClick={() => setIsChatOpen(!isChatOpen)} />
       <SettingsButton />
       <AIChatInterface isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+      <CommandPaletteModal
+        isOpen={isPaletteOpen}
+        onClose={() => setIsPaletteOpen(false)}
+        commands={commandManifest?.commands ?? []}
+        onSelectCommandForBuilder={(spec) => {
+          setIsPaletteOpen(false);
+          navigate(`/commands?builder=${spec.name}`);
+        }}
+      />
     </div>
   );
 }
