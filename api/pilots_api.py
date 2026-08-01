@@ -2631,7 +2631,12 @@ def get_automation_status() -> Dict[str, Any]:
     Never raises, never 500s (CONSTRAINT #6) — every sub-read already degrades
     to an honest ``None``/empty shape on its own failure."""
     daemon_status = daemon_client.get_status()
-    if daemon_status is not None:
+    # A reachable Control API still answers `GET /status` with HTTP 200 and
+    # `{"daemon_alive": False}` whenever no OrchestratorDaemon is attached
+    # (startup window, mid-restart, or the API served standalone) — that is
+    # NOT proof of life, so it must fall through to the same daemon_json
+    # branch a connection failure takes, not be treated as "alive: True".
+    if daemon_status is not None and daemon_status.get("daemon_alive"):
         daemon_info: Dict[str, Any] = {
             "alive": True,
             "source": "control_api",

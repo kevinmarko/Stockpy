@@ -1972,6 +1972,44 @@ class TestAutomationStatus:
         assert body["last_run"] is None
         assert body["last_run_source"] == "state_snapshot"
 
+    def test_control_api_reachable_but_no_daemon_attached_falls_back(self, tmp_path):
+        """Regression pin: a reachable Control API still answers `GET
+        /status` with HTTP 200 and {"daemon_alive": False} whenever no
+        OrchestratorDaemon is attached (startup window, mid-restart, or the
+        API served standalone). That 200 response is not proof of life --
+        this must fall through to the daemon_json branch exactly like a
+        connection failure does, never hardcode alive=True from the mere
+        fact that *a* response came back. This was the root cause of the
+        Settings screen showing "Daemon: Alive" while "Run now" reported
+        "Orchestrator daemon is not reachable" in the same breath -- POST
+        /automation/run correctly checked get_daemon() is None server-side
+        while this endpoint didn't look at the identical daemon_alive flag
+        the Control API had already told it about."""
+        daemon_json = {
+            "pid": 55123,
+            "state": "started",
+            "interval_seconds": 300,
+            "started_at": "2026-07-16T15:34:45.942581+00:00",
+            "port": 8601,
+            "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(__import__("json").dumps(daemon_json), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.run_status.os, "kill", return_value=None):
+                with mock.patch.object(
+                    pilots_api.daemon_client, "get_status",
+                    return_value={"daemon_alive": False},
+                ):
+                    with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                        with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                            resp = client.get("/automation/status")
+        assert resp.status_code == 200
+        daemon = resp.json()["daemon"]
+        assert daemon["alive"] is False
+        assert daemon["source"] == "daemon_json"
+        assert daemon["pid_alive"] is True
+        assert daemon["pid"] == 55123
+
     def test_daemon_unreachable_and_no_daemon_json(self, tmp_path):
         """Neither the Control API nor a daemon.json file exist (never
         launched, or a very early state) — everything degrades to null,
@@ -2054,8 +2092,8 @@ class TestAutomationStatus:
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
             with mock.patch.object(
                 pilots_api.daemon_client, "get_status",
-                return_value={"is_running": True, "interval_seconds": 60, "started_at": None,
-                              "current_run_id": None, "engines_warm": True},
+                return_value={"daemon_alive": True, "is_running": True, "interval_seconds": 60,
+                              "started_at": None, "current_run_id": None, "engines_warm": True},
             ):
                 with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
                     with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
