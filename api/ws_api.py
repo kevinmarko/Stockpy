@@ -61,6 +61,65 @@ def _sanitize(value) -> float | None:
         return None
 
 
+async def _build_tick_payload(sym_upper: str) -> dict:
+    """Build one tick JSON payload for *sym_upper* (WS cache, else REST fallback).
+
+    Extracted from ws_tick_endpoint's loop body so the REST-fallback path
+    (provider reuse + executor offload) is directly unit-testable without
+    driving a real WebSocket connection.
+    """
+    tick = None
+
+    # 1. Try the live WS cache
+    if _WS_AVAILABLE and _WS_STREAMER is not None:
+        tick = _WS_STREAMER.get_quote(sym_upper)
+
+    if tick is not None:
+        bid = _sanitize(tick.get("bp"))
+        ask = _sanitize(tick.get("ap"))
+        price = (
+            ((bid or 0) + (ask or 0)) / 2
+            if bid is not None and ask is not None
+            else (bid or ask)
+        )
+        return {
+            "symbol": sym_upper,
+            "price": price,
+            "bid": bid,
+            "ask": ask,
+            "source": "alpaca-ws",
+            "is_stale": False,
+        }
+
+    # 2. REST fallback via the market_data module singleton. get_provider()
+    # (not a fresh CompositeProvider()) so this reuses the provider's own
+    # in-process quote TTL cache across ticks/clients instead of
+    # constructing a brand-new, cold cache on every 500 ms iteration -- a
+    # fresh CompositeProvider() re-creates that cache every call, silently
+    # defeating MARKET_DATA_QUOTE_TTL_SECONDS entirely and re-hitting the
+    # underlying network provider on every single tick. get_latest_quote()
+    # is itself a synchronous/blocking call (yfinance/alpaca-py's REST
+    # clients), so it's additionally offloaded to the executor -- otherwise
+    # a slow or cold-cache call would block the whole event loop (every
+    # other connected client's socket) for its duration.
+    try:
+        from data.market_data import get_provider
+        provider = get_provider()
+        loop = asyncio.get_running_loop()
+        q = await loop.run_in_executor(None, provider.get_latest_quote, sym_upper)
+        return {
+            "symbol": sym_upper,
+            "price": _sanitize(q.price),
+            "bid": _sanitize(q.bid),
+            "ask": _sanitize(q.ask),
+            "source": q.source,
+            "is_stale": q.is_stale,
+        }
+    except Exception as rest_exc:
+        logger.warning("ws_tick REST fallback failed for %s: %s", sym_upper, rest_exc)
+        return {"symbol": sym_upper, "error": "quote unavailable"}
+
+
 @ws_router.websocket("/ws/ticks/{symbol}")
 async def ws_tick_endpoint(
     websocket: WebSocket,
@@ -99,46 +158,7 @@ async def ws_tick_endpoint(
 
     try:
         while True:
-            tick = None
-
-            # 1. Try the live WS cache
-            if _WS_AVAILABLE and _WS_STREAMER is not None:
-                tick = _WS_STREAMER.get_quote(sym_upper)
-
-            if tick is not None:
-                bid = _sanitize(tick.get("bp"))
-                ask = _sanitize(tick.get("ap"))
-                price = (
-                    ((bid or 0) + (ask or 0)) / 2
-                    if bid is not None and ask is not None
-                    else (bid or ask)
-                )
-                payload = {
-                    "symbol": sym_upper,
-                    "price": price,
-                    "bid": bid,
-                    "ask": ask,
-                    "source": "alpaca-ws",
-                    "is_stale": False,
-                }
-            else:
-                # 2. REST fallback via CompositeProvider
-                try:
-                    from data.market_data import CompositeProvider
-                    provider = CompositeProvider()
-                    q = provider.get_latest_quote(sym_upper)
-                    payload = {
-                        "symbol": sym_upper,
-                        "price": _sanitize(q.price),
-                        "bid": _sanitize(q.bid),
-                        "ask": _sanitize(q.ask),
-                        "source": q.source,
-                        "is_stale": q.is_stale,
-                    }
-                except Exception as rest_exc:
-                    logger.warning("ws_tick REST fallback failed for %s: %s", sym_upper, rest_exc)
-                    payload = {"symbol": sym_upper, "error": "quote unavailable"}
-
+            payload = await _build_tick_payload(sym_upper)
             await websocket.send_text(json.dumps(payload))
             await asyncio.sleep(0.5)  # 2 Hz push cadence
 

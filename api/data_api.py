@@ -1256,8 +1256,12 @@ def get_order_book_ladder(symbol: str) -> Dict[str, Any]:
     sym = symbol.upper()
     current_price: Optional[float] = None
     try:
-        from data.market_data import CompositeProvider
-        quote = CompositeProvider().get_latest_quote(sym)
+        # get_provider() (the module singleton every other endpoint in this
+        # file already uses), not a fresh CompositeProvider() -- the latter
+        # constructs its own brand-new, cold TTL cache on every call,
+        # silently defeating MARKET_DATA_QUOTE_TTL_SECONDS and re-hitting the
+        # underlying network provider on every request.
+        quote = get_provider().get_latest_quote(sym)
         if quote.price is not None and not math.isnan(quote.price):
             current_price = float(quote.price)
     except Exception as exc:
@@ -1315,9 +1319,21 @@ def _sse(event_type: str, content: str) -> str:
     return f"data: {json.dumps({'type': event_type, 'content': content})}\n\n"
 
 
-@app.post("/api/chat", dependencies=[Depends(require_token)])
+@app.post(
+    "/api/chat",
+    dependencies=[Depends(require_token), Depends(_require_ai_generation_enabled)],
+)
 async def chat_endpoint(req: ChatMessageRequest):
-    """Streaming chat endpoint for AI Chat Interface."""
+    """Streaming chat endpoint for AI Chat Interface.
+
+    Gated by _require_ai_generation_enabled (settings.AI_GENERATION_API_ENABLED)
+    in addition to require_token, matching the three /data/ai/* generation
+    endpoints above -- this endpoint calls out to paid external LLM APIs
+    (Gemini/Anthropic) exactly like those do, and this API is fail-open by
+    design when STATE_API_TOKEN is unset, so the capability flag is the ONLY
+    thing stopping it from being remotely, repeatedly triggerable the moment
+    an operator sets GEMINI_API_KEY/ANTHROPIC_API_KEY for their own local use.
+    """
 
     async def stream_generator():
         # Emit a thought to show activity
@@ -1393,8 +1409,13 @@ async def chat_endpoint(req: ChatMessageRequest):
             yield _sse("SUGGESTION", "Explain option overlay")
 
         except Exception as e:
-            logger.error("Chat streaming error: %s", e)
-            yield _sse("MESSAGE", f"\n\n**Error:** {str(e)}")
+            # Full detail stays server-side (CodeQL: information exposure
+            # through an exception) -- the raw exception string can carry
+            # internal detail (a file path, part of a request payload, or an
+            # LLM SDK's own error body) that must never reach an external
+            # chat client. Only a generic, safe message is streamed back.
+            logger.error("Chat streaming error: %s", e, exc_info=True)
+            yield _sse("MESSAGE", "\n\n**Error:** something went wrong generating a response. Please try again.")
 
         yield "data: [DONE]\n\n"
 

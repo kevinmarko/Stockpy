@@ -1,7 +1,21 @@
 """Retail Social Sentiment & Emoji Model (Phase 5).
 
-Parses social emoji sentiment density and sentiment signals into a
-normalized [-1, 1] return impact multiplier. Implements Model(ABC).
+HONEST STATUS: this is a stateless deterministic transform (row-wise mean of
+whatever numeric columns are present, clipped to [-1, 1]), NOT a trained
+sentiment model. There is no emoji parsing, no emoji-to-polarity mapping, no
+social-volume weighting, and no learning of any kind -- fit(X, y) ignores
+BOTH arguments entirely and only flips `is_fitted = True`; predict()'s
+output has no relationship to y and would be identical for any two calls
+with the same X regardless of what this was "fit" on.
+
+Implements the Model(ABC) interface contract from ml.models.base (so it can
+sit in a model registry / comparison chart alongside real models under this
+name), but a caller relying on this class to actually score emoji/social
+sentiment will get materially different behavior than the name promises.
+Building a real Emoji Sentiment Dictionary lookup + retail-volume weighting
+(per the blueprint this class's name is borrowed from) is a separate,
+scoped feature -- out of scope for this fix; this docstring exists so
+nobody mistakes this mean-of-columns stand-in for that.
 """
 
 from typing import Optional
@@ -12,13 +26,16 @@ from ml.models.base import Model
 
 
 class EmojiSentimentModel(Model):
-    """Emoji & social sentiment predictive model."""
+    """Stateless mean-of-numeric-columns transform registered under the
+    Emoji Sentiment name — see module docstring for exactly what it does
+    and doesn't implement."""
 
     def __init__(self):
         self.is_fitted = False
 
     def fit(self, X: pd.DataFrame, y: pd.Series, t1: Optional[pd.Series] = None) -> "EmojiSentimentModel":
-        """Fit sentiment model parameters."""
+        """No-op: X and y are both ignored. Only marks the instance fitted
+        so predict() will run (see module docstring)."""
         self.is_fitted = True
         return self
 

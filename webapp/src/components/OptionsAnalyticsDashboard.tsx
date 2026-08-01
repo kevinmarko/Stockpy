@@ -9,8 +9,10 @@ export default function OptionsAnalyticsDashboard({ symbol = 'SPY' }: { symbol?:
   const { data, loading, error } = useApi<OptionsAnalyticsSummaryResponse>(() => api.getOptionsAnalytics(symbol), [symbol]);
 
   const intradayData = data?.intraday_series || [];
-  const netDealerPremium = data?.net_dealer_premium || 0;
-  const regime = data?.regime || 'Unknown';
+  // ?? not || : an absent/invalid premium must render as "unavailable", not
+  // be silently converted into a real-looking $0M "Long" reading.
+  const netDealerPremium = data?.net_dealer_premium ?? null;
+  const regime = data?.regime ?? null;
 
   return (
     <div className="bg-white dark:bg-[#1a1a1a] rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-5 flex flex-col gap-6">
@@ -36,26 +38,22 @@ export default function OptionsAnalyticsDashboard({ symbol = 'SPY' }: { symbol?:
         <div className="flex-1 flex items-center justify-center text-red-500 min-h-[300px]">Failed to load analytics</div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4">
             <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800">
           <div className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Net Dealer Premium</div>
-          <div className={`text-2xl font-bold ${netDealerPremium < 0 ? 'text-red-500' : 'text-green-500'}`}>
-            ${Math.abs(netDealerPremium)}M {netDealerPremium < 0 ? 'Short' : 'Long'}
-          </div>
-          <div className="text-xs mt-2 flex items-center gap-1 text-slate-600 dark:text-slate-400">
-            {netDealerPremium < 0 ? <AlertTriangle className="w-3 h-3 text-red-500" /> : <TrendingUp className="w-3 h-3 text-green-500" />}
-            Regime: {regime}
-          </div>
-        </div>
-
-        <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800">
-          <div className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Pin Risk Detection</div>
-          <div className="text-2xl font-bold text-amber-500">
-            Elevated
-          </div>
-          <div className="text-xs mt-2 text-slate-600 dark:text-slate-400">
-            Large OI clusters detected near current ATM strikes.
-          </div>
+          {netDealerPremium === null ? (
+            <div className="text-lg font-medium text-slate-400 dark:text-slate-500">Unavailable</div>
+          ) : (
+            <>
+              <div className={`text-2xl font-bold ${netDealerPremium < 0 ? 'text-red-500' : 'text-green-500'}`}>
+                ${Math.abs(netDealerPremium)}M {netDealerPremium < 0 ? 'Short' : 'Long'}
+              </div>
+              <div className="text-xs mt-2 flex items-center gap-1 text-slate-600 dark:text-slate-400">
+                {netDealerPremium < 0 ? <AlertTriangle className="w-3 h-3 text-red-500" /> : <TrendingUp className="w-3 h-3 text-green-500" />}
+                Regime: {regime ?? 'Unavailable'}
+              </div>
+            </>
+          )}
         </div>
       </div>
 

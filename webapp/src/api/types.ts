@@ -3021,10 +3021,14 @@ export interface IntradayThetaPoint {
 
 export interface OptionsAnalyticsSummaryResponse {
   symbol: string;
-  // Deterministic per-symbol hash, not a real options-chain/OI measurement
-  // (see execution/options_analytics.py docstring) -- always is_synthetic.
-  net_dealer_premium: number;
-  regime: string;
+  // Always null/[] from the live backend today -- no real options-chain/OI
+  // feed exists in this codebase to compute a real measurement from (see
+  // execution/options_analytics.py docstring), so it honestly reports
+  // unavailable rather than a plausible-looking placeholder number.
+  // is_synthetic is always true; kept for API-shape parity with the other
+  // synthetic-data endpoints.
+  net_dealer_premium: number | null;
+  regime: string | null;
   intraday_series: IntradayThetaPoint[];
   is_synthetic: boolean;
 }

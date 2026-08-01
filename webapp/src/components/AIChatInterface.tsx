@@ -157,7 +157,18 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
   };
 
   return (
-    <div className={`fixed top-0 right-0 z-50 h-full w-[400px] bg-white dark:bg-[#1a1a1a] shadow-2xl flex flex-col transition-transform ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+    <div
+      className={`fixed top-0 right-0 z-50 h-full w-[400px] bg-white dark:bg-[#1a1a1a] shadow-2xl flex flex-col transition-transform ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
+      // The panel is only translated off-screen (for the slide transition),
+      // not unmounted, so its buttons/textarea/suggestions stay in the DOM
+      // while closed. `inert` (supported in all current major browsers)
+      // removes the whole subtree from the tab order and assistive-tech
+      // exposure without breaking the CSS transition the way conditionally
+      // unmounting would. aria-hidden is redundant with inert in modern
+      // browsers but kept as a defensive fallback for older AT/browser pairs.
+      inert={!isOpen}
+      aria-hidden={!isOpen}
+    >
       <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800">
         <div className="font-semibold text-slate-900 dark:text-white">AI Chat Interface</div>
         <button onClick={onClose}><X className="w-5 h-5 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200" /></button>

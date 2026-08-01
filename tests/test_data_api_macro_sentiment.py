@@ -146,7 +146,14 @@ class TestGetOrderBookLadder:
             def get_latest_quote(self, symbol):
                 return _FakeQuote()
 
-        monkeypatch.setattr("data.market_data.CompositeProvider", _FakeProvider)
+        # Patched at the point of use (api.data_api.get_provider, imported
+        # via `from data.market_data import ... get_provider` at module
+        # top), matching every other endpoint in this file's provider
+        # access pattern -- NOT a fresh data.market_data.CompositeProvider(),
+        # which get_order_book_ladder deliberately stopped constructing
+        # (see its docstring: a fresh instance defeats the provider's own
+        # quote TTL cache).
+        monkeypatch.setattr(data_api, "get_provider", lambda: _FakeProvider())
         resp = client.get("/data/ladder/AAPL")
         body = resp.json()
         assert body["current_price"] == 123.45
@@ -157,7 +164,7 @@ class TestGetOrderBookLadder:
             def get_latest_quote(self, symbol):
                 raise RuntimeError("no network")
 
-        monkeypatch.setattr("data.market_data.CompositeProvider", _FailingProvider)
+        monkeypatch.setattr(data_api, "get_provider", lambda: _FailingProvider())
         resp = client.get("/data/ladder/SPY")
         body = resp.json()
         assert body["current_price"] == 450.00

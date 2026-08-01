@@ -122,6 +122,35 @@ class WebSocketStreamer:
         except Exception as exc:
             logger.warning("WS delta subscribe failed (will retry on next reconnect): %s", exc)
 
+    def _handle_raw_message(self, message: str) -> None:
+        """Parse one raw WS text frame (a JSON array of Alpaca event dicts)
+        and merge each event into ``self._cache``.
+
+        Extracted from ``_stream_loop`` as its own method so the quote/trade
+        TTL handling below is directly unit-testable without a live socket.
+        """
+        try:
+            data = json.loads(message)
+            if not isinstance(data, list):
+                return
+            ts = time.monotonic()
+            for event in data:
+                sym = event.get("S", "").upper()
+                if not sym:
+                    continue
+                entry = self._cache.setdefault(sym, {})
+                entry.update(event)
+                # Both quotes ("T": "q", carrying bp/ap) and trades ("T": "t",
+                # no bid/ask) are subscribed. get_quote()'s TTL is a freshness
+                # check on the BID/ASK pair specifically -- refreshing _ts on
+                # a trade event would let a name with frequent trades but
+                # stale bid/ask keep reporting "fresh" quotes indefinitely.
+                # Only a quote event refreshes it.
+                if event.get("T") == "q":
+                    entry["_ts"] = ts
+        except Exception as parse_exc:
+            logger.error("WS parse error: %s", parse_exc)
+
     # ------------------------------------------------------------------
     # Internal streaming loop
     # ------------------------------------------------------------------
@@ -165,18 +194,7 @@ class WebSocketStreamer:
                     async for message in ws:
                         if not self.is_running:
                             break
-                        try:
-                            data = json.loads(message)
-                            if isinstance(data, list):
-                                ts = time.monotonic()
-                                for event in data:
-                                    sym = event.get("S", "").upper()
-                                    if sym:
-                                        entry = self._cache.setdefault(sym, {})
-                                        entry.update(event)
-                                        entry["_ts"] = ts
-                        except Exception as parse_exc:
-                            logger.error("WS parse error: %s", parse_exc)
+                        self._handle_raw_message(message)
 
             except Exception as exc:
                 logger.warning(

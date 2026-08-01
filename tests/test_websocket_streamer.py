@@ -9,9 +9,13 @@ Tests:
 - get_quote returns None when data is stale (TTL exceeded)
 - subscribe adds to _subscribed set
 - start() logs an error when called outside an event loop
+- _handle_raw_message: only quote events ("T": "q") refresh the TTL;
+  trade events ("T": "t") update the cache entry but must not mask a
+  stale bid/ask as fresh
 """
 from __future__ import annotations
 
+import json
 import time
 import pytest
 from unittest.mock import patch, MagicMock
@@ -87,3 +91,61 @@ def test_stop_sets_is_running_false():
     streamer.stop()
     assert streamer.is_running is False
     assert streamer._task is None
+
+
+class TestHandleRawMessageQuoteVsTradeTTL:
+    def test_quote_event_sets_ts_and_bid_ask(self):
+        streamer = WebSocketStreamer()
+        streamer._handle_raw_message(json.dumps([
+            {"T": "q", "S": "AAPL", "bp": 191.5, "ap": 191.6},
+        ]))
+        entry = streamer._cache["AAPL"]
+        assert entry["bp"] == 191.5
+        assert "_ts" in entry
+        assert streamer.get_quote("AAPL") is not None
+
+    def test_trade_event_alone_never_sets_ts(self):
+        """A trade event carries no bid/ask and must not make get_quote()
+        report a (nonexistent) fresh quote."""
+        streamer = WebSocketStreamer()
+        streamer._handle_raw_message(json.dumps([
+            {"T": "t", "S": "AAPL", "p": 191.55, "s": 100},
+        ]))
+        assert "_ts" not in streamer._cache["AAPL"]
+        assert streamer.get_quote("AAPL") is None
+
+    def test_trade_event_does_not_refresh_a_stale_quotes_ts(self):
+        """The bug this covers: a stale bid/ask must not be kept looking
+        'fresh' by unrelated trade traffic on the same symbol."""
+        streamer = WebSocketStreamer()
+        stale_ts = time.monotonic() - (_TICK_TTL_SECONDS + 1)
+        streamer._cache["AAPL"] = {"S": "AAPL", "bp": 190.0, "ap": 190.1, "_ts": stale_ts}
+
+        streamer._handle_raw_message(json.dumps([
+            {"T": "t", "S": "AAPL", "p": 191.55, "s": 100},
+        ]))
+
+        assert streamer._cache["AAPL"]["_ts"] == stale_ts, "trade event must not touch _ts"
+        assert streamer.get_quote("AAPL") is None, "stale bid/ask must still report stale"
+
+    def test_subsequent_quote_event_does_refresh_ts(self):
+        streamer = WebSocketStreamer()
+        stale_ts = time.monotonic() - (_TICK_TTL_SECONDS + 1)
+        streamer._cache["AAPL"] = {"S": "AAPL", "bp": 190.0, "ap": 190.1, "_ts": stale_ts}
+
+        streamer._handle_raw_message(json.dumps([
+            {"T": "q", "S": "AAPL", "bp": 191.0, "ap": 191.1},
+        ]))
+
+        assert streamer._cache["AAPL"]["_ts"] != stale_ts
+        assert streamer.get_quote("AAPL") is not None
+
+    def test_non_list_payload_ignored(self):
+        streamer = WebSocketStreamer()
+        streamer._handle_raw_message(json.dumps({"action": "auth", "status": "authorized"}))
+        assert streamer._cache == {}
+
+    def test_malformed_json_does_not_raise(self):
+        streamer = WebSocketStreamer()
+        streamer._handle_raw_message("{not valid json")  # must not raise
+        assert streamer._cache == {}
