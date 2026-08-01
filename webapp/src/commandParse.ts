@@ -156,20 +156,31 @@ export function fuzzyMatch(pattern: string, text: string): boolean {
   return fuzzyScore(pattern, text) > 0;
 }
 
-/** Known strategy names for contextual autocompletion of --strategy option */
+/**
+ * Known strategy names for contextual autocompletion of --strategy option.
+ * `validation/harness.py`'s `--strategy` argparse arg has no `choices=` (it
+ * can't import `scripts.refresh_validations.STRATEGY_REGISTRY` without a
+ * circular import — that module imports the harness), so the manifest never
+ * carries real choices for this flag. This list must be kept in sync by hand
+ * with the keys of `STRATEGY_REGISTRY` in `scripts/refresh_validations.py`.
+ */
 export const REGISTERED_STRATEGIES = [
   "rsi2_mean_reversion",
+  "timeseries_momentum",
+  "macd_trend",
+  "coppock_momentum",
+  "multifactor_lowvol_size",
   "garch_vol_target",
   "cross_sectional_momentum",
-  "faber_sma200",
-  "pairs_trading",
+  "relative_strength_xsec",
+  "rsi14_extremes",
+  "sortino_drawdown",
+  "dividend_yield_edgar_pit",
+  "deep_value_edgar_pit",
+  "value_quality_edgar_pit",
   "macro_regime_pit",
-  "multifactor_lowvol_size",
-  "quality_value_momentum",
-  "regime_multiplier",
-  "sector_momentum",
-  "trend_following",
-  "options_overlay",
+  "forecast_direction_arima_hw",
+  "signal_replay_balanced_blend",
 ];
 
 /** Substring or fuzzy match on any command key — for suggestions while still typing. */

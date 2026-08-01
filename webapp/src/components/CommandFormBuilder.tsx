@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { Modal } from "./Modal";
-import { Button, Toggle } from "./ui";
+import { Button } from "./ui";
+import { Toggle } from "./Toggle";
 import { CopyCommandBlock } from "./CopyCommandBlock";
 import type { CommandSpec, CommandOption } from "../api/types";
 import { REGISTERED_STRATEGIES } from "../commandParse";
@@ -103,10 +104,11 @@ export function CommandFormBuilder({ command, onClose, onRunCommand }: CommandFo
         {/* Subcommand selector if command has subcommands */}
         {command.subcommands.length > 0 && (
           <div style={{ marginBottom: "var(--s-4)", background: theme.surface2, padding: "var(--s-3)", borderRadius: "var(--r-sm)" }}>
-            <label style={{ display: "block", fontSize: "var(--t-caption)", fontWeight: 600, color: theme.textSecondary, marginBottom: "var(--s-1)" }}>
+            <label htmlFor="form-builder-subcommand" style={{ display: "block", fontSize: "var(--t-caption)", fontWeight: 600, color: theme.textSecondary, marginBottom: "var(--s-1)" }}>
               Select Subcommand
             </label>
             <select
+              id="form-builder-subcommand"
               className="input"
               value={selectedSubcommandName}
               onChange={(e) => setSelectedSubcommandName(e.target.value)}
@@ -201,22 +203,17 @@ function OptionFormControl({
 
   if (!option.takes_value) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: theme.surface, padding: "var(--s-2-5) var(--s-3)", borderRadius: "var(--r-sm)", border: `1px solid ${theme.border}` }}>
-        <div>
-          <div style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 600, color: theme.textPrimary, fontSize: "var(--t-body)" }}>
-            {option.name}
-          </div>
-          {option.description && (
-            <div style={{ fontSize: "var(--t-caption)", color: theme.textMuted, marginTop: 2 }}>
-              {option.description}
-            </div>
-          )}
-        </div>
+      <div style={{ background: theme.surface, padding: "var(--s-2-5) var(--s-3)", borderRadius: "var(--r-sm)", border: `1px solid ${theme.border}` }}>
         <Toggle
           checked={Boolean(value)}
           onChange={(checked) => onChange(checked)}
-          ariaLabel={option.name}
+          label={option.name}
         />
+        {option.description && (
+          <div style={{ fontSize: "var(--t-caption)", color: theme.textMuted, marginTop: "var(--s-1)" }}>
+            {option.description}
+          </div>
+        )}
       </div>
     );
   }

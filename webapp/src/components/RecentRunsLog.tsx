@@ -80,7 +80,7 @@ export function RecentRunsLog({ jobs, onRefresh }: RecentRunsLogProps) {
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
-                  <StatusBadge status={job.status} />
+                  <StatusBadge status={job.status} exitCode={job.exit_code} />
                   <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 600, color: theme.textPrimary }}>
                     {job.command_name ?? job.job_type}
                   </span>
@@ -105,19 +105,20 @@ export function RecentRunsLog({ jobs, onRefresh }: RecentRunsLogProps) {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  let color = theme.textMuted;
+function StatusBadge({ status, exitCode }: { status: string; exitCode?: number | null }) {
+  let color: string = theme.textMuted;
   let bg = "rgba(255, 255, 255, 0.1)";
-  let label = status;
+  let label: string = status;
+  const exitSuffix = exitCode !== undefined && exitCode !== null ? ` (exit ${exitCode})` : "";
 
   if (status === "success" || status === "succeeded") {
     color = "#4ade80";
     bg = "rgba(74, 222, 128, 0.15)";
-    label = "✓ Success (0)";
+    label = `✓ Success${exitSuffix}`;
   } else if (status === "failed" || status === "error") {
     color = "#f87171";
     bg = "rgba(248, 113, 113, 0.15)";
-    label = "✗ Failed (1)";
+    label = `✗ Failed${exitSuffix}`;
   } else if (status === "running") {
     color = "#38bdf8";
     bg = "rgba(56, 189, 248, 0.15)";

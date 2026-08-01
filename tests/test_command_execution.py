@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 from unittest.mock import MagicMock
@@ -276,6 +277,38 @@ def test_normal_command_succeeds_and_builds_expected_argv(monkeypatch):
     # invocation "python scripts/preflight_check.py" -> interpreter substituted
     # for "python", rest of the invocation tail preserved, no extra args.
     assert created[0].args == [sys.executable, "scripts/preflight_check.py"]
+
+
+def test_command_job_response_echoes_command_name_and_created_at(monkeypatch):
+    created: list = []
+    monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _recording_popen(created))
+    with _manifest_patch(), _enabled():
+        resp = client.post(
+            "/jobs",
+            json={"job_type": "command", "params": {"command": "scripts/preflight_check.py", "args": []}},
+            headers=_HEADERS,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["command_name"] == "scripts/preflight_check.py"
+        assert body["created_at"]
+        datetime.fromisoformat(body["created_at"])  # must be real ISO 8601, not a placeholder
+
+        status = client.get(f"/jobs/{body['job_id']}", headers=_HEADERS)
+    assert status.status_code == 200
+    status_body = status.json()
+    assert status_body["command_name"] == "scripts/preflight_check.py"
+    assert status_body["created_at"] == body["created_at"]
+
+
+def test_non_command_job_has_no_command_name(monkeypatch):
+    monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _recording_popen([]))
+    with _enabled():
+        resp = client.post("/jobs", json={"job_type": "preflight"}, headers=_HEADERS)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["command_name"] is None
+    assert body["created_at"]
 
 
 def test_normal_command_with_args_appends_them_after_invocation_tail(monkeypatch):

@@ -3746,7 +3746,10 @@ const MOCK_AGENT_LOOP: AgentLoopStatus = {
 // In-memory job bookkeeping for createJob/getJobStatus/cancelJob — just
 // enough state so the mock's status-polling story (running -> success, or
 // running -> cancelled) is believable rather than always-terminal.
-const _mockJobs: Record<string, { jobType: string; startedAt: number; cancelled: boolean }> = {};
+const _mockJobs: Record<
+  string,
+  { jobType: string; commandName: string | null; startedAt: number; createdAt: string; cancelled: boolean }
+> = {};
 
 // ---------------------------------------------------------------------------
 // Prompt Registry (webapp parity gap G4) — GET /prompts, GET /prompts/{id},
@@ -5519,12 +5522,16 @@ export const mockApi = {
     }
 
     const job_id = `mock-job-${Object.keys(_mockJobs).length + 1}`;
-    _mockJobs[job_id] = { jobType: job_type, startedAt: Date.now(), cancelled: false };
+    const commandName = job_type === "command" && typeof params?.command === "string" ? params.command : null;
+    const createdAt = new Date().toISOString();
+    _mockJobs[job_id] = { jobType: job_type, commandName, startedAt: Date.now(), createdAt, cancelled: false };
     return delay({
       job_id,
       job_type: job_type as any,
       status: "running",
       cancellable: job_type !== "orchestrator",
+      command_name: commandName,
+      created_at: createdAt,
     }, 150);
   },
 
@@ -5549,6 +5556,8 @@ export const mockApi = {
       exit_code: status === "running" ? null : status === "cancelled" ? -15 : 0,
       is_running: status === "running",
       cancellable,
+      command_name: job?.commandName ?? null,
+      created_at: job?.createdAt ?? new Date().toISOString(),
     }, 100);
   },
 

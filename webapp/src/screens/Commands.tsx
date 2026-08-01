@@ -567,7 +567,7 @@ function RunCommandControl({
         args: argTokens,
         confirm: true,
       };
-      const job = await api.createJob("command", { ...params, command_name: command!.name });
+      const job = await api.createJob("command", { ...params });
       setActiveJob(job);
       setRecentJobs((prev) => [job, ...prev]);
       setError(null);

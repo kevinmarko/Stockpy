@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Modal } from "./Modal";
 import { CopyCommandBlock } from "./CopyCommandBlock";
-import type { CommandSpec, Suggestion } from "../api/types";
+import type { CommandSpec } from "../api/types";
 import {
   parseCommandLine,
   getGhostText,
   tokenizeForHighlighting,
   getCommandCategory,
   CATEGORIES,
+  type Suggestion,
+  type HighlightToken,
 } from "../commandParse";
 import { theme } from "../theme";
 import { Button } from "./ui";
@@ -78,9 +80,10 @@ export function CommandPaletteModal({
           onClose();
         }
       }
-    } else if (e.key === "Escape") {
-      onClose();
     }
+    // Escape is intentionally NOT handled here -- Modal already closes on
+    // Escape (see Modal.tsx), and this handler doesn't stopPropagation, so
+    // duplicating it here just calls onClose() a second time for one press.
   };
 
   return (
