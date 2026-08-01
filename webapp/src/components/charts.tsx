@@ -19,6 +19,64 @@ import { sectorColor, theme } from "../theme";
 import { fmtDate, fmtPct, fmtUsd, fmtDateTime } from "../format";
 import { InfoTip } from "./ui";
 
+export function CustomTooltip({
+  active,
+  payload,
+  label,
+  valueFormat = "number",
+  valueLabel = "Pilot",
+  macroLabel = "S&P 500",
+  yTickDecimals = 0,
+}: any) {
+  if (active && payload && payload.length) {
+    const formatValue = (v: number) => {
+      if (valueFormat === "currency") return fmtUsd(v);
+      if (valueFormat === "percent") return fmtPct(v, yTickDecimals, { fromFraction: true });
+      return v.toFixed(yTickDecimals);
+    };
+
+    return (
+      <div
+        style={{
+          background: theme.surface3,
+          border: `1px solid ${theme.borderStrong}`,
+          borderRadius: 10,
+          padding: "var(--s-2) var(--s-3)",
+          color: theme.textPrimary,
+          fontSize: "var(--t-caption)",
+          boxShadow: "var(--shadow-card)",
+          minWidth: 160,
+        }}
+      >
+        <div style={{ marginBottom: "var(--s-1-5)", fontWeight: 600, color: theme.textSecondary, borderBottom: `1px solid ${theme.border}`, paddingBottom: 4 }}>
+          {fmtDateTime(String(label))}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-1-5)" }}>
+          {payload.map((entry: any, index: number) => {
+            let name = "Benchmark";
+            if (entry.dataKey === "value") name = valueLabel;
+            else if (entry.dataKey === "macro") name = macroLabel;
+
+            return (
+              <div key={index} style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: entry.color || theme.textSecondary }}></span>
+                  <span style={{ color: theme.textSecondary }}>{name}</span>
+                </div>
+                <span className="num" style={{ fontWeight: 700, color: entry.color || theme.textPrimary }}>
+                  {formatValue(Number(entry.value))}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 /**
  * Shared chart chrome — the grid/axis/tooltip config every Recharts chart in
  * this app should use, so a new chart never re-derives its own gridline
@@ -174,16 +232,7 @@ export function PerfLine({
             />
           )}
           <Tooltip
-            contentStyle={chartTooltipStyle}
-            labelFormatter={(l) => fmtDateTime(String(l))}
-            formatter={(val, name) => [
-              formatValue(Number(val)),
-              name === "value"
-                ? valueLabel
-                : name === "macro"
-                  ? macroLabel
-                  : "Benchmark",
-            ]}
+            content={<CustomTooltip valueFormat={valueFormat} valueLabel={valueLabel} macroLabel={macroLabel} yTickDecimals={yTickDecimals} />}
             cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
           />
           {benchmark && benchmark.length > 0 && (

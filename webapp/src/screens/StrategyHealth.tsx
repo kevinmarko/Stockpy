@@ -48,12 +48,32 @@ function formatGateNumber(gate: StrategyHealthGate, value: number): string {
   return fmtNum(value, gate.key === "pbo" ? 2 : 2);
 }
 
+function getGateHeatmapStyle(gate: StrategyHealthGate): React.CSSProperties {
+  if (gate.passed == null || gate.value == null) return {};
+  const diff = gate.value - gate.threshold;
+  const margin = diff / Math.abs(gate.threshold || 1);
+  const normalizedMargin = gate.direction === "below" ? -margin : margin;
+  
+  // Create an explicit heatmap tint by scaling opacity based on performance
+  if (normalizedMargin > 0) {
+    // Passed: scale from 0.1 to 0.4 opacity of green
+    const opacity = Math.min(0.4, 0.1 + normalizedMargin * 0.3);
+    return { backgroundColor: `rgba(16, 185, 129, ${opacity})`, borderColor: `rgba(16, 185, 129, ${opacity + 0.2})` };
+  } else {
+    // Failed: scale from 0.1 to 0.4 opacity of red
+    const opacity = Math.min(0.4, 0.1 + Math.abs(normalizedMargin) * 0.3);
+    return { backgroundColor: `rgba(239, 68, 68, ${opacity})`, borderColor: `rgba(239, 68, 68, ${opacity + 0.2})` };
+  }
+}
+
 function GateChip({ gate }: { gate: StrategyHealthGate }) {
   const cls =
     gate.passed == null ? "badge badge-neutral" : gate.passed ? "badge badge-good" : "badge badge-bad";
   const valueStr = gate.value == null ? "—" : formatGateNumber(gate, gate.value);
+  const heatmapStyle = getGateHeatmapStyle(gate);
+  
   return (
-    <InfoTip triggerClassName={cls} content={gate.label}>
+    <InfoTip triggerClassName={cls} triggerStyle={heatmapStyle} content={gate.label}>
       {GATE_SHORT_LABEL[gate.key]} {valueStr}{" "}
       <span style={{ opacity: 0.75 }}>
         ({directionGlyph(gate.direction)} {formatGateNumber(gate, gate.threshold)})
@@ -135,7 +155,7 @@ function HealthCard({
       : true;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", wordBreak: "break-word" }}>
@@ -150,7 +170,7 @@ function HealthCard({
 
       {hasGates ? (
         <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "var(--s-2)", marginTop: "var(--s-3)", flex: 1 }}>
             {row.gates.map((g) => (
               <GateChip key={g.key} gate={g} />
             ))}
@@ -583,9 +603,11 @@ export function StrategyHealth() {
                 </div>
               )}
             </div>
-            {data.map((row) => (
-              <HealthCard key={row.pilot_id} row={row} thresholds={thresholds} metric={trendMetric} />
-            ))}
+            <div className="dashboard-grid">
+              {data.map((row) => (
+                <HealthCard key={row.pilot_id} row={row} thresholds={thresholds} metric={trendMetric} />
+              ))}
+            </div>
           </>
         )
       )}

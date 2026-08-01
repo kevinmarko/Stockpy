@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { api, apiMeta } from "../api/client";
 import type { PilotSummary } from "../api/types";
@@ -80,6 +80,14 @@ export function Marketplace() {
     return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [pilots]);
 
+  const [activeCategory, setActiveCategory] = useState<string>("All");
+  const categories = ["All", ...byCategory.map(([cat]) => cat)];
+
+  const filteredPilots = useMemo(() => {
+    if (activeCategory === "All") return pilots;
+    return pilots.filter(p => p.category === activeCategory);
+  }, [pilots, activeCategory]);
+
   return (
     <div className="screen">
       <div
@@ -113,24 +121,55 @@ export function Marketplace() {
       {!loading && !error && (
         <>
           {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
-          <Rail
-            title="Top Performers"
-            sub="by Sharpe / DSR"
-            pilots={topPerformers}
-          />
-          <Rail
-            title="Most Popular"
-            sub="by AUM & followers"
-            pilots={mostPopular}
-            variant="popular"
-          />
-
-          <div className="rail-head" style={{ marginTop: "var(--s-6)" }}>
-            <h2>Browse by category</h2>
+          <div style={{ display: "flex", gap: "var(--s-2)", overflowX: "auto", paddingBottom: "var(--s-2)", marginTop: "var(--s-4)", marginBottom: "var(--s-4)", scrollbarWidth: "none" }}>
+            {categories.map(cat => (
+              <button
+                key={cat}
+                className="chip"
+                style={{
+                  background: activeCategory === cat ? theme.accent : "transparent",
+                  color: activeCategory === cat ? "#fff" : theme.textPrimary,
+                  border: `1px solid ${activeCategory === cat ? theme.accent : theme.borderStrong}`,
+                  cursor: "pointer",
+                  fontSize: "var(--t-label)",
+                  padding: "var(--s-1-5) var(--s-3)",
+                  whiteSpace: "nowrap",
+                }}
+                onClick={() => setActiveCategory(cat)}
+              >
+                {cat}
+              </button>
+            ))}
           </div>
-          {byCategory.map(([cat, ps]) => (
-            <Rail key={cat} title={cat} pilots={ps} />
-          ))}
+
+          {activeCategory === "All" ? (
+            <>
+              <Rail
+                title="Top Performers"
+                sub="by Sharpe / DSR"
+                pilots={topPerformers}
+              />
+              <Rail
+                title="Most Popular"
+                sub="by AUM & followers"
+                pilots={mostPopular}
+                variant="popular"
+              />
+
+              <div className="rail-head" style={{ marginTop: "var(--s-6)" }}>
+                <h2>Browse by category</h2>
+              </div>
+              {byCategory.map(([cat, ps]) => (
+                <Rail key={cat} title={cat} pilots={ps} />
+              ))}
+            </>
+          ) : (
+            <div className="rail" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "var(--s-4)", overflowX: "visible", whiteSpace: "normal" }}>
+              {filteredPilots.map(p => (
+                <PilotCard key={p.id} pilot={p} />
+              ))}
+            </div>
+          )}
 
           {/* Explore: research surfaces that aren't a single Pilot */}
           <div className="rail-head" style={{ marginTop: "var(--s-6)" }}>

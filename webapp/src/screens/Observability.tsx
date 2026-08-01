@@ -719,7 +719,7 @@ function LogEntryRow({ entry }: { entry: LogAggregationEntry }) {
         {entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "—"}
       </span>
       <LogLevelBadge level={entry.level} />
-      <span style={{ color: theme.growth, wordBreak: "break-word" }}>
+      <span style={{ color: "#10b981", wordBreak: "break-word" }}>
         {entry.parsed ? entry.message : entry.raw}
       </span>
     </div>
@@ -799,12 +799,13 @@ function LogAggregationSection({ logs }: { logs: LogAggregation }) {
       ) : (
         <div
           style={{
-            background: "#000000",
+            background: "#0b0e11",
             border: `1px solid ${theme.borderStrong}`,
             borderRadius: "var(--r-sm)",
             padding: "var(--s-3)",
             maxHeight: 320,
             overflowY: "auto",
+            scrollBehavior: "smooth",
           }}
         >
           {filtered.map((e, i) => (
