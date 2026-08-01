@@ -576,6 +576,7 @@ def _build_context_extras(
         # 0 for every symbol every cycle. Any failure here degrades to an empty
         # dict (below) rather than aborting the whole pre-compute pass.
         fund_metrics: Dict[str, Dict[str, Any]] = {}
+        fund_dtos: Dict[str, FundamentalDataDTO] = {}
         try:
             from processing_engine import ProcessingEngine
 
@@ -652,6 +653,8 @@ def _build_context_extras(
             # symbol had enough history — a missing symbol degrades to NaN/null
             # downstream, never a fabricated 0.0 (CONSTRAINT #4).
             "xsec_12_1m": dict(xsec_return),
+            "bars": bars_dict,
+            "fundamentals": fund_dtos,
         }
 
         # news_catalyst.pre_compute() (run inside run_pre_compute above) wrote
