@@ -8,11 +8,16 @@
  * whatever the server actually returned, never assumes success client-side.
  */
 import { useEffect } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Settings } from "./Settings";
+import {
+  Settings,
+  RESTART_POLL_START_DELAY_MS,
+  RESTART_POLL_INTERVAL_MS,
+  RESTART_POLL_TIMEOUT_MS,
+} from "./Settings";
 import { api } from "../api/client";
 import type { AutomationSchedule, AutomationStatus, Follow, FollowResult, LlmProviderName, LlmStatus, TriggerRunResult } from "../api/types";
 import { writeOnboarding, readOnboarding } from "../onboarding";
@@ -357,44 +362,168 @@ describe("Settings screen — Restart daemon", () => {
     delete (navigator as { serviceWorker?: unknown }).serviceWorker;
   });
 
-  it("happy path: typed RESTART confirm calls restartDaemon and the success notice survives the background status reload it triggers", async () => {
+  /**
+   * Helper for the bounded-poll tests below: gets the confirm dialog open
+   * and "RESTART" typed in using REAL timers + userEvent (exactly like the
+   * still-passing cancel/mistype/disabled tests), so none of that plumbing
+   * has to fight `vi.useFakeTimers()`. The caller switches to fake timers
+   * immediately afterward, before clicking Confirm, since everything from
+   * that click onward drives the `setTimeout`-based poll under test.
+   */
+  async function openConfirmAndType(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
+    await screen.findByRole("dialog", { name: "Restart daemon" });
+    await user.type(screen.getByLabelText('Type "RESTART" to confirm'), "RESTART");
+    return screen.getByTestId("restart-daemon-confirm") as HTMLButtonElement;
+  }
+
+  it("does not query status immediately after confirming -- it waits past the server's 0.5s self-exit window and shows a restarting state first", async () => {
     const user = userEvent.setup();
-    // mockResolvedValue (not Once): PipelineStatusSection reloads status
-    // after a restart attempt (onRestarted -> reloadStatus), exactly like
-    // RunNowButton's onTriggered -- this exercises the SAME
-    // stale-while-revalidate path b77438cb fixed, so it must not use a
-    // single-shot mock that would leave the second call unresolved.
-    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    const statusSpy = vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
     vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
     const restartSpy = vi.spyOn(api, "restartDaemon").mockResolvedValueOnce({
       restarting: true,
       message: "Process exiting in ~0.5s. Whether it comes back up depends on the process supervisor.",
     });
     renderSettings();
+    const confirmBtn = await openConfirmAndType(user);
+    const callsBeforeConfirm = statusSpy.mock.calls.length; // the initial mount fetch
 
-    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
-    expect(await screen.findByRole("dialog", { name: "Restart daemon" })).toBeInTheDocument();
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
-    // Confirm stays disabled until the typed value exactly matches.
-    const confirmBtn = screen.getByTestId("restart-daemon-confirm");
-    expect(confirmBtn).toBeDisabled();
-    await user.type(screen.getByLabelText('Type "RESTART" to confirm'), "RESTART");
-    expect(confirmBtn).toBeEnabled();
+    expect(restartSpy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog", { name: "Restart daemon" })).not.toBeInTheDocument();
+    // The server's own accept message renders immediately (it's the
+    // synchronous result of the restart call itself, not a status query).
+    expect(screen.getByText(/Process exiting in ~0.5s/)).toBeInTheDocument();
+
+    // This is the core of the fix: right after confirming, NO status query
+    // has fired yet (the old bug queried immediately here, while the old
+    // process was still alive and mid-shutdown-delay), and the UI is
+    // showing the honest transitional state instead of a stale "Alive".
+    expect(statusSpy).toHaveBeenCalledTimes(callsBeforeConfirm);
+    expect(screen.getByTestId("restart-daemon-waiting")).toBeInTheDocument();
+    expect(screen.getByText(/Restarting… waiting for the daemon to come back/)).toBeInTheDocument();
+    // The restart button itself is disabled while a poll is in flight, so a
+    // second restart can't be queued mid-poll.
+    expect(screen.getByRole("button", { name: "Restart daemon" })).toBeDisabled();
+
+    // Only once the safety-margin delay elapses does the first status query
+    // actually go out.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RESTART_POLL_START_DELAY_MS);
+    });
+    expect(statusSpy).toHaveBeenCalledTimes(callsBeforeConfirm + 1);
+
+    vi.useRealTimers();
+  });
+
+  it("declares success once daemon.started_at changes to a new value and the daemon reports alive, then refreshes the rest of the section exactly once", async () => {
+    const user = userEvent.setup();
+    const statusSpy = vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "restartDaemon").mockResolvedValueOnce({
+      restarting: true,
+      message: "Process exiting in ~0.5s. Whether it comes back up depends on the process supervisor.",
+    });
+    renderSettings();
+    const confirmBtn = await openConfirmAndType(user);
+    const callsBeforeConfirm = statusSpy.mock.calls.length;
+
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // First poll tick: still the OLD process (started_at unchanged) --
+    // exactly the race the old immediate-reload bug hit. Must stay waiting,
+    // not flip to success.
+    statusSpy.mockResolvedValue(HEALTHY_STATUS);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RESTART_POLL_START_DELAY_MS);
+    });
+    expect(statusSpy).toHaveBeenCalledTimes(callsBeforeConfirm + 1);
+    expect(screen.getByTestId("restart-daemon-waiting")).toBeInTheDocument();
+
+    // Second poll tick: a genuine respawn -- new started_at, daemon alive.
+    statusSpy.mockResolvedValue({
+      ...HEALTHY_STATUS,
+      daemon: { ...HEALTHY_STATUS.daemon, started_at: "2026-07-31T12:00:00+00:00", alive: true },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RESTART_POLL_INTERVAL_MS);
+    });
+
+    expect(screen.getByTestId("restart-daemon-confirmed")).toBeInTheDocument();
+    expect(screen.getByText(/Daemon restarted successfully/)).toBeInTheDocument();
+    expect(screen.queryByTestId("restart-daemon-waiting")).not.toBeInTheDocument();
+    // Polling stopped: the button is enabled again.
+    expect(screen.getByRole("button", { name: "Restart daemon" })).toBeEnabled();
+    // The section's own status reload (onRestarted) fires exactly once,
+    // once polling reaches a terminal state -- not before, not repeatedly.
+    expect(statusSpy).toHaveBeenCalledTimes(callsBeforeConfirm + 3); // mount-reload's own initial fetch is separate; this counts the 2 poll ticks + 1 onRestarted reload
+
+    vi.useRealTimers();
+  });
+
+  it("honestly times out when started_at never changes within the bounded window -- it never falls back to displaying the stale pre-restart status as if nothing happened", async () => {
+    const user = userEvent.setup();
+    const statusSpy = vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "restartDaemon").mockResolvedValueOnce({
+      restarting: true,
+      message: "Process exiting in ~0.5s. Whether it comes back up depends on the process supervisor.",
+    });
+    renderSettings();
+    const confirmBtn = await openConfirmAndType(user);
+
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // started_at never changes across the whole bounded window -- every
+    // poll tick keeps seeing the SAME pre-restart process.
+    statusSpy.mockResolvedValue(HEALTHY_STATUS);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RESTART_POLL_TIMEOUT_MS);
+    });
+
+    expect(screen.getByTestId("restart-daemon-timeout")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Could not confirm the daemon restarted/)
+    ).toBeInTheDocument();
+    // The honest failure state, not a silent fallback to "Alive".
+    expect(screen.queryByTestId("restart-daemon-confirmed")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("restart-daemon-waiting")).not.toBeInTheDocument();
+    // Polling stopped and the control is usable again.
+    expect(screen.getByRole("button", { name: "Restart daemon" })).toBeEnabled();
+
+    vi.useRealTimers();
+  });
+
+  it("a failed restart call (rejected before any process exit) never starts the post-restart poll", async () => {
+    const user = userEvent.setup();
+    const statusSpy = vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
+    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
+    vi.spyOn(api, "restartDaemon").mockRejectedValueOnce(new Error("Daemon not available."));
+    renderSettings();
+    const confirmBtn = await openConfirmAndType(user);
+    const callsBeforeConfirm = statusSpy.mock.calls.length;
 
     await user.click(confirmBtn);
 
-    expect(restartSpy).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/Process exiting in ~0.5s/)).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Restart daemon" })).not.toBeInTheDocument();
-
-    // The confirm click also triggers a background status reload -- confirm
-    // it actually happened, then confirm the success notice is STILL there
-    // once it resolves (this is exactly the class of bug b77438cb fixed for
-    // RunNowButton: a background reload must never wipe a just-rendered
-    // confirmation).
-    await waitFor(() => expect(api.getAutomationStatus).toHaveBeenCalledTimes(2));
-    expect(screen.getByText(/Process exiting in ~0.5s/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Restart daemon" })).toBeInTheDocument();
+    expect(await screen.findByText("Daemon not available.")).toBeInTheDocument();
+    expect(screen.queryByTestId("restart-daemon-waiting")).not.toBeInTheDocument();
+    // Still one refresh of the section, matching every other mutation's
+    // existing "reload after attempt" behavior on this screen.
+    await waitFor(() => expect(statusSpy.mock.calls.length).toBe(callsBeforeConfirm + 1));
   });
 
   it("cancel: closes the dialog without calling restartDaemon", async () => {
@@ -439,19 +568,6 @@ describe("Settings screen — Restart daemon", () => {
     expect(screen.getByText(/Disabled while a pipeline run is active/)).toBeInTheDocument();
   });
 
-  it("a restart failure (e.g. auth/gating rejected server-side) surfaces the real error, not a crash", async () => {
-    const user = userEvent.setup();
-    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
-    vi.spyOn(api, "getAutomationSchedule").mockResolvedValue(HEALTHY_SCHEDULE);
-    vi.spyOn(api, "restartDaemon").mockRejectedValueOnce(new Error("Daemon not available."));
-    renderSettings();
-
-    await user.click(await screen.findByRole("button", { name: "Restart daemon" }));
-    await user.type(screen.getByLabelText('Type "RESTART" to confirm'), "RESTART");
-    await user.click(screen.getByTestId("restart-daemon-confirm"));
-
-    expect(await screen.findByText("Daemon not available.")).toBeInTheDocument();
-  });
 });
 
 describe("Settings screen — Signal generation (pause/resume)", () => {

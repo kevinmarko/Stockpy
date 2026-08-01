@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import type {
@@ -648,6 +648,7 @@ function PipelineStatusSection({
 
           <RestartDaemonControl
             runInFlight={status.daemon.is_running === true}
+            daemonStartedAt={status.daemon.started_at}
             onRestarted={onRetry}
           />
 
@@ -771,12 +772,67 @@ function PipelineStatusSection({
  * reload after a restart attempt never unmounts this component or discards
  * its confirmation/result state, the same failure mode `RunNowButton` had
  * before that fix landed.
+ *
+ * ## Post-restart freshness (Copilot review on PR #532)
+ *
+ * `POST /daemon/restart` answers successfully BEFORE the process actually
+ * exits -- `api/control_api.py`'s handler self-exits via
+ * `threading.Timer(0.5, os._exit, ...)`, a full 0.5s after the response is
+ * already on the wire. An immediate `onRestarted()` (a `reloadStatus()` of
+ * `GET /automation/status`) races that window: it queries the OLD process,
+ * which is still alive and still answers honestly -- just too early -- so
+ * the UI would keep showing "Daemon: Alive" even when the restart genuinely
+ * never came back (the exact risk this whole confirmation flow exists to be
+ * honest about). And because `Settings.tsx`'s status poll only runs while a
+ * run is in flight, an idle daemon after a botched restart would get no
+ * further automatic refresh at all.
+ *
+ * The fix: don't trust an immediate reload. Use the daemon PROCESS's own
+ * `started_at` timestamp (`AutomationStatus.daemon.started_at`, sourced live
+ * from the Control API on every `GET /automation/status` call) as the
+ * freshness signal -- it only changes when the process actually respawns.
+ * (`pipeline.heartbeat_age_seconds` is the wrong signal here: it tracks the
+ * last pipeline CYCLE, is `null` by design in advisory mode, and says
+ * nothing about whether the daemon process itself is the same one.)
+ *
+ * State machine, driven by `postRestart`:
+ *   idle -> (confirm clicked, restart call OK) -> waiting -> confirmed | timed_out
+ * `waiting` begins only after `RESTART_POLL_START_DELAY_MS` (a safety margin
+ * comfortably past the server's 0.5s self-exit window) and then polls
+ * `GET /automation/status` directly -- via a fresh `api.getAutomationStatus()`
+ * call, NOT `onRestarted`/`reloadStatus`, since `useApi`'s `reload` only
+ * bumps a tick and mutates shared state asynchronously; it never hands this
+ * component the fetched value to compare `started_at` against. Polling stops
+ * the instant `started_at` differs from the value captured just before the
+ * restart call AND the daemon reports `alive` (a plausible respawn, not just
+ * "some field changed"), or after `RESTART_POLL_TIMEOUT_MS` of wall-clock
+ * budget elapses -- whichever comes first. A timeout renders an HONEST
+ * failure state (never silently falls back to the stale pre-restart "Alive"
+ * badge, which is precisely the bug being fixed). Either terminal state
+ * calls `onRestarted()` exactly once, so the rest of `PipelineStatusSection`
+ * (the "Daemon"/"Last run" rows) also reflects reality -- but only once
+ * polling has actually concluded, never as the sole mechanism.
  */
+// Exported so the test suite can drive fake-timer advances by the SAME
+// values the component actually uses, instead of duplicating magic numbers
+// that could silently drift out of sync with the implementation.
+export const RESTART_POLL_START_DELAY_MS = 2000; // safety margin past the server's documented 0.5s self-exit delay
+export const RESTART_POLL_INTERVAL_MS = 2000;
+export const RESTART_POLL_TIMEOUT_MS = 26000; // bounded ceiling: process exit + a supervisor noticing + relaunch
+
+type PostRestartPoll =
+  | { phase: "idle" }
+  | { phase: "waiting" }
+  | { phase: "confirmed"; startedAt: string | null }
+  | { phase: "timed_out" };
+
 function RestartDaemonControl({
   runInFlight,
+  daemonStartedAt,
   onRestarted,
 }: {
   runInFlight: boolean;
+  daemonStartedAt: string | null;
   onRestarted: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -784,24 +840,93 @@ function RestartDaemonControl({
   const mutation = useMutation(() => api.restartDaemon());
   const confirmed = typed.trim().toUpperCase() === "RESTART";
 
+  const [postRestart, setPostRestart] = useState<PostRestartPoll>({ phase: "idle" });
+  // Bumped every time a new poll sequence starts, so a stale, still-ticking
+  // `setTimeout` from a PRIOR restart attempt can recognize itself as
+  // superseded and stop touching state, without needing `clearTimeout`
+  // plumbing through every branch.
+  const pollGeneration = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const openConfirm = () => {
     setTyped("");
     mutation.reset();
+    setPostRestart({ phase: "idle" });
     setConfirming(true);
   };
 
-  const confirmRestart = async () => {
-    await mutation.run();
-    setConfirming(false);
-    onRestarted();
+  const beginPostRestartPoll = (baselineStartedAt: string | null) => {
+    const generation = ++pollGeneration.current;
+    const deadline = Date.now() + RESTART_POLL_TIMEOUT_MS;
+    setPostRestart({ phase: "waiting" });
+
+    const tick = async () => {
+      if (!mountedRef.current || pollGeneration.current !== generation) return;
+
+      let status: AutomationStatus | undefined;
+      try {
+        status = await api.getAutomationStatus();
+      } catch {
+        // A transient fetch failure mid-restart is expected (the old
+        // process may already be gone, the new one not listening yet) --
+        // treat it as "not confirmed yet" and keep polling within budget,
+        // rather than surfacing a raw network error here.
+        status = undefined;
+      }
+      if (!mountedRef.current || pollGeneration.current !== generation) return;
+
+      const respawned =
+        status != null &&
+        status.daemon.started_at != null &&
+        status.daemon.started_at !== baselineStartedAt &&
+        status.daemon.alive === true;
+
+      if (respawned) {
+        setPostRestart({ phase: "confirmed", startedAt: status!.daemon.started_at });
+        onRestarted();
+        return;
+      }
+
+      if (Date.now() >= deadline) {
+        setPostRestart({ phase: "timed_out" });
+        onRestarted();
+        return;
+      }
+
+      setTimeout(() => void tick(), RESTART_POLL_INTERVAL_MS);
+    };
+
+    setTimeout(() => void tick(), RESTART_POLL_START_DELAY_MS);
   };
+
+  const confirmRestart = async () => {
+    const baselineStartedAt = daemonStartedAt;
+    const result = await mutation.run();
+    setConfirming(false);
+    if (!result) {
+      // The restart request itself failed (auth/gating/network) -- there is
+      // nothing to poll for, `mutation.error` already tells the whole
+      // story. Still give the rest of the section one refresh.
+      onRestarted();
+      return;
+    }
+    beginPostRestartPoll(baselineStartedAt);
+  };
+
+  const isPolling = postRestart.phase === "waiting";
 
   return (
     <div style={{ marginTop: "var(--s-2-5)" }}>
       <Button
         variant="neutral"
         onClick={openConfirm}
-        disabled={runInFlight}
+        disabled={runInFlight || isPolling}
         data-testid="restart-daemon-button"
       >
         Restart daemon
@@ -828,6 +953,32 @@ function RestartDaemonControl({
         <Notice variant="success" style={{ marginTop: "var(--s-2-5)" }} data-testid="restart-daemon-success">
           <span>✅</span>
           <span>{mutation.result.message}</span>
+        </Notice>
+      )}
+
+      {postRestart.phase === "waiting" && (
+        <Notice variant="info" style={{ marginTop: "var(--s-2-5)" }} data-testid="restart-daemon-waiting">
+          <span>⏳</span>
+          <span>Restarting… waiting for the daemon to come back.</span>
+        </Notice>
+      )}
+      {postRestart.phase === "confirmed" && (
+        <Notice variant="success" style={{ marginTop: "var(--s-2-5)" }} data-testid="restart-daemon-confirmed">
+          <span>✅</span>
+          <span>
+            Daemon restarted successfully
+            {postRestart.startedAt ? ` — back up ${timeAgo(postRestart.startedAt)}.` : "."}
+          </span>
+        </Notice>
+      )}
+      {postRestart.phase === "timed_out" && (
+        <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }} data-testid="restart-daemon-timeout">
+          <span>⚠️</span>
+          <span>
+            Could not confirm the daemon restarted. If your deployment
+            doesn't auto-restart the process, you may need to relaunch it
+            manually at the host machine.
+          </span>
         </Notice>
       )}
 
