@@ -109,14 +109,35 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
   );
 }
 
-/** Compact popularity card (Most Popular rail). */
+/** Premium popularity card (Most Popular rail) — followers/AUM lead, with the
+ * same mini-sparkline + metadata-tag treatment as PilotCard. */
 export function PopularCard({ pilot }: { pilot: PilotSummary }) {
+  const perf = useApi(() => api.getPerformance(pilot.id, "3M"), [pilot.id]);
+  const curve = perf.data?.curve;
+  const isUp = curve && curve.length > 0 && curve[curve.length - 1].value >= curve[0].value;
+
   return (
-    <Link to={`/pilots/${pilot.id}`} className="card popular-card">
-      <div style={{ fontSize: "var(--t-input)", fontWeight: 700 }}>{pilot.name}</div>
-      <div style={{ fontSize: "var(--t-caption)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
-        {pilot.category}
+    <Link
+      to={`/pilots/${pilot.id}`}
+      className="card popular-card"
+      style={{ textDecoration: "none", display: "flex", flexDirection: "column", height: "100%" }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: "var(--s-1-5)",
+        }}
+      >
+        <CategoryChip category={pilot.category} />
+        {pilot.long_only && <span className="chip">Long-only</span>}
       </div>
+
+      <div style={{ fontSize: "var(--t-input)", fontWeight: 700, marginTop: "var(--s-2-5)" }}>
+        {pilot.name}
+      </div>
+
       <div
         style={{
           display: "flex",
@@ -141,6 +162,39 @@ export function PopularCard({ pilot }: { pilot: PilotSummary }) {
             }).format(pilot.aum_proxy)}
           </div>
         </div>
+      </div>
+
+      <div style={{ marginTop: "var(--s-3)", height: 40 }}>
+        {curve && curve.length > 0 ? (
+          <Sparkline data={curve} positive={!!isUp} />
+        ) : perf.loading ? (
+          <div className="skeleton" style={{ width: "100%", height: "100%" }} />
+        ) : null}
+      </div>
+
+      <div
+        style={{
+          fontSize: "var(--t-micro)",
+          color: theme.textSecondary,
+          marginTop: "var(--s-3)",
+          display: "flex",
+          justifyContent: "space-between",
+          borderTop: `1px solid ${theme.border}`,
+          paddingTop: "var(--s-2)",
+        }}
+      >
+        <span>
+          Sharpe{" "}
+          <span style={{ fontWeight: 600, color: theme.textPrimary }}>
+            {pilot.headline.sharpe == null ? "—" : fmtNum(pilot.headline.sharpe, 2)}
+          </span>
+        </span>
+        <span><span style={{ fontWeight: 600, color: theme.textPrimary }}>{pilot.holdings_count}</span> holdings</span>
+      </div>
+
+      <div style={{ marginTop: "var(--s-3)" }}>
+        {/* interactive=false: see PilotCard's identical DeployableBadge comment above. */}
+        <DeployableBadge deployable={pilot.headline.deployable} interactive={false} />
       </div>
     </Link>
   );

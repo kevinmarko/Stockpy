@@ -308,7 +308,7 @@ function PilotRow({
         <Toggle
           label=""
           checked={isChecked}
-          onChange={(val) => onToggle()}
+          onChange={() => onToggle()}
           dataTestId={`top-pilot-checkbox-${pilot.id}`}
         />
       </div>

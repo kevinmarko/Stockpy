@@ -3,7 +3,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api } from "../api/client";
 import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Notice, Table } from "../components/ui";
+import { ErrorState, Loading, Notice } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";

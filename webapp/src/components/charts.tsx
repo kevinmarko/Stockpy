@@ -749,9 +749,13 @@ export function AttentionHeatmapStrip({ attention }: { attention: ForecastAttent
 export function Sparkline({
   data,
   positive,
+  valueFormat = "number",
+  valueLabel = "Value",
 }: {
   data: CurvePoint[];
   positive: boolean;
+  valueFormat?: "number" | "currency" | "percent";
+  valueLabel?: string;
 }) {
   if (data.length === 0) return null;
   const stroke = positive ? theme.growth : theme.decline;
@@ -765,6 +769,12 @@ export function Sparkline({
               <stop offset="100%" stopColor={stroke} stopOpacity={0} />
             </linearGradient>
           </defs>
+          <XAxis dataKey="date" hide />
+          <YAxis hide domain={["dataMin", "dataMax"]} />
+          <Tooltip
+            content={<CustomTooltip valueFormat={valueFormat} valueLabel={valueLabel} yTickDecimals={valueFormat === "number" ? 2 : 0} />}
+            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
+          />
           <Area
             type="monotone"
             dataKey="value"

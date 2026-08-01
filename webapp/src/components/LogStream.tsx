@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { jobStreamUrl, USE_MOCK } from "../api/client";
-import { Button,  } from "./ui";
+import { Button } from "./ui";
 import { Toggle } from "./Toggle";
 import { theme } from "../theme";
 
@@ -103,11 +103,12 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
           gap: "var(--s-1)",
           fontFamily: "var(--font-mono, ui-monospace, monospace)",
           fontSize: "var(--t-caption)",
-          color: theme.growth,
-          background: "#000000",
+          color: "#10b981",
+          background: "#0b0e11",
           padding: "var(--s-3)",
           borderRadius: "var(--r-sm)",
           border: `1px solid ${theme.borderStrong}`,
+          scrollBehavior: "smooth",
         }}
       >
         {USE_MOCK ? (
