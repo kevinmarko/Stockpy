@@ -2820,6 +2820,27 @@ class Settings(BaseSettings):
             "Never GUI-writable — hand-set in .env only."
         ),
     )
+    # Master switch for the Pilots API's RAG query endpoint (POST /rag/query,
+    # api/pilots_api.py -- wires agents/rag_orchestrator.py's run_rag_query()
+    # into a real HTTP surface for the first time; that module previously had
+    # no production caller at all). A DEDICATED flag, NOT
+    # AI_GENERATION_API_ENABLED: that one's own description enumerates the
+    # three specific /data/ai/* endpoints on the Data API it gates -- reusing
+    # it here would silently widen what it controls beyond its documented
+    # scope. Same risk class as AI_GENERATION_API_ENABLED (a paid external LLM
+    # call, via llm/router.py::get_rationale_provider, reachable over an API
+    # gated only by require_command_token otherwise), so it gets the same
+    # fail-closed treatment: off by default, never GUI-writable -- hand-set in
+    # .env only (deliberately NOT in gui/env_io.py's ALLOWED_KEYS).
+    RAG_QUERY_API_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables POST /rag/query on the Pilots API (agents/rag_orchestrator.py's "
+            "run_rag_query, calling a paid LLM provider). Off by default -- see "
+            "AI_GENERATION_API_ENABLED for the same risk-class reasoning. Never "
+            "GUI-writable — hand-set in .env only."
+        ),
+    )
     # Master switch for the Pilots API's Macro Regime Gate WRITE endpoint
     # (api/pilots_api.py PUT /observability/macro-gate -- flips
     # MACRO_REGIME_GATE_ENABLED itself to .env). A DEDICATED flag, not

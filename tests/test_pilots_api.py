@@ -4671,3 +4671,102 @@ class TestPromptRegistryWritesInvariants:
         Streamlit Prompt Registry tab for a long time (gui/panels/prompt_registry.py)
         — this new write path must not require (or accidentally break) that."""
         assert "PROMPT_REGISTRY_PINS" in pilots_api.env_io.ALLOWED_KEYS
+
+
+# ===========================================================================
+# POST /rag/query — agents/rag_orchestrator.py's first production caller
+# ===========================================================================
+
+
+class TestRagQuery:
+    def _auth(self):
+        return {"Authorization": f"Bearer {_CMD_TOKEN}"}
+
+    def test_fails_closed_when_rag_query_disabled(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RAG_QUERY_API_ENABLED", False):
+                resp = client.post("/rag/query", json={"query": "any risks?"}, headers=self._auth())
+        assert resp.status_code == 403
+        assert "RAG_QUERY_API_ENABLED" in resp.json()["detail"]
+
+    def test_fails_closed_when_follow_token_unset(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            with mock.patch.object(settings, "RAG_QUERY_API_ENABLED", True):
+                resp = client.post(
+                    "/rag/query", json={"query": "any risks?"},
+                    headers={"Authorization": "Bearer anything"},
+                )
+        assert resp.status_code == 403
+
+    def test_fails_closed_with_wrong_token(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RAG_QUERY_API_ENABLED", True):
+                resp = client.post(
+                    "/rag/query", json={"query": "any risks?"},
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401
+
+    def test_empty_query_rejected_422(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RAG_QUERY_API_ENABLED", True):
+                resp = client.post("/rag/query", json={"query": "   "}, headers=self._auth())
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "empty_query"
+
+    def test_happy_path_returns_analysis(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RAG_QUERY_API_ENABLED", True):
+                with mock.patch.object(pilots_api, "run_rag_query", return_value="Real analysis text.") as m:
+                    resp = client.post(
+                        "/rag/query", json={"query": "What are my portfolio risks?"},
+                        headers=self._auth(),
+                    )
+        assert resp.status_code == 200
+        m.assert_called_once_with("What are my portfolio risks?")
+        body = resp.json()
+        assert body["analysis"] == "Real analysis text."
+        assert body["available"] is True
+        assert body["query"] == "What are my portfolio risks?"
+
+    def test_degraded_string_passed_through_as_available(self):
+        """A "(...)"-style degraded-mode message (e.g. langgraph missing) is
+        still honest, human-readable status text -- not a failure."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RAG_QUERY_API_ENABLED", True):
+                with mock.patch.object(
+                    pilots_api, "run_rag_query",
+                    return_value="(RAG unavailable — langgraph not installed)",
+                ):
+                    resp = client.post("/rag/query", json={"query": "risks?"}, headers=self._auth())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["available"] is True
+        assert "langgraph not installed" in body["analysis"]
+
+    def test_empty_string_result_reports_unavailable_not_fabricated(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RAG_QUERY_API_ENABLED", True):
+                with mock.patch.object(pilots_api, "run_rag_query", return_value=""):
+                    resp = client.post("/rag/query", json={"query": "risks?"}, headers=self._auth())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["available"] is False
+        assert body["analysis"] is None
+
+    def test_write_never_logs_token(self, caplog):
+        with caplog.at_level("DEBUG"):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "RAG_QUERY_API_ENABLED", True):
+                    with mock.patch.object(pilots_api, "run_rag_query", return_value="ok"):
+                        client.post("/rag/query", json={"query": "risks?"}, headers=self._auth())
+        assert _CMD_TOKEN not in caplog.text
+
+
+class TestRagQueryInvariants:
+    def test_rag_query_api_enabled_is_not_gui_writable(self):
+        """Mirrors test_macro_gate_writes_enabled_is_not_gui_writable: a GUI
+        bug must never flip this on. Neither allowlisted nor secret — hand-set
+        only, same treatment as AI_GENERATION_API_ENABLED."""
+        assert "RAG_QUERY_API_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+        assert "RAG_QUERY_API_ENABLED" not in pilots_api.env_io.SECRET_KEYS

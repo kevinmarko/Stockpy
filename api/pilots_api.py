@@ -215,6 +215,15 @@ import gui.gravity_ai_panel as gravity_ai_panel
 # can `mock.patch.object(pilots_api, "execution_panel", ...)`.
 import gui.robinhood_execution_panel as execution_panel
 
+# Portfolio-aware RAG query (POST /rag/query). agents/rag_orchestrator.py's
+# own optional heavy deps (langgraph, qdrant_client, sentence-transformers)
+# are each self-guarded with try/except ImportError at ITS module top, so
+# importing it here is safe with none of them installed -- run_rag_query()
+# degrades to an honest "(RAG unavailable — langgraph not installed)" string
+# rather than raising. Not on the AST-guard deny-list (agents/, langgraph,
+# qdrant_client are none of the seven forbidden heavy-engine names).
+from agents.rag_orchestrator import run_rag_query
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -424,6 +433,26 @@ def require_macro_gate_writes_enabled() -> None:
         raise HTTPException(
             status_code=403,
             detail="Macro gate writes are disabled (MACRO_GATE_WRITES_ENABLED=false).",
+        )
+
+
+def require_rag_query_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``POST /rag/query``. A DEDICATED
+    flag (``settings.RAG_QUERY_API_ENABLED``), NOT ``AI_GENERATION_API_ENABLED``:
+    that flag's own description enumerates the three specific
+    ``/data/ai/{commentary,chart,research}/{symbol}`` endpoints on the Data
+    API it gates -- reusing it here would silently widen its documented
+    scope to a different service. Same risk class though (a real, paid LLM
+    call via ``llm/router.py::get_rationale_provider``, otherwise reachable
+    behind ``require_command_token`` alone), so it gets the identical
+    fail-closed treatment. Mirrors ``require_strategy_writes_enabled``
+    exactly — deliberately NOT GUI-writable, hand-set in ``.env`` only.
+    There is no read-only companion endpoint to exempt (this is the entry
+    point being wired up for the first time)."""
+    if not settings.RAG_QUERY_API_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="RAG query is disabled (RAG_QUERY_API_ENABLED=false).",
         )
 
 
@@ -3805,4 +3834,53 @@ def put_prompts_pin(body: PromptPinRequest) -> Dict[str, Any]:
         "pins": pins,
         "applies": "next_daemon_restart",
         "note": note,
+    }
+
+
+class RagQueryRequest(BaseModel):
+    query: str
+
+
+@app.post(
+    "/rag/query",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_rag_query_enabled),
+    ],
+)
+def post_rag_query(body: RagQueryRequest) -> Dict[str, Any]:
+    """Portfolio-aware RAG query -- the first production caller of
+    ``agents/rag_orchestrator.py::run_rag_query`` (previously wired to
+    nothing but that module's own ``__main__`` block).
+
+    Fail-closed command token (``require_command_token``, i.e.
+    ``FOLLOW_API_TOKEN``) STACKED with the dedicated
+    ``RAG_QUERY_API_ENABLED`` master flag (``require_rag_query_enabled``) —
+    the same "auth tier AND feature flag" pattern as ``PUT /strategy/modules``
+    / ``PUT /llm/setting``, required here because this calls a real, paid LLM
+    provider (via ``llm/router.py::get_rationale_provider``), exactly the
+    risk class ``api/data_api.py``'s ``_require_ai_generation_enabled`` gates
+    on the Data API.
+
+    ``run_rag_query`` never raises (dead-letter safe by its own design) --
+    it returns an honest descriptive string for every degraded case
+    (langgraph/qdrant/sentence-transformers missing, no LLM provider
+    configured, an LLM call failure) and only an empty string on a genuine
+    internal exception. ``available`` is ``False`` (and ``analysis`` is
+    ``None``, never a fabricated placeholder -- CONSTRAINT #4) ONLY in that
+    empty-string case; every other string -- including the degraded-mode
+    messages -- is passed through verbatim as honest, human-readable status
+    text, not something this endpoint tries to reinterpret."""
+    query = body.query.strip()
+    if not query:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "empty_query", "message": "query must not be empty."},
+        )
+
+    analysis = run_rag_query(query)
+    return {
+        "query": query,
+        "analysis": analysis if analysis else None,
+        "available": bool(analysis),
     }
