@@ -1657,8 +1657,11 @@ class HistoricalStore:
         Returns
         -------
         pd.Series
-            tz-naive DatetimeIndex, values are floats (NaN for FRED gaps).
-            Empty Series on total failure.
+            tz-naive DatetimeIndex, values are floats. Dates with no real
+            FRED observation are OMITTED entirely (not included as NaN) —
+            see ``_read_macro_series``'s docstring for why this matters to
+            ``merge_asof``/rolling-window consumers. Empty Series on total
+            failure.
         """
         from settings import settings as _s  # avoid circular import
 
@@ -1928,14 +1931,31 @@ class HistoricalStore:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _read_macro_series(self, series_id: str) -> pd.DataFrame:
-        """Return all (date, value) rows for *series_id* as a DataFrame."""
+        """Return (date, value) rows for *series_id* with a REAL observation,
+        as a DataFrame.
+
+        ``macro_history`` stores one row per calendar day per series (a dense
+        skeleton), with ``value=NULL`` on days FRED has no observation for
+        (a monthly series like UNRATE, or a genuine gap in a daily one like
+        BAMLH0A0HYM2). Rows with ``value IS NULL`` are excluded here rather
+        than returned as NaN — this is the single read path ``get_macro()``
+        goes through (its only two call sites are both in this class), so
+        filtering here fixes every consumer at once. Downstream, both
+        ``_reconstruct_macro_regime_series``'s Sahm-rule
+        ``.rolling(window=3)`` (needs 3 consecutive REAL monthly UNRATE
+        observations, not 3 consecutive calendar-day rows) and
+        ``_asof_align``'s ``merge_asof(direction="backward")`` (must forward-
+        fill from the nearest REAL prior value, not match onto a NULL
+        placeholder row and propagate NaN) require a sparse, gap-free series
+        of real observations, not a dense one padded with NaN.
+        """
         with self._lock:
             conn = self._get_conn()
             rows = conn.execute(
                 """
                 SELECT date, value
                 FROM macro_history
-                WHERE series_id = ?
+                WHERE series_id = ? AND value IS NOT NULL
                 ORDER BY date ASC
                 """,
                 (series_id,),
