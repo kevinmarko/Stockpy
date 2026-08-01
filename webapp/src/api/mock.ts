@@ -1510,8 +1510,8 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     // Honest absent value: settings.py's real default IS None (auto-select
     // by key availability) -- never fabricated as "alpaca"/"yfinance".
     group: "Market Data", key: "MARKET_DATA_PROVIDER", type: "enum",
-    value: null, default: null, options: ["alpaca", "yfinance"],
-    description: "Force a specific market-data backend: 'alpaca' or 'yfinance'. When unset the platform auto-selects based on key availability.",
+    value: null, default: null, options: ["alpaca", "yfinance", "fmp"],
+    description: "Force a specific market-data backend: 'fmp', 'alpaca' or 'yfinance'. When unset the platform auto-selects based on key availability (Alpaca if its keys are present, else yfinance). Setting FMP_API_KEY alone NEVER auto-elects FMP: unlike the Alpaca ladder, FMP is chosen only by explicitly setting this to 'fmp', so an operator who adds the key to enable the analyst or earnings feed does not silently have their quote/bars source change underneath them. FMP quotes/bars additionally require FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention).",
   },
   {
     group: "Market Data", key: "MARKET_DATA_QUOTE_TTL_SECONDS", type: "number",
@@ -1525,8 +1525,8 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Market Data", key: "FUNDAMENTALS_SOURCE", type: "enum",
-    value: "yahoo", default: "yahoo", options: ["yahoo", "yfinance_info"],
-    description: "Primary fundamentals backend: 'yahoo' (statement-derived, default) or 'yfinance_info' (raw .info fallback). Finnhub is no longer a fundamentals source.",
+    value: "yahoo", default: "yahoo", options: ["yahoo", "yfinance_info", "fmp"],
+    description: "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep — see section 25). Finnhub is no longer a fundamentals source. Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
   },
   // ---- Runtime & Ops ----
   {

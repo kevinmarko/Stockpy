@@ -3180,10 +3180,10 @@ _TUNABLE_GROUPS: List[tuple] = [
     (
         "Market Data",
         [
-            ("MARKET_DATA_PROVIDER", "enum", {"options": ["alpaca", "yfinance"]}),
+            ("MARKET_DATA_PROVIDER", "enum", {"options": ["alpaca", "yfinance", "fmp"]}),
             ("MARKET_DATA_QUOTE_TTL_SECONDS", "int", {"min": 0, "max": 86400, "step": 1}),
             ("MARKET_DATA_BARS_TTL_SECONDS", "int", {"min": 0, "max": 86400, "step": 1}),
-            ("FUNDAMENTALS_SOURCE", "enum", {"options": ["yahoo", "yfinance_info"]}),
+            ("FUNDAMENTALS_SOURCE", "enum", {"options": ["yahoo", "yfinance_info", "fmp"]}),
         ],
     ),
     (
