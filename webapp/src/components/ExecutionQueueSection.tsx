@@ -157,7 +157,7 @@ function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: strin
           }}
         >
           <div>
-            <div style={{ color: theme.textPrimary, fontWeight: 700, fontSize: "var(--t-small)", marginBottom: 4 }}>
+            <div style={{ color: theme.textPrimary, fontWeight: 700, fontSize: "var(--t-caption)", marginBottom: 4 }}>
               Risk Approval Required
             </div>
             <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)" }}>
@@ -174,7 +174,7 @@ function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: strin
                 fontWeight: 700,
                 border: "none",
                 cursor: "pointer",
-                fontSize: "var(--t-small)",
+                fontSize: "var(--t-caption)",
               }}
             >
               REJECT
@@ -188,7 +188,7 @@ function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: strin
                 fontWeight: 700,
                 border: `1px solid ${theme.growth}`,
                 cursor: "pointer",
-                fontSize: "var(--t-small)",
+                fontSize: "var(--t-caption)",
               }}
             >
               APPROVE

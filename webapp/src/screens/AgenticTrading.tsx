@@ -19,7 +19,7 @@ import {
   Notice,
   StaleDataNotice,
 } from "../components/ui";
-import { Chip, ExecutionQueueSection, ModeBadge } from "../components/ExecutionQueueSection";
+import { Chip, ExecutionQueueSection } from "../components/ExecutionQueueSection";
 import { CopyCommandBlock } from "../components/CopyCommandBlock";
 import { DecisionModal } from "../components/DecisionModal";
 import { KillSwitchToggle } from "../components/KillSwitchToggle";
@@ -201,9 +201,9 @@ function ExecutionLadder({ currentMode }: { currentMode: string }) {
         const isActive = idx === currentIndex;
         const isPast = currentIndex !== -1 && idx < currentIndex;
         
-        let color = theme.textMuted;
-        let bg = "transparent";
-        let borderColor = theme.border;
+        let color: string = theme.textMuted;
+        let bg: string = "transparent";
+        let borderColor: string = theme.border;
         
         if (isActive) {
            color = theme.base;
@@ -220,7 +220,7 @@ function ExecutionLadder({ currentMode }: { currentMode: string }) {
               style={{
                 padding: "var(--s-1) var(--s-3)",
                 borderRadius: "999px",
-                fontSize: "var(--t-small)",
+                fontSize: "var(--t-caption)",
                 fontWeight: isActive ? 600 : 400,
                 color,
                 background: bg,

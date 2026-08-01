@@ -46,7 +46,7 @@ export function Activity() {
             onClick={() => setActiveCategory(cat)}
             style={{
               padding: "var(--s-1) var(--s-3)",
-              fontSize: "var(--t-small)",
+              fontSize: "var(--t-caption)",
               borderRadius: "999px",
               whiteSpace: "nowrap",
             }}

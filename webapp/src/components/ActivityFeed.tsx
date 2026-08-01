@@ -90,21 +90,21 @@ function AlertCard({ entry }: { entry: AlertEntry }) {
       </div>
       {category === "EXECUTION" && (
         <div style={{ marginTop: "var(--s-2)" }}>
-          <button className="btn btn-primary" style={{ fontSize: "var(--t-small)", padding: "var(--s-1) var(--s-3)" }}>
+          <button className="btn btn-primary" style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-3)" }}>
             Review Trade
           </button>
         </div>
       )}
       {category === "REGIME" && (
         <div style={{ marginTop: "var(--s-2)" }}>
-          <button className="btn btn-secondary" style={{ fontSize: "var(--t-small)", padding: "var(--s-1) var(--s-3)" }}>
+          <button className="btn btn-secondary" style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-3)" }}>
             View Regime
           </button>
         </div>
       )}
       {category === "RISK" && (
         <div style={{ marginTop: "var(--s-2)" }}>
-          <button className="btn btn-secondary" style={{ fontSize: "var(--t-small)", padding: "var(--s-1) var(--s-3)" }}>
+          <button className="btn btn-secondary" style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-3)" }}>
             Risk Details
           </button>
         </div>
