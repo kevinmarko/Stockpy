@@ -12,34 +12,43 @@ export default function MacroSentimentDashboard() {
 
   const renderTrendIcon = (trend: string) => {
     switch (trend) {
-      case 'up': return <TrendingUp className="w-4 h-4 text-green-500" />;
-      case 'down': return <TrendingDown className="w-4 h-4 text-red-500" />;
-      default: return <Minus className="w-4 h-4 text-slate-400" />;
+      case 'up': return <TrendingUp style={{ width: 16, height: 16, color: "var(--growth)" }} />;
+      case 'down': return <TrendingDown style={{ width: 16, height: 16, color: "var(--decline)" }} />;
+      default: return <Minus style={{ width: 16, height: 16, color: "var(--text-muted)" }} />;
     }
   };
 
   return (
-    <div className="bg-white dark:bg-[#1a1a1a] rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-5 h-full flex flex-col">
-      <div className="flex items-center gap-2 mb-6 border-b border-slate-200 dark:border-slate-800 pb-4">
-        <Globe className="w-5 h-5 text-teal-500" />
-        <h3 className="font-semibold text-slate-900 dark:text-white">Macroeconomic Sentiment</h3>
+    <div className="card card-pad" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--s-2)",
+          marginBottom: "var(--s-6)",
+          borderBottom: "1px solid var(--border)",
+          paddingBottom: "var(--s-4)",
+        }}
+      >
+        <Globe style={{ width: 20, height: 20, color: "#14b8a6" }} />
+        <h3 style={{ margin: 0, fontWeight: 600, color: "var(--text-primary)" }}>Macroeconomic Sentiment</h3>
         {data?.is_synthetic && <DemoDataBadge />}
       </div>
-      
-      <div className="flex-1 flex flex-col lg:flex-row gap-6">
+
+      <div className="detail-grid" style={{ flex: 1, marginBottom: 0 }}>
         {loading ? (
-          <div className="w-full flex items-center justify-center p-8">
-            <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+          <div style={{ gridColumn: "1 / -1", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: "var(--s-8)" }}>
+            <Loader2 style={{ width: 24, height: 24, color: "var(--text-muted)", animation: "spin 0.7s linear infinite" }} />
           </div>
         ) : error ? (
-          <div className="w-full text-center text-red-500 p-8">Failed to load macro sentiment</div>
+          <div style={{ gridColumn: "1 / -1", width: "100%", textAlign: "center", color: "var(--decline)", padding: "var(--s-8)" }}>Failed to load macro sentiment</div>
         ) : macroData.length === 0 ? (
-          <div className="w-full text-center text-slate-500 dark:text-slate-400 p-8">
+          <div style={{ gridColumn: "1 / -1", width: "100%", textAlign: "center", color: "var(--text-secondary)", padding: "var(--s-8)" }}>
             {data?.reason || 'No macro data available yet.'}
           </div>
         ) : (
           <>
-            <div className="w-full lg:w-1/2 h-[300px]">
+            <div style={{ width: "100%", height: 300 }}>
           <ResponsiveContainer width="100%" height="100%">
             <RadarChart cx="50%" cy="50%" outerRadius="80%" data={macroData}>
               <PolarGrid stroke="#334155" opacity={0.3} />
@@ -49,17 +58,17 @@ export default function MacroSentimentDashboard() {
             </RadarChart>
           </ResponsiveContainer>
         </div>
-        
-        <div className="w-full lg:w-1/2 flex flex-col justify-center">
-          <h4 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-4">Key Drivers</h4>
-          <div className="space-y-3">
+
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+          <h4 style={{ fontSize: "var(--t-body)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--s-4)" }}>Key Drivers</h4>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
             {macroData.map((item, idx) => (
-              <div key={idx} className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                <span className="text-sm text-slate-700 dark:text-slate-300 font-medium">{item.subject}</span>
-                <div className="flex items-center gap-3">
-                  <div className="w-24 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-teal-500 rounded-full"
+              <div key={idx} className="macro-driver-row">
+                <span style={{ fontSize: "var(--t-body)", color: "var(--text-secondary)", fontWeight: 500 }}>{item.subject}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)" }}>
+                  <div className="macro-driver-track">
+                    <div
+                      className="macro-driver-fill"
                       style={{ width: `${item.value}%` }}
                     />
                   </div>

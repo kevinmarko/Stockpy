@@ -17,7 +17,7 @@ class ErrorBoundary extends Component<{children: React.ReactNode}, {hasError: bo
   }
   render() {
     if (this.state.hasError) {
-      return <div className="text-red-500 text-xs p-2">MD Err: {this.state.error?.message}</div>;
+      return <div style={{ color: "var(--decline)", fontSize: "var(--t-caption)", padding: "var(--s-2)" }}>MD Err: {this.state.error?.message}</div>;
     }
     return this.props.children;
   }
@@ -158,7 +158,7 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
 
   return (
     <div
-      className={`fixed top-0 right-0 z-50 h-full w-[400px] bg-white dark:bg-[#1a1a1a] shadow-2xl flex flex-col transition-transform ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
+      className={`ai-chat-panel${isOpen ? ' is-open' : ''}`}
       // The panel is only translated off-screen (for the slide transition),
       // not unmounted, so its buttons/textarea/suggestions stay in the DOM
       // while closed. `inert` (supported in all current major browsers)
@@ -169,28 +169,28 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
       inert={!isOpen}
       aria-hidden={!isOpen}
     >
-      <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-800">
-        <div className="font-semibold text-slate-900 dark:text-white">AI Chat Interface</div>
-        <button onClick={onClose}><X className="w-5 h-5 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200" /></button>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "var(--s-4)", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>AI Chat Interface</div>
+        <button onClick={onClose} className="ai-chat-icon-btn"><X style={{ width: 20, height: 20 }} /></button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+      <div style={{ flex: 1, overflowY: "auto", padding: "var(--s-4)", display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
         {messages.map((m, i) => (
-          <div key={i} className={`flex gap-3 ${m.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center">
-              {m.role === 'user' ? <User className="w-4 h-4 text-slate-500 dark:text-slate-300" /> : <Bot className="w-4 h-4 text-slate-500 dark:text-slate-300" />}
+          <div key={i} style={{ display: "flex", gap: "var(--s-3)", flexDirection: m.role === 'user' ? 'row-reverse' : 'row' }}>
+            <div style={{ flexShrink: 0, width: 32, height: 32, borderRadius: "50%", background: "var(--surface-3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {m.role === 'user' ? <User style={{ width: 16, height: 16, color: "var(--text-secondary)" }} /> : <Bot style={{ width: 16, height: 16, color: "var(--text-secondary)" }} />}
             </div>
-            <div className="max-w-[85%] flex flex-col gap-2">
+            <div style={{ maxWidth: "85%", display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
 
               {m.role === 'model' && m.thoughts && m.thoughts.trim().length > 0 && (
-                <div className="bg-slate-50 dark:bg-[#1e1e1e] border border-slate-200 dark:border-slate-700/60 rounded-xl overflow-hidden shadow-sm">
+                <div style={{ background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--r-lg)", overflow: "hidden" }}>
                   <button
                     onClick={() => toggleThought(i)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/50"
+                    className="ai-chat-thought-toggle"
                   >
-                    {expandedThoughts[i] ? <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 flex-shrink-0" />}
-                    <BrainCircuit className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
-                    <span className="truncate text-left">
+                    {expandedThoughts[i] ? <ChevronDown style={{ width: 14, height: 14, flexShrink: 0 }} /> : <ChevronRight style={{ width: 14, height: 14, flexShrink: 0 }} />}
+                    <BrainCircuit style={{ width: 14, height: 14, color: "var(--accent)", flexShrink: 0 }} />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>
                       {(() => {
                         if (m.content && m.content.length > 0) return "View reasoning process";
                         const lines = m.thoughts.split('\n').filter((l: string) => l.trim().length > 0);
@@ -199,11 +199,26 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
                     </span>
                   </button>
                   {expandedThoughts[i] && (
-                    <div className="px-3 pb-3 pt-3 border-t border-slate-200 dark:border-slate-800/50 max-h-[250px] overflow-y-auto bg-slate-100 dark:bg-black/20 text-[11px] font-mono leading-relaxed text-slate-600 dark:text-slate-400 flex flex-col gap-2">
+                    <div
+                      style={{
+                        padding: "var(--s-3) var(--s-3) var(--s-3)",
+                        borderTop: "1px solid var(--border)",
+                        maxHeight: 250,
+                        overflowY: "auto",
+                        background: "rgba(0, 0, 0, 0.2)",
+                        fontSize: "var(--t-micro)",
+                        fontFamily: "var(--font-mono, monospace)",
+                        lineHeight: 1.6,
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "var(--s-2)",
+                      }}
+                    >
                       {m.thoughts.split('\n').filter((l: string) => l.trim().length > 0).map((line: string, idx: number) => (
-                        <div key={idx} className="flex gap-2 items-start">
-                          <div className="text-slate-400 dark:text-slate-600 mt-[2px]">›</div>
-                          <div className="break-words whitespace-pre-wrap">{line}</div>
+                        <div key={idx} style={{ display: "flex", gap: "var(--s-2)", alignItems: "flex-start" }}>
+                          <div style={{ color: "var(--text-muted)", marginTop: 2 }}>›</div>
+                          <div style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{line}</div>
                         </div>
                       ))}
                     </div>
@@ -212,33 +227,43 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
               )}
 
               {m.role === 'model' && !m.content && !expandedThoughts[i] && (
-                <div className="flex items-center gap-2 text-xs text-slate-500 italic ml-1 mb-1 p-1">
-                  <Loader2 className="w-3 h-3 animate-spin" /> {m.thoughts ? 'Thinking...' : 'Gathering insights...'}
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", color: "var(--text-secondary)", fontStyle: "italic", marginLeft: "var(--s-1)", marginBottom: "var(--s-1)", padding: "var(--s-1)" }}>
+                  <Loader2 style={{ width: 12, height: 12, animation: "spin 0.7s linear infinite" }} /> {m.thoughts ? 'Thinking...' : 'Gathering insights...'}
                 </div>
               )}
 
               {m.content && (
-                <div className={`p-3 rounded-2xl text-sm leading-relaxed ${m.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-100 dark:bg-[#262626] text-slate-800 dark:text-slate-200 rounded-tl-none border border-slate-200 dark:border-slate-700/50 shadow-sm'}`}>
+                <div
+                  style={{
+                    padding: "var(--s-3)",
+                    borderRadius: "var(--r-lg)",
+                    fontSize: "var(--t-body)",
+                    lineHeight: 1.6,
+                    ...(m.role === 'user'
+                      ? { background: "var(--accent)", color: "#06222f", borderTopRightRadius: "var(--r-2xs)" }
+                      : { background: "var(--surface-2)", color: "var(--text-primary)", borderTopLeftRadius: "var(--r-2xs)", border: "1px solid var(--border)" }),
+                  }}
+                >
                   {m.role === 'model' ? (
                     <ErrorBoundary>
-                      <div className="[&>p]:mb-2 [&>p:last-child]:mb-0 [&>ul]:list-disc [&>ul]:ml-5 [&>h3]:font-semibold [&>h3]:text-slate-800 dark:[&>h3]:text-slate-100 [&>h3]:mb-1 [&>h3]:mt-3 [&>ol]:list-decimal [&>ol]:ml-5 [&_code]:bg-black/5 dark:[&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:rounded">
+                      <div className="md-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {m.content}
                         </ReactMarkdown>
                       </div>
                     </ErrorBoundary>
                   ) : (
-                    <div className="whitespace-pre-wrap">{m.content}</div>
+                    <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
                   )}
                 </div>
               )}
 
               {m.role === 'model' && m.suggestions && m.suggestions.length > 0 && (
-                <div className="flex flex-col gap-1.5 mt-2">
+                <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-1-5)", marginTop: "var(--s-2)" }}>
                   {m.suggestions.slice(0, 3).map((s: string, idx: number) => (
                     <button
                       key={idx} onClick={() => handleSend(undefined, s)} disabled={isLoading}
-                      className="text-left text-xs bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-800/40 text-blue-700 dark:text-blue-300 p-2 rounded-lg border border-blue-200 dark:border-blue-800/30 transition-colors"
+                      className="ai-chat-suggestion"
                     >{s}</button>
                   ))}
                 </div>
@@ -250,16 +275,16 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
         <div ref={bottomRef} />
       </div>
 
-      <form onSubmit={handleSend} className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-end bg-slate-100 dark:bg-[#121212] relative">
+      <form onSubmit={handleSend} style={{ padding: "var(--s-4)", borderTop: "1px solid var(--border)", display: "flex", alignItems: "flex-end", background: "var(--surface-2)", position: "relative" }}>
         <textarea
           ref={textareaRef}
           value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} disabled={isLoading}
           placeholder="Ask a question about your portfolio..."
           rows={1}
-          className="w-full bg-white dark:bg-[#1a1a1a] border border-slate-300 dark:border-slate-700 rounded-xl pl-4 pr-12 py-3 text-sm focus:outline-none focus:border-blue-500 text-slate-800 dark:text-slate-100 placeholder-slate-500 dark:placeholder-slate-400 resize-none overscroll-contain"
+          className="ai-chat-textarea"
         />
-        <button type="submit" disabled={!input.trim() || isLoading} className="absolute right-6 bottom-6 p-2 bg-blue-600 hover:bg-blue-700 rounded-full text-white transition-colors disabled:opacity-50">
-          <Send className="w-4 h-4" />
+        <button type="submit" disabled={!input.trim() || isLoading} className="ai-chat-send-btn">
+          <Send style={{ width: 16, height: 16 }} />
         </button>
       </form>
     </div>

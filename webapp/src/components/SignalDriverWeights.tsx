@@ -47,9 +47,17 @@ export default function SignalDriverWeights({ data: overrideData }: { data?: SHA
       const point = payload[0].payload;
       const isPositive = point.value >= 0;
       return (
-        <div className="bg-white dark:bg-slate-800 p-3 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg">
-          <p className="font-semibold text-slate-900 dark:text-slate-100">{point.name}</p>
-          <p className={`text-sm ${isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+        <div
+          style={{
+            background: "var(--surface-3)",
+            padding: "var(--s-3)",
+            border: "1px solid var(--border-strong)",
+            borderRadius: "var(--r-sm)",
+            boxShadow: "var(--shadow-card)",
+          }}
+        >
+          <p style={{ margin: 0, fontWeight: 600, color: "var(--text-primary)" }}>{point.name}</p>
+          <p style={{ margin: "var(--s-1) 0 0", fontSize: "var(--t-body)", color: isPositive ? "var(--growth)" : "var(--decline)" }}>
             Mean |Contribution|: {(point.value * 100).toFixed(1)}%
           </p>
         </div>
@@ -59,23 +67,23 @@ export default function SignalDriverWeights({ data: overrideData }: { data?: SHA
   };
 
   return (
-    <div className="bg-white dark:bg-[#1a1a1a] rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-5 h-full flex flex-col">
-      <div className="flex items-center gap-2 mb-4">
-        <Activity className="w-5 h-5 text-purple-500" />
-        <h3 className="font-semibold text-slate-900 dark:text-white">Signal Driver Weights</h3>
+    <div className="card card-pad" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginBottom: "var(--s-4)" }}>
+        <Activity style={{ width: 20, height: 20, color: "#a855f7" }} />
+        <h3 style={{ margin: 0, fontWeight: 600, color: "var(--text-primary)" }}>Signal Driver Weights</h3>
       </div>
-      <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+      <p style={{ fontSize: "var(--t-body)", color: "var(--text-secondary)", marginBottom: "var(--s-6)" }}>
         Mean absolute contribution (score × weight) per signal module across the universe.
         Linear weight decomposition — not Shapley marginal contributions.
       </p>
 
-      <div className="flex-1 min-h-[300px] flex items-center justify-center">
+      <div style={{ flex: 1, minHeight: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {loading ? (
-          <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+          <Loader2 style={{ width: 24, height: 24, color: "var(--text-muted)", animation: "spin 0.7s linear infinite" }} />
         ) : error ? (
-          <div className="text-red-500 text-sm">Failed to load signal driver weights</div>
+          <div style={{ color: "var(--decline)", fontSize: "var(--t-body)" }}>Failed to load signal driver weights</div>
         ) : sortedData.length === 0 ? (
-          <div className="text-sm text-slate-500 dark:text-slate-400">No tracked symbols yet — run the pipeline, then reload.</div>
+          <div style={{ fontSize: "var(--t-body)", color: "var(--text-secondary)" }}>No tracked symbols yet — run the pipeline, then reload.</div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <BarChart

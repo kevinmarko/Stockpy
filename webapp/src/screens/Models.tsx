@@ -119,11 +119,11 @@ export function Models() {
 
       <TabGuide tabKey="models" />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 mt-4">
-        <div className="h-[400px]">
+      <div className="chart-grid-2">
+        <div style={{ height: 400 }}>
           <ModelComparisonChart />
         </div>
-        <div className="h-[400px]">
+        <div style={{ height: 400 }}>
           <SignalDriverWeights />
         </div>
       </div>

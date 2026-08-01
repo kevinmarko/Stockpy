@@ -30,53 +30,87 @@ export default function ActiveTraderLadder({
   const effectivePrice = tick.price ?? ladder?.current_price ?? currentPrice ?? null;
 
   return (
-    <div className="bg-white dark:bg-[#1a1a1a] rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col h-full">
-      <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-[#121212]">
-        <div className="flex items-center gap-2">
-          <Activity className="w-5 h-5 text-blue-500" />
-          <h3 className="font-semibold text-slate-900 dark:text-white">Active Trader Ladder</h3>
+    <div className="card" style={{ overflow: "hidden", display: "flex", flexDirection: "column", height: "100%" }}>
+      <div
+        style={{
+          padding: "var(--s-4)",
+          borderBottom: "1px solid var(--border)",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          background: "var(--surface-2)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <Activity style={{ width: 20, height: 20, color: "var(--accent)" }} />
+          <h3 style={{ margin: 0, fontWeight: 600, color: "var(--text-primary)" }}>Active Trader Ladder</h3>
           {ladder?.is_synthetic && <DemoDataBadge />}
         </div>
-        <div className="flex items-center gap-2">
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           {tick.isConnected && (
             <span
               title={`Live tick source: ${tick.source}`}
-              className="w-1.5 h-1.5 rounded-full bg-green-500"
+              style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--growth)", display: "inline-block" }}
             />
           )}
-          <div className="text-sm font-medium text-slate-500 bg-white dark:bg-black px-3 py-1 rounded-md border border-slate-200 dark:border-slate-800">
+          <div
+            style={{
+              fontSize: "var(--t-body)",
+              fontWeight: 600,
+              color: "var(--text-secondary)",
+              background: "var(--surface)",
+              padding: "var(--s-1) var(--s-3)",
+              borderRadius: "var(--r-sm)",
+              border: "1px solid var(--border)",
+            }}
+          >
             {symbol}
           </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-4">
+      <div style={{ flex: 1, overflow: "auto", padding: "var(--s-4)" }}>
         {loading ? (
-          <div className="flex items-center justify-center p-8">
-            <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "var(--s-8)" }}>
+            <Loader2 style={{ width: 24, height: 24, color: "var(--text-muted)", animation: "spin 0.7s linear infinite" }} />
           </div>
         ) : error || !ladder || effectivePrice === null ? (
-          <div className="text-center text-slate-500 dark:text-slate-400 p-8 text-sm">
+          <div style={{ textAlign: "center", color: "var(--text-secondary)", padding: "var(--s-8)", fontSize: "var(--t-body)" }}>
             Ladder unavailable for {symbol}.
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-3 gap-4 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider text-center border-b border-slate-200 dark:border-slate-800 pb-2">
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: "var(--s-4)",
+                marginBottom: "var(--s-2)",
+                fontSize: "var(--t-caption)",
+                fontWeight: 600,
+                color: "var(--text-muted)",
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+                textAlign: "center",
+                borderBottom: "1px solid var(--border)",
+                paddingBottom: "var(--s-2)",
+              }}
+            >
               <div>Bid Size</div>
               <div>Price</div>
               <div>Ask Size</div>
             </div>
 
-            <div className="flex flex-col">
+            <div style={{ display: "flex", flexDirection: "column" }}>
               {/* Asks (descending price) */}
               {[...ladder.asks].reverse().map((ask, i) => (
-                <div key={`ask-${i}`} className="grid grid-cols-3 gap-4 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded group cursor-pointer">
-                  <div className="text-center text-slate-400">-</div>
-                  <div className="text-center font-medium text-red-500 dark:text-red-400">${ask.price.toFixed(2)}</div>
-                  <div className="text-center relative">
-                    <span className="relative z-10 text-slate-700 dark:text-slate-300">{ask.size}</span>
+                <div key={`ask-${i}`} className="ladder-row">
+                  <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
+                  <div className="ladder-cell" style={{ fontWeight: 600, color: "var(--decline)" }}>${ask.price.toFixed(2)}</div>
+                  <div className="ladder-cell">
+                    <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{ask.size}</span>
                     <div
-                      className="absolute inset-y-0 right-0 bg-red-100 dark:bg-red-900/30 rounded-sm"
+                      className="ladder-size-bar ladder-size-bar-ask"
                       style={{ width: `${Math.min(100, (ask.size / 2000) * 100)}%` }}
                     />
                   </div>
@@ -84,24 +118,38 @@ export default function ActiveTraderLadder({
               ))}
 
               {/* Current Price */}
-              <div className="grid grid-cols-3 gap-4 py-3 my-2 text-sm bg-blue-50 dark:bg-blue-900/20 border-y border-blue-100 dark:border-blue-800/30">
-                <div className="text-center"></div>
-                <div className="text-center font-bold text-lg text-slate-900 dark:text-white">${effectivePrice.toFixed(2)}</div>
-                <div className="text-center"></div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: "var(--s-4)",
+                  padding: "var(--s-3) 0",
+                  margin: "var(--s-2) 0",
+                  fontSize: "var(--t-body)",
+                  background: "rgba(56, 189, 248, 0.08)",
+                  borderTop: "1px solid rgba(56, 189, 248, 0.22)",
+                  borderBottom: "1px solid rgba(56, 189, 248, 0.22)",
+                }}
+              >
+                <div />
+                <div style={{ textAlign: "center", fontWeight: 700, fontSize: "var(--t-subhead)", color: "var(--text-primary)" }}>
+                  ${effectivePrice.toFixed(2)}
+                </div>
+                <div />
               </div>
 
               {/* Bids (descending price) */}
               {ladder.bids.map((bid, i) => (
-                <div key={`bid-${i}`} className="grid grid-cols-3 gap-4 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded group cursor-pointer">
-                  <div className="text-center relative">
-                    <span className="relative z-10 text-slate-700 dark:text-slate-300">{bid.size}</span>
+                <div key={`bid-${i}`} className="ladder-row">
+                  <div className="ladder-cell">
+                    <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{bid.size}</span>
                     <div
-                      className="absolute inset-y-0 left-0 bg-green-100 dark:bg-green-900/30 rounded-sm"
+                      className="ladder-size-bar ladder-size-bar-bid"
                       style={{ width: `${Math.min(100, (bid.size / 2000) * 100)}%` }}
                     />
                   </div>
-                  <div className="text-center font-medium text-green-500 dark:text-green-400">${bid.price.toFixed(2)}</div>
-                  <div className="text-center text-slate-400">-</div>
+                  <div className="ladder-cell" style={{ fontWeight: 600, color: "var(--growth)" }}>${bid.price.toFixed(2)}</div>
+                  <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
                 </div>
               ))}
             </div>

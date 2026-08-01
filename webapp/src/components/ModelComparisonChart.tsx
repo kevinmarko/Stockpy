@@ -9,26 +9,37 @@ export default function ModelComparisonChart() {
   const data = responseData?.data || [];
 
   return (
-    <div className="bg-white dark:bg-[#1a1a1a] rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-5 h-full flex flex-col">
-      <div className="flex items-center gap-2 mb-6 border-b border-slate-200 dark:border-slate-800 pb-4">
-        <GitBranch className="w-5 h-5 text-orange-500" />
-        <h3 className="font-semibold text-slate-900 dark:text-white">Model Strategy Comparison</h3>
+    <div className="card card-pad" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--s-2)",
+          marginBottom: "var(--s-6)",
+          borderBottom: "1px solid var(--border)",
+          paddingBottom: "var(--s-4)",
+        }}
+      >
+        <GitBranch style={{ width: 20, height: 20, color: "var(--caution)" }} />
+        <h3 style={{ margin: 0, fontWeight: 600, color: "var(--text-primary)" }}>Model Strategy Comparison</h3>
       </div>
-      
-      <div className="flex-1 min-h-[300px]">
+
+      <div style={{ flex: 1, minHeight: 300 }}>
         {loading ? (
-          <div className="w-full h-full flex items-center justify-center">
-            <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Loader2 style={{ width: 24, height: 24, color: "var(--text-muted)", animation: "spin 0.7s linear infinite" }} />
           </div>
         ) : error ? (
-          <div className="w-full h-full flex items-center justify-center text-red-500">Failed to load model comparison</div>
+          <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--decline)" }}>
+            Failed to load model comparison
+          </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" opacity={0.2} />
             <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: 12 }} tickLine={false} axisLine={{ stroke: '#334155', opacity: 0.5 }} />
             <YAxis tickFormatter={(val) => `${val}%`} tick={{ fill: '#64748b', fontSize: 12 }} tickLine={false} axisLine={false} />
-            <Tooltip 
+            <Tooltip
               contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc' }}
               itemStyle={{ fontSize: 13 }}
             />

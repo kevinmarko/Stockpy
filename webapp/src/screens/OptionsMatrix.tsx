@@ -1025,7 +1025,7 @@ export function OptionsMatrix() {
 
       {showRecompute && <OptionsRecomputeSection />}
 
-      <div className="mt-8 mb-4">
+      <div style={{ marginTop: "var(--s-8)", marginBottom: "var(--s-4)" }}>
         <OptionsAnalyticsDashboard />
       </div>
     </div>

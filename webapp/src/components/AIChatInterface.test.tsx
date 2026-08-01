@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import AIChatInterface from "./AIChatInterface";
 
 function getPanel(container: HTMLElement): HTMLDivElement {
-  const panel = container.querySelector("div.fixed");
+  const panel = container.querySelector("div.ai-chat-panel");
   if (!panel) throw new Error("panel not found");
   return panel as HTMLDivElement;
 }
@@ -36,7 +36,7 @@ describe("AIChatInterface closed-panel a11y", () => {
   it("textarea sits inside the inert subtree while the panel is closed", () => {
     render(<AIChatInterface isOpen={false} onClose={() => {}} />);
     const textarea = screen.getByPlaceholderText("Ask a question about your portfolio...");
-    const panel = textarea.closest("div.fixed") as HTMLDivElement;
+    const panel = textarea.closest("div.ai-chat-panel") as HTMLDivElement;
     expect(panel.getAttribute("inert")).not.toBeNull();
   });
 });
