@@ -1,8 +1,26 @@
+# 2026-07 shutdown-budget fix: TimeoutStopSec/KillSignal made explicit
+# (was relying on systemd's implicit 90s default, which happened to be wide
+# enough but was never a stated contract); After=network-online.target
+# (was network.target -- this daemon's first cycle makes outbound calls
+# (FRED/market data) immediately in daemon.start(), and network.target only
+# means "networking is configured", not "an address is routable", so a DHCP
+# boot could race DNS -- Restart=always + the daemon's own dead-letter
+# resilience already recover from this either way, so treat this as a
+# nice-to-have hardening, not a correctness fix). StartLimitIntervalSec/
+# StartLimitBurst MOVED from [Service] to [Unit] -- they belong in [Unit]
+# since systemd v229 (2016); left in [Service], modern systemd silently
+# rejects them ("Unknown lvalue... in section 'Service'"), so the
+# crash-loop throttling this unit believed it had was NOT actually in
+# effect on any current distro. See settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS
+# (default 25s) and docs/RUNBOOK.md §3.13's shutdown-budget ladder for the
+# full derivation of the 45s below.
 [Unit]
 Description=InvestYo Persistent Orchestrator Daemon
 Documentation=https://github.com/kevinmarko/Stockpy
-After=network.target
-Wants=investyo-mcp.service
+After=network-online.target
+Wants=network-online.target investyo-mcp.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -14,8 +32,15 @@ EnvironmentFile=/opt/investyo/.env
 ExecStart=/opt/investyo/.venv/bin/python -m desktop.orchestrator_daemon
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
+# Must stay > settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS (default 25s) plus
+# margin -- otherwise systemd SIGKILLs the daemon before its own graceful
+# _teardown() (uvicorn drain + timer-thread join + in-flight-run poll) can
+# finish, exactly the problem this fix removes. KillSignal is already the
+# systemd default; stated explicitly here since the whole shutdown design
+# hinges on SIGTERM specifically, and an implicit default is exactly the
+# class of thing this fix is about.
+TimeoutStopSec=45
+KillSignal=SIGTERM
 
 # Security hardening
 NoNewPrivileges=true

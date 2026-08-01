@@ -81,6 +81,14 @@ _SETTINGS_LAYOUT: List[tuple[str, str]] = [
     ("PROMPT_REGISTRY_BACKEND", "text"),
     # Persistent orchestrator daemon + State API CORS policy
     ("ORCHESTRATOR_DAEMON_ENABLED", "bool"),
+    # Total seconds budgeted for the daemon's graceful teardown -- see
+    # settings.py's DAEMON_SHUTDOWN_TIMEOUT_SECONDS docstring for the full
+    # shutdown-budget ladder. Applies at the daemon's NEXT restart, not
+    # live; raising it without ALSO raising the outer supervisor timeouts
+    # (scripts/com.investyo.stack.plist's ExitTimeOut, deploy/
+    # investyo-daemon.service's TimeoutStopSec, launch_app.command's
+    # SHUTDOWN_GRACE_SECONDS) makes shutdown LESS graceful, not more.
+    ("DAEMON_SHUTDOWN_TIMEOUT_SECONDS", "number"),
     ("PILOTS_API_ENABLED", "bool"),
     ("CORS_ALLOWED_ORIGINS", "json"),
     ("DEFAULT_TICKERS", "tickers"),

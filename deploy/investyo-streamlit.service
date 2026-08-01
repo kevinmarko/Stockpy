@@ -1,8 +1,25 @@
+# 2026-07 fix: StartLimitIntervalSec/StartLimitBurst MOVED from [Service] to
+# [Unit] (see deploy/investyo-daemon.service's comment for why -- silently
+# rejected in [Service] on any systemd since v229/2016). Kept
+# After=network.target (NOT network-online.target, unlike the daemon/mcp
+# units) since Streamlit binds 127.0.0.1 only (--server.address 127.0.0.1)
+# and has no outbound network dependency at startup -- network-online is
+# genuinely irrelevant here, so don't "fix" this into consistency with the
+# other two units. TimeoutStopSec=20 added -- Streamlit has no meaningful
+# graceful-teardown duty of its own, so this just bounds a hung `stop` at a
+# short, explicit value instead of the implicit 90s default. Deliberately
+# NOT setting KillMode=mixed here (unlike investyo-daemon.service's own
+# intent-documenting comment) -- `python -m streamlit run` genuinely spawns
+# child processes that should ALL receive SIGTERM, so the default
+# `control-group` KillMode is the correct one; don't "fix" this into
+# asymmetry with the daemon unit either.
 [Unit]
 Description=InvestYo Streamlit Command Center
 Documentation=https://github.com/kevinmarko/Stockpy
 After=network.target
 Wants=investyo-mcp.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -14,8 +31,7 @@ EnvironmentFile=/opt/investyo/.env
 ExecStart=/opt/investyo/.venv/bin/python -m streamlit run gui/app.py --server.port 8501 --server.address 127.0.0.1 --server.headless true
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
+TimeoutStopSec=20
 
 # Security hardening
 NoNewPrivileges=true

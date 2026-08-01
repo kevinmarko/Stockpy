@@ -820,8 +820,16 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
             "macro_regime_gate_enabled": settings.MACRO_REGIME_GATE_ENABLED,
             "signals": signals,
         }
+        # Atomic write-then-rename (2026-07 fix; mirrors execution/kill_switch.py's
+        # activate() and desktop/orchestrator_daemon.py's _write_daemon_file):
+        # a bare write_text() truncates on open, so a process killed mid-write
+        # used to leave a truncated, unparseable file that every reader
+        # (pilots/run_status.py, api/state_api.py) then treated as MISSING
+        # rather than merely stale.
         snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
-        snap_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        tmp_path = snap_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        tmp_path.replace(snap_path)
         # Rotate into history/ (write-then-rename + prune > SNAPSHOT_HISTORY_DAYS).
         # Failure is non-fatal — the live snapshot is already on disk.
         try:

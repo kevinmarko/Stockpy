@@ -76,6 +76,21 @@ from dotenv import load_dotenv as _load_dotenv
 
 logger = logging.getLogger("InvestYo.orchestrator_daemon")
 
+# Shutdown budget (2026-07 fix): `_teardown()` sizes each of its stages
+# against ONE total, `settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS`, captured as a
+# monotonic deadline the moment teardown begins. `_SHUTDOWN_API_JOIN_SECONDS`
+# is the per-server-thread CEILING (each uvicorn drain is capped at this even
+# when more of the total budget remains -- a hung API thread must not eat the
+# whole budget that daemon.shutdown() needs for the in-flight-run poll);
+# `daemon.shutdown()` itself gets whatever remains of the deadline after both
+# joins, since it already budgets its OWN internal timer-thread-join +
+# in-flight-run-poll within whatever timeout it's given (see
+# desktop/daemon_runtime.py's `shutdown()`). See `_teardown()` below for the
+# actual per-stage derivation, and docs/RUNBOOK.md's shutdown-budget-ladder
+# table for how every OUTER supervisor (launch_app.command, launchd
+# ExitTimeOut, systemd TimeoutStopSec) is sized to exceed this total.
+_SHUTDOWN_API_JOIN_SECONDS = 5.0
+
 
 def _write_daemon_file(
     daemon,
@@ -331,24 +346,41 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
         ``finally`` block below -- safe to call more than once (mirrors
         app_shell.py's ``_teardown`` idempotency-guard pattern) since it
         no-ops after the first call.
+
+        Sizes each stage against ONE deadline -- ``time.monotonic() +
+        settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS``, captured HERE (inside the
+        idempotency guard, not before it) so the second, no-op-body call from
+        the ``finally`` block below never restarts the clock. Each API-thread
+        join is capped at ``_SHUTDOWN_API_JOIN_SECONDS`` even when more of the
+        deadline remains -- a hung server thread must not consume the budget
+        ``daemon.shutdown()`` needs for its own in-flight-run poll -- and
+        ``daemon.shutdown()`` receives whatever is left of the deadline after
+        both joins (never negative; a blown budget still gets a real,
+        non-negative call rather than being skipped).
         """
         nonlocal _torn_down
         if _torn_down:
             return
         _torn_down = True
+
+        deadline = time.monotonic() + settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS
+
+        def _remaining() -> float:
+            return max(0.0, deadline - time.monotonic())
+
         try:
             api_server.should_exit = True
-            api_thread.join(timeout=5.0)
+            api_thread.join(timeout=min(_SHUTDOWN_API_JOIN_SECONDS, _remaining()))
         except Exception as exc:  # noqa: BLE001
             logger.error("Error shutting down orchestrator Control API: %s", exc)
         if pilots_api_server is not None:
             try:
                 pilots_api_server.should_exit = True
-                pilots_api_thread.join(timeout=5.0)
+                pilots_api_thread.join(timeout=min(_SHUTDOWN_API_JOIN_SECONDS, _remaining()))
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error shutting down Pilots API: %s", exc)
         try:
-            daemon.shutdown(timeout=10.0)
+            daemon.shutdown(timeout=_remaining())
             logger.info("Orchestrator daemon shut down cleanly.")
         except Exception as exc:  # noqa: BLE001
             logger.error("Error shutting down orchestrator daemon: %s", exc)

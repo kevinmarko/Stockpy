@@ -499,6 +499,54 @@ class TestShutdownWaitsForInFlightRun:
         assert d.is_running is False
 
 
+class TestShutdownTimerJoinBudget:
+    """Regression tests for the 2026-07 shutdown-budget fix: the timer
+    -thread join must be BUDGETED WITHIN shutdown()'s own `timeout`, not a
+    flat extra 5.0s tacked on top. Before the fix, shutdown(timeout=T) could
+    actually take up to T+5.0s -- the exact "emergent, unreconciled sum"
+    defect settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS's single-published
+    -budget design exists to eliminate."""
+
+    def test_join_timeout_is_bounded_by_the_passed_timeout(self):
+        d = OrchestratorDaemon()
+        d.start()  # interval_seconds=0 (default) -> no real timer thread created
+
+        recorded = {}
+
+        class _FakeThread:
+            def join(self, timeout=None):
+                recorded["timeout"] = timeout
+
+        with d._lock:
+            d._timer_thread = _FakeThread()
+
+        d.shutdown(timeout=2.0)
+
+        assert recorded.get("timeout") is not None
+        assert recorded["timeout"] <= 2.0
+
+    def test_shutdown_returns_within_the_passed_timeout_even_with_a_slow_join(self):
+        """A timer thread whose join() blocks for its full allotted slice
+        must not make the OVERALL shutdown() call exceed `timeout`."""
+        d = OrchestratorDaemon()
+        d.start()
+
+        class _SlowJoinThread:
+            def join(self, timeout=None):
+                time.sleep(timeout or 0)
+
+        with d._lock:
+            d._timer_thread = _SlowJoinThread()
+
+        started = time.monotonic()
+        d.shutdown(timeout=1.0)
+        elapsed = time.monotonic() - started
+
+        # Generous margin over the 1.0s budget -- this is a regression guard
+        # against an ADDITIONAL flat 5.0s, not a tight timing assertion.
+        assert elapsed <= 2.0
+
+
 # =============================================================================
 # Live interval setter (Piece 2)
 # =============================================================================

@@ -179,7 +179,22 @@ class OrchestratorDaemon:
 
     def shutdown(self, *, timeout: float = 10.0) -> None:
         """Stop the timer thread and wait (without forcibly killing) for any
-        in-flight run to finish, up to ``timeout`` seconds. Idempotent."""
+        in-flight run to finish, up to ``timeout`` seconds TOTAL. Idempotent.
+
+        The timer-thread join is budgeted WITHIN ``timeout`` (capped at 5.0s
+        of it) rather than added as a separate hardcoded 5.0s on top --
+        earlier this method joined for a flat 5.0s and then started a FRESH
+        ``timeout``-long deadline for the in-flight-run poll, so a caller
+        passing ``timeout=10.0`` could actually wait up to 15.0s: the exact
+        "emergent, unreconciled sum" defect that ``settings.
+        DAEMON_SHUTDOWN_TIMEOUT_SECONDS``'s single-published-budget design
+        exists to eliminate. With this fix, ``shutdown(timeout=T)`` returns
+        within ``T`` of being called, full stop -- callers (see
+        ``desktop/orchestrator_daemon.py``'s ``_teardown()``) can size their
+        OWN remaining budget for this call without double-counting a join
+        this method already accounts for internally.
+        """
+        _entry = time.monotonic()
         self._stop_event.set()  # wakes a WAITING (interval > 0) timer loop immediately
         self._wake_event.set()  # ALSO required: a PARKED (interval <= 0) loop is
         # blocked on _wake_event.wait() with no timeout -- _stop_event alone
@@ -194,9 +209,10 @@ class OrchestratorDaemon:
             thread = self._timer_thread
             self._timer_thread = None
         if thread is not None:
-            thread.join(timeout=5.0)
+            join_timeout = max(0.0, min(5.0, timeout - (time.monotonic() - _entry)))
+            thread.join(timeout=join_timeout)
 
-        deadline = time.monotonic() + timeout
+        deadline = _entry + timeout
         while self.is_running and time.monotonic() < deadline:
             time.sleep(0.1)
 

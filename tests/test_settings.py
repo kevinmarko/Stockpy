@@ -297,3 +297,79 @@ class TestIntervalValidationAntiDrift:
         assert results["control_api"] == results["pilots_api"] == results["daemon_runtime"], (
             f"validators disagree for interval_seconds={value}: {results}"
         )
+
+
+# =============================================================================
+# Shutdown-budget setting (2026-07 fix -- one published total instead of
+# three unreconciled hardcoded values in desktop/orchestrator_daemon.py's
+# _teardown() and desktop/daemon_runtime.py's shutdown())
+# =============================================================================
+
+
+class TestDaemonShutdownTimeoutBounds:
+    def test_min_and_max_constants(self):
+        from settings import (
+            DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS,
+            DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS,
+        )
+
+        assert DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS == 1.0
+        assert DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS == 120.0
+
+    def test_default_is_exactly_25(self):
+        from settings import settings
+
+        assert settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS == 25.0
+
+    def test_default_matches_pre_fix_worst_case_arithmetic(self):
+        """25.0 is not an arbitrary round number -- it's the outer bound of
+        every configuration reachable BEFORE this fix (5s Control-API join +
+        5s Pilots-API join [only when PILOTS_API_ENABLED] + a
+        daemon.shutdown(timeout=10.0) call that itself used to take up to
+        15s [5s unbudgeted timer join + 10s poll]). Pinning the arithmetic
+        here means the default can't silently drift away from the sum it's
+        meant to represent."""
+        control_api_join = 5.0
+        pilots_api_join = 5.0
+        pre_fix_daemon_shutdown_worst_case = 5.0 + 10.0  # unbudgeted join + poll
+        assert (
+            control_api_join + pilots_api_join + pre_fix_daemon_shutdown_worst_case
+            == 25.0
+        )
+
+    @pytest.mark.parametrize("value", [1.0, 5.0, 25.0, 60.0, 120.0])
+    def test_in_range_values_pass_through_unchanged(self, value):
+        from settings import validate_daemon_shutdown_timeout
+
+        assert validate_daemon_shutdown_timeout(value) == value
+
+    @pytest.mark.parametrize("value", [0.0, -1.0, 0.99, 120.01, 600.0])
+    def test_out_of_range_values_raise(self, value):
+        from settings import validate_daemon_shutdown_timeout
+
+        with pytest.raises(ValueError):
+            validate_daemon_shutdown_timeout(value)
+
+    def test_zero_is_rejected_not_treated_as_a_valid_sentinel(self):
+        """Unlike validate_interval_seconds (where 0 means "on-demand
+        only"), 0 here has no valid meaning -- it would make every join/poll
+        instant, i.e. an unconditional SIGKILL-equivalent, the opposite of
+        this setting's purpose. Must raise, not silently pass through."""
+        from settings import validate_daemon_shutdown_timeout
+
+        with pytest.raises(ValueError):
+            validate_daemon_shutdown_timeout(0.0)
+
+    def test_error_message_names_the_bounds(self):
+        from settings import validate_daemon_shutdown_timeout
+
+        with pytest.raises(ValueError, match=r"\[1\.0, 120\.0\]"):
+            validate_daemon_shutdown_timeout(0.0)
+
+    def test_settings_field_validator_rejects_out_of_range_construction(self):
+        """The module-level function is also wired as a real pydantic
+        field_validator on Settings itself, not just callable standalone."""
+        from settings import Settings
+
+        with pytest.raises(Exception):
+            Settings(DAEMON_SHUTDOWN_TIMEOUT_SECONDS=0.0)

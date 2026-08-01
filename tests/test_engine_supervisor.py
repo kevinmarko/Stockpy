@@ -112,3 +112,89 @@ def test_stop_engine_passes_through_false_return(monkeypatch):
     result = stop_engine(handle, timeout=1.0)
 
     assert result is False
+
+
+# -----------------------------------------------------------------------
+# Backend-aware default timeout resolution (2026-07 shutdown-budget fix)
+# -----------------------------------------------------------------------
+# stop_engine's PREVIOUS default (a flat 5.0s regardless of backend) was
+# simultaneously too short for a daemon-backed handle (whose graceful
+# teardown genuinely needs up to settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS)
+# and pointless to lengthen for main.py --interval (which can only honor
+# SIGTERM between cycles). These tests pin the new per-backend resolution;
+# every test above already proves an EXPLICIT timeout still wins outright.
+
+
+class _ModeHandle:
+    """Stand-in RunHandle carrying just the `mode` field stop_engine reads."""
+
+    def __init__(self, mode):
+        self.mode = mode
+
+
+def test_stop_engine_daemon_mode_waits_longer_than_the_daemon_shutdown_budget(monkeypatch):
+    from settings import settings
+
+    captured = {}
+
+    def fake_stop_run(h, *, timeout=5.0):
+        captured["timeout"] = timeout
+        return True
+
+    monkeypatch.setattr(orchestrator_runner, "stop_run", fake_stop_run)
+    monkeypatch.setattr(settings, "DAEMON_SHUTDOWN_TIMEOUT_SECONDS", 25.0)
+
+    stop_engine(_ModeHandle("daemon"))
+
+    assert captured["timeout"] > 25.0
+
+
+def test_stop_engine_scheduled_mode_keeps_the_unchanged_five_second_default(monkeypatch):
+    captured = {}
+
+    def fake_stop_run(h, *, timeout=5.0):
+        captured["timeout"] = timeout
+        return True
+
+    monkeypatch.setattr(orchestrator_runner, "stop_run", fake_stop_run)
+
+    stop_engine(_ModeHandle("scheduled"))
+
+    assert captured["timeout"] == 5.0
+
+
+def test_stop_engine_missing_mode_falls_back_to_five_seconds(monkeypatch):
+    """A handle reconstructed across a Streamlit rerun (or this file's own
+    _SentinelHandle, which carries no `mode` at all) must resolve to the
+    same 5.0s default as an explicit "scheduled" handle -- getattr(...,
+    "mode", None) must not raise or misresolve on a missing attribute."""
+    captured = {}
+    handle = _SentinelHandle()  # no .mode attribute at all
+
+    def fake_stop_run(h, *, timeout=5.0):
+        captured["timeout"] = timeout
+        return True
+
+    monkeypatch.setattr(orchestrator_runner, "stop_run", fake_stop_run)
+
+    stop_engine(handle)
+
+    assert captured["timeout"] == 5.0
+
+
+def test_stop_engine_explicit_timeout_wins_for_both_modes(monkeypatch):
+    """Regression guard: the backend-aware default resolution must never
+    override a caller-supplied timeout, for EITHER backend."""
+    captured = {}
+
+    def fake_stop_run(h, *, timeout=5.0):
+        captured["timeout"] = timeout
+        return True
+
+    monkeypatch.setattr(orchestrator_runner, "stop_run", fake_stop_run)
+
+    stop_engine(_ModeHandle("daemon"), timeout=3.0)
+    assert captured["timeout"] == 3.0
+
+    stop_engine(_ModeHandle("scheduled"), timeout=3.0)
+    assert captured["timeout"] == 3.0

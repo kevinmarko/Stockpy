@@ -214,8 +214,17 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
             "macro_regime_gate_enabled": settings.MACRO_REGIME_GATE_ENABLED,
             "signals": signals,
         }
+        # Atomic write-then-rename (2026-07 fix; mirrors execution/kill_switch.py's
+        # activate() and desktop/orchestrator_daemon.py's _write_daemon_file):
+        # a bare write_text() truncates on open, so a process killed mid-write
+        # (e.g. main.py --interval's routine 5s-timeout SIGKILL of a mid-cycle
+        # process -- see desktop/engine_supervisor.py) used to leave a
+        # truncated, unparseable file that every reader (pilots/run_status.py,
+        # api/state_api.py) then treated as MISSING rather than merely stale.
         snap_path = settings.OUTPUT_DIR / "state_snapshot.json"
-        snap_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        tmp_path = snap_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        tmp_path.replace(snap_path)
         try:
             from scripts.snapshot_diff import rotate_snapshot
             rotate_snapshot(
