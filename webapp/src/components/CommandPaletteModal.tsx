@@ -87,8 +87,8 @@ export function CommandPaletteModal({
   };
 
   return (
-    <Modal ariaLabel="Command Palette" onClose={onClose}>
-      <div style={{ minWidth: 600, maxWidth: 760 }} data-testid="command-palette-modal">
+    <Modal ariaLabel="Command Palette" onClose={onClose} size="wide">
+      <div data-testid="command-palette-modal">
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--s-3)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>

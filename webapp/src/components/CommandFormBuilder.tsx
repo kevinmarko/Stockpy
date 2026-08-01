@@ -70,8 +70,8 @@ export function CommandFormBuilder({ command, onClose, onRunCommand }: CommandFo
   }, [command, selectedSubcommandName, activeSpec, optionValues]);
 
   return (
-    <Modal ariaLabel={`Form Builder: ${command.name}`} onClose={onClose}>
-      <div style={{ minWidth: 540, maxWidth: 720 }} data-testid="command-form-builder">
+    <Modal ariaLabel={`Form Builder: ${command.name}`} onClose={onClose} size="wide">
+      <div data-testid="command-form-builder">
         {/* Title / Subhead */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--s-3)" }}>
           <div>
