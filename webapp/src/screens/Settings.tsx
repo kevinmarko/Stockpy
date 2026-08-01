@@ -639,7 +639,11 @@ function PipelineStatusSection({
                 status.daemon.source === "none"
                   ? "no signal"
                   : status.daemon.source === "daemon_json"
-                    ? "last known state"
+                    ? status.daemon.pid_alive === false
+                      ? "stopped — process not running"
+                      : status.daemon.pid_alive === true
+                        ? "process alive, API not responding"
+                        : "last known state"
                     : "live"
               }
               good={status.daemon.alive}

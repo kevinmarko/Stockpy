@@ -2563,11 +2563,23 @@ def get_automation_status() -> Dict[str, Any]:
 
     * ``daemon`` — ``gui.daemon_client.get_status()`` (live, over loopback
       HTTP to the Control API) when reachable (``source: "control_api"``);
-      falls back to ``output/daemon.json`` (written once at daemon startup)
-      when it isn't (``source: "daemon_json"``, ``alive: false`` — this is the
+      falls back to ``output/daemon.json`` (written at daemon startup, and
+      again with ``state: "stopped"`` at a graceful teardown) when it isn't
+      (``source: "daemon_json"``, ``alive: false`` — this is the
       RESTART-HONESTY core: the daemon's in-memory run history is gone after
       a restart, but daemon.json still has the last known pid/interval/
-      started_at); ``source: "none"`` when neither is available.
+      started_at); ``source: "none"`` when neither is available. ``pid_alive``
+      (``True``/``False``/``None``) is a MACHINE-CHECKED liveness probe
+      (``pilots.run_status._pid_alive`` via ``read_daemon_json``) that covers
+      the case the file's own ``state`` field structurally cannot: a daemon
+      killed with SIGKILL can never update its own file, so a stale
+      ``state: "running"`` on disk is not proof of anything. ``None`` on the
+      ``control_api`` branch (never a fabricated ``True`` — CONSTRAINT #4;
+      we never probed a pid there, since ``GET /status`` doesn't echo one).
+      Deliberately does NOT echo the file's own ``state`` string here — that
+      would promote an unverifiable self-report (which a SIGKILLed process
+      can never correct) into the API response, reintroducing the exact
+      staleness problem ``pid_alive`` exists to remove.
     * ``last_run`` — ``gui.daemon_client.get_latest_run()``. ``None`` (with
       ``last_run_source: "state_snapshot"``) when the daemon has never
       triggered a run this process lifetime (a fresh restart with an empty
@@ -2595,6 +2607,7 @@ def get_automation_status() -> Dict[str, Any]:
             "alive": True,
             "source": "control_api",
             "pid": None,  # not echoed by /status; only daemon.json carries it
+            "pid_alive": None,  # no pid to probe on this branch -- never fabricate True
             "port": settings.ORCHESTRATOR_API_PORT,
             "started_at": daemon_status.get("started_at"),
             "interval_seconds": daemon_status.get("interval_seconds"),
@@ -2609,6 +2622,7 @@ def get_automation_status() -> Dict[str, Any]:
                 "alive": False,
                 "source": "daemon_json",
                 "pid": dj.get("pid"),
+                "pid_alive": dj.get("pid_alive"),
                 "port": dj.get("port"),
                 "started_at": dj.get("started_at"),
                 "interval_seconds": dj.get("interval_seconds"),
@@ -2621,6 +2635,7 @@ def get_automation_status() -> Dict[str, Any]:
                 "alive": False,
                 "source": "none",
                 "pid": None,
+                "pid_alive": None,
                 "port": None,
                 "started_at": None,
                 "interval_seconds": None,
@@ -2670,6 +2685,15 @@ def get_automation_schedule() -> Dict[str, Any]:
     They can legitimately disagree (a `.env` edit doesn't reach a live daemon
     until it restarts) — ``drift`` flags that explicitly rather than letting
     the operator assume a `.env` edit already took effect.
+
+    Deliberately NOT suppressed when the ``daemon_json`` fallback's pid turns
+    out to be dead (see ``run_status.read_daemon_json``'s ``pid_alive``):
+    nulling ``running_value``/``drift`` in that case would tell an operator
+    who just edited ``.env`` "no drift", which is the exact failure this
+    field exists to prevent — ``GET /automation/status``'s ``daemon.alive``
+    and ``daemon.pid_alive`` already convey deadness; this endpoint's job is
+    only interval drift, and a dead daemon's LAST KNOWN interval is still the
+    honest answer to "what was it running when it died".
 
     ``cron`` is parsed from the checked-in ``deploy/crontab.txt`` — NEVER via
     ``crontab -l`` (a subprocess call from this API is exactly the RCE-adjacent

@@ -83,10 +83,48 @@ def _write_daemon_file(
     *,
     port: Optional[int] = None,
     pilots_api_port: Optional[int] = None,
+    state: Optional[str] = None,
+    started_at: Optional[str] = None,
+    stopped_at: Optional[str] = None,
 ) -> None:
     """Write ``<output_dir>/daemon.json`` — a discovery file for external
     tooling (e.g. a future CLI/GUI probe) to find this daemon's pid and
     basic state without talking to it directly.
+
+    Written TWICE per process lifetime: once at startup (this function's
+    original behavior, reproduced exactly when ``state``/``started_at``/
+    ``stopped_at`` are all omitted) and once more, with ``state="stopped"``,
+    at the END of a graceful ``_teardown()`` — see ``run_forever`` below.
+    ``stopped_at`` is ``None`` on the startup write and set on the terminal
+    one; this is how a reader (``pilots.run_status.read_daemon_json``)
+    distinguishes "still running" from "exited cleanly", without which
+    ``GET /automation/status`` would keep reporting a dead daemon as
+    ``"running"`` forever.
+
+    Two things a naive second call would get wrong, both handled here:
+
+    * ``state`` cannot be DERIVED at teardown time — ``daemon.status()``
+      still reports ``is_running: False`` after ``daemon.shutdown()``
+      returns (that's the whole point of shutting down), so deriving it
+      the same way the startup call does would produce ``"started"``, not
+      ``"stopped"``. ``state`` must be passed explicitly for the terminal
+      write; ``None`` (the default) preserves today's derived value
+      byte-for-byte for the startup call.
+    * ``started_at`` must NOT be re-stamped to "now" on the terminal
+      write — that would fabricate a start time at the exact moment the
+      daemon died (CONSTRAINT #4: a value that never happened). Callers
+      writing the terminal record MUST pass the real startup timestamp
+      through explicitly; ``None`` (the default) falls back to "now",
+      which is only correct for the original startup call.
+
+    **Load-bearing caveat for any reader:** a daemon killed with ``SIGKILL``
+    (or any signal it doesn't handle) can NEVER perform this terminal
+    write — there is no code path left to run it. A ``state: "running"``
+    record on disk is therefore NOT proof the daemon is actually alive; see
+    ``pilots.run_status.read_daemon_json``'s ``pid_alive`` probe, which is
+    the reader-side half of this fix and the only half that covers that
+    case. Readers MUST pair this file's ``state`` with that probe rather
+    than trusting ``state`` alone.
 
     ``port`` (when given) is the TCP port the Control API
     (``api/control_api.py``) is bound to, so external tooling can discover
@@ -106,16 +144,17 @@ def _write_daemon_file(
 
     This is a discovery convenience only, not load-bearing correctness —
     any failure (permissions, disk full, etc.) is logged as a warning and
-    swallowed; it must never abort daemon startup.
+    swallowed; it must never abort daemon startup OR shutdown.
     """
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
         status = daemon.status()
         payload = {
             "pid": os.getpid(),
-            "state": "running" if status.get("is_running") else "started",
+            "state": state if state is not None else ("running" if status.get("is_running") else "started"),
             "interval_seconds": status.get("interval_seconds"),
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": started_at if started_at is not None else datetime.now(timezone.utc).isoformat(),
+            "stopped_at": stopped_at,
             "port": port,
             "pilots_api_port": pilots_api_port,
         }
@@ -123,7 +162,7 @@ def _write_daemon_file(
         tmp_path = final_path.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         tmp_path.replace(final_path)
-        logger.info("Wrote daemon discovery file: %s", final_path)
+        logger.info("Wrote daemon discovery file: %s (state=%s)", final_path, payload["state"])
     except Exception as exc:  # noqa: BLE001 - discovery file is best-effort only
         logger.warning("Failed to write daemon discovery file: %s", exc)
 
@@ -270,10 +309,16 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
                 "file anyway (port may not be bound yet).", _name,
             )
 
+    # Captured once so the terminal write (in _teardown, below) can echo the
+    # REAL startup time rather than re-stamping "now" at the moment the
+    # daemon is shutting down -- see _write_daemon_file's docstring for why
+    # that distinction matters (CONSTRAINT #4).
+    _daemon_started_at = datetime.now(timezone.utc).isoformat()
     _write_daemon_file(
         daemon, settings.OUTPUT_DIR,
         port=settings.ORCHESTRATOR_API_PORT,
         pilots_api_port=pilots_api_port,
+        started_at=_daemon_started_at,
     )
 
     _torn_down = False
@@ -307,6 +352,27 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
             logger.info("Orchestrator daemon shut down cleanly.")
         except Exception as exc:  # noqa: BLE001
             logger.error("Error shutting down orchestrator daemon: %s", exc)
+        # Terminal discovery-file write -- LAST, after daemon.shutdown() has
+        # returned, so state="stopped" is never contradicted by a still-live
+        # daemon. _write_daemon_file already swallows its own exceptions
+        # internally (best-effort, matching the startup call); this try/except
+        # is belt-and-suspenders symmetry with the two stages above, so a
+        # future regression removing that internal guard still can't block
+        # or fail shutdown here. Does NOT cover a SIGKILLed process, which
+        # can never reach this line at all -- that case is why
+        # pilots.run_status.read_daemon_json() also probes pid liveness
+        # directly rather than trusting this file's state alone.
+        try:
+            _write_daemon_file(
+                daemon, settings.OUTPUT_DIR,
+                port=settings.ORCHESTRATOR_API_PORT,
+                pilots_api_port=pilots_api_port,
+                state="stopped",
+                started_at=_daemon_started_at,
+                stopped_at=datetime.now(timezone.utc).isoformat(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Error writing terminal daemon discovery file: %s", exc)
 
     def _run_signal_watcher() -> None:
         """Block (in a dedicated thread) until SIGTERM or SIGINT is pending,

@@ -1939,8 +1939,9 @@ class TestAutomationStatus:
 
     def test_daemon_unreachable_falls_back_to_daemon_json(self, tmp_path):
         """The restart-honesty core: when the Control API can't be reached,
-        output/daemon.json (written once at startup) still supplies pid/
-        interval/started_at, and `alive` honestly reads False."""
+        output/daemon.json (written at startup, or with state="stopped" at
+        a graceful teardown) still supplies pid/interval/started_at, and
+        `alive` honestly reads False."""
         daemon_json = {
             "pid": 77880,
             "state": "started",
@@ -1951,13 +1952,20 @@ class TestAutomationStatus:
         }
         (tmp_path / "daemon.json").write_text(__import__("json").dumps(daemon_json), encoding="utf-8")
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
-                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
-                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
-                        resp = client.get("/automation/status")
+            with mock.patch.object(pilots_api.run_status.os, "kill", side_effect=ProcessLookupError):
+                with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                    with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                        with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                            resp = client.get("/automation/status")
         assert resp.status_code == 200
         body = resp.json()
         assert body["daemon"]["alive"] is False
+        # pid_alive is a MACHINE-CHECKED probe distinct from the file's own
+        # (unverifiable, self-reported) "state" field -- this is the
+        # regression pin for the actual bug this fix removes: a dead pid
+        # must read pid_alive=False even though the file itself still says
+        # "started".
+        assert body["daemon"]["pid_alive"] is False
         assert body["daemon"]["source"] == "daemon_json"
         assert body["daemon"]["pid"] == 77880
         assert body["daemon"]["interval_seconds"] == 300
@@ -1975,12 +1983,106 @@ class TestAutomationStatus:
         assert resp.status_code == 200
         body = resp.json()
         assert body["daemon"] == {
-            "alive": False, "source": "none", "pid": None, "port": None,
+            "alive": False, "source": "none", "pid": None, "pid_alive": None, "port": None,
             "started_at": None, "interval_seconds": None, "is_running": None,
             "current_run_id": None, "engines_warm": None,
         }
         assert body["last_run"] is None
         assert body["last_run_source"] == "state_snapshot"
+
+    def test_dead_daemon_pid_reports_down_without_destroying_the_record(self, tmp_path):
+        """THE headline test for this fix: a daemon.json left behind by a
+        SIGKILLed process (state still says "running", pid is dead) must
+        report pid_alive=False -- and must NOT be discarded in favor of a
+        source="none" response. The record's pid/port/interval_seconds/
+        started_at are the whole reason this fallback exists; destroying
+        them on a dead pid would be strictly less honest, not more."""
+        daemon_json = {
+            "pid": 99999,
+            "state": "running",
+            "interval_seconds": 300,
+            "started_at": "2026-07-16T15:34:45.942581+00:00",
+            "port": 8601,
+            "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(__import__("json").dumps(daemon_json), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.run_status.os, "kill", side_effect=ProcessLookupError):
+                with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                    with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                        with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                            resp = client.get("/automation/status")
+        assert resp.status_code == 200
+        daemon = resp.json()["daemon"]
+        assert daemon["alive"] is False
+        assert daemon["source"] == "daemon_json"
+        assert daemon["pid_alive"] is False
+        assert daemon["pid"] == 99999
+        assert daemon["port"] == 8601
+        assert daemon["interval_seconds"] == 300
+        assert daemon["started_at"] == "2026-07-16T15:34:45.942581+00:00"
+
+    def test_stale_running_state_in_file_is_never_echoed_as_live(self, tmp_path):
+        """The file's own "state" string is a self-report a SIGKILLed
+        daemon can never correct -- this endpoint must never surface it
+        directly (only the machine-checked pid_alive), and must not
+        fabricate is_running from it either."""
+        daemon_json = {
+            "pid": 99999,
+            "state": "running",
+            "interval_seconds": 300,
+            "started_at": "2026-07-16T15:34:45.942581+00:00",
+            "port": 8601,
+            "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(__import__("json").dumps(daemon_json), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.run_status.os, "kill", side_effect=ProcessLookupError):
+                with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                    with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                        with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                            resp = client.get("/automation/status")
+        daemon = resp.json()["daemon"]
+        assert daemon["is_running"] is None
+        assert daemon["alive"] is False
+        assert "state" not in daemon
+
+    def test_control_api_path_reports_pid_alive_none_not_true(self, tmp_path):
+        """Anti-fabrication guard on the live branch: GET /status doesn't
+        echo a pid at all, so pid_alive must be None there -- never a
+        fabricated True derived from daemon_alive/is_running."""
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(
+                pilots_api.daemon_client, "get_status",
+                return_value={"is_running": True, "interval_seconds": 60, "started_at": None,
+                              "current_run_id": None, "engines_warm": True},
+            ):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                        resp = client.get("/automation/status")
+        daemon = resp.json()["daemon"]
+        assert daemon["source"] == "control_api"
+        assert daemon["alive"] is True
+        assert daemon["pid_alive"] is None
+
+    def test_daemon_json_missing_pid_reports_pid_alive_none(self, tmp_path):
+        """CONSTRAINT #4 at the API layer: an absent pid must read as
+        unknowable, never a fabricated False."""
+        daemon_json = {
+            "state": "started",
+            "interval_seconds": 300,
+            "started_at": "2026-07-16T15:34:45.942581+00:00",
+            "port": 8601,
+            "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(__import__("json").dumps(daemon_json), encoding="utf-8")
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                with mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=None):
+                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+                        resp = client.get("/automation/status")
+        daemon = resp.json()["daemon"]
+        assert daemon["pid_alive"] is None
 
     def test_cold_start_is_200_with_honest_nulls_never_404(self, tmp_path):
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
@@ -2169,6 +2271,32 @@ class TestAutomationSchedule:
             with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
                 resp = client.get("/automation/schedule")
         assert resp.json()["interval"]["running_value"] == 120
+
+    def test_schedule_running_value_survives_a_dead_pid(self, tmp_path):
+        """Regression guard against a future "simplification" that nulls
+        running_value/drift when the daemon.json pid turns out to be dead.
+        Deliberately NOT suppressed: an operator who just edited .env needs
+        to see drift against the daemon's LAST KNOWN interval, not "no
+        drift" -- daemon.alive/daemon.pid_alive on GET /automation/status
+        already convey deadness; this endpoint's only job is interval
+        drift, and a dead daemon's last known interval is still the honest
+        answer to "what was it running when it died"."""
+        import json
+
+        (tmp_path / "daemon.json").write_text(
+            json.dumps({"interval_seconds": 120, "pid": 99999, "started_at": "x",
+                        "port": 8601, "pilots_api_port": None}),
+            encoding="utf-8",
+        )
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), \
+             mock.patch.object(settings, "ORCHESTRATOR_INTERVAL_SECONDS", 300), \
+             mock.patch.object(pilots_api.run_status.os, "kill", side_effect=ProcessLookupError):
+            with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
+                resp = client.get("/automation/schedule")
+        body = resp.json()
+        assert body["interval"]["running_value"] == 120
+        assert body["interval"]["configured_value"] == 300
+        assert body["interval"]["drift"] is True
 
     def test_running_value_null_when_no_daemon_signal_at_all(self, tmp_path):
         with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):

@@ -187,7 +187,14 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
         self.assertEqual(rc, 0)
         instance.start.assert_called_once()
         self.assertEqual(call_order, ["start"])
-        mock_write.assert_called_once()
+        # _write_daemon_file is now called TWICE per run_forever() call: once
+        # at startup, once more (state="stopped") during the terminal
+        # teardown that _FakeWatcherThread's no-op join() causes to run
+        # immediately in this test harness. The FIRST call is the startup
+        # write this test is actually checking.
+        self.assertEqual(mock_write.call_count, 2)
+        _, first_kwargs = mock_write.call_args_list[0]
+        self.assertNotIn("state", first_kwargs)  # startup call omits it (derives "started"/"running")
         # daemon.start() must precede thread creation (watcher started after
         # the Control API thread, which is created first -- see
         # test_control_api_thread_started_after_daemon_start below for that
@@ -281,8 +288,10 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
              patch.object(self.mod, "_write_daemon_file") as mock_write:
             self.mod.run_forever(60)
 
-        mock_write.assert_called_once()
-        _, kwargs = mock_write.call_args
+        # Two calls now (startup + terminal, see the class-level note above);
+        # the startup one -- call_args_list[0] -- is what this test checks.
+        self.assertEqual(mock_write.call_count, 2)
+        _, kwargs = mock_write.call_args_list[0]
         self.assertEqual(kwargs.get("port"), settings.ORCHESTRATOR_API_PORT)
 
     def test_api_server_should_exit_set_and_thread_joined_on_teardown(self):
@@ -332,7 +341,8 @@ class TestPilotsAPIHosting(BaseDaemonEntrypointTest):
 
         self.assertEqual(len(_FakeWatcherThread.pilots_api_instances()), 0)
         self.assertEqual(len(self._fake_api_server_holder["instances"]), 1)  # Control API only
-        _, kwargs = mock_write.call_args
+        # call_args_list[0] -- the startup write, not the terminal one.
+        _, kwargs = mock_write.call_args_list[0]
         self.assertIsNone(kwargs.get("pilots_api_port"))
 
     def test_enabled_starts_second_server_and_thread_on_configured_port(self):
@@ -361,7 +371,8 @@ class TestPilotsAPIHosting(BaseDaemonEntrypointTest):
         # Two uvicorn.Server instances: Control API + Pilots API.
         self.assertEqual(len(self._fake_api_server_holder["instances"]), 2)
 
-        _, kwargs = mock_write.call_args
+        # call_args_list[0] -- the startup write, not the terminal one.
+        _, kwargs = mock_write.call_args_list[0]
         self.assertEqual(kwargs.get("pilots_api_port"), 8602)
         # Control API port is unaffected by the optional second service.
         self.assertEqual(kwargs.get("port"), settings.ORCHESTRATOR_API_PORT)
@@ -403,7 +414,8 @@ class TestPilotsAPIHosting(BaseDaemonEntrypointTest):
 
         instance.start.assert_called_once()  # daemon itself is unaffected
         self.assertEqual(len(_FakeWatcherThread.pilots_api_instances()), 0)
-        _, kwargs = mock_write.call_args
+        # call_args_list[0] -- the startup write, not the terminal one.
+        _, kwargs = mock_write.call_args_list[0]
         self.assertIsNone(kwargs.get("pilots_api_port"))
         # Control API still got its one server as usual.
         self.assertEqual(len(self._fake_api_server_holder["instances"]), 1)
@@ -477,6 +489,73 @@ class TestDaemonFileWriting(BaseDaemonEntrypointTest):
             with patch.object(Path, "replace", side_effect=OSError("disk full")):
                 # Must not raise.
                 self.mod._write_daemon_file(instance, output_dir)
+
+    def test_explicit_state_overrides_derived_state(self):
+        """state="stopped" must win even when daemon.status() still reports
+        is_running=True -- this is exactly the shape at teardown time, since
+        daemon.shutdown() has already returned by the time the terminal
+        write happens but status() itself is never re-queried."""
+        instance = MagicMock()
+        instance.status.return_value = {"is_running": True, "interval_seconds": 30}
+
+        with self._tmp_output_dir() as output_dir:
+            self.mod._write_daemon_file(instance, output_dir, state="stopped")
+            payload = json.loads((output_dir / "daemon.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["state"], "stopped")
+
+    def test_state_still_derived_when_not_passed(self):
+        """Omitting state= must reproduce today's derived behavior exactly
+        -- the backward-compatibility guarantee the whole kwarg design
+        depends on."""
+        instance = MagicMock()
+        instance.status.return_value = {"is_running": True, "interval_seconds": 30}
+
+        with self._tmp_output_dir() as output_dir:
+            self.mod._write_daemon_file(instance, output_dir)
+            payload = json.loads((output_dir / "daemon.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["state"], "running")
+
+    def test_started_at_preserved_when_passed_not_re_stamped(self):
+        """A caller passing started_at= (the terminal write does) must see
+        that EXACT value in the payload -- never datetime.now(), which would
+        fabricate a start time at the moment the daemon died (CONSTRAINT #4)."""
+        instance = MagicMock()
+        instance.status.return_value = {"is_running": False, "interval_seconds": 30}
+        real_start = "2026-01-01T00:00:00+00:00"
+
+        with self._tmp_output_dir() as output_dir:
+            self.mod._write_daemon_file(instance, output_dir, started_at=real_start)
+            payload = json.loads((output_dir / "daemon.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["started_at"], real_start)
+
+    def test_stopped_at_is_none_by_default_and_set_when_passed(self):
+        instance = MagicMock()
+        instance.status.return_value = {"is_running": False, "interval_seconds": 30}
+
+        with self._tmp_output_dir() as output_dir:
+            self.mod._write_daemon_file(instance, output_dir)
+            payload = json.loads((output_dir / "daemon.json").read_text(encoding="utf-8"))
+        self.assertIsNone(payload["stopped_at"])
+
+        with self._tmp_output_dir() as output_dir2:
+            self.mod._write_daemon_file(instance, output_dir2, stopped_at="2026-01-01T01:00:00+00:00")
+            payload2 = json.loads((output_dir2 / "daemon.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload2["stopped_at"], "2026-01-01T01:00:00+00:00")
+
+    def test_terminal_write_uses_the_same_atomic_rename(self):
+        """Pins that the state="stopped" call path reuses the existing
+        write-then-rename idiom rather than a parallel implementation."""
+        instance = MagicMock()
+        instance.status.return_value = {"is_running": False, "interval_seconds": 30}
+
+        with self._tmp_output_dir() as output_dir:
+            with patch.object(Path, "replace", autospec=True) as mock_replace:
+                mock_replace.side_effect = lambda self_path, target: self_path.rename(target)
+                self.mod._write_daemon_file(instance, output_dir, state="stopped")
+            mock_replace.assert_called_once()
 
     def _tmp_output_dir(self):
         import tempfile
@@ -675,11 +754,99 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
 
         with self._patch_daemon_class(daemon_cls), \
              self._patch_uvicorn(), \
-             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(self.mod, "_write_daemon_file") as mock_write, \
              patch.object(self.mod.signal, "pthread_sigmask"), \
              patch.object(self.mod.threading, "Thread", _JoinTriggeringThread):
             self.mod.run_forever(60)
 
+        instance.shutdown.assert_called_once_with(timeout=10.0)
+        # _teardown()'s idempotency guard must also cap the TERMINAL
+        # daemon.json write at exactly one call -- both the signal-watcher
+        # path and the normal finally path run _teardown(), and only the
+        # first invocation may actually do anything.
+        terminal_writes = [
+            c for c in mock_write.call_args_list if c.kwargs.get("state") == "stopped"
+        ]
+        self.assertEqual(len(terminal_writes), 1)
+
+    def test_terminal_daemon_file_write_happens_after_daemon_shutdown(self):
+        """The terminal daemon.json write must be the LAST thing _teardown()
+        does, after daemon.shutdown() has already returned -- so state=
+        "stopped" is never contradicted by a still-live daemon."""
+        daemon_cls, instance = self._make_mock_daemon_class()
+        call_order: list[str] = []
+        instance.shutdown.side_effect = lambda timeout=None: call_order.append("daemon.shutdown")
+
+        def _record_write(*_a, **kw):
+            if kw.get("state") == "stopped":
+                call_order.append("terminal_write")
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file", side_effect=_record_write), \
+             patch.object(self.mod.signal, "pthread_sigmask"):
+            self.mod.run_forever(60)
+
+        self.assertEqual(call_order, ["daemon.shutdown", "terminal_write"])
+
+    def test_terminal_write_preserves_the_startup_started_at(self):
+        """Anti-clobber guard: the terminal write's started_at must be the
+        SAME value the startup write used, never re-stamped to "now" at the
+        moment the daemon is shutting down (CONSTRAINT #4 -- a fabricated
+        start time)."""
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file") as mock_write, \
+             patch.object(self.mod.signal, "pthread_sigmask"):
+            self.mod.run_forever(60)
+
+        self.assertEqual(mock_write.call_count, 2)
+        startup_started_at = mock_write.call_args_list[0].kwargs.get("started_at")
+        terminal_kwargs = mock_write.call_args_list[1].kwargs
+        self.assertEqual(terminal_kwargs.get("state"), "stopped")
+        self.assertIsNotNone(startup_started_at)
+        self.assertEqual(terminal_kwargs.get("started_at"), startup_started_at)
+        self.assertIsNotNone(terminal_kwargs.get("stopped_at"))
+
+    def test_terminal_write_failure_never_prevents_shutdown(self):
+        """A broken terminal write (disk full, permissions, ...) must never
+        block or fail shutdown -- daemon.shutdown() must still have run and
+        run_forever() must still return cleanly (CONSTRAINT #6). Two layers
+        make this true: _write_daemon_file's OWN internal try/except (which
+        this test bypasses, by mocking the whole function to raise) AND
+        _teardown()'s belt-and-suspenders try/except around that call site
+        (which is what this test actually exercises)."""
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        def _boom(*_a, **kw):
+            if kw.get("state") == "stopped":
+                raise OSError("disk full")
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file", side_effect=_boom), \
+             patch.object(self.mod.signal, "pthread_sigmask"):
+            rc = self.mod.run_forever(60)
+
+        self.assertEqual(rc, 0)
+        instance.shutdown.assert_called_once_with(timeout=10.0)
+
+    def test_control_api_teardown_runs_even_if_terminal_write_raises(self):
+        """Real _write_daemon_file (unmocked) never raises even under a
+        real underlying I/O failure -- confirming its OWN internal guard
+        end-to-end, independent of _teardown()'s belt-and-suspenders one
+        exercised by the test above."""
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod.signal, "pthread_sigmask"), \
+             patch.object(Path, "replace", side_effect=OSError("disk full")):
+            rc = self.mod.run_forever(60)
+
+        self.assertEqual(rc, 0)
         instance.shutdown.assert_called_once_with(timeout=10.0)
 
 
