@@ -5787,6 +5787,12 @@ export const mockApi = {
     });
   },
   async getModelComparison() {
+    // Demo-only curve: "SF-GARCH-LSTM"/"Bond-BERT" are undeployed
+    // ridge-regression stand-ins (ml/models/sf_garch_lstm.py,
+    // ml/models/bond_bert.py) with no real tracked return history -- the
+    // live endpoint honestly reports no data (see api/metrics_api.py), this
+    // mock fixture exists only to populate the offline demo UI and is
+    // flagged is_synthetic so the chart shows a Demo Data badge.
     return delay({
       data: [
         { name: "Jan", "SF-GARCH-LSTM": 2.1, "Bond-BERT": 1.8, "Benchmark (SPY)": 1.5 },
@@ -5796,6 +5802,7 @@ export const mockApi = {
         { name: "May", "SF-GARCH-LSTM": 8.0, "Bond-BERT": 6.8, "Benchmark (SPY)": 5.5 },
         { name: "Jun", "SF-GARCH-LSTM": 10.5, "Bond-BERT": 8.2, "Benchmark (SPY)": 6.1 },
       ],
+      is_synthetic: true,
     });
   },
   async getOptionsAnalytics(symbol: string) {

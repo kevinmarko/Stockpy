@@ -270,6 +270,25 @@ def test_options_404_no_bars(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# GET /metrics/models/comparison  (honesty: no fabricated performance curve)
+# ---------------------------------------------------------------------------
+
+
+def test_model_comparison_reports_unavailable_not_fabricated():
+    """SF-GARCH-LSTM/Bond-BERT are undeployed ridge-regression stand-ins
+    (ml/models/sf_garch_lstm.py, ml/models/bond_bert.py) with no registry
+    entry or production caller -- there is no real backtested return history
+    to compare, so the endpoint must report empty/synthetic rather than the
+    previous hardcoded fixed curve."""
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/models/comparison")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"] == []
+    assert body["is_synthetic"] is True
+
+
+# ---------------------------------------------------------------------------
 # GET /metrics/signals/registry  (real registry)
 # ---------------------------------------------------------------------------
 
