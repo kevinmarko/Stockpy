@@ -10,8 +10,10 @@
 #   ./scripts/refresh_validations.sh --strategies rsi2_mean_reversion
 #   ./scripts/refresh_validations.sh --start 2010-01-01 --end 2023-12-31
 #
-# Recommended monthly cron (edit with crontab -e):
-#   0 6 1 * * cd /path/to/stockpy && ./scripts/refresh_validations.sh >> logs/validations.log 2>&1
+# Already scheduled: deploy/crontab.txt runs this monthly (3rd of the month,
+# 07:00 UTC, offset from the 1st-of-month model-retrain job) — see
+# docs/RUNBOOK.md §5.4. That's the source of truth for the installed cadence;
+# don't add a second ad-hoc crontab -e entry that could drift from it.
 #
 # All positional arguments after the script name are forwarded verbatim to
 # scripts/refresh_validations.py.
