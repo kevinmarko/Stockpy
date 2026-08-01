@@ -150,3 +150,73 @@ def load_predict_cnn_lstm(
         raise ValueError("cached model horizon count mismatch")
     pred_scaled = model.predict(last_window, verbose=0)[0]
     return {"pred_scaled": [float(x) for x in pred_scaled]}
+
+
+def fit_predict_or_infer_lstm(
+    X_seq: np.ndarray,
+    Y_seq: Optional[np.ndarray],
+    predict_X_seq: np.ndarray,
+    hidden_dim: int,
+    weights: Optional[list] = None,
+) -> Dict[str, Any]:
+    """Single-layer many-to-one LSTM regressor: ``LSTM(hidden_dim) -> Dense(1)``.
+
+    Genuine backbone for ml.models.sf_garch_lstm.SFGarchLSTMModel -- reuses
+    this module's existing TF-import-order isolation (see module docstring)
+    rather than adding a second TF entry point, since the deadlock this
+    module exists to avoid is a process-wide constraint, not specific to the
+    CNN-LSTM forecaster.
+
+    Two modes, one function (kept as one so the architecture-construction
+    code can never drift out of sync between the two call sites):
+      - ``weights is None`` (fit): trains from scratch on ``X_seq``/``Y_seq``
+        via the same purged train/val split + EarlyStopping convention as
+        fit_predict_cnn_lstm, then predicts on ``predict_X_seq`` and returns
+        the trained weights (nested lists -- JSON/pickle safe) so the caller
+        can persist them without ever holding a live Keras model in the
+        parent process.
+      - ``weights is not None`` (inference-only): skips training entirely,
+        loads the given weights into a freshly-built identical architecture,
+        and predicts on ``predict_X_seq``. Deterministic given fixed weights
+        (no dropout/training-mode randomness), which is what makes a
+        save-then-reload predict() round-trip reproduce exactly.
+
+    ``X_seq``/``predict_X_seq`` shape: (n, sequence_length, n_features).
+    ``Y_seq`` shape: (n,). Returns ``predictions`` (list[float], one per row
+    of ``predict_X_seq``) and ``weights`` (the model's current weights,
+    trained or passed-through, so a caller can always re-persist the latest
+    state uniformly).
+    """
+    if not TENSORFLOW_AVAILABLE:
+        raise RuntimeError("tensorflow is not importable in this worker process")
+
+    np.random.seed(CNN_LSTM_RANDOM_SEED)
+    tf.random.set_seed(CNN_LSTM_RANDOM_SEED)
+
+    _, time_steps, num_features = X_seq.shape if weights is None else predict_X_seq.shape
+    model = Sequential([
+        LSTM(units=hidden_dim, activation='tanh', return_sequences=False,
+             input_shape=(time_steps, num_features)),
+        Dense(units=1),
+    ])
+    model.compile(optimizer='adam', loss='mse')
+
+    if weights is None:
+        if Y_seq is None:
+            raise ValueError("Y_seq is required when weights is None (fit mode)")
+        early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+        X_tr, Y_tr, X_val, Y_val = _purged_train_val_split(X_seq, Y_seq, time_steps)
+        model.fit(
+            X_tr, Y_tr,
+            validation_data=(X_val, Y_val),
+            epochs=50, batch_size=16, verbose=0,
+            callbacks=[early_stop],
+        )
+    else:
+        model.set_weights([np.asarray(w) for w in weights])
+
+    preds = model.predict(predict_X_seq, verbose=0).reshape(-1)
+    return {
+        "predictions": [float(x) for x in preds],
+        "weights": [w.tolist() for w in model.get_weights()],
+    }

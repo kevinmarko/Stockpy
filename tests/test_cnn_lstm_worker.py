@@ -213,3 +213,74 @@ class TestLoadPredictCnnLstm:
         _, _, last_window = _windows()
         with pytest.raises(RuntimeError, match="tensorflow"):
             cnn_lstm_worker.load_predict_cnn_lstm("some/path.keras", last_window, num_horizons=4)
+
+
+class TestFitPredictOrInferLstm:
+    """Backbone for ml.models.sf_garch_lstm.SFGarchLSTMModel -- a genuine
+    single-layer many-to-one LSTM(hidden_dim) -> Dense(1) regressor, reusing
+    this module's TF-import-order isolation instead of a second TF entry
+    point (see fit_predict_or_infer_lstm's own docstring)."""
+
+    def _seq(self, n_samples=40, seq_len=10, n_features=2):
+        X_seq = np.random.rand(n_samples, seq_len, n_features)
+        Y_seq = np.random.rand(n_samples)
+        predict_X_seq = np.random.rand(5, seq_len, n_features)
+        return X_seq, Y_seq, predict_X_seq
+
+    def test_fit_mode_trains_and_returns_weights(self):
+        X_seq, Y_seq, predict_X_seq = self._seq()
+        mock_sequential.return_value.predict.return_value = np.array([[0.1], [0.2], [0.3], [0.4], [0.5]])
+        mock_sequential.return_value.get_weights.return_value = [np.array([1.0, 2.0]), np.array([3.0])]
+
+        result = cnn_lstm_worker.fit_predict_or_infer_lstm(X_seq, Y_seq, predict_X_seq, hidden_dim=8)
+
+        assert result["predictions"] == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5])
+        assert result["weights"] == [[1.0, 2.0], [3.0]]
+        mock_sequential.return_value.fit.assert_called_once()
+        mock_sequential.return_value.set_weights.assert_not_called()
+
+    def test_fit_mode_requires_y_seq(self):
+        X_seq, _, predict_X_seq = self._seq()
+        with pytest.raises(ValueError, match="Y_seq"):
+            cnn_lstm_worker.fit_predict_or_infer_lstm(X_seq, None, predict_X_seq, hidden_dim=8)
+
+    def test_inference_only_mode_skips_training(self):
+        _, _, predict_X_seq = self._seq()
+        stored_weights = [[1.0, 2.0], [3.0]]
+        mock_sequential.return_value.predict.return_value = np.zeros((5, 1))
+        mock_sequential.return_value.get_weights.return_value = [np.array([1.0, 2.0]), np.array([3.0])]
+
+        result = cnn_lstm_worker.fit_predict_or_infer_lstm(
+            None, None, predict_X_seq, hidden_dim=8, weights=stored_weights
+        )
+
+        mock_sequential.return_value.fit.assert_not_called()
+        mock_sequential.return_value.set_weights.assert_called_once()
+        set_call_args = mock_sequential.return_value.set_weights.call_args[0][0]
+        assert [w.tolist() for w in set_call_args] == stored_weights
+        assert result["weights"] == [[1.0, 2.0], [3.0]]
+
+    def test_architecture_matches_shape(self):
+        X_seq, Y_seq, predict_X_seq = self._seq(seq_len=15, n_features=3)
+        mock_sequential.return_value.get_weights.return_value = []
+        cnn_lstm_worker.fit_predict_or_infer_lstm(X_seq, Y_seq, predict_X_seq, hidden_dim=12)
+
+        lstm_call = cnn_lstm_worker.LSTM.call_args
+        assert lstm_call.kwargs["units"] == 12
+        assert lstm_call.kwargs["input_shape"] == (15, 3)
+        dense_call = cnn_lstm_worker.Dense.call_args
+        assert dense_call.kwargs["units"] == 1
+
+    def test_raises_when_tensorflow_unavailable(self, monkeypatch):
+        monkeypatch.setattr(cnn_lstm_worker, "TENSORFLOW_AVAILABLE", False)
+        X_seq, Y_seq, predict_X_seq = self._seq()
+        with pytest.raises(RuntimeError, match="tensorflow"):
+            cnn_lstm_worker.fit_predict_or_infer_lstm(X_seq, Y_seq, predict_X_seq, hidden_dim=8)
+
+    def test_seeds_numpy_and_tf_before_training(self):
+        X_seq, Y_seq, predict_X_seq = self._seq()
+        mock_sequential.return_value.get_weights.return_value = []
+        with patch("numpy.random.seed") as mock_np_seed:
+            cnn_lstm_worker.fit_predict_or_infer_lstm(X_seq, Y_seq, predict_X_seq, hidden_dim=8)
+        mock_np_seed.assert_called_once_with(cnn_lstm_worker.CNN_LSTM_RANDOM_SEED)
+        cnn_lstm_worker.tf.random.set_seed.assert_called_with(cnn_lstm_worker.CNN_LSTM_RANDOM_SEED)
