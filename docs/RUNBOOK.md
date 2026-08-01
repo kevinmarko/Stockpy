@@ -25,11 +25,15 @@ Before it starts the app, `launch_app.command` now (2026-07-31) does two more th
 on every double-click:
 
 - **Safe restart**: it reads a PID from `output/app_shell.pid` (gitignored, per-checkout);
-  if that process is still alive it sends `SIGTERM`, polls for up to 10 s, then
-  `SIGKILL`s it if it hasn't exited — so double-clicking again cleanly replaces a
-  still-running instance instead of leaving two competing refresh loops. No need to
-  manually close the previous window first. The new instance's PID is written back to
-  the same file.
+  if that process is still alive it sends `SIGTERM`, polls for up to `SHUTDOWN_GRACE_SECONDS`
+  (40 s, 2026-07 fix — was 10 s; raised to exceed the daemon backend's own
+  `stop_engine`/`stop_ui_server` teardown budget, see the shutdown-budget ladder in
+  §3.13), printing a progress line every ~5 s while it waits, then `SIGKILL`s it if it
+  hasn't exited — so double-clicking again cleanly replaces a still-running instance
+  instead of leaving two competing refresh loops. No need to manually close the previous
+  window first. The new instance's PID is written back to the same file. When nothing is
+  mid-cycle, teardown is normally ~1 s regardless — the longer wait only ever matters
+  when a cycle is genuinely in flight, which is precisely when waiting is correct.
 - **Auto-sync**: if the checkout is a git work tree with an upstream configured, it
   runs `git fetch --quiet` then `git merge --ff-only` against that upstream. This is
   best-effort and fast-forward-only — on any failure (local edits that would conflict,
@@ -663,6 +667,49 @@ Covered by `tests/test_orchestrator_daemon.py::TestDaemonFileWriting`/`TestSigna
 `tests/test_run_status.py::TestPidAlive`; see `docs/architecture/webapp-and-gui.md`'s
 `desktop/orchestrator_daemon.py` entry for the writer side and
 `docs/architecture/observability-and-apis.md`'s `api/pilots_api.py` entry for the reader side.
+
+### 3.14 Shutdown Taking Longer Than Expected
+
+**Symptom**: closing the desktop app window, running `kill -TERM` on a daemon process, or
+double-clicking `launch_app.command` to replace a running instance takes noticeably longer
+than it used to (up to tens of seconds instead of ~1s).
+
+**This is very likely expected, not a hang.** As of 2026-07, shutdown timeouts across the
+whole stack were re-derived from ONE published budget,
+`settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS` (default **25.0s**), so that every OUTER
+supervisor waits strictly longer than the daemon's own graceful-teardown needs, instead of
+routinely SIGKILLing it mid-teardown as happened before this fix. The ladder:
+
+| Level | Who | Budget (`main.py --interval` backend) | Budget (persistent daemon backend) |
+|---|---|---|---|
+| 0 | An in-flight pipeline cycle | unbounded — never waited out | unbounded — never waited out |
+| 1 | Daemon `_teardown()` (`desktop/orchestrator_daemon.py`) | n/a | `DAEMON_SHUTDOWN_TIMEOUT_SECONDS` = 25s |
+| 2 | `stop_engine`/`stop_run` (`desktop/engine_supervisor.py`) | 5s (unchanged) | ~30s (= 25 + 5s grace) |
+| 3 | `launch_app.command`'s previous-instance replace | `SHUTDOWN_GRACE_SECONDS` = 40s | 40s |
+
+**Why an in-flight cycle is never waited out**: a full pipeline cycle can take minutes, and
+there is no safe way to abort one mid-flight (see `pipeline/runner.py`'s own docstring on
+why adding cancellation there would silently turn a crash into a swallowed error). So a
+`main.py --interval` process that's mid-cycle when asked to stop is still SIGKILLed after
+its 5s window, exactly as before — this is safe (advisory-only, no broker contact, and
+`output/state_snapshot.json` is now written atomically — see below — so a kill mid-write
+never corrupts it). What changed is the **persistent daemon** backend
+(`ORCHESTRATOR_DAEMON_ENABLED=true`), which now gets a genuinely bounded grace period long
+enough to drain its two API servers and let an in-flight run finish (or, past the budget,
+give up on it cleanly and log a warning) instead of being cut off mid-teardown.
+
+**If a wait genuinely seems stuck past the daemon backend's ~30-40s window**: check
+`logs/investyo.log` for `"Orchestrator daemon shut down cleanly."` (the terminal
+confirmation) or `"timeout=%.1fs elapsed while a run was still in flight"` (the honest
+give-up warning) — either one means teardown actually ran within budget. Its absence past
+40s means something is genuinely stuck, not merely slow; check for a wedged run
+(`GET /status`'s `is_running`) or an unresponsive Control API before force-killing.
+
+Covered by `tests/test_orchestrator_daemon.py::TestShutdownBudget`,
+`tests/test_daemon_runtime.py::TestShutdownTimerJoinBudget`,
+`tests/test_engine_supervisor.py`'s backend-aware timeout tests, and
+`tests/test_state_snapshot_advisory.py`/`tests/test_main_orchestrator.py`'s
+`TestAtomicWrite`/atomic-write regression tests.
 
 ---
 

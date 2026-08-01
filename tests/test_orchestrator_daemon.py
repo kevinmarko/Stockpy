@@ -215,6 +215,14 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
         daemon_cls.assert_called_once_with(interval_seconds=45, dry_run=True, strict=True)
 
     def test_shutdown_called_on_clean_return_path(self):
+        """daemon.shutdown()'s timeout is now DERIVED from a deadline
+        (time.monotonic() + settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS)
+        captured at the top of _teardown() minus whatever the two API-thread
+        joins already consumed -- not the old hardcoded 10.0 -- so this
+        asserts it's close to the full budget (both joins return instantly
+        against the fake uvicorn server) rather than an exact literal."""
+        from settings import settings
+
         daemon_cls, instance = self._make_mock_daemon_class()
 
         with self._patch_daemon_class(daemon_cls), \
@@ -222,7 +230,9 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
              patch.object(self.mod, "_write_daemon_file"):
             self.mod.run_forever(60)
 
-        instance.shutdown.assert_called_once_with(timeout=10.0)
+        instance.shutdown.assert_called_once()
+        _, kwargs = instance.shutdown.call_args
+        self.assertAlmostEqual(kwargs["timeout"], settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS, delta=1.0)
 
     def test_control_api_daemon_registered_after_daemon_start(self):
         """set_daemon(daemon) must be called with the real daemon instance
@@ -311,6 +321,120 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
         # returning cleanly above); explicitly assert it's the same thread
         # object whose .started flag we already verified.
         self.assertTrue(api_threads[0].started)
+
+
+class _JoinTimeoutRecordingThread(_FakeWatcherThread):
+    """Extends _FakeWatcherThread to record the `timeout` each .join() call
+    received, keyed by thread name -- lets TestShutdownBudget's tests
+    inspect exactly what _teardown() derived for each stage."""
+
+    recorded_join_timeouts: dict = {}
+
+    def join(self, timeout=None):
+        type(self).recorded_join_timeouts[self.name] = timeout
+        return None
+
+
+class TestShutdownBudget(BaseDaemonEntrypointTest):
+    """Regression tests for the 2026-07 shutdown-budget fix: _teardown()
+    derives each stage's timeout from ONE deadline
+    (settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS, captured at teardown start)
+    instead of three independent hardcoded literals nobody had reconciled."""
+
+    def setUp(self):
+        super().setUp()
+        _JoinTimeoutRecordingThread.recorded_join_timeouts = {}
+        self._thread_patcher = patch.object(
+            self.mod.threading, "Thread", _JoinTimeoutRecordingThread
+        )
+        self._thread_patcher.start()
+        self.addCleanup(self._thread_patcher.stop)
+        self._sigmask_patcher = patch.object(self.mod.signal, "pthread_sigmask")
+        self._sigmask_patcher.start()
+        self.addCleanup(self._sigmask_patcher.stop)
+
+    def test_control_api_join_never_exceeds_its_per_thread_ceiling_even_with_a_huge_total_budget(self):
+        """The Control-API-thread join is capped at
+        _SHUTDOWN_API_JOIN_SECONDS (5.0) REGARDLESS of how large the total
+        deadline is -- a hung API thread must not be allowed to consume the
+        whole budget daemon.shutdown() needs for its own in-flight-run poll."""
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(settings, "DAEMON_SHUTDOWN_TIMEOUT_SECONDS", 100.0):
+            self.mod.run_forever(60)
+
+        recorded = _JoinTimeoutRecordingThread.recorded_join_timeouts
+        self.assertIn("OrchestratorControlAPI", recorded)
+        self.assertLessEqual(recorded["OrchestratorControlAPI"], self.mod._SHUTDOWN_API_JOIN_SECONDS)
+
+    def test_daemon_shutdown_receives_the_remaining_deadline_not_a_small_fixed_value(self):
+        """Unlike the two API-thread joins, daemon.shutdown() gets whatever
+        remains of the TOTAL deadline (it already budgets its own internal
+        timer-join + in-flight-run-poll within whatever timeout it's given
+        -- see desktop/daemon_runtime.py's shutdown()) -- so raising
+        settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS actually gives the daemon
+        more time, rather than being capped at some other small constant."""
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(settings, "DAEMON_SHUTDOWN_TIMEOUT_SECONDS", 100.0):
+            self.mod.run_forever(60)
+
+        instance.shutdown.assert_called_once()
+        _, kwargs = instance.shutdown.call_args
+        # Both joins return instantly against the fake uvicorn server, so
+        # daemon.shutdown()'s derived timeout should be very close to the
+        # full 100.0s configured -- NOT close to some small hardcoded value.
+        self.assertAlmostEqual(kwargs["timeout"], 100.0, delta=1.0)
+
+    def test_total_teardown_time_bounded_by_the_configured_setting(self):
+        """End-to-end: even with a hung Control-API-thread join (blocks for
+        its full allotted ceiling) AND a slow daemon.shutdown(), the total
+        wall-clock time _teardown() takes must stay within
+        settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS (plus a small margin for
+        Python overhead) -- proving the deadline is a genuine ceiling on the
+        whole call, not just documentation."""
+        import time as _time
+
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+
+        def _slow_shutdown(timeout=None):
+            _time.sleep(min(timeout or 0, 0.3))
+
+        instance.shutdown.side_effect = _slow_shutdown
+
+        class _SlowJoinThread(_JoinTimeoutRecordingThread):
+            def join(self_inner, timeout=None):
+                type(self_inner).recorded_join_timeouts[self_inner.name] = timeout
+                if self_inner.name == "OrchestratorControlAPI":
+                    _time.sleep(min(timeout or 0, 0.3))
+                return None
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(self.mod.threading, "Thread", _SlowJoinThread), \
+             patch.object(settings, "DAEMON_SHUTDOWN_TIMEOUT_SECONDS", 1.0):
+            started = _time.monotonic()
+            self.mod.run_forever(60)
+            elapsed = _time.monotonic() - started
+
+        # Budget was 1.0s; the slow join (~0.3s, capped by min(5.0, 1.0)=1.0
+        # so it actually sleeps 0.3s) plus the slow shutdown (capped at
+        # whatever remains) must together stay well within the configured
+        # total, not accumulate as 0.3 + 1.0 unbudgeted stages would.
+        self.assertLess(elapsed, 1.5)
 
 
 class TestPilotsAPIHosting(BaseDaemonEntrypointTest):
@@ -630,9 +754,13 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
     def test_sigterm_arrival_calls_shutdown_exactly_once_and_force_exits(self):
         """Simulates an external `kill <pid>` arriving: invoking the
         captured watcher target directly (as sigwait() returning would)
-        must call daemon.shutdown(timeout=10.0) and then force-exit via
+        must call daemon.shutdown() exactly once (timeout DERIVED from the
+        shutdown-budget deadline, not a hardcoded literal -- see
+        test_shutdown_called_on_clean_return_path) and then force-exit via
         os._exit.
         """
+        from settings import settings
+
         daemon_cls, instance = self._make_mock_daemon_class()
 
         # Make the WATCHER thread's join() invoke the watcher target
@@ -658,7 +786,9 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
                 with patch.object(self.mod.os, "_exit") as mock_exit:
                     self.mod.run_forever(60)
 
-        instance.shutdown.assert_called_once_with(timeout=10.0)
+        instance.shutdown.assert_called_once()
+        _, kwargs = instance.shutdown.call_args
+        self.assertAlmostEqual(kwargs["timeout"], settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS, delta=1.0)
         mock_exit.assert_called_once_with(0)
 
     def test_signals_blocked_before_any_thread_or_daemon_start(self):
@@ -741,8 +871,13 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
         """If the signal watcher's teardown runs (simulated), and control
         then also flows through the normal `finally` teardown afterward
         (os._exit is mocked to a no-op so it doesn't really terminate),
-        daemon.shutdown must be called only once.
+        daemon.shutdown must be called only once -- and the shutdown-budget
+        deadline captured by the FIRST _teardown() call must not be
+        restarted by the second, no-op-bodied call (see _teardown()'s
+        docstring: the deadline is captured inside the _torn_down guard).
         """
+        from settings import settings
+
         daemon_cls, instance = self._make_mock_daemon_class()
 
         class _JoinTriggeringThread(_FakeWatcherThread):
@@ -759,7 +894,9 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
              patch.object(self.mod.threading, "Thread", _JoinTriggeringThread):
             self.mod.run_forever(60)
 
-        instance.shutdown.assert_called_once_with(timeout=10.0)
+        instance.shutdown.assert_called_once()
+        _, kwargs = instance.shutdown.call_args
+        self.assertAlmostEqual(kwargs["timeout"], settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS, delta=1.0)
         # _teardown()'s idempotency guard must also cap the TERMINAL
         # daemon.json write at exactly one call -- both the signal-watcher
         # path and the normal finally path run _teardown(), and only the
@@ -831,7 +968,10 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
             rc = self.mod.run_forever(60)
 
         self.assertEqual(rc, 0)
-        instance.shutdown.assert_called_once_with(timeout=10.0)
+        from settings import settings
+        instance.shutdown.assert_called_once()
+        _, kwargs = instance.shutdown.call_args
+        self.assertAlmostEqual(kwargs["timeout"], settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS, delta=1.0)
 
     def test_control_api_teardown_runs_even_if_terminal_write_raises(self):
         """Real _write_daemon_file (unmocked) never raises even under a
@@ -847,7 +987,45 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
             rc = self.mod.run_forever(60)
 
         self.assertEqual(rc, 0)
-        instance.shutdown.assert_called_once_with(timeout=10.0)
+        from settings import settings
+        instance.shutdown.assert_called_once()
+        _, kwargs = instance.shutdown.call_args
+        self.assertAlmostEqual(kwargs["timeout"], settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS, delta=1.0)
+
+    def test_shut_down_cleanly_log_only_fires_when_daemon_confirms_not_running(self):
+        """Regression guard (Copilot review, PR #536): daemon.shutdown() does
+        NOT raise when its own timeout elapses with a run still in flight --
+        it logs its own WARNING and returns normally. Logging "shut down
+        cleanly" unconditionally after that call would contradict that
+        warning in the same log and falsely signal a clean exit to anyone
+        following docs/RUNBOOK.md's diagnostic. The INFO line must only
+        fire when daemon.is_running actually reads False afterward."""
+        daemon_cls, instance = self._make_mock_daemon_class()
+        instance.is_running = False  # confirms nothing left running
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             self.assertLogs(self.mod.logger, level="INFO") as log_ctx:
+            self.mod.run_forever(60)
+
+        joined = "\n".join(log_ctx.output)
+        self.assertIn("Orchestrator daemon shut down cleanly.", joined)
+        self.assertNotIn("still in flight", joined)
+
+    def test_shutdown_budget_elapsed_with_run_in_flight_logs_a_warning_not_clean_exit(self):
+        daemon_cls, instance = self._make_mock_daemon_class()
+        instance.is_running = True  # the run genuinely never finished
+
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             self.assertLogs(self.mod.logger, level="WARNING") as log_ctx:
+            self.mod.run_forever(60)
+
+        joined = "\n".join(log_ctx.output)
+        self.assertIn("still in flight", joined)
+        self.assertNotIn("Orchestrator daemon shut down cleanly.", joined)
 
 
 class TestArgparse(BaseDaemonEntrypointTest):

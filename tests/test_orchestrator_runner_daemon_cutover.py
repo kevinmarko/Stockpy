@@ -179,9 +179,14 @@ class TestEngineSupervisorFlagBranching:
         assert "scheduled_called" not in captured
         assert result is sentinel
 
-    def test_stop_engine_unchanged_regardless_of_flag(self, monkeypatch):
-        """stop_engine needs no flag-awareness -- it's a pure pass-through
-        to stop_run() for both backends."""
+    def test_stop_engine_explicit_timeout_still_passes_through_unchanged(self, monkeypatch):
+        """An EXPLICITLY passed timeout is still a pure pass-through to
+        stop_run() regardless of backend or flag state (2026-07 update: this
+        no longer means stop_engine is flag/backend-UNAWARE overall -- when
+        timeout is OMITTED, it now resolves per-backend via `handle.mode`;
+        see tests/test_engine_supervisor.py's dedicated coverage for that.
+        This test only pins the narrower, still-true claim: an explicit
+        caller-supplied timeout is never second-guessed)."""
         import gui.orchestrator_runner as orchestrator_runner
         from desktop.engine_supervisor import stop_engine
 

@@ -70,6 +70,30 @@ def validate_interval_seconds(v: int) -> int:
     return v
 
 
+# Bounds for settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS -- see that field's
+# docstring for the full shutdown-budget ladder this bounds the TOP of.
+# 0 is rejected deliberately: it would make every join/poll instant, i.e. an
+# unconditional SIGKILL-equivalent, which is the opposite of this setting's
+# purpose. 120s is a generous ceiling -- past that, "graceful shutdown" has
+# stopped being meaningfully different from "just SIGKILL it".
+DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS = 1.0
+DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS = 120.0
+
+
+def validate_daemon_shutdown_timeout(v: float) -> float:
+    """Shared validation for settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS.
+
+    Mirrors validate_interval_seconds's shape (plain ValueError, reusable
+    both inside a pydantic field_validator and from a plain setter).
+    """
+    if not (DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS <= v <= DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS):
+        raise ValueError(
+            f"DAEMON_SHUTDOWN_TIMEOUT_SECONDS must be in "
+            f"[{DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS}, {DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS}], got {v}"
+        )
+    return v
+
+
 class Settings(BaseSettings):
     """Single source of truth for runtime configuration.
 
@@ -1548,6 +1572,45 @@ class Settings(BaseSettings):
             "orchestrator daemon instead of spawning a fresh subprocess per "
             "cycle. False (default) preserves today's exact subprocess "
             "behavior everywhere."
+        ),
+    )
+    # Total wall-clock budget (2026-07 fix) for desktop/orchestrator_daemon.py's
+    # _teardown() -- ONE explicit, published number every parent supervisor
+    # sizes its own kill timeout against, replacing what used to be an
+    # unreconciled sum of independent hardcoded values (5s Control-API join +
+    # 5s Pilots-API join + a 10s daemon.shutdown() call that ITSELF hardcoded
+    # a 5s timer-thread join before its own poll -- 20-25s nobody had actually
+    # added up). Enforced as a single monotonic deadline captured at the top
+    # of _teardown(): each stage gets min(its own fixed ceiling, time left on
+    # the deadline), so raising or lowering this number can only ever be a
+    # STRICT tightening or loosening of the total, never a surprise from one
+    # sub-stage alone.
+    #
+    # Does NOT wait out an in-flight pipeline cycle -- daemon.shutdown()
+    # polls for one, then gives up and returns anyway; a cycle can take
+    # minutes and there is no safe way to abort mid-flight (see
+    # pipeline/runner.py's own docstring on why). This budget only bounds the
+    # genuinely-bounded stages: uvicorn drain, timer-thread join, and that
+    # final poll's own grace period.
+    #
+    # 25.0 is the outer bound of every configuration reachable BEFORE this
+    # fix (20s with the Pilots API off, 25s with it on -- production, via
+    # launchd, runs with it on) -- so this default cannot make any existing
+    # deployment's teardown budget shorter than it already was. Raising it
+    # without ALSO raising the outer supervisor timeouts that must exceed it
+    # (launch_app.command's SHUTDOWN_GRACE_SECONDS, launchd's ExitTimeOut,
+    # systemd's TimeoutStopSec) makes shutdown WORSE, not better -- the
+    # daemon would simply get SIGKILLed mid-teardown at a different point.
+    # See docs/RUNBOOK.md's shutdown-budget-ladder table.
+    DAEMON_SHUTDOWN_TIMEOUT_SECONDS: float = Field(
+        default=25.0,
+        description=(
+            "Total seconds budgeted for the orchestrator daemon's graceful "
+            "teardown (Control API + Pilots API drain, timer-thread join, "
+            "final in-flight-run poll). Does not wait out an in-flight "
+            "pipeline cycle. Must stay below the outer supervisor timeouts "
+            "(launch_app.command, launchd ExitTimeOut, systemd "
+            "TimeoutStopSec) or shutdown gets worse, not better."
         ),
     )
     SIGNAL_WEIGHTS: dict[str, float] = Field(
@@ -3611,6 +3674,11 @@ class Settings(BaseSettings):
         path = Path(value)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @field_validator("DAEMON_SHUTDOWN_TIMEOUT_SECONDS")
+    @classmethod
+    def _validate_daemon_shutdown_timeout(cls, value: float) -> float:
+        return validate_daemon_shutdown_timeout(value)
 
     @field_validator("ROBINHOOD_EXECUTION_MODE")
     @classmethod

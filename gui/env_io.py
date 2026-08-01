@@ -104,6 +104,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # material); the command token that actually guards the daemon's
     # POST /run is ORCHESTRATOR_DAEMON_TOKEN, which stays in SECRET_KEYS.
     "ORCHESTRATOR_DAEMON_ENABLED",
+    # Total seconds budgeted for the daemon's graceful teardown (see
+    # settings.py's own field docstring for the full shutdown-budget ladder).
+    # Non-secret; a GUI bug here can only make shutdown less graceful, never
+    # leak a credential or enable a dangerous action -- unlike
+    # BROKERAGE_CONNECT_ENABLED/AUTOMATION_WRITES_ENABLED, which are
+    # deliberately excluded from this allowlist for that reason.
+    "DAEMON_SHUTDOWN_TIMEOUT_SECONDS",
     # The daemon's internal timer cadence. Writable via the Pilots API's
     # PUT /automation/schedule/interval (api/pilots_api.py) and the GUI. A
     # write here takes effect on the daemon's NEXT restart, not immediately

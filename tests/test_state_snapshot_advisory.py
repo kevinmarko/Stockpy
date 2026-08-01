@@ -186,3 +186,67 @@ class TestSymbolDetailParityFields:
         assert sig["mae"] == pytest.approx(0.04)
         assert sig["edge_ratio"] == pytest.approx(3.0)
         assert sig["macro_status"] == "RISK ON"
+
+
+class TestAtomicWrite:
+    """2026-07 fix: write_state_snapshot() used to write state_snapshot.json
+    with a bare write_text() -- a process killed mid-write (e.g. main.py
+    --interval's routine 5s SIGKILL of a mid-cycle process, see
+    desktop/engine_supervisor.py's backend-aware stop_engine timeout) left a
+    truncated, unparseable file that every reader (pilots/run_status.py,
+    api/state_api.py) then treated as MISSING rather than merely stale.
+    Fixed to the same write-then-rename idiom already used by
+    execution/kill_switch.py and desktop/orchestrator_daemon.py."""
+
+    def test_uses_write_then_rename_not_a_bare_write_text(self, tmp_path, monkeypatch):
+        from pathlib import Path
+        from unittest import mock
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        result = SimpleNamespace(
+            snapshot=SimpleNamespace(positions={}),
+            recommendations=[_recommendation("AAPL")],
+        )
+
+        with mock.patch.object(Path, "replace", autospec=True) as mock_replace:
+            mock_replace.side_effect = lambda self_path, target: self_path.rename(target)
+            ss.write_state_snapshot(result, _macro())
+
+        # rotate_snapshot() (already atomic) ALSO calls Path.replace for its
+        # own history/ write, so this asserts the main state_snapshot.json
+        # write specifically used the idiom, not merely that SOME call did.
+        main_write_calls = [
+            c for c in mock_replace.call_args_list
+            if c.args[1].name == "state_snapshot.json"
+        ]
+        assert len(main_write_calls) == 1
+        # The final file must exist under its real name (not left as a .tmp
+        # sibling) and must be valid, complete JSON.
+        snap_path = tmp_path / "state_snapshot.json"
+        assert snap_path.exists()
+        assert not (tmp_path / "state_snapshot.tmp").exists()
+        json.loads(snap_path.read_text(encoding="utf-8"))  # must not raise
+
+    def test_a_failed_rename_never_leaves_a_corrupt_final_file(self, tmp_path, monkeypatch):
+        """If the final rename step itself fails (disk full, permissions),
+        the pre-existing state_snapshot.json (if any) must be left INTACT --
+        never partially overwritten -- and the failure must be swallowed
+        (write_state_snapshot's own try/except), never propagated."""
+        from pathlib import Path
+        from unittest import mock
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        snap_path = tmp_path / "state_snapshot.json"
+        snap_path.write_text('{"previous": true}', encoding="utf-8")
+
+        result = SimpleNamespace(
+            snapshot=SimpleNamespace(positions={}),
+            recommendations=[_recommendation("AAPL")],
+        )
+
+        with mock.patch.object(Path, "replace", side_effect=OSError("disk full")):
+            ss.write_state_snapshot(result, _macro())  # must not raise
+
+        # The old file is untouched -- a write-then-rename failure can only
+        # ever leave a stray .tmp sibling, never a half-written final file.
+        assert json.loads(snap_path.read_text(encoding="utf-8")) == {"previous": True}

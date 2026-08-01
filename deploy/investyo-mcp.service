@@ -1,8 +1,22 @@
+# 2026-07 fix: `Wants=network-online.target` paired with `After=network.target`
+# is the classic INEFFECTIVE combination -- `Wants=` alone pulls the target in
+# but performs no ORDERING, so this unit could (and did) start before an
+# address was actually routable despite declaring the dependency. This
+# service genuinely needs network-online (it binds an SSE port real clients
+# connect to), unlike investyo-daemon.service/investyo-streamlit.service's
+# own weaker Wants-without-After relationship to THIS unit (intentional
+# there -- neither needs the MCP server up to function). StartLimitIntervalSec/
+# StartLimitBurst MOVED from [Service] to [Unit] -- see investyo-daemon.service's
+# comment for why (they're silently rejected in [Service] on any systemd
+# since v229/2016, so this unit's crash-loop throttling was not actually in
+# effect on any current distro).
 [Unit]
 Description=InvestYo MCP Server (SSE Transport)
 Documentation=https://github.com/kevinmarko/Stockpy
-After=network.target
+After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -14,8 +28,6 @@ EnvironmentFile=/opt/investyo/.env
 ExecStart=/opt/investyo/.venv/bin/python investyo_mcp_server.py --transport sse --port 8080
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 # Security hardening
 NoNewPrivileges=true

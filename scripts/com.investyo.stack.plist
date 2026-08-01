@@ -28,6 +28,18 @@
 
   Paths below are absolute (launchd does not expand ~ or $HOME). The installer
   rewrites /Users/kevinlee/Desktop/Stockpy to this repo's real location.
+
+  SIGNAL PATH (2026-07 fix): launchd's SIGTERM on stop/reload/unload targets
+  THIS job's root process -- scripts/investyo_stack_service.sh's own pid,
+  not the orchestrator daemon it backgrounds -- so ExitTimeOut bounds the
+  WRAPPER's own graceful-shutdown window, not the daemon's directly. The
+  wrapper itself now (see that script's own header comment for the full
+  signal-path writeup) forwards SIGTERM to the daemon and polls up to ~30s
+  for it to actually finish before reaping the two API children. ExitTimeOut
+  here MUST stay strictly greater than that ~30s wrapper-side budget --
+  otherwise launchd SIGKILLs the whole process group before the wrapper's
+  own poll loop can complete, silently re-introducing the exact problem this
+  fix removes.
 -->
 <plist version="1.0">
 <dict>
@@ -53,6 +65,15 @@
     <!-- Don't hammer restarts if it's crash-looping (e.g. missing FDA). -->
     <key>ThrottleInterval</key>
     <integer>30</integer>
+
+    <!-- Seconds launchd waits after SIGTERM before escalating to SIGKILL
+         (2026-07 fix, was unset -> system-defined default, which is what
+         let launchd routinely SIGKILL the whole stack before the wrapper's
+         own ~30s graceful-teardown poll could finish -- see the SIGNAL PATH
+         note above and investyo_stack_service.sh's header comment). Must
+         stay > the wrapper's own poll budget (~30s) plus reap overhead. -->
+    <key>ExitTimeOut</key>
+    <integer>45</integer>
 
     <key>StandardOutPath</key>
     <string>/Users/kevinlee/Desktop/Stockpy/output/stack_service.out</string>

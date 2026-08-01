@@ -40,6 +40,19 @@ trap '_on_exit' EXIT
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# ── Shutdown grace window for a previous instance (2026-07 fix) ──────────────
+# Must exceed the WORST CASE of app_shell.py's own _teardown(): stop_engine()
+# (desktop/engine_supervisor.py) now waits up to
+# settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS + 5s when ORCHESTRATOR_DAEMON_ENABLED
+# is on (default 25 + 5 = 30s), plus stop_ui_server()'s own ~5-10s SIGTERM
+# ->SIGKILL window -- ~35-40s worst case. The PREVIOUS flat 10s here was
+# already right at the boundary for even the (unchanged) main.py --interval
+# backend's 5+5=10s worst case, and would routinely cut the daemon backend's
+# graceful teardown short. When nothing is mid-cycle, teardown is normally
+# ~1s regardless, so this only lengthens the wait in the one case where
+# waiting is actually the right thing to do.
+SHUTDOWN_GRACE_SECONDS=40
+
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "  InvestYo — starting unified desktop app…"
@@ -60,12 +73,20 @@ if [ -f "$PID_FILE" ]; then
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
         echo "  ↺  Stopping previous instance (pid $OLD_PID)…"
         kill -TERM "$OLD_PID" 2>/dev/null
-        for _ in $(seq 1 20); do
+        _poll_count=$((SHUTDOWN_GRACE_SECONDS * 2))
+        _elapsed=0
+        for _ in $(seq 1 "$_poll_count"); do
             kill -0 "$OLD_PID" 2>/dev/null || break
             sleep 0.5
+            _elapsed=$((_elapsed + 1))
+            # Progress marker every ~5s so a genuinely long wait (a mid-cycle
+            # daemon backend teardown) doesn't look like a hang.
+            if [ $((_elapsed % 10)) -eq 0 ]; then
+                echo "      Still waiting for the previous instance's pipeline cycle to finish… ($((_elapsed / 2))s)"
+            fi
         done
         if kill -0 "$OLD_PID" 2>/dev/null; then
-            echo "      Still running after 10s — forcing it closed."
+            echo "      Still running after ${SHUTDOWN_GRACE_SECONDS}s — forcing it closed."
             kill -KILL "$OLD_PID" 2>/dev/null
         fi
     fi

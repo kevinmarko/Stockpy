@@ -48,6 +48,7 @@ import asyncio
 import json
 import math
 from datetime import datetime
+from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -522,6 +523,46 @@ class TestWriteStateSnapshot:
         _write_state_snapshot({"market_regime": "NEUTRAL"}, final_df, ["AAPL"])
         data = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
         assert data["signals"][0]["sector"] == "Technology"
+
+    def test_uses_write_then_rename_not_a_bare_write_text(self, tmp_path, monkeypatch):
+        """2026-07 fix: mirrors reporting/state_snapshot.py's identical fix
+        for the advisory writer -- a bare write_text() truncates on open, so
+        a process killed mid-write left an unparseable file every reader
+        treated as MISSING rather than merely stale."""
+        self._redirect_output_dir(monkeypatch, tmp_path)
+        final_df = pd.DataFrame([
+            {"Symbol": "AAPL", "Action Signal": "BUY", "Price": 190.0},
+        ])
+
+        with mock.patch.object(Path, "replace", autospec=True) as mock_replace:
+            mock_replace.side_effect = lambda self_path, target: self_path.rename(target)
+            _write_state_snapshot({"market_regime": "NEUTRAL"}, final_df, ["AAPL"])
+
+        # rotate_snapshot() (already atomic) also calls Path.replace for its
+        # own history/ write, so assert the main state_snapshot.json write
+        # specifically used the idiom.
+        main_write_calls = [
+            c for c in mock_replace.call_args_list
+            if c.args[1].name == "state_snapshot.json"
+        ]
+        assert len(main_write_calls) == 1
+        snap_path = tmp_path / "state_snapshot.json"
+        assert snap_path.exists()
+        assert not (tmp_path / "state_snapshot.tmp").exists()
+        json.loads(snap_path.read_text(encoding="utf-8"))  # must not raise
+
+    def test_a_failed_rename_never_leaves_a_corrupt_final_file(self, tmp_path, monkeypatch):
+        self._redirect_output_dir(monkeypatch, tmp_path)
+        snap_path = tmp_path / "state_snapshot.json"
+        snap_path.write_text('{"previous": true}', encoding="utf-8")
+        final_df = pd.DataFrame([
+            {"Symbol": "AAPL", "Action Signal": "BUY", "Price": 190.0},
+        ])
+
+        with mock.patch.object(Path, "replace", side_effect=OSError("disk full")):
+            _write_state_snapshot({"market_regime": "NEUTRAL"}, final_df, ["AAPL"])  # must not raise
+
+        assert json.loads(snap_path.read_text(encoding="utf-8")) == {"previous": True}
 
     def test_score_components_threaded_through(self, tmp_path, monkeypatch):
         """pilots/scoring.py re-blends each symbol's persisted per-module
