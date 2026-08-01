@@ -65,6 +65,27 @@ Endpoints
                                 requires AUTOMATION_WRITES_ENABLED). Changes
                                 the daemon's internal timer cadence LIVE, no
                                 restart required.
+  POST /daemon/restart        -> command-token guarded. 409 while
+                                daemon.is_running (a @property on
+                                OrchestratorDaemon -- read WITHOUT parens;
+                                confusable with gui.orchestrator_runner.
+                                RunHandle.is_running(), which IS a method
+                                and is called correctly elsewhere in this
+                                file). On success arms
+                                threading.Timer(0.5, os._exit, (0,)) --
+                                os._exit, not sys.exit(), since uvicorn is
+                                hosted on a background thread inside
+                                desktop/orchestrator_daemon.py and
+                                SystemExit would only kill that thread.
+                                Deliberately does NOT 503 when no daemon is
+                                attached, unlike every other endpoint here --
+                                this API lives inside the daemon process, so
+                                "no daemon attached" still means this
+                                process can be exited. Promises only a
+                                clean exit, never a respawn: whether one
+                                follows depends entirely on the external
+                                process supervisor (systemd Restart=always,
+                                launchd KeepAlive, or none).
 
 Auth
 ----
@@ -463,7 +484,16 @@ def restart_daemon() -> Dict[str, Any]:
     respawn — only an honest, clean exit.
     """
     daemon = get_daemon()
-    if daemon is not None and daemon.is_running():
+    # ``OrchestratorDaemon.is_running`` is a @property (desktop/daemon_runtime.py),
+    # NOT a method: calling it as ``daemon.is_running()`` evaluates the property to
+    # a bool and then CALLS that bool -- ``TypeError: 'bool' object is not
+    # callable`` -- which FastAPI turns into an HTTP 500 on every request where a
+    # daemon is actually attached (i.e. every real deployment; see
+    # desktop/orchestrator_daemon.py's set_daemon() wiring right after
+    # daemon.start()). Read it as a plain attribute. Do NOT "fix" the
+    # ``rec.handle.is_running()`` calls elsewhere in this file to match -- those
+    # are gui.orchestrator_runner.RunHandle, where is_running() IS a method.
+    if daemon is not None and daemon.is_running:
         raise HTTPException(
             status_code=409,
             detail="Cannot restart while an orchestrator run is currently active.",
