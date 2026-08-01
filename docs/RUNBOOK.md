@@ -115,6 +115,58 @@ The **Reports tab** includes:
 * **Brinson-Fachler Attribution Analysis** — edit a GICS-11 sector matrix or bulk-paste
   TSV/CSV from a spreadsheet to compute allocation / selection / interaction effects.
 
+### 0.1 Migrating to Webapp-Only (recommended)
+
+Per `CLAUDE.md`'s "Frontend strategy" section, the Pilots PWA (`webapp/`) is now the
+platform's one actively-developed frontend; `gui/`, `app_shell.py`/`desktop/`'s native-shell
+modules, and their launchers (`launch_app.command`, `launch_gui.command`) are frozen/legacy —
+still runnable, but getting no new tabs, panels, or capability. Everything above in §0
+describes that legacy desktop-app startup path, kept accurate for existing setups. This
+subsection is the operator sequence for retiring day-to-day reliance on it in favor of the
+webapp talking to the always-on backend stack that already exists in this repo for exactly
+this purpose (`scripts/com.investyo.stack.plist` + `scripts/investyo_stack_service.sh`) —
+instead of `launch_app.command`'s own background refresh loop, which only runs while its
+window stays open.
+
+1. **Install (or confirm) the always-on backend stack service** — double-click
+   `scripts/install_stack_service.command` (idempotent; safe to re-run). This installs the
+   `com.investyo.stack` launchd job (`RunAtLoad` + `KeepAlive`), which starts at login and
+   keeps running with no app window open: the orchestrator daemon (5-min warm refresh
+   cycles + Control API `:8601`) plus `data_api` (`:8603`) and `metrics_api` (`:8604`) as
+   separate processes. It also unloads the older single-run `com.investyo.daily-advisory`
+   job, which this supersedes (see §5.1). Verify with `launchctl list | grep com.investyo.stack`
+   and `tail -f output/stack_daemon.log`.
+2. **Set `PILOTS_API_ENABLED=true` in `.env`** (default `False`) so the same always-on daemon
+   process also hosts the Pilots API (`api/pilots_api.py`) on `:8602`, rather than it needing
+   a separately-launched `uvicorn` server. This flag is read once at daemon startup — this is
+   the one setting genuinely required for the webapp to have a live backend running
+   continuously, independent of any window.
+3. **Restart the stack so the flag takes effect** — re-run
+   `./scripts/install_stack_service.command` (it unloads + reloads `com.investyo.stack`), or
+   manually:
+   ```bash
+   launchctl unload ~/Library/LaunchAgents/com.investyo.stack.plist
+   launchctl load   ~/Library/LaunchAgents/com.investyo.stack.plist
+   ```
+4. **Point the webapp at the live backend** — per `webapp/README.md`: set
+   `VITE_USE_MOCK=false` (default `true`) in `webapp/.env.local`, plus `VITE_API_BASE_URL`
+   (default `http://localhost:8602`) / `VITE_API_TOKEN` if they differ from the defaults, then
+   `npm run dev` (or build/serve for a standing install). No component code changes —
+   `src/api/client.ts` is the single mock/live switch point.
+5. **Stop double-clicking `launch_app.command` going forward.** With the stack service
+   installed and `PILOTS_API_ENABLED=true`, the always-on refresh loop and the Control/Pilots
+   APIs no longer depend on that window being open, so the desktop app simply doesn't need to
+   be launched day-to-day. It remains runnable as a fallback (per the frontend-strategy
+   decision, nothing in this sequence removes it) — this step is a change in operator habit,
+   not a code change.
+
+**What this does NOT require**: no data-layer or pipeline change. `main.py`,
+`main_orchestrator.py`, and every `api/*.py` service are explicitly unaffected by the
+frontend-strategy decision. The whole sequence above is: one `.env` flag, confirming a
+launchd service that already ships in this repo, and the two webapp env vars
+`webapp/README.md` already documents for its own mock↔live switch — as of this writing there
+is no further backend or webapp work outstanding to go webapp-only.
+
 ---
 
 ## 1. ⚠ N/A in Advisory Mode — Paper → Live Switch

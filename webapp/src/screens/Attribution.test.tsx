@@ -265,3 +265,150 @@ describe("Brinson-Fachler manual-input calculator", () => {
     expect(errorBox).toHaveTextContent("No rows with a non-blank sector name.");
   });
 });
+
+describe("Brinson-Fachler bulk paste from spreadsheet", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  async function openPasteSection(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByText("Bulk paste from spreadsheet (TSV / CSV)"));
+  }
+
+  it("parses a TSV paste with a header row and replaces the table", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    await openPasteSection(user);
+
+    const textarea = screen.getByLabelText("Pasted sector matrix");
+    await user.click(textarea);
+    await user.paste(
+      "Sector\tPortfolio Weight (%)\tPortfolio Return (%)\tBenchmark Weight (%)\tBenchmark Return (%)\n" +
+        "Information Technology\t28\t12.4\t26\t10.1\n" +
+        "Health Care\t20\t5.0\t18\t4.5"
+    );
+    await user.click(screen.getByRole("button", { name: "Parse pasted data" }));
+
+    expect(
+      await screen.findByText("Parsed 2 sector row(s) -- table updated below.")
+    ).toBeInTheDocument();
+    const itRow = screen.getByText("Information Technology").closest("tr") as HTMLElement;
+    expect(within(itRow).getByLabelText("Information Technology portfolio weight percent")).toHaveValue(28);
+    expect(within(itRow).getByLabelText("Information Technology portfolio return percent")).toHaveValue(12.4);
+    expect(within(itRow).getByLabelText("Information Technology benchmark weight percent")).toHaveValue(26);
+    expect(within(itRow).getByLabelText("Information Technology benchmark return percent")).toHaveValue(10.1);
+  });
+
+  it("parses a headerless positional CSV paste, including free-text sector names not on the GICS-11 list", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    await openPasteSection(user);
+    await user.click(screen.getByLabelText("Pasted sector matrix"));
+    await user.paste("Tech,28,12.4,26,10.1\nHealth,20,5.0,18,4.5");
+    await user.click(screen.getByRole("button", { name: "Parse pasted data" }));
+
+    await screen.findByText("Parsed 2 sector row(s) -- table updated below.");
+    expect(screen.getByText("Tech")).toBeInTheDocument();
+    expect(screen.getByText("Health")).toBeInTheDocument();
+    // Replaced, not appended -- the original 11 GICS rows are gone.
+    expect(screen.queryByText("Energy")).not.toBeInTheDocument();
+  });
+
+  it("strips % suffixes and coerces an unparseable cell to 0, without rejecting the paste", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    await openPasteSection(user);
+    await user.click(screen.getByLabelText("Pasted sector matrix"));
+    // A header row is required here: a LONE data row whose 4 numeric cells
+    // aren't all numeric is (by design, matching the Python original) itself
+    // detected as a header -- see tests/test_report_viewer_helpers.py's
+    // test_parse_strips_percent_and_coerces_bad_cells_to_zero for the same
+    // documented edge case.
+    await user.paste(
+      "Sector,Portfolio Weight (%),Portfolio Return (%),Benchmark Weight (%),Benchmark Return (%)\n" +
+        "Tech,28%,foo,26,10.1"
+    );
+    await user.click(screen.getByRole("button", { name: "Parse pasted data" }));
+
+    await screen.findByText("Parsed 1 sector row(s) -- table updated below.");
+    const row = screen.getByText("Tech").closest("tr") as HTMLElement;
+    expect(within(row).getByLabelText("Tech portfolio weight percent")).toHaveValue(28);
+    expect(within(row).getByLabelText("Tech portfolio return percent")).toHaveValue(0);
+  });
+
+  it("a lone data row with a non-numeric cell is (by design) detected as a header, producing the honest 'no data rows' error", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    await openPasteSection(user);
+    await user.click(screen.getByLabelText("Pasted sector matrix"));
+    await user.paste("Tech,28%,foo,26,10.1");
+    await user.click(screen.getByRole("button", { name: "Parse pasted data" }));
+
+    const errorBox = await screen.findByTestId("brinson-paste-error");
+    expect(errorBox).toHaveTextContent("No data rows found after parsing.");
+  });
+
+  it("a wrong column count shows the exact error message inline, and leaves the table untouched", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    await openPasteSection(user);
+    await user.click(screen.getByLabelText("Pasted sector matrix"));
+    await user.paste("Sector,Weight\nFinancials,10");
+    await user.click(screen.getByRole("button", { name: "Parse pasted data" }));
+
+    const errorBox = await screen.findByTestId("brinson-paste-error");
+    expect(errorBox).toHaveTextContent(
+      "Expected 5 columns (Sector, P-Weight, P-Return, B-Weight, B-Return); got 2."
+    );
+    // The original 11-row default table is untouched by a rejected paste.
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(11 * 4);
+  });
+
+  it("empty pasted text shows an error rather than silently doing nothing", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    await openPasteSection(user);
+    await user.click(screen.getByRole("button", { name: "Parse pasted data" }));
+
+    const errorBox = await screen.findByTestId("brinson-paste-error");
+    expect(errorBox).toHaveTextContent("Pasted text is empty.");
+  });
+
+  it("Reset to GICS 11 default restores the original all-zero table and clears any paste state", async () => {
+    vi.spyOn(api, "getPortfolioAttribution").mockResolvedValueOnce(BASE);
+    renderScreen();
+    await screen.findByText("Brinson-Fachler attribution");
+
+    const user = userEvent.setup();
+    await openPasteSection(user);
+    await user.click(screen.getByLabelText("Pasted sector matrix"));
+    await user.paste("Tech,28,12.4,26,10.1");
+    await user.click(screen.getByRole("button", { name: "Parse pasted data" }));
+    await screen.findByText("Tech");
+
+    await user.click(screen.getByRole("button", { name: "Reset to GICS 11 default" }));
+
+    expect(screen.queryByText("Tech")).not.toBeInTheDocument();
+    expect(screen.getByText("Energy")).toBeInTheDocument();
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(11 * 4);
+    expect(
+      screen.queryByText("Parsed 1 sector row(s) -- table updated below.")
+    ).not.toBeInTheDocument();
+  });
+});
