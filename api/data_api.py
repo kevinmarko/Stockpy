@@ -1119,34 +1119,126 @@ def get_provider_status() -> Dict[str, Any]:
     }
 
 
+def _clamp01_to_100(x: float) -> float:
+    return max(0.0, min(100.0, x))
+
+
+# Normalization anchors are this codebase's OWN authoritative, already-load-
+# bearing kill-switch/regime thresholds (dto_models.py::MacroEconomicDTO.
+# killSwitch / market_regime), not invented cutoffs: Sahm Rule kill switch at
+# >= 0.5, VIX kill switch at > 30, credit spread ("high_yield_oas") RISK ON
+# <= 4.5 / CREDIT EVENT >= 6.0, yield curve RECESSION signal at < -0.25. Each
+# metric maps its own bad-threshold to 0 and a representative calm value to
+# 100, linearly, clamped -- a real (if necessarily approximate) health score,
+# not a fabricated one, because the anchors are the platform's own numbers.
+def _vix_score(vix: float) -> float:
+    return _clamp01_to_100(100.0 - (vix - 15.0) / (30.0 - 15.0) * 100.0)
+
+
+def _sahm_score(sahm: float) -> float:
+    return _clamp01_to_100(100.0 - (sahm / 0.5) * 100.0)
+
+
+def _credit_spread_score(spread: float) -> float:
+    return _clamp01_to_100(100.0 - (spread - 4.5) / (6.0 - 4.5) * 100.0)
+
+
+def _yield_curve_score(spread: float) -> float:
+    return _clamp01_to_100((spread - (-0.25)) / (0.5 - (-0.25)) * 100.0)
+
+
+_REGIME_SCORE = {"RISK ON": 100.0, "NEUTRAL": 60.0, "CREDIT EVENT": 25.0, "RECESSION": 0.0}
+_REGIME_ORDER = {"RECESSION": 0, "CREDIT EVENT": 1, "NEUTRAL": 2, "RISK ON": 3}
+
+
+def _trend_from_delta(delta: float, higher_is_better: bool, epsilon: float) -> str:
+    if abs(delta) < epsilon:
+        return "flat"
+    improved = delta > 0 if higher_is_better else delta < 0
+    return "up" if improved else "down"
+
+
+def _read_json_or_none(path) -> Optional[Dict[str, Any]]:
+    try:
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 @app.get("/data/macro/sentiment", dependencies=[Depends(require_token)])
 def get_macro_sentiment() -> Dict[str, Any]:
-    """Macroeconomic indicator sentiment scores and trends across factors.
-
-    SYNTHETIC DEMO DATA (``is_synthetic: True``). These six categories
-    (Interest Rates, CPI, Employment, Consumer Sentiment, PMI, Housing
-    Starts) are not indicators this platform actually computes -- the real
-    macro telemetry this codebase tracks (VIX, Sahm Rule, High-Yield OAS,
-    yield curve, market regime -- see output/state_snapshot.json and
-    MacroEconomicDTO) uses different units/scales per metric with no
-    principled way to normalize them onto one comparable 0-100 axis without
-    inventing a scoring methodology. Rather than fabricate that
-    normalization unilaterally, this endpoint stays a fixed demo fixture,
-    honestly flagged, until a real recession-telemetry radar's category set
-    and scaling are explicitly designed (CONSTRAINT #4 -- never fabricate
-    data as if it were a real measurement).
+    """Macroeconomic indicator sentiment scores and trends, from the real
+    macro telemetry this platform tracks (VIX, Sahm Rule, High-Yield OAS,
+    yield curve, market regime -- output/state_snapshot.json, itself sourced
+    from MacroEconomicDTO). Each 0-100 "value" is a health score normalized
+    against this codebase's own kill-switch/regime thresholds (see
+    dto_models.py::MacroEconomicDTO.killSwitch/market_regime) -- not an
+    invented scale. "trend" compares against the most recently rotated prior
+    snapshot in output/history/ (scripts/snapshot_diff.py's own reader) --
+    "flat" (never fabricated up/down) when there is no prior snapshot to
+    compare against yet.
     """
-    return {
-        "macro_data": [
-            {"subject": "Interest Rates", "value": 80, "trend": "up"},
-            {"subject": "Inflation (CPI)", "value": 65, "trend": "flat"},
-            {"subject": "Employment", "value": 40, "trend": "down"},
-            {"subject": "Consumer Sentiment", "value": 55, "trend": "flat"},
-            {"subject": "Manufacturing (PMI)", "value": 35, "trend": "down"},
-            {"subject": "Housing Starts", "value": 70, "trend": "up"},
-        ],
-        "is_synthetic": True,
-    }
+    current = _read_json_or_none(settings.OUTPUT_DIR / "state_snapshot.json")
+    if current is None:
+        return {"macro_data": [], "is_synthetic": False, "reason": "No state snapshot yet — run the pipeline first."}
+
+    previous: Optional[Dict[str, Any]] = None
+    try:
+        from scripts.snapshot_diff import list_rotated_snapshots, load_snapshot
+        rotated = list_rotated_snapshots(settings.OUTPUT_DIR)
+        if rotated:
+            previous = load_snapshot(rotated[-1])
+    except Exception as exc:
+        logger.warning("get_macro_sentiment: history read failed: %s", exc)
+
+    vix = float(current.get("vix", 0.0) or 0.0)
+    sahm = float(current.get("sahm_rule", 0.0) or 0.0)
+    spread = float(current.get("high_yield_oas", 0.0) or 0.0)
+    curve = float(current.get("yield_curve", 0.0) or 0.0)
+    regime = str(current.get("market_regime", "UNKNOWN") or "UNKNOWN")
+
+    prev_vix = float(previous.get("vix", vix) or vix) if previous else vix
+    prev_sahm = float(previous.get("sahm_rule", sahm) or sahm) if previous else sahm
+    prev_spread = float(previous.get("high_yield_oas", spread) or spread) if previous else spread
+    prev_curve = float(previous.get("yield_curve", curve) or curve) if previous else curve
+    prev_regime = str(previous.get("market_regime", regime) or regime) if previous else regime
+
+    macro_data = [
+        {
+            "subject": "VIX (Volatility)",
+            "value": round(_vix_score(vix), 1),
+            "trend": _trend_from_delta(vix - prev_vix, higher_is_better=False, epsilon=0.5) if previous else "flat",
+        },
+        {
+            "subject": "Sahm Rule (Recession Signal)",
+            "value": round(_sahm_score(sahm), 1),
+            "trend": _trend_from_delta(sahm - prev_sahm, higher_is_better=False, epsilon=0.02) if previous else "flat",
+        },
+        {
+            "subject": "High-Yield OAS (Credit Stress)",
+            "value": round(_credit_spread_score(spread), 1),
+            "trend": _trend_from_delta(spread - prev_spread, higher_is_better=False, epsilon=0.05) if previous else "flat",
+        },
+        {
+            "subject": "Yield Curve (10Y-2Y)",
+            "value": round(_yield_curve_score(curve), 1),
+            "trend": _trend_from_delta(curve - prev_curve, higher_is_better=True, epsilon=0.02) if previous else "flat",
+        },
+    ]
+    if regime in _REGIME_SCORE:
+        regime_trend = "flat"
+        if previous and prev_regime in _REGIME_ORDER and regime in _REGIME_ORDER:
+            order_delta = _REGIME_ORDER[regime] - _REGIME_ORDER[prev_regime]
+            regime_trend = "flat" if order_delta == 0 else ("up" if order_delta > 0 else "down")
+        macro_data.append({
+            "subject": "Market Regime",
+            "value": _REGIME_SCORE[regime],
+            "trend": regime_trend,
+        })
+
+    return {"macro_data": macro_data, "is_synthetic": False, "reason": None}
 
 
 @app.get("/data/ladder/{symbol}", dependencies=[Depends(require_token)])

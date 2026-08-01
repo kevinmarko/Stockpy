@@ -5749,17 +5749,21 @@ export const mockApi = {
   },
 
   // ---- Phase 6 additions ----
+  // Mirrors the shape api/data_api.py::get_macro_sentiment actually returns
+  // (VIX/Sahm/credit-spread/yield-curve/regime health scores) -- not the
+  // old fictional CPI/PMI/Employment categories the live endpoint never
+  // computed.
   async getMacroSentiment() {
     return delay({
       macro_data: [
-        { subject: "Interest Rates", value: 80, trend: "up" as const },
-        { subject: "Inflation (CPI)", value: 65, trend: "flat" as const },
-        { subject: "Employment", value: 40, trend: "down" as const },
-        { subject: "Consumer Sentiment", value: 55, trend: "flat" as const },
-        { subject: "Manufacturing (PMI)", value: 35, trend: "down" as const },
-        { subject: "Housing Starts", value: 70, trend: "up" as const },
+        { subject: "VIX (Volatility)", value: 78, trend: "up" as const },
+        { subject: "Sahm Rule (Recession Signal)", value: 92, trend: "flat" as const },
+        { subject: "High-Yield OAS (Credit Stress)", value: 84, trend: "down" as const },
+        { subject: "Yield Curve (10Y-2Y)", value: 61, trend: "flat" as const },
+        { subject: "Market Regime", value: 100, trend: "flat" as const },
       ],
-      is_synthetic: true,
+      is_synthetic: false,
+      reason: null,
     });
   },
   async getOrderBookLadder(symbol: string) {

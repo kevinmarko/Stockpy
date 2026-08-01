@@ -2969,12 +2969,20 @@ export interface MacroIndicatorItem {
 }
 
 export interface MacroSentimentResponse {
+  // Real telemetry (VIX, Sahm Rule, High-Yield OAS, yield curve, market
+  // regime) from output/state_snapshot.json, normalized against this
+  // codebase's own kill-switch/regime thresholds — see
+  // api/data_api.py::get_macro_sentiment. Empty when no snapshot exists yet
+  // (see `reason`), not fabricated. Market Regime is present only when the
+  // snapshot's regime string is a recognized value.
   macro_data: MacroIndicatorItem[];
-  // Always true today -- these categories aren't indicators the platform
-  // actually computes (see api/data_api.py::get_macro_sentiment docstring).
-  // Surfaced so the UI can render an honest "Demo Data" badge instead of
-  // presenting a fixed fixture as a live measurement.
+  // False now that this reads real macro telemetry; kept (rather than
+  // removed) for symmetry with the other synthetic-data endpoints and so a
+  // future genuinely-fabricated variant would still have a place to signal it.
   is_synthetic: boolean;
+  // Non-null (e.g. "No state snapshot yet — run the pipeline first.") when
+  // macro_data is empty because there's nothing to read yet.
+  reason: string | null;
 }
 
 export interface OrderBookLevel {

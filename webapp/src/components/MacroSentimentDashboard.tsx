@@ -33,6 +33,10 @@ export default function MacroSentimentDashboard() {
           </div>
         ) : error ? (
           <div className="w-full text-center text-red-500 p-8">Failed to load macro sentiment</div>
+        ) : macroData.length === 0 ? (
+          <div className="w-full text-center text-slate-500 dark:text-slate-400 p-8">
+            {data?.reason || 'No macro data available yet.'}
+          </div>
         ) : (
           <>
             <div className="w-full lg:w-1/2 h-[300px]">
