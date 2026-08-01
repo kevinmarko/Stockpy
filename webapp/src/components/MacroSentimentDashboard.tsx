@@ -38,7 +38,7 @@ export default function MacroSentimentDashboard() {
       <div className="detail-grid" style={{ flex: 1, marginBottom: 0 }}>
         {loading ? (
           <div style={{ gridColumn: "1 / -1", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: "var(--s-8)" }}>
-            <Loader2 style={{ width: 24, height: 24, color: "var(--text-muted)", animation: "spin 0.7s linear infinite" }} />
+            <Loader2 className="icon-spin" style={{ width: 24, height: 24, color: "var(--text-muted)" }} />
           </div>
         ) : error ? (
           <div style={{ gridColumn: "1 / -1", width: "100%", textAlign: "center", color: "var(--decline)", padding: "var(--s-8)" }}>Failed to load macro sentiment</div>

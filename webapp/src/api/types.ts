@@ -3026,7 +3026,12 @@ export interface ModelComparisonRow {
 }
 
 export interface ModelComparisonResponse {
+  // Always empty from the live backend today -- "SF-GARCH-LSTM"/"Bond-BERT"
+  // are undeployed ridge-regression stand-ins (see ml/models/sf_garch_lstm.py
+  // / ml/models/bond_bert.py) with no tracked real return history to compare,
+  // so this honestly reports no data rather than a fabricated curve.
   data: ModelComparisonRow[];
+  is_synthetic: boolean;
 }
 
 export interface IntradayThetaPoint {

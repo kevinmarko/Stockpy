@@ -42,7 +42,7 @@ export default function OptionsAnalyticsDashboard({ symbol = 'SPY' }: { symbol?:
 
       {loading ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 300 }}>
-          <Loader2 style={{ width: 24, height: 24, color: "var(--text-muted)", animation: "spin 0.7s linear infinite" }} />
+          <Loader2 className="icon-spin" style={{ width: 24, height: 24, color: "var(--text-muted)" }} />
         </div>
       ) : error ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--decline)", minHeight: 300 }}>Failed to load analytics</div>

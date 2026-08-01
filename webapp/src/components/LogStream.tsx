@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { jobStreamUrl, USE_MOCK } from "../api/client";
 import { Button } from "./ui";
+import { Toggle } from "./Toggle";
 import { theme } from "../theme";
 
 interface LogStreamProps {
@@ -76,14 +77,11 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
           Live Console Output
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-1)", fontSize: "var(--t-caption)", color: theme.textMuted }}>
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
-            />
-            Auto-scroll
-          </label>
+          <Toggle
+            label="Auto-scroll"
+            checked={autoScroll}
+            onChange={setAutoScroll}
+          />
           <input
             type="text"
             placeholder="Filter logs..."
@@ -105,7 +103,12 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
           gap: "var(--s-1)",
           fontFamily: "var(--font-mono, ui-monospace, monospace)",
           fontSize: "var(--t-caption)",
-          color: theme.textPrimary,
+          color: "#10b981",
+          background: "#0b0e11",
+          padding: "var(--s-3)",
+          borderRadius: "var(--r-sm)",
+          border: `1px solid ${theme.borderStrong}`,
+          scrollBehavior: "smooth",
         }}
       >
         {USE_MOCK ? (

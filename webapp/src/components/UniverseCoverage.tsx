@@ -2,7 +2,8 @@ import { useState } from "react";
 import { api } from "../api/client";
 import type { CoverageStatus, SyncReportResponse, SyncReportSymbol } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { Button, ErrorState, Loading, MetricBadge } from "./ui";
+import { Button, ErrorState, Loading, MetricBadge,  } from "./ui";
+import { Toggle } from "./Toggle";
 import { theme } from "../theme";
 import { fmtNum, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
 
@@ -248,15 +249,14 @@ function UniverseCoverageBody({
         </p>
       )}
 
-      <label style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)", fontSize: "var(--t-body)", marginBottom: "var(--s-2-5)" }}>
-        <input
-          type="checkbox"
+      <div style={{ marginBottom: "var(--s-2-5)" }}>
+        <Toggle
+          label="Coverage gaps only"
           checked={gapsOnly}
-          onChange={(e) => onGapsOnlyChange(e.target.checked)}
-          data-testid="universe-coverage-gaps-only"
+          onChange={onGapsOnlyChange}
+          dataTestId="universe-coverage-gaps-only"
         />
-        Coverage gaps only
-      </label>
+      </div>
 
       {filtered.length === 0 ? (
         <div className="empty" data-testid="universe-coverage-no-gaps" style={{ padding: "var(--s-4)" }}>

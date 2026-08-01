@@ -19,7 +19,7 @@ import {
   Notice,
   StaleDataNotice,
 } from "../components/ui";
-import { Chip, ExecutionQueueSection, ModeBadge } from "../components/ExecutionQueueSection";
+import { Chip, ExecutionQueueSection } from "../components/ExecutionQueueSection";
 import { CopyCommandBlock } from "../components/CopyCommandBlock";
 import { DecisionModal } from "../components/DecisionModal";
 import { KillSwitchToggle } from "../components/KillSwitchToggle";
@@ -122,8 +122,8 @@ function AgentStatusHeader({
 }) {
   return (
     <SectionCard title="Agent status">
+      <ExecutionLadder currentMode={data.mode} />
       <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap", marginBottom: "var(--s-3)" }}>
-        <ModeBadge mode={data.mode} />
         {data.kill_switch.active && <Chip label="Kill switch ACTIVE" tone="decline" />}
         <Chip
           label={data.advisory_only ? "Advisory only" : "Live trading enabled"}
@@ -175,6 +175,75 @@ function AgentStatusHeader({
         </Button>
       </div>
     </SectionCard>
+  );
+}
+
+function ExecutionLadder({ currentMode }: { currentMode: string }) {
+  const steps = ["advisory", "simulation", "paper", "live"];
+  // Handle edge cases like "off" or "review" by defaulting appropriately or leaving unhighlighted
+  const currentIndex = steps.indexOf(currentMode);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        marginBottom: "var(--s-4)",
+        gap: "var(--s-2)",
+        overflowX: "auto",
+        paddingBottom: "var(--s-1)",
+        scrollbarWidth: "none",
+        msOverflowStyle: "none",
+      }}
+      className="hide-scrollbar"
+    >
+      {steps.map((step, idx) => {
+        const isActive = idx === currentIndex;
+        const isPast = currentIndex !== -1 && idx < currentIndex;
+        
+        let color: string = theme.textMuted;
+        let bg: string = "transparent";
+        let borderColor: string = theme.border;
+        
+        if (isActive) {
+           color = theme.base;
+           bg = step === "live" ? theme.decline : theme.accent;
+           borderColor = "transparent";
+        } else if (isPast) {
+           color = theme.textPrimary;
+           borderColor = theme.textPrimary;
+        }
+
+        return (
+          <div key={step} style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+            <div
+              style={{
+                padding: "var(--s-1) var(--s-3)",
+                borderRadius: "999px",
+                fontSize: "var(--t-caption)",
+                fontWeight: isActive ? 600 : 400,
+                color,
+                background: bg,
+                border: `1px solid ${borderColor}`,
+                textTransform: "capitalize",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {step}
+            </div>
+            {idx < steps.length - 1 && (
+              <div
+                style={{
+                  width: 24,
+                  height: 1,
+                  background: isPast ? theme.textPrimary : theme.border,
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

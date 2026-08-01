@@ -72,7 +72,7 @@ export default function ActiveTraderLadder({
       <div style={{ flex: 1, overflow: "auto", padding: "var(--s-4)" }}>
         {loading ? (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "var(--s-8)" }}>
-            <Loader2 style={{ width: 24, height: 24, color: "var(--text-muted)", animation: "spin 0.7s linear infinite" }} />
+            <Loader2 className="icon-spin" style={{ width: 24, height: 24, color: "var(--text-muted)" }} />
           </div>
         ) : error || !ladder || effectivePrice === null ? (
           <div style={{ textAlign: "center", color: "var(--text-secondary)", padding: "var(--s-8)", fontSize: "var(--t-body)" }}>

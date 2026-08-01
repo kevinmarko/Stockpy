@@ -6,6 +6,7 @@
  * data and that loading/error/retry states surface correctly.
  */
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Marketplace } from "./Marketplace";
@@ -108,5 +109,30 @@ describe("Marketplace screen (real mock API)", () => {
     // The cached catalog still rendered as real rails, not an error/blank screen.
     expect(screen.getAllByText(/Trend Follower/i).length).toBeGreaterThan(0);
     expect(screen.queryByText("Couldn't load")).not.toBeInTheDocument();
+  });
+
+  it("the category pill bar filters to a single-category grid, and 'All' restores the rails", async () => {
+    const user = userEvent.setup();
+    renderMarketplace();
+    await screen.findByText("Top Performers");
+
+    const momentumPill = screen.getByRole("button", { name: "Momentum" });
+    await user.click(momentumPill);
+
+    // Rails are gone; only Momentum-category pilots render, as cards in a grid.
+    expect(screen.queryByText("Top Performers")).not.toBeInTheDocument();
+    expect(screen.queryByText("Most Popular")).not.toBeInTheDocument();
+    expect(screen.queryByText("Browse by category")).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Trend Follower/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Momentum Burst/i).length).toBeGreaterThan(0);
+    // A Mean Reversion-only pilot must not leak into the Momentum filter.
+    expect(screen.queryByText(/Dip Buyer/i)).not.toBeInTheDocument();
+
+    const allPill = screen.getByRole("button", { name: "All" });
+    await user.click(allPill);
+
+    expect(screen.getByText("Top Performers")).toBeInTheDocument();
+    expect(screen.getByText("Most Popular")).toBeInTheDocument();
+    expect(screen.getByText("Browse by category")).toBeInTheDocument();
   });
 });

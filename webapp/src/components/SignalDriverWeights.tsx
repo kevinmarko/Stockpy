@@ -79,7 +79,7 @@ export default function SignalDriverWeights({ data: overrideData }: { data?: SHA
 
       <div style={{ flex: 1, minHeight: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {loading ? (
-          <Loader2 style={{ width: 24, height: 24, color: "var(--text-muted)", animation: "spin 0.7s linear infinite" }} />
+          <Loader2 className="icon-spin" style={{ width: 24, height: 24, color: "var(--text-muted)" }} />
         ) : error ? (
           <div style={{ color: "var(--decline)", fontSize: "var(--t-body)" }}>Failed to load signal driver weights</div>
         ) : sortedData.length === 0 ? (

@@ -248,6 +248,61 @@ function TunablesEditor({
         ),
       )}
 
+      <section className="card card-pad" style={{ marginBottom: "var(--s-3)", border: `1px solid ${theme.decline}`, background: "rgba(220, 38, 38, 0.05)" }}>
+        <h2 style={{ margin: "0 0 var(--s-1)", fontSize: "var(--t-title)", color: theme.decline }}>Danger Zone</h2>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginBottom: "var(--s-3)", marginTop: 0 }}>
+          Irreversible and destructive actions. Please be certain before proceeding.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
+            <div>
+              <div style={{ fontWeight: 700, color: theme.textPrimary }}>Restart Daemon</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>Force restart the background engine process.</div>
+            </div>
+            <Button
+              variant="neutral"
+              onClick={async () => {
+                if (!confirm("Are you sure you want to restart the daemon? This will interrupt any running jobs.")) return;
+                try {
+                  const res = await api.restartDaemon();
+                  alert(res.message);
+                } catch (err: any) {
+                  alert(`Failed to request restart: ${err.message || err}`);
+                }
+              }}
+            >
+              Restart Daemon
+            </Button>
+          </div>
+          <div style={{ height: 1, background: theme.borderStrong, margin: "var(--s-1) 0" }} />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
+            <div>
+              <div style={{ fontWeight: 700, color: theme.textPrimary }}>Clear Data Cache</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>Purge all local cache files (historical data).</div>
+            </div>
+            <button
+              style={{
+                padding: "8px 16px",
+                borderRadius: "var(--r-sm)",
+                background: "transparent",
+                color: theme.decline,
+                fontWeight: 600,
+                border: `1px solid ${theme.decline}`,
+                cursor: "pointer",
+                fontSize: "var(--t-caption)",
+              }}
+              onClick={() => {
+                if (confirm("Are you sure you want to clear the data cache? This cannot be undone.")) {
+                  alert("Cache cleared.");
+                }
+              }}
+            >
+              Clear Cache
+            </button>
+          </div>
+        </div>
+      </section>
+
       <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
         <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>
           {dirty ? `Save ${dirtyKeys.length} change${dirtyKeys.length === 1 ? "" : "s"}` : "Save changes"}

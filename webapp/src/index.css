@@ -1105,6 +1105,11 @@ button:focus-visible {
     transform: rotate(360deg);
   }
 }
+/* Icon-only spin (e.g. an inline lucide-react Loader2) — unlike .spinner
+   above, this draws no ring of its own, just rotates whatever it's applied to. */
+.icon-spin {
+  animation: spin 0.7s linear infinite;
+}
 
 /* ── Options Detail View (tastytrade-inspired) ─────────────────────── */
 
@@ -1294,130 +1299,6 @@ button:focus-visible {
   border-radius: var(--r-pill);
 }
 
-/* ---- AI Chat Interface (slide-over panel) ---- */
-.ai-chat-panel {
-  position: fixed;
-  top: 0;
-  right: 0;
-  z-index: 50;
-  height: 100%;
-  width: 400px;
-  max-width: 100vw;
-  background: var(--surface);
-  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
-  display: flex;
-  flex-direction: column;
-  transform: translateX(100%);
-  transition: transform 0.25s ease;
-}
-.ai-chat-panel.is-open {
-  transform: translateX(0);
-}
-.ai-chat-icon-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text-secondary);
-  display: inline-flex;
-}
-.ai-chat-icon-btn:hover {
-  color: var(--text-primary);
-}
-.ai-chat-thought-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-2) var(--s-3);
-  font-size: var(--t-caption);
-  font-weight: 600;
-  color: var(--text-secondary);
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-}
-.ai-chat-thought-toggle:hover {
-  background: var(--surface-3);
-  color: var(--text-primary);
-}
-.ai-chat-suggestion {
-  text-align: left;
-  font-size: var(--t-caption);
-  background: rgba(56, 189, 248, 0.1);
-  color: var(--accent);
-  padding: var(--s-2);
-  border-radius: var(--r-sm);
-  border: 1px solid rgba(56, 189, 248, 0.24);
-  transition: background 0.15s ease;
-}
-.ai-chat-suggestion:hover {
-  background: rgba(56, 189, 248, 0.18);
-}
-.ai-chat-textarea {
-  width: 100%;
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
-  padding: var(--s-3) 40px var(--s-3) var(--s-4);
-  font-size: var(--t-body);
-  color: var(--text-primary);
-  resize: none;
-  overscroll-behavior: contain;
-  font-family: inherit;
-}
-.ai-chat-textarea:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-}
-.ai-chat-send-btn {
-  position: absolute;
-  right: 24px;
-  bottom: 24px;
-  padding: var(--s-2);
-  background: var(--accent);
-  border: none;
-  border-radius: var(--r-pill);
-  color: #06222f;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.ai-chat-send-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Descendant styling for ReactMarkdown output -- the only place in this file
-   that needs to reach into markup this codebase doesn't author directly. */
-.md-content > p {
-  margin: 0 0 var(--s-2);
-}
-.md-content > p:last-child {
-  margin-bottom: 0;
-}
-.md-content > ul {
-  list-style: disc;
-  margin: 0 0 var(--s-2) var(--s-5);
-  padding: 0;
-}
-.md-content > ol {
-  list-style: decimal;
-  margin: 0 0 var(--s-2) var(--s-5);
-  padding: 0;
-}
-.md-content > h3 {
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: var(--s-3) 0 var(--s-1);
-}
-.md-content code {
-  background: rgba(255, 255, 255, 0.08);
-  padding: 0 var(--s-1-5);
-  border-radius: var(--r-2xs);
-}
-
 /* ---- Two-up chart grid (Models screen) ---- */
 .chart-grid-2 {
   display: grid;
@@ -1474,6 +1355,82 @@ button:focus-visible {
   border-color: var(--accent);
 }
 
+/* ---- Dashboard Grid ---- */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--s-4);
+  align-items: start;
+}
+
+@media (min-width: 768px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .dashboard-widget-wide {
+    grid-column: span 2;
+  }
+}
+
+@media (min-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  
+  .dashboard-widget-full {
+    grid-column: span 3;
+  }
+}
+
+/* ---- AI chat drawer ----
+   Fixed positioning + the slide transform need a real (non-inline) CSS rule
+   since an inline `style` transform can't be conditioned on a class toggle
+   the way this component's `.open` modifier is; everything else about the
+   drawer's chrome is inline-styled via theme.ts like the rest of the app. */
+.chat-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(400px, 100vw);
+  z-index: 50;
+  transform: translateX(100%);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.chat-drawer.open {
+  transform: translateX(0);
+}
+
+/* ReactMarkdown renders arbitrary nested elements (p/ul/ol/li/code/h3/a) that
+   an inline `style` on the wrapper div can't reach — this is the one place
+   in the app that needs a real cascading selector for rendered content. */
+.chat-markdown p {
+  margin: 0 0 var(--s-2);
+}
+.chat-markdown p:last-child {
+  margin-bottom: 0;
+}
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: var(--s-1) 0 var(--s-2) var(--s-5);
+  padding: 0;
+}
+.chat-markdown h3 {
+  font-weight: 700;
+  margin: var(--s-3) 0 var(--s-1);
+}
+.chat-markdown code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: var(--r-2xs);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.chat-markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 /* ---- Reduced motion ----
    Kills every animation/transition in the file, including the two `infinite`
    loops (.skeleton shimmer, .spinner spin) that are exactly the class of
@@ -1491,3 +1448,4 @@ button:focus-visible {
   }
 }
 
+.hide-scrollbar::-webkit-scrollbar { display: none; }
