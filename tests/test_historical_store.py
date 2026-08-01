@@ -1034,6 +1034,44 @@ class TestMacroHistory:
         assert isinstance(result, pd.Series)
         assert result.empty
 
+    def test_macro_gap_rows_are_excluded_not_returned_as_nan(self, tmp_path):
+        """FRED gap dates (NULL ``value`` rows in ``macro_history``) must be
+        OMITTED from the returned Series, not included as NaN entries.
+
+        ``macro_history`` stores a dense one-row-per-calendar-day skeleton
+        per series; a sparsely-published series (e.g. a monthly one, or one
+        with a genuine multi-year backfill gap) is mostly NULL rows. Passing
+        those through as NaN breaks two real downstream consumers in
+        ``scripts/refresh_validations.py``: a ``.rolling(window=N)`` over the
+        raw series (needs N consecutive REAL observations) and
+        ``_asof_align``'s ``merge_asof(direction="backward")`` (must forward-
+        fill from the nearest REAL prior value, not match onto — and
+        propagate — a NULL placeholder row).
+        """
+        db = str(tmp_path / "macro.db")
+        store = HistoricalStore(db_path=db)
+        macro_df = _make_macro_df(30)
+        # Blank out all but the last 5 dates of T10Y2Y, mimicking a series
+        # with a long real-data gap (e.g. BAMLH0A0HYM2 in production, whose
+        # backfill only covers the most recent few years).
+        real_dates = macro_df.index[-5:]
+        macro_df.loc[macro_df.index[:-5], "T10Y2Y"] = float("nan")
+        de = _make_mock_data_engine(macro_df)
+
+        series = store.get_macro("T10Y2Y", data_engine=de)
+
+        assert len(series) == 5
+        assert not series.isna().any(), "gap rows must be omitted, never returned as NaN"
+        for d in real_dates:
+            assert pd.Timestamp(d) in series.index
+        for d in macro_df.index[:-5]:
+            assert pd.Timestamp(d) not in series.index
+
+        # VIXCLS was never blanked out -- unaffected, still fully dense.
+        vix_series = store.get_macro("VIXCLS", data_engine=de)
+        assert len(vix_series) == 30
+        assert not vix_series.isna().any()
+
     def test_macro_lookback_slices_tail(self, tmp_path):
         """lookback_days=10 returns at most ~10 business days of rows."""
         db = str(tmp_path / "macro.db")
