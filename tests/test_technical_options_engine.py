@@ -458,6 +458,126 @@ class TestBuildPremiumDirectiveDeadLetter:
 
 
 # ============================================================================
+# build_premium_directive — FMP fundamental-health kwargs + earnings-risk
+# folding into Integrity_OK (fmp-updates-data-apps PR)
+# ============================================================================
+
+class TestBuildPremiumDirectiveFmpHealthAndEarnings:
+    """Coverage for the eight new pass-through kwargs (Altman Z, Piotroski F,
+    Net Debt/EBITDA, FCF Yield, days_to_earnings, realized_vol_30d, news
+    snippets, peers) and the days_to_earnings -> Earnings_Risk -> Integrity_OK
+    folding logic. build_premium_directive is a pure, no-I/O helper -- none of
+    these values are fetched here, only echoed onto the row verbatim."""
+
+    def _bullish_sell_regime_row(self, seed, **extra):
+        """A deterministic Put Credit Spread: trend bias is forced Bullish by
+        mocking calculate_indicators (rather than relying on the random
+        synthetic bars to happen to produce one), and ivr_sell_threshold=0.0
+        forces the high-IVR/premium-selling branch regardless of whatever the
+        bars' own realized-vol IVR proxy computes to -- the same technique
+        test_options_matrix.py's test_call_debit_spread_directive_... uses for
+        the opposite (low-IVR) regime."""
+        bars = _ohlcv(252, seed=seed)
+        with mock.patch.object(
+            TechnicalOptionsEngine,
+            "calculate_indicators",
+            return_value={
+                "Aroon_Oscillator": 50.0, "Coppock_Curve": 10.0,
+                "Chandelier_Long": 0.0, "Chandelier_Short": 0.0,
+            },
+        ):
+            return build_premium_directive(
+                "EARN", bars, spot_price=float(bars["Close"].iloc[-1]), is_stale=False,
+                target_dte=30, ivr_sell_threshold=0.0, **extra,
+            )
+
+    def test_fmp_health_kwargs_default_to_none_and_empty_lists(self):
+        """Flag-off / no caller-supplied values -- byte-identical to
+        pre-overlay behavior: every new field is None, Earnings_Risk is
+        False, and the two list fields are empty (never None)."""
+        bars = _ohlcv(252, seed=20)
+        row = build_premium_directive("DEFAULT", bars, spot_price=float(bars["Close"].iloc[-1]))
+        assert row["Altman_Z_Score"] is None
+        assert row["Piotroski_F_Score"] is None
+        assert row["Net_Debt_EBITDA"] is None
+        assert row["FCF_Yield"] is None
+        assert row["Days_To_Earnings"] is None
+        assert row["Earnings_Risk"] is False
+        assert row["Realized_Vol_30D"] is None
+        assert row["News_Snippets"] == []
+        assert row["Peers"] == []
+
+    def test_fmp_health_kwargs_pass_through_verbatim(self):
+        """This function never fetches or recomputes these -- whatever the
+        caller passes in comes back out unchanged."""
+        bars = _ohlcv(252, seed=21)
+        news = [{"title": "headline", "url": "http://x", "published_date": "2026-08-01",
+                 "site": "s", "text": "t"}]
+        peers = ["MSFT", "GOOGL"]
+        row = build_premium_directive(
+            "PASS", bars, spot_price=float(bars["Close"].iloc[-1]),
+            altman_z_score=3.4, piotroski_f_score=7, net_debt_ebitda=1.2,
+            fcf_yield=0.05, realized_vol_30d=0.22,
+            news_snippets=news, peers_list=peers,
+        )
+        assert row["Altman_Z_Score"] == 3.4
+        assert row["Piotroski_F_Score"] == 7
+        assert row["Net_Debt_EBITDA"] == 1.2
+        assert row["FCF_Yield"] == 0.05
+        assert row["Realized_Vol_30D"] == 0.22
+        assert row["News_Snippets"] == news
+        assert row["Peers"] == peers
+
+    def test_earnings_within_target_dte_sets_earnings_risk_true(self):
+        bars = _ohlcv(252, seed=22)
+        row = build_premium_directive(
+            "SOON", bars, spot_price=float(bars["Close"].iloc[-1]),
+            target_dte=30, days_to_earnings=10,
+        )
+        assert row["Days_To_Earnings"] == 10
+        assert row["Earnings_Risk"] is True
+
+    def test_earnings_beyond_target_dte_sets_earnings_risk_false(self):
+        bars = _ohlcv(252, seed=23)
+        row = build_premium_directive(
+            "LATER", bars, spot_price=float(bars["Close"].iloc[-1]),
+            target_dte=30, days_to_earnings=45,
+        )
+        assert row["Days_To_Earnings"] == 45
+        assert row["Earnings_Risk"] is False
+
+    def test_earnings_risk_folds_into_integrity_ok_false_for_a_structurally_clean_directive(self):
+        """Pins the dead-code fix: removing the redundant inner
+        `row["Integrity_OK"] = False` must not change behavior -- the
+        unconditional line right after already produced the correct verdict.
+        A structurally clean directive (Integrity_OK True, no issues) must
+        flip to Integrity_OK False and gain exactly the earnings warning
+        (nothing else) once days_to_earnings falls inside target_dte."""
+        row_no_risk = self._bullish_sell_regime_row(seed=24, days_to_earnings=None)
+        assert row_no_risk["Strategy"] == "Put Credit Spread"
+        assert row_no_risk["Integrity_OK"] is True
+        assert row_no_risk["Integrity_Issues"] == []
+
+        row_with_risk = self._bullish_sell_regime_row(seed=24, days_to_earnings=5)
+        assert row_with_risk["Strategy"] == "Put Credit Spread"
+        assert row_with_risk["Earnings_Risk"] is True
+        assert row_with_risk["Integrity_OK"] is False
+        assert len(row_with_risk["Integrity_Issues"]) == 1
+        assert "Earnings Announcement" in row_with_risk["Integrity_Issues"][0]
+
+    def test_earnings_risk_boundary_is_inclusive_of_target_dte(self):
+        """has_earnings_risk uses `0 <= days_to_earnings <= target_dte` --
+        an event exactly ON the target DTE boundary still counts as risk."""
+        row = self._bullish_sell_regime_row(seed=25, days_to_earnings=30)
+        assert row["Earnings_Risk"] is True
+        assert row["Integrity_OK"] is False
+
+        row_just_past = self._bullish_sell_regime_row(seed=25, days_to_earnings=31)
+        assert row_just_past["Earnings_Risk"] is False
+        assert row_just_past["Integrity_OK"] is True
+
+
+# ============================================================================
 # validate_directive_integrity — gaps not covered by test_options_matrix.py
 # ============================================================================
 

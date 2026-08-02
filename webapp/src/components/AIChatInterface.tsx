@@ -94,8 +94,14 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
           ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
-          message: contextText ? `[Context: ${contextText}] ${textToSend.trim()}` : textToSend.trim(),
-          history: currentMessages.slice(0, -1)
+          message: textToSend.trim(),
+          history: currentMessages.slice(0, -1),
+          // Threaded server-side into the LLM prompt as background context
+          // (see api/data_api.py::ChatMessageRequest.context) rather than
+          // folded into the message text here, so the user's literal
+          // question stays clean in the transcript and the backend decides
+          // how best to present grounding context to each provider.
+          ...(contextText ? { context: contextText } : {}),
         })
       });
 

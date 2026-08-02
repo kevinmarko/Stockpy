@@ -3127,31 +3127,4 @@ export interface ForecastBackfillSummary {
   synthetic_tickers?: string[];
 }
 
-export interface ChatThought {
-  type: "THOUGHT";
-  text: string;
-}
-
-export interface ChatFinalResponse {
-  type: "FINAL_RESPONSE";
-  text: string;
-}
-
-export interface ChatSuggestion {
-  type: "SUGGESTION";
-  text: string;
-}
-
-export type ChatStreamEvent = ChatThought | ChatFinalResponse | ChatSuggestion;
-
-export interface ChatMessage {
-  id: string;
-  role: "user" | "model";
-  content: string;
-  thoughts?: string[];
-  suggestions?: string[];
-  isStreaming?: boolean;
-}
-
-
 

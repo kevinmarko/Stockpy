@@ -42,6 +42,7 @@ import pytest
 from data.fmp_feeds_market import (
     _pct_to_fraction,
     fetch_insider_stats,
+    fetch_realized_volatility,
     fetch_sector_snapshot,
 )
 from pipeline.production_steps import _apply_fmp_insider, _apply_fmp_sector
@@ -295,6 +296,56 @@ class TestFetchSectorSnapshot:
             rows = fetch_sector_snapshot("")
         assert rows == []
         get.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# data/fmp_feeds_market.py::fetch_realized_volatility
+# (options-matrix FMP health overlay -- settings.FMP_OPTIONS_HEALTH_ENABLED,
+# wired by reporting/options_snapshot.py::write_options_matrix, surfaced as
+# the diagnostic-only Realized_Vol_30D passthrough field on build_premium_
+# directive's row -- never used as an IVR-rank fallback, see
+# technical_options_engine.py's build_premium_directive step-5 comment)
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestFetchRealizedVolatility:
+    def test_happy_path_maps_all_three_windows(self, fmp_settings):
+        def _get(url, params=None, timeout=None):
+            assert "standard-deviation" in url
+            return _resp(payload=[{
+                "stdDev10d": 0.31, "standardDeviation": 0.22, "stdDev90d": 0.19,
+            }])
+
+        with patch("data.fmp_client.requests.get", side_effect=_get):
+            out = fetch_realized_volatility("aapl")
+
+        assert out["hv_10"] == pytest.approx(0.31)
+        assert out["hv_30"] == pytest.approx(0.22)
+        assert out["hv_90"] == pytest.approx(0.19)
+
+    def test_hv_30_falls_back_to_stddev30d_key_when_standarddeviation_absent(self, fmp_settings):
+        with patch("data.fmp_client.requests.get", return_value=_resp(payload=[{"stdDev30d": 0.27}])):
+            out = fetch_realized_volatility("MSFT")
+        assert out["hv_30"] == pytest.approx(0.27)
+
+    def test_empty_payload_degrades_to_all_nan_never_raises(self, fmp_settings):
+        """This module's own ``_safe_float`` (unlike fmp_feeds_company.py's)
+        returns NaN, not None, for an absent field -- matches the value the
+        `Realized_Vol_30D` diagnostic column stores everywhere else."""
+        with patch("data.fmp_client.requests.get", return_value=_resp(payload=[])):
+            out = fetch_realized_volatility("NEWCO")
+        assert out["hv_10"] != out["hv_10"]  # NaN
+        assert out["hv_30"] != out["hv_30"]
+        assert out["hv_90"] != out["hv_90"]
+
+    def test_total_failure_no_api_key_degrades_to_none_never_raises(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_API_KEY", None)
+        out = fetch_realized_volatility("AAPL")
+        assert out == {"hv_10": None, "hv_30": None, "hv_90": None}
+
+    def test_transport_error_degrades_to_none_never_raises(self, fmp_settings):
+        with patch("data.fmp_client.requests.get", side_effect=ConnectionError("boom")):
+            out = fetch_realized_volatility("AAPL")
+        assert out == {"hv_10": None, "hv_30": None, "hv_90": None}
 
 
 # ─────────────────────────────────────────────────────────────────────────

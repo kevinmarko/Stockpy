@@ -19,6 +19,7 @@ import App from "./App";
 import { api } from "./api/client";
 import type { LlmProviderName, LlmStatus } from "./api/types";
 import { writeOnboarding } from "./onboarding";
+import { ChatProvider } from "./chat/ChatContext";
 
 const _noCall = (provider: LlmProviderName) => ({
   provider,
@@ -91,7 +92,9 @@ vi.mock("virtual:pwa-register/react", () => ({
 function renderApp(initialPath = "/") {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
-      <App />
+      <ChatProvider>
+        <App />
+      </ChatProvider>
     </MemoryRouter>
   );
 }

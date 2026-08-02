@@ -34,7 +34,8 @@ import {
   ReferenceArea,
 } from "recharts";
 import OptionsAnalyticsDashboard from "../components/OptionsAnalyticsDashboard";
-import GeminiChatPanel from "../components/GeminiChatPanel";
+import { useChat } from "../chat/ChatContext";
+import { buildOptionsContextText } from "../chat/formatOptionsContext";
 
 
 function heatmapStyle(val: number | null | undefined, min: number, max: number, invert = false) {
@@ -869,7 +870,7 @@ export function OptionsMatrix() {
   const [openSymbol, setOpenSymbol] = useState<string | null>(null);
   const [showRecompute, setShowRecompute] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [chatOpen, setChatOpen] = useState(false);
+  const { openChat } = useChat();
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
@@ -916,7 +917,7 @@ export function OptionsMatrix() {
         <h1 className="screen-title">Options premium</h1>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <Button
-            onClick={() => setChatOpen(true)}
+            onClick={() => openChat(buildOptionsContextText(directives))}
             style={{
               background: "var(--surface-3)",
               color: "var(--growth)",
@@ -934,12 +935,6 @@ export function OptionsMatrix() {
           )}
         </div>
       </div>
-
-      <GeminiChatPanel
-        isOpen={chatOpen}
-        onClose={() => setChatOpen(false)}
-        symbols={directives.map((d) => d.Symbol)}
-      />
 
       <TabGuide tabKey="options" />
 

@@ -108,12 +108,89 @@ def write_options_matrix(
             logger.warning("options matrix: provider construction failed: %s", exc)
             return None
 
+    # ── Optional FMP fundamental-health overlay (settings.FMP_OPTIONS_HEALTH_ENABLED)
+    # and earnings-proximity flag (settings.FMP_EARNINGS_ENABLED, reusing the
+    # EXISTING durable earnings-events store rather than a fresh fetch — see
+    # pipeline/production_steps.py's _apply_fmp_earnings for the identical
+    # read pattern this mirrors). Both default False: when off, none of this
+    # runs, zero extra network/DB calls, and build_premium_directive's new
+    # kwargs all stay at their None defaults — byte-identical to pre-overlay
+    # behavior. Import failures degrade the corresponding overlay off for the
+    # whole run rather than aborting the writer (CONSTRAINT #6).
+    fmp_health_enabled = bool(getattr(settings, "FMP_OPTIONS_HEALTH_ENABLED", False))
+    fetch_financial_scores = fetch_key_ratios_ttm = fetch_realized_volatility = None
+    if fmp_health_enabled:
+        try:
+            from data.fmp_feeds_company import fetch_financial_scores, fetch_key_ratios_ttm
+            from data.fmp_feeds_market import fetch_realized_volatility
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("options matrix: FMP health overlay unavailable: %s", exc)
+            fmp_health_enabled = False
+
+    fmp_earnings_enabled = bool(getattr(settings, "FMP_EARNINGS_ENABLED", False))
+    earnings_store = None
+    earnings_as_of: Optional[str] = None
+    if fmp_earnings_enabled:
+        try:
+            from data.historical_store import HistoricalStore
+
+            earnings_store = HistoricalStore()
+            earnings_as_of = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("options matrix: earnings-events store unavailable: %s", exc)
+            fmp_earnings_enabled = False
+
     macro_proxy = _MacroProxy(float(vix), str(market_regime))
     directives: List[Dict[str, Any]] = []
     for symbol in syms:
         try:
             quote = provider.get_latest_quote(symbol)
             bars = provider.get_intraday_bars(symbol, lookback_days=252)
+
+            # Each FMP sub-fetch is independently try/excepted: a failure
+            # fetching (say) Altman Z for this symbol must not blank out a
+            # days_to_earnings this same symbol already resolved, or prevent
+            # the base directive from still being built (CONSTRAINT #6).
+            altman_z_score: Optional[float] = None
+            piotroski_f_score: Optional[int] = None
+            net_debt_ebitda: Optional[float] = None
+            fcf_yield: Optional[float] = None
+            realized_vol_30d: Optional[float] = None
+            days_to_earnings: Optional[int] = None
+
+            if fmp_health_enabled:
+                try:
+                    scores = fetch_financial_scores(symbol)
+                    altman_z_score = scores.get("altman_z_score")
+                    piotroski_f_score = scores.get("piotroski_f_score")
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("options matrix: financial-scores failed for %s: %s", symbol, exc)
+                try:
+                    ratios = fetch_key_ratios_ttm(symbol)
+                    net_debt_ebitda = ratios.get("net_debt_ebitda")
+                    fcf_yield = ratios.get("fcf_yield")
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("options matrix: ratios-ttm failed for %s: %s", symbol, exc)
+                try:
+                    vol = fetch_realized_volatility(symbol)
+                    realized_vol_30d = vol.get("hv_30")
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("options matrix: realized-volatility failed for %s: %s", symbol, exc)
+
+            if fmp_earnings_enabled and earnings_store is not None:
+                try:
+                    future_rows = earnings_store.get_earnings_events(
+                        symbol, after=earnings_as_of, limit=1,
+                    )
+                    if future_rows:
+                        event_date = future_rows[0].get("event_date")
+                        if event_date:
+                            d_next = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").date()
+                            d_as_of = datetime.strptime(earnings_as_of, "%Y-%m-%d").date()
+                            days_to_earnings = (d_next - d_as_of).days
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("options matrix: days-to-earnings failed for %s: %s", symbol, exc)
+
             row = build_premium_directive(
                 symbol,
                 bars,
@@ -122,6 +199,12 @@ def write_options_matrix(
                 target_dte=int(target_dte),
                 macro_dto=macro_proxy,
                 vrp=None,  # VRP needs an options chain — skip that gate here
+                altman_z_score=altman_z_score,
+                piotroski_f_score=piotroski_f_score,
+                net_debt_ebitda=net_debt_ebitda,
+                fcf_yield=fcf_yield,
+                days_to_earnings=days_to_earnings,
+                realized_vol_30d=realized_vol_30d,
             )
             directives.append(_json_safe(row))
         except MarketDataError as exc:  # noqa: PERF203
