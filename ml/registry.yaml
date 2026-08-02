@@ -82,15 +82,15 @@ models:
   meta_labeler_timeseries_momentum:
     role: meta_labeler
     path: ml/models/meta_timeseries_momentum_latest.pkl
-    trained_date: '2026-08-01'
-    cpcv_dsr: 4.9946179574289357e-11
-    pbo: 0.06666666666666667
-    n_train: 3565
+    trained_date: '2026-08-02'
+    cpcv_dsr: 2.6186446803844043e-12
+    pbo: 0.13333333333333333
+    n_train: 948
     deployable: false
     notes: Binary LightGBM classifier predicting P(timeseries_momentum signal correct). Trained on triple-barrier
       labels from ml/triple_barrier.py. If predict_proba < settings.META_LABEL_MIN_CONFIDENCE (0.4), the
       position size for that cycle is zeroed by SignalAggregator.
-    artifact_file: meta_timeseries_momentum_20260801.pkl
+    artifact_file: meta_timeseries_momentum_20260802.pkl
     hyperparameters:
       objective: binary
       metric: binary_logloss
@@ -105,9 +105,9 @@ models:
       verbose: -1
       class_weight: balanced
     train_window:
-      start: '2023-02-20'
+      start: '2024-08-01'
       end: '2026-07-31'
-      n_dates: 900
+      n_dates: 501
     features:
     - momentum
     - realized_vol_20d
@@ -116,15 +116,15 @@ models:
   meta_labeler_cross_sectional_momentum:
     role: meta_labeler
     path: ml/models/meta_cross_sectional_momentum_latest.pkl
-    trained_date: '2026-08-01'
-    cpcv_dsr: 0.00017133496620637135
-    pbo: 0.4
-    n_train: 3513
+    trained_date: '2026-08-02'
+    cpcv_dsr: 0.0015573664329870435
+    pbo: 0.26666666666666666
+    n_train: 856
     deployable: false
     notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal correct). Shares the
       same triple-barrier label construction and feature set as the timeseries momentum meta-labeler;
       trained and persisted independently.
-    artifact_file: meta_cross_sectional_momentum_20260801.pkl
+    artifact_file: meta_cross_sectional_momentum_20260802.pkl
     hyperparameters:
       objective: binary
       metric: binary_logloss
@@ -139,9 +139,9 @@ models:
       verbose: -1
       class_weight: balanced
     train_window:
-      start: '2023-02-20'
+      start: '2024-08-01'
       end: '2026-07-31'
-      n_dates: 900
+      n_dates: 501
     features:
     - momentum
     - realized_vol_20d
