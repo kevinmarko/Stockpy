@@ -16,6 +16,14 @@ even when .env is fully populated — producing the production failure mode:
      is missing or empty."
 
 These tests pin the contract so that regression is caught at CI time.
+
+Also covers ``settings.ENV_PATH`` — the single repo-root-anchored ``.env``
+locator every other locator (pydantic-settings' own ``env_file=``,
+``gui/env_io.py``, ``data/brokerage_credentials.py``, ``scripts/_bootstrap.py``)
+must import instead of re-deriving — and
+``data/robinhood_portfolio.py::_require_setting`` (renamed from
+``_require_env``), the ``settings.settings.X``-based credential-presence
+guard that replaced a direct ``os.environ`` read.
 """
 from __future__ import annotations
 
@@ -102,3 +110,108 @@ def test_load_dotenv_actually_populates_environ(monkeypatch: pytest.MonkeyPatch,
         assert os.environ.get("REGRESSION_TEST_KEY") == "hello_world"
     finally:
         os.environ.pop("REGRESSION_TEST_KEY", None)
+
+
+# ===========================================================================
+# settings.ENV_PATH — the single source of truth every other .env locator
+# in the codebase must import instead of re-deriving (see settings.py's own
+# comment immediately above the ENV_PATH definition for the three previously
+# disagreeing mechanisms this constant unifies).
+# ===========================================================================
+
+class TestEnvPathAnchor:
+    def test_env_path_is_a_path_anchored_at_settings_module_location(self) -> None:
+        """ENV_PATH must exist, be a pathlib.Path, and be computed relative
+        to settings.py's OWN file location (not the process CWD) — this is
+        what makes it safe to import from any worktree/CWD without silently
+        resolving to a sibling checkout's .env."""
+        import settings as settings_module
+
+        assert hasattr(settings_module, "ENV_PATH")
+        assert isinstance(settings_module.ENV_PATH, Path)
+        assert settings_module.ENV_PATH == (
+            Path(settings_module.__file__).resolve().parent / ".env"
+        )
+
+    def test_settings_model_config_env_file_is_env_path(self) -> None:
+        """pydantic-settings' own env_file= must point at the SAME ENV_PATH
+        constant, not a separately-derived '.env' string — otherwise
+        Settings() and every other ENV_PATH-based locator could silently
+        drift apart and read two different files.
+
+        Chosen over an actual chdir-then-reconstruct-Settings() functional
+        test: SettingsConfigDict is a TypedDict/dict-like, so inspecting
+        Settings.model_config directly is a precise, side-effect-free check
+        of the exact configured value pydantic-settings will use — no risk
+        of the reconstructed Settings() instance picking up a stray .env
+        from an unexpected directory or mutating any process-global state
+        (os.environ, the settings singleton) that other tests depend on.
+        """
+        from settings import ENV_PATH, Settings
+
+        assert Settings.model_config["env_file"] == ENV_PATH
+
+    def test_env_path_unaffected_by_process_cwd(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Functional companion to the model_config check above: ENV_PATH is
+        a module-level constant computed ONCE at import time from
+        settings.py's own __file__, never from the process's current
+        working directory — so chdir'ing to a directory with no .env at all
+        must never change it.
+
+        Safe to actually chdir here (unlike reconstructing Settings()
+        itself, which risks side effects) because this test only reads the
+        already-computed constant — it never triggers a fresh .env load or
+        mutates the settings singleton.
+        """
+        import settings as settings_module
+
+        before = settings_module.ENV_PATH
+        monkeypatch.chdir(tmp_path)
+        assert settings_module.ENV_PATH == before
+        assert settings_module.ENV_PATH.name == ".env"
+        assert settings_module.ENV_PATH.is_absolute()
+
+
+# ===========================================================================
+# data/robinhood_portfolio.py::_require_setting (renamed from _require_env) —
+# reads a named settings.settings.X attribute (never os.environ directly) and
+# raises RuntimeError when it's missing/empty, or returns the stripped value
+# when set. Tested here directly against a real Settings field (RH_USERNAME)
+# rather than a fake attribute name, since _require_setting takes an
+# arbitrary attribute NAME string and does getattr(_settings, name, None).
+# ===========================================================================
+
+class TestRequireSetting:
+    def test_raises_runtime_error_when_setting_is_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import settings as settings_module
+        from data.robinhood_portfolio import _require_setting
+
+        monkeypatch.setattr(settings_module.settings, "RH_USERNAME", None, raising=False)
+        with pytest.raises(RuntimeError, match="RH_USERNAME"):
+            _require_setting("RH_USERNAME")
+
+    def test_raises_runtime_error_when_setting_is_empty_string(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import settings as settings_module
+        from data.robinhood_portfolio import _require_setting
+
+        monkeypatch.setattr(settings_module.settings, "RH_USERNAME", "", raising=False)
+        with pytest.raises(RuntimeError, match="RH_USERNAME"):
+            _require_setting("RH_USERNAME")
+
+    def test_returns_stripped_value_when_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import settings as settings_module
+        from data.robinhood_portfolio import _require_setting
+
+        monkeypatch.setattr(
+            settings_module.settings, "RH_USERNAME", "  someone@example.com  ", raising=False
+        )
+        result = _require_setting("RH_USERNAME")
+        assert result == "someone@example.com"

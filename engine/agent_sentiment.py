@@ -1,4 +1,3 @@
-import os
 import logging
 import pydantic
 from typing import Dict, Any
@@ -10,7 +9,8 @@ try:
 except ImportError:
     HAS_ANTIGRAVITY = False
 
-from signals.news_catalyst import build_finnhub_client, fetch_company_news
+from settings import settings
+from signals.news_catalyst import fetch_company_headlines
 
 logger = logging.getLogger("AgentSentiment")
 
@@ -20,14 +20,16 @@ class SentimentOutput(pydantic.BaseModel):
     credibility_score: float
 
 def get_recent_news(ticker: str) -> str:
-    """Fetches recent company news headlines for a given ticker."""
-    client = build_finnhub_client()
-    if not client:
-        return f"No Finnhub API key available to fetch news for {ticker}."
-    news_items = fetch_company_news(client, ticker, lookback_days=7)
+    """Fetches recent company news headlines for a given ticker.
+
+    Provider-agnostic: FMP-first when configured
+    (settings.FMP_NEWS_ENABLED + FMP_API_KEY), Finnhub-fallback otherwise
+    (see signals.news_catalyst.fetch_company_headlines).
+    """
+    news_items = fetch_company_headlines(ticker, lookback_days=7)
     if not news_items:
         return f"No recent news found for {ticker}."
-    
+
     # Just grab the headlines to avoid token bloat
     headlines = [item.get("headline", "") for item in news_items if item.get("headline")]
     return "\n".join(headlines[:20]) # Limit to top 20 headlines
@@ -41,7 +43,13 @@ async def analyze_sentiment(ticker: str) -> Dict[str, Any]:
         logger.warning("google.antigravity SDK not installed. Cannot run agent.")
         return {}
 
-    api_key = os.environ.get("GEMINI_API_KEY")
+    # Read via the `settings` singleton, not os.environ — pydantic-settings
+    # loads .env into Settings only, never into the real process environment,
+    # so an os.environ read here would see nothing for a key that only ever
+    # lives in .env (the same bug class fixed across data/robinhood_portfolio.py,
+    # prompt_registry/, and data/market_data.py — see CLAUDE.md's "Credential
+    # reads MUST go through settings.X" convention).
+    api_key = getattr(settings, "GEMINI_API_KEY", None)
     if not api_key:
         logger.warning("GEMINI_API_KEY not set. Cannot run Antigravity agent.")
         return {}

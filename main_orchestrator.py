@@ -68,7 +68,7 @@ from dotenv import load_dotenv as _load_dotenv
 
 # Core imports
 import config
-from settings import settings
+from settings import ENV_PATH, settings
 from data_engine import DataEngine, MockDataEngine
 from processing_engine import ProcessingEngine
 from macro_engine import MacroEngine
@@ -1106,7 +1106,10 @@ async def main(dry_run: bool = False, strict: bool = False):  # CLI flags propag
     # the loader is deliberately invoked here (not at import) so the test
     # suite's Settings()-default assertions aren't polluted by .env values
     # leaking into os.environ at module import time.  Idempotent.
-    _load_dotenv(override=False)
+    # Anchored to ENV_PATH (settings.py) — a bare load_dotenv() walks UP from
+    # this file's directory via find_dotenv() and, in a git worktree with no
+    # .env of its own, silently finds a PARENT checkout's .env instead.
+    _load_dotenv(ENV_PATH, override=False)
     telemetry.info("🚀 Launching Master Orchestration Routing Hub...")
 
     # --dry-run: merge CLI arg with settings; either source can enable it.

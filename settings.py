@@ -21,6 +21,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
 
 logger = logging.getLogger(__name__)
 
+# Repo-root anchor for `.env` resolution — the SINGLE source of truth every
+# other `.env` locator in the codebase must import instead of re-deriving.
+# Before this, three independent mechanisms disagreed with each other:
+#   (1) pydantic-settings' own `env_file=".env"` below, resolved against the
+#       process CWD;
+#   (2) a bare `load_dotenv()` call (main.py / main_orchestrator.py /
+#       app_shell.py), which uses python-dotenv's `find_dotenv()` and walks
+#       UP from the calling file's directory to filesystem root — in a git
+#       worktree with no `.env` of its own, this silently finds a PARENT
+#       checkout's `.env` instead;
+#   (3) gui/env_io.py and data/brokerage_credentials.py, which each
+#       independently re-derived a repo-root-anchored path.
+# Anchoring all three to this one constant makes `.env` resolution identical
+# regardless of CWD or worktree, and makes it impossible for a stray
+# `load_dotenv()` to reach across into a sibling checkout.
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+
 # A FRED API key was previously hardcoded in main.py / main_orchestrator.py and
 # committed to git history. If the live key still equals that value it is
 # compromised and MUST be rotated. We store only the SHA-256 digest of the leaked
@@ -103,7 +120,7 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_PATH,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -592,6 +609,29 @@ class Settings(BaseSettings):
             "provider selector applies."
         ),
     )
+    FMP_NEWS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the FMP company-news feed (data.fmp_client."
+            "stock_news, wrapping /news/stock). False (the default) is a "
+            "complete no-op reproducing today's exact behavior — "
+            "signals/news_catalyst.py's headline fetch stays on its existing "
+            "Finnhub-only path, and data/sentiment_sources.py's 'fmp_news' "
+            "SentimentSource returns [] without any network call. When True "
+            "AND FMP_API_KEY is set, FMP becomes the PRIMARY provider for "
+            "company headlines (signals/news_catalyst.py::"
+            "fetch_company_headlines dispatches FMP-first, falling back to "
+            "Finnhub only on an FMP failure) and 'fmp_news' becomes eligible "
+            "for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP "
+            "key: /news/stock returns >=6 months of real history (vs. "
+            "Finnhub's free-tier ~3-month cap) with working from/to date-"
+            "window + page/limit pagination. Deliberately does NOT touch "
+            "/news/press-releases — that endpoint returned a plan-"
+            "entitlement rejection ('Restricted Endpoint') against the "
+            "account this integration was verified with; see "
+            "docs/FMP_INTEGRATION.md."
+        ),
+    )
     FMP_MACRO_ENABLED: bool = Field(
         default=False,
         description=(
@@ -712,6 +752,29 @@ class Settings(BaseSettings):
             "JUDGMENT CALL, not a derived constant — there is no published "
             "filing-completeness curve behind it; it is set here so an "
             "operator can widen it if they observe late revisions."
+        ),
+    )
+    FMP_NEWS_PAGE_LIMIT: int = Field(
+        default=100,
+        description=(
+            "Articles requested per /news/stock page (the 'limit' query "
+            "param). 100 matches the page size verified live 2026-08 against "
+            "a real FMP key over a multi-day window. Only consulted when "
+            "FMP_NEWS_ENABLED is True."
+        ),
+    )
+    FMP_NEWS_MAX_PAGES: int = Field(
+        default=10,
+        description=(
+            "Hard ceiling on pages fetched per symbol per call into "
+            "data.fmp_client.stock_news, bounding a wide backfill window "
+            "(e.g. scripts/backfill_news_history.py --months 6) so a dense "
+            "news day/symbol cannot loop indefinitely. Once the ceiling is "
+            "reached the remaining (older) articles in the window are simply "
+            "not fetched -- callers that need full coverage should narrow "
+            "--months or accept the honest gap (CONSTRAINT #4: never a "
+            "fabricated substitute for the missing pages, just fewer real "
+            "rows). Only consulted when FMP_NEWS_ENABLED is True."
         ),
     )
     FMP_ECON_INDICATORS: str = Field(
@@ -1187,6 +1250,16 @@ class Settings(BaseSettings):
     # --- Runtime / IO ---
     OUTPUT_DIR: Path = Field(default=Path("./output"), description="Directory for generated reports.")
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
+    SYNC_WATCHLIST_FILES: Optional[str] = Field(
+        default=None,
+        description=(
+            "Colon-separated paths (shell PATH convention) to additional "
+            "plain-text watchlist files (one ticker per line, '#' = comment) "
+            "consumed by data.robinhood_client.discover_universe(). Missing "
+            "files are tolerated silently. See data/portfolio_sync.py's "
+            "Portfolio & Watchlist Synchronization docs for the full union."
+        ),
+    )
     CORS_ALLOWED_ORIGINS: list[str] = Field(
         # http://localhost:3000 is the classic CRA/Node dev-server convention;
         # the 5173 pair (both host spellings, since browsers treat localhost

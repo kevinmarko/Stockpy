@@ -314,7 +314,7 @@ class TestUniverseResolution:
         nothing (never a silent crash)."""
         store = _FakeStore()
         monkeypatch.setattr(backfill, "HistoricalStore", lambda: store)
-        monkeypatch.setattr(backfill, "resolve_universe", lambda spec: [])
+        monkeypatch.setattr(backfill, "resolve_universe", lambda spec, **kwargs: [])
         monkeypatch.setattr(sys, "argv", ["backfill_edgar_fundamentals.py", "--tickers", "all"])
         backfill.main()
         assert store.upserts == []

@@ -3,7 +3,8 @@
 **File:** `signals/news_catalyst.py`  
 **Default weight:** 10.0  
 **Score range:** `[-1.0, +1.0]`  
-**Regime gate:** Suppressed (not just down-weighted) during `RECESSION`/`CREDIT EVENT` regimes or `VIX > 30` — see [Regime Gate](#regime-gate) below. Scoring also degrades gracefully when `FINNHUB_API_KEY` is absent.  
+**Regime gate:** Suppressed (not just down-weighted) during `RECESSION`/`CREDIT EVENT` regimes or `VIX > 30` — see [Regime Gate](#regime-gate) below. Scoring also degrades gracefully when no news provider is configured (neither `FMP_NEWS_ENABLED`+`FMP_API_KEY` nor `FINNHUB_API_KEY`).  
+**Provider (2026-08):** FMP-first, Finnhub-fallback — see [Provider (FMP-first, Finnhub-fallback)](#provider-fmp-first-finnhub-fallback) below.  
 **Hook pattern:** Two-phase `pre_compute` / `compute`  
 **Pilot:** News Catalyst (`news-catalyst`, `pilots/catalog.py`) — no backtest curve
 (`validation_strategy_id=None`); backtesting headline sentiment needs point-in-time news
@@ -51,8 +52,10 @@ financial text by ~10–15 F1 points on the FPB dataset.
 ```
 pre_compute(universe_df, context):
     For each symbol:
-        1. Fetch company_news (last NEWS_LOOKBACK_DAYS = 7 days) from Finnhub.
-        2. Fetch next earnings date from earnings_calendar.
+        1. Fetch company headlines (last NEWS_LOOKBACK_DAYS = 7 days) via
+           fetch_company_headlines() — FMP-first, Finnhub-fallback.
+        2. Fetch next earnings date via fetch_next_earnings_any() — same
+           FMP-first/Finnhub-fallback dispatch.
         3. Score all of this symbol's headlines in one batched score_headlines() call
            (FinBERT, preferred) or per-headline lexicon fallback.
         4. Average the collapsed (positive − negative) headline scores → raw_sentiment ∈ [-1, +1].
@@ -65,9 +68,42 @@ compute(row, context):
     return SignalOutput(score=score, ...)
 ```
 
-Rate courtesy sleep: 0.12 s per symbol ≈ 8 calls/s, safely under Finnhub's 60/min
-free-tier ceiling. This paces the Finnhub *fetch* calls only — the FinBERT/lexicon
-*scoring* step (see below) is local and batched, so it is never subject to this delay.
+Rate courtesy sleep: 0.12 s per symbol between iterations, unconditional regardless of
+which provider actually served the symbol — a fixed, already-accepted per-symbol cost
+that keeps Finnhub-fallback calls (≈8 calls/s, safely under Finnhub's 60/min free-tier
+ceiling) paced correctly without needing to track per-symbol provider attribution. This
+paces *fetch* calls only — the FinBERT/lexicon *scoring* step (see below) is local and
+batched, so it is never subject to this delay. FMP's own throttle/cooldown
+(`data/fmp_client.py`) is independent of this sleep.
+
+---
+
+## Provider (FMP-first, Finnhub-fallback)
+
+Added 2026-08 in response to an operator hitting `FINNHUB_API_KEY is not set ...
+(or finnhub-python is not installed)` from `scripts/backfill_news_history.py` — the
+decision was to make FMP the PRIMARY provider, with Finnhub kept as an opt-in
+fallback rather than removed.
+
+`signals/news_catalyst.py` exposes two provider-agnostic dispatchers:
+`fetch_company_headlines(symbol, lookback_days)` and
+`fetch_next_earnings_any(symbol)`. Each tries FMP first — gated on
+`settings.FMP_NEWS_ENABLED` (default `False`) + `settings.FMP_API_KEY` — via
+`data.fmp_client.stock_news` (headlines, paginated up to
+`settings.FMP_NEWS_MAX_PAGES`) / `data.fmp_feeds_company.fetch_earnings_rows`
+(earnings), and falls back to the original, unchanged, still-exported
+`build_finnhub_client()` + `fetch_company_news()`/`fetch_next_earnings()` path
+whenever FMP is unconfigured or returns nothing for that symbol. Verified live
+2026-08: FMP's `/news/stock` covers ≥6 months of real history — well past
+Finnhub's free-tier ~3-month cap (see `NEWS_LOOKBACK_DAYS`'s own description and
+[Failure Modes](#failure-modes) below). `pre_compute()`'s provider gate now accepts
+FMP-only configuration — it previously required a working Finnhub client to do
+anything at all.
+
+`FMP_NEWS_ENABLED`/`FMP_API_KEY` alone do not change `data/sentiment_sources.py`'s
+separate `FinnhubSentimentSource`/`FMPNewsSource` multi-source participants (see
+[Multi-Source Credibility Blend](#multi-source-credibility-blend) below) — those are
+each independently opt-in via `SENTIMENT_SOURCES`.
 
 ---
 
@@ -153,7 +189,7 @@ of the raw headline text, **not** a date — and only scores cache misses, writi
 results back before returning. This is content-hash, not time-based, keying: a lookup for
 unchanged text is not a lookahead risk, since the score is a pure, deterministic function
 of the text alone and a cycle can only ever look up a hash for a headline it has *already*
-fetched from Finnhub this cycle (see the `finbert_score_cache` DDL comment and
+fetched (from either provider) this cycle (see the `finbert_score_cache` DDL comment and
 `tests/test_news_catalyst.py::TestFinbertScoreCacheLookaheadSafety` for the explicit proof).
 Gated by `settings.FINBERT_SCORE_CACHE_ENABLED` (default `True` — a pure performance
 optimization with identical outputs) and degrades gracefully to "score fresh, skip the
@@ -173,13 +209,15 @@ unavailable.
 
 | Failure | Behaviour |
 |---------|-----------|
-| `FINNHUB_API_KEY` absent | `pre_compute` skips all Finnhub calls; every symbol gets `sentiment = 0.0`. Module is informationless, not broken. |
-| Finnhub 429 rate limit | `FinnhubProvider` applies exponential backoff (2 s) + retry once; on persistent 429, returns empty news list. Score = 0.0 for that symbol. |
+| Neither `FMP_NEWS_ENABLED`+`FMP_API_KEY` nor `FINNHUB_API_KEY` set | `pre_compute` skips all provider calls; every symbol gets `sentiment = 0.0`. Module is informationless, not broken. |
+| `FMP_NEWS_ENABLED=True` but the FMP request fails/returns nothing for a symbol | `fetch_company_headlines`/`fetch_next_earnings_any` fall through to the Finnhub path for that symbol (or `[]`/`None` if Finnhub is also unconfigured) — never raises. |
+| FMP request beyond `FMP_NEWS_MAX_PAGES` pages of real history in the window | Older articles past the page ceiling are an honest, logged gap (CONSTRAINT #4) — not silently treated as "no news". Only relevant to `scripts/backfill_news_history.py`'s wide historical windows; a live per-cycle `NEWS_LOOKBACK_DAYS`-day fetch rarely approaches the ceiling. |
+| Finnhub 429 rate limit (fallback path) | `FinnhubProvider` applies exponential backoff (2 s) + retry once; on persistent 429, returns empty news list. Score = 0.0 for that symbol (unless FMP already served it). |
 | `transformers` ImportError (no PyTorch) | Automatic fallback to lexicon. Logged at INFO, not WARNING — this is a supported configuration. |
 | FinBERT batch inference error/OOM on CPU | An exception inside `score_headlines()`'s batch call is caught; that whole batch falls back to the lexicon per-headline. |
 | `finbert_score_cache` read/write failure | Logged at DEBUG and swallowed; `score_headlines()` scores fresh instead (CONSTRAINT #6) — never blocks scoring. |
 | No headlines in lookback window | score = 0.0 (no news ≠ neutral news, but we treat it as neutral to avoid punishing quiet periods). |
-| Symbol with no Finnhub coverage | empty news list → score = 0.0. |
+| Symbol with no coverage from either provider | empty news list → score = 0.0. |
 
 ---
 
@@ -190,17 +228,20 @@ unavailable.
 is gated behind `settings.SENTIMENT_INGESTION_ENABLED`, **default `False`**. Until an operator
 sets it `True` in `.env`, this is a complete no-op — no network call is attempted for any symbol,
 and `sentiment_ingestion_audit` never accumulates a single row no matter how much time passes.
-This exists because two of the four sources (Yahoo RSS, GDELT) need no API key, so — unlike
-Finnhub/Reddit/EDGAR, which already degrade to a no-op when their credentials are absent — they
+This exists because two of the sources (Yahoo RSS, GDELT) need no API key, so — unlike
+Finnhub/FMP/Reddit/EDGAR, which already degrade to a no-op when their credentials/flags are absent — they
 have no other way to stay quiet by default. **Turning this on is the one action required** for
 the point-in-time archive to start accumulating toward `SENTIMENT_PIT_MIN_MONTHS`; nothing else
 needs to be done afterward — it runs automatically every cycle from then on.
 
-**Backfill: waiting isn't the only way to reach archive depth.** GDELT, SEC EDGAR, and Finnhub
-all have genuine historical archives — `scripts/backfill_sentiment_history.py` can pull real,
-already-existing history (default: the last 5 months) into `sentiment_ingestion_audit` right now,
-with **zero credibility bias**, since all three are policy-trusted institutional sources
-(`credibility_weight=1.0` regardless of when they're scored). Reddit is also backfillable but
+**Backfill: waiting isn't the only way to reach archive depth.** GDELT, SEC EDGAR, Finnhub, and
+FMP all have genuine historical archives (FMP's `/news/stock` verified live 2026-08 to cover ≥6
+months, ahead of Finnhub's free-tier ~3-month cap — see [Provider (FMP-first,
+Finnhub-fallback)](#provider-fmp-first-finnhub-fallback) above) — `scripts/backfill_sentiment_history.py`
+(the `sentiment_ingestion_audit` multi-source backfill) and `scripts/backfill_news_history.py`
+(the `news_history` FMP/Finnhub-specific backfill) can both pull real, already-existing history
+into their respective tables right now, with **zero credibility bias** for the institutional
+sources (`credibility_weight=1.0` regardless of when they're scored). Reddit is also backfillable but
 carries a real caveat: a backfilled post's `S_authority` reflects the author's account state
 *today*, not at post time. Yahoo RSS cannot backfill at all (a live feed, no historical archive).
 `HistoricalStore.get_sentiment_archive_depth_by_source()` reports depth per source, so a future
@@ -209,8 +250,10 @@ rather than one blended number that would overstate confidence in the weaker com
 
 `pre_compute()` additionally reads the current trading day's aggregate from
 `HistoricalStore.get_sentiment_aggregate_by_symbol()` — populated at ingest time by
-`data/sentiment_sources.py`'s `CompositeSentimentSource` (Yahoo RSS/GDELT/Reddit/EDGAR/Finnhub
-documents, deduplicated, trading-day-rolled) and `signals/credibility.py`'s per-document
+`data/sentiment_sources.py`'s `CompositeSentimentSource` (Yahoo RSS/GDELT/Reddit/EDGAR/Finnhub/FMP
+documents, deduplicated, trading-day-rolled — `FMPNewsSource`, `name="fmp_news"`, is opt-in via
+`SENTIMENT_SOURCES` alongside `FinnhubSentimentSource`, `name="finnhub"`, neither in the default)
+and `signals/credibility.py`'s per-document
 credibility scoring (`S_authority`/`S_humanity`/`S_verification` sub-scores → a
 `credibility_weight` in `[0.1, 1.0]` that discounts low-authority/bot-like social documents at
 the aggregate level, before this signal ever sees them).
@@ -226,7 +269,7 @@ to 1.0 by construction. When no social documents exist for a symbol this trading
 contribution is skipped entirely and the score is headline-only (`News_Sentiment`'s own meaning
 is never altered by this blend).
 
-Institutional/editorial sources (Finnhub, Yahoo RSS, GDELT, EDGAR) carry no author/follower
+Institutional/editorial sources (Finnhub, FMP, Yahoo RSS, GDELT, EDGAR) carry no author/follower
 metadata and are treated as fully credible (`credibility_weight = 1.0`) by policy, not by a
 fabricated per-document measurement — this is a deliberate modeling choice documented in
 `signals/credibility.py`'s module docstring, not an attempt to infer authority for editorial copy.
@@ -236,7 +279,7 @@ fabricated per-document measurement — this is a deliberate modeling choice doc
 ## Config / New Columns
 
 Added to `config.COLUMN_SCHEMA`:
-- `News_Sentiment` — average headline score ∈ [−1, +1] (Finnhub-headline component only, unchanged meaning)
+- `News_Sentiment` — average headline score ∈ [−1, +1] (headline component only — FMP-first, Finnhub-fallback since 2026-08 — unchanged meaning)
 - `Earnings_Date` — next earnings date as ISO string or empty
 - `Credibility_Weighted_Sentiment` — mean credibility-weighted social score for the trading day (NaN if no social documents)
 - `Bot_Activity_Ratio` — mean `is_bot` flag across the trading day's social documents (percent)
@@ -258,4 +301,5 @@ tab via `research_engine.compute_correlation_clusters()`, not by this module.
   fundamental reassessment.
 - For earnings-calendar-sparse symbols (e.g. monthly-dividend payers), the earnings
   proximity multiplier defaults to 1.0 (full signal) — the suppression only fires when
-  Finnhub returns a valid next-earnings date.
+  `fetch_next_earnings_any()` (FMP-first, Finnhub-fallback) returns a valid
+  next-earnings date.

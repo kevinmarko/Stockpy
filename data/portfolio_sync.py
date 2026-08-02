@@ -539,7 +539,10 @@ def read_cache(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
 
 
 def resolve_universe(
-    spec: Optional[str] = "all", *, snapshot: Optional[Any] = None
+    spec: Optional[str] = "all",
+    *,
+    snapshot: Optional[Any] = None,
+    allow_live_broker_fetch: bool = True,
 ) -> List[str]:
     """Resolve a ``--tickers`` spec to a concrete sorted symbol list. Never raises.
 
@@ -569,6 +572,23 @@ def resolve_universe(
       ``DEFAULT_TICKERS`` rather than through a special-case fallback branch.
       Only when ``DEFAULT_TICKERS`` is also empty does this return ``[]``, and
       the caller is expected to emit an explicit "empty universe" abort message.
+
+    Parameters
+    ----------
+    allow_live_broker_fetch:
+        Threaded straight through to
+        :func:`data.robinhood_portfolio.fetch_account_snapshot`'s
+        ``allow_live_fetch``. Default ``True`` preserves the exact prior
+        behaviour (a live Robinhood login is attempted when the cache is
+        stale). Set ``False`` for a headless/backfill caller that only needs
+        *a* universe, not a fresh one, and must never attempt an interactive
+        TOTP/MFA login (which — absent ``RH_MFA_SECRET`` — falls back to a
+        blocking terminal prompt on a real TTY, or raises immediately
+        headless; either way it is wasted work when a stale cache is fine).
+        The best available cached snapshot is used regardless of staleness;
+        an "account snapshot unavailable" WARNING (not an ERROR) is logged
+        instead of the noisier live-fetch-failure ERROR this path would
+        otherwise produce.
     """
     from data.robinhood_client import _sanitize_tickers
 
@@ -582,7 +602,7 @@ def resolve_universe(
         try:
             from data.robinhood_portfolio import fetch_account_snapshot
 
-            snapshot = fetch_account_snapshot()
+            snapshot = fetch_account_snapshot(allow_live_fetch=allow_live_broker_fetch)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "resolve_universe: account snapshot unavailable (%s) — "

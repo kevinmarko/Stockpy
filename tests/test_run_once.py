@@ -656,7 +656,7 @@ class TestMacroEngineReuse:
         construct a real on-disk HistoricalStore and hit the real
         get_provider() network path instead of exercising the mocked
         fake_de.fetch_technical_raw fallback this test actually verifies."""
-        monkeypatch.setenv("FRED_API_KEY", "dummy_key_for_test")
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
 
         with patch("data_engine.DataEngine") as MockDE, patch("macro_engine.MacroEngine") as MockME:
             fake_de = MagicMock()
@@ -693,7 +693,7 @@ class TestBuildMacroDtoHistoricalStoreRouting:
     def test_spy_history_routes_through_historical_store_when_enabled(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("FRED_API_KEY", "dummy_key_for_test")
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
         synthetic_spy_df = pd.DataFrame(
             {
                 "Open": [100.0, 101.0],
@@ -738,7 +738,7 @@ class TestBuildMacroDtoHistoricalStoreRouting:
     def test_spy_history_falls_back_when_historical_store_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("FRED_API_KEY", "dummy_key_for_test")
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
         fallback_spy_df = pd.DataFrame({"Close": [50.0, 51.0]})
 
         with patch("data_engine.DataEngine") as MockDE, \
@@ -767,7 +767,7 @@ class TestBuildMacroDtoHistoricalStoreRouting:
     def test_spy_history_uses_direct_fetch_when_historical_store_disabled(
         self, monkeypatch: pytest.MonkeyPatch, disable_historical_store
     ) -> None:
-        monkeypatch.setenv("FRED_API_KEY", "dummy_key_for_test")
+        monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
         fallback_spy_df = pd.DataFrame({"Close": [60.0, 61.0]})
 
         with patch("data_engine.DataEngine") as MockDE, \

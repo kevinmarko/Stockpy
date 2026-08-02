@@ -489,28 +489,52 @@ overlay decision.
 
 ### 3.5b "RH_USERNAME is missing" but `.env` has it set
 
-**Symptom**: Log shows `ERROR - Live Robinhood fetch failed: Required environment
-variable 'RH_USERNAME' (or 'ROBINHOOD_USERNAME') is missing or empty` — yet your `.env`
-clearly contains `RH_USERNAME=...`.
+**Historical note (fixed 2026-08):** this section originally documented a real bug with
+two independent causes, both now fixed. It's kept below in case a *new* variant of the
+symptom resurfaces — the verify step at the bottom is the fast way to tell whether you're
+looking at a genuine regression or something else.
 
-**Root cause**: `pydantic-settings` reads `.env` into `Settings()` but does NOT propagate
-values to `os.environ`. `data/robinhood_portfolio.py` reads credentials via
-`os.environ.get()` directly, so it sees empty strings unless `load_dotenv()` has been
-called.
+**Symptom**: Log shows `ERROR - Live Robinhood fetch failed: Required environment
+variable 'RH_USERNAME' is missing or empty` — yet your `.env` clearly contains
+`RH_USERNAME=...`.
+
+**Root cause #1 (fixed): `os.environ` read instead of `settings.X`.** `pydantic-settings`
+reads `.env` into `Settings()` but does NOT propagate values to `os.environ`.
+`data/robinhood_portfolio.py` used to read credentials via `os.environ.get()` directly,
+so it saw empty strings unless `load_dotenv()` had been called first. Fixed: credentials
+are now read via `settings.settings.RH_USERNAME`/`RH_PASSWORD`/`RH_MFA_SECRET`
+(`_require_setting`, renamed from `_require_env`) — which loads `.env` independently
+through pydantic-settings' own mechanism and needs no `load_dotenv()` call to see a
+value at all.
+
+**Root cause #2 (fixed): three `.env` locators disagreeing.** Even where `load_dotenv()`
+*was* called, it used to be a bare `load_dotenv()` — which resolves the file via
+`find_dotenv()`, walking UP from the calling file's directory. In a git worktree with no
+`.env` of its own, this silently found a PARENT checkout's `.env` instead — the wrong
+file, correctly reported as "missing" for a key that was only ever set in the *real*
+`.env`. Fixed: `settings.ENV_PATH` (`Path(__file__).resolve().parent / ".env"`, anchored
+at `settings.py`'s own location, not the process CWD or a directory walk) is now the
+single anchor every `.env` locator in the codebase imports — `main.py`,
+`main_orchestrator.py`, `app_shell.py`, `desktop/orchestrator_daemon.py`, all five
+standalone `api/*.py` FastAPI services, and every `scripts/*.py` entry point (via the new
+`scripts/_bootstrap.py::bootstrap()` — see §3.5c below) all pass `ENV_PATH` explicitly.
 
 **Verify**:
 
 ```bash
-.venv/bin/python3 -m pytest tests/test_env_loading.py -v
+.venv/bin/python3 -m pytest tests/test_env_loading.py tests/test_robinhood_portfolio.py -v
 ```
 
-Both tests must PASS. If either fails, the regression has returned.
+All tests must PASS. If any fail, a regression has returned. A quick manual check from
+any directory:
 
-**Fix**: The canonical pattern is to **import** `load_dotenv` at module top but **call**
-it inside the entry-point function — `main.py` calls `_load_dotenv(override=False)` as
-the first line of `main()`; `main_orchestrator.py` calls it inside `async def main()`.
-`run_once()` deliberately does NOT call it — callers (`make verify`, `verify.command`)
-must call `load_dotenv()` themselves before invoking `run_once()`, and both already do.
+```bash
+.venv/bin/python3 -c "from settings import settings; print('RH:', bool(settings.RH_USERNAME))"
+```
+
+should print `RH: True` if `.env` (next to `settings.py`, i.e. the repo root) has
+`RH_USERNAME` set — regardless of your current working directory or which worktree you
+run it from.
 
 **Companion symptoms**:
 
@@ -522,6 +546,41 @@ must call `load_dotenv()` themselves before invoking `run_once()`, and both alre
   tickers in **Sheet2 column A** of the Google Sheet (last-resort fallback).
 - First line of `.env` is a comment without `#` prefix → `python-dotenv could not parse
   statement starting at line 1`. Prefix the line with `#`.
+- Running from a git worktree that has never had `.env` copied/symlinked into it: `.env`
+  lives next to `settings.py` in the checkout you're actually running from (not shared
+  automatically across worktrees, same as `.venv` — both are gitignored, per-checkout
+  artifacts). Copy or hand-populate a `.env` in that worktree, or run from the primary
+  checkout instead.
+
+---
+
+### 3.5c A `scripts/*.py` backfill script fails with a missing-package error under a bare `python3`
+
+**Symptom**: `python3 scripts/backfill_news_history.py` (or any other `scripts/*.py`
+entry point) fails with a `ModuleNotFoundError`, or a dependency that's clearly installed
+in `.venv` behaves as if it's "not installed" (e.g. `FINNHUB_API_KEY is not set in
+settings (or finnhub-python is not installed)` even with `finnhub-python` present in
+`.venv`).
+
+**Root cause**: the invoking `python3` is not `.venv`'s interpreter (e.g. Homebrew or
+system Python), which lacks project-only dependencies. `main.py`/`main_orchestrator.py`
+self-correct via their own venv-reexec guard at module top; before 2026-08, no script
+under `scripts/` did.
+
+**Fix**: every `scripts/*.py` entry point now calls `scripts/_bootstrap.py::bootstrap()`,
+which re-execs the process under `.venv`'s interpreter (if not already there) before
+loading `.env`, mirroring `main.py`'s guard exactly. Running any script with a bare
+`python3 scripts/whatever.py` now self-corrects automatically — no `source .venv/bin/
+activate` or `.venv/bin/python3` prefix required, though either still works.
+
+**Verify**:
+
+```bash
+.venv/bin/python3 -m pytest tests/test_scripts_bootstrap.py -v
+```
+
+All tests must PASS — this file statically confirms every `scripts/*.py` file actually
+calls `bootstrap()` somewhere in its source.
 
 ---
 

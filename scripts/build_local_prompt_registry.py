@@ -50,7 +50,15 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from dotenv import load_dotenv
+# Venv re-exec + .env loading -- must run before any third-party/project
+# import below (see scripts/_bootstrap.py's module docstring for why). This
+# script is documented as `python -m scripts.build_local_prompt_registry`
+# only (always run from the repo root), so no separate sys.path shim is
+# needed for `scripts` to be importable here, unlike most of this package's
+# other entry points.
+from scripts._bootstrap import bootstrap
+
+bootstrap()
 
 from prompt_registry.cache import list_baseline_ids, read_baseline
 from prompt_registry.guardrails import validate_prompt
@@ -118,9 +126,11 @@ def write_manifest(manifest: RegistryManifest, output_path: Path) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """Entry point: ``python -m scripts.build_local_prompt_registry``."""
-    load_dotenv(override=False)
+    """Entry point: ``python -m scripts.build_local_prompt_registry``.
 
+    .env is already loaded by this module's top-level ``bootstrap()`` call —
+    no separate load_dotenv() call is needed here.
+    """
     parser = argparse.ArgumentParser(
         description="Seed a signed registry.json for the Prompt Registry's local backend "
                      "from the committed baseline prompts.",

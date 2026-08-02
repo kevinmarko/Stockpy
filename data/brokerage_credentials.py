@@ -42,11 +42,15 @@ from pathlib import Path
 
 from dotenv import set_key, unset_key
 
+from settings import ENV_PATH, settings as _settings
+
 logger = logging.getLogger(__name__)
 
 # Repo root = parent of the data/ package directory (mirrors gui/env_io.py).
+# ENV_PATH itself now lives in settings.py — see that module's comment for
+# why every `.env` locator in the codebase must import it rather than
+# re-deriving its own copy.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-ENV_PATH = _REPO_ROOT / ".env"
 
 # Hard allowlist — the ONLY keys this module will ever write or clear.
 # RH_MFA_SECRET is deliberately excluded — see module header comment above.
@@ -54,19 +58,32 @@ _RH_CREDENTIAL_KEYS: tuple[str, ...] = ("RH_USERNAME", "RH_PASSWORD")
 
 
 def rh_credentials_present() -> bool:
-    """True if RH_USERNAME and RH_PASSWORD are both set in the live process
-    environment. Never returns or logs the credential values themselves."""
+    """True if RH_USERNAME and RH_PASSWORD are both set on the live settings
+    singleton. Never returns or logs the credential values themselves.
+
+    Reads via ``settings.settings.X`` rather than ``os.environ`` — pydantic-
+    settings loads ``.env`` into the Settings model only, it never copies
+    values into the real process environment, so an ``os.environ`` read here
+    would report "absent" for any credential that only ever came from
+    ``.env`` (the exact class of bug documented on
+    ``data.robinhood_portfolio._require_setting``).
+    """
     return bool(
-        os.environ.get("RH_USERNAME", "").strip()
-        and os.environ.get("RH_PASSWORD", "").strip()
+        (_settings.RH_USERNAME or "").strip()
+        and (_settings.RH_PASSWORD or "").strip()
     )
 
 
 def write_rh_credentials(username: str, password: str) -> None:
     """Persist Robinhood portfolio-snapshot credentials to ``.env`` and mirror
-    them into the live process ``os.environ`` so the current process picks
-    them up immediately (no restart required for subsequent
-    ``fetch_account_snapshot()`` calls in this same process).
+    them into both the live process ``os.environ`` and the live ``settings``
+    singleton, so the current process picks them up immediately (no restart
+    required for subsequent ``fetch_account_snapshot()`` calls in this same
+    process). The settings-singleton assignment is the one that actually
+    matters for in-process reads — every RH credential consumer reads via
+    ``settings.settings.X``, not ``os.environ`` (see ``rh_credentials_present``
+    above); the ``os.environ`` mirror is kept for any external tooling that
+    still shells out and expects it.
 
     Callers MUST have already verified these credentials via
     ``data.robinhood_portfolio.verify_credentials`` (a one-time 6-digit
@@ -91,23 +108,27 @@ def write_rh_credentials(username: str, password: str) -> None:
         if value:
             set_key(str(ENV_PATH), key, value, quote_mode="auto")
             os.environ[key] = value
+            setattr(_settings, key, value)
         else:
             unset_key(str(ENV_PATH), key)
             os.environ.pop(key, None)
+            setattr(_settings, key, None)
 
     logger.info(
         "Wrote Robinhood brokerage credentials to .env (keys=%s; values never logged).",
-        [k for k in _RH_CREDENTIAL_KEYS if os.environ.get(k)],
+        [k for k in _RH_CREDENTIAL_KEYS if getattr(_settings, k, None)],
     )
 
 
 def clear_rh_credentials() -> None:
-    """Remove RH_USERNAME/RH_PASSWORD from both ``.env`` and the live process
-    ``os.environ``. Idempotent — safe to call when nothing is set. Never
-    touches RH_MFA_SECRET (see module header comment)."""
+    """Remove RH_USERNAME/RH_PASSWORD from ``.env``, the live process
+    ``os.environ``, and the live ``settings`` singleton. Idempotent — safe to
+    call when nothing is set. Never touches RH_MFA_SECRET (see module header
+    comment)."""
     if ENV_PATH.exists():
         for key in _RH_CREDENTIAL_KEYS:
             unset_key(str(ENV_PATH), key)
     for key in _RH_CREDENTIAL_KEYS:
         os.environ.pop(key, None)
+        setattr(_settings, key, None)
     logger.info("Cleared Robinhood brokerage credentials from .env and process environment.")

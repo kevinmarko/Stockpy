@@ -539,4 +539,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    # Venv re-exec + .env loading -- placed here (not at module top)
+    # because this module is widely imported as a library (by
+    # main_orchestrator.py, api/data_api.py, pipeline/production_steps.py,
+    # several gui/panels/*.py, and more) -- a module-top call would
+    # fire the re-exec check (and, in the wrong environment, spawn a
+    # subprocess and sys.exit()) on every such import, not just when
+    # this file is the actual CLI entry point. See
+    # scripts/_bootstrap.py's module docstring for the full rationale.
+    from scripts._bootstrap import bootstrap
+    bootstrap()
     raise SystemExit(main())
