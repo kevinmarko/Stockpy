@@ -9,28 +9,10 @@ import { Toggle } from "../components/Toggle";
 import { TunableGroupCard } from "../components/TunableGroupCard";
 import { theme } from "../theme";
 
-/**
- * Settings Manager — read + edit the platform's general runtime tunables
- * (GET/PUT /settings/tunables). A `.env`-write surface, so it lives under
- * /settings, reached from the "Runtime tunables" card, mirroring how Strategy
- * Matrix and the AI Control Center each got their own /settings sub-route once
- * they grew a write path.
- *
- * Honesty: an `.env` write does NOT reach the running process (settings is a
- * process-lifetime singleton) — hence the persistent "applies on next restart"
- * notice and the `applies: "next_daemon_restart"` contract. After Save the
- * screen surfaces exactly which keys the server `written`, surfaces every
- * per-key `rejected` reason (never swallowed), and resets the dirty baseline
- * for written keys only. A field whose `value` is null renders an empty input,
- * never a fabricated 0 (CONSTRAINT #4).
- */
-
-// String-backed for number/enum/string inputs; boolean for toggles.
 type EditVal = string | boolean;
 
 function encodeValue(f: TunableField): EditVal {
   if (f.type === "boolean") return f.value === true;
-  // number/enum/string: null -> "" (empty input), never a fabricated default.
   return f.value === null || f.value === undefined ? "" : String(f.value);
 }
 
@@ -40,13 +22,29 @@ function buildBaseline(groups: TunablesResponse["groups"]): Record<string, EditV
   return out;
 }
 
-export function SettingsManager() {
+interface GenericSettingsEditorProps {
+  title: string;
+  subtitle: string;
+  backTo?: string;
+  fetchSettings: () => Promise<TunablesResponse>;
+  updateSettings: (values: Record<string, number | boolean | string>) => Promise<{
+    written: Record<string, any>;
+    rejected: Record<string, string>;
+    applies: string;
+    note?: string;
+  }>;
+}
+
+export function GenericSettingsEditor({
+  title,
+  subtitle,
+  backTo = "/settings",
+  fetchSettings,
+  updateSettings,
+}: GenericSettingsEditorProps) {
   const nav = useNavigate();
-  const { data, loading, error, status, reload } = useApi<TunablesResponse>(
-    () => api.getTunables(),
-    [],
-  );
-  const back = () => (window.history.length > 1 ? nav(-1) : nav("/settings"));
+  const { data, loading, error, status, reload } = useApi<TunablesResponse>(fetchSettings, []);
+  const back = () => (window.history.length > 1 ? nav(-1) : nav(backTo));
 
   const hasFields = Boolean(data?.groups.some((g) => g.fields.length > 0));
 
@@ -66,12 +64,8 @@ export function SettingsManager() {
       >
         ← Settings
       </button>
-      <h1 className="screen-title">Runtime tunables</h1>
-      <p className="screen-sub">
-        General platform settings (sizing, forecasting, data). Advisory only —
-        tuning changes what the platform computes and recommends, never places
-        an order.
-      </p>
+      <h1 className="screen-title">{title}</h1>
+      <p className="screen-sub">{subtitle}</p>
 
       <Notice variant="info" style={{ marginBottom: "var(--s-3)" }} data-testid="applies-notice">
         <span>ℹ️</span>
@@ -82,42 +76,41 @@ export function SettingsManager() {
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && !hasFields && (
         <EmptyState
-          title="No tunables exposed"
-          hint="The backend returned no editable settings. Nothing here is fabricated when a value is unavailable."
+          title="No settings exposed"
+          hint="The backend returned no editable settings for this section."
         />
       )}
       {!loading && !error && data && hasFields && (
-        <TunablesEditor data={data} onReload={reload} />
+        <SettingsForm data={data} onReload={reload} updateSettings={updateSettings} />
       )}
     </div>
   );
 }
 
-function TunablesEditor({
+function SettingsForm({
   data,
   onReload,
+  updateSettings,
 }: {
   data: TunablesResponse;
   onReload: () => void;
+  updateSettings: (values: Record<string, number | boolean | string>) => Promise<{
+    written: Record<string, any>;
+    rejected: Record<string, string>;
+    applies: string;
+    note?: string;
+  }>;
 }) {
-  const flatFields = useMemo(
-    () => data.groups.flatMap((g) => g.fields),
-    [data],
-  );
+  const flatFields = useMemo(() => data.groups.flatMap((g) => g.fields), [data]);
   const baselineInit = useMemo(() => buildBaseline(data.groups), [data]);
   const [baseline, setBaseline] = useState<Record<string, EditVal>>(baselineInit);
   const [edited, setEdited] = useState<Record<string, EditVal>>(baselineInit);
 
-  const mutation = useMutation((values: Record<string, number | boolean | string>) =>
-    api.updateTunables(values),
-  );
+  const mutation = useMutation(updateSettings);
 
   const setVal = (key: string, v: EditVal) =>
     setEdited((s) => ({ ...s, [key]: v }));
 
-  // A number field is invalid only when it's dirty AND not a finite in-bounds
-  // number. An unchanged field (including one that started null/empty) is never
-  // flagged, so a partially-set config doesn't block an unrelated edit's Save.
   const invalidKeys = useMemo(() => {
     const bad = new Set<string>();
     for (const f of flatFields) {
@@ -142,7 +135,7 @@ function TunablesEditor({
 
   const dirtyKeys = useMemo(
     () => flatFields.filter((f) => edited[f.key] !== baseline[f.key]).map((f) => f.key),
-    [flatFields, edited, baseline],
+    [flatFields, edited, baseline]
   );
   const dirty = dirtyKeys.length > 0;
   const canSave = dirty && invalidKeys.size === 0 && !mutation.pending;
@@ -161,8 +154,6 @@ function TunablesEditor({
     }
     const res = await mutation.run(payload);
     if (res) {
-      // Reset the dirty baseline for accepted keys only; rejected keys stay
-      // dirty so the operator can fix and re-submit them.
       setBaseline((b) => {
         const next = { ...b };
         for (const [k, v] of Object.entries(res.written)) {
@@ -170,13 +161,13 @@ function TunablesEditor({
         }
         return next;
       });
-      onReload(); // refresh so env_drift.detected surfaces the pending write
+      onReload();
     }
   };
 
   return (
     <>
-      {data.env_drift.detected && (
+      {data.env_drift?.detected && (
         <Notice variant="info" style={{ marginBottom: "var(--s-3)" }} data-testid="env-drift-notice">
           <span>ℹ️</span>
           <span>
@@ -258,61 +249,6 @@ function TunablesEditor({
         );
       })}
 
-      <section className="card card-pad" style={{ marginBottom: "var(--s-3)", border: `1px solid ${theme.decline}`, background: "rgba(220, 38, 38, 0.05)" }}>
-        <h2 style={{ margin: "0 0 var(--s-1)", fontSize: "var(--t-title)", color: theme.decline }}>Danger Zone</h2>
-        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginBottom: "var(--s-3)", marginTop: 0 }}>
-          Irreversible and destructive actions. Please be certain before proceeding.
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
-            <div>
-              <div style={{ fontWeight: 700, color: theme.textPrimary }}>Restart Daemon</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>Force restart the background engine process.</div>
-            </div>
-            <Button
-              variant="neutral"
-              onClick={async () => {
-                if (!confirm("Are you sure you want to restart the daemon? This will interrupt any running jobs.")) return;
-                try {
-                  const res = await api.restartDaemon();
-                  alert(res.message);
-                } catch (err: any) {
-                  alert(`Failed to request restart: ${err.message || err}`);
-                }
-              }}
-            >
-              Restart Daemon
-            </Button>
-          </div>
-          <div style={{ height: 1, background: theme.borderStrong, margin: "var(--s-1) 0" }} />
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
-            <div>
-              <div style={{ fontWeight: 700, color: theme.textPrimary }}>Clear Data Cache</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>Purge all local cache files (historical data).</div>
-            </div>
-            <button
-              style={{
-                padding: "8px 16px",
-                borderRadius: "var(--r-sm)",
-                background: "transparent",
-                color: theme.decline,
-                fontWeight: 600,
-                border: `1px solid ${theme.decline}`,
-                cursor: "pointer",
-                fontSize: "var(--t-caption)",
-              }}
-              onClick={() => {
-                if (confirm("Are you sure you want to clear the data cache? This cannot be undone.")) {
-                  alert("Cache cleared.");
-                }
-              }}
-            >
-              Clear Cache
-            </button>
-          </div>
-        </div>
-      </section>
-
       <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
         <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>
           {dirty ? `Save ${dirtyKeys.length} change${dirtyKeys.length === 1 ? "" : "s"}` : "Save changes"}
@@ -322,22 +258,6 @@ function TunablesEditor({
   );
 }
 
-function defaultLabel(f: TunableField): string {
-  if (f.default === null || f.default === undefined) return "—";
-  return String(f.default);
-}
-
-/**
- * Wire type "string" covers two very different widgets: a plain scalar
- * (SECTOR_FORECAST_CONFIG_PATH, PROMPT_REGISTRY_BACKEND, DEFAULT_TICKERS) and
- * a JSON blob (SECTOR_FORECAST_CONFIGS, CORS_ALLOWED_ORIGINS) — the backend
- * deliberately does NOT add a 5th TunableFieldType for the latter ("a JSON
- * blob is still a string on the wire"), so the frontend tells them apart by
- * content: a "string" field whose value/default parses as a JSON object or
- * array renders as a multi-line textarea instead of a single-line input.
- * Content-based (not key-name-based) so any future JSON-kind field the
- * backend adds picks up the right widget with zero frontend changes.
- */
 function isJsonBlob(f: TunableField): boolean {
   if (f.type !== "string") return false;
   const probe = f.value ?? f.default;
@@ -416,7 +336,7 @@ function FieldRow({
       )}
 
       <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1-5) 0 0" }}>
-        Default: {defaultLabel(f)}
+        Default: {f.default === null || f.default === undefined ? "—" : String(f.default)}
       </p>
 
       {rejectedReason && (

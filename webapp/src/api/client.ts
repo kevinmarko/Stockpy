@@ -482,6 +482,18 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ values }),
     }),
+  getSentimentSettings: () => http<TunablesResponse>("/settings/sentiment"),
+  updateSentimentSettings: (values: Record<string, number | boolean | string>) =>
+    http<TunablesUpdateResult>("/settings/sentiment", {
+      method: "PUT",
+      body: JSON.stringify({ values }),
+    }),
+  getSectorSelectionSettings: () => http<TunablesResponse>("/settings/sector-selection"),
+  updateSectorSelectionSettings: (values: Record<string, number | boolean | string>) =>
+    http<TunablesUpdateResult>("/settings/sector-selection", {
+      method: "PUT",
+      body: JSON.stringify({ values }),
+    }),
   getFollows: () => http<Follow[]>("/follows"),
   follow: (id: string, amount: number) =>
     http<FollowResult>(`/pilots/${encodeURIComponent(id)}/follow`, {

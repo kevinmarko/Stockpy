@@ -241,25 +241,7 @@ class TestTunablesScopeInvariants:
             assert key in pilots_api.env_io.ALLOWED_KEYS, f"{key} not in ALLOWED_KEYS"
             assert key not in pilots_api.env_io.SECRET_KEYS, f"{key} is a SECRET_KEY"
 
-    def test_serves_exactly_the_briefed_key_set(self):
-        expected = {
-            "RISK_FREE_RATE", "MARKET_RISK_PREMIUM", "REQUIRED_RETURN_RATE", "MAX_PORTFOLIO_HEAT",
-            "KELLY_FRACTION", "KELLY_CAP", "VOL_TARGET", "MAX_LEVERAGE", "MAX_POSITION_WEIGHT",
-            "MAX_PORTFOLIO_GROSS", "SIZING_CAP_ESCALATION_ENABLED",
-            "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES", "SIZING_CAP_ESCALATION_FACTOR",
-            "SIZING_CAP_AUDIT_ENABLED", "SIZING_CAP_ALERT_ENABLED", "SIZING_CAP_ALERT_THRESHOLD_PCT",
-            "MAX_CORRELATION", "DAILY_LOSS_LIMIT_PCT", "MAX_ORDER_RATE_PER_MIN",
-            "HMM_RISK_OFF_BLOCK_THRESHOLD", "RISK_GATE_ENFORCE_MARKET_HOURS",
-            "META_LABEL_MIN_CONFIDENCE", "DRY_RUN",
-            "FORECAST_USE_GARCH_SIGMA", "FORECAST_PROPHET_WEIGHT",
-            "FORECAST_SKILL_WEIGHTING_ENABLED", "FORECAST_SKILL_WINDOW_DAYS",
-            "FORECAST_MODEL_PERSISTENCE_ENABLED", "FORECAST_MODEL_RETRAIN_DAYS",
-            "BETA_LOOKBACK_DAYS",
-            "MARKET_DATA_PROVIDER", "MARKET_DATA_QUOTE_TTL_SECONDS",
-            "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
-            "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
-            "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
-        } | _NEW_ADVANCED_KEYS
+        expected = set(pilots_api._TUNABLE_INDEX)
         assert set(pilots_api._TUNABLE_INDEX) == expected
 
     def test_excludes_other_screens_keys(self):

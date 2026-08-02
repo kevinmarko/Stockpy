@@ -3638,44 +3638,110 @@ def get_settings_tunables() -> Dict[str, Any]:
     ],
 )
 def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
-    """Write a partial map of non-secret tunables to ``.env``.
+    """Write a partial map of non-secret tunables to ``.env``."""
+    return _validate_and_write_payload(body.values, _TUNABLE_INDEX)
+# Standardized helper to build group responses for any field schema tuple list
+def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
+    model_fields = type(settings).model_fields
+    groups: List[Dict[str, Any]] = []
+    for group_name, specs in groups_spec:
+        fields: List[Dict[str, Any]] = []
+        for key, kind, extras in specs:
+            fi = model_fields.get(key)
+            default = _tunable_default(fi)
+            description = (getattr(fi, "description", None) if fi is not None else None) or None
+            value = getattr(settings, key, None)
+            if kind == "json":
+                try:
+                    value = json.dumps(value) if value is not None else None
+                except (TypeError, ValueError):
+                    value = None
+                try:
+                    default = json.dumps(default) if default is not None else None
+                except (TypeError, ValueError):
+                    default = None
+            field: Dict[str, Any] = {
+                "key": key,
+                "value": value,
+                "type": _KIND_TO_TYPE[kind],
+                "default": default,
+                "description": description,
+            }
+            for meta in ("min", "max", "step"):
+                if meta in extras:
+                    field[meta] = extras[meta]
+            if kind == "enum":
+                field["options"] = list(extras.get("options", []))
+            fields.append(field)
+        groups.append({"name": group_name, "fields": fields})
+    return groups
 
-    Fail-closed command token (``require_command_token``) STACKED with the
-    dedicated ``GENERAL_SETTINGS_WRITES_ENABLED`` master flag
-    (``require_general_settings_writes_enabled``) — same "auth tier AND feature
-    flag" pattern as ``PUT /strategy/modules``/``PUT /llm/setting``/
-    ``PUT /agentic/scan-config``. Every submitted key is validated against this
-    editor's scope ∩ ``env_io.ALLOWED_KEYS`` (secrets and
-    unknown/out-of-range/wrong-type/invalid-JSON values are REJECTED with an
-    explicit per-key reason tag in ``rejected`` — never silently dropped).
-    Accepted values are written ATOMICALLY via ``env_io.write_many_atomic``
-    (all-or-nothing, so a filesystem failure can't leave a half-applied risk
-    config).
 
-    ``kind == "json"`` accepted values are parsed back to a native dict/list
-    immediately before the ``env_io`` call (already validated parseable by
-    ``_coerce_and_validate_tunable``) — ``env_io``'s ``_JSON_KEYS`` handling
-    ``json.dumps()``s whatever it's given, so handing it the already-encoded
-    string would double-encode it; the ``written`` response below still echoes
-    the original string.
-
-    Like the other ``.env`` writes here this does NOT patch the running
-    ``settings`` singleton, so ``applies`` is always ``"next_daemon_restart"`` and
-    ``written`` echoes the REQUEST/coerced values — NOT ``settings`` (which would
-    return the stale pre-write values and read as a failed write)."""
+def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tuple]) -> Dict[str, Any]:
     accepted: Dict[str, Any] = {}
     rejected: Dict[str, str] = {}
-    for key, value in body.values.items():
-        ok, result = _coerce_and_validate_tunable(key, value)
-        if ok:
-            accepted[key] = result
+    for key, value in values.items():
+        spec = index_spec.get(key)
+        if spec is None:
+            rejected[key] = "unknown_key"
+            continue
+        kind, extras = spec
+        if key in env_io.SECRET_KEYS or key not in env_io.ALLOWED_KEYS:
+            rejected[key] = "forbidden_key"
+            continue
+
+        if kind == "bool":
+            if not isinstance(value, bool):
+                rejected[key] = "expected_boolean"
+                continue
+            accepted[key] = value
+        elif kind in ("float", "int"):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                rejected[key] = "expected_number"
+                continue
+            if isinstance(value, float) and not math.isfinite(value):
+                rejected[key] = "expected_number"
+                continue
+            if kind == "int":
+                if isinstance(value, float) and not value.is_integer():
+                    rejected[key] = "expected_integer"
+                    continue
+                coerced: Any = int(value)
+            else:
+                coerced = float(value)
+            lo, hi = extras.get("min"), extras.get("max")
+            if (lo is not None and coerced < lo) or (hi is not None and coerced > hi):
+                rejected[key] = "out_of_range"
+                continue
+            accepted[key] = coerced
+        elif kind == "enum":
+            if not isinstance(value, str):
+                rejected[key] = "expected_string"
+                continue
+            if value not in extras.get("options", []):
+                rejected[key] = "invalid_option"
+                continue
+            accepted[key] = value
+        elif kind == "json":
+            if not isinstance(value, str):
+                rejected[key] = "expected_string"
+                continue
+            try:
+                json.loads(value)
+            except (TypeError, ValueError):
+                rejected[key] = "invalid_json"
+                continue
+            accepted[key] = value
         else:
-            rejected[key] = result
+            if not isinstance(value, str):
+                rejected[key] = "expected_string"
+                continue
+            accepted[key] = value
 
     if accepted:
         to_write: Dict[str, Any] = {}
         for key, value in accepted.items():
-            kind, _extras = _TUNABLE_INDEX[key]
+            kind, _extras = index_spec[key]
             to_write[key] = json.loads(value) if kind == "json" else value
         env_io.write_many_atomic(to_write)
 
@@ -3690,6 +3756,128 @@ def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
             "in-process — restart the daemon via POST /daemon/restart to apply."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Dedicated Sentiment & Sector Selection Schemas
+# ---------------------------------------------------------------------------
+
+_SENTIMENT_GROUPS = [
+    (
+        "Sentiment Core & Sources",
+        [
+            ("SENTIMENT_INGESTION_ENABLED", "bool", {}),
+            ("SENTIMENT_SOURCES", "str", {}),
+            ("SENTIMENT_LOOKBACK_DAYS", "int", {"min": 1, "max": 365, "step": 1}),
+            ("SENTIMENT_DECAY_HALF_LIFE_DAYS", "float", {"min": 0.1, "max": 30.0, "step": 0.5}),
+            ("STOCKTWITS_ENABLED", "bool", {}),
+            ("REDDIT_ENABLED", "bool", {}),
+            ("GOOGLE_NEWS_ENABLED", "bool", {}),
+            ("GOOGLE_NEWS_LOOKBACK_WINDOW", "str", {}),
+            ("EDGAR_FULLTEXT_ENABLED", "bool", {}),
+            ("EDGAR_FULLTEXT_FORMS", "str", {}),
+            ("EDGAR_FULLTEXT_CHUNK_TOKENS", "int", {"min": 64, "max": 4096, "step": 64}),
+            ("GDELT_ENABLED", "bool", {}),
+            ("GDELT_MIN_REQUEST_INTERVAL_SECONDS", "float", {"min": 0.0, "max": 60.0, "step": 0.5}),
+            ("GDELT_MAX_RETRIES", "int", {"min": 0, "max": 10, "step": 1}),
+            ("GDELT_RETRY_BACKOFF_SECONDS", "float", {"min": 0.5, "max": 60.0, "step": 0.5}),
+            ("GDELT_COOLDOWN_THRESHOLD", "int", {"min": 1, "max": 10, "step": 1}),
+            ("GDELT_COOLDOWN_SECONDS", "float", {"min": 10.0, "max": 3600.0, "step": 10.0}),
+        ],
+    ),
+    (
+        "FinBERT & Catalyst Scoring",
+        [
+            ("FINBERT_BATCH_SIZE", "int", {"min": 1, "max": 128, "step": 1}),
+            ("FINBERT_SCORE_CACHE_ENABLED", "bool", {}),
+            ("NEWS_CATALYST_LOOKBACK_HOURS", "int", {"min": 1, "max": 168, "step": 1}),
+            ("NEWS_CATALYST_MIN_HEADLINES", "int", {"min": 1, "max": 50, "step": 1}),
+            ("FINNHUB_MIN_REQUEST_INTERVAL_SECONDS", "float", {"min": 0.0, "max": 10.0, "step": 0.1}),
+        ],
+    ),
+    (
+        "Attention & Sector Heat",
+        [
+            ("SECTOR_HEAT_ENABLED", "bool", {}),
+            ("SECTOR_HEAT_MIN_ARTICLES", "int", {"min": 1, "max": 500, "step": 1}),
+            ("WIKIPEDIA_ATTENTION_ENABLED", "bool", {}),
+            ("PYTRENDS_ENABLED", "bool", {}),
+        ],
+    ),
+]
+
+_SENTIMENT_INDEX = {
+    key: (kind, extras)
+    for _group, _specs in _SENTIMENT_GROUPS
+    for key, kind, extras in _specs
+}
+
+_SECTOR_SELECTION_GROUPS = [
+    (
+        "Sector Selection Configuration",
+        [
+            ("SECTOR_SELECTION_TOP_N", "int", {"min": 1, "max": 11, "step": 1}),
+            ("SECTOR_SELECTION_WEIGHTING_SCHEME", "enum", {"options": ["equal", "momentum", "value", "volatility"]}),
+            ("SECTOR_SELECTION_LOOKBACK_DAYS", "int", {"min": 5, "max": 504, "step": 1}),
+            ("SECTOR_SELECTION_MOMENTUM_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("SECTOR_SELECTION_VALUE_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("SECTOR_SELECTION_QUALITY_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("SECTOR_SELECTION_LOWVOL_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("SECTOR_SELECTION_MIN_STABILITY", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("SECTOR_SELECTION_REBALANCE_DAYS", "int", {"min": 1, "max": 90, "step": 1}),
+        ],
+    ),
+]
+
+_SECTOR_SELECTION_INDEX = {
+    key: (kind, extras)
+    for _group, _specs in _SECTOR_SELECTION_GROUPS
+    for key, kind, extras in _specs
+}
+
+
+@app.get("/settings/sentiment", dependencies=[Depends(require_read_token)])
+def get_settings_sentiment() -> Dict[str, Any]:
+    """Get sentiment & news ingestion configuration."""
+    return {
+        "applies": "next_daemon_restart",
+        "groups": _build_groups_payload(_SENTIMENT_GROUPS),
+        "env_drift": {"detected": False, "keys": [], "note": ""},
+    }
+
+
+@app.put(
+    "/settings/sentiment",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_sentiment(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Update sentiment & news ingestion configuration in .env."""
+    return _validate_and_write_payload(body.values, _SENTIMENT_INDEX)
+
+
+@app.get("/settings/sector-selection", dependencies=[Depends(require_read_token)])
+def get_settings_sector_selection() -> Dict[str, Any]:
+    """Get sector selection configuration."""
+    return {
+        "applies": "next_daemon_restart",
+        "groups": _build_groups_payload(_SECTOR_SELECTION_GROUPS),
+        "env_drift": {"detected": False, "keys": [], "note": ""},
+    }
+
+
+@app.put(
+    "/settings/sector-selection",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_sector_selection(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Update sector selection configuration in .env."""
+    return _validate_and_write_payload(body.values, _SECTOR_SELECTION_INDEX)
 
 
 # ---------------------------------------------------------------------------

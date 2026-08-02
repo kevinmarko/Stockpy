@@ -150,6 +150,8 @@ export function Settings() {
 
           <SignalModulesLink />
           <TunablesLink />
+          <SentimentLink />
+          <SectorSelectionLink />
           <PromptRegistryLink />
           <ActiveFollowsSection />
           <BrokerageSection />
@@ -498,6 +500,54 @@ function TunablesLink() {
             {fieldCount == null
               ? "Sizing, forecasting & data settings"
               : `${fieldCount} tunables · ${groupCount} groups`}
+          </div>
+        </div>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
+      </div>
+    </Link>
+  );
+}
+
+function SentimentLink() {
+  const { data } = useApi<TunablesResponse>(() => api.getSentimentSettings(), []);
+  const fieldCount = data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
+  return (
+    <Link
+      to="/settings/sentiment"
+      className="card card-pad"
+      style={{ display: "block", textDecoration: "none" }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Sentiment &amp; News Ingestion</div>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
+            {fieldCount == null
+              ? "Sources, FinBERT, catalysts & attention"
+              : `${fieldCount} ingestion settings`}
+          </div>
+        </div>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
+      </div>
+    </Link>
+  );
+}
+
+function SectorSelectionLink() {
+  const { data } = useApi<TunablesResponse>(() => api.getSectorSelectionSettings(), []);
+  const fieldCount = data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
+  return (
+    <Link
+      to="/settings/sector-selection"
+      className="card card-pad"
+      style={{ display: "block", textDecoration: "none" }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Sector Selection</div>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
+            {fieldCount == null
+              ? "Weights, top N & factor thresholds"
+              : `${fieldCount} sector selection settings`}
           </div>
         </div>
         <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>

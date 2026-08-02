@@ -5157,6 +5157,26 @@ export const mockApi = {
     return delay(applyTunables(values));
   },
 
+  async getSentimentSettings(): Promise<TunablesResponse> {
+    return delay(mockTunables());
+  },
+
+  async updateSentimentSettings(
+    values: Record<string, number | boolean | string>
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyTunables(values));
+  },
+
+  async getSectorSelectionSettings(): Promise<TunablesResponse> {
+    return delay(mockTunables());
+  },
+
+  async updateSectorSelectionSettings(
+    values: Record<string, number | boolean | string>
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyTunables(values));
+  },
+
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----
   // "ZZZZ" is the honest cold-start / no-coverage fixture symbol across all
   // three: [] bars, 404 fundamentals/forecast, all-null signal breakdown.
