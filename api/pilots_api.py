@@ -3722,7 +3722,6 @@ _SENTIMENT_GROUPS = [
         "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
         [
             ("STOCKTWITS_ENABLED", "bool", {}),
-            ("REDDIT_USER_AGENT", "str", {}),
             ("REDDIT_BACKFILL_MAX_PAGES", "int", {"min": 1, "max": 100, "step": 1}),
             ("GOOGLE_NEWS_LOOKBACK_WINDOW", "str", {}),
             ("EDGAR_FULLTEXT_ENABLED", "bool", {}),

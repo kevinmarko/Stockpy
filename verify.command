@@ -83,7 +83,7 @@ echo ""
 
 # ── Step 2: Test suite ───────────────────────────────────────────────────────
 echo "=== Step 2 / 3  Test suite ==="
-"$PYTHON" -m pytest -v --tb=short
+"$PYTHON" -m pytest -v --tb=short -n auto
 PYTEST_STATUS=$?
 
 if [[ $PYTEST_STATUS -ne 0 ]]; then
