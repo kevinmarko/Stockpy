@@ -29,6 +29,7 @@ import { DataExplorer } from "./screens/DataExplorer";
 import { SignalBreakdown } from "./screens/SignalBreakdown";
 import { SentimentDynamics } from "./screens/SentimentDynamics";
 import { ForecastViewer } from "./screens/ForecastViewer";
+import { ForecastBackfillScreen } from "./screens/ForecastBackfillScreen";
 import { SectorSelection } from "./screens/SectorSelection";
 import { Commands } from "./screens/Commands";
 import { Console } from "./screens/Console";
@@ -225,6 +226,7 @@ export default function App() {
                 <Route path="/signals" element={<SignalBreakdown />} />
                 <Route path="/sentiment" element={<SentimentDynamics />} />
                 <Route path="/forecast" element={<ForecastViewer />} />
+                <Route path="/forecast/backfill" element={<ForecastBackfillScreen />} />
                 <Route path="/sector-selection" element={<SectorSelection />} />
                 <Route path="/commands" element={<Commands />} />
                 <Route path="/console" element={<Console />} />

@@ -67,7 +67,8 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/signals", label: "Signal Breakdown", ico: Dna, match: (p) => p.startsWith("/signals"), section: "research" },
   { to: "/sentiment", label: "Sentiment Dynamics", ico: Activity, match: (p) => p.startsWith("/sentiment"), section: "research" },
   { to: "/sector-selection", label: "Sector Selection", ico: Puzzle, match: (p) => p.startsWith("/sector-selection"), section: "research" },
-  { to: "/forecast", label: "Forecast Viewer", ico: TrendingUp, match: (p) => p.startsWith("/forecast"), section: "research" },
+  { to: "/forecast", label: "Forecast Viewer", ico: TrendingUp, match: (p) => p === "/forecast", section: "research" },
+  { to: "/forecast/backfill", label: "Forecast Backfill", ico: TrendingUp, match: (p) => p.startsWith("/forecast/backfill"), section: "research" },
   { to: "/data-explorer", label: "Data Explorer", ico: FolderOpen, match: (p) => p.startsWith("/data-explorer"), section: "research" },
   // Trading Tools
   { to: "/attribution", label: "Attribution", ico: Calculator, match: (p) => p.startsWith("/attribution"), section: "trading" },
