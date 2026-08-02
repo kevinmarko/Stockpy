@@ -483,8 +483,7 @@ class TestGeneralSettingsWritesEnabledInvariants:
     def test_flag_is_not_gui_writable(self):
         """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI bug
         must never flip this on. Neither allowlisted nor secret — hand-set only,
-        exactly like STRATEGY_WRITES_ENABLED/LLM_WRITES_ENABLED/
-        AGENTIC_DISCOVERY_ENABLED."""
+        exactly like STRATEGY_WRITES_ENABLED/LLM_WRITES_ENABLED."""
         assert "GENERAL_SETTINGS_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
         assert "GENERAL_SETTINGS_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
 

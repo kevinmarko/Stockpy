@@ -176,11 +176,11 @@ def test_excluded_from_gui_keys_are_neither_writable_nor_secret():
 @pytest.mark.parametrize(
     "key",
     [
-        "AGENTIC_DISCOVERY_ENABLED",
-        "BROKERAGE_CONNECT_ENABLED",
+        "AI_GENERATION_API_ENABLED",
         "COMMAND_EXECUTION_ENABLED",
         "GENERAL_SETTINGS_WRITES_ENABLED",
-        "UNIVERSE_SYNC_ENABLED",
+        "RAG_QUERY_API_ENABLED",
+        "STRATEGY_WRITES_ENABLED",
     ],
 )
 def test_fail_closed_flags_are_hand_set_only(key):
@@ -188,6 +188,24 @@ def test_fail_closed_flags_are_hand_set_only(key):
     tests/test_pilots_api.py's `*_is_not_gui_writable` assertions."""
     assert key not in env_io.ALLOWED_KEYS
     assert key not in env_io.SECRET_KEYS
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["AGENTIC_DISCOVERY_ENABLED", "BROKERAGE_CONNECT_ENABLED", "UNIVERSE_SYNC_ENABLED"],
+)
+def test_reclassified_flags_are_now_gui_writable(key):
+    """PR #560 reclassified these three "per explicit operator decision" out
+    of the hand-set-only class into ALLOWED_KEYS -- each endpoint remains
+    independently gated by its own command-token/loopback check regardless
+    (see gui/env_io.py's EXCLUDED_FROM_GUI docstring for the full note).
+    Pinned here (rather than left to silently pass
+    test_every_settings_field_is_classified) so a future revert of that
+    policy decision is a visible test failure, not a silent classification
+    drift."""
+    assert key in env_io.ALLOWED_KEYS
+    assert key not in env_io.SECRET_KEYS
+    assert key not in env_io.EXCLUDED_FROM_GUI
 
 
 @pytest.mark.parametrize(

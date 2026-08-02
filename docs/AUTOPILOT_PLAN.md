@@ -180,8 +180,9 @@ stayed green throughout.
   about ("never log or persist secrets", single-operator/local-first). Scoped narrowly rather
   than building a multi-user encrypted vault: `POST /brokerage/connect` reuses `FOLLOW_API_TOKEN`
   (not a new token — same single-token-client tradeoff as D4) and adds two MORE independent
-  gates on top — `settings.BROKERAGE_CONNECT_ENABLED` (new, default `False`, deliberately NOT in
-  `gui/env_io.py`'s `ALLOWED_KEYS` so a GUI bug can't enable it) and a loopback-only
+  gates on top — `settings.BROKERAGE_CONNECT_ENABLED` (new, default `False`; GUI-writable as of
+  2026-08-02 by explicit operator decision -- the endpoint remains independently gated by the
+  two checks named here regardless) and a loopback-only
   (`127.0.0.1`/`::1`) request check. Credentials are verified with a real read-only Robinhood
   login (`data.robinhood_portfolio.verify_credentials`, never falls back to interactive MFA
   prompting — a headless HTTP request must not block on stdin) BEFORE being written, via a
@@ -198,7 +199,7 @@ stayed green throughout.
   run trigger or a pause (the SAFE direction) more strictly than the most sensitive endpoint
   already shipped would invert the risk ordering. The two writes that DO get a second gate
   (`settings.AUTOMATION_WRITES_ENABLED`, new, default `False`, deliberately NOT in
-  `gui/env_io.py`'s `ALLOWED_KEYS` — mirrors D5's `BROKERAGE_CONNECT_ENABLED` exactly) are the
+  `gui/env_io.py`'s `ALLOWED_KEYS`) are the
   ones with a real persistence/rollback cost: `PUT /automation/schedule/interval` (an `.env`
   edit) and `POST /automation/resume`, which additionally fails 403 whenever
   `settings.ADVISORY_ONLY is False` — remote resume is refused once live order submission is

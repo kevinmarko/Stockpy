@@ -96,10 +96,11 @@ have a template for:
    an atomic JSON store (mirrors `pilots/follows_store.py`'s write-then-rename idiom) rather than an
    `.env` key, because scan configs are structured, multi-row, operator-editable data, not a global
    tunable. `PUT /agentic/scan-config` writes to it behind a new dedicated flag,
-   `AGENTIC_DISCOVERY_ENABLED` (default `False`, deliberately absent from `gui/env_io.py`'s
-   `ALLOWED_KEYS`/`SECRET_KEYS` — hand-set in `.env` only, per this repo's write-endpoint auth
-   taxonomy: a flag that changes *what the agent discovers* earns its own risk class, same reasoning
-   as `STRATEGY_WRITES_ENABLED` not riding in on `AUTOMATION_WRITES_ENABLED`).
+   `AGENTIC_DISCOVERY_ENABLED` (default `False` — a flag that changes *what the agent discovers*
+   earns its own risk class, same reasoning as `STRATEGY_WRITES_ENABLED` not riding in on
+   `AUTOMATION_WRITES_ENABLED`; GUI-writable as of 2026-08-02 by explicit operator decision — see
+   `gui/env_io.py`'s `ALLOWED_KEYS` — the endpoint remains independently gated by
+   `FOLLOW_API_TOKEN`).
 
 ### What stays intentionally out of reach
 
