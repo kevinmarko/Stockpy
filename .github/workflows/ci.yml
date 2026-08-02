@@ -74,8 +74,15 @@ jobs:
           # regression below that floor fails this step even if every test
           # passes; coverage.json is still written first, so the summary step
           # below still runs (it's `if: always()`).
+          #
+          # -n auto (pytest-xdist) fans the suite out across the runner's CPUs.
+          # pytest-cov auto-detects xdist and combines each worker's coverage
+          # data before writing the reports below, so --cov-report output is
+          # unaffected; no .coveragerc changes are needed. --durations=25
+          # (pytest.ini) still prints the 25 slowest tests, aggregated across
+          # workers, at the end of the run.
           python -m pytest -m "not network" -v --tb=short \
-            --cov --cov-report=term-missing --cov-report=json
+            --cov --cov-report=term-missing --cov-report=json -n auto
 
       - name: Coverage summary
         if: always()
