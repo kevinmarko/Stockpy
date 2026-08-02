@@ -6,10 +6,21 @@
 # US Eastern market close = 20:00 UTC (16:00 ET)
 # =============================================================================
 
-# ── Daily: Full pipeline refresh (weekdays, 1 hour after market close) ──────
-# Fetches latest price bars, EDGAR filings, macro indicators, and computes
-# composite signals for the active universe.
-0 21 * * 1-5 cd /opt/investyo && .venv/bin/python scripts/daily_briefing.py >> /opt/investyo/logs/daily_briefing.log 2>&1
+# ── Daily: Full pipeline refresh + morning digest (weekdays, 1 hour after market close) ──
+# Runs the master orchestrator (fetches latest price bars, EDGAR filings,
+# macro indicators, and computes composite signals for the active universe),
+# then generates the read-only morning digest from its output. Chained with
+# && so the digest only runs after a successful pipeline cycle -- it has
+# nothing to summarize otherwise (daily_briefing.py makes zero live network
+# calls; it only reads output/state_snapshot.json and the DB). This job never
+# submits orders on its own -- that's gated separately by settings.ADVISORY_ONLY.
+#
+# Fixed 2026-08-02: this job used to run ONLY scripts/daily_briefing.py, which
+# (per its own docstring) never fetches data or computes signals -- despite
+# what this comment historically claimed. No job anywhere in this crontab
+# actually ran main_orchestrator.py, so DailySignals never got a single row
+# written on a cron-only deployment with no investyo-daemon.service running.
+0 21 * * 1-5 cd /opt/investyo && .venv/bin/python main_orchestrator.py >> /opt/investyo/logs/pipeline.log 2>&1 && .venv/bin/python scripts/daily_briefing.py >> /opt/investyo/logs/daily_briefing.log 2>&1
 
 # ── Daily: Strategy validation staleness/deployability alert (08:00 UTC) ────
 # Fires a CRITICAL alert (via ALERT_WEBHOOK_URL / DISCORD_WEBHOOK_URL /
