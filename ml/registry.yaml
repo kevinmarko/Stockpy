@@ -83,9 +83,9 @@ models:
     role: meta_labeler
     path: ml/models/meta_timeseries_momentum_latest.pkl
     trained_date: '2026-08-02'
-    cpcv_dsr: 2.6186446803844043e-12
-    pbo: 0.13333333333333333
-    n_train: 948
+    cpcv_dsr: 3.0904703474694237e-43
+    pbo: 0.0
+    n_train: 4654
     deployable: false
     notes: Binary LightGBM classifier predicting P(timeseries_momentum signal correct). Trained on triple-barrier
       labels from ml/triple_barrier.py. If predict_proba < settings.META_LABEL_MIN_CONFIDENCE (0.4), the
@@ -105,21 +105,22 @@ models:
       verbose: -1
       class_weight: balanced
     train_window:
-      start: '2024-08-01'
+      start: '2021-08-02'
       end: '2026-07-31'
-      n_dates: 501
+      n_dates: 1255
     features:
     - momentum
     - realized_vol_20d
     - dist_sma_50
     - vol_ewma
+    - primary_score
   meta_labeler_cross_sectional_momentum:
     role: meta_labeler
     path: ml/models/meta_cross_sectional_momentum_latest.pkl
     trained_date: '2026-08-02'
-    cpcv_dsr: 0.0015573664329870435
-    pbo: 0.26666666666666666
-    n_train: 856
+    cpcv_dsr: 2.789454589415563e-12
+    pbo: 0.0
+    n_train: 4654
     deployable: false
     notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal correct). Shares the
       same triple-barrier label construction and feature set as the timeseries momentum meta-labeler;
@@ -139,11 +140,12 @@ models:
       verbose: -1
       class_weight: balanced
     train_window:
-      start: '2024-08-01'
+      start: '2021-08-02'
       end: '2026-07-31'
-      n_dates: 501
+      n_dates: 1255
     features:
     - momentum
     - realized_vol_20d
     - dist_sma_50
     - vol_ewma
+    - primary_score
