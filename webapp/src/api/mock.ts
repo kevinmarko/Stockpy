@@ -50,6 +50,7 @@ import type {
   Follow,
   FollowResult,
   ForecastSkill,
+  ForecastBackfillSummary,
   Headline,
   Holding,
   IntervalUpdateResult,
@@ -5868,6 +5869,16 @@ export const mockApi = {
       is_synthetic: true,
     });
   },
+  async getForecastBackfill() {
+    return delay(mockForecastBackfill());
+  },
+  async runForecastBackfill() {
+    return delay({
+      status: "success",
+      summary: mockForecastBackfill(),
+      sample_rows: 11080,
+    });
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -6062,10 +6073,32 @@ function notFoundSymbol(sym: string) {
   return new ApiError(`No such symbol '${sym}' in the latest snapshot.`, 404);
 }
 
+export function mockForecastBackfill(): ForecastBackfillSummary {
+  return {
+    status: "completed",
+    timestamp: new Date().toISOString(),
+    horizons: [10, 30, 60, 90],
+    metrics: {
+      TSMOM_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 2370, split_date: "2024-01-15" },
+      TSMOM_30d: { accuracy: 0.5340, auc: 0.5580, n_train: 9416, n_test: 2354, split_date: "2024-01-15" },
+      TSMOM_60d: { accuracy: 0.5480, auc: 0.5720, n_train: 9320, n_test: 2330, split_date: "2024-01-15" },
+      TSMOM_90d: { accuracy: 0.5620, auc: 0.5910, n_train: 9224, n_test: 2306, split_date: "2024-01-15" },
+      CSMOM_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 9480, n_test: 2370, split_date: "2024-01-15" },
+      CSMOM_30d: { accuracy: 0.5410, auc: 0.5640, n_train: 9416, n_test: 2354, split_date: "2024-01-15" },
+      CSMOM_60d: { accuracy: 0.5590, auc: 0.5830, n_train: 9320, n_test: 2330, split_date: "2024-01-15" },
+      CSMOM_90d: { accuracy: 0.5740, auc: 0.6050, n_train: 9224, n_test: 2306, split_date: "2024-01-15" },
+    },
+    tickers: ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"],
+    total_rows: 11080,
+    csv_path: "output/agentic_forecast_backfill.csv",
+  };
+}
+
 export const MOCK_META = {
   mode: MOCK_MODE,
   notionalCap: NOTIONAL_CAP,
   minAmount: MIN_AMOUNT,
   sectors: SECTORS,
 };
+
 

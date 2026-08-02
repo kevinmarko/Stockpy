@@ -595,7 +595,6 @@ function RobinhoodAuthModal({
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           placeholder="name@domain.com"
-          required
         />
         <Input
           label="Password"
@@ -603,7 +602,6 @@ function RobinhoodAuthModal({
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="••••••••••••"
-          required
         />
         <Input
           label="MFA / 2FA Code (Optional)"

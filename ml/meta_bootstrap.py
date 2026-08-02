@@ -46,6 +46,14 @@ logger = logging.getLogger("ML.MetaBootstrap")
 META_LABELED_SIGNAL_IDS: tuple[str, ...] = (
     "timeseries_momentum",
     "cross_sectional_momentum",
+    "TSMOM_10d",
+    "TSMOM_30d",
+    "TSMOM_60d",
+    "TSMOM_90d",
+    "CSMOM_10d",
+    "CSMOM_30d",
+    "CSMOM_60d",
+    "CSMOM_90d",
 )
 
 

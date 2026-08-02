@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""
+InvestYo Quant Platform - Multi-Horizon Forecast Backfill CLI
+============================================================
+Runs the multi-horizon (10, 30, 60, 90d) forecast backfilling & meta-labeling
+engine for TSMOM and CSMOM across a selected stock universe.
+
+Usage
+-----
+    python scripts/run_forecast_backfill.py
+    python scripts/run_forecast_backfill.py --tickers AAPL,MSFT,NVDA,JPM --use-fmp
+    python scripts/run_forecast_backfill.py --horizons 10,30,60,90 --start 2015-01-01
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+# Repo-root import shim so script runs directly
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from ml.forecast_backfill import AgenticForecastBackfiller
+from settings import settings
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("Scripts.RunForecastBackfill")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run Forecast Backfill & Meta-Labeling Engine.")
+    parser.add_argument(
+        "--tickers",
+        type=str,
+        default="",
+        help="Comma-separated list of stock tickers (default: settings.DEFAULT_TICKERS).",
+    )
+    parser.add_argument(
+        "--start",
+        type=str,
+        default="2015-01-01",
+        help="Start date YYYY-MM-DD (default: 2015-01-01).",
+    )
+    parser.add_argument(
+        "--end",
+        type=str,
+        default="",
+        help="End date YYYY-MM-DD (default: today).",
+    )
+    parser.add_argument(
+        "--horizons",
+        type=str,
+        default="",
+        help="Comma-separated list of forecast horizons in days (e.g. 10,30,60,90).",
+    )
+    parser.add_argument(
+        "--use-fmp",
+        action="store_true",
+        default=True,
+        help="Use Financial Modeling Prep (FMP) for data sourcing (default: True).",
+    )
+    parser.add_argument(
+        "--no-fmp",
+        action="store_false",
+        dest="use_fmp",
+        help="Disable FMP data provider and use CompositeProvider/Store fallback.",
+    )
+    parser.add_argument(
+        "--classifier",
+        type=str,
+        default="",
+        help="Classifier type ('random_forest' or 'lightgbm').",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="agentic_forecast_backfill.csv",
+        help="CSV output filename inside output/ directory.",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+
+    tickers_list = [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
+    horizons_list = [int(h.strip()) for h in args.horizons.split(",") if h.strip().isdigit()] if args.horizons else None
+
+    logger.info("Initializing AgenticForecastBackfiller...")
+    engine = AgenticForecastBackfiller(
+        tickers=tickers_list,
+        start_date=args.start,
+        end_date=args.end or None,
+        horizons=horizons_list,
+        classifier_type=args.classifier or None,
+        use_fmp=args.use_fmp,
+    )
+
+    try:
+        engine.step_1_fetch_data()
+        engine.step_2_calculate_technical_features()
+        engine.step_3_generate_primary_signals()
+        engine.step_4_create_meta_targets()
+        metrics = engine.step_5_backtrain_meta_labelers()
+        forecasts = engine.step_6_execute_backfill()
+        output_df, summary = engine.export_results(filename=args.output)
+
+        print("\n" + "=" * 60)
+        print("FORECAST BACKFILL & META-LABELING RESULTS SUMMARY")
+        print("=" * 60)
+        for model_key, m in metrics.items():
+            print(f"  Model: {model_key:<15} Accuracy: {m['accuracy']:.4f} | AUC: {m['auc']:.4f} | Train Samples: {m['n_train']}")
+        print("=" * 60)
+        print(f"Backfill complete! Exported {len(output_df)} rows to '{summary['csv_path']}'.")
+        return 0
+    except Exception as exc:
+        logger.error("Forecast backfill failed: %s", exc, exc_info=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
