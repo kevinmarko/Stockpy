@@ -793,9 +793,14 @@ def financial_scores(symbol: str) -> Any:
     return _fmp_get("financial-scores", {"symbol": _sym(symbol)})
 
 
-def stock_news(symbol: str, limit: int = 10) -> Any:
-    """Real-time news snippets for a symbol (``/news/stock``)."""
-    return _fmp_get("news/stock", {"symbols": _sym(symbol), "limit": limit})
+# NOTE: stock_news is NOT redefined here — the richer, tested implementation
+# above (with from_date/to_date/page/limit, no case-transformation of
+# `symbols`) is the one and only definition. A near-duplicate second
+# `def stock_news(symbol, limit=10)` briefly existed here (a merge artifact:
+# two independent PRs each added a same-named function to this file, and a
+# textual merge doesn't detect a duplicate top-level def) and silently shadowed
+# the real one, breaking tests/test_fmp_news.py. data/fmp_feeds_company.py's
+# fetch_stock_news() calls the one true stock_news(symbol, limit=limit) above.
 
 
 def economics_calendar(from_date: Optional[str] = None, to_date: Optional[str] = None) -> Any:
