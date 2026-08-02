@@ -1,12 +1,14 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
+import { ApiError } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { usePoll } from "../hooks/usePoll";
 import type {
   AgenticDiscovery,
   AgenticStatus,
+  BrokerageStatus,
   DecisionEntry,
   DiscoveryCandidate,
 } from "../api/types";
@@ -42,32 +44,67 @@ import { timeAgo } from "../format";
  */
 export function AgenticTrading() {
   const status = useApi<AgenticStatus>(() => api.getAgenticStatus(), []);
-  // The queue/status can change without user action (a pipeline cycle, a
-  // scan run) -- poll gently while the tab is open, mirroring Settings'
-  // pipeline-status convention.
-  usePoll(status.reload, 30_000, !status.loading);
+  const brokerageStatus = useApi<BrokerageStatus>(() => api.getBrokerageStatus(), []);
 
-  // "Refresh all" (UX backlog finding #7a): status already auto-refreshes on
-  // the 30s poll above, but Discovery and the Decision journal own their own
-  // un-polled useApi calls. Bumping this token is threaded into both of their
-  // dependency arrays, so one button reloads all three sections at once
-  // instead of a "Refresh" that only ever re-fetched status.
+  usePoll(status.reload, 30_000, !status.loading);
+  usePoll(brokerageStatus.reload, 30_000, !brokerageStatus.loading);
+
   const [refreshToken, setRefreshToken] = useState(0);
-  const refreshAll = () => {
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [isRefreshingData, setIsRefreshingData] = useState(false);
+
+  const refreshAll = async () => {
+    setIsRefreshingData(true);
+    try {
+      await api.refreshBrokerage();
+    } catch {
+      // ignore
+    }
     setRefreshToken((t) => t + 1);
     status.reload();
+    brokerageStatus.reload();
+    setIsRefreshingData(false);
   };
 
   return (
     <div className="screen">
-      <div className="rail-head">
-        <h1>Agentic Trading</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+            <h1 style={{ margin: 0 }}>Agentic Trading</h1>
+            <Chip
+              label={brokerageStatus.data?.connected ? "Robinhood Connected" : "Robinhood Disconnected"}
+              tone={brokerageStatus.data?.connected ? "growth" : "caution"}
+            />
+          </div>
+          <p style={{ color: theme.textSecondary, marginTop: "var(--s-1)", marginBottom: 0 }}>
+            What the agent is doing, what it's found, and the gated controls that drive it.
+          </p>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
+          <Button variant="neutral" onClick={refreshAll} pending={isRefreshingData}>
+            {isRefreshingData ? "Refreshing Data…" : "Refresh Data 🔄"}
+          </Button>
+
+          {brokerageStatus.data?.connected ? (
+            <Button
+              variant="neutral"
+              onClick={async () => {
+                await api.disconnectBrokerage();
+                brokerageStatus.reload();
+              }}
+              style={{ color: theme.decline, borderColor: theme.decline }}
+            >
+              Disconnect Robinhood 🔓
+            </Button>
+          ) : (
+            <Button variant="primary" onClick={() => setShowAuthModal(true)}>
+              Login to Robinhood 🔒
+            </Button>
+          )}
+        </div>
       </div>
-      <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: "var(--s-4)" }}>
-        What the agent is doing, what it's found, and the gated controls that
-        drive it. Placing a real order always requires a separate,
-        human-confirmed step in Claude Code — nothing on this screen does that.
-      </p>
 
       <TabGuide tabKey="agentic" />
 
@@ -87,6 +124,16 @@ export function AgenticTrading() {
       <DecisionJournalSection refreshToken={refreshToken} />
 
       <ControlsSection status={status.data} onChanged={status.reload} />
+
+      {showAuthModal && (
+        <RobinhoodAuthModal
+          onClose={() => setShowAuthModal(false)}
+          onConnected={() => {
+            setShowAuthModal(false);
+            refreshAll();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -351,9 +398,14 @@ function DiscoverySection({ refreshToken }: { refreshToken: number }) {
           </div>
 
           {discovery.data.writable ? (
-            <Button variant="neutral" onClick={() => setAdding(true)}>
-              Add scan config
-            </Button>
+            <div style={{ display: "flex", gap: "var(--s-2-5)", alignItems: "center" }}>
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                Add scan config
+              </Button>
+              <span style={{ color: theme.accent, fontSize: "var(--t-caption)", fontWeight: 500 }}>
+                🔍 Launch Broker Scan & Sector Filter
+              </span>
+            </div>
           ) : (
             <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>{discovery.data.note}</p>
           )}
@@ -489,6 +541,105 @@ function CandidateRow({ c }: { c: DiscoveryCandidate }) {
   );
 }
 
+function RobinhoodAuthModal({
+  onClose,
+  onConnected,
+}: {
+  onClose: () => void;
+  onConnected: () => void;
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      await api.connectBrokerage({
+        username: username.trim(),
+        password: password.trim(),
+        mfa_code: mfaCode.trim(),
+      });
+      onConnected();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not verify Robinhood credentials.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <Modal ariaLabel="Robinhood Authentication Modal" onClose={onClose}>
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
+        Robinhood On-Demand Authentication
+      </h2>
+      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
+        Verify credentials with a read-only login.
+      </p>
+
+      {error && (
+        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
+          <span>⚠️</span>
+          <span>{error}</span>
+        </Notice>
+      )}
+
+      <form onSubmit={submit}>
+        <Input
+          label="Email / Username"
+          type="email"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="name@domain.com"
+        />
+        <Input
+          label="Password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="••••••••••••"
+        />
+        <Input
+          label="Authenticator app code"
+          type="password"
+          inputMode="numeric"
+          value={mfaCode}
+          onChange={(e) => setMfaCode(e.target.value)}
+          placeholder="123456"
+          hint={
+            // The backend (POST /brokerage/connect -> verify_credentials) never
+            // falls through to an interactive MFA prompt over HTTP -- a headless
+            // request must not risk blocking on stdin -- so it treats a missing
+            // or empty mfa_code as a verification failure, not "no MFA needed".
+            // This field must stay required; see RobinhoodConnectForm.tsx for
+            // the same, correct, existing contract.
+            "Open your authenticator app and enter the current 6-digit code. It's used once to verify the login — nothing beyond that is stored."
+          }
+        />
+
+        <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4)" }}>
+          <Button variant="neutral" type="button" onClick={onClose} style={{ flex: 1 }}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            type="submit"
+            disabled={!username.trim() || !password.trim() || mfaCode.trim().length !== 6 || pending}
+            pending={pending}
+            style={{ flex: 2 }}
+          >
+            {pending ? "Authenticating…" : "Connect Robinhood"}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function ScanConfigModal({
   onClose,
   onSaved,
@@ -497,12 +648,18 @@ function ScanConfigModal({
   onSaved: () => void;
 }) {
   const [name, setName] = useState("");
+  const [sector, setSector] = useState("ALL");
   const [minPrice, setMinPrice] = useState("5");
   const [minVolume, setMinVolume] = useState("1000000");
+
   const mutation = useMutation(() =>
     api.putScanConfig({
       name: name.trim(),
-      filters: { min_price: Number(minPrice), min_volume: Number(minVolume) },
+      filters: {
+        sector: sector !== "ALL" ? sector : undefined,
+        min_price: Number(minPrice),
+        min_volume: Number(minVolume),
+      },
       enabled: true,
     })
   );
@@ -514,12 +671,39 @@ function ScanConfigModal({
 
   return (
     <Modal ariaLabel="Add scan config" onClose={onClose}>
-      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Add scan config</h2>
+      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Launch Broker Scan / Add Config</h2>
       <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
-        Saved to output/scan_configs.json. The agentic-discovery skill reads
-        this the next time it runs — nothing runs automatically.
+        Saved to output/scan_configs.json with sector and volume filters. The agentic-discovery skill reads this when executed.
       </p>
       <Input label="Name" value={name} onChange={(e) => setName(e.target.value)} hint="e.g. high_momentum_breakout" />
+
+      <div style={{ marginBottom: "var(--s-2-5)" }}>
+        <label htmlFor="scan-sector" className="tile-label">Sector Filter</label>
+        <select
+          id="scan-sector"
+          value={sector}
+          onChange={(e) => setSector(e.target.value)}
+          style={{
+            width: "100%",
+            background: theme.base,
+            color: theme.textPrimary,
+            border: `1px solid ${theme.border}`,
+            borderRadius: "var(--r-sm)",
+            padding: "8px 12px",
+            fontSize: "var(--t-body)",
+            marginTop: "var(--s-1)",
+          }}
+        >
+          <option value="ALL">All Sectors</option>
+          <option value="Technology">Technology</option>
+          <option value="Financial">Financial</option>
+          <option value="Healthcare">Healthcare</option>
+          <option value="Energy">Energy</option>
+          <option value="Consumer">Consumer</option>
+          <option value="Industrial">Industrial</option>
+        </select>
+      </div>
+
       <Input
         label="Min price"
         type="number"

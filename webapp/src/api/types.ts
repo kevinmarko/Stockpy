@@ -2565,6 +2565,21 @@ export interface ExecutionQueueIntent {
   allow_place: boolean;
   rationale: string;
   client_order_id: string;
+  /**
+   * Real per-intent attribution (never guessed from `rationale` free text —
+   * CONSTRAINT #4): `"advisory"` for the base advisory engine, `"composed"`
+   * when netted across more than one Pilot follow, or a real followed
+   * Pilot's `pilot_id`.
+   */
+  follow_type?: string;
+}
+
+/** Query parameters for GET /execution-queue */
+export interface ExecutionQueueParams {
+  action?: string;
+  follow_type?: string;
+  status_filter?: string;
+  min_conviction?: number;
 }
 
 /**
@@ -2585,6 +2600,12 @@ export interface ExecutionQueue {
   stale: boolean;
   age_seconds: number | null;
   intents: ExecutionQueueIntent[];
+  /**
+   * Every distinct real `follow_type` value present in the UNFILTERED queue
+   * (regardless of the currently-applied filters) — lets a caller build a
+   * filter control without hardcoding pilot names.
+   */
+  available_follow_types?: string[];
   reason: string | null;
 }
 

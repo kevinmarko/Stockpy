@@ -25,6 +25,7 @@ import type {
   CoverageStatus,
   DiscoveryCandidate,
   ExecutionQueue,
+  ExecutionQueueParams,
   ScanConfig,
   ScanConfigRequest,
   ScanConfigResult,
@@ -3608,7 +3609,12 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
  * the queue never fabricates a share count without a live quote), and
  * `mode: "review"` (the queue is populated but nothing can be placed without
  * ROBINHOOD_EXECUTION_MODE=live) — mirrors execution/queue_builder.py's
- * actual output shape.
+ * actual output shape. `follow_type` mirrors the REAL two attribution
+ * buckets the backend derives from execution/queue_builder.py's `"strategy"`
+ * label (never a guessed/free-text category — CONSTRAINT #4): AAPL is a base
+ * advisory-engine intent, TSLA is attributed to the "trend-following" mock
+ * Pilot (a real id in MOCK_PILOTS below) to demonstrate the Strategy filter
+ * against a genuine follow.
  */
 const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
   generated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
@@ -3633,6 +3639,7 @@ const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
       allow_place: true,
       rationale: "Strong momentum, low realized vol, HMM risk-on regime.",
       client_order_id: "advisory-AAPL-buy-1",
+      follow_type: "advisory",
     },
     {
       symbol: "TSLA",
@@ -3644,8 +3651,9 @@ const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
       gate_allowed: false,
       gate_reasons: ["macro_kill_switch"],
       allow_place: false,
-      rationale: "Advisory risk-reduce exit.",
-      client_order_id: "advisory-TSLA-sell-1",
+      rationale: "Pilot follow (trend-following) risk-reduce exit.",
+      client_order_id: "follow-trend-following-TSLA-sell-1",
+      follow_type: "trend-following",
     },
   ],
 };
@@ -5076,8 +5084,40 @@ export const mockApi = {
     return delay(MOCK_COMMAND_MANIFEST);
   },
 
-  async getExecutionQueue(): Promise<ExecutionQueue> {
-    return delay(MOCK_EXECUTION_QUEUE);
+  async getExecutionQueue(params?: ExecutionQueueParams): Promise<ExecutionQueue> {
+    let items = MOCK_EXECUTION_QUEUE.intents;
+    if (params) {
+      if (params.action && params.action !== "ALL") {
+        items = items.filter((i) => i.action.toUpperCase() === params.action?.toUpperCase());
+      }
+      if (params.follow_type && params.follow_type !== "ALL") {
+        items = items.filter((i) => i.follow_type?.toLowerCase() === params.follow_type?.toLowerCase());
+      }
+      if (params.status_filter && params.status_filter !== "ALL") {
+        if (params.status_filter === "Ready") {
+          items = items.filter((i) => i.allow_place);
+        } else if (params.status_filter === "Blocked") {
+          items = items.filter((i) => !i.allow_place);
+        }
+      }
+      if (params.min_conviction !== undefined && params.min_conviction > 0) {
+        items = items.filter((i) => i.conviction !== null && i.conviction >= (params.min_conviction ?? 0));
+      }
+    }
+    const available_follow_types = Array.from(
+      new Set(
+        MOCK_EXECUTION_QUEUE.intents
+          .map((i) => i.follow_type)
+          .filter((v): v is string => Boolean(v))
+      )
+    ).sort();
+    return delay({
+      ...MOCK_EXECUTION_QUEUE,
+      n_intents: items.length,
+      n_placeable: items.filter((i) => i.allow_place).length,
+      intents: items,
+      available_follow_types,
+    });
   },
 
   async setStrategyModules(

@@ -130,6 +130,231 @@ def test_execution_queue_401_on_wrong_token():
     assert resp.status_code == 401
 
 
+# ===========================================================================
+# Query-param filters (action/follow_type/status_filter/min_conviction),
+# the real (non-guessed) `follow_type` attribution, `available_follow_types`,
+# and the `/api/queue` alias.
+# ===========================================================================
+
+
+def _intent(**overrides) -> execution_panel.QueuedIntent:
+    defaults = dict(
+        symbol="AAPL",
+        action="BUY",
+        side="buy",
+        qty=None,
+        target_notional=250.0,
+        conviction=0.8,
+        gate_allowed=True,
+        gate_reasons=[],
+        allow_place=True,
+        rationale="strong momentum",
+        client_order_id="advisory-AAPL-buy-1",
+        strategy="",
+    )
+    defaults.update(overrides)
+    return execution_panel.QueuedIntent(**defaults)
+
+
+def _multi_attribution_snapshot() -> execution_panel.ExecutionQueueSnapshot:
+    """Four intents spanning every real attribution bucket
+    `get_execution_queue` derives from `QueuedIntent.strategy`: a base
+    advisory intent (a derived composite label, no "Follow:"/"Composed:"
+    prefix), a single-pilot follow, a multi-pilot composed intent, and a
+    legacy intent with no `strategy` at all (pre-dates the field). The
+    snapshot's own declared `n_intents`/`n_placeable` are deliberately WRONG
+    (mismatched from the real intents list) so a test can prove the endpoint
+    recomputes from the actual (possibly filtered) intents rather than
+    echoing the snapshot's raw totals.
+    """
+    return execution_panel.ExecutionQueueSnapshot(
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        mode="review",
+        kill_switch_active=False,
+        max_notional_per_order=500.0,
+        n_intents=999,
+        n_placeable=999,
+        intents=[
+            _intent(
+                symbol="AAPL",
+                action="BUY",
+                side="buy",
+                conviction=0.8,
+                allow_place=True,
+                # A real advisory-derived label containing the word "macd" --
+                # pins that follow_type is read from `strategy`, never
+                # keyword-sniffed out of free text.
+                rationale="MACD crossover confirms trend strength.",
+                strategy="high-conviction multi-signal composite [risk-on]",
+                client_order_id="advisory-AAPL-buy-1",
+            ),
+            _intent(
+                symbol="TSLA",
+                action="SELL",
+                side="sell",
+                conviction=0.6,
+                gate_allowed=False,
+                gate_reasons=["macro_kill_switch"],
+                allow_place=False,
+                rationale="risk-reduce exit",
+                strategy="Follow:trend-following",
+                client_order_id="follow-trend-following-TSLA-sell-1",
+            ),
+            _intent(
+                symbol="MSFT",
+                action="BUY",
+                side="buy",
+                conviction=0.3,
+                allow_place=True,
+                rationale="netted across two follows",
+                strategy="Composed: Follow:trend-following, Follow:dip-buyer",
+                client_order_id="composed-MSFT-buy-1",
+            ),
+            _intent(
+                symbol="NVDA",
+                action="BUY",
+                side="buy",
+                conviction=0.9,
+                allow_place=True,
+                rationale="legacy queue file, no strategy field",
+                strategy="",
+                client_order_id="advisory-NVDA-buy-1",
+            ),
+        ],
+    )
+
+
+class TestExecutionQueueFilters:
+    def test_follow_type_is_real_attribution_not_a_rationale_guess(self):
+        """AAPL's rationale contains the word 'macd', but its real `strategy`
+        is a plain advisory composite label -- follow_type must reflect the
+        real attribution ('advisory'), never a keyword match against
+        rationale text (CONSTRAINT #4)."""
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            resp = client.get("/execution-queue")
+        assert resp.status_code == 200
+        by_symbol = {i["symbol"]: i for i in resp.json()["intents"]}
+        assert by_symbol["AAPL"]["follow_type"] == "advisory"
+        assert by_symbol["TSLA"]["follow_type"] == "trend-following"
+        assert by_symbol["MSFT"]["follow_type"] == "composed"
+        assert by_symbol["NVDA"]["follow_type"] == "advisory"  # no strategy -> honest fallback
+
+    def test_available_follow_types_reflects_unfiltered_set(self):
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            resp = client.get("/execution-queue", params={"action": "SELL"})
+        assert resp.status_code == 200
+        body = resp.json()
+        # Filtered down to just TSLA (SELL)...
+        assert [i["symbol"] for i in body["intents"]] == ["TSLA"]
+        # ...but available_follow_types still lists every attribution present
+        # in the UNFILTERED queue, not just the filtered-down set.
+        assert body["available_follow_types"] == ["advisory", "composed", "trend-following"]
+
+    def test_follow_type_filter_matches_real_pilot_id(self):
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            resp = client.get("/execution-queue", params={"follow_type": "trend-following"})
+        assert resp.status_code == 200
+        assert [i["symbol"] for i in resp.json()["intents"]] == ["TSLA"]
+
+    def test_follow_type_filter_composed(self):
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            resp = client.get("/execution-queue", params={"follow_type": "composed"})
+        assert resp.status_code == 200
+        assert [i["symbol"] for i in resp.json()["intents"]] == ["MSFT"]
+
+    def test_action_filter(self):
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            resp = client.get("/execution-queue", params={"action": "SELL"})
+        assert resp.status_code == 200
+        assert [i["symbol"] for i in resp.json()["intents"]] == ["TSLA"]
+
+    def test_status_filter_ready_excludes_blocked(self):
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            resp = client.get("/execution-queue", params={"status_filter": "Ready"})
+        assert resp.status_code == 200
+        symbols = {i["symbol"] for i in resp.json()["intents"]}
+        assert symbols == {"AAPL", "MSFT", "NVDA"}
+
+    def test_status_filter_blocked_excludes_ready(self):
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            resp = client.get("/execution-queue", params={"status_filter": "Blocked"})
+        assert resp.status_code == 200
+        assert [i["symbol"] for i in resp.json()["intents"]] == ["TSLA"]
+
+    def test_min_conviction_filter(self):
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            resp = client.get("/execution-queue", params={"min_conviction": 0.7})
+        assert resp.status_code == 200
+        symbols = {i["symbol"] for i in resp.json()["intents"]}
+        assert symbols == {"AAPL", "NVDA"}  # 0.8 and 0.9; TSLA=0.6, MSFT=0.3 excluded
+
+    def test_counts_reflect_filtered_result_not_raw_snapshot_totals(self):
+        """The snapshot's own declared n_intents/n_placeable are 999/999
+        (deliberately wrong) -- the endpoint must report the FILTERED
+        count, matching what `intents` actually contains, never the raw
+        declared totals."""
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            unfiltered = client.get("/execution-queue")
+            filtered = client.get("/execution-queue", params={"action": "SELL"})
+        assert unfiltered.json()["n_intents"] == 4
+        assert unfiltered.json()["n_placeable"] == 3
+        assert filtered.json()["n_intents"] == 1
+        assert filtered.json()["n_placeable"] == 0
+
+    def test_all_bypasses_every_filter(self):
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            resp = client.get(
+                "/execution-queue",
+                params={"action": "ALL", "follow_type": "ALL", "status_filter": "ALL"},
+            )
+        assert resp.status_code == 200
+        assert len(resp.json()["intents"]) == 4
+
+
+class TestApiQueueAlias:
+    def test_matches_execution_queue_shape_and_filters(self):
+        with mock.patch.object(
+            execution_panel, "read_execution_queue", return_value=_multi_attribution_snapshot()
+        ):
+            direct = client.get("/execution-queue", params={"action": "SELL"}).json()
+            alias = client.get("/api/queue", params={"action": "SELL"}).json()
+        # age_seconds is computed against wall-clock "now" independently per
+        # request, so it can differ by a fraction of a millisecond between
+        # the two sequential calls -- everything else must match exactly.
+        direct.pop("age_seconds")
+        alias.pop("age_seconds")
+        assert alias == direct
+
+    def test_cold_start_is_honest_not_fabricated(self):
+        with mock.patch.object(execution_panel, "read_execution_queue", return_value=None):
+            resp = client.get("/api/queue")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["intents"] == []
+        assert body["available_follow_types"] == []
+        assert "ROBINHOOD_EXECUTION_MODE" in body["reason"]
+
+
 def test_execution_queue_never_calls_mcp_or_places_orders():
     """Architectural pin: this module must not import anything that could place
     a Robinhood order. Only a live Claude Code agent session may do that (see

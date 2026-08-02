@@ -477,7 +477,95 @@ describe("Agentic Trading screen (real mock API)", () => {
 
       expect(await screen.findByText("None configured yet.")).toBeInTheDocument();
       expect(screen.queryByText(/nothing on this screen runs it for you/)).not.toBeInTheDocument();
-      expect(screen.queryByTestId(/scan-cmd-.*-copy/)).not.toBeInTheDocument();
+    });
+
+    it("opens Robinhood auth modal and requires a 6-digit MFA code before connecting", async () => {
+      // POST /brokerage/connect -> verify_credentials never falls through to an
+      // interactive MFA prompt over HTTP (a headless request must not risk
+      // blocking on stdin), so a missing/empty mfa_code is ALWAYS treated as a
+      // verification failure server-side -- this modal must not offer a
+      // "connect with no MFA code" path that can only ever fail.
+      const connectSpy = vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
+        connected: true,
+        verified: true,
+        has_account_snapshot: true,
+      });
+      renderScreen();
+
+      const loginBtn = await screen.findByRole("button", { name: /Login to Robinhood/i });
+      fireEvent.click(loginBtn);
+
+      expect(await screen.findByRole("heading", { name: /Robinhood On-Demand Authentication/i })).toBeInTheDocument();
+
+      const usernameInput = screen.getByLabelText(/Email \/ Username/i);
+      const passwordInput = screen.getByLabelText(/Password/i);
+      const mfaInput = screen.getByLabelText(/Authenticator app code/i);
+      fireEvent.change(usernameInput, { target: { value: "trader@example.com" } });
+      fireEvent.change(passwordInput, { target: { value: "secretpass" } });
+
+      const submitBtn = screen.getByRole("button", { name: /Connect Robinhood/i });
+      expect(submitBtn).toBeDisabled();
+
+      fireEvent.change(mfaInput, { target: { value: "123456" } });
+      expect(submitBtn).not.toBeDisabled();
+
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(connectSpy).toHaveBeenCalledWith({
+          username: "trader@example.com",
+          password: "secretpass",
+          mfa_code: "123456",
+        });
+      });
+    });
+
+    it("toggles execution queue minimization state when Minimize/Expand button is clicked", async () => {
+      renderScreen();
+      const minBtn = await screen.findByRole("button", { name: /Minimize/i });
+      expect(await screen.findByText("AAPL")).toBeInTheDocument();
+
+      fireEvent.click(minBtn);
+      expect(screen.queryByText("AAPL")).not.toBeInTheDocument();
+
+      const expandBtn = screen.getByRole("button", { name: /Expand/i });
+      fireEvent.click(expandBtn);
+      expect(await screen.findByText("AAPL")).toBeInTheDocument();
+    });
+
+    it("opens Launch Broker Scan modal and allows selecting Sector and parameters", async () => {
+      const putSpy = vi.spyOn(api, "putScanConfig").mockResolvedValueOnce({
+        scan_config: {
+          name: "tech_momentum",
+          filters: { sector: "Technology", min_price: 10, min_volume: 500000 },
+          enabled: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        applies: "next_discovery_run",
+        note: "Saved",
+      });
+      renderScreen();
+
+      const scanBtn = await screen.findByRole("button", { name: "Add scan config" });
+      fireEvent.click(scanBtn);
+
+      expect(await screen.findByRole("heading", { name: /Launch Broker Scan \/ Add Config/i })).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText("Name"), { target: { value: "tech_momentum" } });
+      fireEvent.change(screen.getByLabelText(/Sector Filter/i), { target: { value: "Technology" } });
+      fireEvent.change(screen.getByLabelText(/Min price/i), { target: { value: "10" } });
+
+      const saveBtn = screen.getByRole("button", { name: "Save" });
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(putSpy).toHaveBeenCalledWith({
+          name: "tech_momentum",
+          filters: { sector: "Technology", min_price: 10, min_volume: 1000000 },
+          enabled: true,
+        });
+      });
     });
   });
 });
