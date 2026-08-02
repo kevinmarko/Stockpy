@@ -578,7 +578,7 @@ function RobinhoodAuthModal({
         Robinhood On-Demand Authentication
       </h2>
       <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
-        Verify credentials with a read-only login. MFA code is optional.
+        Verify credentials with a read-only login.
       </p>
 
       {error && (
@@ -595,7 +595,6 @@ function RobinhoodAuthModal({
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           placeholder="name@domain.com"
-          required
         />
         <Input
           label="Password"
@@ -603,15 +602,23 @@ function RobinhoodAuthModal({
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="••••••••••••"
-          required
         />
         <Input
-          label="MFA / 2FA Code (Optional)"
+          label="Authenticator app code"
           type="password"
+          inputMode="numeric"
           value={mfaCode}
           onChange={(e) => setMfaCode(e.target.value)}
           placeholder="123456"
-          hint="6-digit authenticator code (optional)."
+          hint={
+            // The backend (POST /brokerage/connect -> verify_credentials) never
+            // falls through to an interactive MFA prompt over HTTP -- a headless
+            // request must not risk blocking on stdin -- so it treats a missing
+            // or empty mfa_code as a verification failure, not "no MFA needed".
+            // This field must stay required; see RobinhoodConnectForm.tsx for
+            // the same, correct, existing contract.
+            "Open your authenticator app and enter the current 6-digit code. It's used once to verify the login — nothing beyond that is stored."
+          }
         />
 
         <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4)" }}>
@@ -621,7 +628,7 @@ function RobinhoodAuthModal({
           <Button
             variant="primary"
             type="submit"
-            disabled={!username.trim() || !password.trim() || pending}
+            disabled={!username.trim() || !password.trim() || mfaCode.trim().length !== 6 || pending}
             pending={pending}
             style={{ flex: 2 }}
           >

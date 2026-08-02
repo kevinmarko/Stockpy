@@ -1631,10 +1631,21 @@ def get_execution_queue(
     Supports optional query filters: ``action`` (BUY/SELL), ``follow_type``,
     ``status_filter`` (Blocked/Ready), and ``min_conviction``.
 
+    ``follow_type`` is the REAL per-intent attribution derived from
+    ``QueuedIntent.strategy`` (``execution/queue_builder.py``'s ``"strategy"``
+    key) — never guessed from ``rationale`` free text (CONSTRAINT #4). It is
+    one of: ``"advisory"`` (the base advisory engine), ``"composed"`` (netted
+    across more than one follow), or a real followed Pilot's ``pilot_id``
+    (parsed off the ``"Follow:<pilot_id>"`` label). ``available_follow_types``
+    lists every distinct value present in the UNFILTERED queue so the caller
+    can build a filter control without hardcoding pilot names.
+
     Returns ``{generated_at, mode, kill_switch_active, max_notional_per_order,
-    n_intents, n_placeable, stale, age_seconds, intents, reason}`` — empty
-    ``intents`` + an honest ``reason`` when no queue has been written yet
-    (CONSTRAINT #4). Never 500s."""
+    n_intents, n_placeable, stale, age_seconds, intents, available_follow_types,
+    reason}`` — empty ``intents`` + an honest ``reason`` when no queue has been
+    written yet (CONSTRAINT #4). ``n_intents``/``n_placeable`` reflect the
+    FILTERED result set (matching what ``intents`` actually contains), not the
+    raw snapshot totals. Never 500s."""
     snapshot = execution_panel.read_execution_queue()
     if snapshot is None:
         return {
@@ -1647,6 +1658,7 @@ def get_execution_queue(
             "stale": False,
             "age_seconds": None,
             "intents": [],
+            "available_follow_types": [],
             "reason": (
                 "No execution queue yet — ROBINHOOD_EXECUTION_MODE may be 'off', "
                 "or the pipeline hasn't run since it was enabled."
@@ -1654,26 +1666,24 @@ def get_execution_queue(
         }
 
     raw_intents = snapshot.intents or []
+
+    def _attribution(i: Any) -> str:
+        raw_strategy = str(getattr(i, "strategy", "") or "")
+        if raw_strategy.startswith("Follow:"):
+            return raw_strategy[len("Follow:") :] or "advisory"
+        if raw_strategy.startswith("Composed:"):
+            return "composed"
+        return "advisory"
+
+    available_follow_types = sorted({_attribution(i) for i in raw_intents})
+
     filtered_intents = []
     for i in raw_intents:
         i_action = (getattr(i, "action", "") or "").upper()
         i_side = (getattr(i, "side", "") or "").upper()
         i_conviction = getattr(i, "conviction", None)
         i_allow_place = bool(getattr(i, "allow_place", False))
-        i_rationale = getattr(i, "rationale", "") or ""
-
-        # Determine strategy follow type
-        f_type = getattr(i, "follow_type", None)
-        if not f_type:
-            rat_lower = i_rationale.lower()
-            if "composite" in rat_lower:
-                f_type = "composite-signal"
-            elif "macd" in rat_lower:
-                f_type = "macd-trend"
-            elif "trend" in rat_lower:
-                f_type = "trend-following"
-            else:
-                f_type = "trend-following"
+        f_type = _attribution(i)
 
         if action and action.upper() != "ALL":
             if i_action != action.upper() and i_side != action.upper():
@@ -1715,11 +1725,12 @@ def get_execution_queue(
         "mode": snapshot.mode,
         "kill_switch_active": snapshot.kill_switch_active,
         "max_notional_per_order": snapshot.max_notional_per_order,
-        "n_intents": snapshot.n_intents,
-        "n_placeable": snapshot.n_placeable,
+        "n_intents": len(filtered_intents),
+        "n_placeable": sum(1 for fi in filtered_intents if fi["allow_place"]),
         "stale": execution_panel.is_queue_stale(snapshot),
         "age_seconds": _safe_float(execution_panel.queue_age_seconds(snapshot)),
         "intents": filtered_intents,
+        "available_follow_types": available_follow_types,
         "reason": None,
     }
 

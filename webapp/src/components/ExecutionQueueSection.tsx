@@ -37,6 +37,8 @@ export function ExecutionQueueSection() {
         }),
       [filterAction, filterFollowType, filterStatus, minConviction]
     );
+  const filtersActive =
+    filterAction !== "ALL" || filterFollowType !== "ALL" || filterStatus !== "ALL" || minConviction > 0;
 
   return (
     <div style={{ marginTop: 40 }} className="card card-pad">
@@ -78,8 +80,9 @@ export function ExecutionQueueSection() {
 
         {/* Side Filter */}
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
-          <label style={{ color: theme.textSecondary }}>Side:</label>
+          <label htmlFor="queue-filter-side" style={{ color: theme.textSecondary }}>Side:</label>
           <select
+            id="queue-filter-side"
             value={filterAction}
             onChange={(e) => setFilterAction(e.target.value)}
             style={{
@@ -97,10 +100,15 @@ export function ExecutionQueueSection() {
           </select>
         </div>
 
-        {/* Strategy Filter */}
+        {/* Strategy Filter — options are the REAL attribution values present in
+            the queue (advisory / composed / a followed Pilot's id), read from
+            `available_follow_types` (always the unfiltered set, so this list
+            stays stable across filter changes). Never a hardcoded guess at
+            pilot names — those vary per-operator. */}
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
-          <label style={{ color: theme.textSecondary }}>Strategy:</label>
+          <label htmlFor="queue-filter-strategy" style={{ color: theme.textSecondary }}>Strategy:</label>
           <select
+            id="queue-filter-strategy"
             value={filterFollowType}
             onChange={(e) => setFilterFollowType(e.target.value)}
             style={{
@@ -113,16 +121,19 @@ export function ExecutionQueueSection() {
             }}
           >
             <option value="ALL">All Strategies</option>
-            <option value="trend-following">Trend Following</option>
-            <option value="macd-trend">MACD Trend</option>
-            <option value="composite-signal">Composite Signal</option>
+            {(data?.available_follow_types ?? []).map((ft) => (
+              <option key={ft} value={ft}>
+                {formatFollowType(ft)}
+              </option>
+            ))}
           </select>
         </div>
 
         {/* Status Filter */}
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
-          <label style={{ color: theme.textSecondary }}>Status:</label>
+          <label htmlFor="queue-filter-status" style={{ color: theme.textSecondary }}>Status:</label>
           <select
+            id="queue-filter-status"
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
             style={{
@@ -142,8 +153,11 @@ export function ExecutionQueueSection() {
 
         {/* Min Conviction Range Slider */}
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)", minWidth: 180 }}>
-          <label style={{ color: theme.textSecondary }}>Min Conviction: {minConviction}%</label>
+          <label htmlFor="queue-filter-min-conviction" style={{ color: theme.textSecondary }}>
+            Min Conviction: {minConviction}%
+          </label>
           <input
+            id="queue-filter-min-conviction"
             type="range"
             min="0"
             max="100"
@@ -164,7 +178,12 @@ export function ExecutionQueueSection() {
             data.intents.length === 0 ? (
               <EmptyState
                 title="No queued orders"
-                hint={data.reason ?? "No execution items match the selected filter criteria."}
+                hint={
+                  data.reason ??
+                  (filtersActive
+                    ? "No execution items match the selected filter criteria."
+                    : "The execution queue is empty.")
+                }
               />
             ) : (
               <div>
@@ -187,6 +206,16 @@ export function ExecutionQueueSection() {
       )}
     </div>
   );
+}
+
+/** Title-cases a real `follow_type` value ("trend-following" -> "Trend Following")
+ * for display — the underlying filter value stays the raw string. */
+function formatFollowType(value: string): string {
+  return value
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 export function ModeBadge({ mode }: { mode: string }) {
@@ -252,7 +281,7 @@ function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: strin
           </span>
         )}
         {intent.follow_type && (
-          <Chip label={intent.follow_type} tone="muted" />
+          <Chip label={formatFollowType(intent.follow_type)} tone="muted" />
         )}
         <span style={{ marginLeft: "auto" }}>
           {intent.allow_place ? (

@@ -91,6 +91,12 @@ class QueuedIntent:
     allow_place: bool
     rationale: str
     client_order_id: str
+    # The real owner/attribution label written by execution/queue_builder.py
+    # ("advisory" for a base advisory-engine intent, "Follow:<pilot_id>" for
+    # a pilot follow, "Composed: ..." when multiple follows netted into one
+    # order). Defaults to "" (never fabricated) for a queue file written
+    # before this field existed.
+    strategy: str = ""
 
 
 @dataclass(frozen=True)
@@ -120,6 +126,7 @@ def _coerce_intent(raw: Dict[str, Any]) -> Optional[QueuedIntent]:
             allow_place=bool(raw.get("allow_place", False)),
             rationale=str(raw.get("rationale", "")),
             client_order_id=str(raw.get("client_order_id", "")),
+            strategy=str(raw.get("strategy", "") or ""),
         )
     except Exception:
         logger.debug("robinhood_execution_panel: skipping malformed intent %r", raw, exc_info=True)

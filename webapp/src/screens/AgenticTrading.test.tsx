@@ -479,7 +479,12 @@ describe("Agentic Trading screen (real mock API)", () => {
       expect(screen.queryByText(/nothing on this screen runs it for you/)).not.toBeInTheDocument();
     });
 
-    it("opens Robinhood auth modal and allows connection with optional MFA code", async () => {
+    it("opens Robinhood auth modal and requires a 6-digit MFA code before connecting", async () => {
+      // POST /brokerage/connect -> verify_credentials never falls through to an
+      // interactive MFA prompt over HTTP (a headless request must not risk
+      // blocking on stdin), so a missing/empty mfa_code is ALWAYS treated as a
+      // verification failure server-side -- this modal must not offer a
+      // "connect with no MFA code" path that can only ever fail.
       const connectSpy = vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
         connected: true,
         verified: true,
@@ -494,10 +499,14 @@ describe("Agentic Trading screen (real mock API)", () => {
 
       const usernameInput = screen.getByLabelText(/Email \/ Username/i);
       const passwordInput = screen.getByLabelText(/Password/i);
+      const mfaInput = screen.getByLabelText(/Authenticator app code/i);
       fireEvent.change(usernameInput, { target: { value: "trader@example.com" } });
       fireEvent.change(passwordInput, { target: { value: "secretpass" } });
 
       const submitBtn = screen.getByRole("button", { name: /Connect Robinhood/i });
+      expect(submitBtn).toBeDisabled();
+
+      fireEvent.change(mfaInput, { target: { value: "123456" } });
       expect(submitBtn).not.toBeDisabled();
 
       fireEvent.click(submitBtn);
@@ -506,7 +515,7 @@ describe("Agentic Trading screen (real mock API)", () => {
         expect(connectSpy).toHaveBeenCalledWith({
           username: "trader@example.com",
           password: "secretpass",
-          mfa_code: "",
+          mfa_code: "123456",
         });
       });
     });

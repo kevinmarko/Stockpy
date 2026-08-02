@@ -187,6 +187,25 @@ class TestReadExecutionQueue:
         snap = read_execution_queue(p)
         assert snap.n_placeable == 1
 
+    def test_strategy_field_round_trips(self, tmp_path):
+        """QueuedIntent.strategy carries execution/queue_builder.py's real
+        "strategy" owner label verbatim -- this is what api/pilots_api.py's
+        GET /execution-queue derives its `follow_type` attribution from,
+        instead of guessing from `rationale` free text (CONSTRAINT #4)."""
+        payload = _sample_payload(intents=[_sample_intent(strategy="Follow:trend-following")])
+        p = _write_json(tmp_path, payload)
+        snap = read_execution_queue(p)
+        assert snap.intents[0].strategy == "Follow:trend-following"
+
+    def test_strategy_absent_defaults_to_empty_string_not_none(self, tmp_path):
+        """A queue file written before `strategy` existed (or any other
+        omission) must never crash the reader and must never fabricate a
+        label -- "" is the honest default (CONSTRAINT #4)."""
+        payload = _sample_payload(intents=[_sample_intent()])  # no "strategy" key
+        p = _write_json(tmp_path, payload)
+        snap = read_execution_queue(p)
+        assert snap.intents[0].strategy == ""
+
     def test_default_path_used_when_none_given(self, monkeypatch, tmp_path):
         fake_path = tmp_path / "execution_queue.json"
         _write_json(tmp_path, _sample_payload())
