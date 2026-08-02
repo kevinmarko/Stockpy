@@ -54,6 +54,7 @@ import { TickerDrawer } from "./components/TickerDrawer";
 import { TopStatusBar } from "./components/TopStatusBar";
 import { ToastProvider } from "./components/ToastContext";
 import { DensityProvider } from "./components/DensityContext";
+import { AutoRefreshProvider } from "./components/AutoRefreshContext";
 import { needsTokenEntry } from "./auth/apiToken";
 import { usePwaStatus } from "./hooks/usePwaStatus";
 import { useApi } from "./hooks/useApi";
@@ -207,92 +208,93 @@ export default function App() {
   return (
     <ToastProvider>
       <DensityProvider>
-        <div className="app app-shell">
-          <Sidebar />
-          <div className="app-main">
-            <TopStatusBar />
-            <ErrorBoundary key={location.pathname}>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/marketplace" element={<Marketplace />} />
-                <Route path="/compare" element={<Comparison />} />
-                <Route path="/pilots/:id" element={<PilotDetail />} />
-                <Route path="/symbol/:ticker" element={<SymbolDetail />} />
-                <Route path="/activity" element={<Activity />} />
-                <Route path="/models" element={<Models />} />
-                <Route path="/pairs" element={<PairsRadar />} />
-                <Route path="/options" element={<OptionsMatrix />} />
-                <Route path="/attribution" element={<Attribution />} />
-                <Route path="/observability" element={<Observability />} />
-                <Route path="/strategy-health" element={<StrategyHealth />} />
-                <Route path="/calibration" element={<Calibration />} />
-                <Route path="/pipeline" element={<PipelineDashboard />} />
-                <Route path="/data-explorer" element={<DataExplorer />} />
-                <Route path="/signals" element={<SignalBreakdown />} />
-                <Route path="/sentiment" element={<SentimentDynamics />} />
-                <Route path="/forecast" element={<ForecastViewer />} />
-                <Route path="/forecast/backfill" element={<ForecastBackfillScreen />} />
-                <Route path="/sector-selection" element={<SectorSelection />} />
-                <Route path="/commands" element={<Commands />} />
-                <Route path="/console" element={<Console />} />
-                <Route path="/operations/reports" element={<ReportLibrary />} />
-                <Route path="/help" element={<Help />} />
-                <Route path="/agentic" element={<AgenticTrading />} />
-                <Route path="/research" element={<ResearchHub />} />
-                <Route path="/trading" element={<TradingHub />} />
-                <Route path="/operations" element={<OperationsHub />} />
-                <Route path="/portfolio" element={<Portfolio />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/settings/strategy" element={<StrategyMatrix />} />
-                <Route path="/settings/tunables" element={<SettingsManager />} />
-                <Route path="/settings/sentiment" element={<SentimentSettings />} />
-                <Route path="/settings/sector-selection" element={<SectorSelectionSettings />} />
-                <Route path="/settings/fmp" element={<FmpSettings />} />
-                <Route path="/settings/etf-transmission" element={<EtfTransmissionSettings />} />
-                <Route path="/settings/ai" element={<AIControlCenter />} />
-                <Route path="/settings/prompts" element={<PromptRegistry />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </ErrorBoundary>
+        <AutoRefreshProvider>
+          <div className="app app-shell">
+            <Sidebar />
+            <div className="app-main">
+              <TopStatusBar />
+              <ErrorBoundary key={location.pathname}>
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/marketplace" element={<Marketplace />} />
+                  <Route path="/compare" element={<Comparison />} />
+                  <Route path="/pilots/:id" element={<PilotDetail />} />
+                  <Route path="/symbol/:ticker" element={<SymbolDetail />} />
+                  <Route path="/activity" element={<Activity />} />
+                  <Route path="/models" element={<Models />} />
+                  <Route path="/pairs" element={<PairsRadar />} />
+                  <Route path="/options" element={<OptionsMatrix />} />
+                  <Route path="/attribution" element={<Attribution />} />
+                  <Route path="/observability" element={<Observability />} />
+                  <Route path="/strategy-health" element={<StrategyHealth />} />
+                  <Route path="/calibration" element={<Calibration />} />
+                  <Route path="/pipeline" element={<PipelineDashboard />} />
+                  <Route path="/data-explorer" element={<DataExplorer />} />
+                  <Route path="/signals" element={<SignalBreakdown />} />
+                  <Route path="/sentiment" element={<SentimentDynamics />} />
+                  <Route path="/forecasts" element={<ForecastViewer />} />
+                  <Route path="/forecasts/backfill" element={<ForecastBackfillScreen />} />
+                  <Route path="/sectors" element={<SectorSelection />} />
+                  <Route path="/commands" element={<Commands />} />
+                  <Route path="/console" element={<Console />} />
+                  <Route path="/reports" element={<ReportLibrary />} />
+                  <Route path="/agentic" element={<AgenticTrading />} />
+                  <Route path="/research" element={<ResearchHub />} />
+                  <Route path="/trading" element={<TradingHub />} />
+                  <Route path="/operations" element={<OperationsHub />} />
+                  <Route path="/portfolio" element={<Portfolio />} />
+                  <Route path="/settings" element={<Settings />} />
+                  <Route path="/settings/strategy" element={<StrategyMatrix />} />
+                  <Route path="/settings/tunables" element={<SettingsManager />} />
+                  <Route path="/settings/sentiment" element={<SentimentSettings />} />
+                  <Route path="/settings/sector-selection" element={<SectorSelectionSettings />} />
+                  <Route path="/settings/fmp" element={<FmpSettings />} />
+                  <Route path="/settings/etf-transmission" element={<EtfTransmissionSettings />} />
+                  <Route path="/settings/ai" element={<AIControlCenter />} />
+                  <Route path="/settings/prompts" element={<PromptRegistry />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </ErrorBoundary>
+            </div>
+            <BottomNav />
+            <ChatButton isOpen={isChatOpen} onOpen={() => openChat()} onClose={closeChat} />
+            <SettingsButton />
+            <AIChatInterface isOpen={isChatOpen} onClose={closeChat} contextText={chatContextText} />
+
+            <CommandPaletteModal
+              isOpen={isPaletteOpen}
+              onClose={() => setIsPaletteOpen(false)}
+              commands={commandManifest?.commands ?? []}
+              onSelectCommandForBuilder={(spec) => {
+                setIsPaletteOpen(false);
+                navigate(`/commands?builder=${spec.name}`);
+              }}
+              onInspectTicker={(sym) => {
+                setInspectedTicker(sym);
+                setIsPaletteOpen(false);
+              }}
+              onPreviewReport={(name) => {
+                setPreviewReportName(name);
+                setIsPaletteOpen(false);
+              }}
+              onNavigate={navigate}
+            />
+
+            {inspectedTicker && (
+              <TickerDrawer
+                symbol={inspectedTicker}
+                onClose={() => setInspectedTicker(null)}
+              />
+            )}
+
+            {previewReportName && (
+              <ReportPreviewModal
+                name={previewReportName}
+                onClose={() => setPreviewReportName(null)}
+              />
+            )}
           </div>
-          <BottomNav />
-          <ChatButton isOpen={isChatOpen} onOpen={() => openChat()} onClose={closeChat} />
-          <SettingsButton />
-          <AIChatInterface isOpen={isChatOpen} onClose={closeChat} contextText={chatContextText} />
-
-          <CommandPaletteModal
-            isOpen={isPaletteOpen}
-            onClose={() => setIsPaletteOpen(false)}
-            commands={commandManifest?.commands ?? []}
-            onSelectCommandForBuilder={(spec) => {
-              setIsPaletteOpen(false);
-              navigate(`/commands?builder=${spec.name}`);
-            }}
-            onInspectTicker={(sym) => {
-              setInspectedTicker(sym);
-              setIsPaletteOpen(false);
-            }}
-            onPreviewReport={(name) => {
-              setPreviewReportName(name);
-              setIsPaletteOpen(false);
-            }}
-            onNavigate={navigate}
-          />
-
-          {inspectedTicker && (
-            <TickerDrawer
-              symbol={inspectedTicker}
-              onClose={() => setInspectedTicker(null)}
-            />
-          )}
-
-          {previewReportName && (
-            <ReportPreviewModal
-              name={previewReportName}
-              onClose={() => setPreviewReportName(null)}
-            />
-          )}
-        </div>
+        </AutoRefreshProvider>
       </DensityProvider>
     </ToastProvider>
   );

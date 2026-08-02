@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "./Settings";
+import { AutoRefreshProvider } from "../components/AutoRefreshContext";
 import { api } from "../api/client";
 import type { AutomationSchedule, AutomationStatus, Follow, FollowResult, LlmProviderName, LlmStatus, TriggerRunResult } from "../api/types";
 import { writeOnboarding, readOnboarding } from "../onboarding";
@@ -35,7 +36,9 @@ vi.mock("virtual:pwa-register/react", () => ({
 function renderSettings() {
   return render(
     <MemoryRouter initialEntries={["/settings"]}>
-      <Settings />
+      <AutoRefreshProvider>
+        <Settings />
+      </AutoRefreshProvider>
     </MemoryRouter>
   );
 }
@@ -1125,5 +1128,42 @@ describe("Settings screen — Tracked universe", () => {
   it("renders the coverage-reconciliation diagnostic alongside the manager", async () => {
     renderSettings();
     expect(await screen.findByTestId("universe-coverage")).toBeInTheDocument();
+  });
+});
+
+describe("Settings screen — Data Auto-Refresh", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders the Data Auto-Refresh card with master toggle and interval controls", async () => {
+    renderSettings();
+    expect(await screen.findByTestId("auto-refresh-section")).toBeInTheDocument();
+    expect(screen.getByText("Data Auto-Refresh")).toBeInTheDocument();
+    expect(screen.getAllByText("Enable Auto-Refresh")[0]).toBeInTheDocument();
+    expect(screen.getAllByText("Pause When Market Closed")[0]).toBeInTheDocument();
+  });
+
+  it("toggles master auto-refresh and persists to localStorage", async () => {
+    renderSettings();
+    const masterToggle = await screen.findByTestId("auto-refresh-master-toggle");
+
+    expect(masterToggle).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(masterToggle);
+    expect(masterToggle).toHaveAttribute("aria-checked", "true");
+    expect(localStorage.getItem("stockpy.auto_refresh.enabled")).toBe("1");
+  });
+
+  it("updates interval via preset button clicks", async () => {
+    renderSettings();
+    const section = await screen.findByTestId("auto-refresh-section");
+    const button60s = within(section).getByRole("button", { name: "60s" });
+
+    await userEvent.click(button60s);
+    expect(localStorage.getItem("stockpy.auto_refresh.interval_ms")).toBe("60000");
   });
 });

@@ -11,6 +11,7 @@ import type {
   UniverseResponse,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { PerfLine } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
 import { TabGuide } from "../components/TabGuide";
@@ -117,6 +118,19 @@ export function Portfolio() {
   const pilots = useApi<PilotSummary[]>(() => api.listPilots(), []);
   const realized = useApi<RealizedPerformance>(() => api.getRealized(), []);
   const universe = useApi<UniverseResponse>(() => api.getUniverse(), []);
+
+  useAutoPoll(
+    () => {
+      port.reload();
+      equity.reload();
+      follows.reload();
+      pilots.reload();
+      realized.reload();
+      universe.reload();
+    },
+    "portfolio",
+    { hasError: port.error != null }
+  );
 
   if (port.loading) {
     return (

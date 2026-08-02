@@ -23,6 +23,7 @@ import type {
   SymbolOptions,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Loading, MetricBadge, Notice } from "../components/ui";
 import { PerfLine, chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
@@ -252,6 +253,18 @@ export function SymbolDetail() {
   const decisions = useApi<DecisionEntry[]>(
     () => api.getDecisions({ symbol: ticker, limit: 10 }),
     [ticker]
+  );
+
+  useAutoPoll(
+    () => {
+      reload();
+      forecast.reload();
+      options.reload();
+      rollingBeta.reload();
+      decisions.reload();
+    },
+    "signals",
+    { hasError: error != null }
   );
   const [journaling, setJournaling] = useState(false);
 

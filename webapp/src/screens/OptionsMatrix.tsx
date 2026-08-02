@@ -8,6 +8,7 @@ import type {
   Portfolio,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
@@ -956,6 +957,7 @@ export function OptionsMatrix() {
     () => api.getOptions(),
     [],
   );
+  useAutoPoll(reload, "options", { hasError: error != null });
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("premium");
   const [openSymbol, setOpenSymbol] = useState<string | null>(null);

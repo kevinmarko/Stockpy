@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router";
 import { api } from "../api/client";
 import type { PerfRange, PilotDetail as PilotDetailT, PerformanceResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { RangeToggle } from "../components/RangeToggle";
 import { PerfLine, SectorDonut } from "../components/charts";
 import { ErrorState, HonestyRow, Loading, StaleDataNotice } from "../components/ui";
@@ -32,6 +33,15 @@ export function PilotDetail() {
   const perf = useApi<PerformanceResponse>(
     () => api.getPerformance(id, range),
     [id, range]
+  );
+
+  useAutoPoll(
+    () => {
+      reload();
+      perf.reload();
+    },
+    "portfolio",
+    { hasError: error != null }
   );
 
   if (loading) {

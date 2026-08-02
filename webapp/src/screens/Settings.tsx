@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import type {
@@ -31,6 +31,8 @@ import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { UniverseManager } from "../components/UniverseManager";
 import { UniverseCoverage } from "../components/UniverseCoverage";
 import { TabGuide } from "../components/TabGuide";
+import { Toggle } from "../components/Toggle";
+import { useAutoRefresh } from "../components/AutoRefreshContext";
 import { fmtAge, fmtDate, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
@@ -115,6 +117,8 @@ export function Settings() {
             httpStatus={scheduleHttpStatus}
             onRetry={reloadSchedule}
           />
+
+          <AutoRefreshSection />
 
           {status && (
             <SignalGenerationSection
@@ -1477,5 +1481,187 @@ function ResetOnboardingSection() {
         </Modal>
       )}
     </SectionCard>
+  );
+}
+
+function AutoRefreshSection() {
+  const {
+    autoRefreshEnabled,
+    pauseWhenMarketClosed,
+    autoRefreshIntervalMs,
+    portfolioRefreshEnabled,
+    dashboardRefreshEnabled,
+    signalsRefreshEnabled,
+    observabilityRefreshEnabled,
+    optionsRefreshEnabled,
+    setAutoRefreshEnabled,
+    setPauseWhenMarketClosed,
+    setAutoRefreshIntervalMs,
+    setCategoryRefreshEnabled,
+    isMarketOpen,
+  } = useAutoRefresh();
+
+  const [customInputSec, setCustomInputSec] = useState<string>(
+    String(Math.round(autoRefreshIntervalMs / 1000))
+  );
+
+  // Sync internal input state when external autoRefreshIntervalMs changes (e.g. preset clicked)
+  useEffect(() => {
+    setCustomInputSec(String(Math.round(autoRefreshIntervalMs / 1000)));
+  }, [autoRefreshIntervalMs]);
+
+  // Debounce custom interval input changes (500ms debounce)
+  useEffect(() => {
+    const val = parseInt(customInputSec, 10);
+    if (!isNaN(val) && val >= 5 && val <= 86400) {
+      const timer = setTimeout(() => {
+        setAutoRefreshIntervalMs(val * 1000);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [customInputSec, setAutoRefreshIntervalMs]);
+
+  const presets = [
+    { label: "15s", ms: 15_000 },
+    { label: "30s", ms: 30_000 },
+    { label: "60s", ms: 60_000 },
+    { label: "2m", ms: 120_000 },
+    { label: "5m", ms: 300_000 },
+  ];
+
+  const currentSec = Math.round(autoRefreshIntervalMs / 1000);
+
+  let statusMessage = "Disabled";
+  if (autoRefreshEnabled) {
+    if (pauseWhenMarketClosed && !isMarketOpen) {
+      statusMessage = "Paused (Market Closed / Weekend)";
+    } else {
+      statusMessage = `Active (${currentSec}s cadence)`;
+    }
+  }
+
+  return (
+    <section className="card card-pad" data-testid="auto-refresh-section">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-2)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Data Auto-Refresh</h2>
+        <MetricBadge
+          tone={autoRefreshEnabled ? (pauseWhenMarketClosed && !isMarketOpen ? "warn" : "pos") : undefined}
+          label={statusMessage}
+        />
+      </div>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", margin: "0 0 var(--s-3)" }}>
+        Automatically reload screen data at a configured interval. Polling pauses when tab is hidden or market is closed.
+      </p>
+
+      {/* Master Toggle */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)", padding: "var(--s-2)", background: "var(--surface-2)", borderRadius: "var(--r-sm)" }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: "var(--t-label)" }}>Enable Auto-Refresh</div>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>Master switch for all screen auto-polling</div>
+        </div>
+        <Toggle
+          label="Enable Auto-Refresh"
+          checked={autoRefreshEnabled}
+          onChange={(val) => setAutoRefreshEnabled(val)}
+          dataTestId="auto-refresh-master-toggle"
+        />
+      </div>
+
+      {/* Pause When Market Closed Toggle */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)", padding: "var(--s-2)", background: "var(--surface-2)", borderRadius: "var(--r-sm)" }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: "var(--t-label)" }}>Pause When Market Closed</div>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>Pause auto-polling on weekends &amp; after-hours</div>
+        </div>
+        <Toggle
+          label="Pause When Market Closed"
+          checked={pauseWhenMarketClosed}
+          onChange={(val) => setPauseWhenMarketClosed(val)}
+          dataTestId="auto-refresh-pause-closed-toggle"
+        />
+      </div>
+
+      {/* Interval Selector */}
+      <div style={{ marginBottom: "var(--s-4)" }}>
+        <div style={{ fontWeight: 600, fontSize: "var(--t-label)", marginBottom: "var(--s-1)" }}>
+          Refresh Interval
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", alignItems: "center", marginBottom: "var(--s-2)" }}>
+          {presets.map((p) => (
+            <button
+              key={p.ms}
+              className={`btn btn-sm ${autoRefreshIntervalMs === p.ms ? "btn-primary" : "btn-subtle"}`}
+              onClick={() => {
+                setAutoRefreshIntervalMs(p.ms);
+                setCustomInputSec(String(p.ms / 1000));
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <span style={{ fontSize: "var(--t-caption)", color: theme.textSecondary }}>Custom duration (sec):</span>
+          <Input
+            type="number"
+            min={5}
+            max={86400}
+            value={customInputSec}
+            onChange={(e) => setCustomInputSec(e.target.value)}
+            style={{ width: "100px" }}
+            aria-label="Custom Auto-Refresh Interval Seconds"
+          />
+        </div>
+      </div>
+
+      {/* Screen Categories */}
+      <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-3)" }}>
+        <div style={{ fontWeight: 600, fontSize: "var(--t-label)", marginBottom: "var(--s-2)" }}>
+          Active Categories
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-2)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={portfolioRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("portfolio", e.target.checked)}
+            />
+            Portfolio &amp; Pilots
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={dashboardRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("dashboard", e.target.checked)}
+            />
+            Main Dashboard
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={signalsRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("signals", e.target.checked)}
+            />
+            Signals &amp; Strategy Matrix
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={observabilityRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("observability", e.target.checked)}
+            />
+            Observability &amp; Telemetry
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={optionsRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("options", e.target.checked)}
+            />
+            Options Matrix &amp; Analytics
+          </label>
+        </div>
+      </div>
+    </section>
   );
 }

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { Portfolio, PilotSummary, PerfRange, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { ErrorState, Loading, Notice, Tile } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { TabGuide } from "../components/TabGuide";
@@ -23,6 +24,16 @@ export function Dashboard() {
     [range]
   );
   const pilots = useApi<PilotSummary[]>(() => api.listPilots(), []);
+
+  useAutoPoll(
+    () => {
+      port.reload();
+      equity.reload();
+      pilots.reload();
+    },
+    "dashboard",
+    { hasError: port.error != null }
+  );
 
   const [selectedTopPilots, setSelectedTopPilots] = useState<string[]>([]);
 
