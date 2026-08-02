@@ -317,14 +317,20 @@ class TestMacroRegimePitIntegration:
         from execution.cost_model import TieredCostModel
         from validation.harness import StrategyValidationHarness
         from scripts.refresh_validations import _download_closes, _make_strategy_fn
+        # Imported BEFORE the patch context below so this binds the real class,
+        # not the mock -- `from data.historical_store import HistoricalStore`
+        # executed *inside* `with patch("data.historical_store.HistoricalStore")`
+        # would import the patched (mock) name instead, silently turning every
+        # get_macro() call into a MagicMock stand-in (len()==0 by default) and
+        # making the regime reconstruction see empty series everywhere -- not
+        # a real "no FRED data" case, just this import-order footgun.
+        from data.historical_store import HistoricalStore as _RealStore
 
         tickers = ["AAPL", "JNJ", "XOM", "JPM", "KO"]
         closes = _download_closes(tickers, "2015-01-01", "2023-12-31")
         assert len(closes) > 300
 
         with patch("data.historical_store.HistoricalStore") as mock_cls:
-            from data.historical_store import HistoricalStore as _RealStore
-
             real_store = _RealStore(db_path=str(tmp_path / "macro_pit.db"))
             mock_cls.return_value = real_store
             X, y, precomputed = _build_macro_regime_adapter(closes)
