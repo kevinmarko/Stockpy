@@ -3818,7 +3818,7 @@ _FMP_GROUPS = [
             ("FMP_QUOTES_ENABLED", "bool", {}),
             ("FMP_QUOTES_REALTIME", "bool", {}),
             ("FMP_BARS_ENABLED", "bool", {}),
-            ("FMP_BARS_ADJUSTMENT", "enum", {"options": ["dividend-adjusted", "split-adjusted", "unadjusted"]}),
+            ("FMP_BARS_ADJUSTMENT", "enum", {"options": ["dividend-adjusted", "light", "full", "non-split-adjusted"]}),
             ("FMP_FUNDAMENTALS_ENABLED", "bool", {}),
         ],
     ),
@@ -3850,7 +3850,7 @@ _ETF_TRANSMISSION_GROUPS = [
         "Holdings Ingestion",
         [
             ("ETF_HOLDINGS_ENABLED", "bool", {}),
-            ("ETF_HOLDINGS_TICKERS", "str", {}),
+            ("ETF_HOLDINGS_TICKERS", "json", {}),
             ("ETF_HOLDINGS_REFRESH_DAYS", "int", {"min": 1, "max": 90, "step": 1}),
             ("ETF_HOLDINGS_ISSUER_CSV_ENABLED", "bool", {}),
             ("ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE", "float", {"min": 1.0, "max": 300.0, "step": 1.0}),
@@ -3862,8 +3862,8 @@ _ETF_TRANSMISSION_GROUPS = [
         [
             ("ETF_TRANSMISSION_ENABLED", "bool", {}),
             ("ETF_HOLDINGS_MARKET_PROXY", "str", {}),
-            ("ETF_TRANSMISSION_WRAPPERS", "str", {}),
-            ("ETF_TRANSMISSION_EXCLUDED_SYMBOLS", "str", {}),
+            ("ETF_TRANSMISSION_WRAPPERS", "json", {}),
+            ("ETF_TRANSMISSION_EXCLUDED_SYMBOLS", "json", {}),
             ("ETF_TRANSMISSION_WINDOW_DAYS", "int", {"min": 10, "max": 504, "step": 1}),
             ("ETF_TRANSMISSION_MIN_OBS", "int", {"min": 5, "max": 252, "step": 1}),
         ],

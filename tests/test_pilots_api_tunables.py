@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import itertools
 import json
 import pathlib
 from unittest import mock
@@ -514,6 +515,8 @@ class TestGeneralSettingsWritesEnabledInvariants:
 _SETTINGS_SUBROUTES = [
     ("/settings/sentiment", "_SENTIMENT_INDEX"),
     ("/settings/sector-selection", "_SECTOR_SELECTION_INDEX"),
+    ("/settings/fmp", "_FMP_INDEX"),
+    ("/settings/etf-transmission", "_ETF_TRANSMISSION_INDEX"),
 ]
 
 
@@ -558,13 +561,16 @@ class TestSettingsSubroutesRealFieldInvariant:
                 if hi is not None:
                     assert default <= hi, f"{index_name}: {key} default {default} > max {hi}"
 
-    def test_no_key_leaks_across_the_three_editor_scopes(self):
-        general = set(pilots_api._TUNABLE_INDEX)
-        sentiment = set(pilots_api._SENTIMENT_INDEX)
-        sector = set(pilots_api._SECTOR_SELECTION_INDEX)
-        assert not (general & sentiment)
-        assert not (general & sector)
-        assert not (sentiment & sector)
+    def test_no_key_leaks_across_editor_scopes(self):
+        scopes = {
+            "general": set(pilots_api._TUNABLE_INDEX),
+            "sentiment": set(pilots_api._SENTIMENT_INDEX),
+            "sector": set(pilots_api._SECTOR_SELECTION_INDEX),
+            "fmp": set(pilots_api._FMP_INDEX),
+            "etf_transmission": set(pilots_api._ETF_TRANSMISSION_INDEX),
+        }
+        for (name_a, keys_a), (name_b, keys_b) in itertools.combinations(scopes.items(), 2):
+            assert not (keys_a & keys_b), f"{name_a} and {name_b} share keys: {keys_a & keys_b}"
 
 
 class TestSettingsSubroutesGetShape:
@@ -629,6 +635,8 @@ class TestSettingsSubroutesEnvDrift:
         cases = [
             ("/settings/sentiment", "SENTIMENT_INGESTION_LOOKBACK_DAYS", int, 1),
             ("/settings/sector-selection", "SECTOR_SELECTION_TOP_N", int, 1),
+            ("/settings/fmp", "FMP_COOLDOWN_THRESHOLD", int, 1),
+            ("/settings/etf-transmission", "ETF_TRANSMISSION_WINDOW_DAYS", int, 1),
         ]
         for url, key, _cast, delta in cases:
             env_file = tmp_path / f"{key}.env"
@@ -653,6 +661,8 @@ class TestSettingsSubroutesEnvDrift:
 
 
 class TestSettingsSubroutesPut:
+    """PUT /settings/sentiment, PUT /settings/sector-selection, PUT /settings/fmp, PUT /settings/etf-transmission."""
+
     def test_happy_path_writes_via_env_io_and_echoes(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
             resp = _put_scoped("/settings/sentiment", {"SENTIMENT_INGESTION_ENABLED": True})
@@ -683,7 +693,16 @@ class TestSettingsSubroutesPut:
             resp = _put_scoped("/settings/sentiment", {"FINNHUB_API_KEY": "leak"})
         assert resp.status_code == 200
         body = resp.json()
-    """PUT /settings/sentiment, PUT /settings/sector-selection, PUT /settings/fmp, PUT /settings/etf-transmission."""
+        assert body["rejected"]["FINNHUB_API_KEY"] == "unknown_key"
+        assert body["written"] == {}
+        assert w.call_count == 0
+
+    def test_a_key_owned_by_the_other_subroute_is_unknown_here(self):
+        """SECTOR_SELECTION_TOP_N belongs to /settings/sector-selection, not
+        /settings/sentiment -- confirms the two editors don't silently share
+        scope."""
+        rejected_body = _put_scoped("/settings/sentiment", {"SECTOR_SELECTION_TOP_N": 5})
+        assert rejected_body.json()["rejected"]["SECTOR_SELECTION_TOP_N"] == "unknown_key"
 
     def test_happy_path_writes_to_env(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:

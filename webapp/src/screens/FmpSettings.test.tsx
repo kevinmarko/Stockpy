@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FmpSettings } from "./FmpSettings";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type { TunablesResponse } from "../api/types";
 
 function baseFmpTunables(): TunablesResponse {
@@ -81,5 +81,33 @@ describe("FmpSettings screen", () => {
     await waitFor(() => {
       expect(updateSpy).toHaveBeenCalledWith({ FMP_QUOTES_ENABLED: true });
     });
+  });
+
+  it("shows the honest cold-start state when GET 404s", async () => {
+    vi.spyOn(api, "getFmpSettings").mockRejectedValue(new ApiError("not found", 404));
+    renderScreen();
+    expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
+  });
+
+  it("Save calls updateFmpSettings, not the sentiment or general tunables endpoint", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getFmpSettings").mockResolvedValue(baseFmpTunables());
+    const fmpSpy = vi.spyOn(api, "updateFmpSettings").mockResolvedValue({
+      written: { FMP_QUOTES_ENABLED: true },
+      rejected: {},
+      applies: "next_daemon_restart",
+    });
+    const sentimentSpy = vi.spyOn(api, "updateSentimentSettings");
+    const generalSpy = vi.spyOn(api, "updateTunables");
+
+    renderScreen();
+    const toggle = await screen.findByLabelText("FMP_QUOTES_ENABLED");
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(fmpSpy).toHaveBeenCalledTimes(1));
+    expect(fmpSpy.mock.calls[0][0]).toEqual({ FMP_QUOTES_ENABLED: true });
+    expect(sentimentSpy).not.toHaveBeenCalled();
+    expect(generalSpy).not.toHaveBeenCalled();
   });
 });

@@ -2011,7 +2011,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Client & Resiliency", key: "FMP_COOLDOWN_THRESHOLD", type: "number",
-    value: 3, default: 3, min: 1, max: 20, step: 1,
+    value: 5, default: 5, min: 1, max: 20, step: 1,
     description: "Consecutive failures before opening the circuit breaker.",
   },
   {
@@ -2026,7 +2026,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Client & Resiliency", key: "FMP_MAX_SECONDS_PER_CYCLE", type: "number",
-    value: 60.0, default: 60.0, min: 1.0, max: 600.0, step: 1.0,
+    value: 120.0, default: 120.0, min: 1.0, max: 600.0, step: 1.0,
     description: "Maximum wall-clock seconds allowed for FMP calls in a single pipeline cycle.",
   },
   {
@@ -2046,7 +2046,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Primary Feeds", key: "FMP_BARS_ADJUSTMENT", type: "enum",
-    value: "dividend-adjusted", default: "dividend-adjusted", options: ["dividend-adjusted", "split-adjusted", "unadjusted"],
+    value: "dividend-adjusted", default: "dividend-adjusted", options: ["dividend-adjusted", "light", "full", "non-split-adjusted"],
     description: "Adjustment mode for historical EOD bars.",
   },
   {
@@ -2071,7 +2071,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Diagnostic & Supplement Feeds", key: "FMP_EARNINGS_REFRESH_HOURS", type: "number",
-    value: 24, default: 24, min: 1, max: 168, step: 1,
+    value: 12, default: 12, min: 1, max: 168, step: 1,
     description: "Refresh interval for earnings data in hours.",
   },
   {
@@ -2081,7 +2081,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Diagnostic & Supplement Feeds", key: "FMP_ECON_INDICATORS", type: "string",
-    value: "GDP,CPI,unemploymentRate", default: "GDP,CPI,unemploymentRate",
+    value: "unemploymentRate", default: "unemploymentRate",
     description: "Comma-separated list of FMP economic indicator series to fetch.",
   },
   {
@@ -2096,7 +2096,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Diagnostic & Supplement Feeds", key: "FMP_INSIDER_MIN_LAG_DAYS", type: "number",
-    value: 2, default: 2, min: 0, max: 90, step: 1,
+    value: 45, default: 45, min: 0, max: 90, step: 1,
     description: "Minimum lag days required before analyzing insider trades.",
   },
   {
@@ -2114,12 +2114,13 @@ const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Holdings Ingestion", key: "ETF_HOLDINGS_TICKERS", type: "string",
-    value: "SPY,QQQ,IWM", default: "SPY,QQQ,IWM",
-    description: "Comma-separated ETF tickers to ingest holdings for.",
+    value: '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
+    default: '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
+    description: "JSON array of ETF tickers to ingest holdings for.",
   },
   {
     group: "Holdings Ingestion", key: "ETF_HOLDINGS_REFRESH_DAYS", type: "number",
-    value: 30, default: 30, min: 1, max: 90, step: 1,
+    value: 7, default: 7, min: 1, max: 90, step: 1,
     description: "Refresh interval for ETF constituent holdings in days.",
   },
   {
@@ -2149,13 +2150,14 @@ const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Measurement & Residualization", key: "ETF_TRANSMISSION_WRAPPERS", type: "string",
-    value: "SPY,QQQ,IWM", default: "SPY,QQQ,IWM",
-    description: "ETF tickers considered as transmission wrappers.",
+    value: '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
+    default: '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
+    description: "JSON array of candidate wrapper ETFs considered as transmission wrappers.",
   },
   {
     group: "Measurement & Residualization", key: "ETF_TRANSMISSION_EXCLUDED_SYMBOLS", type: "string",
-    value: "", default: "",
-    description: "Comma-separated symbols excluded from ETF transmission calculation.",
+    value: "[]", default: "[]",
+    description: "JSON array of extra symbols excluded from ETF transmission calculation.",
   },
   {
     group: "Measurement & Residualization", key: "ETF_TRANSMISSION_WINDOW_DAYS", type: "number",
@@ -2164,7 +2166,7 @@ const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Measurement & Residualization", key: "ETF_TRANSMISSION_MIN_OBS", type: "number",
-    value: 30, default: 30, min: 5, max: 252, step: 1,
+    value: 60, default: 60, min: 5, max: 252, step: 1,
     description: "Minimum required observation days in the rolling window.",
   },
   {

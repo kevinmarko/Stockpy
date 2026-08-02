@@ -991,7 +991,7 @@ export function Observability() {
           <SizingCapAuditSection audit={data.sizing_cap_audit} />
 
           {/* ETF volatility transmission — per-symbol diagnostic view. */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: "var(--s-2)" }}>
             <SectionHeading
               title="ETF volatility transmission"
               sub="Ben-David, Franzoni &amp; Moussawi (2018) — non-diversifiable variance from heavy ETF wrapping"
