@@ -988,6 +988,17 @@ class Settings(BaseSettings):
             "reproduces the pre-dedup always-fires behavior exactly."
         ),
     )
+    # Optional deep-link URL (e.g. "http://localhost:8501") appended to each
+    # watch-rule notification body so the operator can jump straight to the
+    # dashboard (main._run_cycle -> watch_engine.dispatch_watch_alerts). Never
+    # a secret -- see watch_engine.dispatch_watch_alerts's own docstring.
+    NTFY_DASHBOARD_URL: Optional[str] = Field(
+        default=None,
+        description=(
+            "Deep-link URL appended to watch-rule ntfy notifications so the "
+            "operator can jump to the dashboard. None = link omitted."
+        ),
+    )
     # --- alerting_mcp/notifier.py (the standalone MCP push-notifier) --------
     # These are read via os.getenv() inside alerting_mcp/notifier.py, which is a
     # separate subsystem from observability/alerts.py above (note the distinct

@@ -3320,7 +3320,17 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("KELLY_CAP", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
             ("VOL_TARGET", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
             ("MAX_LEVERAGE", "float", {"min": 0.0, "max": 10.0, "step": 0.1}),
+            # Widened to 5.0 (from an originally-invented 1.0): the field's own
+            # default is 1.0, which sat exactly AT the old max — a 2x fat-finger
+            # check (2.0) would have been rejected even though a leveraged
+            # single-position weight above 100% of unlevered equity is a real,
+            # legitimate config (bounded in practice by MAX_LEVERAGE's own 10.0
+            # ceiling above), not a typo.
             ("MAX_POSITION_WEIGHT", "float", {"min": 0.0, "max": 5.0, "step": 0.05}),
+            # Portfolio-level gross exposure cap + cap-aware escalation +
+            # cap-event audit/alerting (sizing/position_sizer.py,
+            # sizing/cap_audit_store.py). Same typo-guardrail widening
+            # convention as MAX_POSITION_WEIGHT above.
             ("MAX_PORTFOLIO_GROSS", "float", {"min": 0.0, "max": 20.0, "step": 0.1}),
             ("SIZING_CAP_ESCALATION_ENABLED", "bool", {}),
             ("SIZING_CAP_ESCALATION_THRESHOLD_CYCLES", "int", {"min": 1, "max": 100, "step": 1}),
@@ -3374,6 +3384,9 @@ _TUNABLE_GROUPS: List[tuple] = [
         ],
     ),
     (
+        # Widgetless / JSON-structured tunables ported from the Streamlit tab's
+        # own _SETTINGS_LAYOUT (gui/panels/settings_manager.py:36-77) — all 7
+        # were previously missing from this editor entirely.
         "Advanced / Config",
         [
             ("SECTOR_FORECAST_CONFIG_PATH", "str", {}),

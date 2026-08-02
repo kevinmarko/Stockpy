@@ -300,8 +300,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PIT_CAPTURE_ENABLED",
     "SNAPSHOT_HISTORY_DAYS",
     "SNAPSHOT_CONVICTION_DELTA_THRESHOLD",
-    "UNIVERSE_SYNC_ENABLED",
-    "AGENTIC_DISCOVERY_ENABLED",
+    # NOTE: UNIVERSE_SYNC_ENABLED and AGENTIC_DISCOVERY_ENABLED are deliberately
+    # NOT here -- same "hand-set only" invariant class as BROKERAGE_CONNECT_ENABLED
+    # (see tests/test_data_api.py::TestUniverseSyncInvariants and
+    # tests/test_pilots_api.py::TestAgenticDiscoveryInvariants). A GUI bug must
+    # never be able to flip either of these master switches on.
     "NEWS_HISTORY_CAPTURE_ENABLED",
     "DB_POOL_SIZE",
     "DB_MAX_OVERFLOW",
@@ -318,6 +321,12 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SENTIMENT_DESENTENCIZE_ENABLED",
     "SENTIMENT_INDEX_ENABLED",
     "SENTIMENT_SOCIAL_BLEND_WEIGHT",
+    # Heuristic credibility-composite band that qualifies a document for LLM
+    # verification (SENTIMENT_LLM_VERIFICATION_ENABLED's own gate). Plain
+    # float thresholds, no credential material -- siblings of the already-
+    # allowlisted SENTIMENT_LLM_VERIFICATION_ENABLED/_PROVIDER/_MAX_CALLS_PER_CYCLE.
+    "SENTIMENT_LLM_VERIFICATION_BORDERLINE_LOW",
+    "SENTIMENT_LLM_VERIFICATION_BORDERLINE_HIGH",
     "STOCKTWITS_ENABLED",
     "REDDIT_BACKFILL_MAX_PAGES",
     "EDGAR_MAX_CONCURRENCY",
@@ -388,6 +397,15 @@ SECRET_KEYS: tuple[str, ...] = (
     # Bearer token guarding POST /run on the orchestrator Control API
     # (api/control_api.py). Same secret treatment as STATE_API_TOKEN.
     "ORCHESTRATOR_DAEMON_TOKEN",
+    # Bearer token guarding the follow WRITE-path on the Pilots API (PUT
+    # /follows, POST /pilots/{id}/follow) and reused as the fail-closed
+    # command-token gate for every *_WRITES_ENABLED/*_ENABLED master switch
+    # above (BROKERAGE_CONNECT_ENABLED, AGENTIC_DISCOVERY_ENABLED, etc.). Its
+    # own settings.py Field docstring already states "SECRET -- never
+    # GUI-writable... Like ORCHESTRATOR_DAEMON_TOKEN" -- this was a pre-existing
+    # gap (present in neither list, so read_settings() would have echoed it in
+    # cleartext if ever set in .env) rather than a deliberate omission.
+    "FOLLOW_API_TOKEN",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
     # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood

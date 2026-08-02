@@ -984,7 +984,7 @@ def _run_agent_loop(run_cycle) -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    dashboard_url = os.environ.get("NTFY_DASHBOARD_URL")
+    dashboard_url = settings.NTFY_DASHBOARD_URL
 
     while not _shutdown:
         # ── (1) Run one full advisory cycle (sheet + html + watch_engine) ────
@@ -1232,7 +1232,7 @@ def main() -> None:
             )
             dispatch_watch_alerts(
                 _watch_alerts,
-                dashboard_url=os.environ.get("NTFY_DASHBOARD_URL"),
+                dashboard_url=dashboard_url,
             )
             # Always save — keeps edge-trigger state current even on quiet runs.
             save_watch_state(_new_watch_state, _watch_state_path)
