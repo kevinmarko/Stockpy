@@ -42,8 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--start",
         type=str,
-        default="2015-01-01",
-        help="Start date YYYY-MM-DD (default: 2015-01-01).",
+        default="",
+        help=(
+            "Start date YYYY-MM-DD (default: settings.FORECAST_BACKFILL_LOOKBACK_YEARS "
+            "years back from --end/today)."
+        ),
     )
     parser.add_argument(
         "--end",
@@ -93,7 +96,7 @@ def main() -> int:
     logger.info("Initializing AgenticForecastBackfiller...")
     engine = AgenticForecastBackfiller(
         tickers=tickers_list,
-        start_date=args.start,
+        start_date=args.start or None,
         end_date=args.end or None,
         horizons=horizons_list,
         classifier_type=args.classifier or None,
