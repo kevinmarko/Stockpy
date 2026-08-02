@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -145,6 +146,54 @@ def test_train_signal_no_registry_flag_skips_yaml(tmp_models_dir, tmp_registry, 
     )
     assert path is not None and path.exists()
     assert tmp_registry.read_text() == before, "registry should be unchanged"
+
+
+# ---------------------------------------------------------------------------
+# 1b. The two signals must train on genuinely different primary-signal
+# definitions, not the same per-symbol momentum sign under two names.
+# ---------------------------------------------------------------------------
+
+def test_cross_sectional_signal_is_genuinely_cross_sectional_not_per_symbol():
+    """Regression test for a real bug: cross_sectional_momentum's primary
+    signal used to be computed identically to timeseries_momentum's (plain
+    per-symbol momentum sign) -- the two meta-labelers only ever looked
+    different because of an RNG seed that solely affected the synthetic-data
+    fallback. On a live-data run the seed is irrelevant, so both labelers
+    silently trained on the SAME primary signal under two different names.
+
+    Construct a small deterministic panel where the cross-sectional ranking
+    diverges from each symbol's own trailing-momentum sign, and assert the
+    two signal definitions actually disagree somewhere -- not just happen to
+    produce different floats.
+    """
+    dates = pd.date_range("2020-01-01", periods=300, freq="B")
+    # Symbol A: strong uptrend (positive time-series momentum), but weaker
+    # than B and C on average -- so cross-sectionally it can rank LOW even
+    # though its own trailing return is positive.
+    n = np.arange(300)
+    a = pd.Series(100 * (1.0015 ** n), index=dates, name="A")
+    b = pd.Series(100 * (1.004 ** n), index=dates, name="B")
+    c = pd.Series(100 * (1.006 ** n), index=dates, name="C")
+    panel = {"A": a, "B": b, "C": c}
+
+    tsmom = trainer._build_primary_signal_series("timeseries_momentum", panel)
+    csmom = trainer._build_primary_signal_series("cross_sectional_momentum", panel)
+
+    # Time-series definition: every symbol here has positive trailing return
+    # for the whole history, so its sign is always +1 (once the 252d window
+    # is available).
+    tsmom_a = tsmom["A"].dropna()
+    assert (np.sign(tsmom_a) > 0).all()
+
+    # Cross-sectional definition: A is the weakest performer of the three, so
+    # its centered rank must be negative (bottom of the pack) on dates where
+    # all three have a valid 12-1m return -- i.e. the two definitions
+    # DISAGREE on A's sign, proving cross_sectional_momentum isn't just a
+    # relabeled copy of timeseries_momentum.
+    csmom_a = csmom["A"].dropna()
+    assert len(csmom_a) > 0, "cross-sectional series should have valid dates once the panel warms up"
+    assert (csmom_a < 0).all(), "A is the weakest of the three names and must rank in the bottom half"
+    assert not tsmom_a.equals(csmom_a)
 
 
 # ---------------------------------------------------------------------------
