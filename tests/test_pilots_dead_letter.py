@@ -209,7 +209,7 @@ class TestDeadLetterRetryWrite:
 
 class TestDeadLetterRetryInvariants:
     def test_dead_letter_retry_enabled_is_not_gui_writable(self):
-        """Mirrors test_agentic_discovery_enabled_is_not_gui_writable: a GUI
+        """Mirrors test_automation_writes_enabled_is_not_gui_writable: a GUI
         bug must never flip this on. Neither allowlisted nor secret --
         hand-set in .env only."""
         assert "DEAD_LETTER_RETRY_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
