@@ -36,6 +36,25 @@ _MODELS_DIR.mkdir(parents=True, exist_ok=True)
 _OUTPUT_DIR = Path(settings.OUTPUT_DIR)
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Upper bound is arbitrary (10 years of trading days) -- the point is just to
+# constrain `h` to a small positive integer before it is ever interpolated
+# into a model filename (`f"meta_{model_type}_{h}d.pkl"`) that gets opened
+# for writing. `AgenticForecastBackfiller` is reachable from an HTTP request
+# body (api/pilots_api.py's POST /pilots/forecast_backfill/run), which
+# already validates this at the Pydantic layer -- this is a second,
+# independent check (never trust a single validation layer) that also covers
+# every other caller (the CLI script, tests, future callers).
+_MAX_HORIZON_DAYS = 3650
+
+
+def _validate_horizons(horizons: List[int]) -> List[int]:
+    for h in horizons:
+        if isinstance(h, bool) or not isinstance(h, int) or not (0 < h <= _MAX_HORIZON_DAYS):
+            raise ValueError(
+                f"forecast horizon must be a positive integer (days) <= {_MAX_HORIZON_DAYS}, got {h!r}"
+            )
+    return list(horizons)
+
 
 class AgenticForecastBackfiller:
     """Multi-horizon forecast backfilling and meta-labeling pipeline engine."""
@@ -64,7 +83,9 @@ class AgenticForecastBackfiller:
         self.tickers = tickers or settings.DEFAULT_TICKERS or ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"]
         self.start_date = start_date or "2015-01-01"
         self.end_date = end_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        self.horizons = horizons or getattr(settings, "FORECAST_BACKFILL_HORIZONS", [10, 30, 60, 90])
+        self.horizons = _validate_horizons(
+            horizons or getattr(settings, "FORECAST_BACKFILL_HORIZONS", [10, 30, 60, 90])
+        )
         self.momentum_window = momentum_window or getattr(settings, "FORECAST_BACKFILL_MOMENTUM_WINDOW", 252)
         self.vol_short_window = vol_short_window or getattr(settings, "FORECAST_BACKFILL_VOL_SHORT_WINDOW", 20)
         self.vol_long_window = vol_long_window or getattr(settings, "FORECAST_BACKFILL_VOL_LONG_WINDOW", 50)
@@ -362,8 +383,16 @@ class AgenticForecastBackfiller:
                     "split_date": str(split_date)[:10],
                 }
 
-                # Save trained model artifact
-                model_path = _MODELS_DIR / f"meta_{model_key}.pkl"
+                # Save trained model artifact. model_key is built only from a
+                # hardcoded model_type ("TSMOM"/"CSMOM") and h, which
+                # _validate_horizons() (called in __init__) already
+                # constrains to a small positive int -- this containment
+                # check is a second, independent guard against the resolved
+                # path ever escaping _MODELS_DIR (defense in depth, not
+                # reliance on a single validation layer).
+                model_path = (_MODELS_DIR / f"meta_{model_key}.pkl").resolve()
+                if not model_path.is_relative_to(_MODELS_DIR.resolve()):
+                    raise ValueError(f"Refusing to write model artifact outside {_MODELS_DIR}: {model_path}")
                 with open(model_path, "wb") as f:
                     pickle.dump(clf, f)
 

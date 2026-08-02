@@ -621,13 +621,34 @@ class BrokerageConnectRequest(BaseModel):
 
 
 class ForecastBackfillRunRequest(BaseModel):
-    """Body for ``POST /pilots/forecast_backfill/run``."""
+    """Body for ``POST /pilots/forecast_backfill/run``.
+
+    ``horizons`` ends up in a model filename
+    (``ml/forecast_backfill.py``'s ``f"meta_{model_type}_{h}d.pkl"``) that
+    gets opened for writing — bounded here (CodeQL: uncontrolled data in a
+    path expression) so it can only ever be a small positive integer, never
+    something that could compose a path-traversal segment. The engine itself
+    re-validates independently (CONSTRAINT: validate at boundaries, but never
+    trust a single layer) — see ``AgenticForecastBackfiller.__init__``.
+    """
 
     tickers: Optional[list[str]] = Field(default=None)
     start_date: Optional[str] = Field(default="2015-01-01")
     end_date: Optional[str] = Field(default=None)
     use_fmp: bool = Field(default=True)
     horizons: Optional[list[int]] = Field(default=None)
+
+    @field_validator("horizons")
+    @classmethod
+    def _validate_horizons(cls, v: Optional[list[int]]) -> Optional[list[int]]:
+        if v is None:
+            return v
+        for h in v:
+            if isinstance(h, bool) or not isinstance(h, int) or not (0 < h <= 3650):
+                raise ValueError(
+                    f"horizons must be positive integers (days) <= 3650, got {h!r}"
+                )
+        return v
 
 
 class BrinsonFachlerRow(BaseModel):

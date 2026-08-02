@@ -25,6 +25,21 @@ class _RecordingClassifier(RandomForestClassifier):
         return super().fit(X, y)
 
 
+@pytest.mark.parametrize(
+    "bad_horizon",
+    [-1, 0, 3651, 1.5, "10", True, "../../etc/passwd"],
+)
+def test_backfiller_rejects_invalid_horizons(bad_horizon):
+    """`horizons` ends up in a model filename that gets opened for writing
+    (ml/forecast_backfill.py's meta_{model_type}_{h}d.pkl) -- CodeQL flagged
+    this as uncontrolled data in a path expression, since it is reachable
+    from POST /pilots/forecast_backfill/run's request body. Every horizon
+    must be constrained to a small positive int before it ever reaches a
+    path, regardless of caller (API, CLI script, or direct construction)."""
+    with pytest.raises(ValueError):
+        AgenticForecastBackfiller(horizons=[10, bad_horizon])
+
+
 def test_backfiller_initialization():
     """Verify parameters are loaded from settings defaults with zero hardcoded values."""
     engine = AgenticForecastBackfiller()
@@ -214,3 +229,23 @@ def test_forecast_backfill_api_endpoint(monkeypatch, tmp_path):
     data = res.json()
     assert data["status"] == "completed"
     assert data["horizons"] == [10, 30, 60, 90]
+
+
+def test_forecast_backfill_run_endpoint_rejects_invalid_horizons(monkeypatch):
+    """POST /pilots/forecast_backfill/run's `horizons` reaches a model
+    filename that gets opened for writing -- must 422 (Pydantic validation),
+    never reach AgenticForecastBackfiller, for an out-of-range or non-integer
+    horizon (CodeQL: uncontrolled data in a path expression)."""
+    from unittest import mock
+    from fastapi.testclient import TestClient
+    from api.pilots_api import app
+    from settings import settings as live_settings
+
+    client = TestClient(app, client=("127.0.0.1", 50000))
+    with mock.patch.object(live_settings, "FOLLOW_API_TOKEN", "cmd-tok"):
+        res = client.post(
+            "/pilots/forecast_backfill/run",
+            json={"horizons": [10, -1]},
+            headers={"Authorization": "Bearer cmd-tok"},
+        )
+    assert res.status_code == 422
