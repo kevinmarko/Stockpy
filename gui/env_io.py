@@ -31,6 +31,16 @@ The module uses ``python-dotenv`` (already a dependency) — ``dotenv_values`` f
 reading and ``set_key`` for writing — so existing comments and unrelated keys in
 ``.env`` are preserved across edits.
 
+Classification completeness
+----------------------------
+Every field on ``settings.Settings`` must appear in exactly one of
+:data:`ALLOWED_KEYS`, :data:`SECRET_KEYS`, or :data:`EXCLUDED_FROM_GUI` (the
+last for filesystem paths and fail-closed command flags that are deliberately
+neither — see that set's own docstring). ``tests/test_gui_env_io.py::
+test_every_settings_field_is_classified`` enforces this so a batch of new
+``Settings`` fields can never again ship without a corresponding allowlist
+decision (the gap this module accumulated before the 2026-08 audit).
+
 Persistence model
 ------------------
 Writes land in ``.env`` and therefore take effect on the **next** orchestrator /
@@ -282,6 +292,178 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_INSIDER_MIN_LAG_DAYS",           # int  — quarter-close lag before an aggregate is read
     "FMP_ECON_INDICATORS",                # str  — comma-separated series names (not JSON)
     "FMP_MAX_SECONDS_PER_CYCLE",          # float — per-cycle wall-clock budget
+    # --- 2026-08 allowlist audit (settings.py <-> env_io.py parity sweep) -----
+    # Everything below closes the gap flagged in the settings-parity audit: every
+    # field on `settings.Settings` must land in ALLOWED_KEYS, SECRET_KEYS, or
+    # EXCLUDED_FROM_GUI below (enforced by
+    # tests/test_gui_env_io.py::test_every_settings_field_is_classified). Grouped
+    # by subsystem, mirroring settings.py's own field ordering/comments.
+    #
+    # Worker-pool concurrency (result order is always deterministic by
+    # symbol/ticker regardless of value; 1 = sequential/original behavior).
+    "ADVISORY_MAX_CONCURRENCY",
+    "DATA_FETCH_MAX_CONCURRENCY",
+    "FORECAST_MAX_CONCURRENCY",
+    "EDGAR_MAX_CONCURRENCY",
+    # SQLAlchemy connection pool (Postgres backend only; ignored for SQLite).
+    "DB_POOL_SIZE",
+    "DB_MAX_OVERFLOW",
+    # Daemon interval-refresh freshness gate (desktop/orchestrator_daemon.py).
+    "DATA_FRESHNESS_TTL_SECONDS",
+    # Hierarchical correlation clustering (Lopez de Prado distance).
+    "CORRELATION_CLUSTER_LOOKBACK_DAYS",
+    "CORRELATION_CLUSTER_THRESHOLD",
+    # Historical persistence / caching (data/historical_store.py, Tier 2.3).
+    "BARS_BACKFILL_DAYS",
+    "FUNDAMENTALS_REFRESH_DAYS",
+    "MACRO_REFRESH_HOURS",
+    "HISTORICAL_STORE_ENABLED",
+    "FUNDAMENTALS_CACHE_TTL_SECONDS",
+    "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS",
+    "PIT_CAPTURE_ENABLED",
+    # Credential-rotation reminder dates (scripts/preflight_check.py). Plain ISO
+    # date strings the operator sets after rotating a key/starting paper trading
+    # -- not the credential itself, so non-secret (unlike the keys they track).
+    "ALPACA_KEY_ROTATED_DATE",
+    "FRED_KEY_ROTATED_DATE",
+    "PAPER_TRADING_START_DATE",
+    # observability/alerts.py + alerting_mcp/notifier.py non-secret tunables.
+    # Hostnames/webhook URLs/topics in this family are SECRET_KEYS below
+    # (mirroring ALERT_SMTP_HOST/ALERT_WEBHOOK_URL/NTFY_TOPIC); ports and
+    # behavioral knobs are not credentials.
+    "ALERT_CHANNELS",
+    "ALERT_DEDUP_WINDOW_SECONDS",
+    "ALERT_SMTP_PORT",
+    "ALERT_EMAIL_SMTP_PORT",
+    "FLATTEN_ON_KILL",
+    # HMM regime detector (regime/hmm_regime.py, macro_engine.py).
+    "HMM_N_STATES",
+    "HMM_RETRAIN_FREQ_DAYS",
+    # Meta-labeling startup registration (ml/meta_bootstrap.py).
+    "META_LABELING_ENABLED",
+    # Forecast skill-weighting cold-start floor + walk-forward scaler opt-in.
+    "FORECAST_SKILL_MIN_OBS",
+    "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
+    # Dual Momentum cross-sectional overlay (JSON list; see _JSON_KEYS).
+    "USE_DUAL_MOMENTUM_OVERLAY",
+    "DUAL_MOMENTUM_SAFE_ASSET",
+    "DUAL_MOMENTUM_RISKY_ASSETS",
+    # Per-regime signal weight overrides merged onto SIGNAL_WEIGHTS (JSON dict;
+    # see _JSON_KEYS).
+    "REGIME_SIGNAL_WEIGHTS",
+    # Multifactor microcap exclusion threshold (signals/multifactor.py).
+    "MULTIFACTOR_MICROCAP_THRESHOLD",
+    # News catalyst / Finnhub (signals/news_catalyst.py).
+    "NEWS_LOOKBACK_DAYS",
+    "NEWS_EARNINGS_SUPPRESS_HOURS",
+    "NEWS_EARNINGS_DAMPEN_DAYS",
+    "NEWS_HISTORY_CAPTURE_ENABLED",
+    "FINNHUB_RATE_LIMIT_PER_MIN",
+    # Multi-source sentiment ingestion pipeline (data/sentiment_sources.py,
+    # signals/news_catalyst.py, signals/credibility.py, signals/sentiment_index.py).
+    # All master switches default False/off -- non-secret, no credential material
+    # (REDDIT_CLIENT_ID/SECRET and EDGAR_USER_AGENT stay classified separately;
+    # REDDIT_USER_AGENT is a SECRET_KEY below, mirroring EDGAR_USER_AGENT).
+    "SENTIMENT_INGESTION_ENABLED",
+    "SENTIMENT_SOURCES",
+    "SENTIMENT_COMMENT_SOURCES",
+    "SENTIMENT_INGESTION_LOOKBACK_DAYS",
+    "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE",
+    "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE",
+    "SENTIMENT_CIRCUIT_BREAKER_THRESHOLD",
+    "SENTIMENT_AUDIT_ENABLED",
+    "SENTIMENT_PIT_MIN_MONTHS",
+    "SENTIMENT_DESENTENCIZE_ENABLED",
+    "SENTIMENT_INDEX_ENABLED",
+    "SENTIMENT_SOCIAL_BLEND_WEIGHT",
+    "SENTIMENT_LLM_VERIFICATION_BORDERLINE_LOW",
+    "SENTIMENT_LLM_VERIFICATION_BORDERLINE_HIGH",
+    "STOCKTWITS_ENABLED",
+    "REDDIT_BACKFILL_MAX_PAGES",
+    "GOOGLE_NEWS_LOOKBACK_WINDOW",
+    "EDGAR_FULLTEXT_ENABLED",
+    "EDGAR_FULLTEXT_FORMS",
+    "EDGAR_FULLTEXT_CHUNK_TOKENS",
+    "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
+    "GDELT_MAX_RETRIES",
+    "GDELT_RETRY_BACKOFF_SECONDS",
+    "GDELT_COOLDOWN_THRESHOLD",
+    "GDELT_COOLDOWN_SECONDS",
+    "FINBERT_ENABLED",
+    "FINBERT_BATCH_SIZE",
+    "FINBERT_SCORE_CACHE_ENABLED",
+    # Attention pipeline: Wikipedia pageviews + optional pytrends overlay +
+    # GDELT-article-volume Sector Heat Factor. All non-secret, all default off.
+    "WIKIPEDIA_ATTENTION_ENABLED",
+    "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
+    "PYTRENDS_ENABLED",
+    "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE",
+    "ATTENTION_CIRCUIT_BREAKER_THRESHOLD",
+    "SECTOR_HEAT_ENABLED",
+    "SECTOR_HEAT_LOOKBACK_DAYS",
+    "SECTOR_HEAT_SMOOTHING_SIGMA",
+    # Related Sector Selection (data/sector_selection_heat.py) -- semantic
+    # similarity + Gaussian-response Sector Heat term.
+    "SECTOR_SELECTION_ENABLED",
+    "SECTOR_SELECTION_TOP_N",
+    "SECTOR_SELECTION_HEAT_A",
+    "SECTOR_SELECTION_HEAT_B",
+    "SECTOR_SELECTION_HEAT_C",
+    "SECTOR_SELECTION_HEAT_LOOKBACK_DAYS",
+    "SECTOR_SELECTION_W1",
+    "SECTOR_SELECTION_W2",
+    "SECTOR_SIMILARITY_EMBEDDER",
+    "SECTOR_SIMILARITY_MODEL",
+    "SECTOR_SIMILARITY_POOLING",
+    # BERT-LLA multi-horizon neural forecaster (forecasting/bert_lla.py).
+    "BERT_LLA_ENABLED",
+    "BERT_LLA_BLEND_ENABLED",
+    "BERT_LLA_ABLATION_ENABLED",
+    "BERT_LLA_WINDOW_SIZE",
+    "BERT_LLA_MIN_SENTIMENT_COVERAGE",
+    # Options true-IVR opt-in + intraday excursion opt-in (both no-op when False,
+    # matching the FORECAST_USE_GARCH_SIGMA opt-in convention).
+    "OPTIONS_TRUE_IVR_ENABLED",
+    "EXCURSION_INTRADAY_ENABLED",
+    # Real-time WS quote ingestion reconnect backoff (companions to
+    # MARKET_DATA_WS_ENABLED/STALE_SECONDS/SYMBOLS above).
+    "MARKET_DATA_WS_RECONNECT_BASE_SECONDS",
+    "MARKET_DATA_WS_RECONNECT_MAX_SECONDS",
+    # Robinhood execution bridge (execution/queue_builder.py, pilots/mirror.py).
+    # Mirrors ALPACA_PAPER's precedent: an execution-mode toggle is GUI-writable
+    # even though it spans paper/live, because per-trade human confirmation is
+    # still enforced downstream by the robinhood-execution skill regardless of
+    # this setting. Credentials (RH_USERNAME/RH_PASSWORD/RH_MFA_SECRET) stay in
+    # SECRET_KEYS above.
+    "ROBINHOOD_EXECUTION_MODE",
+    "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
+    "ROBINHOOD_LIMIT_BUFFER_BPS",
+    "ROBINHOOD_AUTO_REFRESH_ENABLED",
+    # Pilots scoring / follow-queue bounds (pilots/scoring.py, pilots/mirror.py,
+    # api/pilots_api.py's GET /agentic/discovery).
+    "PILOTS_TOP_N",
+    "FOLLOW_MIN_AMOUNT",
+    "AGENTIC_MAX_CANDIDATES",
+    # Orchestrator Control API bind port (127.0.0.1-only; companion to
+    # PILOTS_API_PORT above).
+    "ORCHESTRATOR_API_PORT",
+    # Prompt Registry operational knobs (companions to PROMPT_REGISTRY_ENABLED/
+    # BACKEND/PINS above; credentials stay in SECRET_KEYS).
+    "PROMPT_REGISTRY_REFRESH_SECONDS",
+    "PROMPT_CACHE_KEEP_VERSIONS",
+    "PROMPT_MAX_CHARS",
+    # LLM commentary / Opal research per-call timeouts (companions to
+    # LLM_COMMENTARY_ENABLED/OPAL_RESEARCH_ENABLED above).
+    "LLM_COMMENTARY_TIMEOUT_SECONDS",
+    "OPAL_RESEARCH_TIMEOUT_SECONDS",
+    # Execution-queue composition freshness gate (execution/compose.py).
+    "QUEUE_SOURCE_MAX_AGE_SECONDS",
+    # State-snapshot pruning + advisory rationale presentation.
+    "SNAPSHOT_HISTORY_DAYS",
+    "SNAPSHOT_CONVICTION_DELTA_THRESHOLD",
+    "RATIONALE_VERBOSITY",
+    # Strategy validation harness genuine-OOS gate opt-in (validation/harness.py).
+    "VALIDATION_HARNESS_OOS_GATE_ENABLED",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -354,6 +536,73 @@ SECRET_KEYS: tuple[str, ...] = (
     # masked in the GUI, never GUI-writable; hand-edit .env to set/rotate it.
     # Its 24 non-secret operational tunables live in ALLOWED_KEYS above.
     "FMP_API_KEY",
+    # --- 2026-08 allowlist audit additions (see ALLOWED_KEYS's matching header) -
+    # Bearer token guarding the Pilots API's follow WRITE-path (PUT /follows,
+    # POST /pilots/{id}/follow). Same fail-closed command-token treatment as
+    # ORCHESTRATOR_DAEMON_TOKEN/STATE_API_TOKEN — its own Field(description=...)
+    # says "SECRET — never GUI-writable, never logged."
+    "FOLLOW_API_TOKEN",
+    # alerting_mcp/notifier.py family (distinct from observability/alerts.py's
+    # ALERT_SMTP_HOST/ALERT_WEBHOOK_URL/NTFY_TOPIC, all already secret above) —
+    # mirrors those exact siblings: a webhook/topic/hostname in this alerting
+    # channel is treated as sensitive alongside the credential fields it's
+    # grouped with in settings.py, even though a hostname/topic alone isn't a
+    # credential in the strict sense (same judgment call already made for
+    # ALERT_SMTP_HOST and NTFY_TOPIC). ALERT_EMAIL_SMTP_PORT/ALERT_SMTP_PORT stay
+    # non-secret in ALLOWED_KEYS above — only the host/webhook/topic move here.
+    "ALERT_EMAIL_SMTP_HOST",
+    "ALERT_NTFY_TOPIC",
+    "ALERT_SLACK_WEBHOOK_URL",  # description literally says "Secret"
+    # Reddit API User-Agent header. Not a credential in the auth sense (REDDIT_
+    # CLIENT_ID/SECRET already cover that), but a per-operator identifying value
+    # for a third-party API — classified here for the exact same reason
+    # EDGAR_USER_AGENT is (see that key's own comment above), not ALLOWED_KEYS.
+    "REDDIT_USER_AGENT",
+)
+
+# ---------------------------------------------------------------------------
+# Deliberately excluded from BOTH allowlists
+# ---------------------------------------------------------------------------
+# Fields on settings.Settings that are neither GUI-writable non-secret tunables
+# nor secrets to mask -- each is either (a) a filesystem path (editing it from
+# the GUI has no clear safety benefit and risks pointing the app at a bogus
+# location), or (b) a fail-closed master switch gating a real side effect
+# (broker credential intake/re-login, arbitrary command execution, a paid LLM
+# call exposed over a fail-open HTTP API, a .env-writing endpoint) that must
+# stay hand-set-only per this codebase's established "a GUI bug must never flip
+# this on" pattern (see e.g. BROKERAGE_CONNECT_ENABLED's own settings.py
+# docstring and tests/test_pilots_api.py's `*_is_not_gui_writable` tests).
+# This set exists purely so tests/test_gui_env_io.py can assert every
+# settings.py field is accounted for -- it grants no capability and is not
+# consulted by read_settings/write_setting/write_many (unclassified access
+# stays rejected via ALLOWED_KEYS/SECRET_KEYS exactly as before).
+EXCLUDED_FROM_GUI: frozenset[str] = frozenset(
+    {
+        # --- Filesystem paths -------------------------------------------------
+        "OUTPUT_DIR",
+        "PROMPT_CACHE_DIR",
+        "WATCH_RULES_FILE",
+        "ALERT_FILE_PATH",
+        "GRAVITY_AI_RUNNER_OUTPUT_PATH",
+        "LLM_COMMENTARY_CACHE_PATH",
+        # --- Fail-closed command / write / paid-API-exposure flags -----------
+        # (hand-set in .env only; several already pinned by dedicated
+        # `test_*_is_not_gui_writable` tests in tests/test_pilots_api.py)
+        "AGENTIC_DISCOVERY_ENABLED",
+        "AI_GENERATION_API_ENABLED",
+        "AUTOMATION_WRITES_ENABLED",
+        "BROKERAGE_CONNECT_ENABLED",
+        "BROKERAGE_REFRESH_ENABLED",
+        "COMMAND_EXECUTION_ENABLED",
+        "DEAD_LETTER_RETRY_ENABLED",
+        "GENERAL_SETTINGS_WRITES_ENABLED",
+        "LLM_WRITES_ENABLED",
+        "MACRO_GATE_WRITES_ENABLED",
+        "PROMPT_REGISTRY_WRITES_ENABLED",
+        "RAG_QUERY_API_ENABLED",
+        "STRATEGY_WRITES_ENABLED",
+        "UNIVERSE_SYNC_ENABLED",
+    }
 )
 
 # Keys whose values are JSON-encoded structures (lists/dicts) in .env.
@@ -371,6 +620,10 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
         # Multi-horizon forecast backfill list
         "FORECAST_BACKFILL_HORIZONS",
+        # Dual Momentum risky-asset universe (list[str])
+        "DUAL_MOMENTUM_RISKY_ASSETS",
+        # Per-regime signal weight overrides (dict[str, dict[str, float]])
+        "REGIME_SIGNAL_WEIGHTS",
     }
 )
 
