@@ -19,6 +19,19 @@ from settings import settings
 _captured_train_max_date: dict = {}
 
 
+@pytest.fixture(autouse=True)
+def _isolate_output_dir(tmp_path, monkeypatch):
+    """Every test in this file that calls export_results() must never write
+    into the real, operator-facing output/ directory. AgenticForecastBackfiller
+    reads settings.OUTPUT_DIR live (not a cached module-level path), so
+    monkeypatching it here is sufficient -- without this, running this file
+    clobbers the live output/agentic_forecast_summary.json that
+    GET /pilots/forecast_backfill serves verbatim, which is exactly how a
+    ZZZZ_NOT_REAL synthetic-fallback ticker used to leak into the webapp's
+    Forecast Backfill screen after a local test run."""
+    monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+
+
 class _RecordingClassifier(RandomForestClassifier):
     def fit(self, X, y):
         _captured_train_max_date["date"] = X.index.get_level_values("Date").max()

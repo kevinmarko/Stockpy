@@ -33,8 +33,6 @@ logger = logging.getLogger("ML.ForecastBackfill")
 
 _MODELS_DIR = Path(__file__).parent / "models"
 _MODELS_DIR.mkdir(parents=True, exist_ok=True)
-_OUTPUT_DIR = Path(settings.OUTPUT_DIR)
-_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Upper bound is arbitrary (10 years of trading days) -- the point is just to
 # constrain `h` to a small positive integer before it is ever interpolated
@@ -438,8 +436,18 @@ class AgenticForecastBackfiller:
 
     def export_results(self, filename: str = "agentic_forecast_backfill.csv") -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """Export backfilled forecasts dataset and summary JSON metadata."""
-        out_csv = _OUTPUT_DIR / filename
-        out_json = _OUTPUT_DIR / "agentic_forecast_summary.json"
+        # settings.OUTPUT_DIR is read live here, not cached at module import
+        # time, matching every other output-path reader in this codebase
+        # (see pilots/dead_letter.py's docstring) -- so tests that
+        # monkeypatch settings.OUTPUT_DIR to an isolated tmp_path (the
+        # standard technique used throughout tests/) actually isolate this
+        # write path too, instead of silently writing into the real,
+        # operator-facing output/ directory that api/pilots_api.py's
+        # GET /pilots/forecast_backfill serves from.
+        output_dir = Path(settings.OUTPUT_DIR)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        out_csv = output_dir / filename
+        out_json = output_dir / "agentic_forecast_summary.json"
 
         export_cols = ["Close", "TSMOM_Signal", "CSMOM_Signal"]
         for model_type in ["TSMOM", "CSMOM"]:
