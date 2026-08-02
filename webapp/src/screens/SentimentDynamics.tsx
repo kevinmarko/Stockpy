@@ -253,11 +253,30 @@ export function SentimentDynamics() {
       >
         ← Back
       </button>
-      <h1 className="screen-title">Sentiment Dynamics</h1>
-      <p className="screen-sub">
-        Live sentiment analysis from financial news and social media activity,
-        driven by the Antigravity Agent and GJR-GARCH asymmetric volatility metrics.
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "var(--s-2)" }}>
+        <div>
+          <h1 className="screen-title">Sentiment Dynamics</h1>
+          <p className="screen-sub">
+            Live sentiment analysis from financial news and social media activity,
+            driven by the Antigravity Agent and GJR-GARCH asymmetric volatility metrics.
+          </p>
+        </div>
+        <button
+          onClick={() => nav("/settings/sentiment")}
+          style={{
+            padding: "6px 12px",
+            borderRadius: "var(--r-sm)",
+            background: "transparent",
+            border: `1px solid ${theme.border}`,
+            color: theme.textSecondary,
+            fontSize: "var(--t-caption)",
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          Configure ingestion →
+        </button>
+      </div>
 
       <TabGuide tabKey="sentiment" />
 

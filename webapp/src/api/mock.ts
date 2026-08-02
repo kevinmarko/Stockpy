@@ -1596,28 +1596,35 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   },
 ];
 
-function readTunableOverrides(): Record<string, number | boolean | string> {
+function readOverrides(storageKey: string): Record<string, number | boolean | string> {
   try {
-    const raw = localStorage.getItem(TUNABLES_KEY);
+    const raw = localStorage.getItem(storageKey);
     return raw ? (JSON.parse(raw) as Record<string, number | boolean | string>) : {};
   } catch {
     return {};
   }
 }
 
-function readTunablesDrift(): string[] {
+function readDrift(storageKey: string): string[] {
   try {
-    const raw = localStorage.getItem(TUNABLES_DRIFT_KEY);
+    const raw = localStorage.getItem(storageKey);
     return raw ? (JSON.parse(raw) as string[]) : [];
   } catch {
     return [];
   }
 }
 
-function mockTunables(): TunablesResponse {
-  const ov = readTunableOverrides();
+// Shared by every mock `/settings/*` editor (general tunables, sentiment,
+// sector-selection) -- each passes its own defs list + a dedicated pair of
+// localStorage keys so their overrides/drift never collide.
+function buildTunablesResponse(
+  defs: MockTunableDef[],
+  overridesKey: string,
+  driftKey: string
+): TunablesResponse {
+  const ov = readOverrides(overridesKey);
   const groups: TunablesResponse["groups"] = [];
-  for (const def of TUNABLE_DEFS) {
+  for (const def of defs) {
     let group = groups.find((g) => g.name === def.group);
     if (!group) {
       group = { name: def.group, fields: [] };
@@ -1636,7 +1643,7 @@ function mockTunables(): TunablesResponse {
     if (def.options !== undefined) field.options = def.options;
     group.fields.push(field);
   }
-  const driftKeys = readTunablesDrift();
+  const driftKeys = readDrift(driftKey);
   return {
     applies: "next_daemon_restart",
     groups,
@@ -1652,12 +1659,15 @@ function mockTunables(): TunablesResponse {
   };
 }
 
-function applyTunables(
-  values: Record<string, number | boolean | string>
+function applyTunablesGeneric(
+  values: Record<string, number | boolean | string>,
+  defs: MockTunableDef[],
+  overridesKey: string,
+  driftKey: string
 ): TunablesUpdateResult {
   const written: Record<string, number | boolean | string> = {};
   const rejected: Record<string, string> = {};
-  const byKey = new Map(TUNABLE_DEFS.map((d) => [d.key, d]));
+  const byKey = new Map(defs.map((d) => [d.key, d]));
   for (const [key, val] of Object.entries(values)) {
     const def = byKey.get(key);
     if (!def) {
@@ -1695,16 +1705,306 @@ function applyTunables(
   }
   if (Object.keys(written).length > 0) {
     try {
-      localStorage.setItem(TUNABLES_KEY, JSON.stringify({ ...readTunableOverrides(), ...written }));
+      localStorage.setItem(overridesKey, JSON.stringify({ ...readOverrides(overridesKey), ...written }));
       // A .env write does NOT reach the running process until restart --
       // mark every written key as drifted (mirrors STRATEGY_DRIFT_KEY above).
-      const drift = new Set([...readTunablesDrift(), ...Object.keys(written)]);
-      localStorage.setItem(TUNABLES_DRIFT_KEY, JSON.stringify([...drift]));
+      const drift = new Set([...readDrift(driftKey), ...Object.keys(written)]);
+      localStorage.setItem(driftKey, JSON.stringify([...drift]));
     } catch {
       /* ignore quota */
     }
   }
   return { written, rejected, applies: "next_daemon_restart" };
+}
+
+function mockTunables(): TunablesResponse {
+  return buildTunablesResponse(TUNABLE_DEFS, TUNABLES_KEY, TUNABLES_DRIFT_KEY);
+}
+
+function applyTunables(
+  values: Record<string, number | boolean | string>
+): TunablesUpdateResult {
+  return applyTunablesGeneric(values, TUNABLE_DEFS, TUNABLES_KEY, TUNABLES_DRIFT_KEY);
+}
+
+// ---------------------------------------------------------------------------
+// Dedicated Sentiment & Sector Selection tunables (webapp /settings/sentiment,
+// /settings/sector-selection) -- mirrors api/pilots_api.py's _SENTIMENT_GROUPS
+// / _SECTOR_SELECTION_GROUPS exactly (same keys, types, bounds, real
+// settings.py defaults). Every key here is a REAL settings.py field, verified
+// against Settings.model_fields on the backend side -- see that module's
+// _SENTIMENT_GROUPS comment for why a fabricated key would be a silent no-op
+// were it ever written for real. "Sector Selection" is data/sector_selection_
+// heat.py's semantic-similarity feature backing SectorSelection.tsx -- NOT a
+// momentum/value/volatility factor rotation.
+const SENTIMENT_TUNABLES_KEY = "stockpy.mock.sentiment_tunables";
+const SENTIMENT_TUNABLES_DRIFT_KEY = "stockpy.mock.sentiment_tunables_drift";
+const SECTOR_SELECTION_TUNABLES_KEY = "stockpy.mock.sector_selection_tunables";
+const SECTOR_SELECTION_TUNABLES_DRIFT_KEY = "stockpy.mock.sector_selection_tunables_drift";
+
+const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
+  // ---- Sentiment Ingestion Core ----
+  {
+    group: "Sentiment Ingestion Core", key: "SENTIMENT_INGESTION_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/Reddit/EDGAR). False is a complete no-op.",
+  },
+  {
+    group: "Sentiment Ingestion Core", key: "SENTIMENT_SOURCES", type: "string",
+    value: "yahoo_rss,gdelt,reddit,edgar", default: "yahoo_rss,gdelt,reddit,edgar",
+    description: "Comma-separated list of enabled sentiment-source provider names.",
+  },
+  {
+    group: "Sentiment Ingestion Core", key: "SENTIMENT_COMMENT_SOURCES", type: "string",
+    value: "reddit,stocktwits", default: "reddit,stocktwits",
+    description: "Comma-separated subset of SENTIMENT_SOURCES classified as investor-forum comment sources.",
+  },
+  {
+    group: "Sentiment Ingestion Core", key: "SENTIMENT_INGESTION_LOOKBACK_DAYS", type: "number",
+    value: 1, default: 1, min: 1, max: 90, step: 1,
+    description: "Calendar days of lookback each ingestion cycle requests from every enabled source.",
+  },
+  {
+    group: "Sentiment Ingestion Core", key: "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE", type: "number",
+    value: 2000, default: 2000, min: 1, max: 20000, step: 1,
+    description: "Per-cycle document budget shared across all symbols.",
+  },
+  {
+    group: "Sentiment Ingestion Core", key: "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE", type: "number",
+    value: 60.0, default: 60.0, min: 1.0, max: 600.0, step: 1.0,
+    description: "Hard wall-clock ceiling (seconds) for the entire per-cycle ingestion run.",
+  },
+  {
+    group: "Sentiment Ingestion Core", key: "SENTIMENT_CIRCUIT_BREAKER_THRESHOLD", type: "number",
+    value: 3, default: 3, min: 1, max: 20, step: 1,
+    description: "Consecutive failures for a single source within one cycle before it's skipped for the rest of the cycle.",
+  },
+  // ---- Sources — Reddit, StockTwits, EDGAR, GDELT, Google News ----
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "STOCKTWITS_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for the free, uncredentialed StockTwits source.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "REDDIT_USER_AGENT", type: "string",
+    value: "stockpy-sentiment-ingestion/0.1", default: "stockpy-sentiment-ingestion/0.1",
+    description: "User-Agent header sent with every Reddit API request, per Reddit's API rules.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "REDDIT_BACKFILL_MAX_PAGES", type: "number",
+    value: 10, default: 10, min: 1, max: 100, step: 1,
+    description: "Max pages RedditSource paginates through for a historical backfill request.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GOOGLE_NEWS_LOOKBACK_WINDOW", type: "string",
+    value: "7d", default: "7d",
+    description: "Lookback window passed as Google News RSS's `when:` query parameter.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "EDGAR_FULLTEXT_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for the SEC EDGAR full-text search (10-K/10-Q) additions to EdgarSource.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "EDGAR_FULLTEXT_FORMS", type: "string",
+    value: "8-K,10-K,10-Q", default: "8-K,10-K,10-Q",
+    description: "Comma-separated SEC form types requested from EDGAR full-text search.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "EDGAR_FULLTEXT_CHUNK_TOKENS", type: "number",
+    value: 512, default: 512, min: 64, max: 4096, step: 64,
+    description: "Maximum tokens per filing-text chunk for FinBERT scoring.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_MIN_REQUEST_INTERVAL_SECONDS", type: "number",
+    value: 5.0, default: 5.0, min: 0.0, max: 60.0, step: 0.5,
+    description: "Minimum seconds between GDELT DOC API request issuance, shared process-wide.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_MAX_RETRIES", type: "number",
+    value: 2, default: 2, min: 0, max: 10, step: 1,
+    description: "Retries after a GDELT HTTP 429/5xx before the request is given up on.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_RETRY_BACKOFF_SECONDS", type: "number",
+    value: 5.0, default: 5.0, min: 0.5, max: 60.0, step: 0.5,
+    description: "Base seconds for the GDELT retry backoff.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_COOLDOWN_THRESHOLD", type: "number",
+    value: 3, default: 3, min: 1, max: 10, step: 1,
+    description: "Consecutive failed GDELT requests after which calls are skipped outright for a cooldown period.",
+  },
+  {
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_COOLDOWN_SECONDS", type: "number",
+    value: 300.0, default: 300.0, min: 10.0, max: 3600.0, step: 10.0,
+    description: "How long the GDELT cooldown stays open once the failure threshold is reached.",
+  },
+  // ---- FinBERT & Catalyst Scoring ----
+  {
+    group: "FinBERT & Catalyst Scoring", key: "FINBERT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Use ProsusAI/FinBERT for headline sentiment when `transformers` is installed; falls back to a keyword lexicon otherwise.",
+  },
+  {
+    group: "FinBERT & Catalyst Scoring", key: "FINBERT_BATCH_SIZE", type: "number",
+    value: 16, default: 16, min: 1, max: 128, step: 1,
+    description: "Headlines per forward pass when a real FinBERT pipeline is loaded.",
+  },
+  {
+    group: "FinBERT & Catalyst Scoring", key: "FINBERT_SCORE_CACHE_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Cache FinBERT/lexicon headline scores by content hash so an unchanged headline is not re-scored.",
+  },
+  {
+    group: "FinBERT & Catalyst Scoring", key: "NEWS_LOOKBACK_DAYS", type: "number",
+    value: 7, default: 7, min: 1, max: 90, step: 1,
+    description: "Calendar days of Finnhub company_news headlines scored per symbol per cycle.",
+  },
+  {
+    group: "FinBERT & Catalyst Scoring", key: "FINNHUB_RATE_LIMIT_PER_MIN", type: "number",
+    value: 50, default: 50, min: 1, max: 60, step: 1,
+    description: "Finnhub sliding-window call budget per 60s (free tier ceiling: 60).",
+  },
+  {
+    group: "FinBERT & Catalyst Scoring", key: "SENTIMENT_SOCIAL_BLEND_WEIGHT", type: "number",
+    value: 0.4, default: 0.4, min: 0.0, max: 1.0, step: 0.05,
+    description: "Weight on the multi-source social sentiment component of the blended catalyst score.",
+  },
+  // ---- AI Credibility Verification ----
+  {
+    group: "AI Credibility Verification", key: "SENTIMENT_LLM_VERIFICATION_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "When True, borderline-credibility documents are verified via an LLM call instead of the heuristic placeholder.",
+  },
+  {
+    group: "AI Credibility Verification", key: "SENTIMENT_LLM_VERIFICATION_PROVIDER", type: "enum",
+    value: "none", default: "none", options: ["claude", "gemini", "openai", "none"],
+    description: "Which LLM provider backs sentiment-document verification.",
+  },
+  {
+    group: "AI Credibility Verification", key: "SENTIMENT_LLM_VERIFICATION_MAX_CALLS_PER_CYCLE", type: "number",
+    value: 25, default: 25, min: 0, max: 500, step: 1,
+    description: "Per-batch cap on real LLM calls made for credibility verification.",
+  },
+  // ---- Attention & Sector Heat ----
+  {
+    group: "Attention & Sector Heat", key: "SECTOR_HEAT_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for the GDELT article-volume-based Sector Heat Factor attention feature.",
+  },
+  {
+    group: "Attention & Sector Heat", key: "SECTOR_HEAT_SMOOTHING_SIGMA", type: "number",
+    value: 1.0, default: 1.0, min: 0.1, max: 10.0, step: 0.1,
+    description: "Gaussian smoothing sigma applied to the raw daily GDELT article-volume series.",
+  },
+  {
+    group: "Attention & Sector Heat", key: "SECTOR_HEAT_LOOKBACK_DAYS", type: "number",
+    value: 7, default: 7, min: 1, max: 90, step: 1,
+    description: "Calendar days of GDELT article-volume history used to compute the Sector Heat Factor.",
+  },
+  {
+    group: "Attention & Sector Heat", key: "WIKIPEDIA_ATTENTION_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for the Wikipedia-pageviews-based retail-attention feature.",
+  },
+  {
+    group: "Attention & Sector Heat", key: "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS", type: "number",
+    value: 30, default: 30, min: 1, max: 365, step: 1,
+    description: "Calendar days of Wikipedia pageview history used to compute the attention baseline/z-score.",
+  },
+  {
+    group: "Attention & Sector Heat", key: "PYTRENDS_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Best-effort optional Google Trends overlay on top of the Wikipedia-pageviews attention feature.",
+  },
+];
+
+const SECTOR_SELECTION_TUNABLE_DEFS: MockTunableDef[] = [
+  {
+    group: "Related Sector Selection", key: "SECTOR_SELECTION_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for the semantic Related Sector Selection feature's Gaussian-response Sector Heat term.",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SELECTION_TOP_N", type: "number",
+    value: 3, default: 3, min: 1, max: 11, step: 1,
+    description: "Default number of top-ranked related sectors selected per target symbol.",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SELECTION_W1", type: "number",
+    value: 0.4, default: 0.4, min: 0.0, max: 1.0, step: 0.05,
+    description: "Default news-volume weight, mirrored from the composite sentiment index.",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SELECTION_W2", type: "number",
+    value: 0.1, default: 0.1, min: 0.0, max: 1.0, step: 0.05,
+    description: "Default review-volume weight.",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SELECTION_HEAT_LOOKBACK_DAYS", type: "number",
+    value: 22, default: 22, min: 1, max: 252, step: 1,
+    description: "Trailing trading days of sentiment volume summed per candidate sector before min-max normalization.",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SELECTION_HEAT_A", type: "number",
+    value: 0.8, default: 0.8, min: 0.0, max: 5.0, step: 0.05,
+    description: "Gaussian amplitude 'a' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SELECTION_HEAT_B", type: "number",
+    value: 1.0, default: 1.0, min: 0.0, max: 5.0, step: 0.05,
+    description: "Gaussian center 'b' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SELECTION_HEAT_C", type: "number",
+    value: 0.6, default: 0.6, min: 0.05, max: 5.0, step: 0.05,
+    description: "Gaussian width 'c' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SIMILARITY_EMBEDDER", type: "enum",
+    value: "sbert", default: "sbert", options: ["sbert", "openai", "none"],
+    description: "Embedding backend for the semantic-similarity term.",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SIMILARITY_MODEL", type: "string",
+    value: "sentence-transformers/all-MiniLM-L6-v2", default: "sentence-transformers/all-MiniLM-L6-v2",
+    description: "Hugging Face model id loaded when SECTOR_SIMILARITY_EMBEDDER is 'sbert'.",
+  },
+  {
+    group: "Related Sector Selection", key: "SECTOR_SIMILARITY_POOLING", type: "enum",
+    value: "max", default: "max", options: ["max", "mean"],
+    description: "Pooling strategy applied to SBERT token embeddings.",
+  },
+];
+
+function mockSentimentTunables(): TunablesResponse {
+  return buildTunablesResponse(SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY);
+}
+
+function applySentimentTunables(
+  values: Record<string, number | boolean | string>
+): TunablesUpdateResult {
+  return applyTunablesGeneric(values, SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY);
+}
+
+function mockSectorSelectionTunables(): TunablesResponse {
+  return buildTunablesResponse(
+    SECTOR_SELECTION_TUNABLE_DEFS,
+    SECTOR_SELECTION_TUNABLES_KEY,
+    SECTOR_SELECTION_TUNABLES_DRIFT_KEY
+  );
+}
+
+function applySectorSelectionTunables(
+  values: Record<string, number | boolean | string>
+): TunablesUpdateResult {
+  return applyTunablesGeneric(
+    values,
+    SECTOR_SELECTION_TUNABLE_DEFS,
+    SECTOR_SELECTION_TUNABLES_KEY,
+    SECTOR_SELECTION_TUNABLES_DRIFT_KEY
+  );
 }
 
 // ---- Realized broker P&L fixture (FIFO round-trips) ----
@@ -5155,6 +5455,26 @@ export const mockApi = {
     values: Record<string, number | boolean | string>
   ): Promise<TunablesUpdateResult> {
     return delay(applyTunables(values));
+  },
+
+  async getSentimentSettings(): Promise<TunablesResponse> {
+    return delay(mockSentimentTunables());
+  },
+
+  async updateSentimentSettings(
+    values: Record<string, number | boolean | string>
+  ): Promise<TunablesUpdateResult> {
+    return delay(applySentimentTunables(values));
+  },
+
+  async getSectorSelectionSettings(): Promise<TunablesResponse> {
+    return delay(mockSectorSelectionTunables());
+  },
+
+  async updateSectorSelectionSettings(
+    values: Record<string, number | boolean | string>
+  ): Promise<TunablesUpdateResult> {
+    return delay(applySectorSelectionTunables(values));
   },
 
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----

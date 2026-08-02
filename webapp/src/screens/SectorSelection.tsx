@@ -126,11 +126,28 @@ export function SectorSelection() {
       >
         ← Back
       </button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1 className="screen-title">Sector Selection</h1>
-        {data?.as_of && (
-          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{fmtDate(data.as_of)}</span>
-        )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "var(--s-2)" }}>
+        <div>
+          <h1 className="screen-title">Sector Selection</h1>
+          {data?.as_of && (
+            <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{fmtDate(data.as_of)}</span>
+          )}
+        </div>
+        <button
+          onClick={() => nav("/settings/sector-selection")}
+          style={{
+            padding: "6px 12px",
+            borderRadius: "var(--r-sm)",
+            background: "transparent",
+            border: `1px solid ${theme.border}`,
+            color: theme.textSecondary,
+            fontSize: "var(--t-caption)",
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          Configure sector selection →
+        </button>
       </div>
 
       <TabGuide tabKey="sector-selection" />

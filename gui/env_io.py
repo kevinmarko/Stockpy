@@ -327,7 +327,14 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "NEWS_HISTORY_CAPTURE_ENABLED",
     "DB_POOL_SIZE",
     "DB_MAX_OVERFLOW",
-    # Multi-source sentiment & attention pipeline
+    # Multi-source sentiment & attention pipeline (webapp /settings/sentiment,
+    # api/pilots_api.py's _SENTIMENT_GROUPS). Every key here is a REAL
+    # settings.py Field verified against Settings.model_fields — see that
+    # module's _SENTIMENT_GROUPS comment for why this matters (extra="ignore"
+    # means a fabricated key would silently do nothing on write).
+    # SENTIMENT_LLM_VERIFICATION_ENABLED/_PROVIDER/_MAX_CALLS_PER_CYCLE are
+    # already listed above (pre-dating this block) and also served by this
+    # editor — not repeated here.
     "SENTIMENT_INGESTION_ENABLED",
     "SENTIMENT_SOURCES",
     "SENTIMENT_COMMENT_SOURCES",
@@ -347,6 +354,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SENTIMENT_LLM_VERIFICATION_BORDERLINE_LOW",
     "SENTIMENT_LLM_VERIFICATION_BORDERLINE_HIGH",
     "STOCKTWITS_ENABLED",
+    "REDDIT_USER_AGENT",
     "REDDIT_BACKFILL_MAX_PAGES",
     "EDGAR_MAX_CONCURRENCY",
     "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
@@ -358,6 +366,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FINBERT_ENABLED",
     "FINBERT_BATCH_SIZE",
     "FINBERT_SCORE_CACHE_ENABLED",
+    "FINNHUB_RATE_LIMIT_PER_MIN",
     "NEWS_EARNINGS_SUPPRESS_HOURS",
     "NEWS_EARNINGS_DAMPEN_DAYS",
     "GOOGLE_NEWS_LOOKBACK_WINDOW",
@@ -372,6 +381,20 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PYTRENDS_ENABLED",
     "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE",
     "ATTENTION_CIRCUIT_BREAKER_THRESHOLD",
+    # Related Sector Selection tunables (webapp /settings/sector-selection,
+    # api/pilots_api.py's _SECTOR_SELECTION_GROUPS) — data/sector_selection_heat.py's
+    # semantic-similarity feature backing the SectorSelection.tsx screen.
+    "SECTOR_SELECTION_ENABLED",
+    "SECTOR_SELECTION_TOP_N",
+    "SECTOR_SELECTION_W1",
+    "SECTOR_SELECTION_W2",
+    "SECTOR_SELECTION_HEAT_LOOKBACK_DAYS",
+    "SECTOR_SELECTION_HEAT_A",
+    "SECTOR_SELECTION_HEAT_B",
+    "SECTOR_SELECTION_HEAT_C",
+    "SECTOR_SIMILARITY_EMBEDDER",
+    "SECTOR_SIMILARITY_MODEL",
+    "SECTOR_SIMILARITY_POOLING",
     # BERT-LLA Neural Forecaster
     "BERT_LLA_ENABLED",
     "BERT_LLA_BLEND_ENABLED",
