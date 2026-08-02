@@ -21,9 +21,11 @@ For each configured signal (``timeseries_momentum``, ``cross_sectional_momentum`
 Data sourcing
 -------------
 This script builds its training panel self-contained. It uses the live
-``DataEngine`` when a ``FRED_API_KEY`` + network are available, and otherwise
-falls back to a deterministic synthetic geometric-random-walk panel so the
-script (and its offline tests) never depend on the network.
+``DataEngine`` (yfinance, zero API key required) whenever real network
+access is available, and otherwise falls back to a deterministic synthetic
+geometric-random-walk panel -- per-symbol, so a single bad fetch doesn't
+degrade the whole universe -- so the script (and its offline tests, which
+always force the synthetic panel explicitly) never depend on the network.
 
     Deliberately NOT converged onto ``ml.training_data.build_training_panel()``:
     that helper builds a date-grid forward-return-rank panel for the LGBM
@@ -87,12 +89,39 @@ logger = logging.getLogger("ML.TrainMetaLabelers")
 
 _REGISTRY_PATH = _REPO_ROOT / "ml" / "registry.yaml"
 
-# Universe used to build the training panel. Kept small & liquid; the goal is a
-# few hundred cross-sectional events, not a full backtest.
+# Universe used to build the training panel: liquid, multi-sector individual
+# equities (deliberately no broad index ETFs like SPY/QQQ -- mixing an
+# index into a CROSS-SECTIONAL ranking dilutes the idiosyncratic signal
+# every other row is being ranked on, since an ETF's return is by
+# construction close to the universe's own average). Broad enough (~24
+# names, 8 sectors) to give both the per-symbol CUSUM event count and the
+# cross-sectional rank at each date real statistical breadth -- the
+# previous 10-name set (of which 2 were index ETFs) was undersized for a
+# genuine DSR/PBO read, not just for a "few hundred events" smoke test.
 _DEFAULT_UNIVERSE: Tuple[str, ...] = (
-    "AAPL", "MSFT", "GOOGL", "AMZN", "META",
-    "SPY", "QQQ", "JPM", "XOM", "JNJ",
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "AVGO",  # tech
+    "JPM", "BAC", "GS", "MA", "V",                            # financials
+    "JNJ", "UNH", "PFE", "ABBV",                              # healthcare
+    "XOM", "CVX",                                             # energy
+    "WMT", "PG", "KO", "HD", "MCD",                           # consumer
+    "CAT", "HON",                                             # industrials
 )
+
+# Requested real-data lookback for _build_price_panel's live fetch, in
+# calendar days. NOTE: the actual ceiling delivered today is ~5 years, not
+# this constant's face value -- CompositeProvider's yfinance path
+# (data/market_data.py::YFinanceProvider.get_intraday_bars) buckets any
+# lookback_days > 500 into yfinance's "5y" period string (there is no
+# longer daily-interval bucket), so requesting more than that is a no-op
+# via this provider. Getting genuinely more than ~5 years would mean
+# routing through FMP instead (arbitrary date ranges, like
+# ml/forecast_backfill.py's primary path), which requires FMP_API_KEY to be
+# configured -- not assumed here. Kept at a value larger than the real
+# ceiling anyway so this constant doesn't silently become the bottleneck if
+# that ceiling is ever raised. Independent of _synthetic_price_series's own
+# n_days default (900, kept short for the offline test suite's speed) --
+# tests always force_synthetic=True, which never reaches this constant.
+_DEFAULT_LOOKBACK_DAYS = 3650
 
 
 # ---------------------------------------------------------------------------
@@ -128,41 +157,67 @@ def _build_price_panel(
     *,
     force_synthetic: bool = False,
     n_days: int = 900,
+    lookback_days: int = _DEFAULT_LOOKBACK_DAYS,
     seed: int = 0,
 ) -> Dict[str, pd.Series]:
     """Return ``{symbol: close_series}`` for the training universe.
 
-    Tries the live ``DataEngine`` first (when a FRED key + network exist), then
-    falls back to the deterministic synthetic panel. Never raises: a per-symbol
-    fetch failure degrades that symbol to the synthetic series.
+    Tries the live ``CompositeProvider`` first (yfinance, zero API key
+    required; routes through FMP instead when configured -- same provider
+    ``ml/forecast_backfill.py`` uses) for ``lookback_days`` calendar days of
+    history, then falls back to the deterministic synthetic panel. Never
+    raises: a per-symbol fetch failure degrades that symbol to the synthetic
+    series.
+
+    Previously used ``DataEngine.fetch_technical_raw()``, which hardcodes
+    ``yf.Ticker(symbol).history(period="2y")`` -- there is no way to ask it
+    for more history, and 2 years is too short a sample for the CPCV
+    DSR/PBO gate to have a fair shot at clearing 0.95 (DSR is explicitly a
+    function of sample size: the same true edge needs more independent
+    observations to become statistically distinguishable from luck).
+    ``CompositeProvider.get_intraday_bars`` takes an explicit
+    ``lookback_days``, so this can span multiple market regimes instead of
+    whatever the last 2 years happened to look like.
+
+    ``n_days`` (unrelated to ``lookback_days``) sizes ONLY the synthetic
+    fallback and keeps its own small default for the offline test suite's
+    speed; tests always pass ``force_synthetic=True``, which skips the live
+    fetch entirely and never touches ``lookback_days``.
 
     Future: replace with ``ml.training_data.build_training_panel()`` (Agent 1 PR).
     """
     panel: Dict[str, pd.Series] = {}
 
-    live_frames: Dict[str, pd.DataFrame] = {}
+    live_frames: Dict[str, pd.Series] = {}
     if not force_synthetic:
         try:
-            from settings import settings  # noqa: PLC0415
-            from data_engine import DataEngine  # noqa: PLC0415
+            from data.market_data import CompositeProvider, MarketDataError  # noqa: PLC0415
 
-            fred_key = getattr(settings, "FRED_API_KEY", None)
-            if fred_key:
-                de = DataEngine(fred_api_key=str(fred_key))
-                live_frames = de.fetch_technical_raw(list(universe)) or {}
-                logger.info("Fetched live price history for %d symbols.", len(live_frames))
+            provider = CompositeProvider()
+            for symbol in universe:
+                try:
+                    bars = provider.get_intraday_bars(
+                        symbol, lookback_days=lookback_days, interval="1d"
+                    )
+                    if isinstance(bars, pd.DataFrame) and not bars.empty and "Close" in bars.columns:
+                        live_frames[symbol] = bars["Close"].dropna()
+                except MarketDataError as exc:
+                    logger.warning("CompositeProvider bars fetch failed for %s (%s).", symbol, exc)
+            logger.info(
+                "Fetched live price history for %d/%d symbols (lookback=%d days).",
+                len(live_frames), len(universe), lookback_days,
+            )
         except Exception as exc:
             logger.warning(
-                "Live DataEngine unavailable (%s) — using synthetic panel.", exc
+                "Live CompositeProvider unavailable (%s) — using synthetic panel.", exc
             )
 
     for i, symbol in enumerate(universe):
-        df = live_frames.get(symbol)
-        close: Optional[pd.Series] = None
-        if isinstance(df, pd.DataFrame) and "Close" in df.columns and len(df) > 200:
-            close = df["Close"].dropna()
+        close = live_frames.get(symbol)
+        if close is not None and len(close) >= 200:
+            close = close.copy()
             close.index = pd.DatetimeIndex(close.index)
-        if close is None or len(close) < 200:
+        else:
             close = _synthetic_price_series(symbol, n_days=n_days, seed=seed + i)
         panel[symbol] = close
 
@@ -173,9 +228,50 @@ def _build_price_panel(
 # 2. Feature + label construction per name
 # ---------------------------------------------------------------------------
 
+def _build_primary_signal_series(
+    signal_id: str,
+    panel: Dict[str, pd.Series],
+) -> Dict[str, pd.Series]:
+    """Per-symbol primary-signal VALUE series (pre-sign; sign is taken at each
+    event date by the caller), matching the REAL production ``SignalModule``
+    each meta-labeler is meant to gate — NOT a proxy that happens to be
+    convenient to compute:
+
+    - ``"timeseries_momentum"``: trailing 252-trading-day (~12-month) return,
+      matching ``signals/timeseries_momentum.py``'s ``ROC_12M`` (sign of
+      ``roc_12m - risk_free_rate``; the risk-free offset is immaterial to the
+      *sign* at typical rates, so trailing return sign is the faithful proxy).
+    - ``"cross_sectional_momentum"``: Jegadeesh-Titman 12-1m return
+      (``price[t-22] / price[t-252] - 1``, skipping the most recent month),
+      ranked cross-sectionally across the WHOLE universe at each date and
+      centered on 0.5 — exactly ``signals/cross_sectional_momentum.py``'s
+      ``pre_compute``/``compute`` formula (``2 * (rank - 0.5)``; only the
+      sign matters here, so the centered value is returned directly).
+
+    Any other/unrecognized ``signal_id`` falls back to the time-series
+    definition (dead-letter: never crashes on an unexpected id).
+
+    This must NOT be per-symbol-independent for cross_sectional_momentum —
+    that would silently degenerate into the time-series definition again
+    (the bug this function replaces: both meta-labelers used to train on the
+    identical per-symbol momentum-sign target, differing only by an RNG seed
+    that only ever affected the synthetic-data fallback, so real-data runs
+    produced byte-identical models under two different names).
+    """
+    if signal_id == "cross_sectional_momentum":
+        close_df = pd.DataFrame(panel)
+        ret_12_1m = close_df.shift(22) / close_df.shift(252) - 1.0
+        ranks = ret_12_1m.rank(axis=1, pct=True)
+        centered = ranks - 0.5
+        return {sym: centered[sym] for sym in centered.columns}
+
+    return {sym: close.pct_change(252) for sym, close in panel.items()}
+
+
 def _events_features_labels_for_symbol(
     close: pd.Series,
     *,
+    primary_signal: pd.Series,
     momentum_lookback: int = 63,
 ) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
     """Build (X, y_primary, y_barrier) for one name's price history.
@@ -183,18 +279,45 @@ def _events_features_labels_for_symbol(
     - Events: sampled by ``cusum_filter`` at a threshold equal to the median
       EWMA vol (adaptive, matches the AFML convention).
     - y_barrier: triple-barrier label per event.
-    - y_primary: momentum-sign direction at each event (sign of the trailing
-      ``momentum_lookback``-day return) — the "primary signal" whose correctness
-      the meta-labeler learns to predict.
+    - y_primary: sign of ``primary_signal`` (built by
+      ``_build_primary_signal_series``, matching the REAL production signal
+      this meta-labeler is meant to gate) reindexed to each event date — the
+      "primary signal" whose correctness the meta-labeler learns to predict.
     - X: a small PIT feature matrix (trailing return, realized vol, distance
-      from a moving average) evaluated at each event date only.
+      from a moving average, and the primary signal's own strength) evaluated
+      at each event date only. The first three are generic market-context
+      inputs (not the primary signal's own definition, so momentum_lookback
+      intentionally stays short-horizon (63d) regardless of which signal_id
+      is being trained); ``primary_score`` is the caller-supplied
+      ``primary_signal`` value itself (not just its sign) -- mirroring
+      ``signals/aggregator.py``'s live meta-label query, which feeds the
+      registered MetaLabeler ``feat_row["primary_score"] = output.score`` so
+      it conditions on how strong the original bet was, not just its
+      direction. Without it the classifier never sees the bet's magnitude at
+      all (y_primary collapses it to a bare sign).
+
+    ``vertical_barrier_days=21`` (~1 trading month) matches these signals'
+    actual rebalance cadence (``signals/cross_sectional_momentum.py``'s own
+    docstring: "Holding period: 1 month, rebalanced by the orchestrator") --
+    a 10-day window was evaluating whether a monthly-rebalanced bet paid off
+    over less than half its actual holding period, mostly capturing
+    short-term noise rather than the outcome the primary signal is betting on.
+
+    CUSUM threshold is 2x the median EWMA vol, not the raw median. At 1x,
+    events fired roughly every ~6-7 trading days per name (9,471 events
+    across 25 tickers over ~10y) -- far more often than a "significant
+    cumulative move" filter is meant to isolate, which dilutes the label set
+    with routine noise no classifier could reasonably call. 2x is a
+    standard significance-style multiplier (AFML's own CUSUM convention
+    scales the threshold off the volatility estimate rather than using it
+    directly), producing rarer but more economically meaningful events.
     """
     empty = (pd.DataFrame(), pd.Series(dtype=int), pd.Series(dtype=int))
     if close is None or len(close) < 200:
         return empty
 
     vol = get_volatility(close, span=50)
-    thr = float(np.nanmedian(vol.dropna())) if vol.notna().any() else 0.0
+    thr = float(np.nanmedian(vol.dropna())) * 2.0 if vol.notna().any() else 0.0
     if thr <= 0:
         return empty
 
@@ -206,7 +329,7 @@ def _events_features_labels_for_symbol(
         return empty
 
     barrier = apply_triple_barrier(
-        events, close, pt_sl_multiples=(2.0, 1.0), vertical_barrier_days=10
+        events, close, pt_sl_multiples=(2.0, 1.0), vertical_barrier_days=21
     )
     if barrier.empty:
         return empty
@@ -227,20 +350,28 @@ def _events_features_labels_for_symbol(
             "realized_vol_20d": realized_vol,
             "dist_sma_50": dist_sma,
             "vol_ewma": vol,
+            "primary_score": primary_signal,
         }
     )
     X = feat.reindex(ev_index)
 
-    # Primary signal direction = momentum sign at the event date.
-    mom_at_event = mom.reindex(ev_index)
-    y_primary = np.sign(mom_at_event).fillna(0).astype(int)
-    y_primary = pd.Series(y_primary.values, index=ev_index, dtype=int)
+    # Primary signal direction = sign of the caller-supplied primary_signal
+    # series at the event date (dropna: an event date the cross-sectional
+    # rank has no valid value for -- e.g. outside the panel's common date
+    # range -- is excluded rather than defaulting to a fabricated 0/neutral).
+    sig_at_event = primary_signal.reindex(ev_index).dropna()
+    if sig_at_event.empty:
+        return empty
+    y_primary = np.sign(sig_at_event).astype(int)
+    X = X.loc[y_primary.index]
+    y_barrier = y_barrier.loc[y_primary.index]
 
     return X, y_primary, y_barrier
 
 
 def _assemble_training_set(
     panel: Dict[str, pd.Series],
+    primary_series_by_symbol: Dict[str, pd.Series],
 ) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
     """Stack per-symbol (X, y_primary, y_barrier) into one training set.
 
@@ -254,7 +385,10 @@ def _assemble_training_set(
 
     for symbol, close in panel.items():
         try:
-            X, yp, yb = _events_features_labels_for_symbol(close)
+            X, yp, yb = _events_features_labels_for_symbol(
+                close,
+                primary_signal=primary_series_by_symbol.get(symbol, pd.Series(dtype=float)),
+            )
         except Exception as exc:
             logger.warning("Feature/label build failed for %s (%s) — skipping.", symbol, exc)
             continue
@@ -500,6 +634,7 @@ def train_signal(
     force_synthetic: bool = False,
     update_registry: bool = True,
     universe: Tuple[str, ...] = _DEFAULT_UNIVERSE,
+    lookback_days: int = _DEFAULT_LOOKBACK_DAYS,
     seed: int = 0,
 ) -> Optional[Path]:
     """Train and persist a MetaLabeler for ``signal_id``.
@@ -509,12 +644,18 @@ def train_signal(
     """
     logger.info("Training meta-labeler for %r ...", signal_id)
     # Vary the seed per signal so the two labelers see different (still
-    # deterministic) synthetic panels — mirrors that they'd be trained on
-    # different primary-signal directions in production.
+    # deterministic) synthetic-panel fallbacks when force_synthetic=True or
+    # live data is unavailable -- immaterial once real data is used, and no
+    # longer the thing that differentiates the two signals: that's now
+    # _build_primary_signal_series (see its docstring for why the previous
+    # seed-only differentiation was a real bug on live-data runs).
     sig_seed = seed + (7 if signal_id == "cross_sectional_momentum" else 0)
-    panel = _build_price_panel(universe, force_synthetic=force_synthetic, seed=sig_seed)
+    panel = _build_price_panel(
+        universe, force_synthetic=force_synthetic, lookback_days=lookback_days, seed=sig_seed
+    )
 
-    X, y_primary, y_barrier = _assemble_training_set(panel)
+    primary_series_by_symbol = _build_primary_signal_series(signal_id, panel)
+    X, y_primary, y_barrier = _assemble_training_set(panel, primary_series_by_symbol)
     if X.empty or len(X) < 30:
         logger.warning(
             "Meta-labeler %r: only %d events (< 30 required) — not trained.",
@@ -609,6 +750,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Skip updating ml/registry.yaml.",
     )
     parser.add_argument("--seed", type=int, default=0, help="Base RNG seed for synthetic panel.")
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=_DEFAULT_LOOKBACK_DAYS,
+        help=f"Live-data lookback window in calendar days (default: {_DEFAULT_LOOKBACK_DAYS}).",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -623,6 +770,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             signal_id,
             force_synthetic=args.synthetic,
             update_registry=not args.no_registry,
+            lookback_days=args.lookback_days,
             seed=args.seed,
         )
         if path is not None:

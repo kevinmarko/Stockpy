@@ -19,6 +19,19 @@ from settings import settings
 _captured_train_max_date: dict = {}
 
 
+@pytest.fixture(autouse=True)
+def _isolate_output_dir(tmp_path, monkeypatch):
+    """Every test in this file that calls export_results() must never write
+    into the real, operator-facing output/ directory. AgenticForecastBackfiller
+    reads settings.OUTPUT_DIR live (not a cached module-level path), so
+    monkeypatching it here is sufficient -- without this, running this file
+    clobbers the live output/agentic_forecast_summary.json that
+    GET /pilots/forecast_backfill serves verbatim, which is exactly how a
+    ZZZZ_NOT_REAL synthetic-fallback ticker used to leak into the webapp's
+    Forecast Backfill screen after a local test run."""
+    monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+
+
 class _RecordingClassifier(RandomForestClassifier):
     def fit(self, X, y):
         _captured_train_max_date["date"] = X.index.get_level_values("Date").max()
@@ -38,6 +51,21 @@ def test_backfiller_rejects_invalid_horizons(bad_horizon):
     path, regardless of caller (API, CLI script, or direct construction)."""
     with pytest.raises(ValueError):
         AgenticForecastBackfiller(horizons=[10, bad_horizon])
+
+
+def test_default_start_date_is_lookback_years_before_end_date():
+    """When start_date isn't supplied, it must be computed as
+    FORECAST_BACKFILL_LOOKBACK_YEARS back from end_date -- not a fixed
+    calendar-date literal (which would grow the window unbounded on every
+    future re-run instead of rolling forward)."""
+    engine = AgenticForecastBackfiller(end_date="2026-06-15")
+    expected = (pd.Timestamp("2026-06-15") - pd.DateOffset(years=settings.FORECAST_BACKFILL_LOOKBACK_YEARS))
+    assert engine.start_date == expected.strftime("%Y-%m-%d")
+
+
+def test_explicit_start_date_overrides_the_default():
+    engine = AgenticForecastBackfiller(start_date="2010-01-01", end_date="2026-06-15")
+    assert engine.start_date == "2010-01-01"
 
 
 def test_backfiller_initialization():

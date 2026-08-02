@@ -11,8 +11,14 @@ Coverage
 1. train_signal() trains, persists a pickle, and populates the registry row
    (both signals; synthetic offline panel — no network). The registry row
    carries the wired-through CPCV metrics and a gate-derived ``deployable``.
-2. bootstrap_meta_registry() registers a saved model so
-   global_meta_registry.has(signal_id) is True afterward.
+2. bootstrap_meta_registry() registers a saved, DEPLOYABLE model so
+   global_meta_registry.has(signal_id) is True afterward -- and refuses to
+   register a saved model that fails the DSR>0.95/PBO<0.5 gate, or has no
+   registry entry at all (fails closed), even though the pickle exists on
+   disk. This check was added after a real gap: previously any saved pickle
+   was registered unconditionally, so a meta-labeler proven statistically
+   indistinguishable from noise would have silently started dampening live
+   position sizing the moment its file existed.
 3. bootstrap_meta_registry() is a strict no-op when no model exists (registry
    stays empty — current-behavior preservation).
 4. bootstrap_meta_registry() respects settings.META_LABELING_ENABLED=False.
@@ -38,6 +44,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -86,6 +93,13 @@ def tmp_registry(tmp_path, monkeypatch):
 # the registry row instead of being hardcoded null).
 _STUB_CPCV = {"dsr": 0.30, "pbo": 0.70, "mean_oos_sharpe": 0.42}
 
+# A deployable stub (DSR > 0.95 AND PBO < 0.5) for tests that need
+# bootstrap_meta_registry() to actually register the model -- since it now
+# refuses to register anything that fails the gate (see ml/meta_bootstrap.py),
+# testing the "wiring works" path needs a genuinely-deployable registry row,
+# not the (deliberately failing) default stub above.
+_DEPLOYABLE_STUB_CPCV = {"dsr": 0.99, "pbo": 0.10, "mean_oos_sharpe": 1.2}
+
 
 @pytest.fixture
 def fast_cpcv(monkeypatch):
@@ -97,6 +111,13 @@ def fast_cpcv(monkeypatch):
     """
     monkeypatch.setattr(trainer, "compute_cpcv_metrics", lambda *a, **k: dict(_STUB_CPCV))
     return _STUB_CPCV
+
+
+@pytest.fixture
+def deployable_cpcv(monkeypatch):
+    """Like ``fast_cpcv``, but the stub metrics clear the deployability gate."""
+    monkeypatch.setattr(trainer, "compute_cpcv_metrics", lambda *a, **k: dict(_DEPLOYABLE_STUB_CPCV))
+    return _DEPLOYABLE_STUB_CPCV
 
 
 # ---------------------------------------------------------------------------
@@ -148,11 +169,59 @@ def test_train_signal_no_registry_flag_skips_yaml(tmp_models_dir, tmp_registry, 
 
 
 # ---------------------------------------------------------------------------
+# 1b. The two signals must train on genuinely different primary-signal
+# definitions, not the same per-symbol momentum sign under two names.
+# ---------------------------------------------------------------------------
+
+def test_cross_sectional_signal_is_genuinely_cross_sectional_not_per_symbol():
+    """Regression test for a real bug: cross_sectional_momentum's primary
+    signal used to be computed identically to timeseries_momentum's (plain
+    per-symbol momentum sign) -- the two meta-labelers only ever looked
+    different because of an RNG seed that solely affected the synthetic-data
+    fallback. On a live-data run the seed is irrelevant, so both labelers
+    silently trained on the SAME primary signal under two different names.
+
+    Construct a small deterministic panel where the cross-sectional ranking
+    diverges from each symbol's own trailing-momentum sign, and assert the
+    two signal definitions actually disagree somewhere -- not just happen to
+    produce different floats.
+    """
+    dates = pd.date_range("2020-01-01", periods=300, freq="B")
+    # Symbol A: strong uptrend (positive time-series momentum), but weaker
+    # than B and C on average -- so cross-sectionally it can rank LOW even
+    # though its own trailing return is positive.
+    n = np.arange(300)
+    a = pd.Series(100 * (1.0015 ** n), index=dates, name="A")
+    b = pd.Series(100 * (1.004 ** n), index=dates, name="B")
+    c = pd.Series(100 * (1.006 ** n), index=dates, name="C")
+    panel = {"A": a, "B": b, "C": c}
+
+    tsmom = trainer._build_primary_signal_series("timeseries_momentum", panel)
+    csmom = trainer._build_primary_signal_series("cross_sectional_momentum", panel)
+
+    # Time-series definition: every symbol here has positive trailing return
+    # for the whole history, so its sign is always +1 (once the 252d window
+    # is available).
+    tsmom_a = tsmom["A"].dropna()
+    assert (np.sign(tsmom_a) > 0).all()
+
+    # Cross-sectional definition: A is the weakest performer of the three, so
+    # its centered rank must be negative (bottom of the pack) on dates where
+    # all three have a valid 12-1m return -- i.e. the two definitions
+    # DISAGREE on A's sign, proving cross_sectional_momentum isn't just a
+    # relabeled copy of timeseries_momentum.
+    csmom_a = csmom["A"].dropna()
+    assert len(csmom_a) > 0, "cross-sectional series should have valid dates once the panel warms up"
+    assert (csmom_a < 0).all(), "A is the weakest of the three names and must rank in the bottom half"
+    assert not tsmom_a.equals(csmom_a)
+
+
+# ---------------------------------------------------------------------------
 # 2. Runtime registration wires the model into the global registry
 # ---------------------------------------------------------------------------
 
-def test_bootstrap_registers_saved_model(tmp_models_dir, tmp_registry, fast_cpcv):
-    """After a model is saved, bootstrap_meta_registry() registers it."""
+def test_bootstrap_registers_saved_model(tmp_models_dir, tmp_registry, deployable_cpcv):
+    """After a DEPLOYABLE model is saved, bootstrap_meta_registry() registers it."""
     # Train + save into the temp models dir.
     labeler = trainer.train_signal("timeseries_momentum", force_synthetic=True, seed=1)
     assert labeler is not None
@@ -160,10 +229,52 @@ def test_bootstrap_registers_saved_model(tmp_models_dir, tmp_registry, fast_cpcv
     # Registry starts empty (autouse fixture reset).
     assert not meta_labeling.global_meta_registry.has("timeseries_momentum")
 
-    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",))
+    registered = bootstrap_meta_registry(
+        signal_ids=("timeseries_momentum",), registry_path=tmp_registry
+    )
 
     assert registered == ["timeseries_momentum"]
     assert meta_labeling.global_meta_registry.has("timeseries_momentum")
+
+
+def test_bootstrap_skips_non_deployable_model(tmp_models_dir, tmp_registry, fast_cpcv):
+    """A saved model that FAILS the DSR>0.95/PBO<0.5 gate must NOT be
+    registered -- a pickle existing on disk is necessary but not sufficient.
+
+    Regression test for a real gap: before this check existed,
+    bootstrap_meta_registry() registered any saved pickle unconditionally,
+    so a meta-labeler that was honestly evaluated as statistically
+    indistinguishable from noise (this fixture's stub: dsr=0.30, pbo=0.70)
+    would have silently started dampening live position sizing the moment
+    its file existed, regardless of how badly it failed CPCV.
+    """
+    labeler = trainer.train_signal("timeseries_momentum", force_synthetic=True, seed=1)
+    assert labeler is not None
+
+    registered = bootstrap_meta_registry(
+        signal_ids=("timeseries_momentum",), registry_path=tmp_registry
+    )
+
+    assert registered == [], "a non-deployable model must not be registered"
+    assert not meta_labeling.global_meta_registry.has("timeseries_momentum")
+
+
+def test_bootstrap_fails_closed_on_missing_registry(tmp_models_dir, fast_cpcv, tmp_path):
+    """A saved model with NO accompanying registry entry (or an unreadable
+    registry) must be treated as non-deployable, not assumed fine -- the
+    absence of a deployability record is not evidence of quality."""
+    labeler = trainer.train_signal(
+        "timeseries_momentum", force_synthetic=True, update_registry=False, seed=1
+    )
+    assert labeler is not None
+
+    missing_registry_path = tmp_path / "does_not_exist.yaml"
+    registered = bootstrap_meta_registry(
+        signal_ids=("timeseries_momentum",), registry_path=missing_registry_path
+    )
+
+    assert registered == []
+    assert not meta_labeling.global_meta_registry.has("timeseries_momentum")
 
 
 def test_bootstrap_noop_when_no_model(tmp_models_dir):
@@ -179,14 +290,18 @@ def test_bootstrap_noop_when_no_model(tmp_models_dir):
         )
 
 
-def test_bootstrap_respects_disabled_setting(tmp_models_dir, tmp_registry, monkeypatch, fast_cpcv):
-    """META_LABELING_ENABLED=False disables registration even with a saved model."""
+def test_bootstrap_respects_disabled_setting(tmp_models_dir, tmp_registry, monkeypatch, deployable_cpcv):
+    """META_LABELING_ENABLED=False disables registration even with a saved,
+    deployable model (deployable so this test genuinely exercises the
+    ENABLED flag rather than incidentally being blocked by the gate)."""
     trainer.train_signal("timeseries_momentum", force_synthetic=True, seed=1)
 
     from settings import settings
     monkeypatch.setattr(settings, "META_LABELING_ENABLED", False)
 
-    registered = bootstrap_meta_registry(signal_ids=("timeseries_momentum",))
+    registered = bootstrap_meta_registry(
+        signal_ids=("timeseries_momentum",), registry_path=tmp_registry
+    )
 
     assert registered == []
     assert not meta_labeling.global_meta_registry.has("timeseries_momentum")

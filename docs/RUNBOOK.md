@@ -152,6 +152,28 @@ window stays open.
    launchctl unload ~/Library/LaunchAgents/com.investyo.stack.plist
    launchctl load   ~/Library/LaunchAgents/com.investyo.stack.plist
    ```
+   **This same restart is required any time you add or change `STATE_API_TOKEN`,
+   `FOLLOW_API_TOKEN`, or `ORCHESTRATOR_DAEMON_TOKEN` in `.env`** — every one of these is
+   read once at process startup (`pydantic-settings`, no live reload), so an already-running
+   backend keeps serving with the OLD value (typically surfacing as a 403 "Command endpoint
+   disabled: `<TOKEN>` not configured" even though the token IS set in `.env` on disk) until
+   restarted. The in-app "Restart daemon" webapp button **cannot** fix a stale
+   `ORCHESTRATOR_DAEMON_TOKEN` on its own — `POST /daemon/restart` is itself gated by that
+   same stale token — so this out-of-band restart is the only way out of that specific trap.
+
+   **If you also run `launch_webapp.command` in live mode, check which process actually owns
+   each port before assuming the stack restart above was enough**: `launch_webapp.command`'s
+   `_start_api` helper only starts `api.pilots_api:app` / `api.control_api:app` / etc. as their
+   own standalone `uvicorn` processes when nothing is already listening on that port — if one
+   is already up, it silently *reuses* it rather than restarting it, even on a later re-run of
+   `launch_webapp.command`. So a standalone process started this way can end up outliving (and
+   never being touched by) a `com.investyo.stack` restart. Confirm with:
+   ```bash
+   lsof -nP -iTCP:8601,8602,8603,8604 -sTCP:LISTEN
+   ```
+   and cross-reference each PID's start time (`ps -p <pid> -o lstart,command`) against your
+   `.env` edit time — anything older needs killing and relaunching by hand (or via
+   `launch_webapp.command`, once the stale one is gone) before it will pick up the new token.
 4. **Point the webapp at the live backend** — per `webapp/README.md`: set
    `VITE_USE_MOCK=false` (default `true`) in `webapp/.env.local`, plus `VITE_API_BASE_URL`
    (default `http://localhost:8602`) / `VITE_API_TOKEN` if they differ from the defaults, then

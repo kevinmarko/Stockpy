@@ -154,8 +154,15 @@ require_orchestrator_command_token = make_command_token_guard(
     "Command endpoint disabled: ORCHESTRATOR_DAEMON_TOKEN not configured.",
 )
 
-# api/pilots_api.py's follow write-path (a follow produces a gated order queue).
+# api/pilots_api.py's fail-closed command surface. Originally bound only to
+# the follow write-path (a follow produces a gated order queue), it has since
+# been reused as the auth tier for ~20 other command endpoints in that file
+# (forecast backfill trigger, /automation/run|pause, /decisions, brokerage
+# connect, etc. -- see api/pilots_api.py's module docstring). disabled_detail
+# is deliberately endpoint-agnostic ("Command endpoint", not "Follow
+# endpoints") so it doesn't mislead operators hitting it from any of those
+# other, unrelated endpoints.
 require_follow_command_token = make_command_token_guard(
     "FOLLOW_API_TOKEN",
-    "Follow endpoints disabled: FOLLOW_API_TOKEN not configured.",
+    "Command endpoint disabled: FOLLOW_API_TOKEN not configured.",
 )

@@ -633,7 +633,9 @@ class ForecastBackfillRunRequest(BaseModel):
     """
 
     tickers: Optional[list[str]] = Field(default=None)
-    start_date: Optional[str] = Field(default="2015-01-01")
+    # None -> AgenticForecastBackfiller computes settings.FORECAST_BACKFILL_LOOKBACK_YEARS
+    # (default 4) back from end_date, rather than duplicating that default here.
+    start_date: Optional[str] = Field(default=None)
     end_date: Optional[str] = Field(default=None)
     use_fmp: bool = Field(default=True)
     horizons: Optional[list[int]] = Field(default=None)

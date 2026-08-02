@@ -51,6 +51,22 @@ fix):
      already read this correctly) is the reference this fix matches, and
      ``TestGetExecutionQueue::test_parity_with_gui_reader_on_the_same_payload``
      pins agreement between the two readers on a real builder payload.
+  4. ``get_signal_breakdown``/``generate_daily_signals`` queried
+     ``DailySignals`` with a lowercase ``symbol``/``date`` schema (plus,
+     for ``generate_daily_signals``, ``composite_score``/``action``/
+     ``conviction`` columns) that never existed under any casing --
+     ``database_setup.py`` builds the table from ``id``/``timestamp`` plus
+     ``config.COLUMN_SCHEMA``'s real keys (``Symbol``, ``Score``,
+     ``Action Signal``, ``Advisory_Conviction``). Every call failed
+     identically with ``no such column: date`` regardless of ticker. The
+     tests below previously hand-built a fixture table matching the
+     buggy query instead of the real schema, which is exactly how this
+     shipped undetected; fixed to build the table via the real
+     ``database_setup.initialize_database`` so a future schema drift
+     can't hide the same way. Fixed to ``WHERE "Symbol" = ? ORDER BY
+     timestamp DESC`` and ``WHERE DATE(timestamp) = ? ORDER BY "Score"
+     DESC`` respectively (``DATE(timestamp)`` groups a cycle's rows by
+     calendar day since there is no dedicated trading-day column).
 
 Testing approach
 -----------------
@@ -514,19 +530,21 @@ class TestQmarkToNamed:
         assert binds == {"p0": 25}
 
     def test_matches_get_signal_breakdown_query(self):
-        sql = "SELECT * FROM DailySignals WHERE symbol = ? ORDER BY date DESC LIMIT 1"
+        sql = 'SELECT * FROM DailySignals WHERE "Symbol" = ? ORDER BY timestamp DESC LIMIT 1'
         rewritten, binds = srv._qmark_to_named(sql, ("AAPL",))
         assert rewritten == sql.replace("?", ":p0")
         assert binds == {"p0": "AAPL"}
 
     def test_matches_generate_daily_signals_query(self):
         sql = (
-            "SELECT symbol, composite_score, action, conviction FROM DailySignals "
-            "WHERE date = ? ORDER BY composite_score DESC LIMIT ?"
+            'SELECT "Symbol", "Score", "Action Signal", "Advisory_Conviction" FROM DailySignals '
+            'WHERE DATE(timestamp) = ? ORDER BY "Score" DESC LIMIT ?'
         )
         rewritten, binds = srv._qmark_to_named(sql, ("2026-07-15", 10))
-        assert rewritten == "SELECT symbol, composite_score, action, conviction FROM DailySignals " \
-            "WHERE date = :p0 ORDER BY composite_score DESC LIMIT :p1"
+        assert rewritten == (
+            'SELECT "Symbol", "Score", "Action Signal", "Advisory_Conviction" FROM DailySignals '
+            'WHERE DATE(timestamp) = :p0 ORDER BY "Score" DESC LIMIT :p1'
+        )
         assert binds == {"p0": "2026-07-15", "p1": 10}
 
     def test_mismatched_placeholder_count_raises(self):
@@ -2461,43 +2479,49 @@ class TestRunBacktest:
 
 
 class TestGetSignalBreakdown:
+    """Builds DailySignals via the real database_setup.initialize_database
+    schema (config.COLUMN_SCHEMA-driven, "Symbol"/"timestamp" columns) rather
+    than a hand-typed fixture -- a hand-typed fixture that happened to match
+    the tool's (buggy) lowercase "symbol"/"date" query previously let this
+    exact schema mismatch ship undetected (the tool crashed with "no such
+    column: date" against the real table on every call)."""
+
     def test_missing_db_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
         assert "not found" in srv.get_signal_breakdown("AAPL")
 
     def test_symbol_not_found(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
-        conn = sqlite3.connect("quant_platform.db")
-        conn.execute("CREATE TABLE DailySignals (symbol TEXT, date TEXT, composite_score REAL)")
-        conn.commit()
-        conn.close()
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
 
         assert "No signals found for AAPL" in srv.get_signal_breakdown("aapl")
 
     def test_renders_most_recent_row_excluding_meta_keys(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
+
         conn = sqlite3.connect("quant_platform.db")
         conn.execute(
-            "CREATE TABLE DailySignals (id INTEGER, symbol TEXT, date TEXT, "
-            "composite_score REAL, created_at TEXT)"
+            'INSERT INTO DailySignals ("Symbol", timestamp, "Score") VALUES (?, ?, ?)',
+            ("AAPL", "2026-01-01 09:30:00", 42.5),
         )
         conn.execute(
-            "INSERT INTO DailySignals VALUES (1, 'AAPL', '2026-01-01', 42.5, 'ts1')"
-        )
-        conn.execute(
-            "INSERT INTO DailySignals VALUES (2, 'AAPL', '2026-01-02', 50.0, 'ts2')"
+            'INSERT INTO DailySignals ("Symbol", timestamp, "Score") VALUES (?, ?, ?)',
+            ("AAPL", "2026-01-02 09:30:00", 50.0),
         )
         conn.commit()
         conn.close()
 
         result = srv.get_signal_breakdown("aapl")
 
-        assert "Signal Breakdown: AAPL (2026-01-02)" in result
-        assert "composite_score" in result and "50.0" in result
+        assert "Signal Breakdown: AAPL (2026-01-02 09:30:00)" in result
+        assert "**Score**: 50.0" in result
         # Meta keys must not be rendered as "signal" rows.
         assert "**id**" not in result
-        assert "**symbol**" not in result
-        assert "**created_at**" not in result
+        assert "**Symbol**" not in result
+        assert "**timestamp**" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -2506,42 +2530,46 @@ class TestGetSignalBreakdown:
 
 
 class TestGenerateDailySignals:
+    """Same real-schema convention as TestGetSignalBreakdown above -- the
+    real DailySignals table has no "date"/"composite_score"/"action"/
+    "conviction" columns under any casing; the real columns are "Symbol",
+    "Score", "Action Signal", and "Advisory_Conviction" (config.COLUMN_SCHEMA),
+    plus the base "timestamp" insert-time column used for date grouping."""
+
     def test_missing_db_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
         assert "not found" in srv.generate_daily_signals()
 
     def test_no_signals_in_db(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
-        conn = sqlite3.connect("quant_platform.db")
-        conn.execute(
-            "CREATE TABLE DailySignals (symbol TEXT, date TEXT, composite_score REAL, "
-            "action TEXT, conviction REAL)"
-        )
-        conn.commit()
-        conn.close()
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
 
         assert "Run the full pipeline first" in srv.generate_daily_signals()
 
-    def test_top_n_ranked_by_composite_score(self, monkeypatch, tmp_path):
+    def test_top_n_ranked_by_score(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
+
         conn = sqlite3.connect("quant_platform.db")
-        conn.execute(
-            "CREATE TABLE DailySignals (symbol TEXT, date TEXT, composite_score REAL, "
-            "action TEXT, conviction REAL)"
-        )
         rows = [
-            ("AAPL", "2026-01-01", 90.0, "BUY", 0.9),
-            ("MSFT", "2026-01-01", 50.0, "HOLD", 0.5),
-            ("TSLA", "2026-01-01", 10.0, None, 0.1),
+            ("AAPL", "2026-01-01 09:30:00", 90.0, "BUY", 0.9),
+            ("MSFT", "2026-01-01 09:31:00", 50.0, "HOLD", 0.5),
+            ("TSLA", "2026-01-01 09:32:00", 10.0, None, 0.1),
         ]
-        conn.executemany("INSERT INTO DailySignals VALUES (?, ?, ?, ?, ?)", rows)
+        conn.executemany(
+            'INSERT INTO DailySignals ("Symbol", timestamp, "Score", "Action Signal", '
+            '"Advisory_Conviction") VALUES (?, ?, ?, ?, ?)',
+            rows,
+        )
         conn.commit()
         conn.close()
 
         result = srv.generate_daily_signals(top_n=2)
 
         assert "AAPL" in result and "MSFT" in result
-        assert "TSLA" not in result  # only top 2 by composite_score
+        assert "TSLA" not in result  # only top 2 by Score
         aapl_idx = result.index("AAPL")
         msft_idx = result.index("MSFT")
         assert aapl_idx < msft_idx  # ranked descending
