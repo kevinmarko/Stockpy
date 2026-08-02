@@ -93,6 +93,7 @@ import json
 import logging
 import math
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -619,6 +620,37 @@ class BrokerageConnectRequest(BaseModel):
     )
 
 
+class ForecastBackfillRunRequest(BaseModel):
+    """Body for ``POST /pilots/forecast_backfill/run``.
+
+    ``horizons`` ends up in a model filename
+    (``ml/forecast_backfill.py``'s ``f"meta_{model_type}_{h}d.pkl"``) that
+    gets opened for writing — bounded here (CodeQL: uncontrolled data in a
+    path expression) so it can only ever be a small positive integer, never
+    something that could compose a path-traversal segment. The engine itself
+    re-validates independently (CONSTRAINT: validate at boundaries, but never
+    trust a single layer) — see ``AgenticForecastBackfiller.__init__``.
+    """
+
+    tickers: Optional[list[str]] = Field(default=None)
+    start_date: Optional[str] = Field(default="2015-01-01")
+    end_date: Optional[str] = Field(default=None)
+    use_fmp: bool = Field(default=True)
+    horizons: Optional[list[int]] = Field(default=None)
+
+    @field_validator("horizons")
+    @classmethod
+    def _validate_horizons(cls, v: Optional[list[int]]) -> Optional[list[int]]:
+        if v is None:
+            return v
+        for h in v:
+            if isinstance(h, bool) or not isinstance(h, int) or not (0 < h <= 3650):
+                raise ValueError(
+                    f"horizons must be positive integers (days) <= 3650, got {h!r}"
+                )
+        return v
+
+
 class BrinsonFachlerRow(BaseModel):
     """One sector row of the wire-format matrix for
     ``POST /portfolio/attribution/brinson-fachler``. All weight/return fields
@@ -813,6 +845,78 @@ def list_pilots() -> List[Dict[str, Any]]:
     snapshot = _load_snapshot()
     store = FollowsStore()
     return [_pilot_summary(p, snapshot, store) for p in catalog.list_pilots()]
+
+
+@app.get("/pilots/forecast_backfill", dependencies=[Depends(require_read_token)])
+def get_forecast_backfill_status() -> Dict[str, Any]:
+    """Return multi-horizon forecast backfill status, trained meta-labeler metrics,
+    and summary metadata from output/agentic_forecast_summary.json."""
+    summary_path = settings.OUTPUT_DIR / "agentic_forecast_summary.json"
+    if summary_path.exists():
+        try:
+            with open(summary_path, "r") as f:
+                return json.load(f)
+        except Exception as exc:
+            logger.warning("Failed to read agentic_forecast_summary.json: %s", exc)
+
+    return {
+        "status": "not_run",
+        "timestamp": None,
+        "horizons": getattr(settings, "FORECAST_BACKFILL_HORIZONS", [10, 30, 60, 90]),
+        "metrics": {},
+        "tickers": settings.DEFAULT_TICKERS,
+        "message": "Forecast backfill has not been run yet.",
+    }
+
+
+_forecast_backfill_lock = threading.Lock()
+
+
+@app.post("/pilots/forecast_backfill/run", dependencies=[Depends(require_command_token)])
+def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Dict[str, Any]:
+    """Trigger an on-demand forecast backfill cycle across specified tickers & horizons.
+
+    Runs synchronously (this is an occasional, manually-triggered research
+    action, not a hot path) but single-flight guarded: a second call while one
+    is already in progress would otherwise race on the SAME shared output
+    files (ml/models/meta_*.pkl, output/agentic_forecast_backfill.csv,
+    output/agentic_forecast_summary.json) and could corrupt them via
+    interleaved writes. A non-blocking lock acquire returns 409 instead.
+    """
+    if not _forecast_backfill_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="A forecast backfill run is already in progress.",
+        )
+    try:
+        from ml.forecast_backfill import AgenticForecastBackfiller
+
+        engine = AgenticForecastBackfiller(
+            tickers=req.tickers,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            horizons=req.horizons,
+            use_fmp=req.use_fmp,
+        )
+
+        try:
+            engine.step_1_fetch_data()
+            engine.step_2_calculate_technical_features()
+            engine.step_3_generate_primary_signals()
+            engine.step_4_create_meta_targets()
+            metrics = engine.step_5_backtrain_meta_labelers()
+            engine.step_6_execute_backfill()
+            output_df, summary = engine.export_results()
+            return {
+                "status": "success",
+                "summary": summary,
+                "sample_rows": len(output_df),
+            }
+        except Exception as exc:
+            logger.error("Forecast backfill run API call failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Forecast backfill failed: {exc}")
+    finally:
+        _forecast_backfill_lock.release()
 
 
 @app.get("/pilots/{pilot_id}", dependencies=[Depends(require_read_token)])
@@ -1666,7 +1770,6 @@ def get_execution_queue(
         }
 
     raw_intents = snapshot.intents or []
-
     def _attribution(i: Any) -> str:
         raw_strategy = str(getattr(i, "strategy", "") or "")
         if raw_strategy.startswith("Follow:"):

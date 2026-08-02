@@ -3688,6 +3688,63 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- 26. Forecast Backfill & Meta-Labeling Settings (ml/forecast_backfill.py) ---
+    FORECAST_BACKFILL_HORIZONS: list[int] = Field(
+        default_factory=lambda: [10, 30, 60, 90],
+        description=(
+            "Forecast horizons in days for multi-horizon forecast backfilling "
+            "and meta-labeling (e.g. 10, 30, 60, 90 days)."
+        ),
+    )
+    FORECAST_BACKFILL_MOMENTUM_WINDOW: int = Field(
+        default=252,
+        description="Lookback window in trading days for primary TSMOM & CSMOM signals (default 252 days = 1 year).",
+    )
+    FORECAST_BACKFILL_VOL_SHORT_WINDOW: int = Field(
+        default=20,
+        description="Short rolling volatility lookback window in days (default 20 days).",
+    )
+    FORECAST_BACKFILL_VOL_LONG_WINDOW: int = Field(
+        default=50,
+        description="Long rolling volatility lookback window in days (default 50 days).",
+    )
+    FORECAST_BACKFILL_RSI_WINDOW: int = Field(
+        default=14,
+        description="RSI calculation lookback window in days (default 14 days).",
+    )
+    FORECAST_BACKFILL_MACD_FAST: int = Field(
+        default=12,
+        description="MACD fast exponential moving average span (default 12).",
+    )
+    FORECAST_BACKFILL_MACD_SLOW: int = Field(
+        default=26,
+        description="MACD slow exponential moving average span (default 26).",
+    )
+    FORECAST_BACKFILL_VOL_RATIO_WINDOW: int = Field(
+        default=20,
+        description="Volume moving average ratio lookback window in days (default 20 days).",
+    )
+    FORECAST_BACKFILL_TRAIN_SPLIT: float = Field(
+        default=0.80,
+        description="Chronological train/test split fraction (default 0.80 = 80% train, 20% test).",
+    )
+    FORECAST_BACKFILL_N_ESTIMATORS: int = Field(
+        default=100,
+        description="Number of trees/estimators for forecast meta-label classifier (default 100).",
+    )
+    FORECAST_BACKFILL_MAX_DEPTH: int = Field(
+        default=5,
+        description="Maximum tree depth for forecast meta-label classifier (default 5).",
+    )
+    FORECAST_BACKFILL_RANDOM_STATE: int = Field(
+        default=42,
+        description="Random state seed for reproducibility in forecast meta-label classifier (default 42).",
+    )
+    FORECAST_BACKFILL_CLASSIFIER_TYPE: str = Field(
+        default="random_forest",
+        description="Classifier algorithm for forecast backfilling ('random_forest' or 'lightgbm').",
+    )
+
     @field_validator("OUTPUT_DIR")
     @classmethod
     def _ensure_output_dir(cls, value: Path) -> Path:

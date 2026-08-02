@@ -13,4 +13,11 @@ Key modules
   ml.meta_labeling    — MetaLabeler (binary LightGBM) + MetaLabelerRegistry.
   ml.lgbm_ranker      — LGBMCrossSectionalRanker (LambdaRank cross-sectional).
   ml.feature_engineering — PIT feature matrix builder for the LGBMRanker.
+  ml.forecast_backfill   — AgenticForecastBackfiller / ForecastBackfillEngine.
+
+Submodules are imported lazily by their consumers (matching this repo's
+convention elsewhere, e.g. HistoricalStore) rather than re-exported eagerly
+here, to avoid paying sklearn/pandas import cost -- and circular-import risk
+-- on every bare `import ml`.
 """
+

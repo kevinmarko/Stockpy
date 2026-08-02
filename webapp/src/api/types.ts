@@ -3088,15 +3088,33 @@ export interface IntradayThetaPoint {
 
 export interface OptionsAnalyticsSummaryResponse {
   symbol: string;
-  // Always null/[] from the live backend today -- no real options-chain/OI
-  // feed exists in this codebase to compute a real measurement from (see
-  // execution/options_analytics.py docstring), so it honestly reports
-  // unavailable rather than a plausible-looking placeholder number.
-  // is_synthetic is always true; kept for API-shape parity with the other
-  // synthetic-data endpoints.
   net_dealer_premium: number | null;
   regime: string | null;
   intraday_series: IntradayThetaPoint[];
   is_synthetic: boolean;
 }
+
+export interface ForecastBackfillModelMetrics {
+  accuracy: number;
+  auc: number;
+  n_train: number;
+  n_test: number;
+  split_date: string;
+}
+
+export interface ForecastBackfillSummary {
+  status?: string;
+  timestamp?: string | null;
+  horizons: number[];
+  metrics: Record<string, ForecastBackfillModelMetrics>;
+  tickers: string[];
+  total_rows?: number;
+  csv_path?: string;
+  message?: string;
+  /** Non-empty iff one or more tickers had no real FMP/provider data and a
+   * synthetic random-walk panel was substituted — metrics/probabilities for
+   * these tickers are not from real market data. */
+  synthetic_tickers?: string[];
+}
+
 
