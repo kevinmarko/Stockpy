@@ -25,6 +25,7 @@ import type {
   CoverageStatus,
   DiscoveryCandidate,
   ExecutionQueue,
+  ExecutionQueueParams,
   ScanConfig,
   ScanConfigRequest,
   ScanConfigResult,
@@ -3633,6 +3634,7 @@ const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
       allow_place: true,
       rationale: "Strong momentum, low realized vol, HMM risk-on regime.",
       client_order_id: "advisory-AAPL-buy-1",
+      follow_type: "trend-following",
     },
     {
       symbol: "TSLA",
@@ -3646,6 +3648,7 @@ const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
       allow_place: false,
       rationale: "Advisory risk-reduce exit.",
       client_order_id: "advisory-TSLA-sell-1",
+      follow_type: "macd-trend",
     },
   ],
 };
@@ -5076,8 +5079,32 @@ export const mockApi = {
     return delay(MOCK_COMMAND_MANIFEST);
   },
 
-  async getExecutionQueue(): Promise<ExecutionQueue> {
-    return delay(MOCK_EXECUTION_QUEUE);
+  async getExecutionQueue(params?: ExecutionQueueParams): Promise<ExecutionQueue> {
+    let items = MOCK_EXECUTION_QUEUE.intents;
+    if (params) {
+      if (params.action && params.action !== "ALL") {
+        items = items.filter((i) => i.action.toUpperCase() === params.action?.toUpperCase());
+      }
+      if (params.follow_type && params.follow_type !== "ALL") {
+        items = items.filter((i) => i.follow_type?.toLowerCase() === params.follow_type?.toLowerCase());
+      }
+      if (params.status_filter && params.status_filter !== "ALL") {
+        if (params.status_filter === "Ready") {
+          items = items.filter((i) => i.allow_place);
+        } else if (params.status_filter === "Blocked") {
+          items = items.filter((i) => !i.allow_place);
+        }
+      }
+      if (params.min_conviction !== undefined && params.min_conviction > 0) {
+        items = items.filter((i) => i.conviction !== null && i.conviction >= (params.min_conviction ?? 0));
+      }
+    }
+    return delay({
+      ...MOCK_EXECUTION_QUEUE,
+      n_intents: items.length,
+      n_placeable: items.filter((i) => i.allow_place).length,
+      intents: items,
+    });
   },
 
   async setStrategyModules(

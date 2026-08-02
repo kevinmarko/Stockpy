@@ -2565,6 +2565,15 @@ export interface ExecutionQueueIntent {
   allow_place: boolean;
   rationale: string;
   client_order_id: string;
+  follow_type?: string;
+}
+
+/** Query parameters for GET /execution-queue */
+export interface ExecutionQueueParams {
+  action?: string;
+  follow_type?: string;
+  status_filter?: string;
+  min_conviction?: number;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
@@ -19,45 +20,170 @@ import { theme } from "../theme";
  * out of Commands.tsx so the queue view isn't duplicated across both.
  */
 export function ExecutionQueueSection() {
+  const [isQueueMinimized, setIsQueueMinimized] = useState(false);
+  const [filterAction, setFilterAction] = useState("ALL");
+  const [filterFollowType, setFilterFollowType] = useState("ALL");
+  const [filterStatus, setFilterStatus] = useState("ALL");
+  const [minConviction, setMinConviction] = useState(0);
+
   const { data, loading, error, status, stale, cachedAt, reload } =
-    useApi<ExecutionQueue>(() => api.getExecutionQueue(), []);
+    useApi<ExecutionQueue>(
+      () =>
+        api.getExecutionQueue({
+          action: filterAction,
+          follow_type: filterFollowType,
+          status_filter: filterStatus,
+          min_conviction: minConviction > 0 ? minConviction / 100 : 0,
+        }),
+      [filterAction, filterFollowType, filterStatus, minConviction]
+    );
 
   return (
-    <div style={{ marginTop: 40 }}>
-      <div className="rail-head">
-        <h2>Robinhood execution queue</h2>
+    <div style={{ marginTop: 40 }} className="card card-pad">
+      <div className="rail-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: "var(--t-title)" }}>Robinhood execution queue</h2>
+        </div>
+        <button
+          onClick={() => setIsQueueMinimized((prev) => !prev)}
+          className="btn btn-neutral"
+          style={{ padding: "4px 10px", fontSize: "var(--t-caption)" }}
+          title={isQueueMinimized ? "Expand Queue" : "Minimize Queue"}
+        >
+          {isQueueMinimized ? "Expand ▲" : "Minimize ▼"}
+        </button>
       </div>
-      <p style={{ color: theme.textSecondary, marginTop: -4, marginBottom: "var(--s-4)" }}>
+      <p style={{ color: theme.textSecondary, marginTop: "var(--s-1)", marginBottom: "var(--s-3)" }}>
         What's currently staged to trade. To place any of these, ask me in Claude
         Code — I'll run the paper-first, per-trade-confirmed Robinhood flow
         (skills/robinhood-execution). Nothing here is ever placed automatically.
       </p>
 
-      {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
-      {loading && <Loading lines={2} />}
-      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
-      {!loading && !error && data && (
-        data.intents.length === 0 ? (
-          <EmptyState
-            title="No queued orders"
-            hint={data.reason ?? "The execution queue is empty."}
+      {/* Multi-attribute Filter Controls Bar */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "var(--s-3)",
+          padding: "var(--s-2-5) var(--s-3)",
+          marginBottom: "var(--s-4)",
+          background: theme.surface,
+          border: `1px solid ${theme.border}`,
+          borderRadius: "var(--r-sm)",
+          fontSize: "var(--t-caption)",
+        }}
+      >
+        <span style={{ fontWeight: 600, color: theme.textPrimary }}>Filters:</span>
+
+        {/* Side Filter */}
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+          <label style={{ color: theme.textSecondary }}>Side:</label>
+          <select
+            value={filterAction}
+            onChange={(e) => setFilterAction(e.target.value)}
+            style={{
+              background: theme.base,
+              color: theme.textPrimary,
+              border: `1px solid ${theme.border}`,
+              borderRadius: "var(--r-sm)",
+              padding: "3px 8px",
+              fontSize: "var(--t-caption)",
+            }}
+          >
+            <option value="ALL">All Sides</option>
+            <option value="BUY">BUY</option>
+            <option value="SELL">SELL</option>
+          </select>
+        </div>
+
+        {/* Strategy Filter */}
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+          <label style={{ color: theme.textSecondary }}>Strategy:</label>
+          <select
+            value={filterFollowType}
+            onChange={(e) => setFilterFollowType(e.target.value)}
+            style={{
+              background: theme.base,
+              color: theme.textPrimary,
+              border: `1px solid ${theme.border}`,
+              borderRadius: "var(--r-sm)",
+              padding: "3px 8px",
+              fontSize: "var(--t-caption)",
+            }}
+          >
+            <option value="ALL">All Strategies</option>
+            <option value="trend-following">Trend Following</option>
+            <option value="macd-trend">MACD Trend</option>
+            <option value="composite-signal">Composite Signal</option>
+          </select>
+        </div>
+
+        {/* Status Filter */}
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+          <label style={{ color: theme.textSecondary }}>Status:</label>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            style={{
+              background: theme.base,
+              color: theme.textPrimary,
+              border: `1px solid ${theme.border}`,
+              borderRadius: "var(--r-sm)",
+              padding: "3px 8px",
+              fontSize: "var(--t-caption)",
+            }}
+          >
+            <option value="ALL">All Statuses</option>
+            <option value="Blocked">Blocked</option>
+            <option value="Ready">Ready</option>
+          </select>
+        </div>
+
+        {/* Min Conviction Range Slider */}
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)", minWidth: 180 }}>
+          <label style={{ color: theme.textSecondary }}>Min Conviction: {minConviction}%</label>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            value={minConviction}
+            onChange={(e) => setMinConviction(Number(e.target.value))}
+            style={{ flex: 1, accentColor: theme.accent }}
           />
-        ) : (
-          <div>
-            <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap", marginBottom: "var(--s-3)" }}>
-              <ModeBadge mode={data.mode} />
-              {data.kill_switch_active && <Chip label="Kill switch ACTIVE" tone="decline" />}
-              {data.stale && <Chip label="Queue is stale" tone="caution" />}
-              <Chip label={`${data.n_placeable}/${data.n_intents} placeable`} tone="muted" />
-              <Chip label={`as of ${timeAgo(data.generated_at)}`} tone="muted" />
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-              {data.intents.map((intent) => (
-                <IntentRow key={intent.client_order_id || `${intent.symbol}-${intent.side}`} intent={intent} mode={data.mode} />
-              ))}
-            </div>
-          </div>
-        )
+        </div>
+      </div>
+
+      {!isQueueMinimized && (
+        <>
+          {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
+          {loading && <Loading lines={2} />}
+          {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+          {!loading && !error && data && (
+            data.intents.length === 0 ? (
+              <EmptyState
+                title="No queued orders"
+                hint={data.reason ?? "No execution items match the selected filter criteria."}
+              />
+            ) : (
+              <div>
+                <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap", marginBottom: "var(--s-3)" }}>
+                  <ModeBadge mode={data.mode} />
+                  {data.kill_switch_active && <Chip label="Kill switch ACTIVE" tone="decline" />}
+                  {data.stale && <Chip label="Queue is stale" tone="caution" />}
+                  <Chip label={`${data.n_placeable}/${data.n_intents} placeable`} tone="muted" />
+                  <Chip label={`as of ${timeAgo(data.generated_at)}`} tone="muted" />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+                  {data.intents.map((intent) => (
+                    <IntentRow key={intent.client_order_id || `${intent.symbol}-${intent.side}`} intent={intent} mode={data.mode} />
+                  ))}
+                </div>
+              </div>
+            )
+          )}
+        </>
       )}
     </div>
   );
@@ -124,6 +250,9 @@ function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: strin
           <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
             conviction {(intent.conviction * 100).toFixed(0)}%
           </span>
+        )}
+        {intent.follow_type && (
+          <Chip label={intent.follow_type} tone="muted" />
         )}
         <span style={{ marginLeft: "auto" }}>
           {intent.allow_place ? (
