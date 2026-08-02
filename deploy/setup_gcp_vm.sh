@@ -71,13 +71,21 @@ mkdir -p "${INSTALL_DIR}/logs" "${INSTALL_DIR}/backups"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 
 # ─── 4. Python Virtual Environment & Webapp Build ────────────────────────────
+# Uses uv (https://astral.sh/uv) instead of stdlib venv + pip — same .venv
+# layout, but installs run in seconds instead of minutes. Installed system-wide
+# (UV_INSTALL_DIR=/usr/local/bin, run as root before the sudo -u switch below)
+# so it's on PATH for ${SERVICE_USER} too. --seed keeps a real pip inside
+# .venv (uv venvs are pip-less by default) as a fallback for any ad-hoc
+# `.venv/bin/pip install X` an operator runs by hand later.
 echo "[4/8] Setting up Python virtual environment..."
+if ! command -v uv >/dev/null 2>&1; then
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
+fi
 cd "${INSTALL_DIR}"
-sudo -u "${SERVICE_USER}" python${PYTHON_VERSION} -m venv .venv
-sudo -u "${SERVICE_USER}" .venv/bin/pip install --upgrade pip -q
-sudo -u "${SERVICE_USER}" .venv/bin/pip install -r requirements.txt -q
+sudo -u "${SERVICE_USER}" uv venv .venv --python "${PYTHON_VERSION}" --seed
+sudo -u "${SERVICE_USER}" uv pip install --python .venv/bin/python3 -r requirements.txt -q
 # Ensure MCP SDK with SSE support is installed
-sudo -u "${SERVICE_USER}" .venv/bin/pip install "mcp[sse]" -q
+sudo -u "${SERVICE_USER}" uv pip install --python .venv/bin/python3 "mcp[sse]" -q
 
 echo "Building React Webapp..."
 cd "${INSTALL_DIR}/webapp"

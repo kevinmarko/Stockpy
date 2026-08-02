@@ -167,7 +167,7 @@ if [ "$LIVE_MODE" = true ]; then
     # shellcheck disable=SC1091
     source ".venv/bin/activate" || { echo "  ERROR: could not activate .venv"; exit 1; }
     if ! python -c "import uvicorn" 2>/dev/null; then
-        echo "  ERROR: uvicorn not installed — run ./.venv/bin/pip install -r requirements.txt"
+        echo "  ERROR: uvicorn not installed — run ./setup.sh"
         exit 1
     fi
     [ -f ".env" ] || echo "  ⚠  .env not found — backends run with defaults (fail-open, no token)."

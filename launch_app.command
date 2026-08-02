@@ -119,8 +119,7 @@ if [ ! -d ".venv" ]; then
     echo "  Create it by opening Terminal and running:"
     echo ""
     echo "    cd \"$SCRIPT_DIR\""
-    echo "    python3.12 -m venv .venv"
-    echo "    ./.venv/bin/pip install -r requirements.txt"
+    echo "    ./setup.sh"
     echo ""
     exit 1
 fi
@@ -132,8 +131,7 @@ if ! source ".venv/bin/activate"; then
     echo ""
     echo "    cd \"$SCRIPT_DIR\""
     echo "    rm -rf .venv"
-    echo "    python3.12 -m venv .venv"
-    echo "    ./.venv/bin/pip install -r requirements.txt"
+    echo "    ./setup.sh"
     echo ""
     exit 1
 fi
@@ -158,8 +156,7 @@ if [ "$PY_MAJOR" != "3" ] || [ "$PY_MINOR" != "12" ]; then
     echo ""
     echo "    cd \"$SCRIPT_DIR\""
     echo "    rm -rf .venv"
-    echo "    python3.12 -m venv .venv"
-    echo "    ./.venv/bin/pip install -r requirements.txt"
+    echo "    ./setup.sh"
     echo ""
     exit 1
 fi
@@ -169,7 +166,7 @@ echo "  ✓  Python $PYTHON_FULL  (.venv)"
 # ── Guard 3: pywebview must be installed ──────────────────────────────────────
 if ! python -c "import webview" 2>/dev/null; then
     echo "  ERROR: pywebview is not installed in .venv."
-    echo "         Run: ./.venv/bin/pip install -r requirements.txt"
+    echo "         Run: ./setup.sh"
     exit 1
 fi
 
