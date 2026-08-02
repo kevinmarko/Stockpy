@@ -74,6 +74,7 @@ def _download_yahoo_pair():
     return close["EWA"], close["EWC"]
 
 
+@pytest.mark.network
 def test_pairs_no_lookahead_yahoo_data():
     """PRIMARY: real Yahoo (yfinance) EWA/EWC pair — perturbing the last third
     of history must not change any signal in the first two-thirds."""

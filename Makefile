@@ -34,12 +34,12 @@ exit(1 if missing_req else 0) \
 test:
 	@echo ""
 	@echo "=== Step 2 / 3  Test suite ==="
-	@$(PYTHON) -m pytest -v --tb=short
+	@$(PYTHON) -m pytest -v --tb=short -n auto
 
 ci:
 	@echo ""
 	@echo "=== Offline test suite (mirrors GitHub Actions CI) ==="
-	@$(PYTHON) -m pytest -m "not network" -v --tb=short
+	@$(PYTHON) -m pytest -m "not network" -v --tb=short -n auto
 
 smoke:
 	@echo ""
