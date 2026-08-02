@@ -3696,6 +3696,17 @@ class Settings(BaseSettings):
             "and meta-labeling (e.g. 10, 30, 60, 90 days)."
         ),
     )
+    FORECAST_BACKFILL_LOOKBACK_YEARS: int = Field(
+        default=4,
+        description=(
+            "Default backfill lookback window in years, used when the caller "
+            "doesn't supply an explicit start_date (e.g. the webapp's 'Run "
+            "Forecast Backfill' button, which always omits it). Computed "
+            "relative to end_date at run time, not a fixed calendar date -- "
+            "so the window keeps rolling forward on every re-run instead of "
+            "growing unbounded."
+        ),
+    )
     FORECAST_BACKFILL_MOMENTUM_WINDOW: int = Field(
         default=252,
         description="Lookback window in trading days for primary TSMOM & CSMOM signals (default 252 days = 1 year).",

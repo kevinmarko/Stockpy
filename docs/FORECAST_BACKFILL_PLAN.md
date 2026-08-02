@@ -48,6 +48,7 @@ All hyperparameters are centralized in `settings.py` and configurable via `.env`
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `FORECAST_BACKFILL_HORIZONS` | `[10, 30, 60, 90]` | List of forecast horizons in days. |
+| `FORECAST_BACKFILL_LOOKBACK_YEARS` | `4` | Default backfill window in years, used when no explicit `start_date` is given (e.g. the webapp's "Run Forecast Backfill" button always omits it). Computed relative to `end_date` at run time — rolls forward on every re-run rather than growing unbounded. |
 | `FORECAST_BACKFILL_MOMENTUM_WINDOW` | `252` | Lookback window in trading days for primary TSMOM/CSMOM signals. |
 | `FORECAST_BACKFILL_VOL_SHORT_WINDOW` | `20` | Short rolling volatility lookback window in days. |
 | `FORECAST_BACKFILL_VOL_LONG_WINDOW` | `50` | Long rolling volatility lookback window in days. |

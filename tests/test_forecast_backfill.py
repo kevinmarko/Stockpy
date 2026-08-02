@@ -40,6 +40,21 @@ def test_backfiller_rejects_invalid_horizons(bad_horizon):
         AgenticForecastBackfiller(horizons=[10, bad_horizon])
 
 
+def test_default_start_date_is_lookback_years_before_end_date():
+    """When start_date isn't supplied, it must be computed as
+    FORECAST_BACKFILL_LOOKBACK_YEARS back from end_date -- not a fixed
+    calendar-date literal (which would grow the window unbounded on every
+    future re-run instead of rolling forward)."""
+    engine = AgenticForecastBackfiller(end_date="2026-06-15")
+    expected = (pd.Timestamp("2026-06-15") - pd.DateOffset(years=settings.FORECAST_BACKFILL_LOOKBACK_YEARS))
+    assert engine.start_date == expected.strftime("%Y-%m-%d")
+
+
+def test_explicit_start_date_overrides_the_default():
+    engine = AgenticForecastBackfiller(start_date="2010-01-01", end_date="2026-06-15")
+    assert engine.start_date == "2010-01-01"
+
+
 def test_backfiller_initialization():
     """Verify parameters are loaded from settings defaults with zero hardcoded values."""
     engine = AgenticForecastBackfiller()

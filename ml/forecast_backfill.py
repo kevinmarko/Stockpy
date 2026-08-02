@@ -81,8 +81,14 @@ class AgenticForecastBackfiller:
     ):
         """Initialize backfill pipeline with parameters sourced from settings.py defaults."""
         self.tickers = tickers or settings.DEFAULT_TICKERS or ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"]
-        self.start_date = start_date or "2015-01-01"
         self.end_date = end_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if start_date:
+            self.start_date = start_date
+        else:
+            lookback_years = getattr(settings, "FORECAST_BACKFILL_LOOKBACK_YEARS", 4)
+            self.start_date = (
+                pd.Timestamp(self.end_date) - pd.DateOffset(years=lookback_years)
+            ).strftime("%Y-%m-%d")
         self.horizons = _validate_horizons(
             horizons or getattr(settings, "FORECAST_BACKFILL_HORIZONS", [10, 30, 60, 90])
         )
