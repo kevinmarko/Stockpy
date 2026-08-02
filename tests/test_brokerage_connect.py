@@ -664,6 +664,16 @@ class TestBrokerageRefreshGating:
         assert "BROKERAGE_REFRESH_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
         assert "BROKERAGE_REFRESH_ENABLED" not in pilots_api.env_io.SECRET_KEYS
 
+    def test_brokerage_connect_enabled_is_gui_writable(self):
+        """BROKERAGE_CONNECT_ENABLED was previously a hand-set-only invariant
+        (like its BROKERAGE_REFRESH_ENABLED sibling above) but was made
+        GUI-writable by operator decision. It must stay a non-secret allowlisted
+        key (/brokerage/connect and /brokerage/disconnect remain gated
+        independently by FOLLOW_API_TOKEN and require_loopback, so this flag's
+        own writability is not the sole safeguard on credential intake)."""
+        assert "BROKERAGE_CONNECT_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
+        assert "BROKERAGE_CONNECT_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+
 
 class TestBrokerageRefreshHappyPath:
     def test_refresh_calls_fetch_with_force_true(self, monkeypatch):

@@ -39,12 +39,18 @@ and invite questions before writing the file.
    are available). If not, tell the operator to run `claude mcp add
    robinhood-trading --transport http https://agent.robinhood.com/mcp/trading`
    and authenticate via `/mcp`. Stop.
-2. The `investyo-platform` MCP server is connected (tools `get_recommendation`,
-   `generate_daily_signals` are available) — this is how you cross-reference a
-   scan hit against the platform's own advisory output. If not connected, you
-   can still run scans and write candidates with `action: null` / `conviction:
-   null` (honest — never fabricate a score), but tell the operator the
-   cross-reference step was skipped and why.
+2. The `investyo-platform` MCP server is connected (tools `get_signal_breakdown`,
+   `generate_daily_signals`, `update_universe_tickers` are available) — this is
+   how you cross-reference a scan hit against the platform's own advisory
+   output. If not connected, you can still run scans and write candidates with
+   `action: null` / `conviction: null` (honest — never fabricate a score), but
+   tell the operator the cross-reference step was skipped and why.
+   **Confirmed 2026-08-02: this MCP connection can be a completely separate
+   process from this checkout — in this operator's setup it's reached over SSH
+   to a deployed instance with its own `.env`/`watchlist.txt`/DB, not this
+   repo's working directory.** Whatever it's pointed at, treat it as a
+   possibly-remote system with its own state, distinct from local files you
+   edit directly — see step 7.5.
 3. `output/scan_configs.json` (read via `pilots.scan_config_store.ScanConfigStore`
    if you want to inspect it directly, or just read the file — schema is
    `{"version": 1, "scan_configs": [{"name", "filters", "enabled", ...}]}`).
@@ -88,11 +94,14 @@ and invite questions before writing the file.
    operator or check `.env` if you need the current value; default is 25) —
    don't write an unbounded list.
 4. **Cross-reference against the advisory engine.** For each candidate symbol,
-   call `get_recommendation(symbol)` on the investyo MCP. Record its `action`
-   and `conviction` on the candidate. If the call fails or the symbol isn't in
-   the platform's tracked universe, leave `action`/`conviction` as `null` —
-   **never** invent a plausible-looking score. Say out loud when this happens
-   for a candidate so the operator knows it's an honest gap, not a scan error.
+   call `get_signal_breakdown(symbol)` on the investyo MCP and parse `action`
+   from its `Action Signal`/`Advice` field and `conviction` from whatever
+   composite score field it returns. If the call fails (including a generic
+   backend error unrelated to any specific symbol — that's a tool bug, not a
+   per-symbol gap; say so explicitly) or the symbol isn't in the platform's
+   tracked universe, leave `action`/`conviction` as `null` — **never** invent a
+   plausible-looking score. Say out loud when this happens for a candidate so
+   the operator knows it's an honest gap, not a scan error.
 5. **Write `output/scan_candidates.json`.** Shape:
    ```json
    {
@@ -140,10 +149,26 @@ and invite questions before writing the file.
    3. Report exactly which lines were added vs. already present. Note this
       takes effect on the *next* `main.py`/`main_orchestrator.py` universe
       build — it's not retroactive and places no order on its own.
-   4. Leave `DEFAULT_TICKERS` (`data/portfolio_sync.py`'s separate
-      coverage-tracking universe, distinct from the advisory pipeline's
-      `WATCHLIST`/`watchlist.txt`) untouched unless the operator separately
-      asks for that too — don't conflate the two mechanisms.
+   4. `DEFAULT_TICKERS` (`data/portfolio_sync.py`'s separate coverage-tracking
+      universe, distinct from the advisory pipeline's `WATCHLIST`/
+      `watchlist.txt`) is a DIFFERENT mechanism — don't conflate the two. See
+      7.5 for when to also update it; otherwise leave it untouched.
+   5. **Also sync the connected `investyo-platform` MCP's universe, by
+      default — this is what closes the "two places to update" gap.** That
+      MCP connection may be a separate, possibly-remote deployment with its
+      own `.env` (see prerequisite 2) — editing local `watchlist.txt` alone
+      does not reach it, and its own `get_universe_status` reports
+      `DEFAULT_TICKERS`, not `watchlist.txt`. If `update_universe_tickers` is
+      available, call it once per newly-tracked symbol (`action: "add"`) right
+      alongside the local watchlist.txt edit in 7.2 — don't make the operator
+      ask for this separately each time. Tell them plainly that this updates a
+      DIFFERENT field (the connected deployment's `DEFAULT_TICKERS`) than the
+      local `watchlist.txt` edit, in case the two ever need to diverge (e.g.
+      operator wants a symbol advisory-scored locally but not yet on the live
+      deployment) — if they say so, skip this call for that symbol and say
+      which one you skipped and why. If `update_universe_tickers` isn't
+      available (MCP not connected, or a write error), say so and fall back to
+      local-only, same as today.
 
 ## Invariants (never violate)
 

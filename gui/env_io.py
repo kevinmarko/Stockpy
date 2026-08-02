@@ -87,6 +87,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "MAX_ORDER_RATE_PER_MIN",
     "EXECUTION_PRIORITY_QUEUE_ENABLED",
     "EXECUTION_QUEUE_LEAK_RATE_PER_SEC",
+    "EXCURSION_INTRADAY_ENABLED",
     "HMM_RISK_OFF_BLOCK_THRESHOLD",
     "RISK_GATE_ENFORCE_MARKET_HOURS",
     "MACRO_REGIME_GATE_ENABLED",
@@ -122,7 +123,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # settings.py's own field docstring for the full shutdown-budget ladder).
     # Non-secret; a GUI bug here can only make shutdown less graceful, never
     # leak a credential or enable a dangerous action -- unlike
-    # BROKERAGE_CONNECT_ENABLED/AUTOMATION_WRITES_ENABLED, which are
+    # AUTOMATION_WRITES_ENABLED, which is
     # deliberately excluded from this allowlist for that reason.
     "DAEMON_SHUTDOWN_TIMEOUT_SECONDS",
     # The daemon's internal timer cadence. Writable via the Pilots API's
@@ -282,7 +283,41 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_INSIDER_MIN_LAG_DAYS",           # int  — quarter-close lag before an aggregate is read
     "FMP_ECON_INDICATORS",                # str  — comma-separated series names (not JSON)
     "FMP_MAX_SECONDS_PER_CYCLE",          # float — per-cycle wall-clock budget
-    # Sentiment & News Ingestion pipeline tunables (webapp /settings/sentiment,
+    # Robinhood execution bridge & portfolio controls
+    "ROBINHOOD_EXECUTION_MODE",
+    "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
+    "ROBINHOOD_LIMIT_BUFFER_BPS",
+    "ROBINHOOD_AUTO_REFRESH_ENABLED",
+    # GUI-writable by operator decision (previously excluded as a "hand-set
+    # only" master switch -- see settings.py's own BROKERAGE_CONNECT_ENABLED
+    # field docstring). The brokerage-credential connect/disconnect endpoints
+    # remain gated by two further independent checks regardless of this
+    # flag's own writability: FOLLOW_API_TOKEN and a loopback-only request
+    # check (api/pilots_api.py::require_brokerage_connect_enabled).
+    "BROKERAGE_CONNECT_ENABLED",
+    # Concurrency limits
+    "ADVISORY_MAX_CONCURRENCY",
+    "FORECAST_MAX_CONCURRENCY",
+    "DATA_FETCH_MAX_CONCURRENCY",
+    # Historical persistence & DB controls
+    "HISTORICAL_STORE_ENABLED",
+    "BARS_BACKFILL_DAYS",
+    "FUNDAMENTALS_REFRESH_DAYS",
+    "MACRO_REFRESH_HOURS",
+    "PIT_CAPTURE_ENABLED",
+    "SNAPSHOT_HISTORY_DAYS",
+    "SNAPSHOT_CONVICTION_DELTA_THRESHOLD",
+    # GUI-writable by operator decision (previously excluded from this
+    # allowlist as "hand-set only" master switches -- see settings.py's own
+    # UNIVERSE_SYNC_ENABLED/AGENTIC_DISCOVERY_ENABLED field docstrings for the
+    # endpoint-level safeguards that remain independent of this flag:
+    # STATE_API_TOKEN / FOLLOW_API_TOKEN command-token guards respectively).
+    "UNIVERSE_SYNC_ENABLED",
+    "AGENTIC_DISCOVERY_ENABLED",
+    "NEWS_HISTORY_CAPTURE_ENABLED",
+    "DB_POOL_SIZE",
+    "DB_MAX_OVERFLOW",
+    # Multi-source sentiment & attention pipeline (webapp /settings/sentiment,
     # api/pilots_api.py's _SENTIMENT_GROUPS). Every key here is a REAL
     # settings.py Field verified against Settings.model_fields — see that
     # module's _SENTIMENT_GROUPS comment for why this matters (extra="ignore"
@@ -293,34 +328,49 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SENTIMENT_INGESTION_ENABLED",
     "SENTIMENT_SOURCES",
     "SENTIMENT_COMMENT_SOURCES",
-    "SENTIMENT_INGESTION_LOOKBACK_DAYS",
     "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE",
     "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE",
+    "SENTIMENT_INGESTION_LOOKBACK_DAYS",
     "SENTIMENT_CIRCUIT_BREAKER_THRESHOLD",
+    "SENTIMENT_PIT_MIN_MONTHS",
+    "SENTIMENT_AUDIT_ENABLED",
+    "SENTIMENT_DESENTENCIZE_ENABLED",
+    "SENTIMENT_INDEX_ENABLED",
+    "SENTIMENT_SOCIAL_BLEND_WEIGHT",
+    # Heuristic credibility-composite band that qualifies a document for LLM
+    # verification (SENTIMENT_LLM_VERIFICATION_ENABLED's own gate). Plain
+    # float thresholds, no credential material -- siblings of the already-
+    # allowlisted SENTIMENT_LLM_VERIFICATION_ENABLED/_PROVIDER/_MAX_CALLS_PER_CYCLE.
+    "SENTIMENT_LLM_VERIFICATION_BORDERLINE_LOW",
+    "SENTIMENT_LLM_VERIFICATION_BORDERLINE_HIGH",
     "STOCKTWITS_ENABLED",
     "REDDIT_USER_AGENT",
     "REDDIT_BACKFILL_MAX_PAGES",
-    "GOOGLE_NEWS_LOOKBACK_WINDOW",
-    "EDGAR_FULLTEXT_ENABLED",
-    "EDGAR_FULLTEXT_FORMS",
-    "EDGAR_FULLTEXT_CHUNK_TOKENS",
+    "EDGAR_MAX_CONCURRENCY",
     "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
     "GDELT_MAX_RETRIES",
     "GDELT_RETRY_BACKOFF_SECONDS",
     "GDELT_COOLDOWN_THRESHOLD",
     "GDELT_COOLDOWN_SECONDS",
+    "NEWS_LOOKBACK_DAYS",
     "FINBERT_ENABLED",
     "FINBERT_BATCH_SIZE",
     "FINBERT_SCORE_CACHE_ENABLED",
-    "NEWS_LOOKBACK_DAYS",
     "FINNHUB_RATE_LIMIT_PER_MIN",
-    "SENTIMENT_SOCIAL_BLEND_WEIGHT",
+    "NEWS_EARNINGS_SUPPRESS_HOURS",
+    "NEWS_EARNINGS_DAMPEN_DAYS",
+    "GOOGLE_NEWS_LOOKBACK_WINDOW",
+    "EDGAR_FULLTEXT_ENABLED",
+    "EDGAR_FULLTEXT_FORMS",
+    "EDGAR_FULLTEXT_CHUNK_TOKENS",
     "SECTOR_HEAT_ENABLED",
     "SECTOR_HEAT_SMOOTHING_SIGMA",
     "SECTOR_HEAT_LOOKBACK_DAYS",
     "WIKIPEDIA_ATTENTION_ENABLED",
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
     "PYTRENDS_ENABLED",
+    "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE",
+    "ATTENTION_CIRCUIT_BREAKER_THRESHOLD",
     # Related Sector Selection tunables (webapp /settings/sector-selection,
     # api/pilots_api.py's _SECTOR_SELECTION_GROUPS) — data/sector_selection_heat.py's
     # semantic-similarity feature backing the SectorSelection.tsx screen.
@@ -335,6 +385,21 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SECTOR_SIMILARITY_EMBEDDER",
     "SECTOR_SIMILARITY_MODEL",
     "SECTOR_SIMILARITY_POOLING",
+    # BERT-LLA Neural Forecaster
+    "BERT_LLA_ENABLED",
+    "BERT_LLA_BLEND_ENABLED",
+    "BERT_LLA_ABLATION_ENABLED",
+    "BERT_LLA_WINDOW_SIZE",
+    "BERT_LLA_MIN_SENTIMENT_COVERAGE",
+    "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
+    # Additional Observability & Dual Momentum controls
+    "NTFY_DASHBOARD_URL",
+    "RATIONALE_VERBOSITY",
+    "ALERT_DEDUP_WINDOW_SECONDS",
+    "USE_DUAL_MOMENTUM_OVERLAY",
+    "DUAL_MOMENTUM_SAFE_ASSET",
+    "DUAL_MOMENTUM_RISKY_ASSETS",
+    "FLATTEN_ON_KILL",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -364,6 +429,15 @@ SECRET_KEYS: tuple[str, ...] = (
     # Bearer token guarding POST /run on the orchestrator Control API
     # (api/control_api.py). Same secret treatment as STATE_API_TOKEN.
     "ORCHESTRATOR_DAEMON_TOKEN",
+    # Bearer token guarding the follow WRITE-path on the Pilots API (PUT
+    # /follows, POST /pilots/{id}/follow) and reused as the fail-closed
+    # command-token gate for every *_WRITES_ENABLED/*_ENABLED master switch
+    # above (BROKERAGE_CONNECT_ENABLED, AGENTIC_DISCOVERY_ENABLED, etc.). Its
+    # own settings.py Field docstring already states "SECRET -- never
+    # GUI-writable... Like ORCHESTRATOR_DAEMON_TOKEN" -- this was a pre-existing
+    # gap (present in neither list, so read_settings() would have echoed it in
+    # cleartext if ever set in .env) rather than a deliberate omission.
+    "FOLLOW_API_TOKEN",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
     # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood
@@ -424,6 +498,7 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
         # Multi-horizon forecast backfill list
         "FORECAST_BACKFILL_HORIZONS",
+        "DUAL_MOMENTUM_RISKY_ASSETS",
     }
 )
 

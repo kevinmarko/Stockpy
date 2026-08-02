@@ -638,13 +638,16 @@ class TestDataSyncWrite:
 
 
 class TestUniverseSyncInvariants:
-    def test_universe_sync_enabled_is_not_gui_writable(self):
-        """Mirrors the other *_WRITES_ENABLED invariants in api/pilots_api.py:
-        a GUI bug must never flip this on. Neither allowlisted nor secret —
-        hand-set only."""
+    def test_universe_sync_enabled_is_gui_writable(self):
+        """UNIVERSE_SYNC_ENABLED was previously a hand-set-only invariant (like
+        the other *_WRITES_ENABLED flags in api/pilots_api.py) but was made
+        GUI-writable by operator decision. It must stay a non-secret allowlisted
+        key (POST /data/sync remains gated independently by STATE_API_TOKEN via
+        require_write_token, so this flag's own writability is not the sole
+        safeguard)."""
         import gui.env_io as env_io
 
-        assert "UNIVERSE_SYNC_ENABLED" not in env_io.ALLOWED_KEYS
+        assert "UNIVERSE_SYNC_ENABLED" in env_io.ALLOWED_KEYS
         assert "UNIVERSE_SYNC_ENABLED" not in env_io.SECRET_KEYS
 
 

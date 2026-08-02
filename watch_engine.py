@@ -87,7 +87,7 @@ Called inside ``_run_cycle()`` after ``run_once()`` returns a ``RunResult``::
     rules  = load_watch_rules(settings.WATCH_RULES_FILE)
     prev   = load_watch_state(settings.OUTPUT_DIR / "watch_state.json")
     alerts, new_state = evaluate_watch_rules(rules, result.recommendations, prev)
-    dispatch_watch_alerts(alerts, dashboard_url=os.environ.get("NTFY_DASHBOARD_URL"))
+    dispatch_watch_alerts(alerts, dashboard_url=settings.NTFY_DASHBOARD_URL)
     save_watch_state(new_state, settings.OUTPUT_DIR / "watch_state.json")
 
 The state update (``save_watch_state``) ALWAYS runs, even when no alerts fire,

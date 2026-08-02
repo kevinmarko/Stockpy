@@ -30,7 +30,7 @@ A deliberate, narrowly-scoped exception to this codebase's normal
 hand-edit-``.env`` posture for secrets — see ``data/brokerage_credentials.py``
 for the full rationale. Gated behind THREE independent controls, all of which
 must pass: (1) ``settings.BROKERAGE_CONNECT_ENABLED`` (default ``False``,
-never GUI-writable), (2) the same fail-closed ``FOLLOW_API_TOKEN`` command
+GUI-writable), (2) the same fail-closed ``FOLLOW_API_TOKEN`` command
 token as the follow write-path, (3) ``require_loopback`` — the request must
 originate from ``127.0.0.1``/``::1``. Credentials are verified with a
 read-only login (``data.robinhood_portfolio.verify_credentials``) BEFORE they
@@ -58,11 +58,13 @@ Two independent bearer-token guards (both ``HTTPBearer(auto_error=False)`` +
 
 Several additional FAIL-CLOSED master-switch guards stack ON TOP of the command
 token for the writes with real persistence/rollback cost, each a dedicated
-``settings`` flag deliberately kept out of ``gui/env_io.py``'s ALLOWED_KEYS
-(hand-set in ``.env`` only): ``require_brokerage_connect_enabled``
-(``/brokerage/connect``), ``require_automation_writes_enabled``
+``settings`` flag: ``require_brokerage_connect_enabled``
+(``/brokerage/connect`` — its ``BROKERAGE_CONNECT_ENABLED`` flag is
+GUI-writable by operator decision; the endpoint remains gated by the command
+token and loopback check below regardless), ``require_automation_writes_enabled``
 (``PUT /automation/schedule/interval``, ``POST /automation/resume``,
-``PUT /automation/execution-mode``),
+``PUT /automation/execution-mode`` — deliberately kept out of
+``gui/env_io.py``'s ALLOWED_KEYS, hand-set in ``.env`` only),
 ``require_strategy_writes_enabled`` (``PUT /strategy/modules`` — signal weights +
 disabled-module set to ``.env``; its own flag so signal tuning cannot ride in on
 the automation flag), ``require_llm_writes_enabled`` (``PUT /llm/setting`` —
@@ -297,8 +299,10 @@ def require_loopback(request: Request) -> None:
 def require_brokerage_connect_enabled() -> None:
     """FAIL-CLOSED master-switch guard for ``/brokerage/connect`` and
     ``/brokerage/disconnect``. ``settings.BROKERAGE_CONNECT_ENABLED`` is
-    deliberately NOT GUI-writable (gui/env_io.py) — it must be hand-set in
-    ``.env``. ``/brokerage/status`` is read-only and NOT gated by this flag."""
+    GUI-writable (gui/env_io.py) — the endpoints remain gated by two further
+    independent checks regardless: the ``FOLLOW_API_TOKEN`` command token and
+    ``require_loopback``. ``/brokerage/status`` is read-only and NOT gated by
+    this flag."""
     if not settings.BROKERAGE_CONNECT_ENABLED:
         raise HTTPException(
             status_code=403,
@@ -328,8 +332,7 @@ def require_automation_writes_enabled() -> None:
     """FAIL-CLOSED master-switch guard for the two Data & Automation writes
     with a real persistence/rollback cost: ``PUT /automation/schedule/interval``
     (an ``.env`` edit) and ``POST /automation/resume`` (re-enabling live order
-    submission when ``ADVISORY_ONLY=False``). Mirrors
-    ``require_brokerage_connect_enabled`` exactly. ``settings.AUTOMATION_WRITES_ENABLED``
+    submission when ``ADVISORY_ONLY=False``). ``settings.AUTOMATION_WRITES_ENABLED``
     is deliberately NOT GUI-writable — hand-set in ``.env`` only.
 
     ``POST /automation/run`` and ``POST /automation/pause`` are NOT gated by
@@ -385,9 +388,9 @@ def require_agentic_discovery_enabled() -> None:
     (``settings.AGENTIC_DISCOVERY_ENABLED``), NOT ``AUTOMATION_WRITES_ENABLED``,
     ``STRATEGY_WRITES_ENABLED``, or ``LLM_WRITES_ENABLED``: this changes WHAT THE
     AGENT DISCOVERS (which symbols get scanned and fed toward the gated order
-    queue) and must not ride in on any of those. Mirrors
-    ``require_strategy_writes_enabled`` exactly — deliberately NOT GUI-writable,
-    hand-set in ``.env`` only. ``GET /agentic/status`` and ``GET
+    queue) and must not ride in on any of those. ``settings.AGENTIC_DISCOVERY_ENABLED``
+    is GUI-writable by operator decision — the endpoint remains gated by the
+    ``FOLLOW_API_TOKEN`` command token regardless. ``GET /agentic/status`` and ``GET
     /agentic/discovery`` are read-only and NOT gated by this flag
     (``require_read_token`` alone, matching ``GET /strategy/matrix`` and ``GET
     /llm/status``)."""
@@ -3859,7 +3862,7 @@ def require_dead_letter_retry_enabled() -> None:
     ``require_*_writes_enabled`` flag: this spawns a REAL single-symbol
     ``main.py`` subprocess (network calls, a fresh data fetch, a real
     advisory evaluation) — a materially different cost/risk than any
-    existing flag was scoped for. Mirrors ``require_brokerage_connect_enabled``
+    existing flag was scoped for. Mirrors ``require_automation_writes_enabled``
     exactly — deliberately NOT GUI-writable (``gui/env_io.py``), hand-set in
     ``.env`` only. ``GET /dead-letter`` is read-only and NOT gated by this
     flag (``require_read_token`` alone, matching every other GET here)."""
