@@ -1232,7 +1232,7 @@ def main() -> None:
             )
             dispatch_watch_alerts(
                 _watch_alerts,
-                dashboard_url=dashboard_url,
+                dashboard_url=settings.NTFY_DASHBOARD_URL,
             )
             # Always save — keeps edge-trigger state current even on quiet runs.
             save_watch_state(_new_watch_state, _watch_state_path)
