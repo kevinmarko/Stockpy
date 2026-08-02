@@ -3432,76 +3432,6 @@ class TunablesUpdateRequest(BaseModel):
     values: Dict[str, Any] = Field(..., max_length=64)
 
 
-def _coerce_and_validate_tunable(key: str, value: Any) -> tuple[bool, Any]:
-    """Return ``(True, coerced_value)`` if ``key``/``value`` is an acceptable
-    write, else ``(False, reason_tag)``. Reason tags (frontend branches on these,
-    never on a message): ``unknown_key`` (outside this editor's scope),
-    ``forbidden_key`` (defensive: not an env_io writable non-secret),
-    ``expected_boolean`` / ``expected_number`` / ``expected_integer`` /
-    ``expected_string`` / ``invalid_option`` / ``out_of_range`` / ``invalid_json``
-    (``kind == "json"`` only).
-
-    For ``kind == "json"`` the coerced value returned here is the ORIGINAL
-    STRING the caller submitted (only validated as parseable, never
-    re-serialized) — it is what ``written`` echoes back. ``put_settings_tunables``
-    parses it back to a native object immediately before handing it to
-    ``env_io.write_many_atomic``, which — matching ``env_io._JSON_KEYS``'s own
-    ``json.dumps(value)`` convention for ``SIGNAL_WEIGHTS``/``CORS_ALLOWED_ORIGINS``
-    etc. — expects a native dict/list, not an already-encoded string (handing it
-    a string would double-encode)."""
-    spec = _TUNABLE_INDEX.get(key)
-    if spec is None:
-        return False, "unknown_key"
-    kind, extras = spec
-    # Defensive: never write anything outside the env_io allowlist / any secret,
-    # even if the layout ever drifts (CONSTRAINT #3).
-    if key in env_io.SECRET_KEYS or key not in env_io.ALLOWED_KEYS:
-        return False, "forbidden_key"
-
-    if kind == "bool":
-        if not isinstance(value, bool):
-            return False, "expected_boolean"
-        return True, value
-
-    if kind in ("float", "int"):
-        # bool is an int subclass — reject it explicitly for numeric fields.
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return False, "expected_number"
-        if isinstance(value, float) and not math.isfinite(value):
-            return False, "expected_number"
-        if kind == "int":
-            if isinstance(value, float) and not value.is_integer():
-                return False, "expected_integer"
-            coerced: Any = int(value)
-        else:
-            coerced = float(value)
-        lo, hi = extras.get("min"), extras.get("max")
-        if (lo is not None and coerced < lo) or (hi is not None and coerced > hi):
-            return False, "out_of_range"
-        return True, coerced
-
-    if kind == "enum":
-        if not isinstance(value, str):
-            return False, "expected_string"
-        if value not in extras.get("options", []):
-            return False, "invalid_option"
-        return True, value
-
-    if kind == "json":
-        if not isinstance(value, str):
-            return False, "expected_string"
-        try:
-            json.loads(value)
-        except (TypeError, ValueError):
-            return False, "invalid_json"
-        return True, value  # original string — see docstring above
-
-    # kind == "str"
-    if not isinstance(value, str):
-        return False, "expected_string"
-    return True, value
-
-
 def _tunable_default(fi: Any) -> Any:
     """A settings field's real default — including fields declared with
     ``default_factory=`` (e.g. ``SECTOR_FORECAST_CONFIGS``/``CORS_ALLOWED_ORIGINS``,
@@ -3520,59 +3450,24 @@ def _tunable_default(fi: Any) -> Any:
 
 
 def _build_tunables_groups() -> List[Dict[str, Any]]:
-    """Assemble the grouped tunables payload. ``value``/``default``/``description``
-    are read LIVE from the settings pydantic model — never re-typed as literals
-    (repo convention). ``description`` is ``null`` when the field has no pydantic
-    ``Field(description=...)`` (CONSTRAINT #4 — never fabricated). ``kind == "json"``
-    fields carry a native dict/list ``value``/``default`` in ``settings`` — both are
-    JSON-stringified here so the wire contract's ``string`` type holds (a failed
-    ``json.dumps`` dead-letters to ``None`` rather than 500ing — CONSTRAINT #6)."""
-    model_fields = type(settings).model_fields
-    groups: List[Dict[str, Any]] = []
-    for group_name, specs in _TUNABLE_GROUPS:
-        fields: List[Dict[str, Any]] = []
-        for key, kind, extras in specs:
-            fi = model_fields.get(key)
-            default = _tunable_default(fi)
-            description = (getattr(fi, "description", None) if fi is not None else None) or None
-            value = getattr(settings, key, None)
-            if kind == "json":
-                try:
-                    value = json.dumps(value) if value is not None else None
-                except (TypeError, ValueError):
-                    value = None
-                try:
-                    default = json.dumps(default) if default is not None else None
-                except (TypeError, ValueError):
-                    default = None
-            field: Dict[str, Any] = {
-                "key": key,
-                "value": value,
-                "type": _KIND_TO_TYPE[kind],
-                "default": default,
-                "description": description,
-            }
-            for meta in ("min", "max", "step"):
-                if meta in extras:
-                    field[meta] = extras[meta]
-            if kind == "enum":
-                field["options"] = list(extras.get("options", []))
-            fields.append(field)
-        groups.append({"name": group_name, "fields": fields})
-    return groups
+    """Assemble ``/settings/tunables``'s grouped payload. Thin wrapper over
+    ``_build_groups_payload`` (the shared builder every ``/settings/*`` editor
+    uses) scoped to ``_TUNABLE_GROUPS``."""
+    return _build_groups_payload(_TUNABLE_GROUPS)
 
 
-def _tunables_env_drift() -> Dict[str, Any]:
-    """Compare the on-disk ``.env`` value of every tunable this editor serves
+def _tunables_env_drift(index_spec: Dict[str, tuple]) -> Dict[str, Any]:
+    """Compare the on-disk ``.env`` value of every tunable ``index_spec`` serves
     against the running process's ``settings`` singleton. Mirrors
-    ``_env_drift()`` (Strategy Matrix) but scoped to ``_TUNABLE_INDEX`` instead of
-    the two Strategy Matrix keys. A ``.env`` write does NOT reach the live
-    singleton, so after a successful PUT this stays serving the OLD values until
-    restart — this surfaces that pending change. Dead-letter per key: a parse
-    failure for one key is skipped rather than failing the whole check
+    ``_env_drift()`` (Strategy Matrix) but scoped to the caller's editor
+    (``_TUNABLE_INDEX`` / ``_SENTIMENT_INDEX`` / ``_SECTOR_SELECTION_INDEX``)
+    instead of the two Strategy Matrix keys. A ``.env`` write does NOT reach the
+    live singleton, so after a successful PUT this stays serving the OLD values
+    until restart — this surfaces that pending change. Dead-letter per key: a
+    parse failure for one key is skipped rather than failing the whole check
     (CONSTRAINT #6 — a hand-mangled ``.env`` must never 500 this endpoint)."""
     keys: List[str] = []
-    for key, (kind, _extras) in _TUNABLE_INDEX.items():
+    for key, (kind, _extras) in index_spec.items():
         try:
             raw = env_io.get_value(key, "")
             if raw == "":
@@ -3626,7 +3521,7 @@ def get_settings_tunables() -> Dict[str, Any]:
     return {
         "applies": "next_daemon_restart",
         "groups": _build_tunables_groups(),
-        "env_drift": _tunables_env_drift(),
+        "env_drift": _tunables_env_drift(_TUNABLE_INDEX),
     }
 
 
@@ -3640,8 +3535,20 @@ def get_settings_tunables() -> Dict[str, Any]:
 def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Write a partial map of non-secret tunables to ``.env``."""
     return _validate_and_write_payload(body.values, _TUNABLE_INDEX)
-# Standardized helper to build group responses for any field schema tuple list
+
+
 def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
+    """Assemble a grouped tunables payload for any ``(group_name, [(key, kind,
+    extras), ...])`` spec list — shared by every ``/settings/*`` editor
+    (``_TUNABLE_GROUPS``, ``_SENTIMENT_GROUPS``, ``_SECTOR_SELECTION_GROUPS``).
+    ``value``/``default``/``description`` are read LIVE from the settings
+    pydantic model — never re-typed as literals (repo convention).
+    ``description`` is ``null`` when the field has no pydantic
+    ``Field(description=...)`` (CONSTRAINT #4 — never fabricated). ``kind ==
+    "json"`` fields carry a native dict/list ``value``/``default`` in
+    ``settings`` — both are JSON-stringified here so the wire contract's
+    ``string`` type holds (a failed ``json.dumps`` dead-letters to ``None``
+    rather than 500ing — CONSTRAINT #6)."""
     model_fields = type(settings).model_fields
     groups: List[Dict[str, Any]] = []
     for group_name, specs in groups_spec:
@@ -3678,6 +3585,26 @@ def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
 
 
 def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tuple]) -> Dict[str, Any]:
+    """Validate ``values`` against ``index_spec`` (one editor's ``{key: (kind,
+    extras)}`` scope — ``_TUNABLE_INDEX`` / ``_SENTIMENT_INDEX`` /
+    ``_SECTOR_SELECTION_INDEX``) and write the accepted subset to ``.env``.
+    Shared by every ``PUT /settings/*`` endpoint here.
+
+    Per-key rejection reason tags (frontend branches on these, never on a
+    message): ``unknown_key`` (outside this editor's scope), ``forbidden_key``
+    (defensive: not an env_io writable non-secret, CONSTRAINT #3),
+    ``expected_boolean`` / ``expected_number`` / ``expected_integer`` /
+    ``expected_string`` / ``invalid_option`` / ``out_of_range`` /
+    ``invalid_json`` (``kind == "json"`` only).
+
+    For ``kind == "json"`` the accepted value kept in ``accepted`` (and echoed
+    in ``written`` below) is the ORIGINAL STRING the caller submitted (only
+    validated as parseable, never re-serialized) — it is parsed back to a
+    native object immediately before handing it to
+    ``env_io.write_many_atomic``, which — matching ``env_io._JSON_KEYS``'s own
+    ``json.dumps(value)`` convention for ``SIGNAL_WEIGHTS``/
+    ``CORS_ALLOWED_ORIGINS`` etc. — expects a native dict/list, not an
+    already-encoded string (handing it a string would double-encode)."""
     accepted: Dict[str, Any] = {}
     rejected: Dict[str, str] = {}
     for key, value in values.items():
@@ -3760,24 +3687,44 @@ def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tu
 
 # ---------------------------------------------------------------------------
 # Dedicated Sentiment & Sector Selection Schemas
+#
+# Every key below is a REAL settings.py Field — verified against
+# Settings.model_fields, not re-typed from memory. An earlier draft of this
+# section invented plausible-sounding names (SENTIMENT_LOOKBACK_DAYS,
+# REDDIT_ENABLED, GDELT_ENABLED, SECTOR_SELECTION_WEIGHTING_SCHEME, etc.) that
+# do not exist anywhere in the codebase; since Settings' model_config has
+# extra="ignore", writing one of those to .env would have been a SILENT NO-OP
+# — the GUI would show "Saved to .env" while changing nothing. "Sector
+# Selection" here is the semantic Related-Sector-Selection feature
+# (data/sector_selection_heat.py, see settings.py's "A DIFFERENT feature from
+# SECTOR_HEAT_* above" comment) that backs the existing SectorSelection.tsx
+# screen — NOT a momentum/value/volatility factor rotation, which does not
+# exist for sectors in this codebase.
 # ---------------------------------------------------------------------------
 
 _SENTIMENT_GROUPS = [
     (
-        "Sentiment Core & Sources",
+        "Sentiment Ingestion Core",
         [
             ("SENTIMENT_INGESTION_ENABLED", "bool", {}),
             ("SENTIMENT_SOURCES", "str", {}),
-            ("SENTIMENT_LOOKBACK_DAYS", "int", {"min": 1, "max": 365, "step": 1}),
-            ("SENTIMENT_DECAY_HALF_LIFE_DAYS", "float", {"min": 0.1, "max": 30.0, "step": 0.5}),
+            ("SENTIMENT_COMMENT_SOURCES", "str", {}),
+            ("SENTIMENT_INGESTION_LOOKBACK_DAYS", "int", {"min": 1, "max": 90, "step": 1}),
+            ("SENTIMENT_MAX_DOCUMENTS_PER_CYCLE", "int", {"min": 1, "max": 20000, "step": 1}),
+            ("SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE", "float", {"min": 1.0, "max": 600.0, "step": 1.0}),
+            ("SENTIMENT_CIRCUIT_BREAKER_THRESHOLD", "int", {"min": 1, "max": 20, "step": 1}),
+        ],
+    ),
+    (
+        "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+        [
             ("STOCKTWITS_ENABLED", "bool", {}),
-            ("REDDIT_ENABLED", "bool", {}),
-            ("GOOGLE_NEWS_ENABLED", "bool", {}),
+            ("REDDIT_USER_AGENT", "str", {}),
+            ("REDDIT_BACKFILL_MAX_PAGES", "int", {"min": 1, "max": 100, "step": 1}),
             ("GOOGLE_NEWS_LOOKBACK_WINDOW", "str", {}),
             ("EDGAR_FULLTEXT_ENABLED", "bool", {}),
             ("EDGAR_FULLTEXT_FORMS", "str", {}),
             ("EDGAR_FULLTEXT_CHUNK_TOKENS", "int", {"min": 64, "max": 4096, "step": 64}),
-            ("GDELT_ENABLED", "bool", {}),
             ("GDELT_MIN_REQUEST_INTERVAL_SECONDS", "float", {"min": 0.0, "max": 60.0, "step": 0.5}),
             ("GDELT_MAX_RETRIES", "int", {"min": 0, "max": 10, "step": 1}),
             ("GDELT_RETRY_BACKOFF_SECONDS", "float", {"min": 0.5, "max": 60.0, "step": 0.5}),
@@ -3788,19 +3735,30 @@ _SENTIMENT_GROUPS = [
     (
         "FinBERT & Catalyst Scoring",
         [
+            ("FINBERT_ENABLED", "bool", {}),
             ("FINBERT_BATCH_SIZE", "int", {"min": 1, "max": 128, "step": 1}),
             ("FINBERT_SCORE_CACHE_ENABLED", "bool", {}),
-            ("NEWS_CATALYST_LOOKBACK_HOURS", "int", {"min": 1, "max": 168, "step": 1}),
-            ("NEWS_CATALYST_MIN_HEADLINES", "int", {"min": 1, "max": 50, "step": 1}),
-            ("FINNHUB_MIN_REQUEST_INTERVAL_SECONDS", "float", {"min": 0.0, "max": 10.0, "step": 0.1}),
+            ("NEWS_LOOKBACK_DAYS", "int", {"min": 1, "max": 90, "step": 1}),
+            ("FINNHUB_RATE_LIMIT_PER_MIN", "int", {"min": 1, "max": 60, "step": 1}),
+            ("SENTIMENT_SOCIAL_BLEND_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+        ],
+    ),
+    (
+        "AI Credibility Verification",
+        [
+            ("SENTIMENT_LLM_VERIFICATION_ENABLED", "bool", {}),
+            ("SENTIMENT_LLM_VERIFICATION_PROVIDER", "enum", {"options": ["claude", "gemini", "openai", "none"]}),
+            ("SENTIMENT_LLM_VERIFICATION_MAX_CALLS_PER_CYCLE", "int", {"min": 0, "max": 500, "step": 1}),
         ],
     ),
     (
         "Attention & Sector Heat",
         [
             ("SECTOR_HEAT_ENABLED", "bool", {}),
-            ("SECTOR_HEAT_MIN_ARTICLES", "int", {"min": 1, "max": 500, "step": 1}),
+            ("SECTOR_HEAT_SMOOTHING_SIGMA", "float", {"min": 0.1, "max": 10.0, "step": 0.1}),
+            ("SECTOR_HEAT_LOOKBACK_DAYS", "int", {"min": 1, "max": 90, "step": 1}),
             ("WIKIPEDIA_ATTENTION_ENABLED", "bool", {}),
+            ("WIKIPEDIA_ATTENTION_LOOKBACK_DAYS", "int", {"min": 1, "max": 365, "step": 1}),
             ("PYTRENDS_ENABLED", "bool", {}),
         ],
     ),
@@ -3814,17 +3772,19 @@ _SENTIMENT_INDEX = {
 
 _SECTOR_SELECTION_GROUPS = [
     (
-        "Sector Selection Configuration",
+        "Related Sector Selection",
         [
+            ("SECTOR_SELECTION_ENABLED", "bool", {}),
             ("SECTOR_SELECTION_TOP_N", "int", {"min": 1, "max": 11, "step": 1}),
-            ("SECTOR_SELECTION_WEIGHTING_SCHEME", "enum", {"options": ["equal", "momentum", "value", "volatility"]}),
-            ("SECTOR_SELECTION_LOOKBACK_DAYS", "int", {"min": 5, "max": 504, "step": 1}),
-            ("SECTOR_SELECTION_MOMENTUM_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("SECTOR_SELECTION_VALUE_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("SECTOR_SELECTION_QUALITY_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("SECTOR_SELECTION_LOWVOL_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("SECTOR_SELECTION_MIN_STABILITY", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("SECTOR_SELECTION_REBALANCE_DAYS", "int", {"min": 1, "max": 90, "step": 1}),
+            ("SECTOR_SELECTION_W1", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("SECTOR_SELECTION_W2", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("SECTOR_SELECTION_HEAT_LOOKBACK_DAYS", "int", {"min": 1, "max": 252, "step": 1}),
+            ("SECTOR_SELECTION_HEAT_A", "float", {"min": 0.0, "max": 5.0, "step": 0.05}),
+            ("SECTOR_SELECTION_HEAT_B", "float", {"min": 0.0, "max": 5.0, "step": 0.05}),
+            ("SECTOR_SELECTION_HEAT_C", "float", {"min": 0.05, "max": 5.0, "step": 0.05}),
+            ("SECTOR_SIMILARITY_EMBEDDER", "enum", {"options": ["sbert", "openai", "none"]}),
+            ("SECTOR_SIMILARITY_MODEL", "str", {}),
+            ("SECTOR_SIMILARITY_POOLING", "enum", {"options": ["max", "mean"]}),
         ],
     ),
 ]
@@ -3842,7 +3802,7 @@ def get_settings_sentiment() -> Dict[str, Any]:
     return {
         "applies": "next_daemon_restart",
         "groups": _build_groups_payload(_SENTIMENT_GROUPS),
-        "env_drift": {"detected": False, "keys": [], "note": ""},
+        "env_drift": _tunables_env_drift(_SENTIMENT_INDEX),
     }
 
 
@@ -3864,7 +3824,7 @@ def get_settings_sector_selection() -> Dict[str, Any]:
     return {
         "applies": "next_daemon_restart",
         "groups": _build_groups_payload(_SECTOR_SELECTION_GROUPS),
-        "env_drift": {"detected": False, "keys": [], "note": ""},
+        "env_drift": _tunables_env_drift(_SECTOR_SELECTION_INDEX),
     }
 
 

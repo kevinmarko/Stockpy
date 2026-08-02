@@ -282,43 +282,59 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_INSIDER_MIN_LAG_DAYS",           # int  — quarter-close lag before an aggregate is read
     "FMP_ECON_INDICATORS",                # str  — comma-separated series names (not JSON)
     "FMP_MAX_SECONDS_PER_CYCLE",          # float — per-cycle wall-clock budget
-    # Sentiment & News Ingestion pipeline tunables
+    # Sentiment & News Ingestion pipeline tunables (webapp /settings/sentiment,
+    # api/pilots_api.py's _SENTIMENT_GROUPS). Every key here is a REAL
+    # settings.py Field verified against Settings.model_fields — see that
+    # module's _SENTIMENT_GROUPS comment for why this matters (extra="ignore"
+    # means a fabricated key would silently do nothing on write).
+    # SENTIMENT_LLM_VERIFICATION_ENABLED/_PROVIDER/_MAX_CALLS_PER_CYCLE are
+    # already listed above (pre-dating this block) and also served by this
+    # editor — not repeated here.
     "SENTIMENT_INGESTION_ENABLED",
     "SENTIMENT_SOURCES",
-    "SENTIMENT_LOOKBACK_DAYS",
-    "SENTIMENT_DECAY_HALF_LIFE_DAYS",
+    "SENTIMENT_COMMENT_SOURCES",
+    "SENTIMENT_INGESTION_LOOKBACK_DAYS",
+    "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE",
+    "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE",
+    "SENTIMENT_CIRCUIT_BREAKER_THRESHOLD",
     "STOCKTWITS_ENABLED",
-    "REDDIT_ENABLED",
-    "GOOGLE_NEWS_ENABLED",
+    "REDDIT_USER_AGENT",
+    "REDDIT_BACKFILL_MAX_PAGES",
     "GOOGLE_NEWS_LOOKBACK_WINDOW",
     "EDGAR_FULLTEXT_ENABLED",
     "EDGAR_FULLTEXT_FORMS",
     "EDGAR_FULLTEXT_CHUNK_TOKENS",
-    "GDELT_ENABLED",
     "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
     "GDELT_MAX_RETRIES",
     "GDELT_RETRY_BACKOFF_SECONDS",
     "GDELT_COOLDOWN_THRESHOLD",
     "GDELT_COOLDOWN_SECONDS",
+    "FINBERT_ENABLED",
     "FINBERT_BATCH_SIZE",
     "FINBERT_SCORE_CACHE_ENABLED",
-    "NEWS_CATALYST_LOOKBACK_HOURS",
-    "NEWS_CATALYST_MIN_HEADLINES",
-    "FINNHUB_MIN_REQUEST_INTERVAL_SECONDS",
+    "NEWS_LOOKBACK_DAYS",
+    "FINNHUB_RATE_LIMIT_PER_MIN",
+    "SENTIMENT_SOCIAL_BLEND_WEIGHT",
     "SECTOR_HEAT_ENABLED",
-    "SECTOR_HEAT_MIN_ARTICLES",
+    "SECTOR_HEAT_SMOOTHING_SIGMA",
+    "SECTOR_HEAT_LOOKBACK_DAYS",
     "WIKIPEDIA_ATTENTION_ENABLED",
+    "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
     "PYTRENDS_ENABLED",
-    # Sector Selection tunables
+    # Related Sector Selection tunables (webapp /settings/sector-selection,
+    # api/pilots_api.py's _SECTOR_SELECTION_GROUPS) — data/sector_selection_heat.py's
+    # semantic-similarity feature backing the SectorSelection.tsx screen.
+    "SECTOR_SELECTION_ENABLED",
     "SECTOR_SELECTION_TOP_N",
-    "SECTOR_SELECTION_WEIGHTING_SCHEME",
-    "SECTOR_SELECTION_LOOKBACK_DAYS",
-    "SECTOR_SELECTION_MOMENTUM_WEIGHT",
-    "SECTOR_SELECTION_VALUE_WEIGHT",
-    "SECTOR_SELECTION_QUALITY_WEIGHT",
-    "SECTOR_SELECTION_LOWVOL_WEIGHT",
-    "SECTOR_SELECTION_MIN_STABILITY",
-    "SECTOR_SELECTION_REBALANCE_DAYS",
+    "SECTOR_SELECTION_W1",
+    "SECTOR_SELECTION_W2",
+    "SECTOR_SELECTION_HEAT_LOOKBACK_DAYS",
+    "SECTOR_SELECTION_HEAT_A",
+    "SECTOR_SELECTION_HEAT_B",
+    "SECTOR_SELECTION_HEAT_C",
+    "SECTOR_SIMILARITY_EMBEDDER",
+    "SECTOR_SIMILARITY_MODEL",
+    "SECTOR_SIMILARITY_POOLING",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.

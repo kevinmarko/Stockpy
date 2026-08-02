@@ -546,7 +546,7 @@ function SectorSelectionLink() {
           <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Sector Selection</div>
           <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
             {fieldCount == null
-              ? "Weights, top N & factor thresholds"
+              ? "Top N, heat weights & similarity settings"
               : `${fieldCount} sector selection settings`}
           </div>
         </div>

@@ -203,6 +203,44 @@ describe("mock API — honesty fixtures (must not be loosened)", () => {
   });
 });
 
+describe("mock API — settings sub-routes serve their OWN field set (not the general tunables one)", () => {
+  // Regression guard: an earlier draft of getSentimentSettings/
+  // getSectorSelectionSettings just returned the general mockTunables()
+  // fixture verbatim, so the sentiment/sector-selection screens would render
+  // the wrong ~30-field set in mock mode, and saving a real sentiment/
+  // sector-selection key would be rejected as unknown_key (mockTunables()'s
+  // TUNABLE_DEFS carries none of those keys).
+  function fieldKeys(resp: { groups: { fields: { key: string }[] }[] }): Set<string> {
+    return new Set(resp.groups.flatMap((g) => g.fields.map((f) => f.key)));
+  }
+
+  it("getSentimentSettings serves sentiment keys, not the general tunables set", async () => {
+    const keys = fieldKeys(await mockApi.getSentimentSettings());
+    expect(keys.has("SENTIMENT_INGESTION_ENABLED")).toBe(true);
+    expect(keys.has("SECTOR_SELECTION_TOP_N")).toBe(false);
+    expect(keys.has("KELLY_FRACTION")).toBe(false); // general-tunables-only key
+  });
+
+  it("getSectorSelectionSettings serves sector-selection keys, not the general tunables set", async () => {
+    const keys = fieldKeys(await mockApi.getSectorSelectionSettings());
+    expect(keys.has("SECTOR_SELECTION_TOP_N")).toBe(true);
+    expect(keys.has("SENTIMENT_INGESTION_ENABLED")).toBe(false);
+    expect(keys.has("KELLY_FRACTION")).toBe(false); // general-tunables-only key
+  });
+
+  it("updateSentimentSettings accepts a real sentiment key (not rejected as unknown_key)", async () => {
+    const result = await mockApi.updateSentimentSettings({ SENTIMENT_INGESTION_ENABLED: true });
+    expect(result.rejected).toEqual({});
+    expect(result.written).toEqual({ SENTIMENT_INGESTION_ENABLED: true });
+  });
+
+  it("updateSectorSelectionSettings accepts a real sector-selection key (not rejected as unknown_key)", async () => {
+    const result = await mockApi.updateSectorSelectionSettings({ SECTOR_SELECTION_TOP_N: 5 });
+    expect(result.rejected).toEqual({});
+    expect(result.written).toEqual({ SECTOR_SELECTION_TOP_N: 5 });
+  });
+});
+
 describe("mock API — /portfolio contract", () => {
   it("returns a Portfolio with source and PortfolioPositionView positions", async () => {
     const pf = await mockApi.getPortfolio();

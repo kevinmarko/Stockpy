@@ -94,6 +94,18 @@ def _put_and_get_rejected(values: dict) -> dict:
     return resp.json()["rejected"]
 
 
+def _put_scoped(url: str, values: dict, token: "str | None" = _CMD_TOKEN, enabled: bool = True):
+    """Same shape as ``_put`` but for the dedicated sub-route editors
+    (``/settings/sentiment``, ``/settings/sector-selection``), which share
+    ``PUT /settings/tunables``'s two-tier auth stack."""
+    with _writes_enabled(token=token, enabled=enabled):
+        return client.put(
+            url,
+            json={"values": values},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+
 # ---------------------------------------------------------------------------
 # GET /settings/tunables
 # ---------------------------------------------------------------------------
@@ -241,7 +253,24 @@ class TestTunablesScopeInvariants:
             assert key in pilots_api.env_io.ALLOWED_KEYS, f"{key} not in ALLOWED_KEYS"
             assert key not in pilots_api.env_io.SECRET_KEYS, f"{key} is a SECRET_KEY"
 
-        expected = set(pilots_api._TUNABLE_INDEX)
+        expected = {
+            "RISK_FREE_RATE", "MARKET_RISK_PREMIUM", "REQUIRED_RETURN_RATE", "MAX_PORTFOLIO_HEAT",
+            "KELLY_FRACTION", "KELLY_CAP", "VOL_TARGET", "MAX_LEVERAGE", "MAX_POSITION_WEIGHT",
+            "MAX_PORTFOLIO_GROSS", "SIZING_CAP_ESCALATION_ENABLED",
+            "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES", "SIZING_CAP_ESCALATION_FACTOR",
+            "SIZING_CAP_AUDIT_ENABLED", "SIZING_CAP_ALERT_ENABLED", "SIZING_CAP_ALERT_THRESHOLD_PCT",
+            "MAX_CORRELATION", "DAILY_LOSS_LIMIT_PCT", "MAX_ORDER_RATE_PER_MIN",
+            "HMM_RISK_OFF_BLOCK_THRESHOLD", "RISK_GATE_ENFORCE_MARKET_HOURS",
+            "META_LABEL_MIN_CONFIDENCE", "DRY_RUN",
+            "FORECAST_USE_GARCH_SIGMA", "FORECAST_PROPHET_WEIGHT",
+            "FORECAST_SKILL_WEIGHTING_ENABLED", "FORECAST_SKILL_WINDOW_DAYS",
+            "FORECAST_MODEL_PERSISTENCE_ENABLED", "FORECAST_MODEL_RETRAIN_DAYS",
+            "BETA_LOOKBACK_DAYS",
+            "MARKET_DATA_PROVIDER", "MARKET_DATA_QUOTE_TTL_SECONDS",
+            "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
+            "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
+            "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
+        } | _NEW_ADVANCED_KEYS
         assert set(pilots_api._TUNABLE_INDEX) == expected
 
     def test_excludes_other_screens_keys(self):
@@ -469,6 +498,220 @@ class TestGeneralSettingsWritesEnabledInvariants:
         AGENTIC_DISCOVERY_ENABLED."""
         assert "GENERAL_SETTINGS_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
         assert "GENERAL_SETTINGS_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+
+
+# ---------------------------------------------------------------------------
+# GET/PUT /settings/sentiment & GET/PUT /settings/sector-selection
+#
+# _SENTIMENT_INDEX / _SECTOR_SELECTION_INDEX are dedicated editor scopes,
+# structurally identical to _TUNABLE_INDEX (same _build_groups_payload /
+# _validate_and_write_payload / _tunables_env_drift machinery, parameterized
+# by index). The one invariant unique to these two scopes: every served key
+# must be a REAL settings.py Field -- a fabricated key would still round-trip
+# through this editor (GET shows it, PUT "accepts" it) while doing genuinely
+# nothing on disk, since Settings.model_config has extra="ignore".
+# ---------------------------------------------------------------------------
+
+_SETTINGS_SUBROUTES = [
+    ("/settings/sentiment", "_SENTIMENT_INDEX"),
+    ("/settings/sector-selection", "_SECTOR_SELECTION_INDEX"),
+]
+
+
+class TestSettingsSubroutesRealFieldInvariant:
+    """The regression this class guards against: an earlier draft invented
+    plausible-sounding keys (SENTIMENT_LOOKBACK_DAYS, REDDIT_ENABLED,
+    GDELT_ENABLED, SECTOR_SELECTION_WEIGHTING_SCHEME, ...) that do not exist
+    on the Settings pydantic model at all."""
+
+    def test_every_served_key_is_a_real_settings_field(self):
+        model_fields = type(settings).model_fields
+        for _url, index_name in _SETTINGS_SUBROUTES:
+            index = getattr(pilots_api, index_name)
+            assert index, f"{index_name} is empty"
+            for key in index:
+                assert key in model_fields, f"{index_name}: {key} is not a real settings.py field"
+
+    def test_every_served_key_is_allowlisted_non_secret(self):
+        for _url, index_name in _SETTINGS_SUBROUTES:
+            index = getattr(pilots_api, index_name)
+            for key in index:
+                assert key in pilots_api.env_io.ALLOWED_KEYS, f"{index_name}: {key} not in ALLOWED_KEYS"
+                assert key not in pilots_api.env_io.SECRET_KEYS, f"{index_name}: {key} is a SECRET_KEY"
+
+    def test_no_numeric_bound_rejects_its_own_settings_default(self):
+        """Uses the DECLARED pydantic default (``Field(default=...)``), not the
+        live ``settings`` singleton -- a couple of GDELT keys are monkeypatched
+        session-wide by ``conftest.py``'s ``_no_gdelt_throttle_in_tests`` autouse
+        fixture (real production default 5.0s, patched to 0.0s for test speed),
+        which would otherwise make this guard compare against a value no real
+        deployment ever sees."""
+        model_fields = type(settings).model_fields
+        for _url, index_name in _SETTINGS_SUBROUTES:
+            index = getattr(pilots_api, index_name)
+            for key, (kind, extras) in index.items():
+                if kind not in ("float", "int"):
+                    continue
+                default = pilots_api._tunable_default(model_fields[key])
+                lo, hi = extras.get("min"), extras.get("max")
+                if lo is not None:
+                    assert default >= lo, f"{index_name}: {key} default {default} < min {lo}"
+                if hi is not None:
+                    assert default <= hi, f"{index_name}: {key} default {default} > max {hi}"
+
+    def test_no_key_leaks_across_the_three_editor_scopes(self):
+        general = set(pilots_api._TUNABLE_INDEX)
+        sentiment = set(pilots_api._SENTIMENT_INDEX)
+        sector = set(pilots_api._SECTOR_SELECTION_INDEX)
+        assert not (general & sentiment)
+        assert not (general & sector)
+        assert not (sentiment & sector)
+
+
+class TestSettingsSubroutesGetShape:
+    def test_shape_and_grouping(self):
+        for url, index_name in _SETTINGS_SUBROUTES:
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                resp = client.get(url)
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["applies"] == "next_daemon_restart"
+            index = getattr(pilots_api, index_name)
+            served_keys = {f["key"] for g in body["groups"] for f in g["fields"]}
+            assert served_keys == set(index), f"{url}: served keys != {index_name}"
+            for g in body["groups"]:
+                for f in g["fields"]:
+                    assert set(f) >= {"key", "value", "type", "default", "description"}
+                    assert f["type"] in _VALID_TYPES
+
+    def test_value_and_default_sourced_from_settings(self):
+        model_fields = type(settings).model_fields
+        for url, index_name in _SETTINGS_SUBROUTES:
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                body = client.get(url).json()
+            for key, (kind, _extras) in getattr(pilots_api, index_name).items():
+                field = _find_field(body, key)
+                live = getattr(settings, key)
+                default = pilots_api._tunable_default(model_fields[key])
+                if kind == "json":
+                    assert json.loads(field["value"]) == live
+                    assert json.loads(field["default"]) == default
+                else:
+                    assert field["value"] == live
+                    assert field["default"] == default
+
+    def test_fail_open_when_read_token_unset(self):
+        for url, _index_name in _SETTINGS_SUBROUTES:
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                resp = client.get(url)
+            assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self):
+        for url, _index_name in _SETTINGS_SUBROUTES:
+            with mock.patch.object(settings, "STATE_API_TOKEN", _READ_TOKEN):
+                resp = client.get(url, headers={"Authorization": "Bearer nope"})
+            assert resp.status_code == 401
+
+
+class TestSettingsSubroutesEnvDrift:
+    """Regression guard: an earlier draft hardcoded ``env_drift`` to
+    ``{"detected": False, "keys": [], "note": ""}`` on both GET endpoints
+    instead of computing it -- a fabricated "nothing pending" claim
+    (CONSTRAINT #4) that would never surface a real pending .env write."""
+
+    def test_env_drift_present_and_shaped(self):
+        for url, _index_name in _SETTINGS_SUBROUTES:
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                body = client.get(url).json()
+            assert set(body["env_drift"]) == {"detected", "keys", "note"}
+            assert isinstance(body["env_drift"]["keys"], list)
+
+    def test_env_drift_detected_when_env_disagrees_with_live(self, tmp_path):
+        cases = [
+            ("/settings/sentiment", "SENTIMENT_INGESTION_LOOKBACK_DAYS", int, 1),
+            ("/settings/sector-selection", "SECTOR_SELECTION_TOP_N", int, 1),
+        ]
+        for url, key, _cast, delta in cases:
+            env_file = tmp_path / f"{key}.env"
+            env_file.write_text(f"{key}={getattr(settings, key) + delta}\n", encoding="utf-8")
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    body = client.get(url).json()
+            assert body["env_drift"]["detected"] is True, url
+            assert key in body["env_drift"]["keys"]
+            assert body["env_drift"]["note"]
+
+    def test_env_drift_false_when_env_matches_live(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            f"SENTIMENT_INGESTION_LOOKBACK_DAYS={settings.SENTIMENT_INGESTION_LOOKBACK_DAYS}\n",
+            encoding="utf-8",
+        )
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                body = client.get("/settings/sentiment").json()
+        assert "SENTIMENT_INGESTION_LOOKBACK_DAYS" not in body["env_drift"]["keys"]
+
+
+class TestSettingsSubroutesPut:
+    def test_happy_path_writes_via_env_io_and_echoes(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put_scoped("/settings/sentiment", {"SENTIMENT_INGESTION_ENABLED": True})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rejected"] == {}
+        assert body["written"] == {"SENTIMENT_INGESTION_ENABLED": True}
+        assert w.call_args[0][0] == {"SENTIMENT_INGESTION_ENABLED": True}
+
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put_scoped("/settings/sector-selection", {"SECTOR_SELECTION_TOP_N": 5})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rejected"] == {}
+        assert body["written"] == {"SECTOR_SELECTION_TOP_N": 5}
+        assert w.call_args[0][0] == {"SECTOR_SELECTION_TOP_N": 5}
+
+    def test_rejects_unknown_key(self):
+        for url, _index_name in _SETTINGS_SUBROUTES:
+            with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+                resp = _put_scoped(url, {"NOT_A_KEY": 1})
+            assert resp.status_code == 200
+            assert resp.json()["rejected"]["NOT_A_KEY"] == "unknown_key"
+            assert w.call_count == 0
+
+    def test_rejects_secret_key_never_written(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put_scoped("/settings/sentiment", {"FINNHUB_API_KEY": "leak"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rejected"]["FINNHUB_API_KEY"] == "unknown_key"
+        assert body["written"] == {}
+        assert w.call_count == 0
+
+    def test_a_key_owned_by_the_other_subroute_is_unknown_here(self):
+        """SECTOR_SELECTION_TOP_N belongs to /settings/sector-selection, not
+        /settings/sentiment -- confirms the two editors don't silently share
+        scope."""
+        rejected_body = _put_scoped("/settings/sentiment", {"SECTOR_SELECTION_TOP_N": 5})
+        assert rejected_body.json()["rejected"]["SECTOR_SELECTION_TOP_N"] == "unknown_key"
+
+    def test_rejects_out_of_range(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put_scoped("/settings/sector-selection", {"SECTOR_SELECTION_TOP_N": 99})
+        assert resp.status_code == 200
+        assert resp.json()["rejected"]["SECTOR_SELECTION_TOP_N"] == "out_of_range"
+        assert w.call_count == 0
+
+    def test_fail_closed_when_command_token_unset(self):
+        for url, _index_name in _SETTINGS_SUBROUTES:
+            resp = _put_scoped(url, {"SECTOR_SELECTION_TOP_N": 5}, token=None)
+            assert resp.status_code == 403
+
+    def test_fails_closed_when_general_settings_writes_disabled(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put_scoped("/settings/sentiment", {"SENTIMENT_INGESTION_ENABLED": True}, enabled=False)
+        assert resp.status_code == 403
+        assert w.call_count == 0
 
 
 # ---------------------------------------------------------------------------
