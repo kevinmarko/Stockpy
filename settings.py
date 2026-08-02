@@ -668,6 +668,29 @@ class Settings(BaseSettings):
             "FMP_INSIDER_ENABLED. Single gate."
         ),
     )
+    FMP_OPTIONS_HEALTH_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the FMP fundamental-health overlay bundled into "
+            "the options premium-directive matrix (reporting/options_snapshot.py"
+            "::write_options_matrix → technical_options_engine.build_premium_"
+            "directive). False (the default) is a complete no-op reproducing "
+            "today's exact behavior: Altman_Z_Score, Piotroski_F_Score, "
+            "Net_Debt_EBITDA, FCF_Yield, and Realized_Vol_30D all stay None and "
+            "zero additional FMP requests are attempted. When True, gates three "
+            "endpoints for every symbol in the options matrix: Altman Z-Score + "
+            "Piotroski F-Score (`/financial-scores`), Net Debt/EBITDA + FCF "
+            "Yield (`/ratios-ttm`), and 30-day realized volatility "
+            "(`/standard-deviation`). Single gate bundling all three — they are "
+            "always fetched together for one overlay concept ('is this credit-"
+            "spread candidate financially healthy'), matching the "
+            "FMP_SECTOR_SNAPSHOT_ENABLED / FMP_INSIDER_ENABLED precedent of one "
+            "flag per logically-bundled feature. Does NOT gate "
+            "Days_To_Earnings/Earnings_Risk — those reuse the EXISTING "
+            "FMP_EARNINGS_ENABLED earnings-calendar gate via the durable "
+            "earnings-events store, not a fresh fetch of their own."
+        ),
+    )
     # ── FMP behavior knobs ───────────────────────────────────────────────
     FMP_FALLBACK_ENABLED: bool = Field(
         default=True,

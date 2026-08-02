@@ -158,13 +158,53 @@ describe("OptionsMatrix screen (real mock API)", () => {
     expect(within(sheet).getAllByText(/—/).length).toBeGreaterThan(0);
   });
 
+  it("renders the FMP fundamental-health + earnings badges from the mock fixture, and renders cleanly when absent", async () => {
+    renderScreen();
+    const aaplCard = (await screen.findByText("AAPL")).closest('[role="button"]') as HTMLElement;
+    // AAPL: Altman Z 5.8 -> "Safe" badge; no upcoming earnings -> no earnings badge.
+    expect(within(aaplCard).getByText(/Altman Z: 5\.8 \(Safe\)/)).toBeInTheDocument();
+    // "Net Debt/EBITDA: 1.2x" is split across sibling text nodes (the "1.2"
+    // and "x" pieces sit in/around a nested <span class="num">), so match
+    // against the card's full text content rather than a single text node.
+    expect(aaplCard.textContent).toMatch(/Net Debt\/EBITDA:\s*1\.2x/);
+    expect(within(aaplCard).queryByText(/Earnings in/)).not.toBeInTheDocument();
+
+    // MSFT: Altman Z 1.4 -> "Distress" badge; earnings in 12d (within its
+    // 30-day target DTE) -> warn-styled earnings badge, and Integrity_OK
+    // folded false by that same earnings risk (dual-meaning contract).
+    const msftCard = screen.getByText("MSFT").closest('[role="button"]') as HTMLElement;
+    expect(within(msftCard).getByText(/Altman Z: 1\.4 \(Distress\)/)).toBeInTheDocument();
+    expect(within(msftCard).getByText(/⚠️ Earnings in 12d/)).toBeInTheDocument();
+    expect(within(msftCard).getByText(/⚠ Integrity/)).toBeInTheDocument();
+
+    // NVDA: Altman Z 2.1 -> neutral "Grey" badge. Earnings 45d out is beyond
+    // the 30-day target DTE, so the badge still renders (Days_To_Earnings is
+    // set) but stays neutral-styled rather than warn-styled, since
+    // Earnings_Risk is false for an out-of-window event.
+    const nvdaCard = screen.getByText("NVDA").closest('[role="button"]') as HTMLElement;
+    expect(within(nvdaCard).getByText(/Altman Z: 2\.1 \(Grey\)/)).toBeInTheDocument();
+    const nvdaEarningsBadge = within(nvdaCard).getByText(/⚠️ Earnings in 45d/);
+    expect(nvdaEarningsBadge).toHaveClass("badge-neutral");
+    expect(nvdaEarningsBadge).not.toHaveClass("badge-warn");
+
+    // XOM carries none of the new fields -- the "no data" case must render
+    // cleanly with no badges at all, never a placeholder/fabricated value.
+    const xomCard = screen.getByText("XOM").closest('[role="button"]') as HTMLElement;
+    expect(within(xomCard).queryByText(/Altman Z/)).not.toBeInTheDocument();
+    expect(within(xomCard).queryByText(/Net Debt\/EBITDA/)).not.toBeInTheDocument();
+    expect(within(xomCard).queryByText(/Earnings in/)).not.toBeInTheDocument();
+  });
+
   it("filter chips narrow the visible cards", async () => {
     renderScreen();
     await screen.findByText("AAPL");
-    // "Flagged" filter -> only KO (Integrity_OK false) + ZZZ (error stub).
+    // "Flagged" filter -> KO (structural violation), ZZZ (error stub), and
+    // MSFT (Integrity_OK folded false by earnings-risk timing -- see the
+    // FMP health-overlay badge test below). AAPL stays clean.
     await userEvent.click(screen.getByRole("button", { name: /^Flagged/ }));
     await waitFor(() => {
       expect(screen.getByText("KO")).toBeInTheDocument();
+      expect(screen.getByText("MSFT")).toBeInTheDocument();
       expect(screen.queryByText("AAPL")).not.toBeInTheDocument();
     });
   });

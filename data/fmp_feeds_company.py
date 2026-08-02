@@ -236,3 +236,75 @@ def fetch_earnings_rows(symbol: str, *, limit: Optional[int] = None) -> List[Dic
             }
         )
     return rows
+
+
+def fetch_financial_scores(symbol: str) -> Dict[str, Any]:
+    """Fetch Altman Z-Score and Piotroski F-Score for a symbol (``/financial-scores``).
+
+    CONSTRAINT #4: Never coerces missing scores to 0.0 — returns None if missing.
+    CONSTRAINT #6: Never raises.
+    """
+    try:
+        payload = fmp_client.financial_scores(symbol)
+        record = _first_record(payload)
+        return {
+            "altman_z_score": _safe_float(record.get("altmanZScore")),
+            "piotroski_f_score": int(record["piotroskiScore"]) if record.get("piotroskiScore") is not None else None,
+            "source": "fmp",
+        }
+    except FMPUnavailable as exc:
+        logger.info("FMP financial-scores unavailable for %s: %s", symbol, exc)
+    except Exception as exc:
+        logger.warning("FMP financial-scores fetch failed for %s: %s", symbol, exc)
+    return {"altman_z_score": None, "piotroski_f_score": None, "source": "fmp"}
+
+
+def fetch_key_ratios_ttm(symbol: str) -> Dict[str, Any]:
+    """Fetch key TTM financial ratios: Net Debt/EBITDA, FCF Yield, Debt-to-Equity (``/ratios-ttm``).
+
+    CONSTRAINT #4: Missing fields return None.
+    CONSTRAINT #6: Never raises.
+    """
+    try:
+        payload = fmp_client.ratios_ttm(symbol)
+        record = _first_record(payload)
+        return {
+            "net_debt_ebitda": _safe_float(record.get("netDebtToEBITDATTM")),
+            "fcf_yield": _safe_float(record.get("freeCashFlowYieldTTM")),
+            "debt_to_equity": _safe_float(record.get("debtEquityRatioTTM")),
+            "pe_ratio": _safe_float(record.get("priceEarningsRatioTTM")),
+            "source": "fmp",
+        }
+    except FMPUnavailable as exc:
+        logger.info("FMP ratios-ttm unavailable for %s: %s", symbol, exc)
+    except Exception as exc:
+        logger.warning("FMP ratios-ttm fetch failed for %s: %s", symbol, exc)
+    return {"net_debt_ebitda": None, "fcf_yield": None, "debt_to_equity": None, "pe_ratio": None, "source": "fmp"}
+
+
+def fetch_stock_news(symbol: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """Fetch real-time stock news headline snippets for a symbol (``/news/stock``).
+
+    CONSTRAINT #6: Never raises.
+    """
+    try:
+        payload = fmp_client.stock_news(symbol, limit=limit)
+        if not isinstance(payload, list):
+            return []
+        items: List[Dict[str, Any]] = []
+        for item in payload:
+            if isinstance(item, dict):
+                items.append({
+                    "title": str(item.get("title", "")),
+                    "url": str(item.get("url", "")),
+                    "published_date": str(item.get("publishedDate", "")),
+                    "site": str(item.get("site", "")),
+                    "text": str(item.get("text", "")),
+                })
+        return items
+    except FMPUnavailable as exc:
+        logger.info("FMP stock news unavailable for %s: %s", symbol, exc)
+    except Exception as exc:
+        logger.warning("FMP stock news fetch failed for %s: %s", symbol, exc)
+    return []
+

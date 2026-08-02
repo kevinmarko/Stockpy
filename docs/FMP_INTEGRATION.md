@@ -69,6 +69,7 @@ All 28 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 | `FMP_MACRO_ENABLED` | `bool` | `False` | Master switch for the macro feed (treasury rates + `FMP_ECON_INDICATORS`). Single gate. |
 | `FMP_INSIDER_ENABLED` | `bool` | `False` | Master switch for the insider-trading statistics feed (per-symbol cost). Single gate, separate from sector snapshots on purpose. |
 | `FMP_SECTOR_SNAPSHOT_ENABLED` | `bool` | `False` | Master switch for the dated sector P/E + sector performance snapshots (2 requests/cycle total). Single gate. |
+| `FMP_OPTIONS_HEALTH_ENABLED` | `bool` | `False` | Master switch for the fundamental-health overlay bundled into the options premium-directive matrix (Altman Z / Piotroski F / Net Debt-EBITDA / FCF Yield / 30-day realized vol). Single gate bundling three endpoints. See §3a below. |
 
 ### Behavior knobs (9)
 
@@ -89,6 +90,30 @@ All 28 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 ### Related, pre-existing settings whose descriptions changed (no default changed)
 
 `MARKET_DATA_PROVIDER` and `FUNDAMENTALS_SOURCE` both gained `'fmp'` as an accepted value, and both descriptions now state explicitly that setting `FMP_API_KEY` alone never elects it.
+
+---
+
+## 3a. Options Matrix FMP health overlay (`FMP_OPTIONS_HEALTH_ENABLED`)
+
+A fifth diagnostic overlay, added on top of the four described in §1 — same "diagnostic-only, never a `SignalModule`" treatment, scoped specifically to the webapp's Options Matrix screen rather than the general dashboard.
+
+**What it gates.** `FMP_OPTIONS_HEALTH_ENABLED` (default `False`) is a single gate bundling three endpoints that are always fetched together for one overlay concept ("is this credit-spread candidate financially healthy"), matching the `FMP_SECTOR_SNAPSHOT_ENABLED`/`FMP_INSIDER_ENABLED` precedent of one flag per logically-bundled feature:
+
+| Endpoint | `data/fmp_client.py` wrapper | `data/fmp_feeds_company.py` / `data/fmp_feeds_market.py` shape function | Fields produced |
+|---|---|---|---|
+| `/financial-scores` | `financial_scores(symbol)` | `fetch_financial_scores(symbol)` | `altman_z_score`, `piotroski_f_score` |
+| `/ratios-ttm` | `ratios_ttm(symbol)` | `fetch_key_ratios_ttm(symbol)` | `net_debt_ebitda`, `fcf_yield` (also `debt_to_equity`, `pe_ratio`, unused by the overlay) |
+| `/standard-deviation` | `standard_deviation(symbol)` | `fetch_realized_volatility(symbol)` | `hv_30` (30-day realized volatility) |
+
+`Days_To_Earnings` / `Earnings_Risk` are **not** gated by this flag — they reuse the pre-existing `FMP_EARNINGS_ENABLED` earnings-calendar feed (§3 above) via the durable `earnings_events` store (`HistoricalStore.get_earnings_events(symbol, after=<today>, limit=1)`), the same read pattern `pipeline/production_steps.py::_apply_fmp_earnings` already uses. No second earnings fetch of its own.
+
+**Where the data flows.** `reporting/options_snapshot.py::write_options_matrix` is the ONE production caller that fetches these (per-symbol, each of the three sub-fetches independently try/excepted so one failing never blanks a sibling's data for the same symbol — CONSTRAINT #6) and passes them as plain kwargs into `technical_options_engine.build_premium_directive`, which is otherwise a pure, no-I/O function — it never fetches anything itself, only echoes whatever the caller supplies onto the row (`Altman_Z_Score`, `Piotroski_F_Score`, `Net_Debt_EBITDA`, `FCF_Yield`, `Days_To_Earnings`, `Earnings_Risk`, `Realized_Vol_30D`). The hydrated row is written to `output/options_matrix.json`, read by the Pilots API's pure file-reader (`pilots/options.py` → `GET /options`, deliberately never importing the engine), and rendered as badges on the webapp's Options Matrix screen (`webapp/src/screens/OptionsMatrix.tsx`'s `DirectiveCard`).
+
+**`Integrity_OK`'s dual meaning.** `Earnings_Risk` (an earnings event scheduled inside the directive's `target_dte` window) folds into the same `Integrity_OK` boolean that the strike-grid/delta-target structural check already reports — a structurally clean directive with earnings risk still reports `Integrity_OK=False`. This is intentional: the one production consumer that reads `Integrity_OK` as an execution gate, `execution/options_queue_builder.py::passes_premium_gate`, wants a single "safe to queue" signal and already excludes any `Integrity_OK=False` row regardless of cause, matching this overlay's purpose of keeping credit spreads out of execution right before an earnings print. `Integrity_Issues` still lists the earnings warning as its own entry (`"⚠️ Earnings Announcement scheduled in N days (within target DTE M)"`), distinguishable from a genuine structural violation string. Gravity `step_38_options_matrix_integrity_audit` is unaffected — its fixtures never pass `days_to_earnings`.
+
+**`Realized_Vol_30D` is diagnostic-only, never a fallback tier.** `build_premium_directive`'s existing IVR fallback chain (`True_IVR` → `IVR_Proxy` → hardcoded `50.0` neutral default) was NOT extended with `realized_vol_30d` as a third tier ahead of `50.0`: FMP's `/standard-deviation` returns a single current reading with no historical series this function can rank it against locally, so any "percentile" derived from one data point would be fabricated, not measured (CONSTRAINT #4). It is surfaced purely as a passthrough field for the operator to eyeball alongside the proxy/chain IVR.
+
+**Flag-off is byte-identical.** With the default `False`, `write_options_matrix` never imports `data/fmp_feeds_company.py`/`data/fmp_feeds_market.py`, makes zero extra network calls, and every one of the seven fields above stays `None`/`False` — proven by `tests/test_options_snapshot.py::TestWriteOptionsMatrixFmpFlagsOff`.
 
 ---
 

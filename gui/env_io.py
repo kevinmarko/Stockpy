@@ -289,6 +289,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_MACRO_ENABLED",                  # bool — treasury/econ into macro_history
     "FMP_INSIDER_ENABLED",                # bool — per-symbol insider statistics
     "FMP_SECTOR_SNAPSHOT_ENABLED",        # bool — 2 dated sector snapshots per cycle
+    "FMP_OPTIONS_HEALTH_ENABLED",         # bool — Altman Z/Piotroski F/ratios/realized-vol for options matrix
     "FMP_FALLBACK_ENABLED",               # bool — fall through to Alpaca/yfinance/Yahoo
     "FMP_QUOTES_REALTIME",                # bool — label FMP quotes real-time (unverified on Starter)
     "FMP_BARS_ADJUSTMENT",                # str  — EOD variant; 'dividend-adjusted' matches yfinance

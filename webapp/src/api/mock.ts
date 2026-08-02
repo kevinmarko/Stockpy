@@ -3024,6 +3024,15 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
     ],
     Integrity_OK: true,
     Integrity_Issues: [],
+    // FMP fundamental-health overlay (settings.FMP_OPTIONS_HEALTH_ENABLED) --
+    // Altman Z >= 2.6 is the "Safe" zone; no upcoming earnings this cycle.
+    Altman_Z_Score: 5.8,
+    Piotroski_F_Score: 7,
+    Net_Debt_EBITDA: 1.2,
+    FCF_Yield: 0.045,
+    Days_To_Earnings: null,
+    Earnings_Risk: false,
+    Realized_Vol_30D: 0.21,
   },
   {
     // 4 legs, engine omits per-leg Delta -> Short_Delta/Long_Delta null.
@@ -3053,8 +3062,20 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
       { Side: "Short", Type: "Call", Strike: 452.0, Price: 3.4 },
       { Side: "Long", Type: "Call", Strike: 457.0, Price: 2.1 },
     ],
-    Integrity_OK: true,
-    Integrity_Issues: [],
+    // Integrity_OK carries a dual meaning (structural + earnings-timing --
+    // see technical_options_engine.py's build_premium_directive step-6
+    // comment): this directive is structurally clean, but earnings inside
+    // the target DTE window flips Integrity_OK to false anyway.
+    Integrity_OK: false,
+    Integrity_Issues: ["⚠️ Earnings Announcement scheduled in 12 days (within target DTE 30)"],
+    // Altman Z < 1.8 is the "Distress" zone.
+    Altman_Z_Score: 1.4,
+    Piotroski_F_Score: 3,
+    Net_Debt_EBITDA: 3.8,
+    FCF_Yield: -0.01,
+    Days_To_Earnings: 12,
+    Earnings_Risk: true,
+    Realized_Vol_30D: 0.19,
   },
   {
     // Debit spread: theta is the initializer default 0.0, NOT a measurement.
@@ -3085,6 +3106,15 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
     ],
     Integrity_OK: true,
     Integrity_Issues: [],
+    // Altman Z in [1.8, 2.6) is the "Grey" zone; earnings 45d out is beyond
+    // this row's 30-day target DTE, so Earnings_Risk stays false.
+    Altman_Z_Score: 2.1,
+    Piotroski_F_Score: 5,
+    Net_Debt_EBITDA: 0.5,
+    FCF_Yield: 0.08,
+    Days_To_Earnings: 45,
+    Earnings_Risk: false,
+    Realized_Vol_30D: 0.41,
   },
   {
     // Covered Call: 1 short leg, no long leg -> Long_Strike null. Theta default.

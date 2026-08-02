@@ -40,6 +40,8 @@ from data.fmp_feeds_company import (
     _safe_float,
     fetch_analyst_snapshot,
     fetch_earnings_rows,
+    fetch_financial_scores,
+    fetch_key_ratios_ttm,
 )
 from data.historical_store import HistoricalStore
 from pipeline.production_steps import _apply_fmp_analyst, _apply_fmp_earnings
@@ -417,3 +419,104 @@ class TestApplyFmpEarningsIntegration:
         mock_fetch.assert_not_called()
         assert df.loc[0, "Days_To_Earnings"] == pytest.approx(5.0)
         assert df.loc[0, "Earnings_Date"] == near_future
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# fetch_financial_scores / fetch_key_ratios_ttm
+# (options-matrix FMP health overlay -- settings.FMP_OPTIONS_HEALTH_ENABLED,
+# wired by reporting/options_snapshot.py::write_options_matrix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestFetchFinancialScores:
+    def test_happy_path(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+
+        def _get(url, params=None, timeout=None):
+            assert "financial-scores" in url
+            return _resp([{"symbol": "AAPL", "altmanZScore": 5.2, "piotroskiScore": 8}])
+
+        with patch("data.fmp_client.requests.get", side_effect=_get):
+            out = fetch_financial_scores("aapl")
+
+        assert out["altman_z_score"] == pytest.approx(5.2)
+        assert out["piotroski_f_score"] == 8
+        assert isinstance(out["piotroski_f_score"], int)
+        assert out["source"] == "fmp"
+
+    def test_missing_scores_are_none_never_zero(self, monkeypatch):
+        """CONSTRAINT #4: an absent score must not be coerced to a fabricated
+        0.0/0 -- 0 is itself a meaningful Piotroski value, so 'not reported'
+        must stay distinguishable as None."""
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.requests.get", return_value=_resp([{}])):
+            out = fetch_financial_scores("XOM")
+
+        assert out["altman_z_score"] is None
+        assert out["piotroski_f_score"] is None
+        assert out["source"] == "fmp"
+
+    def test_real_zero_piotroski_score_round_trips_as_zero_not_none(self, monkeypatch):
+        """The other direction of CONSTRAINT #4: a genuine 0 must survive."""
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.requests.get", return_value=_resp([{"piotroskiScore": 0}])):
+            out = fetch_financial_scores("ZERO")
+        assert out["piotroski_f_score"] == 0
+
+    def test_total_failure_no_api_key_degrades_to_none_never_raises(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_API_KEY", None)
+        out = fetch_financial_scores("AAPL")
+        assert out == {"altman_z_score": None, "piotroski_f_score": None, "source": "fmp"}
+
+    def test_access_denied_degrades_to_none_never_raises(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.requests.get", return_value=_access_denied_resp()):
+            out = fetch_financial_scores("AAPL")
+        assert out["altman_z_score"] is None
+        assert out["piotroski_f_score"] is None
+
+
+class TestFetchKeyRatiosTtm:
+    def test_happy_path(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+
+        def _get(url, params=None, timeout=None):
+            assert "ratios-ttm" in url
+            return _resp([{
+                "netDebtToEBITDATTM": 1.8, "freeCashFlowYieldTTM": 0.045,
+                "debtEquityRatioTTM": 0.6, "priceEarningsRatioTTM": 22.1,
+            }])
+
+        with patch("data.fmp_client.requests.get", side_effect=_get):
+            out = fetch_key_ratios_ttm("aapl")
+
+        assert out["net_debt_ebitda"] == pytest.approx(1.8)
+        assert out["fcf_yield"] == pytest.approx(0.045)
+        assert out["debt_to_equity"] == pytest.approx(0.6)
+        assert out["pe_ratio"] == pytest.approx(22.1)
+        assert out["source"] == "fmp"
+
+    def test_missing_fields_are_none_never_zero(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.requests.get", return_value=_resp([{}])):
+            out = fetch_key_ratios_ttm("XOM")
+
+        assert out["net_debt_ebitda"] is None
+        assert out["fcf_yield"] is None
+        assert out["debt_to_equity"] is None
+        assert out["pe_ratio"] is None
+
+    def test_total_failure_no_api_key_degrades_to_none_never_raises(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_API_KEY", None)
+        out = fetch_key_ratios_ttm("AAPL")
+        assert out == {
+            "net_debt_ebitda": None, "fcf_yield": None,
+            "debt_to_equity": None, "pe_ratio": None, "source": "fmp",
+        }
+
+    def test_access_denied_degrades_to_none_never_raises(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_API_KEY", "test-key")
+        with patch("data.fmp_client.requests.get", return_value=_access_denied_resp()):
+            out = fetch_key_ratios_ttm("AAPL")
+        assert out["net_debt_ebitda"] is None
+        assert out["fcf_yield"] is None

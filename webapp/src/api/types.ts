@@ -979,8 +979,18 @@ export interface OptionsDirective {
   Legs?: OptionsLeg[] | null;
   Integrity_OK?: boolean | null;
   Integrity_Issues?: string[] | null;
+  Altman_Z_Score?: number | null;
+  Piotroski_F_Score?: number | null;
+  Net_Debt_EBITDA?: number | null;
+  FCF_Yield?: number | null;
+  Days_To_Earnings?: number | null;
+  Earnings_Risk?: boolean | null;
+  Realized_Vol_30D?: number | null;
+  News_Snippets?: Array<{ title: string; url: string; published_date?: string; site?: string }> | null;
+  Peers?: string[] | null;
   [key: string]: unknown;
 }
+
 
 /** GET /options — the full persisted options matrix. */
 export interface OptionsMatrix {

@@ -62,6 +62,7 @@ import type { CommandManifest, LlmStatus } from "./api/types";
 
 import { theme } from "./theme";
 import AIChatInterface from "./components/AIChatInterface";
+import { useChat } from "./chat/ChatContext";
 import { MessageSquare } from "lucide-react";
 import { BottomNav, Sidebar } from "./components/BottomNavigation";
 
@@ -137,11 +138,11 @@ function SettingsButton() {
   );
 }
 
-function ChatButton({ onClick }: { onClick: () => void }) {
+function ChatButton({ isOpen, onOpen, onClose }: { isOpen: boolean; onOpen: () => void; onClose: () => void }) {
   return (
     <button
       className="btn"
-      onClick={onClick}
+      onClick={() => (isOpen ? onClose() : onOpen())}
       aria-label="Toggle AI Chat"
       data-testid="chat-button"
       style={{
@@ -169,7 +170,7 @@ function ChatButton({ onClick }: { onClick: () => void }) {
 export default function App() {
   const [done, setDone] = useState(() => readOnboarding().completed);
   const [tokenGated] = useState(() => needsTokenEntry());
-  const [isChatOpen, setIsChatOpen] = useState(false);
+  const { isOpen: isChatOpen, contextText: chatContextText, openChat, closeChat } = useChat();
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [inspectedTicker, setInspectedTicker] = useState<string | null>(null);
   const [previewReportName, setPreviewReportName] = useState<string | null>(null);
@@ -255,9 +256,9 @@ export default function App() {
             </ErrorBoundary>
           </div>
           <BottomNav />
-          <ChatButton onClick={() => setIsChatOpen(!isChatOpen)} />
+          <ChatButton isOpen={isChatOpen} onOpen={() => openChat()} onClose={closeChat} />
           <SettingsButton />
-          <AIChatInterface isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+          <AIChatInterface isOpen={isChatOpen} onClose={closeChat} contextText={chatContextText} />
 
           <CommandPaletteModal
             isOpen={isPaletteOpen}

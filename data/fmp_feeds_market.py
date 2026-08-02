@@ -322,3 +322,97 @@ def fetch_sector_snapshot(
     except Exception as exc:
         logger.warning("fetch_sector_snapshot(%s) failed: %s", date_str, exc)
         return []
+
+
+def fetch_volatility_benchmarks() -> Dict[str, Optional[float]]:
+    """Fetch quotes for major volatility benchmarks: ^VIX, ^VVIX, ^VXN, ^SKEW (``/batch-index-quotes``).
+
+    CONSTRAINT #4: Missing benchmarks return None.
+    CONSTRAINT #6: Never raises.
+    """
+    try:
+        from data.fmp_client import FMPUnavailable, batch_index_quotes
+        payload = batch_index_quotes()
+        rows = _as_row_list(payload)
+        out: Dict[str, Optional[float]] = {"VIX": None, "VVIX": None, "VXN": None, "SKEW": None}
+        for row in rows:
+            sym = str(row.get("symbol") or "").upper().replace("^", "")
+            if sym in out:
+                price = row.get("price") or row.get("close")
+                if price is not None:
+                    out[sym] = _safe_float(price)
+        return out
+    except Exception as exc:
+        logger.warning("fetch_volatility_benchmarks failed: %s", exc)
+        return {"VIX": None, "VVIX": None, "VXN": None, "SKEW": None}
+
+
+def fetch_realized_volatility(symbol: str) -> Dict[str, Optional[float]]:
+    """Fetch custom rolling realized volatility / standard deviation (``/standard-deviation``).
+
+    Returns Dict with keys 'hv_10', 'hv_30', 'hv_90'.
+    CONSTRAINT #6: Never raises.
+    """
+    try:
+        from data.fmp_client import FMPUnavailable, standard_deviation
+        payload = standard_deviation(symbol)
+        rows = _as_row_list(payload)
+        record = rows[0] if rows else {}
+        return {
+            "hv_10": _safe_float(record.get("stdDev10d")),
+            "hv_30": _safe_float(record.get("standardDeviation") or record.get("stdDev30d")),
+            "hv_90": _safe_float(record.get("stdDev90d")),
+        }
+    except Exception as exc:
+        logger.warning("fetch_realized_volatility(%s) failed: %s", symbol, exc)
+        return {"hv_10": None, "hv_30": None, "hv_90": None}
+
+
+def fetch_economics_calendar(from_date: Optional[str] = None, to_date: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch macroeconomic events (CPI, PPI, NFP, FOMC rate decisions) (``/economics-calendar``).
+
+    CONSTRAINT #6: Never raises.
+    """
+    try:
+        from data.fmp_client import FMPUnavailable, economics_calendar
+        payload = economics_calendar(from_date=from_date, to_date=to_date)
+        rows = _as_row_list(payload)
+        events: List[Dict[str, Any]] = []
+        for row in rows:
+            event_name = str(row.get("event") or "").strip()
+            event_date = str(row.get("date") or "").strip()
+            if event_name and event_date:
+                events.append({
+                    "event": event_name,
+                    "date": event_date,
+                    "country": str(row.get("country") or "US"),
+                    "actual": _safe_float(row.get("actual")),
+                    "estimate": _safe_float(row.get("estimate")),
+                    "impact": str(row.get("impact") or "High"),
+                })
+        return events
+    except Exception as exc:
+        logger.warning("fetch_economics_calendar failed: %s", exc)
+        return []
+
+
+def fetch_peer_group(symbol: str) -> List[str]:
+    """Fetch peer stock comparison group for a symbol (``/peers``).
+
+    CONSTRAINT #6: Never raises.
+    """
+    try:
+        from data.fmp_client import FMPUnavailable, peers
+        payload = peers(symbol)
+        rows = _as_row_list(payload)
+        if rows and isinstance(rows[0], dict) and "peersList" in rows[0]:
+            p_list = rows[0]["peersList"]
+            if isinstance(p_list, list):
+                return [str(p).strip().upper() for p in p_list if str(p).strip()]
+        if isinstance(payload, list):
+            return [str(p).strip().upper() for p in payload if isinstance(p, str)]
+        return []
+    except Exception as exc:
+        logger.warning("fetch_peer_group(%s) failed: %s", symbol, exc)
+        return []
+

@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import pandas as pd
 import pandas_ta_classic as ta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from scipy.stats import norm
 from scipy.optimize import brentq
 
@@ -734,6 +734,14 @@ def build_premium_directive(
     data_engine: Optional[Any] = None,
     iv_history_store: Optional[Any] = None,
     as_of_date: Optional[str] = None,
+    altman_z_score: Optional[float] = None,
+    piotroski_f_score: Optional[int] = None,
+    net_debt_ebitda: Optional[float] = None,
+    fcf_yield: Optional[float] = None,
+    days_to_earnings: Optional[int] = None,
+    realized_vol_30d: Optional[float] = None,
+    news_snippets: Optional[List[Dict[str, Any]]] = None,
+    peers_list: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Compute a fully-hydrated premium-selling row for one symbol.
 
@@ -790,6 +798,47 @@ def build_premium_directive(
         Explicit ``YYYY-MM-DD`` cutoff for the real-IVR lookup (mainly for
         tests / historical replays). Defaults to ``bars.index[-1]`` — the
         latest bar date — matching ``OptionsAnalysisStep``'s own convention.
+    altman_z_score, piotroski_f_score, net_debt_ebitda, fcf_yield :
+        FMP-sourced fundamental-health overlays (``/financial-scores`` and
+        ``/ratios-ttm``), gated end-to-end by ``settings.
+        FMP_OPTIONS_HEALTH_ENABLED`` (default ``False``). This function is a
+        PURE, no-I/O helper — it never fetches these itself; the one
+        production caller, ``reporting/options_snapshot.py::write_options_matrix``,
+        fetches them via ``data.fmp_feeds_company.fetch_financial_scores`` /
+        ``fetch_key_ratios_ttm`` when the flag is on and passes them through
+        as plain kwargs. All four default to ``None`` and are copied verbatim
+        onto the returned row (``Altman_Z_Score``, ``Piotroski_F_Score``,
+        ``Net_Debt_EBITDA``, ``FCF_Yield``) — never fabricated, never
+        recomputed here (CONSTRAINT #4).
+    days_to_earnings :
+        Days until the symbol's next scheduled earnings event, as of the
+        caller's "as of" date. Sourced from the EXISTING earnings-events
+        store (``settings.FMP_EARNINGS_ENABLED`` — see
+        ``pipeline/production_steps.py``'s earnings write-back for the
+        identical read pattern), not re-fetched here. A publicly scheduled
+        future date is not lookahead (see that module's docstring for the
+        four-rule contract); optional, defaults to ``None`` when the flag is
+        off or no upcoming event is known. Drives ``Earnings_Risk`` and the
+        earnings-proximity entry in ``Integrity_Issues`` below — see the
+        step-6 comment for how that interacts with ``Integrity_OK``.
+    realized_vol_30d :
+        FMP's 30-day realized-volatility/standard-deviation reading
+        (``/standard-deviation``, ``data.fmp_feeds_market.fetch_realized_volatility``
+        → ``hv_30``), gated by the same ``FMP_OPTIONS_HEALTH_ENABLED`` flag.
+        Diagnostic passthrough only — copied verbatim onto
+        ``Realized_Vol_30D``. NOT used as a third fallback tier ahead of the
+        hardcoded 50.0 neutral default in step 5 below: FMP's endpoint
+        returns a single current standard-deviation reading with no
+        historical baseline this function can rank it against locally, and
+        fabricating a percentile from one data point would violate
+        CONSTRAINT #4. Defaults to ``None``.
+    news_snippets, peers_list :
+        Optional pass-throughs (FMP stock-news headlines / peer-group
+        tickers) surfaced verbatim onto ``News_Snippets`` (default ``[]``,
+        never ``None``) and ``Peers`` (default ``[]``, never ``None``) for
+        GUI/MCP display. Never fetched by this function — no production
+        caller wires these yet, so they are permanently empty unless a
+        future caller passes them explicitly.
 
     Returns
     -------
@@ -807,7 +856,9 @@ def build_premium_directive(
     """
     toe = TechnicalOptionsEngine()
     nan = float("nan")
+    has_earnings_risk = bool(days_to_earnings is not None and 0 <= days_to_earnings <= target_dte)
     row: Dict[str, Any] = {
+
         "Symbol": symbol,
         "Price": float(spot_price) if np.isfinite(spot_price) else nan,
         "Stale": bool(is_stale),
@@ -832,6 +883,15 @@ def build_premium_directive(
         "Legs": [],
         "Integrity_OK": True,
         "Integrity_Issues": [],
+        "Altman_Z_Score": altman_z_score,
+        "Piotroski_F_Score": piotroski_f_score,
+        "Net_Debt_EBITDA": net_debt_ebitda,
+        "FCF_Yield": fcf_yield,
+        "Days_To_Earnings": days_to_earnings,
+        "Earnings_Risk": has_earnings_risk,
+        "Realized_Vol_30D": realized_vol_30d,
+        "News_Snippets": news_snippets or [],
+        "Peers": peers_list or [],
     }
 
     # 1) Volatility (GJR-GARCH) — falls back to 20-day realized inside the engine.
@@ -919,12 +979,26 @@ def build_premium_directive(
     # proxy when the flag produced a finite value this call; otherwise fall
     # back to IVR_Proxy exactly as before True_IVR existed (byte-identical
     # when the flag is off, since True_IVR is always NaN in that case).
+    #
+    # NOT a third tier here: `realized_vol_30d` (FMP's /standard-deviation,
+    # gated by FMP_OPTIONS_HEALTH_ENABLED) was investigated as a possible
+    # honest replacement for the hardcoded 50.0 "neutral" default below, for
+    # thinly-traded/newer symbols where calculate_realized_vol_rank's local
+    # 252-day rolling-vol window returns NaN. Rejected: FMP's endpoint
+    # returns a single current standard-deviation reading with no historical
+    # series this function can rank it against, so any "percentile" derived
+    # from one data point would be fabricated, not measured (CONSTRAINT #4).
+    # realized_vol_30d is therefore surfaced only as a diagnostic passthrough
+    # (row["Realized_Vol_30D"] above), never consulted here.
     if true_ivr_flag and np.isfinite(row["True_IVR"]):
         ivr_value = row["True_IVR"]
+        logger.debug("build_premium_directive(%s): IVR source = True_IVR (chain-derived)", symbol)
     elif np.isfinite(row["IVR_Proxy"]):
         ivr_value = row["IVR_Proxy"]
+        logger.debug("build_premium_directive(%s): IVR source = IVR_Proxy (local realized-vol rank)", symbol)
     else:
         ivr_value = 50.0
+        logger.debug("build_premium_directive(%s): IVR source = neutral 50.0 default (no proxy/chain data)", symbol)
     try:
         directive = recommender.generate_strategy_pricing_matrix(
             true_ivr=float(ivr_value),
@@ -968,6 +1042,23 @@ def build_premium_directive(
         strike_grid=strike_grid,
         delta_target_scale=delta_target_scale,
     )
-    row["Integrity_OK"] = bool(integrity["ok"])
-    row["Integrity_Issues"] = list(integrity["issues"])
+    # NOTE — Integrity_OK carries TWO distinct meanings on purpose: a
+    # structural verdict (strike-grid + delta-target tolerance, from
+    # validate_directive_integrity above) AND a timing verdict (whether a
+    # scheduled earnings event falls inside this trade's DTE window). Both
+    # fold into the same boolean because the one production consumer,
+    # execution/options_queue_builder.py::passes_premium_gate, wants a single
+    # "is this directive safe to queue for execution" signal and already
+    # treats Integrity_OK=False as an exclusion reason regardless of
+    # cause — matching this PR's stated intent of protecting credit spreads
+    # from execution right before earnings. Gravity AI Review Suite.py's
+    # step_38_options_matrix_integrity_audit is NOT affected: its fixtures
+    # never pass days_to_earnings, so has_earnings_risk is always False there
+    # and its checks continue to exercise the structural verdict only.
+    issues = list(integrity["issues"])
+    if has_earnings_risk:
+        issues.append(f"⚠️ Earnings Announcement scheduled in {days_to_earnings} days (within target DTE {target_dte})")
+    row["Integrity_OK"] = bool(integrity["ok"]) and not has_earnings_risk
+    row["Integrity_Issues"] = issues
     return row
+

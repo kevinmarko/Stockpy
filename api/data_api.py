@@ -1302,6 +1302,14 @@ def get_order_book_ladder(symbol: str) -> Dict[str, Any]:
 class ChatMessageRequest(BaseModel):
     message: str
     history: Optional[List[Dict[str, Any]]] = None
+    # Optional pre-formatted text block the frontend builds client-side from
+    # data it already has on screen (e.g. the Options Matrix's currently
+    # displayed directives -- symbol, Altman Z, days to earnings, ...). This
+    # endpoint never re-fetches anything to build it; it only threads the
+    # caller-supplied string into the prompt below. Backward compatible:
+    # omitted/empty produces byte-identical behavior to before this field
+    # existed.
+    context: Optional[str] = None
 
 
 async def _iter_blocking(sync_iterable):
@@ -1345,6 +1353,13 @@ async def chat_endpoint(req: ChatMessageRequest):
     design when STATE_API_TOKEN is unset, so the capability flag is the ONLY
     thing stopping it from being remotely, repeatedly triggerable the moment
     an operator sets GEMINI_API_KEY/ANTHROPIC_API_KEY for their own local use.
+
+    ``req.context``, when present, is a pre-formatted text block the caller
+    builds client-side from data it already has on screen (e.g. the Options
+    Matrix's currently displayed directives). This endpoint never fetches
+    anything to build it -- it only threads the string into the prompt, so
+    it stays free of any FMP/heavy-engine import surface. Omitted/empty is
+    byte-identical to the endpoint's behavior before this field existed.
     """
 
     async def stream_generator():
@@ -1360,6 +1375,17 @@ async def chat_endpoint(req: ChatMessageRequest):
                 client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
                 contents = []
+                if req.context:
+                    # Grounding context goes in as its own leading turn
+                    # rather than folded into the query text, so the model
+                    # sees it as background data rather than part of the
+                    # user's literal question.
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_text(text=f"Context:\n{req.context}")]
+                        )
+                    )
                 for msg in (req.history or []):
                     contents.append(
                         types.Content(
@@ -1396,17 +1422,28 @@ async def chat_endpoint(req: ChatMessageRequest):
                     messages.append({"role": role, "content": msg.get("content", "")})
                 messages.append({"role": "user", "content": req.message})
 
+                # Anthropic's Messages API requires roles to strictly
+                # alternate user/assistant, so grounding context can't be
+                # prepended as its own leading "user" turn the way it is for
+                # Gemini above (that would create two consecutive user turns
+                # whenever history is empty). The `system` parameter carries
+                # background context outside the turn sequence entirely, so
+                # it's the correct fit here regardless of history length.
+                stream_kwargs: Dict[str, Any] = {
+                    "model": "claude-3-5-sonnet-20241022",
+                    "max_tokens": 800,
+                    "messages": messages,
+                }
+                if req.context:
+                    stream_kwargs["system"] = f"Context:\n{req.context}"
+
                 # client.messages.stream(...) itself just constructs the
                 # manager (no I/O), but __enter__ opens the connection and
                 # __exit__ waits for it to close -- both are blocking SDK
                 # calls, so both are offloaded to the executor too, not just
                 # the per-chunk iteration.
                 loop = asyncio.get_running_loop()
-                stream_cm = client.messages.stream(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=800,
-                    messages=messages,
-                )
+                stream_cm = client.messages.stream(**stream_kwargs)
                 stream = await loop.run_in_executor(None, stream_cm.__enter__)
                 try:
                     async for text in _iter_blocking(stream.text_stream):
