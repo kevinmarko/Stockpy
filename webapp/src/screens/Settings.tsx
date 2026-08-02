@@ -152,6 +152,8 @@ export function Settings() {
           <TunablesLink />
           <SentimentLink />
           <SectorSelectionLink />
+          <FmpLink />
+          <EtfTransmissionLink />
           <PromptRegistryLink />
           <ActiveFollowsSection />
           <BrokerageSection />
@@ -548,6 +550,54 @@ function SectorSelectionLink() {
             {fieldCount == null
               ? "Top N, heat weights & similarity settings"
               : `${fieldCount} sector selection settings`}
+          </div>
+        </div>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
+      </div>
+    </Link>
+  );
+}
+
+function FmpLink() {
+  const { data } = useApi<TunablesResponse>(() => api.getFmpSettings(), []);
+  const fieldCount = data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
+  return (
+    <Link
+      to="/settings/fmp"
+      className="card card-pad"
+      style={{ display: "block", textDecoration: "none" }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Financial Modeling Prep</div>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
+            {fieldCount == null
+              ? "API credentials, primary & diagnostic feeds"
+              : `${fieldCount} FMP settings`}
+          </div>
+        </div>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
+      </div>
+    </Link>
+  );
+}
+
+function EtfTransmissionLink() {
+  const { data } = useApi<TunablesResponse>(() => api.getEtfTransmissionSettings(), []);
+  const fieldCount = data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
+  return (
+    <Link
+      to="/settings/etf-transmission"
+      className="card card-pad"
+      style={{ display: "block", textDecoration: "none" }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>ETF Volatility Transmission</div>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
+            {fieldCount == null
+              ? "Holdings ingestion, residualization & derates"
+              : `${fieldCount} ETF transmission settings`}
           </div>
         </div>
         <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>

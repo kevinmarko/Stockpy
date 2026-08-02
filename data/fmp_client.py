@@ -103,7 +103,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -659,6 +661,78 @@ def earnings(symbol: str, limit: Optional[int] = None) -> Any:
     if limit is not None:
         params["limit"] = int(limit)
     return _fmp_get("earnings", params)
+
+
+def stock_news(
+    symbols: str,
+    *,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    page: Optional[int] = None,
+    limit: Optional[int] = None,
+) -> Any:
+    """Company news headlines for one or more symbols (``/news/stock``).
+
+    ``symbols`` is a single ticker or a comma-separated list (FMP's own
+    convention — this wrapper does not validate or split it). ``from_date``/
+    ``to_date`` are ``"YYYY-MM-DD"`` strings; both are optional but SHOULD be
+    passed together to bound a window (an unbounded call returns only the
+    most recent articles). ``page``/``limit`` paginate — verified live
+    2026-08 against a real FMP key: a single page returns up to ~100
+    articles for a multi-day window, so a wide backfill window needs several
+    pages (the caller's job, not this wrapper's — mirrors :func:`earnings`'s
+    "raw rows, no pagination-looping" contract).
+
+    Returns a list of dicts with (at least) ``symbol``, ``publishedDate``
+    (a naive ``"YYYY-MM-DD HH:MM:SS"`` string — see
+    ``signals/news_catalyst.py``'s FMP dispatch path for the verified
+    timezone), ``publisher``, ``site``, ``title``, ``text``, ``url``. A
+    symbol with no news in the window returns ``[]``, not an error — same
+    "empty is not failure" contract as every other wrapper in this module.
+
+    Deliberately NOT wrapping ``/news/press-releases``: that endpoint
+    returned "Restricted Endpoint" (a plan-entitlement rejection) against
+    the account this integration was verified with — see
+    ``docs/FMP_INTEGRATION.md`` for the full verification note.
+    """
+    params: Dict[str, Any] = {"symbols": symbols}
+    if from_date is not None:
+        params["from"] = from_date
+    if to_date is not None:
+        params["to"] = to_date
+    if page is not None:
+        params["page"] = int(page)
+    if limit is not None:
+        params["limit"] = int(limit)
+    return _fmp_get("news/stock", params)
+
+
+# ``publishedDate`` is a NAIVE "YYYY-MM-DD HH:MM:SS" string with no timezone
+# marker. Verified live 2026-08 by cross-referencing a real article: FMP
+# reported ``publishedDate: "2026-08-02 14:51:00"`` for a GlobeNewswire
+# release whose OWN page states "August 02, 2026 14:51 ET" -- an exact
+# match. FMP's news timestamps are therefore US EASTERN TIME, not UTC.
+# ``ZoneInfo("America/New_York")`` (not a fixed UTC-4/UTC-5 offset) handles
+# EDT/EST daylight-saving transitions correctly year-round. Lives HERE
+# (rather than in a consumer module) because it's a property of FMP's own
+# wire format, and both ``data/sentiment_sources.py`` (FMPNewsSource) and
+# ``signals/news_catalyst.py`` (fetch_company_headlines) need it without
+# importing from each other, which would be circular (sentiment_sources.py
+# already imports FROM news_catalyst.py).
+NEWS_TZ = ZoneInfo("America/New_York")
+
+
+def parse_news_published_date(raw: str) -> Optional[datetime]:
+    """Parse a ``stock_news()`` article's ``publishedDate`` into a UTC-aware
+    ``datetime``. Returns ``None`` on any parse failure (a malformed/missing
+    timestamp is a data-quality gap, not a crash)."""
+    if not raw:
+        return None
+    try:
+        naive = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return None
+    return naive.replace(tzinfo=NEWS_TZ).astimezone(timezone.utc)
 
 
 def treasury_rates(from_date: str, to_date: str) -> Any:

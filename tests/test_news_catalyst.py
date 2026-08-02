@@ -22,6 +22,9 @@ TestGracefulDegradation — API error → 0.0; all-error batch → no crash
 TestEarningsProximityEdge — boundary conditions for the proximity multiplier
 TestContextPopulation   — pre_compute writes news_sentiment_scores + earnings_dates
 TestRegimeGate          — is_active_in_regime suppression + SignalAggregator wiring
+TestProviderAgnosticDispatchers — FMP-first/Finnhub-fallback dispatcher functions
+                          (fetch_company_headlines / fetch_next_earnings_any) and
+                          pre_compute()'s FMP-only gate acceptance
 """
 
 import math
@@ -42,11 +45,14 @@ from signals.news_catalyst import (
     _content_hash,
     _distribution_to_signed,
     _earnings_proximity_multiplier,
+    _fetch_company_headlines_fmp,
     _lexicon_sentiment,
     _lexicon_softmax,
     _score_headline,
+    fetch_company_headlines,
     fetch_company_news,
     fetch_next_earnings,
+    fetch_next_earnings_any,
     score_headlines,
 )
 from signals.registry import SignalRegistry
@@ -1227,6 +1233,230 @@ class TestFetchHelpers:
         mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
         result = fetch_next_earnings(mock_client, "AAPL")
         assert result is None
+
+
+# ===========================================================================
+# TestProviderAgnosticDispatchers -- FMP-first, Finnhub-fallback dispatchers
+#
+# fetch_company_headlines()/fetch_next_earnings_any() (added 2026-08 so FMP
+# can become the PRIMARY company-news/earnings source) try FMP first when
+# settings.FMP_NEWS_ENABLED + settings.FMP_API_KEY are both set, falling back
+# to the existing Finnhub-specific fetch_company_news()/fetch_next_earnings()
+# path (via build_finnhub_client()) whenever FMP is unconfigured or returns
+# nothing. Both dispatchers must never raise.
+# ===========================================================================
+
+class TestProviderAgnosticDispatchers:
+    # -----------------------------------------------------------------
+    # fetch_company_headlines
+    # -----------------------------------------------------------------
+
+    def test_headlines_fmp_disabled_falls_to_finnhub(self):
+        """FMP_NEWS_ENABLED defaults False -- straight to the Finnhub path,
+        and whatever Finnhub returns comes back unchanged."""
+        mock_client = MagicMock()
+        mock_client.company_news.return_value = [
+            {"headline": "Finnhub headline one", "datetime": 1234567890}
+        ]
+        with patch("settings.settings.FMP_NEWS_ENABLED", False):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                result = fetch_company_headlines("AAPL", 7)
+        assert result == [{"headline": "Finnhub headline one", "datetime": 1234567890}]
+
+    def test_headlines_fmp_enabled_short_circuits_finnhub(self):
+        """FMP enabled + keyed and the FMP fetch returns real items -> those
+        items come back WITHOUT ever calling build_finnhub_client (proving
+        FMP truly short-circuits the fallback, not just 'is tried first')."""
+        fmp_articles = [
+            {
+                "title": "FMP: Apple beats and raises guidance",
+                "publishedDate": "2026-08-01 09:30:00",
+                "url": "https://example.com/aapl-1",
+                "site": "example.com",
+                "text": "Apple posted strong quarterly results.",
+            },
+        ]
+        with patch("settings.settings.FMP_NEWS_ENABLED", True):
+            with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
+                with patch("data.fmp_client.stock_news", return_value=fmp_articles):
+                    with patch("signals.news_catalyst.build_finnhub_client") as mock_build:
+                        result = fetch_company_headlines("AAPL", 7)
+        mock_build.assert_not_called()
+        assert len(result) == 1
+        assert result[0]["headline"] == "FMP: Apple beats and raises guidance"
+        assert result[0]["source"] == "example.com"
+
+    def test_headlines_fmp_returns_empty_falls_through_to_finnhub(self):
+        """FMP enabled + keyed but stock_news() returns [] -> falls through
+        to Finnhub rather than returning an empty result outright."""
+        mock_client = MagicMock()
+        mock_client.company_news.return_value = [
+            {"headline": "Finnhub fallback headline", "datetime": 555}
+        ]
+        with patch("settings.settings.FMP_NEWS_ENABLED", True):
+            with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
+                with patch("data.fmp_client.stock_news", return_value=[]):
+                    with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                        result = fetch_company_headlines("AAPL", 7)
+        assert result == [{"headline": "Finnhub fallback headline", "datetime": 555}]
+
+    def test_headlines_fmp_unavailable_falls_through_to_finnhub(self):
+        """FMP enabled + keyed but stock_news() raises FMPUnavailable ->
+        falls through to Finnhub rather than propagating the exception."""
+        from data.fmp_client import FMPUnavailable
+
+        mock_client = MagicMock()
+        mock_client.company_news.return_value = [
+            {"headline": "Finnhub fallback after FMP outage", "datetime": 999}
+        ]
+        with patch("settings.settings.FMP_NEWS_ENABLED", True):
+            with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
+                with patch(
+                    "data.fmp_client.stock_news",
+                    side_effect=FMPUnavailable("simulated FMP outage"),
+                ):
+                    with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                        result = fetch_company_headlines("AAPL", 7)
+        assert result == [{"headline": "Finnhub fallback after FMP outage", "datetime": 999}]
+
+    def test_headlines_neither_provider_available_returns_empty(self):
+        """FMP disabled AND no Finnhub client -> [], never raises."""
+        with patch("settings.settings.FMP_NEWS_ENABLED", False):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=None):
+                result = fetch_company_headlines("AAPL", 7)
+        assert result == []
+
+    def test_fmp_helper_returns_empty_when_key_missing_even_if_enabled(self):
+        """_fetch_company_headlines_fmp itself is gated on BOTH
+        FMP_NEWS_ENABLED and FMP_API_KEY -- enabled with no key is still a
+        no-op, zero network calls."""
+        with patch("settings.settings.FMP_NEWS_ENABLED", True):
+            with patch("settings.settings.FMP_API_KEY", None):
+                with patch("data.fmp_client.stock_news") as mock_stock_news:
+                    result = _fetch_company_headlines_fmp("AAPL", 7)
+        mock_stock_news.assert_not_called()
+        assert result == []
+
+    # -----------------------------------------------------------------
+    # fetch_next_earnings_any
+    # -----------------------------------------------------------------
+
+    def test_earnings_fmp_disabled_falls_to_finnhub(self):
+        mock_client = MagicMock()
+        future = datetime.now(timezone.utc) + timedelta(days=10)
+        mock_client.earnings_calendar.return_value = {
+            "earningsCalendar": [{"date": future.strftime("%Y-%m-%d")}]
+        }
+        with patch("settings.settings.FMP_NEWS_ENABLED", False):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                result = fetch_next_earnings_any("AAPL")
+        assert result is not None
+        assert result.date() == future.date()
+
+    def test_earnings_fmp_enabled_short_circuits_finnhub(self):
+        """FMP enabled + keyed and fetch_earnings_rows() returns real rows
+        -> the SOONEST future event_date is picked, and build_finnhub_client
+        is never called."""
+        now = datetime.now(timezone.utc)
+        soon = (now + timedelta(days=5)).strftime("%Y-%m-%d")
+        later = (now + timedelta(days=40)).strftime("%Y-%m-%d")
+        rows = [
+            {"symbol": "AAPL", "event_date": later, "source": "fmp"},
+            {"symbol": "AAPL", "event_date": soon, "source": "fmp"},
+        ]
+        with patch("settings.settings.FMP_NEWS_ENABLED", True):
+            with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
+                with patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=rows):
+                    with patch("signals.news_catalyst.build_finnhub_client") as mock_build:
+                        result = fetch_next_earnings_any("AAPL")
+        mock_build.assert_not_called()
+        assert result is not None
+        assert result.strftime("%Y-%m-%d") == soon
+
+    def test_earnings_fmp_returns_empty_falls_through_to_finnhub(self):
+        mock_client = MagicMock()
+        future = datetime.now(timezone.utc) + timedelta(days=15)
+        mock_client.earnings_calendar.return_value = {
+            "earningsCalendar": [{"date": future.strftime("%Y-%m-%d")}]
+        }
+        with patch("settings.settings.FMP_NEWS_ENABLED", True):
+            with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
+                with patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=[]):
+                    with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                        result = fetch_next_earnings_any("AAPL")
+        assert result is not None
+        assert result.date() == future.date()
+
+    def test_earnings_fmp_only_past_rows_falls_through_to_finnhub(self):
+        """fetch_earnings_rows() can legitimately return only historical
+        rows (no future-dated event scheduled yet) -- the FMP branch's own
+        future-date filter then yields nothing, which must also fall
+        through to Finnhub rather than returning None outright."""
+        now = datetime.now(timezone.utc)
+        past = (now - timedelta(days=90)).strftime("%Y-%m-%d")
+        rows = [{"symbol": "AAPL", "event_date": past, "source": "fmp"}]
+        mock_client = MagicMock()
+        future = now + timedelta(days=20)
+        mock_client.earnings_calendar.return_value = {
+            "earningsCalendar": [{"date": future.strftime("%Y-%m-%d")}]
+        }
+        with patch("settings.settings.FMP_NEWS_ENABLED", True):
+            with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
+                with patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=rows):
+                    with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+                        result = fetch_next_earnings_any("AAPL")
+        assert result is not None
+        assert result.date() == future.date()
+
+    def test_earnings_neither_provider_available_returns_none(self):
+        with patch("settings.settings.FMP_NEWS_ENABLED", False):
+            with patch("signals.news_catalyst.build_finnhub_client", return_value=None):
+                result = fetch_next_earnings_any("AAPL")
+        assert result is None
+
+    # -----------------------------------------------------------------
+    # NewsCatalystSignal.pre_compute() -- FMP-only gate acceptance
+    # -----------------------------------------------------------------
+
+    def test_pre_compute_accepts_fmp_only_configuration(self):
+        """pre_compute()'s gate now checks fmp_available OR finnhub_available
+        -- with FMP as the SOLE configured provider (FINNHUB_API_KEY empty,
+        so build_finnhub_client() naturally returns None), pre_compute must
+        NOT take the 'no provider configured' early-return branch: _news_scores
+        gets populated, not left {}."""
+        sig = _make_signal()
+        ctx = _make_context()
+        universe = _make_universe(["AAPL"])
+        fmp_articles = [
+            {
+                "title": "Apple beats and raises full-year guidance",
+                "publishedDate": "2026-08-01 09:30:00",
+                "url": "https://example.com/aapl-2",
+                "site": "example.com",
+                "text": "Apple posted strong quarterly results.",
+            },
+        ]
+        with patch("settings.settings.FMP_NEWS_ENABLED", True):
+            with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
+                with patch("settings.settings.FINNHUB_API_KEY", ""):
+                    with patch("data.fmp_client.stock_news", return_value=fmp_articles):
+                        with patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=[]):
+                            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                                with patch("signals.news_catalyst.time.sleep"):
+                                    sig.pre_compute(universe, ctx)
+        assert sig._news_scores != {}
+        assert "AAPL" in sig._news_scores
+        assert ctx.news_sentiment_scores != {}
+
+    # -----------------------------------------------------------------
+    # _score_via_finnhub backward-compat alias
+    # -----------------------------------------------------------------
+
+    def test_score_via_finnhub_is_alias_for_score_via_provider(self):
+        """_score_via_finnhub (the old name) must remain resolvable as a
+        class-level alias for _score_via_provider -- literally the same
+        function object, not a separate wrapper that could drift."""
+        assert NewsCatalystSignal._score_via_finnhub is NewsCatalystSignal._score_via_provider
 
 
 # ===========================================================================

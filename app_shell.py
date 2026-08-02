@@ -115,7 +115,15 @@ def main(interval_seconds: int = 300, ui_port: Optional[int] = None) -> int:
         SIGTERM forces process exit directly (see ``_run_sigterm_watcher``
         below) and never returns to the caller.
     """
-    _load_dotenv(override=False)
+    # Anchored to ENV_PATH (settings.py) rather than a bare load_dotenv() —
+    # bare load_dotenv() uses find_dotenv(), which walks UP from this file's
+    # directory and, in a git worktree with no .env of its own, silently
+    # finds a PARENT checkout's .env instead. Deferred import (not at module
+    # top) for the same reason every other import in this function is
+    # deferred — see the comment below.
+    from settings import ENV_PATH
+
+    _load_dotenv(ENV_PATH, override=False)
 
     # Deferred imports: keeps `import app_shell` side-effect-free when
     # desktop/* or pywebview aren't installed, and lets tests patch

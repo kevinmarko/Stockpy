@@ -32,8 +32,13 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Stub env vars BEFORE importing the module under test.
-# (The module reads os.environ at function-call time, not import time, but
-# the import still triggers top-level module code so we guard here too.)
+# (The module reads credentials via the `settings` singleton, not os.environ,
+# at function-call time inside _login() -- not at import time. These
+# os.environ.setdefault calls are a defensive belt-and-suspenders for
+# whatever real .env this test session's settings.Settings() singleton was
+# constructed against; individual tests below patch
+# data.robinhood_portfolio._settings.RH_X directly, which is what actually
+# controls _login()'s behavior.)
 # ---------------------------------------------------------------------------
 os.environ.setdefault("RH_USERNAME", "test@example.com")
 os.environ.setdefault("RH_PASSWORD", "testpassword123")
@@ -747,9 +752,13 @@ class TestLoginFlow:
             return {"access_token": "mock-totp-token"}
 
         monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
-        monkeypatch.setenv("RH_USERNAME", "totp_user@example.com")
-        monkeypatch.setenv("RH_PASSWORD", "totp_pass")
-        monkeypatch.setenv("RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
+        # _login() reads credentials via the `settings` singleton, NOT
+        # os.environ (fixed 2026-08 -- pydantic-settings loads .env into
+        # Settings only, never into the real process environment, so an
+        # os.environ.setenv here would be silently ignored by _login()).
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "totp_user@example.com")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "totp_pass")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
 
         from data.robinhood_portfolio import _login
         _login()
@@ -779,9 +788,11 @@ class TestLoginFlow:
 
         monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
         monkeypatch.setattr("data.robinhood_portfolio.sys.stdin.isatty", lambda: True)
-        monkeypatch.setenv("RH_USERNAME", "sms_user@example.com")
-        monkeypatch.setenv("RH_PASSWORD", "sms_pass")
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+        # See test_login_with_mfa_secret above: credentials come from the
+        # `settings` singleton, not os.environ.
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "sms_user@example.com")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "sms_pass")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_MFA_SECRET", None)
 
         from data.robinhood_portfolio import _login
         _login()
@@ -803,9 +814,11 @@ class TestLoginFlow:
 
         monkeypatch.setattr("data.robinhood_portfolio.r.login", boom_login)
         monkeypatch.setattr("data.robinhood_portfolio.sys.stdin.isatty", lambda: False)
-        monkeypatch.setenv("RH_USERNAME", "sms_user@example.com")
-        monkeypatch.setenv("RH_PASSWORD", "sms_pass")
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+        # See test_login_with_mfa_secret above: credentials come from the
+        # `settings` singleton, not os.environ.
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "sms_user@example.com")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "sms_pass")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_MFA_SECRET", None)
 
         from data.robinhood_portfolio import _login
         with pytest.raises(ValueError, match="MFA code is required"):
@@ -817,9 +830,11 @@ class TestLoginFlow:
             return None
 
         monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
-        monkeypatch.setenv("RH_USERNAME", "user@example.com")
-        monkeypatch.setenv("RH_PASSWORD", "pass")
-        monkeypatch.setenv("RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
+        # See test_login_with_mfa_secret above: credentials come from the
+        # `settings` singleton, not os.environ.
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "user@example.com")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "pass")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
 
         from data.robinhood_portfolio import _login
         with pytest.raises(RuntimeError, match="Robinhood login failed"):

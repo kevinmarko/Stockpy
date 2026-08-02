@@ -4,7 +4,9 @@ llm/research.py — Tier 9 Scope 4 Opal grounded research brief (OpenAI/Gemini).
 
 Public entry point :func:`generate_research_brief` takes a symbol (+ an
 optional context dict), assembles a grounding packet of REAL retrieved
-Finnhub company news + earnings date (+ an optional macro snippet from
+company news + earnings date (FMP-first when configured, Finnhub-fallback
+otherwise — see ``signals.news_catalyst.fetch_company_headlines`` /
+``fetch_next_earnings_any``) (+ an optional macro snippet from
 ``context``), sends it to the operator-configured provider (``OpenAIProvider``
 or ``GeminiProvider``, chosen via ``OPAL_RESEARCH_PROVIDER`` and resolved by
 :func:`llm.router.get_research_provider`) via ``provider.call_structured``,
@@ -23,14 +25,14 @@ replacement (same contract as the rest of Tier 9).
 No fabricated metrics (CONSTRAINT #4)
 --------------------------------------
 The grounding packet is assembled from REAL retrieved data only
-(``signals.news_catalyst.fetch_company_news`` / ``fetch_next_earnings``).
+(``signals.news_catalyst.fetch_company_headlines`` / ``fetch_next_earnings_any``).
 The system prompt explicitly forbids inventing catalysts, headlines, or
 dates not present in the packet. ``ResearchBrief`` itself has NO numeric
 field — there is nothing to fabricate a price target or score into.
 
 Soft-fail contract (CONSTRAINT #6)
 -----------------------------------
-Every code path that touches the Finnhub client, the SDK, or the cache is
+Every code path that touches the news provider, the SDK, or the cache is
 wrapped in try/except. Any failure → ``None``; the caller falls back to
 the deterministic template exactly as if Opal were disabled.
 
@@ -104,43 +106,47 @@ def _gather_grounding(symbol: str, context: Optional[Dict[str, Any]] = None) -> 
 
     Returns a dict shaped ``{"headlines": list[str], "next_earnings":
     Optional[str] (ISO date), "macro_snippet": Optional[str]}``. Degrades to
-    the empty shape on any failure (missing ``FINNHUB_API_KEY``, network
-    error, missing ``finnhub-python`` package) — never invents grounding
-    data (CONSTRAINT #4 + #6).
+    the empty shape on any failure (no news provider configured — neither
+    ``settings.FMP_NEWS_ENABLED``+``FMP_API_KEY`` nor ``FINNHUB_API_KEY`` —
+    network error, missing ``finnhub-python`` package) — never invents
+    grounding data (CONSTRAINT #4 + #6).
+
+    Uses ``signals.news_catalyst``'s provider-agnostic dispatchers
+    (``fetch_company_headlines`` / ``fetch_next_earnings_any``, added
+    2026-08): FMP-first when configured, Finnhub-fallback otherwise, so this
+    grounding packet is real regardless of which provider actually served
+    it — the caller/prompt no longer needs to know or care.
     """
     packet: Dict[str, Any] = {"headlines": [], "next_earnings": None, "macro_snippet": None}
     try:
         from signals.news_catalyst import (  # noqa: PLC0415
-            build_finnhub_client,
-            fetch_company_news,
-            fetch_next_earnings,
+            fetch_company_headlines,
+            fetch_next_earnings_any,
         )
 
-        client = build_finnhub_client()
-        if client is not None:
-            lookback = int(getattr(settings, "NEWS_LOOKBACK_DAYS", 7) or 7)
-            try:
-                news_items = fetch_company_news(client, symbol, lookback)
-                packet["headlines"] = [
-                    str(item.get("headline", "")).strip()
-                    for item in news_items
-                    if item.get("headline")
-                ][:8]
-            except Exception as exc:
-                logger.debug(
-                    "research: _gather_grounding news fetch failed for %s: %s", symbol, exc
-                )
-            try:
-                next_earnings = fetch_next_earnings(client, symbol)
-                if next_earnings is not None:
-                    packet["next_earnings"] = next_earnings.date().isoformat()
-            except Exception as exc:
-                logger.debug(
-                    "research: _gather_grounding earnings fetch failed for %s: %s", symbol, exc
-                )
+        lookback = int(getattr(settings, "NEWS_LOOKBACK_DAYS", 7) or 7)
+        try:
+            news_items = fetch_company_headlines(symbol, lookback)
+            packet["headlines"] = [
+                str(item.get("headline", "")).strip()
+                for item in news_items
+                if item.get("headline")
+            ][:8]
+        except Exception as exc:
+            logger.debug(
+                "research: _gather_grounding news fetch failed for %s: %s", symbol, exc
+            )
+        try:
+            next_earnings = fetch_next_earnings_any(symbol)
+            if next_earnings is not None:
+                packet["next_earnings"] = next_earnings.date().isoformat()
+        except Exception as exc:
+            logger.debug(
+                "research: _gather_grounding earnings fetch failed for %s: %s", symbol, exc
+            )
     except Exception as exc:
         logger.debug(
-            "research: _gather_grounding Finnhub client unavailable for %s: %s", symbol, exc
+            "research: _gather_grounding news provider unavailable for %s: %s", symbol, exc
         )
 
     if isinstance(context, dict):
@@ -156,7 +162,7 @@ def _format_grounding_user_prompt(symbol: str, packet: Dict[str, Any]) -> str:
     lines = [f"Symbol: {symbol}"]
     headlines = packet.get("headlines") or []
     if headlines:
-        lines.append("Recent headlines (real, retrieved from Finnhub):")
+        lines.append("Recent headlines (real, retrieved from a live news provider):")
         for headline in headlines:
             lines.append(f"  - {headline}")
     else:
@@ -223,8 +229,8 @@ def generate_research_brief(
         :func:`llm.router.get_research_provider`.
     grounding_fn :
         Optional override for :func:`_gather_grounding` (test seam so tests
-        never hit real Finnhub). Receives ``(symbol, context)`` and must
-        return the grounding-packet dict shape.
+        never hit a real news provider). Receives ``(symbol, context)`` and
+        must return the grounding-packet dict shape.
 
     Returns
     -------

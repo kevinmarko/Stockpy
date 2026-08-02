@@ -463,12 +463,18 @@ class TestFileTickers:
 
 
 class TestWatchlistFilesFromEnv:
+    """_watchlist_files_from_env() reads settings.SYNC_WATCHLIST_FILES via the
+    `settings` singleton, not os.environ (fixed 2026-08) -- pydantic-settings
+    loads .env into Settings only, never into the real process environment."""
+
     def test_unset_env_returns_empty(self, monkeypatch):
-        monkeypatch.delenv("SYNC_WATCHLIST_FILES", raising=False)
+        monkeypatch.setattr(robinhood_client.settings, "SYNC_WATCHLIST_FILES", None)
         assert _watchlist_files_from_env() == []
 
     def test_parses_colon_separated_paths(self, monkeypatch):
-        monkeypatch.setenv("SYNC_WATCHLIST_FILES", "/a/b.txt: /c/d.txt :")
+        monkeypatch.setattr(
+            robinhood_client.settings, "SYNC_WATCHLIST_FILES", "/a/b.txt: /c/d.txt :"
+        )
         paths = _watchlist_files_from_env()
         assert [str(p) for p in paths] == ["/a/b.txt", "/c/d.txt"]
 
@@ -532,7 +538,7 @@ class TestDiscoverUniverse:
         env_file.write_text("aapl\n", encoding="utf-8")
         arg_file = tmp_path / "arg_list.txt"
         arg_file.write_text("msft\n", encoding="utf-8")
-        monkeypatch.setenv("SYNC_WATCHLIST_FILES", str(env_file))
+        monkeypatch.setattr(robinhood_client.settings, "SYNC_WATCHLIST_FILES", str(env_file))
 
         universe = discover_universe(client, extra_files=[arg_file])
 

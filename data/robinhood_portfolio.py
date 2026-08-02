@@ -46,6 +46,7 @@ import pyotp
 import robin_stocks.robinhood as r
 
 from dto_models import RobinhoodPositionDTO
+from settings import settings as _settings
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +60,24 @@ _CACHE_PATH: Path = Path(__file__).parent.parent / "cache" / "account_snapshot.j
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _require_env(name: str) -> str:
-    """Return the stripped value of *name* from os.environ, or raise.
+def _require_setting(name: str) -> str:
+    """Return the stripped value of ``settings.settings.<name>``, or raise.
+
+    Reads via the ``settings`` singleton, NOT ``os.environ`` — pydantic-
+    settings loads ``.env`` into the Settings model only; it never copies
+    values into the real process environment, so an ``os.environ`` read here
+    reports "missing" for any credential whose only source is ``.env`` and
+    that no caller happened to run ``load_dotenv()`` before reaching this
+    function (e.g. any of the standalone ``api/*.py`` FastAPI services, or a
+    script under ``scripts/`` launched directly). Reading via
+    ``settings.settings.X`` is correct regardless of whether ``load_dotenv()``
+    ever ran, because ``Settings()`` loads ``.env`` itself, independently,
+    through pydantic-settings' own ``env_file=ENV_PATH`` mechanism.
 
     Provides a clear, actionable error message naming exactly which variable
-    is missing so the developer knows what to add to .env.
+    is missing so the operator knows what to add to .env.
     """
-    value = os.environ.get(name, "").strip()
+    value = (getattr(_settings, name, None) or "").strip()
     if not value:
         raise RuntimeError(
             f"Required environment variable '{name}' is missing or empty. "
@@ -247,8 +259,8 @@ def _login_with(
 def _login() -> None:
     """Authenticate to Robinhood using TOTP or SMS MFA.
 
-    Reads RH_USERNAME, RH_PASSWORD, and optional RH_MFA_SECRET from os.environ
-    (populated from .env by python-dotenv / pydantic-settings at startup).
+    Reads RH_USERNAME, RH_PASSWORD, and optional RH_MFA_SECRET via the
+    ``settings`` singleton (populated from .env by pydantic-settings).
     Raises RuntimeError if any required credential is missing or if login fails.
 
     ``store_session=True`` persists the session pickle in ~/.tokens so that
@@ -272,9 +284,9 @@ def _login() -> None:
     stdin that will never receive input -- see _login_with's own docstring
     for why that distinction matters.
     """
-    username = _require_env("RH_USERNAME")
-    password = _require_env("RH_PASSWORD")
-    mfa_secret = os.environ.get("RH_MFA_SECRET", "").strip()
+    username = _require_setting("RH_USERNAME")
+    password = _require_setting("RH_PASSWORD")
+    mfa_secret = (_settings.RH_MFA_SECRET or "").strip()
 
     if mfa_secret:
         # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
@@ -529,6 +541,8 @@ def _read_cache() -> Optional[AccountSnapshot]:
 def fetch_account_snapshot(
     max_age_hours: float = 20.0,
     force: bool = False,
+    *,
+    allow_live_fetch: bool = True,
 ) -> AccountSnapshot:
     """Return a Robinhood account snapshot, using a daily cache when fresh.
 
@@ -541,6 +555,21 @@ def fetch_account_snapshot(
     force:
         When True, bypass the cache unconditionally and re-authenticate +
         re-fetch from Robinhood even if a fresh cache exists.
+    allow_live_fetch:
+        When False, Tier 3 (live login) is skipped for THIS call only,
+        regardless of ``settings.ROBINHOOD_AUTO_REFRESH_ENABLED`` — the
+        best available cached snapshot is returned instead (stale or not),
+        raising only when no cache exists at all.  Unlike
+        ``ROBINHOOD_AUTO_REFRESH_ENABLED`` (an operator-wide setting
+        affecting every caller — GUI panels, main.py's daily refresh, the
+        Pilots API), this is a per-call opt-out for callers that should
+        never attempt an interactive/TOTP login regardless of the global
+        setting — e.g. a headless backfill script resolving the universe
+        via :func:`data.portfolio_sync.resolve_universe`, which only needs
+        *a* universe, not a fresh one, and must never risk hanging on a
+        missing ``RH_MFA_SECRET``'s interactive MFA fallback.  Has no
+        effect when ``force=True`` (an explicit "I want it now" request
+        always takes precedence, exactly like ``ROBINHOOD_AUTO_REFRESH_ENABLED``).
 
     Returns
     -------
@@ -559,7 +588,7 @@ def fetch_account_snapshot(
         Live-fetch failure + cache present → returns stale cache, logs warning.
         Live-fetch failure + no cache     → raises the original exception.
 
-    settings.ROBINHOOD_AUTO_REFRESH_ENABLED=False:
+    settings.ROBINHOOD_AUTO_REFRESH_ENABLED=False, or allow_live_fetch=False:
         Tier 3 (live fetch) is skipped entirely whenever force=False — the
         best available cached snapshot is returned regardless of staleness,
         and no Robinhood login is attempted. Only force=True ever logs in.
@@ -590,16 +619,23 @@ def fetch_account_snapshot(
             )
             return cached
 
-    # ---- Tier 3: live fetch (skipped when auto-refresh is disabled) ----
+    # ---- Tier 3: live fetch (skipped when auto-refresh is disabled, or the
+    # caller opted out of a live fetch for this call via allow_live_fetch) ----
     if not force:
         from settings import settings as _settings
 
-        if not _settings.ROBINHOOD_AUTO_REFRESH_ENABLED:
+        if not _settings.ROBINHOOD_AUTO_REFRESH_ENABLED or not allow_live_fetch:
+            reason = (
+                "ROBINHOOD_AUTO_REFRESH_ENABLED=False"
+                if not _settings.ROBINHOOD_AUTO_REFRESH_ENABLED
+                else "allow_live_fetch=False"
+            )
             logger.info(
-                "ROBINHOOD_AUTO_REFRESH_ENABLED=False — skipping live Robinhood "
-                "login, returning best available cached snapshot regardless of "
-                "staleness. Run `python3 main.py --refresh-account` to fetch "
-                "fresh data on demand."
+                "%s — skipping live Robinhood login, returning best available "
+                "cached snapshot regardless of staleness. Run "
+                "`python3 main.py --refresh-account` to fetch fresh data on "
+                "demand.",
+                reason,
             )
             try:
                 from data.historical_store import HistoricalStore
@@ -612,9 +648,9 @@ def fetch_account_snapshot(
             if cached is not None:
                 return cached
             raise RuntimeError(
-                "No cached Robinhood account snapshot available and "
-                "ROBINHOOD_AUTO_REFRESH_ENABLED=False prevents a live fetch. "
-                "Run `python3 main.py --refresh-account` to fetch one manually."
+                f"No cached Robinhood account snapshot available and {reason} "
+                "prevents a live fetch. Run `python3 main.py --refresh-account` "
+                "to fetch one manually."
             )
 
     try:

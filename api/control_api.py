@@ -124,7 +124,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from settings import INTERVAL_MAX_SECONDS, settings, validate_interval_seconds
+from dotenv import load_dotenv as _load_dotenv
+
+from settings import ENV_PATH, INTERVAL_MAX_SECONDS, settings, validate_interval_seconds
+
+# Load .env before any subsequent project import. Standalone
+# `uvicorn api.control_api:app` has no main()-style entry point to hook this
+# into the way main.py/main_orchestrator.py/app_shell.py do, so it runs
+# here, at true module top, anchored to ENV_PATH (settings.py) — a bare
+# load_dotenv() walks UP from this file's directory via find_dotenv() and,
+# in a git worktree with no .env of its own, silently finds a PARENT
+# checkout's .env instead.
+_load_dotenv(ENV_PATH, override=False)
+
 from api.auth import (
     require_orchestrator_command_token as require_command_token,
     require_read_token,

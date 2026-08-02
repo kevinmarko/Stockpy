@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 # Sources with no author/follower/account-age concept at all — editorial or
 # regulatory copy, treated as fully trusted by policy (see module docstring).
-_INSTITUTIONAL_SOURCES = frozenset({"finnhub", "yahoo_rss", "gdelt", "edgar"})
+_INSTITUTIONAL_SOURCES = frozenset({"finnhub", "fmp_news", "yahoo_rss", "gdelt", "edgar"})
 
 # --- Tunables (calibrate on real ingested data before relying on these) ---
 _AUTHORITY_FOLLOWER_FLOOR = 50

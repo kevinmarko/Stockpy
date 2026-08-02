@@ -2594,7 +2594,7 @@ class GravityAIAuditor:
           (f) JSON serialisation round-trip is lossless.
           (g) No secret fields appear in the serialised payload.
           (h) fetched_at is UTC-aware.
-          (i) _require_env raises RuntimeError on a missing environment variable.
+          (i) _require_setting raises RuntimeError on a missing settings value.
         """
         audit: dict = {"status": "PENDING", "checks": {}}
         try:
@@ -2701,20 +2701,27 @@ class GravityAIAuditor:
                 "status": "PASSED" if utc_aware else "FAILED",
             }
 
-            # ── (i) _require_env raises on missing var ────────────────────────
-            from data.robinhood_portfolio import _require_env
-            import os as _os
-            prev = _os.environ.pop("_GRAVITY_TEST_MISSING_VAR_", None)
+            # ── (i) _require_setting raises on a missing settings value ──────
+            # data/robinhood_portfolio.py reads credentials via the `settings`
+            # singleton, NOT os.environ (fixed 2026-08 — see settings.ENV_PATH's
+            # docstring for why an os.environ read was wrong here: pydantic-
+            # settings loads .env into Settings only, never into the real
+            # process environment). This check monkeypatches the settings
+            # singleton attribute directly, matching that contract.
+            from data.robinhood_portfolio import _require_setting
+            from settings import settings as _rh_settings
+            _MISSING_ATTR = "_GRAVITY_TEST_MISSING_SETTING_"
+            prev = getattr(_rh_settings, _MISSING_ATTR, None)
+            setattr(_rh_settings, _MISSING_ATTR, None)
             try:
-                _require_env("_GRAVITY_TEST_MISSING_VAR_")
-                require_env_raises = False
+                _require_setting(_MISSING_ATTR)
+                require_setting_raises = False
             except RuntimeError:
-                require_env_raises = True
+                require_setting_raises = True
             finally:
-                if prev is not None:
-                    _os.environ["_GRAVITY_TEST_MISSING_VAR_"] = prev
-            audit["checks"]["require_env_raises_on_missing"] = {
-                "status": "PASSED" if require_env_raises else "FAILED",
+                setattr(_rh_settings, _MISSING_ATTR, prev)
+            audit["checks"]["require_setting_raises_on_missing"] = {
+                "status": "PASSED" if require_setting_raises else "FAILED",
             }
 
             passed = all(

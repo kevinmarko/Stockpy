@@ -1978,6 +1978,234 @@ const SECTOR_SELECTION_TUNABLE_DEFS: MockTunableDef[] = [
   },
 ];
 
+const FMP_TUNABLES_KEY = "stockpy.mock.fmp_tunables";
+const FMP_TUNABLES_DRIFT_KEY = "stockpy.mock.fmp_tunables_drift";
+const ETF_TRANSMISSION_TUNABLES_KEY = "stockpy.mock.etf_transmission_tunables";
+const ETF_TRANSMISSION_TUNABLES_DRIFT_KEY = "stockpy.mock.etf_transmission_tunables_drift";
+
+const FMP_TUNABLE_DEFS: MockTunableDef[] = [
+  {
+    group: "Client & Resiliency", key: "FMP_BASE_URL", type: "string",
+    value: "https://financialmodelingprep.com/stable", default: "https://financialmodelingprep.com/stable",
+    description: "Financial Modeling Prep API base URL.",
+  },
+  {
+    group: "Client & Resiliency", key: "FMP_TIMEOUT_SECONDS", type: "number",
+    value: 10.0, default: 10.0, min: 1.0, max: 120.0, step: 1.0,
+    description: "Per-request HTTP timeout in seconds.",
+  },
+  {
+    group: "Client & Resiliency", key: "FMP_MIN_REQUEST_INTERVAL_SECONDS", type: "number",
+    value: 0.25, default: 0.25, min: 0.0, max: 60.0, step: 0.05,
+    description: "Minimum interval between requests in seconds (0.25 = 240 req/min).",
+  },
+  {
+    group: "Client & Resiliency", key: "FMP_MAX_RETRIES", type: "number",
+    value: 2, default: 2, min: 0, max: 10, step: 1,
+    description: "Max retries on rate limit or server error.",
+  },
+  {
+    group: "Client & Resiliency", key: "FMP_RETRY_BACKOFF_SECONDS", type: "number",
+    value: 2.0, default: 2.0, min: 0.1, max: 60.0, step: 0.5,
+    description: "Base backoff duration in seconds for retries.",
+  },
+  {
+    group: "Client & Resiliency", key: "FMP_COOLDOWN_THRESHOLD", type: "number",
+    value: 5, default: 5, min: 1, max: 20, step: 1,
+    description: "Consecutive failures before opening the circuit breaker.",
+  },
+  {
+    group: "Client & Resiliency", key: "FMP_COOLDOWN_SECONDS", type: "number",
+    value: 300.0, default: 300.0, min: 1.0, max: 3600.0, step: 10.0,
+    description: "Duration in seconds the circuit breaker remains open.",
+  },
+  {
+    group: "Client & Resiliency", key: "FMP_FALLBACK_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Fall through to secondary providers (Alpaca/yfinance/Yahoo) on FMP failure.",
+  },
+  {
+    group: "Client & Resiliency", key: "FMP_MAX_SECONDS_PER_CYCLE", type: "number",
+    value: 120.0, default: 120.0, min: 1.0, max: 600.0, step: 1.0,
+    description: "Maximum wall-clock seconds allowed for FMP calls in a single pipeline cycle.",
+  },
+  {
+    group: "Primary Feeds", key: "FMP_QUOTES_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Use FMP as the quote provider (requires MARKET_DATA_PROVIDER=fmp).",
+  },
+  {
+    group: "Primary Feeds", key: "FMP_QUOTES_REALTIME", type: "boolean",
+    value: false, default: false,
+    description: "Treat FMP quotes as real-time rather than delayed.",
+  },
+  {
+    group: "Primary Feeds", key: "FMP_BARS_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Use FMP for historical OHLCV bars (requires MARKET_DATA_PROVIDER=fmp).",
+  },
+  {
+    group: "Primary Feeds", key: "FMP_BARS_ADJUSTMENT", type: "enum",
+    value: "dividend-adjusted", default: "dividend-adjusted", options: ["dividend-adjusted", "light", "full", "non-split-adjusted"],
+    description: "Adjustment mode for historical EOD bars.",
+  },
+  {
+    group: "Primary Feeds", key: "FMP_FUNDAMENTALS_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Use FMP for company fundamental data (requires FUNDAMENTALS_SOURCE=fmp).",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_ANALYST_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Fetch analyst consensus & price targets into diagnostic columns.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_ANALYST_REFRESH_HOURS", type: "number",
+    value: 24, default: 24, min: 1, max: 168, step: 1,
+    description: "Refresh interval for analyst consensus data in hours.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_EARNINGS_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Fetch earnings calendar & surprises into diagnostic columns.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_EARNINGS_REFRESH_HOURS", type: "number",
+    value: 12, default: 12, min: 1, max: 168, step: 1,
+    description: "Refresh interval for earnings data in hours.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_MACRO_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Fetch treasury rates & economic indicators into macro_history.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_ECON_INDICATORS", type: "string",
+    value: "unemploymentRate", default: "unemploymentRate",
+    description: "Comma-separated list of FMP economic indicator series to fetch.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_INSIDER_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Fetch insider trading statistics into diagnostic columns.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_INSIDER_REFRESH_DAYS", type: "number",
+    value: 7, default: 7, min: 1, max: 30, step: 1,
+    description: "Refresh interval for insider trading data in days.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_INSIDER_MIN_LAG_DAYS", type: "number",
+    value: 45, default: 45, min: 0, max: 90, step: 1,
+    description: "Minimum lag days required before analyzing insider trades.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_SECTOR_SNAPSHOT_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Fetch sector valuation & performance snapshots.",
+  },
+];
+
+const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
+  {
+    group: "Holdings Ingestion", key: "ETF_HOLDINGS_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for ETF constituent holdings ingestion (EDGAR N-PORT).",
+  },
+  {
+    group: "Holdings Ingestion", key: "ETF_HOLDINGS_TICKERS", type: "string",
+    value: '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
+    default: '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
+    description: "JSON array of ETF tickers to ingest holdings for.",
+  },
+  {
+    group: "Holdings Ingestion", key: "ETF_HOLDINGS_REFRESH_DAYS", type: "number",
+    value: 7, default: 7, min: 1, max: 90, step: 1,
+    description: "Refresh interval for ETF constituent holdings in days.",
+  },
+  {
+    group: "Holdings Ingestion", key: "ETF_HOLDINGS_ISSUER_CSV_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Allow secondary CSV ingestion directly from issuer sites.",
+  },
+  {
+    group: "Holdings Ingestion", key: "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE", type: "number",
+    value: 60.0, default: 60.0, min: 1.0, max: 300.0, step: 1.0,
+    description: "Max wall-clock seconds allocated for ETF holdings ingestion per cycle.",
+  },
+  {
+    group: "Holdings Ingestion", key: "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD", type: "number",
+    value: 3, default: 3, min: 1, max: 20, step: 1,
+    description: "Consecutive ingestion failures before circuit breaker trips.",
+  },
+  {
+    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for ETF volatility-transmission measurement columns.",
+  },
+  {
+    group: "Measurement & Residualization", key: "ETF_HOLDINGS_MARKET_PROXY", type: "string",
+    value: "SPY", default: "SPY",
+    description: "Market benchmark ticker used for residualization.",
+  },
+  {
+    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_WRAPPERS", type: "string",
+    value: '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
+    default: '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
+    description: "JSON array of candidate wrapper ETFs considered as transmission wrappers.",
+  },
+  {
+    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_EXCLUDED_SYMBOLS", type: "string",
+    value: "[]", default: "[]",
+    description: "JSON array of extra symbols excluded from ETF transmission calculation.",
+  },
+  {
+    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_WINDOW_DAYS", type: "number",
+    value: 60, default: 60, min: 10, max: 504, step: 1,
+    description: "Rolling window days for ETF comovement R² calculation.",
+  },
+  {
+    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_MIN_OBS", type: "number",
+    value: 60, default: 60, min: 5, max: 252, step: 1,
+    description: "Minimum required observation days in the rolling window.",
+  },
+  {
+    group: "Position Sizing Derate", key: "ETF_TRANSMISSION_SIZING_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Enable position sizing derate based on ETF ownership & comovement.",
+  },
+  {
+    group: "Position Sizing Derate", key: "ETF_TRANSMISSION_MAX_DERATE", type: "number",
+    value: 0.30, default: 0.30, min: 0.0, max: 1.0, step: 0.05,
+    description: "Maximum sizing derate fraction (e.g. 0.30 = up to 30% reduction).",
+  },
+  {
+    group: "Position Sizing Derate", key: "ETF_TRANSMISSION_OWNERSHIP_REFERENCE", type: "number",
+    value: 0.20, default: 0.20, min: 0.01, max: 1.0, step: 0.01,
+    description: "Reference ETF ownership percentage scaling the derate.",
+  },
+  {
+    group: "Position Sizing Derate", key: "ETF_TRANSMISSION_MIN_MULTIPLIER", type: "number",
+    value: 0.50, default: 0.50, min: 0.0, max: 1.0, step: 0.05,
+    description: "Floor for the position sizing multiplier.",
+  },
+  {
+    group: "Portfolio Covariance Adjustment", key: "ETF_TRANSMISSION_PORTFOLIO_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Enable ETF-co-ownership-adjusted portfolio covariance matrix.",
+  },
+  {
+    group: "Portfolio Covariance Adjustment", key: "ETF_TRANSMISSION_COV_INFLATION", type: "number",
+    value: 0.25, default: 0.25, min: 0.0, max: 5.0, step: 0.05,
+    description: "Off-diagonal covariance inflation factor for overlapping ETF holdings.",
+  },
+  {
+    group: "Portfolio Covariance Adjustment", key: "ETF_TRANSMISSION_COV_WINDOW_DAYS", type: "number",
+    value: 60, default: 60, min: 10, max: 504, step: 1,
+    description: "Rolling window days for ETF portfolio covariance calculation.",
+  },
+];
+
 function mockSentimentTunables(): TunablesResponse {
   return buildTunablesResponse(SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY);
 }
@@ -2004,6 +2232,35 @@ function applySectorSelectionTunables(
     SECTOR_SELECTION_TUNABLE_DEFS,
     SECTOR_SELECTION_TUNABLES_KEY,
     SECTOR_SELECTION_TUNABLES_DRIFT_KEY
+  );
+}
+
+function mockFmpTunables(): TunablesResponse {
+  return buildTunablesResponse(FMP_TUNABLE_DEFS, FMP_TUNABLES_KEY, FMP_TUNABLES_DRIFT_KEY);
+}
+
+function applyFmpTunables(
+  values: Record<string, number | boolean | string>
+): TunablesUpdateResult {
+  return applyTunablesGeneric(values, FMP_TUNABLE_DEFS, FMP_TUNABLES_KEY, FMP_TUNABLES_DRIFT_KEY);
+}
+
+function mockEtfTransmissionTunables(): TunablesResponse {
+  return buildTunablesResponse(
+    ETF_TRANSMISSION_TUNABLE_DEFS,
+    ETF_TRANSMISSION_TUNABLES_KEY,
+    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY
+  );
+}
+
+function applyEtfTransmissionTunables(
+  values: Record<string, number | boolean | string>
+): TunablesUpdateResult {
+  return applyTunablesGeneric(
+    values,
+    ETF_TRANSMISSION_TUNABLE_DEFS,
+    ETF_TRANSMISSION_TUNABLES_KEY,
+    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY
   );
 }
 
@@ -5505,6 +5762,26 @@ export const mockApi = {
     values: Record<string, number | boolean | string>
   ): Promise<TunablesUpdateResult> {
     return delay(applySectorSelectionTunables(values));
+  },
+
+  async getFmpSettings(): Promise<TunablesResponse> {
+    return delay(mockFmpTunables());
+  },
+
+  async updateFmpSettings(
+    values: Record<string, number | boolean | string>
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyFmpTunables(values));
+  },
+
+  async getEtfTransmissionSettings(): Promise<TunablesResponse> {
+    return delay(mockEtfTransmissionTunables());
+  },
+
+  async updateEtfTransmissionSettings(
+    values: Record<string, number | boolean | string>
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyEtfTransmissionTunables(values));
   },
 
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----

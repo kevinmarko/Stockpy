@@ -26,6 +26,8 @@ import { StrategyMatrix } from "./screens/StrategyMatrix";
 import { SettingsManager } from "./screens/SettingsManager";
 import { SentimentSettings } from "./screens/SentimentSettings";
 import { SectorSelectionSettings } from "./screens/SectorSelectionSettings";
+import { FmpSettings } from "./screens/FmpSettings";
+import { EtfTransmissionSettings } from "./screens/EtfTransmissionSettings";
 import { AIControlCenter } from "./screens/AIControlCenter";
 import { DataExplorer } from "./screens/DataExplorer";
 import { SignalBreakdown } from "./screens/SignalBreakdown";
@@ -245,6 +247,8 @@ export default function App() {
                 <Route path="/settings/tunables" element={<SettingsManager />} />
                 <Route path="/settings/sentiment" element={<SentimentSettings />} />
                 <Route path="/settings/sector-selection" element={<SectorSelectionSettings />} />
+                <Route path="/settings/fmp" element={<FmpSettings />} />
+                <Route path="/settings/etf-transmission" element={<EtfTransmissionSettings />} />
                 <Route path="/settings/ai" element={<AIControlCenter />} />
                 <Route path="/settings/prompts" element={<PromptRegistry />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

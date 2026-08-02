@@ -494,6 +494,18 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ values }),
     }),
+  getFmpSettings: () => http<TunablesResponse>("/settings/fmp"),
+  updateFmpSettings: (values: Record<string, number | boolean | string>) =>
+    http<TunablesUpdateResult>("/settings/fmp", {
+      method: "PUT",
+      body: JSON.stringify({ values }),
+    }),
+  getEtfTransmissionSettings: () => http<TunablesResponse>("/settings/etf-transmission"),
+  updateEtfTransmissionSettings: (values: Record<string, number | boolean | string>) =>
+    http<TunablesUpdateResult>("/settings/etf-transmission", {
+      method: "PUT",
+      body: JSON.stringify({ values }),
+    }),
   getFollows: () => http<Follow[]>("/follows"),
   follow: (id: string, amount: number) =>
     http<FollowResult>(`/pilots/${encodeURIComponent(id)}/follow`, {

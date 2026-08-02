@@ -63,6 +63,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+# Venv re-exec + .env loading -- must run before any third-party/project
+# import below (see scripts/_bootstrap.py's module docstring for why).
+from scripts._bootstrap import bootstrap  # noqa: E402
+bootstrap()
+
 from ml.meta_bootstrap import META_LABELED_SIGNAL_IDS  # noqa: E402
 from ml.registry_io import load_registry  # noqa: E402
 from scripts.train_lgbm import _DEFAULT_TICKERS, run_training  # noqa: E402

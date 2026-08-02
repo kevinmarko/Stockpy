@@ -1,6 +1,6 @@
 # FMP Data Integration
 
-**Source:** `data/fmp_client.py`, `data/fmp_fundamentals.py`, `data/fmp_macro.py`, `data/fmp_feeds_company.py`, `data/fmp_feeds_market.py`, `FMPProvider` in `data/market_data.py`
+**Source:** `data/fmp_client.py`, `data/fmp_fundamentals.py`, `data/fmp_macro.py`, `data/fmp_feeds_company.py`, `data/fmp_feeds_market.py`, `FMPProvider` in `data/market_data.py`. News (§7, 2026-08 addition): `data/fmp_client.py::stock_news`/`parse_news_published_date`, `data/sentiment_sources.py::FMPNewsSource`, `signals/news_catalyst.py::fetch_company_headlines`/`fetch_next_earnings_any`.
 **Verification gate:** `scripts/verify_fmp_bars.py`
 **Architecture reference:** `docs/architecture/data-layer.md`'s "FMP data layer" bullet
 **Planning source:** this document, `docs/architecture/data-layer.md`, and `CLAUDE.md`'s FMP bullet are all derived from the integration plan (`i-just-signed-up-modular-abelson`); where a claim below could not be independently re-verified against a live response by the agent that wrote it, that is stated explicitly rather than presented as confirmed.
@@ -34,7 +34,7 @@ Two honest, permanent consequences follow, stated plainly so nobody re-discovers
 
 ## 3. Settings reference
 
-All 26 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (data/fmp_client.py) ---`, are mirrored in `.env.example`, and (except the credential) are GUI-writable via `gui/panels/settings_manager.py`. **`FMP_API_KEY` alone never elects FMP as the active provider for anything.** All nine feed master gates enforce a genuine two-gate convention (the `STOCKTWITS_ENABLED` precedent) where a source is actually being REPLACED: quotes need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_QUOTES_ENABLED`; bars need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_BARS_ENABLED`, independently of the quotes gate; fundamentals need `FUNDAMENTALS_SOURCE=fmp` **and** `FMP_FUNDAMENTALS_ENABLED`; the six diagnostic feeds (`FMP_ANALYST_ENABLED` through `FMP_OPTIONS_HEALTH_ENABLED`) are each a single, standalone gate — they add new columns rather than replacing an existing source, so there is no second selector to require. When `MARKET_DATA_PROVIDER=fmp`/`FUNDAMENTALS_SOURCE=fmp` is set but the matching capability flag is `False`, that capability falls through **unconditionally** to the pre-existing default (Alpaca-if-keyed-else-yfinance for quotes/bars, Yahoo-derived for fundamentals) — this is deliberately independent of `FMP_FALLBACK_ENABLED`, since FMP is never attempted in the first place and there is nothing to fall back *from*. `CompositeProvider.quote_source`/`.is_realtime`/`.source_name` always report the provider that is genuinely serving, never `"fmp"` while its capability gate is off. `FMP_QUOTES_ENABLED` and `FMP_BARS_ENABLED` are fully independent: an operator can run quotes on FMP while bars stay on yfinance, or vice versa, from the same `MARKET_DATA_PROVIDER=fmp` selection.
+All 28 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (data/fmp_client.py) ---` (the three news settings — §7 — were added 2026-08, next to `FMP_EARNINGS_ENABLED`/`FMP_ECON_INDICATORS`), are mirrored in `.env.example`, and (except the credential) are GUI-writable via `gui/env_io.py`'s `ALLOWED_KEYS` (the desktop GUI itself is decommissioned as of 2026-07-20 — see `CLAUDE.md`'s "Frontend strategy" — so the three news settings are allowlisted for write access but have no new `gui/panels/settings_manager.py` widget). **`FMP_API_KEY` alone never elects FMP as the active provider for anything.** All nine feed master gates enforce a genuine two-gate convention (the `STOCKTWITS_ENABLED` precedent): quotes need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_QUOTES_ENABLED`; bars need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_BARS_ENABLED`, independently of the quotes gate; fundamentals need `FUNDAMENTALS_SOURCE=fmp` **and** `FMP_FUNDAMENTALS_ENABLED`; news needs `FMP_NEWS_ENABLED` **and** `FMP_API_KEY` (see §7); the five diagnostic feeds (`FMP_ANALYST_ENABLED` through `FMP_SECTOR_SNAPSHOT_ENABLED`) are each a single, standalone gate. When `MARKET_DATA_PROVIDER=fmp`/`FUNDAMENTALS_SOURCE=fmp` is set but the matching capability flag is `False`, that capability falls through **unconditionally** to the pre-existing default (Alpaca-if-keyed-else-yfinance for quotes/bars, Yahoo-derived for fundamentals) — this is deliberately independent of `FMP_FALLBACK_ENABLED`, since FMP is never attempted in the first place and there is nothing to fall back *from*. `CompositeProvider.quote_source`/`.is_realtime`/`.source_name` always report the provider that is genuinely serving, never `"fmp"` while its capability gate is off. `FMP_QUOTES_ENABLED` and `FMP_BARS_ENABLED` are fully independent: an operator can run quotes on FMP while bars stay on yfinance, or vice versa, from the same `MARKET_DATA_PROVIDER=fmp` selection.
 
 ### Credential (1) — `SECRET_KEYS` only, never GUI-writable
 
@@ -65,6 +65,7 @@ All 26 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 | `FMP_FUNDAMENTALS_ENABLED` | `bool` | `False` | Master switch for FMP-sourced fundamentals. Also requires `FUNDAMENTALS_SOURCE=fmp`. |
 | `FMP_ANALYST_ENABLED` | `bool` | `False` | Master switch for the analyst feed (price-target consensus + grades summary) as diagnostic columns. Single gate. |
 | `FMP_EARNINGS_ENABLED` | `bool` | `False` | Master switch for the earnings calendar/surprise feed. Single gate. |
+| `FMP_NEWS_ENABLED` | `bool` | `False` | Master switch for FMP as the PRIMARY company-news/earnings-date provider (also requires `FMP_API_KEY`). See §7. |
 | `FMP_MACRO_ENABLED` | `bool` | `False` | Master switch for the macro feed (treasury rates + `FMP_ECON_INDICATORS`). Single gate. |
 | `FMP_INSIDER_ENABLED` | `bool` | `False` | Master switch for the insider-trading statistics feed (per-symbol cost). Single gate, separate from sector snapshots on purpose. |
 | `FMP_SECTOR_SNAPSHOT_ENABLED` | `bool` | `False` | Master switch for the dated sector P/E + sector performance snapshots (2 requests/cycle total). Single gate. |
@@ -82,6 +83,8 @@ All 26 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 | `FMP_INSIDER_REFRESH_DAYS` | `int` | `7` | Days before a symbol's cached insider statistics are re-fetched. |
 | `FMP_INSIDER_MIN_LAG_DAYS` | `int` | `45` | Minimum days a quarter must have been closed before its insider aggregate is consumed (Form 4s keep landing after quarter-end). A deliberate conservative judgment call, not a derived constant. |
 | `FMP_ECON_INDICATORS` | `str` | `"unemploymentRate"` | Comma-separated `/economic-indicators` series names fetched when `FMP_MACRO_ENABLED=True` (e.g. `"unemploymentRate,GDP,CPI"`). A plain comma-separated string, not JSON — matches the `SENTIMENT_SOURCES` convention. |
+| `FMP_NEWS_PAGE_LIMIT` | `int` | `100` | Articles requested per `/news/stock` page. Only consulted when `FMP_NEWS_ENABLED=True`. See §7. |
+| `FMP_NEWS_MAX_PAGES` | `int` | `10` | Hard ceiling on pages fetched per symbol per call — bounds a wide backfill window. Older articles past the ceiling are an honest, logged gap, not a fabricated substitute. Only consulted when `FMP_NEWS_ENABLED=True`. See §7. |
 | `FMP_MAX_SECONDS_PER_CYCLE` | `float` | `120.0` | Wall-clock budget for all FMP requests in one pipeline cycle. Once spent, remaining symbols degrade to `NaN` for that cycle rather than overrunning it. |
 
 ### Related, pre-existing settings whose descriptions changed (no default changed)
@@ -168,3 +171,80 @@ Reproduced from the integration plan's own "Risks" section, largely verbatim, so
 **Not fixable on Starter, stated plainly** (see §2 above for the full explanation):
 - `Institutional Velocity` stays hardcoded `0.0` — 13F is Ultimate-only, and Starter has no short-interest feed either.
 - `data/etf_holdings.py`'s SEC N-PORT path and its 1–5 month staleness are unchanged by this integration.
+
+---
+
+## 7. Company news feed (2026-08 addition)
+
+Added in response to an operator report of two related failures — a `RH_USERNAME`
+resolution bug (fixed separately, see `CLAUDE.md`'s `.env`-resolution notes) and a
+`FINNHUB_API_KEY is not set ... (or finnhub-python is not installed)` error from
+`scripts/backfill_news_history.py` — that prompted the decision to make FMP the
+PRIMARY company-news source, with Finnhub kept as an opt-in fallback rather than
+removed outright.
+
+**Endpoint used:** `data/fmp_client.py::stock_news` wraps `GET /news/stock`
+(`symbols`, `from`, `to`, `page`, `limit` params). Verified live 2026-08 against a
+real FMP key: a single 10-day window returned 99 and 93 articles across two pages,
+and a query 6 months in the past still returned genuinely real, dated articles —
+well past Finnhub's free-tier ~3 month cap (`settings.NEWS_LOOKBACK_DAYS`'s own
+description). **Deliberately does NOT wrap `/news/press-releases`** — that endpoint
+returned `"Restricted Endpoint... please visit our subscription page to upgrade
+your plan"` (a plan-entitlement rejection, not a bug) against the Starter-tier
+account this integration was verified with.
+
+**`publishedDate` timezone — verified, not assumed.** FMP's news payload returns
+`publishedDate` as a naive `"YYYY-MM-DD HH:MM:SS"` string with no timezone marker.
+This was resolved by cross-referencing a real article rather than guessing: FMP
+reported `publishedDate: "2026-08-02 14:51:00"` for a GlobeNewswire press release
+whose OWN page states `"August 02, 2026 14:51 ET"` — an exact match. **FMP's news
+timestamps are therefore US Eastern Time, not UTC.**
+`data/fmp_client.py::parse_news_published_date` localizes via
+`ZoneInfo("America/New_York")` (not a fixed UTC-4/UTC-5 offset, so EDT/EST
+daylight-saving transitions are handled correctly year-round) before converting to
+the UTC-aware `datetime` every other timestamp in this codebase uses. Getting this
+wrong would have shifted every `news_history` day-bucket by up to 5 hours,
+silently — exactly the class of "fails plausibly, not loudly" risk §6 above warns
+about for the bars-adjustment setting; the same discipline (verify against a real,
+independently-dated record) was applied here.
+
+**Consumers, all provider-agnostic (FMP-first, Finnhub-fallback):**
+- `data/sentiment_sources.py::FMPNewsSource` (`name = "fmp_news"`) — a new,
+  separately-selectable entry in `_SOURCE_REGISTRY`/`_SOURCE_PRIORITY` (ahead of
+  `"finnhub"`). Opt-in: an operator must add `"fmp_news"` to `SENTIMENT_SOURCES`
+  *and* set `FMP_NEWS_ENABLED=True` for it to run. Paginates, scores via the
+  batched `score_headlines()` path, and is bounded by `deadline_exceeded()` like
+  every other multi-request source in this module (the `GDELTSource` pattern).
+- `signals/news_catalyst.py::fetch_company_headlines(symbol, lookback_days)` and
+  `fetch_next_earnings_any(symbol)` — new top-level dispatcher functions. Each
+  tries FMP first (when `FMP_NEWS_ENABLED` + `FMP_API_KEY`), falling back to the
+  existing Finnhub-specific `build_finnhub_client()`/`fetch_company_news()`/
+  `fetch_next_earnings()` otherwise (those three functions are UNCHANGED and stay
+  exported, since `FMPNewsSource`'s Finnhub sibling `FinnhubSentimentSource` and
+  other explicit-Finnhub callers still use them directly). `NewsCatalystSignal`'s
+  `pre_compute()` (renamed internal method `_score_via_provider`, aliased from the
+  old `_score_via_finnhub` name), `llm/research.py`'s Opal grounding packet, and
+  `engine/agent_sentiment.py`'s Antigravity agent tool were all re-pointed at
+  these two dispatchers — the earnings-date gate that used to require a Finnhub
+  client now also accepts FMP-only configuration.
+- `scripts/backfill_news_history.py` — `_fetch_headlines`/`_fetch_earnings_dates`
+  each gained an FMP-first half (`_fetch_headlines_fmp`/`_fetch_earnings_dates_fmp`)
+  using the same wide-date-range-in-one-call-then-reconstruct-locally approach the
+  Finnhub path already used, so a 6-month backfill still costs a small, bounded
+  number of provider calls, not thousands. The pagination ceiling
+  (`FMP_NEWS_MAX_PAGES`) is logged, not silently absorbed, when it's hit.
+
+**Verified, live, 2026-08** (not merely fixture-driven): `stock_news` pagination
+and date-window filtering; `FMPNewsSource.fetch()` end-to-end against real AAPL
+headlines; `fetch_company_headlines`/`fetch_next_earnings_any` end-to-end,
+including the earnings-date result (`2026-10-29`, matching a direct
+`/earnings?symbol=AAPL` probe); the full `NewsCatalystSignal.pre_compute()` path
+with FMP as the sole configured provider; the full `backfill_news_history.py`
+`_backfill_symbol()` path including the page-ceiling warning path (deliberately
+triggered with a low `FMP_NEWS_MAX_PAGES` to confirm the log fires and coverage
+degrades honestly rather than silently).
+
+**Not changed:** `FinnhubSentimentSource` (`data/sentiment_sources.py`) stays
+Finnhub-specific and is not re-pointed at the dispatchers — it remains a
+separately-selectable `SENTIMENT_SOURCES` entry for an operator who wants Finnhub
+specifically, alongside (or instead of) `fmp_news`.
