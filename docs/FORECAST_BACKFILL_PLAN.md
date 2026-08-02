@@ -7,7 +7,18 @@ The Multi-Horizon Forecast Backfill and Meta-Labeling engine (`ml/forecast_backf
 1. **Time-Series Momentum (TSMOM)**
 2. **Cross-Sectional Momentum (CSMOM)**
 
-The pipeline enables the Agentic Trading platform to train confidence classifiers that evaluate market environment conditions (volatility, RSI, MACD, volume ratio) to output $P(\text{success})$ confidence probabilities for primary signals, providing quantitative guardrails and sizing filters.
+The pipeline trains confidence classifiers that evaluate market environment conditions (volatility, RSI, MACD, volume ratio) to output out-of-sample $P(\text{success})$ probabilities for primary signals, per horizon.
+
+**Current scope: standalone research/backfill diagnostic, not wired to live trading.** The trained
+per-horizon models (`ml/models/meta_{TSMOM,CSMOM}_{10,30,60,90}d.pkl`) are plain pickled
+classifiers, not `ml.meta_labeling.MetaLabeler` instances, and are **not** registered into
+`ml.meta_labeling.global_meta_registry` — `SignalAggregator`/`StrategyEngine`'s live position
+sizing and confidence gating are unaffected by this engine today. `ml/meta_bootstrap.py` documents
+why (file-naming convention, pickled type, and signal-id keying are all incompatible with the
+existing single-model-per-`SignalModule` gate). Wiring multi-horizon confidence into live sizing
+is a real, separate design decision (which horizon should gate the existing `timeseries_momentum`/
+`cross_sectional_momentum` signals, or a new aggregation across horizons) that hasn't been made —
+this PR ships the backfill/training/reporting engine and its API + UI, not that wiring.
 
 ---
 

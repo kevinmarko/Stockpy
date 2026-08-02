@@ -9,9 +9,20 @@ from pathlib import Path
 import pytest
 import pandas as pd
 import numpy as np
+from sklearn.ensemble import RandomForestClassifier
 
 from ml.forecast_backfill import AgenticForecastBackfiller
 from settings import settings
+
+# Module-level (not test-local) so it stays picklable -- step_5 persists every
+# trained classifier via pickle.dump().
+_captured_train_max_date: dict = {}
+
+
+class _RecordingClassifier(RandomForestClassifier):
+    def fit(self, X, y):
+        _captured_train_max_date["date"] = X.index.get_level_values("Date").max()
+        return super().fit(X, y)
 
 
 def test_backfiller_initialization():
@@ -87,6 +98,96 @@ def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     assert not out_df.empty
     assert summary["total_rows"] == len(out_df)
     assert len(summary["metrics"]) == 8
+
+
+def test_step_6_no_model_produces_nan_not_fabricated_confidence():
+    """A horizon/model that never trained (e.g. insufficient samples) must
+    leave its Meta_Prob column as NaN, never a fabricated placeholder like
+    1.0 (CONSTRAINT #4) -- a fake 100%-confidence value would otherwise be
+    indistinguishable from a genuine, trained prediction downstream."""
+    engine = AgenticForecastBackfiller(
+        tickers=["AAPL", "MSFT"],
+        start_date="2018-01-01",
+        end_date="2022-01-01",
+        horizons=[10],
+        use_fmp=False,
+    )
+    engine.step_1_fetch_data()
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    engine.step_4_create_meta_targets()
+    engine.step_5_backtrain_meta_labelers()
+
+    # Simulate "no model trained for this horizon" (e.g. too few samples).
+    engine.models.pop("TSMOM_10d", None)
+    engine.step_6_execute_backfill()
+
+    assert engine.data["TSMOM_Meta_Prob_10d"].isna().all()
+    assert not (engine.data["TSMOM_Meta_Prob_10d"] == 1.0).any()
+
+
+def test_synthetic_fallback_is_flagged_not_silently_indistinguishable_from_real():
+    """When neither FMP nor CompositeProvider returns data for a ticker, the
+    substituted synthetic random-walk panel must be tracked and surfaced in
+    the exported summary -- a provider outage must never look like a genuine
+    backtest (CONSTRAINT #4)."""
+    engine = AgenticForecastBackfiller(
+        tickers=["ZZZZ_NOT_REAL"],
+        start_date="2020-01-01",
+        end_date="2022-01-01",
+        horizons=[10],
+        use_fmp=False,
+    )
+    engine.step_1_fetch_data()
+    assert "ZZZZ_NOT_REAL" in engine.synthetic_tickers
+
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    engine.step_4_create_meta_targets()
+    engine.step_5_backtrain_meta_labelers()
+    engine.step_6_execute_backfill()
+    _, summary = engine.export_results(filename="test_synthetic_flag_output.csv")
+    assert summary["synthetic_tickers"] == ["ZZZZ_NOT_REAL"]
+
+
+def test_train_test_split_embargoes_overlapping_forward_window(monkeypatch):
+    """The last `h` dates before the split boundary must be excluded from
+    training, since their target label is derived from a forward return that
+    extends past the boundary into the test period -- otherwise test-period
+    price moves leak into training (the same overlapping-label leakage class
+    validation/purged_cv.py and the CNN-LSTM purged split guard elsewhere in
+    this codebase)."""
+    import ml.forecast_backfill as fb_module
+
+    horizon = 30
+    engine = AgenticForecastBackfiller(
+        tickers=["AAPL", "MSFT", "AMZN"],
+        start_date="2018-01-01",
+        end_date="2022-01-01",
+        horizons=[horizon],
+        use_fmp=False,
+    )
+    engine.step_1_fetch_data()
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+    engine.step_4_create_meta_targets()
+
+    _captured_train_max_date.clear()
+    monkeypatch.setattr(fb_module, "RandomForestClassifier", _RecordingClassifier)
+    engine.step_5_backtrain_meta_labelers()
+
+    target_col = "TSMOM_Target_30d"
+    features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
+    clean_df = engine.data.dropna(subset=features + [target_col])
+    dates = clean_df.index.get_level_values("Date").unique().sort_values()
+    split_idx = int(len(dates) * engine.train_split)
+    split_date = dates[split_idx]
+
+    # The recorded training set's latest date must be at least `horizon`
+    # trading days before split_date -- i.e. its forward-return window never
+    # crosses into the test period.
+    assert _captured_train_max_date["date"] <= dates[max(0, split_idx - horizon)]
+    assert _captured_train_max_date["date"] < split_date
 
 
 def test_forecast_backfill_api_endpoint(monkeypatch, tmp_path):

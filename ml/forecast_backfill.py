@@ -84,6 +84,12 @@ class AgenticForecastBackfiller:
         self.data: pd.DataFrame = pd.DataFrame()
         self.models: Dict[str, Any] = {}
         self.metrics: Dict[str, Dict[str, float]] = {}
+        # Tickers for which no real provider (FMP nor CompositeProvider) returned
+        # data and a synthetic random-walk panel was substituted instead (offline
+        # testing only, in principle) — tracked so a real-environment provider
+        # outage is never silently indistinguishable from genuine market data in
+        # the exported summary/API/UI (CONSTRAINT #4).
+        self.synthetic_tickers: List[str] = []
 
     def step_1_fetch_data(self) -> pd.DataFrame:
         """Step 1: Fetch daily OHLCV price and volume data using FMP or fallback providers."""
@@ -141,7 +147,13 @@ class AgenticForecastBackfiller:
         # Synthetic fallback if zero real data returned (e.g. offline unit testing)
         still_missing = [t for t in self.tickers if t not in price_dict or price_dict[t].empty]
         if still_missing:
-            logger.info("Generating synthetic random walk price panel for %d offline tickers.", len(still_missing))
+            self.synthetic_tickers = list(still_missing)
+            logger.warning(
+                "No real data (FMP nor CompositeProvider) for %d ticker(s) — "
+                "substituting a SYNTHETIC random-walk price panel: %s. Any "
+                "metrics/probabilities for these tickers are not from real "
+                "market data.", len(still_missing), still_missing,
+            )
             dates = pd.date_range(start=self.start_date, end=self.end_date, freq="B")
             for i, ticker in enumerate(still_missing):
                 rng = np.random.default_rng(abs(hash((ticker, self.random_state))) % (2**32))
@@ -261,7 +273,20 @@ class AgenticForecastBackfiller:
         return self.data
 
     def step_5_backtrain_meta_labelers(self) -> Dict[str, Any]:
-        """Step 5: Train multi-horizon Meta-Labeling models on chronological train/test split."""
+        """Step 5: Train multi-horizon Meta-Labeling models on chronological train/test split.
+
+        Each row's target label (``{model_type}_Target_{h}d``) is derived from a
+        forward return that looks ``h`` trading days ahead of that row's date
+        (see ``step_4_create_meta_targets``). A naive split at ``split_date``
+        therefore leaks test-period price information into training: every
+        training row within ``h`` days of the boundary has a label computed
+        from data that falls inside the test window. This purges/embargoes the
+        last ``h`` dates before the split out of the training set — the same
+        overlapping-label leakage class this platform already guards against
+        elsewhere (``validation/purged_cv.py``, the CNN-LSTM purged train/val
+        split in ``forecasting_engine.py``) — so the reported OOS accuracy/AUC
+        isn't inflated by boundary leakage.
+        """
         logger.info("[*] Step 5: Training meta-labelers across models & horizons...")
         features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
 
@@ -277,9 +302,18 @@ class AgenticForecastBackfiller:
                 dates = clean_df.index.get_level_values("Date").unique().sort_values()
                 split_idx = int(len(dates) * self.train_split)
                 split_date = dates[split_idx]
+                embargo_idx = max(0, split_idx - h)
+                train_cutoff_date = dates[embargo_idx]
 
-                train_df = clean_df[clean_df.index.get_level_values("Date") <= split_date]
+                train_df = clean_df[clean_df.index.get_level_values("Date") <= train_cutoff_date]
                 test_df = clean_df[clean_df.index.get_level_values("Date") > split_date]
+
+                if len(train_df) < 30 or len(test_df) < 30:
+                    logger.warning(
+                        "Insufficient post-embargo samples (train=%d, test=%d) for %s_%dd model. Skipping.",
+                        len(train_df), len(test_df), model_type, h,
+                    )
+                    continue
 
                 X_train, y_train = train_df[features], train_df[target_col].astype(int)
                 X_test, y_test = test_df[features], test_df[target_col].astype(int)
@@ -357,7 +391,12 @@ class AgenticForecastBackfiller:
                     probabilities = clf.predict_proba(X_infer)[:, 1]
                     self.data.loc[valid_mask, prob_col] = probabilities
                 else:
-                    self.data[prob_col] = 1.0  # neutral fallback
+                    # No trained model for this horizon (insufficient samples) —
+                    # NaN, never a fabricated confidence value (CONSTRAINT #4).
+                    # export_results()'s dropna() then correctly excludes these
+                    # rows from the exported CSV rather than reporting a fake
+                    # 100%-confidence probability.
+                    self.data[prob_col] = np.nan
 
         logger.info("[+] Step 6 complete. Forecast backfill executed.")
         return self.data
@@ -378,12 +417,19 @@ class AgenticForecastBackfiller:
         output_df.to_csv(out_csv)
 
         summary_payload = {
+            "status": "completed",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tickers": self.tickers,
             "horizons": self.horizons,
             "metrics": self.metrics,
             "total_rows": len(output_df),
             "csv_path": str(out_csv),
+            # Non-empty iff step_1_fetch_data had to substitute a synthetic
+            # random-walk panel for one or more tickers (no real FMP/
+            # CompositeProvider data available) — surfaced end-to-end so a
+            # provider outage is never silently indistinguishable from a real
+            # backtest in the API response or webapp screen (CONSTRAINT #4).
+            "synthetic_tickers": list(self.synthetic_tickers),
         }
         with open(out_json, "w") as f:
             json.dump(summary_payload, f, indent=2)

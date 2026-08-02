@@ -81,6 +81,18 @@ export function ForecastBackfillScreen() {
         <ErrorState message={error} status={status} onRetry={() => void reload()} />
       ) : (
         <>
+          {(data?.synthetic_tickers?.length ?? 0) > 0 && (
+            <div
+              className="card card-pad"
+              style={{ marginBottom: "var(--s-4)", borderColor: theme.caution, color: theme.textPrimary }}
+            >
+              <strong>No real market data for {data?.synthetic_tickers?.length} ticker(s)</strong> —
+              FMP and the fallback provider both returned nothing, so a synthetic random-walk price
+              panel was substituted for: {data?.synthetic_tickers?.join(", ")}. Metrics/probabilities
+              touching these tickers are not from real market data.
+            </div>
+          )}
+
           <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
             <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", marginBottom: "var(--s-3)" }}>
               Pipeline Status & Data Sourcing
@@ -153,13 +165,14 @@ export function ForecastBackfillScreen() {
 
           <section className="card card-pad">
             <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", marginBottom: "var(--s-2)" }}>
-              How Meta-Labeling Guardrails Work
+              How This Research Engine Works
             </div>
             <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", lineHeight: 1.6 }}>
               Primary models (TSMOM & CSMOM) generate raw directional signals (+1 for Buy, -1 for Sell).
               Secondary Meta-Labelers learn market environment conditions (volatility regime, RSI, MACD, volume ratio)
-              under which primary signals succeed or fail. The agent uses forecast probabilities to scale position sizing
-              or zero out positions when confidence drops below safety thresholds.
+              under which primary signals succeed or fail at each horizon, and report out-of-sample accuracy/AUC per
+              model above. This is a standalone research &amp; backfill diagnostic — its trained models are not
+              currently wired into live position sizing or the signal aggregator's confidence gate.
             </p>
           </section>
         </>

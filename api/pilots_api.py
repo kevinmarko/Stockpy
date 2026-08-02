@@ -93,6 +93,7 @@ import json
 import logging
 import math
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -847,35 +848,54 @@ def get_forecast_backfill_status() -> Dict[str, Any]:
     }
 
 
+_forecast_backfill_lock = threading.Lock()
+
+
 @app.post("/pilots/forecast_backfill/run", dependencies=[Depends(require_command_token)])
 def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Dict[str, Any]:
-    """Trigger an on-demand forecast backfill cycle across specified tickers & horizons."""
-    from ml.forecast_backfill import AgenticForecastBackfiller
+    """Trigger an on-demand forecast backfill cycle across specified tickers & horizons.
 
-    engine = AgenticForecastBackfiller(
-        tickers=req.tickers,
-        start_date=req.start_date,
-        end_date=req.end_date,
-        horizons=req.horizons,
-        use_fmp=req.use_fmp,
-    )
-
+    Runs synchronously (this is an occasional, manually-triggered research
+    action, not a hot path) but single-flight guarded: a second call while one
+    is already in progress would otherwise race on the SAME shared output
+    files (ml/models/meta_*.pkl, output/agentic_forecast_backfill.csv,
+    output/agentic_forecast_summary.json) and could corrupt them via
+    interleaved writes. A non-blocking lock acquire returns 409 instead.
+    """
+    if not _forecast_backfill_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="A forecast backfill run is already in progress.",
+        )
     try:
-        engine.step_1_fetch_data()
-        engine.step_2_calculate_technical_features()
-        engine.step_3_generate_primary_signals()
-        engine.step_4_create_meta_targets()
-        metrics = engine.step_5_backtrain_meta_labelers()
-        engine.step_6_execute_backfill()
-        output_df, summary = engine.export_results()
-        return {
-            "status": "success",
-            "summary": summary,
-            "sample_rows": len(output_df),
-        }
-    except Exception as exc:
-        logger.error("Forecast backfill run API call failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Forecast backfill failed: {exc}")
+        from ml.forecast_backfill import AgenticForecastBackfiller
+
+        engine = AgenticForecastBackfiller(
+            tickers=req.tickers,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            horizons=req.horizons,
+            use_fmp=req.use_fmp,
+        )
+
+        try:
+            engine.step_1_fetch_data()
+            engine.step_2_calculate_technical_features()
+            engine.step_3_generate_primary_signals()
+            engine.step_4_create_meta_targets()
+            metrics = engine.step_5_backtrain_meta_labelers()
+            engine.step_6_execute_backfill()
+            output_df, summary = engine.export_results()
+            return {
+                "status": "success",
+                "summary": summary,
+                "sample_rows": len(output_df),
+            }
+        except Exception as exc:
+            logger.error("Forecast backfill run API call failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Forecast backfill failed: {exc}")
+    finally:
+        _forecast_backfill_lock.release()
 
 
 @app.get("/pilots/{pilot_id}", dependencies=[Depends(require_read_token)])

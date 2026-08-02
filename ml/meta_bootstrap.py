@@ -46,15 +46,22 @@ logger = logging.getLogger("ML.MetaBootstrap")
 META_LABELED_SIGNAL_IDS: tuple[str, ...] = (
     "timeseries_momentum",
     "cross_sectional_momentum",
-    "TSMOM_10d",
-    "TSMOM_30d",
-    "TSMOM_60d",
-    "TSMOM_90d",
-    "CSMOM_10d",
-    "CSMOM_30d",
-    "CSMOM_60d",
-    "CSMOM_90d",
 )
+# NOTE: ml/forecast_backfill.py's AgenticForecastBackfiller trains its own
+# multi-horizon models (keys like "TSMOM_10d"/"CSMOM_90d") and persists them
+# to ml/models/meta_<model_key>.pkl. Those are NOT MetaLabeler instances (they
+# are raw sklearn/lightgbm classifiers) and their model_key never matches a
+# live SignalModule.name — MetaLabeler.load_latest() globs
+# meta_<signal_id>_<stamp>.pkl and requires the pickle to be a MetaLabeler, so
+# they cannot be (and must not be) added here: doing so would silently no-op
+# (file never found) or crash the load (wrong pickle type), and even if both
+# were fixed, SignalAggregator.aggregate() only ever queries the registry
+# with the two real signal_ids above, so a "TSMOM_10d" entry would just sit
+# unused. The multi-horizon backfill is a standalone research/diagnostic
+# engine (see docs/FORECAST_BACKFILL_PLAN.md) — surfaced via
+# GET /pilots/forecast_backfill and the webapp Forecast Backfill screen, not
+# wired into live position sizing.
+
 
 
 def bootstrap_meta_registry(
