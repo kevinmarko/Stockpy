@@ -104,9 +104,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from settings import settings
+from dotenv import load_dotenv as _load_dotenv
+
+from settings import ENV_PATH, settings
 from settings import INTERVAL_MAX_SECONDS as _INTERVAL_MAX_SECONDS
 from settings import validate_interval_seconds as _validate_interval_seconds
+
+# Load .env before any subsequent project import that reads credentials
+# (e.g. data.robinhood_portfolio, data.brokerage_credentials). Standalone
+# `uvicorn api.pilots_api:app` (this module's normal launch — see module
+# docstring) has no main()-style entry point to hook this into the way
+# main.py/main_orchestrator.py/app_shell.py do, so it runs here, at true
+# module top, anchored to ENV_PATH (settings.py) rather than a bare
+# load_dotenv() — bare load_dotenv() uses find_dotenv(), which walks UP from
+# this file's directory and, in a git worktree with no .env of its own,
+# silently finds a PARENT checkout's .env instead. Without this, RH-backed
+# endpoints raised "RH_USERNAME is missing" even with a correct .env,
+# because the daemon-hosted path (desktop/orchestrator_daemon.py) was the
+# only one that ever called load_dotenv().
+_load_dotenv(ENV_PATH, override=False)
 from api.auth import (
     require_follow_command_token as require_command_token,
     require_read_token,

@@ -374,9 +374,12 @@ def run_training(
         de = _SyntheticDataEngine()
     else:
         try:
-            import os
             from data_engine import DataEngine
-            fred_key = os.environ.get("FRED_API_KEY")
+            from settings import settings as _settings
+            # Read via the `settings` singleton, not os.environ —
+            # pydantic-settings loads .env into Settings only, never into the
+            # real process environment.
+            fred_key = _settings.FRED_API_KEY
             de = DataEngine(fred_api_key=fred_key) if fred_key else DataEngine()
         except Exception as exc:
             # No FRED key / live engine unavailable: fall back to the synthetic
@@ -496,4 +499,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    # Venv re-exec + .env loading -- placed here (not at module top)
+    # because this module is also imported as a library by
+    # scripts/retrain_models.py; a module-top call would fire the
+    # re-exec check on every such import, not just when this file is
+    # the actual entry point. See scripts/_bootstrap.py's module
+    # docstring for the full rationale.
+    from scripts._bootstrap import bootstrap
+    bootstrap()
     raise SystemExit(main())

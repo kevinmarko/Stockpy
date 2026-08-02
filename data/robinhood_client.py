@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
@@ -83,11 +82,10 @@ def _suppress_rs_output() -> Iterator[io.StringIO]:
     finally:
         _rs_helper.set_output(prev)
 
-# Env var: colon-separated list of additional plain-text watchlist files.
-# Each file holds one ticker per line; '#' begins a comment. Empty / missing
-# files are skipped silently. Surfaced here (not in settings.py) because the
-# value is consumed exclusively by the discovery layer.
-_WATCHLIST_FILES_ENV: str = "SYNC_WATCHLIST_FILES"
+# SYNC_WATCHLIST_FILES: colon-separated list of additional plain-text
+# watchlist files (settings.SYNC_WATCHLIST_FILES). Each file holds one
+# ticker per line; '#' begins a comment. Empty / missing files are skipped
+# silently.
 
 
 class RobinhoodClient:
@@ -294,13 +292,17 @@ def _file_tickers(path: Path) -> List[str]:
 
 
 def _watchlist_files_from_env() -> List[Path]:
-    """Parse the ``SYNC_WATCHLIST_FILES`` env var into a list of Paths.
+    """Parse the ``SYNC_WATCHLIST_FILES`` setting into a list of Paths.
 
     Colon-separated to match shell PATH conventions; whitespace and empty
     components are dropped.  Missing files are not validated here — caller
     decides whether to warn (we want headless CI runs to tolerate absences).
+
+    Reads via the ``settings`` singleton, not ``os.environ`` — pydantic-
+    settings loads ``.env`` into Settings only, never into the real process
+    environment.
     """
-    raw = os.environ.get(_WATCHLIST_FILES_ENV, "").strip()
+    raw = (settings.SYNC_WATCHLIST_FILES or "").strip()
     if not raw:
         return []
     return [Path(p.strip()).expanduser() for p in raw.split(":") if p.strip()]

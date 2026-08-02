@@ -440,10 +440,11 @@ def test_discover_universe_dedupes_across_sources(monkeypatch, tmp_path):
     monkeypatch.setattr(rc, "_watchlist_tickers",
                         lambda name: client._watchlists.get(name, []))
 
-    # Inject a file-backed list via the env var path.
+    # Inject a file-backed list via settings.SYNC_WATCHLIST_FILES (read via
+    # the `settings` singleton, not os.environ, since 2026-08).
     wl_file = tmp_path / "extra.txt"
     wl_file.write_text("TSLA\nAAPL\n")  # AAPL duplicates again
-    monkeypatch.setenv("SYNC_WATCHLIST_FILES", str(wl_file))
+    monkeypatch.setattr(rc.settings, "SYNC_WATCHLIST_FILES", str(wl_file))
 
     out = rc.discover_universe(client)
     assert out == ["AAPL", "MSFT", "NVDA", "TSLA"]
@@ -488,8 +489,9 @@ class TestResolveUniverse:
             rp, "fetch_account_snapshot",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no creds")),
         )
-        # No file-backed watchlists in play.
-        monkeypatch.delenv("SYNC_WATCHLIST_FILES", raising=False)
+        # No file-backed watchlists in play. Read via the `settings`
+        # singleton, not os.environ (fixed 2026-08).
+        monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
         got = ps.resolve_universe("all")
         assert got == sorted({t.upper() for t in settings.DEFAULT_TICKERS})
 
@@ -505,7 +507,7 @@ class TestResolveUniverse:
         monkeypatch.setattr(rp, "fetch_account_snapshot", lambda *a, **k: _FakeSnapshot(positions=held))
         wl = tmp_path / "wl.txt"
         wl.write_text("TSLA\n# a comment\nNVDA\n", encoding="utf-8")
-        monkeypatch.setenv("SYNC_WATCHLIST_FILES", str(wl))
+        monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", str(wl))
 
         got = ps.resolve_universe("all")
         expected = sorted(
@@ -550,6 +552,7 @@ class TestResolveUniverse:
             rp, "fetch_account_snapshot",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no creds")),
         )
-        monkeypatch.delenv("SYNC_WATCHLIST_FILES", raising=False)
+        # Read via the `settings` singleton, not os.environ (fixed 2026-08).
+        monkeypatch.setattr(rc.settings, "SYNC_WATCHLIST_FILES", None)
         # Completes (returns DEFAULT_TICKERS) without ever hitting login().
         assert ps.resolve_universe("all")

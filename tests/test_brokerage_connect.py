@@ -52,6 +52,14 @@ class TestBrokerageCredentialsWriter:
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
         monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+        # write_rh_credentials also assigns the live settings singleton (the
+        # value that actually matters for in-process reads — see that
+        # function's docstring) — register both attrs with monkeypatch BEFORE
+        # the call so teardown restores whatever this session's real .env had,
+        # instead of permanently leaking "someone@example.com" into every
+        # later test in the same pytest run.
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
 
         brokerage_credentials.write_rh_credentials("someone@example.com", "hunter2")
 
@@ -64,6 +72,10 @@ class TestBrokerageCredentialsWriter:
         assert os.environ["RH_USERNAME"] == "someone@example.com"
         assert os.environ["RH_PASSWORD"] == "hunter2"
         assert "RH_MFA_SECRET" not in os.environ
+        # Mirrored into the live settings singleton — the one that actually
+        # controls data.robinhood_portfolio._login() (fixed 2026-08).
+        assert brokerage_credentials._settings.RH_USERNAME == "someone@example.com"
+        assert brokerage_credentials._settings.RH_PASSWORD == "hunter2"
 
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
@@ -78,6 +90,8 @@ class TestBrokerageCredentialsWriter:
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
         monkeypatch.setenv("RH_MFA_SECRET", "OPERATORSECRET")
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
 
         brokerage_credentials.write_rh_credentials("user@example.com", "pw")
 
@@ -95,6 +109,8 @@ class TestBrokerageCredentialsWriter:
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
         monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
 
         secret_password = "sUp3rS3cr3tPassw0rd!!"
         with caplog.at_level(logging.DEBUG):
@@ -111,6 +127,8 @@ class TestBrokerageCredentialsWriter:
         monkeypatch.setenv("RH_USERNAME", "user@example.com")
         monkeypatch.setenv("RH_PASSWORD", "pw")
         monkeypatch.setenv("RH_MFA_SECRET", "OPERATORSECRET")
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
         brokerage_credentials.write_rh_credentials("user@example.com", "pw")
 
         brokerage_credentials.clear_rh_credentials()
@@ -130,18 +148,22 @@ class TestBrokerageCredentialsWriter:
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
         monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
         # Should not raise even though nothing exists yet.
         brokerage_credentials.clear_rh_credentials()
 
-    def test_rh_credentials_present_reflects_environ(self, monkeypatch):
-        monkeypatch.delenv("RH_USERNAME", raising=False)
-        monkeypatch.delenv("RH_PASSWORD", raising=False)
+    def test_rh_credentials_present_reflects_settings(self, monkeypatch):
+        """rh_credentials_present() reads the `settings` singleton, NOT
+        os.environ (fixed 2026-08) -- pydantic-settings loads .env into
+        Settings only, never into the real process environment, so a plain
+        os.environ.setenv would be silently ignored by this function."""
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
         assert brokerage_credentials.rh_credentials_present() is False
-        monkeypatch.setenv("RH_USERNAME", "user@example.com")
-        monkeypatch.setenv("RH_PASSWORD", "pw")
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", "user@example.com")
+        monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", "pw")
         assert brokerage_credentials.rh_credentials_present() is True
-        monkeypatch.delenv("RH_USERNAME", raising=False)
-        monkeypatch.delenv("RH_PASSWORD", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -252,16 +274,15 @@ class TestVerifyCredentials:
 
         monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
         monkeypatch.setattr(robinhood_portfolio.sys.stdin, "isatty", lambda: False)
-        monkeypatch.setenv("RH_USERNAME", "user@example.com")
-        monkeypatch.setenv("RH_PASSWORD", "pw")
-        monkeypatch.setenv("RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
+        # _login() reads credentials via the `settings` singleton, not
+        # os.environ (fixed 2026-08) -- see data.robinhood_portfolio's
+        # _require_setting docstring.
+        monkeypatch.setattr(robinhood_portfolio._settings, "RH_USERNAME", "user@example.com")
+        monkeypatch.setattr(robinhood_portfolio._settings, "RH_PASSWORD", "pw")
+        monkeypatch.setattr(robinhood_portfolio._settings, "RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
 
         robinhood_portfolio._login()
         assert calls["mfa_code"]  # a real 6-digit TOTP code, not None/empty
-
-        monkeypatch.delenv("RH_USERNAME", raising=False)
-        monkeypatch.delenv("RH_PASSWORD", raising=False)
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
 
     def test_login_falls_back_to_interactive_only_at_a_real_terminal(self, monkeypatch):
         """Missing RH_MFA_SECRET + a genuine TTY (a human running python3
@@ -275,15 +296,12 @@ class TestVerifyCredentials:
 
         monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
         monkeypatch.setattr(robinhood_portfolio.sys.stdin, "isatty", lambda: True)
-        monkeypatch.setenv("RH_USERNAME", "user@example.com")
-        monkeypatch.setenv("RH_PASSWORD", "pw")
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+        monkeypatch.setattr(robinhood_portfolio._settings, "RH_USERNAME", "user@example.com")
+        monkeypatch.setattr(robinhood_portfolio._settings, "RH_PASSWORD", "pw")
+        monkeypatch.setattr(robinhood_portfolio._settings, "RH_MFA_SECRET", None, raising=False)
 
         robinhood_portfolio._login()  # falls back to interactive path, no raise
         assert calls["mfa_code"] is None
-
-        monkeypatch.delenv("RH_USERNAME", raising=False)
-        monkeypatch.delenv("RH_PASSWORD", raising=False)
 
     def test_login_raises_immediately_when_headless_and_no_mfa_secret(self, monkeypatch):
         """The actual bug fix: missing RH_MFA_SECRET in a headless context
@@ -296,15 +314,12 @@ class TestVerifyCredentials:
 
         monkeypatch.setattr(robinhood_portfolio.r, "login", boom_login)
         monkeypatch.setattr(robinhood_portfolio.sys.stdin, "isatty", lambda: False)
-        monkeypatch.setenv("RH_USERNAME", "user@example.com")
-        monkeypatch.setenv("RH_PASSWORD", "pw")
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+        monkeypatch.setattr(robinhood_portfolio._settings, "RH_USERNAME", "user@example.com")
+        monkeypatch.setattr(robinhood_portfolio._settings, "RH_PASSWORD", "pw")
+        monkeypatch.setattr(robinhood_portfolio._settings, "RH_MFA_SECRET", None, raising=False)
 
         with pytest.raises(ValueError, match="MFA code is required"):
             robinhood_portfolio._login()
-
-        monkeypatch.delenv("RH_USERNAME", raising=False)
-        monkeypatch.delenv("RH_PASSWORD", raising=False)
 
 
 # ---------------------------------------------------------------------------

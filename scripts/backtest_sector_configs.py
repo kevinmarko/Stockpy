@@ -46,12 +46,20 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import numpy as np
-import pandas as pd
-
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+# Venv re-exec + .env loading -- must run before any third-party/project
+# import below (see scripts/_bootstrap.py's module docstring for why). Moved
+# ABOVE the numpy/pandas imports (this file originally had those before the
+# repo-root shim) -- otherwise a wrong-interpreter run would crash on
+# `import numpy` before ever reaching this guard, defeating its purpose.
+from scripts._bootstrap import bootstrap  # noqa: E402
+bootstrap()
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 
 from validation.sector_forecast_types import BacktestConfig  # noqa: E402
 from validation.sector_forecast_backtest import run_sector_backtest  # noqa: E402

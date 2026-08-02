@@ -191,7 +191,13 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
     watcher thread force-exits via ``os._exit(0)`` once teardown completes,
     exactly mirroring ``app_shell.py``'s SIGTERM path.
     """
-    _load_dotenv(override=False)
+    # Anchored to ENV_PATH (settings.py) rather than a bare load_dotenv() —
+    # bare load_dotenv() uses find_dotenv(), which walks UP from this file's
+    # directory and, in a git worktree with no .env of its own, silently
+    # finds a PARENT checkout's .env instead.
+    from settings import ENV_PATH
+
+    _load_dotenv(ENV_PATH, override=False)
 
     # SIGTERM/SIGINT MUST be blocked here, before ANY other thread is
     # created (daemon.start()'s optional interval-timer thread, the Control

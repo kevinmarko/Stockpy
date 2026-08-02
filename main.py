@@ -130,7 +130,7 @@ from data.robinhood_portfolio import (
 )
 from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
 from engine.advisory import Recommendation, evaluate as advisory_evaluate
-from settings import settings
+from settings import ENV_PATH, settings
 from signals import global_registry
 from signals.base import SignalContext
 
@@ -333,7 +333,9 @@ def _build_macro_dto() -> MacroEconomicDTO:
     Degrades gracefully to neutral defaults when FRED_API_KEY is absent or
     FRED is unreachable.  Never raises.
     """
-    fred_key = os.environ.get("FRED_API_KEY", "").strip()
+    # Read via the `settings` singleton, not os.environ — pydantic-settings
+    # loads .env into Settings only, never into the real process environment.
+    fred_key = (settings.FRED_API_KEY or "").strip()
     if not fred_key:
         logger.info("FRED_API_KEY not configured; using neutral macro defaults.")
         return MacroEconomicDTO(
@@ -837,12 +839,17 @@ def run_once(force_account: bool = False) -> RunResult:
     This function does NOT call load_dotenv() itself — doing so would pollute
     the pytest session (test_run_once.py invokes run_once() many times and
     each call would copy every .env value into os.environ, breaking
-    test_settings_defaults).  The caller is responsible for ensuring
-    os.environ contains the secrets that downstream modules read via
-    os.environ.get(), notably data/robinhood_portfolio.py.
+    test_settings_defaults).  Most downstream modules (including
+    data/robinhood_portfolio.py, since the 2026-08 .env-resolution fix) read
+    credentials via ``settings.settings.X``, which loads ``.env`` independently
+    through pydantic-settings' own ``env_file=ENV_PATH`` and needs no
+    load_dotenv() call at all.  A handful of call sites still read raw
+    ``os.environ.get(...)`` directly for values with no ``settings.py`` field;
+    for those, the caller remains responsible for ensuring
+    ``_load_dotenv(ENV_PATH, ...)`` ran first.
 
     Standard call sites:
-      • main() invokes _load_dotenv() before run_once() — production launch.
+      • main() invokes _load_dotenv(ENV_PATH) before run_once() — production launch.
       • Makefile target `verify` invokes load_dotenv() in its python -c block
         before calling main.run_once().
       • verify.command invokes load_dotenv() in its python heredoc before
@@ -1154,7 +1161,12 @@ def main() -> None:
     # Load .env into os.environ before any runtime os.environ.get() call.
     # This is the primary load point when launched as `python main.py`; the
     # call inside run_once() is the defensive backstop for direct imports.
-    _load_dotenv(override=False)
+    # Anchored to ENV_PATH (settings.py) rather than a bare load_dotenv() —
+    # bare load_dotenv() uses find_dotenv(), which walks UP from this file's
+    # directory and, in a git worktree with no .env of its own, silently
+    # finds a PARENT checkout's .env instead. See settings.ENV_PATH's
+    # docstring comment for the full three-locators writeup.
+    _load_dotenv(ENV_PATH, override=False)
     setup_logging()   # configure root logger (file + console, rotating, structured)
     logger.info("InvestYo Quant Platform starting.")
     settings.warn_if_fred_key_leaked(logger)

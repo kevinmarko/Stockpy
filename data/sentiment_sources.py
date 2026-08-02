@@ -114,10 +114,16 @@ logger = logging.getLogger(__name__)
 
 # Sources polled first when the per-cycle document budget is under pressure --
 # established/regulatory feeds outrank noisier social feeds (never orders).
-# "google_news" sits alongside yahoo_rss/gdelt (a news-aggregator tier, noisier
-# than the regulatory/single-publisher feeds ahead of it but not the social
-# tier that follows) -- ahead of reddit.
-_SOURCE_PRIORITY: List[str] = ["finnhub", "edgar", "yahoo_rss", "gdelt", "google_news", "reddit"]
+# "fmp_news" sits ahead of "finnhub" -- both are single-publisher-aggregator
+# company-news feeds with no credibility metadata, but fmp_news is the
+# opt-in PRIMARY per FMP_NEWS_ENABLED (see settings.py's description) once
+# enabled, so it should win the budget first when both are active. "google_news"
+# sits alongside yahoo_rss/gdelt (a news-aggregator tier, noisier than the
+# regulatory/single-publisher feeds ahead of it but not the social tier that
+# follows) -- ahead of reddit.
+_SOURCE_PRIORITY: List[str] = [
+    "fmp_news", "finnhub", "edgar", "yahoo_rss", "gdelt", "google_news", "reddit",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +303,110 @@ class FinnhubSentimentSource(SentimentSource):
             return docs
         except Exception as exc:
             logger.warning("FinnhubSentimentSource.fetch(%s) failed: %s", symbol, exc)
+            return []
+
+
+# ---------------------------------------------------------------------------
+# Financial Modeling Prep (FMP) — company news, opt-in primary source.
+# ---------------------------------------------------------------------------
+# ``publishedDate`` parsing (a naive US-Eastern-Time string, verified live
+# 2026-08 -- see data/fmp_client.py::parse_news_published_date's docstring
+# for the full cross-reference evidence) lives in data/fmp_client.py, not
+# here: both this module and signals/news_catalyst.py need it, and
+# sentiment_sources.py already imports FROM news_catalyst.py, so a copy
+# living in either consumer risks a circular import via the other.
+
+
+class FMPNewsSource(SentimentSource):
+    """Wraps ``data.fmp_client.stock_news`` (``/news/stock``). Opt-in --
+    only registered here, never active in ``SENTIMENT_SOURCES`` by default;
+    an operator must both add ``"fmp_news"`` to ``SENTIMENT_SOURCES`` and set
+    ``settings.FMP_NEWS_ENABLED=True`` (the ``FMP_API_KEY`` two-gate
+    convention every other FMP feed in this codebase follows). No
+    credibility metadata (same as Finnhub -- FMP headlines carry no author/
+    follower data) -- ``author_followers``/``account_age_days`` stay
+    ``None``.
+
+    Paginates up to ``settings.FMP_NEWS_MAX_PAGES`` pages of
+    ``settings.FMP_NEWS_PAGE_LIMIT`` articles each, bounded by ``since`` on
+    the client side (FMP's own ``from``/``to`` params bound the window, but
+    a page may still straddle ``since`` at its tail, so each article is also
+    checked individually) and by ``deadline_exceeded()`` between pages so a
+    ``CompositeSentimentSource``-assigned wall-clock budget is respected
+    for a source that internally loops (same seam ``GDELTSource`` uses).
+    Scoring goes through the batched ``score_headlines()`` path (one FinBERT
+    forward pass for the whole page, not one call per headline), matching
+    ``NewsCatalystSignal.pre_compute()``'s convention rather than
+    ``FinnhubSentimentSource``'s per-headline ``_score_headline()``.
+    """
+
+    name = "fmp_news"
+
+    def fetch(self, symbol: str, since: datetime) -> List[SentimentDocument]:
+        try:
+            from settings import settings as _settings
+
+            if not getattr(_settings, "FMP_NEWS_ENABLED", False):
+                return []
+            if not getattr(_settings, "FMP_API_KEY", None):
+                return []
+
+            from data.fmp_client import FMPUnavailable, parse_news_published_date, stock_news
+            from signals.news_catalyst import (
+                _distribution_to_signed,
+                _get_finbert_pipeline,
+                score_headlines,
+            )
+
+            page_limit = int(getattr(_settings, "FMP_NEWS_PAGE_LIMIT", 100) or 100)
+            max_pages = int(getattr(_settings, "FMP_NEWS_MAX_PAGES", 10) or 10)
+            from_date = since.astimezone(timezone.utc).date().isoformat()
+            to_date = datetime.now(timezone.utc).date().isoformat()
+
+            raw_articles: List[Dict[str, Any]] = []
+            for page in range(max_pages):
+                if self.deadline_exceeded():
+                    break
+                try:
+                    batch = stock_news(
+                        symbol,
+                        from_date=from_date,
+                        to_date=to_date,
+                        page=page,
+                        limit=page_limit,
+                    )
+                except FMPUnavailable as exc:
+                    logger.info("FMPNewsSource.fetch(%s) unavailable: %s", symbol, exc)
+                    break
+                if not isinstance(batch, list) or not batch:
+                    break
+                raw_articles.extend(batch)
+                if len(batch) < page_limit:
+                    break  # short page -- no more to fetch
+
+            if not raw_articles:
+                return []
+
+            pipeline = _get_finbert_pipeline() if _settings.FINBERT_ENABLED else None
+            headlines = [str(a.get("title", "")) for a in raw_articles]
+            scored = score_headlines(headlines, pipeline=pipeline)
+
+            docs: List[SentimentDocument] = []
+            for article, dist in zip(raw_articles, scored):
+                title = str(article.get("title", ""))
+                if not title:
+                    continue
+                as_of = parse_news_published_date(str(article.get("publishedDate", "")))
+                if as_of is None or as_of < since:
+                    continue
+                score = max(-1.0, min(1.0, _distribution_to_signed(dist)))
+                docs.append(SentimentDocument(
+                    as_of=as_of, symbol=symbol.upper(), source_name=self.name,
+                    text_content=title, raw_sentiment_score=score,
+                ))
+            return docs
+        except Exception as exc:
+            logger.warning("FMPNewsSource.fetch(%s) failed: %s", symbol, exc)
             return []
 
 
@@ -1719,6 +1829,7 @@ class EdgarSource(SentimentSource):
 
 _SOURCE_REGISTRY: Dict[str, Type[SentimentSource]] = {
     "finnhub": FinnhubSentimentSource,
+    "fmp_news": FMPNewsSource,
     "yahoo_rss": YahooRSSSource,
     "gdelt": GDELTSource,
     "google_news": GoogleNewsRSSSource,

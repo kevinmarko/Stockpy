@@ -87,6 +87,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+# Venv re-exec + .env loading -- must run before any third-party/project
+# import below (see scripts/_bootstrap.py's module docstring for why).
+from scripts._bootstrap import bootstrap  # noqa: E402
+bootstrap()
+
 from data.historical_store import HistoricalStore  # noqa: E402
 from data.portfolio_sync import resolve_universe  # noqa: E402
 from data.sentiment_sources import CompositeSentimentSource  # noqa: E402
@@ -156,7 +161,13 @@ def main():
     )
     args = parser.parse_args()
 
-    tickers = resolve_universe(args.tickers)
+    # allow_live_broker_fetch=False: a headless backfill script must
+    # never attempt a live Robinhood TOTP/MFA login (absent RH_MFA_SECRET
+    # this falls back to a blocking interactive prompt on a real TTY, or
+    # raises immediately headless) just to resolve the universe -- the
+    # best available cached snapshot is fine here. See
+    # data.portfolio_sync.resolve_universe's own docstring.
+    tickers = resolve_universe(args.tickers, allow_live_broker_fetch=False)
     if not tickers:
         logger.error(
             "No tickers to process: --tickers=%r resolved to an empty universe. "

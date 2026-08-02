@@ -59,11 +59,15 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from dotenv import dotenv_values, set_key
 
+from settings import ENV_PATH
+
 logger = logging.getLogger(__name__)
 
-# Repo root = parent of the gui/ package directory.
+# Repo root = parent of the gui/ package directory. ENV_PATH itself now lives
+# in settings.py — the single source of truth every `.env` locator in the
+# codebase must import instead of re-deriving (see that module's comment for
+# why three independent locators used to disagree with each other).
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-ENV_PATH = _REPO_ROOT / ".env"
 
 # ---------------------------------------------------------------------------
 # Key classification
@@ -261,10 +265,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
     "ETF_TRANSMISSION_COV_INFLATION",
     "ETF_TRANSMISSION_COV_WINDOW_DAYS",
-    # Financial Modeling Prep (data/fmp_client.py + its consumers). All 24 keys
+    # Financial Modeling Prep (data/fmp_client.py + its consumers). All 27 keys
     # below are non-secret operational tunables; the credential itself
     # (FMP_API_KEY) is in SECRET_KEYS — CONSTRAINT #3, never GUI-writable.
-    # Every default reproduces today's exact behavior: the eight feed master
+    # Every default reproduces today's exact behavior: the nine feed master
     # switches default False, and the client-tuning knobs are only ever
     # consulted once a request is actually being made. FMP_ECON_INDICATORS is a
     # comma-separated STRING (the SENTIMENT_SOURCES convention), NOT a
@@ -281,6 +285,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_FUNDAMENTALS_ENABLED",           # bool — also needs FUNDAMENTALS_SOURCE=fmp
     "FMP_ANALYST_ENABLED",                # bool — diagnostic analyst columns
     "FMP_EARNINGS_ENABLED",               # bool — Earnings_Date second source + surprises
+    "FMP_NEWS_ENABLED",                   # bool — company-news primary source (news_catalyst + sentiment_sources)
     "FMP_MACRO_ENABLED",                  # bool — treasury/econ into macro_history
     "FMP_INSIDER_ENABLED",                # bool — per-symbol insider statistics
     "FMP_SECTOR_SNAPSHOT_ENABLED",        # bool — 2 dated sector snapshots per cycle
@@ -292,6 +297,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_INSIDER_REFRESH_DAYS",           # int  — insider cadence gate
     "FMP_INSIDER_MIN_LAG_DAYS",           # int  — quarter-close lag before an aggregate is read
     "FMP_ECON_INDICATORS",                # str  — comma-separated series names (not JSON)
+    "FMP_NEWS_PAGE_LIMIT",                # int  — articles per /news/stock page
+    "FMP_NEWS_MAX_PAGES",                 # int  — pagination ceiling per symbol per call
     "FMP_MAX_SECONDS_PER_CYCLE",          # float — per-cycle wall-clock budget
     # Robinhood execution bridge & portfolio controls
     "ROBINHOOD_EXECUTION_MODE",
@@ -590,6 +597,7 @@ EXCLUDED_FROM_GUI: frozenset[str] = frozenset(
         "ALERT_FILE_PATH",
         "GRAVITY_AI_RUNNER_OUTPUT_PATH",
         "LLM_COMMENTARY_CACHE_PATH",
+        "SYNC_WATCHLIST_FILES",  # colon-separated local filesystem paths
         # --- Fail-closed command / write / paid-API-exposure flags -----------
         # (hand-set in .env only; several already pinned by dedicated
         # `test_*_is_not_gui_writable` tests in tests/test_pilots_api.py)

@@ -29,6 +29,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+# Venv re-exec + .env loading -- must run before any third-party/project
+# import below (see scripts/_bootstrap.py's module docstring for why).
+from scripts._bootstrap import bootstrap  # noqa: E402
+bootstrap()
+
 logger = logging.getLogger("generate_shell_completion")
 
 MANIFEST_PATH = _REPO_ROOT / "cli_introspect" / "command_manifest.json"
