@@ -1616,18 +1616,25 @@ def _safe_float(value: float) -> Optional[float]:
 
 
 @app.get("/execution-queue", dependencies=[Depends(require_read_token)])
-def get_execution_queue() -> Dict[str, Any]:
+def get_execution_queue(
+    action: Optional[str] = None,
+    follow_type: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    min_conviction: Optional[float] = 0.0,
+) -> Dict[str, Any]:
     """The gated, dry-run Robinhood order queue (``output/execution_queue.json``)
     — READ ONLY. This endpoint never contacts the Robinhood MCP and never
     places an order: per ``execution/queue_builder.py``'s module contract, a
     live Claude Code agent session is the ONLY actor that ever calls the MCP
     ``place_equity_order`` tool, so there is nothing for this API to trigger.
 
+    Supports optional query filters: ``action`` (BUY/SELL), ``follow_type``,
+    ``status_filter`` (Blocked/Ready), and ``min_conviction``.
+
     Returns ``{generated_at, mode, kill_switch_active, max_notional_per_order,
     n_intents, n_placeable, stale, age_seconds, intents, reason}`` — empty
     ``intents`` + an honest ``reason`` when no queue has been written yet
-    (CONSTRAINT #4). Never 500s (reuses ``gui.robinhood_execution_panel``'s
-    dead-letter-tolerant reader)."""
+    (CONSTRAINT #4). Never 500s."""
     snapshot = execution_panel.read_execution_queue()
     if snapshot is None:
         return {
@@ -1645,16 +1652,48 @@ def get_execution_queue() -> Dict[str, Any]:
                 "or the pipeline hasn't run since it was enabled."
             ),
         }
-    return {
-        "generated_at": snapshot.generated_at or None,
-        "mode": snapshot.mode,
-        "kill_switch_active": snapshot.kill_switch_active,
-        "max_notional_per_order": snapshot.max_notional_per_order,
-        "n_intents": snapshot.n_intents,
-        "n_placeable": snapshot.n_placeable,
-        "stale": execution_panel.is_queue_stale(snapshot),
-        "age_seconds": _safe_float(execution_panel.queue_age_seconds(snapshot)),
-        "intents": [
+
+    raw_intents = snapshot.intents or []
+    filtered_intents = []
+    for i in raw_intents:
+        i_action = (getattr(i, "action", "") or "").upper()
+        i_side = (getattr(i, "side", "") or "").upper()
+        i_conviction = getattr(i, "conviction", None)
+        i_allow_place = bool(getattr(i, "allow_place", False))
+        i_rationale = getattr(i, "rationale", "") or ""
+
+        # Determine strategy follow type
+        f_type = getattr(i, "follow_type", None)
+        if not f_type:
+            rat_lower = i_rationale.lower()
+            if "composite" in rat_lower:
+                f_type = "composite-signal"
+            elif "macd" in rat_lower:
+                f_type = "macd-trend"
+            elif "trend" in rat_lower:
+                f_type = "trend-following"
+            else:
+                f_type = "trend-following"
+
+        if action and action.upper() != "ALL":
+            if i_action != action.upper() and i_side != action.upper():
+                continue
+
+        if follow_type and follow_type != "ALL":
+            if f_type.lower() != follow_type.lower():
+                continue
+
+        if status_filter and status_filter != "ALL":
+            if status_filter == "Ready" and not i_allow_place:
+                continue
+            if status_filter == "Blocked" and i_allow_place:
+                continue
+
+        if min_conviction is not None and min_conviction > 0:
+            if i_conviction is None or i_conviction < min_conviction:
+                continue
+
+        filtered_intents.append(
             {
                 "symbol": i.symbol,
                 "action": i.action,
@@ -1667,11 +1706,38 @@ def get_execution_queue() -> Dict[str, Any]:
                 "allow_place": i.allow_place,
                 "rationale": i.rationale,
                 "client_order_id": i.client_order_id,
+                "follow_type": f_type,
             }
-            for i in snapshot.intents
-        ],
+        )
+
+    return {
+        "generated_at": snapshot.generated_at or None,
+        "mode": snapshot.mode,
+        "kill_switch_active": snapshot.kill_switch_active,
+        "max_notional_per_order": snapshot.max_notional_per_order,
+        "n_intents": snapshot.n_intents,
+        "n_placeable": snapshot.n_placeable,
+        "stale": execution_panel.is_queue_stale(snapshot),
+        "age_seconds": _safe_float(execution_panel.queue_age_seconds(snapshot)),
+        "intents": filtered_intents,
         "reason": None,
     }
+
+
+@app.get("/api/queue", dependencies=[Depends(require_read_token)])
+def get_api_execution_queue(
+    action: Optional[str] = None,
+    follow_type: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    min_conviction: Optional[float] = 0.0,
+) -> Dict[str, Any]:
+    """Alias route for GET /execution-queue."""
+    return get_execution_queue(
+        action=action,
+        follow_type=follow_type,
+        status_filter=status_filter,
+        min_conviction=min_conviction,
+    )
 
 
 def _env_drift() -> Dict[str, Any]:

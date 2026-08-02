@@ -38,6 +38,7 @@ import type {
   IntervalUpdateResult,
   ExecutionModeUpdateRequest,
   ExecutionModeUpdateResult,
+  ExecutionQueueParams,
   JobRecord,
   KillSwitchActionResult,
   LlmSettingUpdateResult,
@@ -388,7 +389,16 @@ const liveApi = {
     return http<DecisionEntry[]>(`/decisions?${params.toString()}`);
   },
   getCommands: () => http<CommandManifest>("/commands"),
-  getExecutionQueue: () => http<ExecutionQueue>("/execution-queue"),
+  getExecutionQueue: (params?: ExecutionQueueParams) => {
+    const q = new URLSearchParams();
+    if (params?.action && params.action !== "ALL") q.set("action", params.action);
+    if (params?.follow_type && params.follow_type !== "ALL") q.set("follow_type", params.follow_type);
+    if (params?.status_filter && params.status_filter !== "ALL") q.set("status_filter", params.status_filter);
+    if (params?.min_conviction !== undefined && params.min_conviction > 0)
+      q.set("min_conviction", String(params.min_conviction));
+    const queryStr = q.toString();
+    return http<ExecutionQueue>(`/execution-queue${queryStr ? `?${queryStr}` : ""}`);
+  },
   // ---- Data API (data_api.py, :8603) + Metrics API (metrics_api.py, :8604) ----
   // Routed by path prefix (see baseFor); these are the Phase-4 Data Explorer,
   // Signal Breakdown, and Forecast Viewer screens' data sources.

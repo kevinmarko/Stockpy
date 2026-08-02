@@ -71,8 +71,8 @@ describe("StrategyMatrix screen", () => {
     vi.spyOn(api, "getStrategyMatrix").mockResolvedValue(baseMatrix());
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Signal modules" })).toBeInTheDocument();
-    expect(screen.getByText("macro_regime")).toBeInTheDocument();
-    expect(screen.getByText("regime_multiplier")).toBeInTheDocument();
+    expect(await screen.findByText("macro_regime")).toBeInTheDocument();
+    expect(await screen.findByText("regime_multiplier")).toBeInTheDocument();
   });
 
   it("read-only (writable false) hides Save and shows the disabled note", async () => {
