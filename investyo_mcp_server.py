@@ -65,8 +65,8 @@ def _qmark_to_named(sql: str, params: tuple) -> tuple:
     ``?`` character inside a quoted SQL string literal would be
     misidentified as a placeholder. Verified this does not occur for any
     current ``?``-using call site in this module (``read_platform_logs``'s
-    ``LIMIT ?``, ``get_signal_breakdown``'s ``WHERE symbol = ?``,
-    ``generate_daily_signals``'s ``WHERE date=? ... LIMIT ?``) — none of
+    ``LIMIT ?``, ``get_signal_breakdown``'s ``WHERE "Symbol" = ?``,
+    ``generate_daily_signals``'s ``WHERE DATE(timestamp) = ? ... LIMIT ?``) — none of
     them embed a literal ``?`` inside a quoted string, and params are
     always bound values, never SQL fragments. A full SQL tokenizer was
     judged unnecessary complexity for this codebase's actual query
@@ -1791,8 +1791,8 @@ def get_signal_breakdown(symbol: str) -> str:
     try:
         columns, rows = _db_query(
             """SELECT * FROM DailySignals
-               WHERE symbol = ?
-               ORDER BY date DESC LIMIT 1""",
+               WHERE "Symbol" = ?
+               ORDER BY timestamp DESC LIMIT 1""",
             (symbol.upper(),)
         )
         if not rows:
@@ -1800,10 +1800,13 @@ def get_signal_breakdown(symbol: str) -> str:
 
         row = rows[0]
         data = dict(zip(columns, row))
-        lines = [f"# Signal Breakdown: {symbol.upper()} ({data.get('date', 'N/A')})\n"]
+        lines = [f"# Signal Breakdown: {symbol.upper()} ({data.get('timestamp', 'N/A')})\n"]
 
-        # Separate signal columns from metadata
-        meta_keys = {"symbol", "date", "id", "created_at"}
+        # Separate signal columns from metadata. DailySignals' only base
+        # columns (see database_setup.py) are "id" and "timestamp"; every
+        # other column comes from config.COLUMN_SCHEMA, keyed "Symbol"
+        # (capitalized), not "symbol".
+        meta_keys = {"Symbol", "timestamp", "id"}
         signal_keys = [k for k in columns if k not in meta_keys]
 
         for key in signal_keys:
@@ -1960,17 +1963,21 @@ def generate_daily_signals(top_n: int = 10) -> str:
         top_n: Number of top signals to return (default: 10).
     """
     try:
-        # Get the latest date's signals
-        _, date_rows = _db_query("SELECT MAX(date) FROM DailySignals")
+        # Get the latest date's signals. DailySignals has no dedicated
+        # trading-day column -- only a per-row insert "timestamp" -- so
+        # group by calendar day (DATE(timestamp)) rather than exact
+        # equality, which would splinter one cycle's rows across their
+        # slightly different insert times.
+        _, date_rows = _db_query("SELECT MAX(DATE(timestamp)) FROM DailySignals")
         latest_date = date_rows[0][0] if date_rows else None
         if not latest_date:
             return "No signals in the database. Run the full pipeline first."
 
         _, rows = _db_query(
-            """SELECT symbol, composite_score, action, conviction
+            """SELECT "Symbol", "Score", "Action Signal", "Advisory_Conviction"
                FROM DailySignals
-               WHERE date = ?
-               ORDER BY composite_score DESC
+               WHERE DATE(timestamp) = ?
+               ORDER BY "Score" DESC
                LIMIT ?""",
             (latest_date, top_n)
         )
