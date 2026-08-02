@@ -3797,6 +3797,102 @@ _SECTOR_SELECTION_INDEX = {
     for key, kind, extras in _specs
 }
 
+_FMP_GROUPS = [
+    (
+        "Client & Resiliency",
+        [
+            ("FMP_BASE_URL", "str", {}),
+            ("FMP_TIMEOUT_SECONDS", "float", {"min": 1.0, "max": 120.0, "step": 1.0}),
+            ("FMP_MIN_REQUEST_INTERVAL_SECONDS", "float", {"min": 0.0, "max": 60.0, "step": 0.05}),
+            ("FMP_MAX_RETRIES", "int", {"min": 0, "max": 10, "step": 1}),
+            ("FMP_RETRY_BACKOFF_SECONDS", "float", {"min": 0.1, "max": 60.0, "step": 0.5}),
+            ("FMP_COOLDOWN_THRESHOLD", "int", {"min": 1, "max": 20, "step": 1}),
+            ("FMP_COOLDOWN_SECONDS", "float", {"min": 1.0, "max": 3600.0, "step": 10.0}),
+            ("FMP_FALLBACK_ENABLED", "bool", {}),
+            ("FMP_MAX_SECONDS_PER_CYCLE", "float", {"min": 1.0, "max": 600.0, "step": 1.0}),
+        ],
+    ),
+    (
+        "Primary Feeds",
+        [
+            ("FMP_QUOTES_ENABLED", "bool", {}),
+            ("FMP_QUOTES_REALTIME", "bool", {}),
+            ("FMP_BARS_ENABLED", "bool", {}),
+            ("FMP_BARS_ADJUSTMENT", "enum", {"options": ["dividend-adjusted", "light", "full", "non-split-adjusted"]}),
+            ("FMP_FUNDAMENTALS_ENABLED", "bool", {}),
+        ],
+    ),
+    (
+        "Diagnostic & Supplement Feeds",
+        [
+            ("FMP_ANALYST_ENABLED", "bool", {}),
+            ("FMP_ANALYST_REFRESH_HOURS", "int", {"min": 1, "max": 168, "step": 1}),
+            ("FMP_EARNINGS_ENABLED", "bool", {}),
+            ("FMP_EARNINGS_REFRESH_HOURS", "int", {"min": 1, "max": 168, "step": 1}),
+            ("FMP_MACRO_ENABLED", "bool", {}),
+            ("FMP_ECON_INDICATORS", "str", {}),
+            ("FMP_INSIDER_ENABLED", "bool", {}),
+            ("FMP_INSIDER_REFRESH_DAYS", "int", {"min": 1, "max": 30, "step": 1}),
+            ("FMP_INSIDER_MIN_LAG_DAYS", "int", {"min": 0, "max": 90, "step": 1}),
+            ("FMP_SECTOR_SNAPSHOT_ENABLED", "bool", {}),
+        ],
+    ),
+]
+
+_FMP_INDEX = {
+    key: (kind, extras)
+    for _group, _specs in _FMP_GROUPS
+    for key, kind, extras in _specs
+}
+
+_ETF_TRANSMISSION_GROUPS = [
+    (
+        "Holdings Ingestion",
+        [
+            ("ETF_HOLDINGS_ENABLED", "bool", {}),
+            ("ETF_HOLDINGS_TICKERS", "json", {}),
+            ("ETF_HOLDINGS_REFRESH_DAYS", "int", {"min": 1, "max": 90, "step": 1}),
+            ("ETF_HOLDINGS_ISSUER_CSV_ENABLED", "bool", {}),
+            ("ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE", "float", {"min": 1.0, "max": 300.0, "step": 1.0}),
+            ("ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD", "int", {"min": 1, "max": 20, "step": 1}),
+        ],
+    ),
+    (
+        "Measurement & Residualization",
+        [
+            ("ETF_TRANSMISSION_ENABLED", "bool", {}),
+            ("ETF_HOLDINGS_MARKET_PROXY", "str", {}),
+            ("ETF_TRANSMISSION_WRAPPERS", "json", {}),
+            ("ETF_TRANSMISSION_EXCLUDED_SYMBOLS", "json", {}),
+            ("ETF_TRANSMISSION_WINDOW_DAYS", "int", {"min": 10, "max": 504, "step": 1}),
+            ("ETF_TRANSMISSION_MIN_OBS", "int", {"min": 5, "max": 252, "step": 1}),
+        ],
+    ),
+    (
+        "Position Sizing Derate",
+        [
+            ("ETF_TRANSMISSION_SIZING_ENABLED", "bool", {}),
+            ("ETF_TRANSMISSION_MAX_DERATE", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("ETF_TRANSMISSION_OWNERSHIP_REFERENCE", "float", {"min": 0.01, "max": 1.0, "step": 0.01}),
+            ("ETF_TRANSMISSION_MIN_MULTIPLIER", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+        ],
+    ),
+    (
+        "Portfolio Covariance Adjustment",
+        [
+            ("ETF_TRANSMISSION_PORTFOLIO_ENABLED", "bool", {}),
+            ("ETF_TRANSMISSION_COV_INFLATION", "float", {"min": 0.0, "max": 5.0, "step": 0.05}),
+            ("ETF_TRANSMISSION_COV_WINDOW_DAYS", "int", {"min": 10, "max": 504, "step": 1}),
+        ],
+    ),
+]
+
+_ETF_TRANSMISSION_INDEX = {
+    key: (kind, extras)
+    for _group, _specs in _ETF_TRANSMISSION_GROUPS
+    for key, kind, extras in _specs
+}
+
 
 @app.get("/settings/sentiment", dependencies=[Depends(require_read_token)])
 def get_settings_sentiment() -> Dict[str, Any]:
@@ -3840,6 +3936,50 @@ def get_settings_sector_selection() -> Dict[str, Any]:
 def put_settings_sector_selection(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update sector selection configuration in .env."""
     return _validate_and_write_payload(body.values, _SECTOR_SELECTION_INDEX)
+
+
+@app.get("/settings/fmp", dependencies=[Depends(require_read_token)])
+def get_settings_fmp() -> Dict[str, Any]:
+    """Get Financial Modeling Prep (FMP) configuration."""
+    return {
+        "applies": "next_daemon_restart",
+        "groups": _build_groups_payload(_FMP_GROUPS),
+        "env_drift": _tunables_env_drift(_FMP_INDEX),
+    }
+
+
+@app.put(
+    "/settings/fmp",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_fmp(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Update Financial Modeling Prep (FMP) configuration in .env."""
+    return _validate_and_write_payload(body.values, _FMP_INDEX)
+
+
+@app.get("/settings/etf-transmission", dependencies=[Depends(require_read_token)])
+def get_settings_etf_transmission() -> Dict[str, Any]:
+    """Get ETF volatility transmission & holdings configuration."""
+    return {
+        "applies": "next_daemon_restart",
+        "groups": _build_groups_payload(_ETF_TRANSMISSION_GROUPS),
+        "env_drift": _tunables_env_drift(_ETF_TRANSMISSION_INDEX),
+    }
+
+
+@app.put(
+    "/settings/etf-transmission",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_etf_transmission(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Update ETF volatility transmission & holdings configuration in .env."""
+    return _validate_and_write_payload(body.values, _ETF_TRANSMISSION_INDEX)
 
 
 # ---------------------------------------------------------------------------
