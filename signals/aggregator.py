@@ -47,6 +47,7 @@ no ``"_default"`` catch-all.
 import logging
 import math
 from typing import Dict, List, Tuple
+import numpy as np
 import pandas as pd
 
 from signals.base import SignalContext, SignalOutput
@@ -458,9 +459,21 @@ class SignalAggregator:
     def aggregate_vectorized(self, universe_df: pd.DataFrame, context: SignalContext) -> Dict[str, Tuple[float, List[str], List[str], List[str], Dict[str, SignalOutput], float]]:
         """
         Executes signal calculations and aggregations for all tickers simultaneously.
-        
+
         This significantly reduces overhead compared to calling aggregate() per ticker
         in a loop.
+
+        The weighted-score contribution and the meta-label composite (the two
+        numeric quantities this method exists to batch) are computed with
+        column-wise pandas/numpy ops across the whole universe — no per-ticker
+        Python loop touches them. Building each ticker's ``SignalOutput``
+        objects and parsing its free-text ``explanation`` into
+        score_log/warnings/details lines is inherently row-shaped (distinct
+        Python objects and per-string text parsing per ticker), so that part
+        uses ``zip()`` over already-vectorized columns rather than
+        ``.iterrows()``/``.itertuples()`` — matching this codebase's existing
+        "vectorized mapping" idiom (see evaluation_engine.py's
+        ``df.index.map(lambda idx: ...)`` write-back).
 
         Returns:
             Dict mapping ticker string to the standard 6-tuple returned by aggregate().
@@ -476,30 +489,35 @@ class SignalAggregator:
         meta_registry = _get_meta_registry()
 
         final_scores = pd.Series(50.0, index=universe_df.index)
-        
-        ticker_results = {
-            ticker: {
-                "score_log": [],
-                "warnings": [],
-                "details": [],
-                "outputs": {},
-                "meta_log_sum": 0.0,
-                "meta_active_count": 0,
-                "meta_hard_gate": False
-            }
-            for ticker in universe_df.index
+
+        score_logs: Dict[str, List[str]] = {ticker: [] for ticker in universe_df.index}
+        warnings_map: Dict[str, List[str]] = {ticker: [] for ticker in universe_df.index}
+        details_map: Dict[str, List[str]] = {ticker: [] for ticker in universe_df.index}
+        per_ticker_outputs: Dict[str, Dict[str, SignalOutput]] = {
+            ticker: {} for ticker in universe_df.index
         }
+
+        # Per-module, per-ticker meta_label_proba (clamped to [1e-9, 1.0], the
+        # same clamp `aggregate()` applies before its hard-gate/log-sum use) --
+        # one column per module that survives the disabled/regime gate below.
+        # Module-level gating (DISABLED_SIGNAL_MODULES / is_active_in_regime)
+        # is identical for every ticker within a cycle, so the resulting
+        # "active module count" is a single scalar shared across the whole
+        # universe, not a per-ticker quantity -- this is what lets the
+        # hard-gate/geometric-mean composite collapse to two matrix ops
+        # instead of a per-ticker running accumulator.
+        clamped_mlp_columns: Dict[str, pd.Series] = {}
 
         for name, df_out in outputs.items():
             if name in settings.DISABLED_SIGNAL_MODULES:
                 continue
-            
+
             module = self.registry.get(name)
             if not module.is_active_in_regime(context.macro):
                 continue
 
             weight = effective_weights.get(name, 0.0)
-            
+
             contribs = df_out['score'] * weight
             final_scores += contribs
 
@@ -517,60 +535,72 @@ class SignalAggregator:
                         "MetaLabelerRegistry vectorized predict failed: %s — defaulting to 1.0.", exc
                     )
 
-            # Extract per-ticker items
-            for i, ticker in enumerate(universe_df.index):
-                t_res = ticker_results[ticker]
-                score_val = df_out.at[ticker, 'score']
-                conf_val = df_out.at[ticker, 'confidence']
-                expl_val = df_out.at[ticker, 'explanation']
-                mlp_val = df_out.at[ticker, 'meta_label_proba']
-                
+            mlp_raw = df_out['meta_label_proba'].astype(float)
+            clamped_mlp_columns[name] = mlp_raw.clip(lower=1e-9, upper=1.0)
+
+            # Per-ticker SignalOutput construction + explanation-line parsing.
+            # `out_obj.meta_label_proba` stores the RAW (unclamped) value —
+            # matching `aggregate()`'s single-row path, which stores
+            # `float(mlp_val)` before ever computing its clamped `mlp` local.
+            for ticker, score_val, conf_val, expl_val, mlp_val in zip(
+                df_out.index,
+                df_out['score'],
+                df_out['confidence'],
+                df_out['explanation'],
+                mlp_raw,
+            ):
                 out_obj = SignalOutput(
                     score=float(score_val),
                     confidence=float(conf_val),
                     explanation=str(expl_val),
-                    meta_label_proba=float(mlp_val)
+                    meta_label_proba=float(mlp_val),
                 )
-                t_res["outputs"][name] = out_obj
-
-                mlp = max(1e-9, min(1.0, float(mlp_val)))
-                if mlp < settings.META_LABEL_MIN_CONFIDENCE:
-                    t_res["meta_hard_gate"] = True
-                
-                if not t_res["meta_hard_gate"]:
-                    t_res["meta_log_sum"] += math.log(mlp)
-                t_res["meta_active_count"] += 1
+                per_ticker_outputs[ticker][name] = out_obj
 
                 if out_obj.explanation:
                     lines = out_obj.explanation.strip().split("\n")
                     for line in lines:
                         line = line.strip()
                         if line.startswith("WARNING:"):
-                            t_res["warnings"].append(line[len("WARNING:"):].strip())
+                            warnings_map[ticker].append(line[len("WARNING:"):].strip())
                         elif line.startswith("DETAIL:"):
-                            t_res["details"].append(line[len("DETAIL:"):].strip())
+                            details_map[ticker].append(line[len("DETAIL:"):].strip())
                         else:
-                            t_res["score_log"].append(line)
+                            score_logs[ticker].append(line)
 
         final_scores = final_scores.clip(lower=0.0, upper=100.0)
-        
+
+        # Vectorized meta-label composite (replaces the old per-ticker
+        # meta_log_sum/meta_active_count/meta_hard_gate running accumulator):
+        #   - hard gate: True for a ticker if ANY active module's clamped mlp
+        #     fell below the confidence threshold -- `.any(axis=1)`.
+        #   - geometric mean: exp(mean(log(mlp))) across active modules --
+        #     `.sum(axis=1)` divided by the (cycle-wide-constant) active count.
+        # A hard-gated ticker's log-sum is computed the same as everyone
+        # else's, which is safe: the branch below discards it (forces 0.0)
+        # exactly as `aggregate()` does regardless of the partial sum its own
+        # early-exit would have accumulated.
+        n_active = len(clamped_mlp_columns)
+        if n_active > 0:
+            mlp_df = pd.DataFrame(clamped_mlp_columns, index=universe_df.index)
+            hard_gate = (mlp_df < settings.META_LABEL_MIN_CONFIDENCE).any(axis=1)
+            log_sum = np.log(mlp_df).sum(axis=1)
+            meta_composite = pd.Series(
+                np.where(hard_gate, 0.0, np.exp(log_sum / n_active)),
+                index=universe_df.index,
+            )
+        else:
+            meta_composite = pd.Series(1.0, index=universe_df.index)
+
         result_dict = {}
         for ticker in universe_df.index:
-            t_res = ticker_results[ticker]
-            if t_res["meta_hard_gate"]:
-                meta_comp = 0.0
-            elif t_res["meta_active_count"] > 0:
-                meta_comp = math.exp(t_res["meta_log_sum"] / t_res["meta_active_count"])
-            else:
-                meta_comp = 1.0
-                
             result_dict[ticker] = (
                 float(final_scores.at[ticker]),
-                t_res["score_log"],
-                t_res["warnings"],
-                t_res["details"],
-                t_res["outputs"],
-                meta_comp
+                score_logs[ticker],
+                warnings_map[ticker],
+                details_map[ticker],
+                per_ticker_outputs[ticker],
+                float(meta_composite.at[ticker]),
             )
-            
+
         return result_dict
