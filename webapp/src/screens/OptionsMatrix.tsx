@@ -34,6 +34,8 @@ import {
   ReferenceArea,
 } from "recharts";
 import OptionsAnalyticsDashboard from "../components/OptionsAnalyticsDashboard";
+import GeminiChatPanel from "../components/GeminiChatPanel";
+
 
 function heatmapStyle(val: number | null | undefined, min: number, max: number, invert = false) {
   if (val == null || isNaN(val)) return {};
@@ -207,6 +209,27 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
           )}
         </span>
         <span style={{ fontSize: "var(--t-body)", color: theme.textSecondary }}>{d.Trend_Bias ?? "—"}</span>
+        {d.Days_To_Earnings != null && (
+          <span
+            className={`badge ${d.Earnings_Risk ? "badge-warn" : "badge-neutral"}`}
+            title="Scheduled earnings announcement"
+          >
+            ⚠️ Earnings in {d.Days_To_Earnings}d
+          </span>
+        )}
+        {typeof d.Altman_Z_Score === "number" && (
+          <span
+            className={`badge ${d.Altman_Z_Score >= 2.6 ? "badge-good" : d.Altman_Z_Score < 1.8 ? "badge-bad" : "badge-warn"}`}
+            title="Altman Z-Score Solvency (>= 2.6 Safe, < 1.8 Distress)"
+          >
+            Altman Z: {fmtNum(d.Altman_Z_Score, 1)} {d.Altman_Z_Score >= 2.6 ? "(Safe)" : d.Altman_Z_Score < 1.8 ? "(Distress)" : "(Grey)"}
+          </span>
+        )}
+        {typeof d.Net_Debt_EBITDA === "number" && (
+          <span style={{ fontSize: "var(--t-micro)", color: theme.textSecondary }}>
+            Net Debt/EBITDA: <span className="num">{fmtNum(d.Net_Debt_EBITDA, 1)}x</span>
+          </span>
+        )}
         {isFlagged(d) && (
           <span className="badge badge-bad" style={{ marginLeft: "auto" }}>
             ⚠ Integrity
@@ -216,6 +239,7 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
     </div>
   );
 }
+
 
 
 
@@ -845,6 +869,7 @@ export function OptionsMatrix() {
   const [openSymbol, setOpenSymbol] = useState<string | null>(null);
   const [showRecompute, setShowRecompute] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
@@ -887,14 +912,37 @@ export function OptionsMatrix() {
       >
         ← Back
       </button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 className="screen-title">Options premium</h1>
-        {data?.as_of && (
-          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <Button
+            onClick={() => setChatOpen(true)}
+            style={{
+              background: "var(--surface-3)",
+              color: "var(--growth)",
+              border: "1px solid var(--border)",
+              fontSize: "var(--t-body)",
+              fontWeight: 600,
+              padding: "4px 12px",
+              borderRadius: "var(--r-md)",
+            }}
+          >
+            🤖 Ask Gemini
+          </Button>
+          {data?.as_of && (
+            <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
+          )}
+        </div>
       </div>
 
+      <GeminiChatPanel
+        isOpen={chatOpen}
+        onClose={() => setChatOpen(false)}
+        symbols={directives.map((d) => d.Symbol)}
+      />
+
       <TabGuide tabKey="options" />
+
 
       {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
 

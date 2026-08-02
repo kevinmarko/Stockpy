@@ -979,8 +979,18 @@ export interface OptionsDirective {
   Legs?: OptionsLeg[] | null;
   Integrity_OK?: boolean | null;
   Integrity_Issues?: string[] | null;
+  Altman_Z_Score?: number | null;
+  Piotroski_F_Score?: number | null;
+  Net_Debt_EBITDA?: number | null;
+  FCF_Yield?: number | null;
+  Days_To_Earnings?: number | null;
+  Earnings_Risk?: boolean | null;
+  Realized_Vol_30D?: number | null;
+  News_Snippets?: Array<{ title: string; url: string; published_date?: string; site?: string }> | null;
+  Peers?: string[] | null;
   [key: string]: unknown;
 }
+
 
 /** GET /options — the full persisted options matrix. */
 export interface OptionsMatrix {
@@ -3116,5 +3126,32 @@ export interface ForecastBackfillSummary {
    * these tickers are not from real market data. */
   synthetic_tickers?: string[];
 }
+
+export interface ChatThought {
+  type: "THOUGHT";
+  text: string;
+}
+
+export interface ChatFinalResponse {
+  type: "FINAL_RESPONSE";
+  text: string;
+}
+
+export interface ChatSuggestion {
+  type: "SUGGESTION";
+  text: string;
+}
+
+export type ChatStreamEvent = ChatThought | ChatFinalResponse | ChatSuggestion;
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "model";
+  content: string;
+  thoughts?: string[];
+  suggestions?: string[];
+  isStreaming?: boolean;
+}
+
 
 

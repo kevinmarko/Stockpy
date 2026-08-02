@@ -712,3 +712,49 @@ def sector_performance_snapshot(date: str, exchange: Optional[str] = None) -> An
     if exchange:
         params["exchange"] = exchange
     return _fmp_get("sector-performance-snapshot", params)
+
+
+def financial_scores(symbol: str) -> Any:
+    """Financial health & solvency scores — Altman Z and Piotroski F (``/financial-scores``)."""
+    return _fmp_get("financial-scores", {"symbol": _sym(symbol)})
+
+
+def stock_news(symbol: str, limit: int = 10) -> Any:
+    """Real-time news snippets for a symbol (``/news/stock``)."""
+    return _fmp_get("news/stock", {"symbols": _sym(symbol), "limit": limit})
+
+
+def economics_calendar(from_date: Optional[str] = None, to_date: Optional[str] = None) -> Any:
+    """Macroeconomic events calendar (``/economics-calendar``)."""
+    params: Dict[str, Any] = {}
+    if from_date:
+        params["from"] = from_date
+    if to_date:
+        params["to"] = to_date
+    return _fmp_get("economics-calendar", params)
+
+
+def earnings_calendar(from_date: Optional[str] = None, to_date: Optional[str] = None) -> Any:
+    """Upcoming earnings release calendar (``/earnings-calendar``)."""
+    params: Dict[str, Any] = {}
+    if from_date:
+        params["from"] = from_date
+    if to_date:
+        params["to"] = to_date
+    return _fmp_get("earnings-calendar", params)
+
+
+def batch_index_quotes() -> Any:
+    """Quotes for major market volatility indices (``/batch-index-quotes``)."""
+    return _fmp_get("batch-index-quotes", {})
+
+
+def peers(symbol: str) -> Any:
+    """Stock peer group comparison tickers (``/peers``)."""
+    return _fmp_get("peers", {"symbol": _sym(symbol)})
+
+
+def standard_deviation(symbol: str) -> Any:
+    """Technical rolling standard deviation and realized volatility (``/standard-deviation``)."""
+    return _fmp_get("standard-deviation", {"symbol": _sym(symbol)})
+

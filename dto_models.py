@@ -153,12 +153,18 @@ class FundamentalDataDTO(BaseDTO):
         self.price: float = self._to_float(price)
         self.beta: float = self._to_float(beta, 1.0)
         
-        # New default attributes for research engine
+        # New default attributes for research engine & FMP health overlays
         self.held_percent_institutions: float = 0.0
         self.institutional_change: float = 0.0
         self.debt_to_equity: float = 0.0
-        # Missing solvency data must be NaN (CONSTRAINT #4), never a fabricated 0.0.
+        # Missing solvency & health data must be None / NaN (CONSTRAINT #4), never a fabricated 0.0.
         self.current_ratio: float = float("nan")
+        self.altman_z_score: Optional[float] = None
+        self.piotroski_f_score: Optional[int] = None
+        self.net_debt_ebitda: Optional[float] = None
+        self.fcf_yield: Optional[float] = None
+        self.days_to_earnings: Optional[int] = None
+
 
     @staticmethod
     def _calculate_dividend_growth_rate(info: Dict[str, Any], dividends: Optional[Any] = None) -> float:

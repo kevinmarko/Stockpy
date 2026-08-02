@@ -734,80 +734,21 @@ def build_premium_directive(
     data_engine: Optional[Any] = None,
     iv_history_store: Optional[Any] = None,
     as_of_date: Optional[str] = None,
+    altman_z_score: Optional[float] = None,
+    piotroski_f_score: Optional[int] = None,
+    net_debt_ebitda: Optional[float] = None,
+    fcf_yield: Optional[float] = None,
+    days_to_earnings: Optional[int] = None,
+    realized_vol_30d: Optional[float] = None,
+    news_snippets: Optional[List[Dict[str, Any]]] = None,
+    peers_list: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Compute a fully-hydrated premium-selling row for one symbol.
-
-    Wraps :class:`TechnicalOptionsEngine` + :class:`OptionsPricingRecommender`
-    into a single dict containing both the diagnostic feature columns the
-    Command Center renders (sigma, IVR proxy, trend bias, ATM Greeks) and the
-    actionable strategy directive (legs, net premium, realizable daily theta).
-
-    Parameters
-    ----------
-    symbol :
-        Ticker label (used only for display / dead-letter logging).
-    bars :
-        OHLCV DataFrame with at least 22 rows; the same shape returned by
-        :meth:`data.market_data.CompositeProvider.get_intraday_bars`.
-    spot_price :
-        Latest mid price for the underlying.
-    is_stale :
-        Surfaced verbatim into the row so the GUI can flag delayed quotes.
-    target_dte, macro_dto, vrp, risk_free_rate :
-        Forwarded to
-        :meth:`OptionsPricingRecommender.generate_strategy_pricing_matrix`.
-    ivr_sell_threshold, ivr_buy_threshold, delta_target_scale :
-        Optional operator overrides forwarded to the recommender (see that
-        method's docstring). ``delta_target_scale`` is ALSO forwarded to
-        :func:`validate_directive_integrity` so the integrity verdict stays
-        consistent with the (scaled) target deltas. All default to the engine
-        constants → byte-identical output when untouched.
-    delta_tolerance, strike_grid :
-        Forwarded to :func:`validate_directive_integrity` so the per-run
-        matrix-integrity check (delta-target tolerance + strike grid) is
-        operator-adjustable. Default to the engine constants.
-    true_ivr_enabled :
-        Tri-state override for ``settings.OPTIONS_TRUE_IVR_ENABLED``: ``None``
-        (default) reads the live setting; an explicit ``True``/``False`` lets
-        callers/tests force the branch without monkeypatching settings. When
-        effectively ``False`` (the platform default), the real-IVR block below
-        never runs and this function is byte-identical to before the flag
-        existed.
-    data_engine, iv_history_store :
-        Injection points for the real-IVR path (mainly for tests). When the
-        flag is on and either is left ``None``, a fresh, lightweight
-        ``data_engine.DataEngine(fred_api_key="")`` (no network calls at
-        construction — only ``fetch_options_chain`` touches the network) and
-        ``volatility.iv_engine.IVHistoryStore()`` (the SAME on-disk table
-        ``pipeline/production_steps.py::OptionsAnalysisStep`` already writes
-        to) are constructed. ``data/market_data.py``'s ``CompositeProvider`` —
-        the convention-mandated provider for GUI/MCP-path quote/bar/
-        fundamentals fetches — exposes no chain-shaped method at all, so
-        reusing/extending it here would contradict its own contract; a fresh
-        ``DataEngine`` scoped to this one call is the least-invasive fit that
-        matches what ``OptionsAnalysisStep`` already does.
-    as_of_date :
-        Explicit ``YYYY-MM-DD`` cutoff for the real-IVR lookup (mainly for
-        tests / historical replays). Defaults to ``bars.index[-1]`` — the
-        latest bar date — matching ``OptionsAnalysisStep``'s own convention.
-
-    Returns
-    -------
-    dict
-        Always a *complete* row; numeric fields are ``float('nan')`` when the
-        underlying primitive could not be computed (never fabricated as 0.0,
-        CONSTRAINT #4).  The ``"integrity"`` sub-dict is the output of
-        :func:`validate_directive_integrity` so callers can show pass/fail
-        without re-walking the legs. ``True_IVR`` is the opt-in real,
-        options-chain-derived IV rank (NaN unless
-        ``settings.OPTIONS_TRUE_IVR_ENABLED`` is on AND a chain fetch +
-        history lookup both succeeded) — surfaced ALONGSIDE ``IVR_Proxy``
-        (the realized-vol proxy, untouched) rather than replacing it, so
-        provenance stays honest.
-    """
+    """Compute a fully-hydrated premium-selling row for one symbol."""
     toe = TechnicalOptionsEngine()
     nan = float("nan")
+    has_earnings_risk = bool(days_to_earnings is not None and 0 <= days_to_earnings <= target_dte)
     row: Dict[str, Any] = {
+
         "Symbol": symbol,
         "Price": float(spot_price) if np.isfinite(spot_price) else nan,
         "Stale": bool(is_stale),
@@ -832,6 +773,15 @@ def build_premium_directive(
         "Legs": [],
         "Integrity_OK": True,
         "Integrity_Issues": [],
+        "Altman_Z_Score": altman_z_score,
+        "Piotroski_F_Score": piotroski_f_score,
+        "Net_Debt_EBITDA": net_debt_ebitda,
+        "FCF_Yield": fcf_yield,
+        "Days_To_Earnings": days_to_earnings,
+        "Earnings_Risk": has_earnings_risk,
+        "Realized_Vol_30D": realized_vol_30d,
+        "News_Snippets": news_snippets or [],
+        "Peers": peers_list or [],
     }
 
     # 1) Volatility (GJR-GARCH) — falls back to 20-day realized inside the engine.
@@ -968,6 +918,11 @@ def build_premium_directive(
         strike_grid=strike_grid,
         delta_target_scale=delta_target_scale,
     )
-    row["Integrity_OK"] = bool(integrity["ok"])
-    row["Integrity_Issues"] = list(integrity["issues"])
+    issues = list(integrity["issues"])
+    if has_earnings_risk:
+        issues.append(f"⚠️ Earnings Announcement scheduled in {days_to_earnings} days (within target DTE {target_dte})")
+        row["Integrity_OK"] = False
+    row["Integrity_OK"] = bool(integrity["ok"]) and not has_earnings_risk
+    row["Integrity_Issues"] = issues
     return row
+
