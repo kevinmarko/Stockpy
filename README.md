@@ -28,7 +28,9 @@ an HTML report.
 ## Quick start (fresh machine)
 
 ```bash
-# 1. Create the virtual environment (Python 3.12 required)
+# 1. Create the virtual environment (Python 3.12 required, via uv — https://astral.sh/uv)
+#    Install uv first if you don't have it: curl -LsSf https://astral.sh/uv/install.sh | sh
+#    (or: brew install uv)
 ./setup.sh
 
 # 2. Copy the environment template and fill in your credentials

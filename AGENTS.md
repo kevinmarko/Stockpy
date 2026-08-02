@@ -141,7 +141,7 @@ duplicate that detail here; this file is the map, not the territory.
 ## 6. Common commands
 
 ```bash
-./setup.sh                          # create .venv (Python 3.12), install deps
+./setup.sh                          # create .venv (Python 3.12, via uv), install deps
 python3 main.py                     # one advisory cycle (add --interval N to loop)
 python3 main_orchestrator.py        # full async pipeline
 pytest                              # full test suite

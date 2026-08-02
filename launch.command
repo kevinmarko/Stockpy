@@ -66,8 +66,7 @@ if [ ! -d ".venv" ]; then
     echo "  Create it by opening Terminal and running:"
     echo ""
     echo "    cd \"$SCRIPT_DIR\""
-    echo "    python3.12 -m venv .venv"
-    echo "    ./.venv/bin/pip install -r requirements.txt"
+    echo "    ./setup.sh"
     echo ""
     exit 1
 fi
@@ -79,8 +78,7 @@ if ! source ".venv/bin/activate"; then
     echo ""
     echo "    cd \"$SCRIPT_DIR\""
     echo "    rm -rf .venv"
-    echo "    python3.12 -m venv .venv"
-    echo "    ./.venv/bin/pip install -r requirements.txt"
+    echo "    ./setup.sh"
     echo ""
     exit 1
 fi
@@ -105,8 +103,7 @@ if [ "$PY_MAJOR" != "3" ] || [ "$PY_MINOR" != "12" ]; then
     echo ""
     echo "    cd \"$SCRIPT_DIR\""
     echo "    rm -rf .venv"
-    echo "    python3.12 -m venv .venv"
-    echo "    ./.venv/bin/pip install -r requirements.txt"
+    echo "    ./setup.sh"
     echo ""
     exit 1
 fi

@@ -32,7 +32,7 @@ PY_VER=$("$PYTHON" --version 2>&1)
 if [[ "$PY_VER" != *"3.12."* ]]; then
     echo "ERROR: .venv Python is $PY_VER — expected 3.12.x"
     echo "Recreate the venv with Python 3.12:"
-    echo "  python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    echo "  ./setup.sh --clean"
     echo ""
     read -rp "Press any key to close..." _
     exit 1

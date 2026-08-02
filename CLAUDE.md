@@ -102,8 +102,10 @@ streamlit run gui/app.py             # legacy: InvestYo Command Center — full 
 ./launch_gui.command                 # legacy: same as above, macOS double-click launcher
 
 # ── Backend pipeline (unaffected by the frontend decommission) ────────────────
-./setup.sh                       # creates .venv (Python 3.12), installs requirements.txt
-source .venv/bin/activate
+./setup.sh                       # creates .venv (Python 3.12, via uv — https://astral.sh/uv), installs requirements.txt
+# Everything below works either after `source .venv/bin/activate`, or prefixed
+# with `uv run` (e.g. `uv run pytest`) to skip activation entirely — uv
+# auto-discovers .venv in the repo root, no pyproject.toml required.
 python3 main.py                  # clean advisory orchestrator — runs one full cycle (or loops with --interval N); use --refresh-account to force Robinhood re-auth
 python3 main.py --interval 60   # refresh market data every 60 s; Robinhood account fetched at most once/day
 python3 main.py --refresh-account  # force fresh Robinhood login on this launch, then resume normal daily-cache behavior
