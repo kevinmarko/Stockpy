@@ -123,7 +123,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # settings.py's own field docstring for the full shutdown-budget ladder).
     # Non-secret; a GUI bug here can only make shutdown less graceful, never
     # leak a credential or enable a dangerous action -- unlike
-    # BROKERAGE_CONNECT_ENABLED/AUTOMATION_WRITES_ENABLED, which are
+    # AUTOMATION_WRITES_ENABLED, which is
     # deliberately excluded from this allowlist for that reason.
     "DAEMON_SHUTDOWN_TIMEOUT_SECONDS",
     # The daemon's internal timer cadence. Writable via the Pilots API's
@@ -288,6 +288,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
     "ROBINHOOD_LIMIT_BUFFER_BPS",
     "ROBINHOOD_AUTO_REFRESH_ENABLED",
+    # GUI-writable by operator decision (previously excluded as a "hand-set
+    # only" master switch -- see settings.py's own BROKERAGE_CONNECT_ENABLED
+    # field docstring). The brokerage-credential connect/disconnect endpoints
+    # remain gated by two further independent checks regardless of this
+    # flag's own writability: FOLLOW_API_TOKEN and a loopback-only request
+    # check (api/pilots_api.py::require_brokerage_connect_enabled).
+    "BROKERAGE_CONNECT_ENABLED",
     # Concurrency limits
     "ADVISORY_MAX_CONCURRENCY",
     "FORECAST_MAX_CONCURRENCY",
@@ -300,11 +307,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PIT_CAPTURE_ENABLED",
     "SNAPSHOT_HISTORY_DAYS",
     "SNAPSHOT_CONVICTION_DELTA_THRESHOLD",
-    # NOTE: UNIVERSE_SYNC_ENABLED and AGENTIC_DISCOVERY_ENABLED are deliberately
-    # NOT here -- same "hand-set only" invariant class as BROKERAGE_CONNECT_ENABLED
-    # (see tests/test_data_api.py::TestUniverseSyncInvariants and
-    # tests/test_pilots_api.py::TestAgenticDiscoveryInvariants). A GUI bug must
-    # never be able to flip either of these master switches on.
+    # GUI-writable by operator decision (previously excluded from this
+    # allowlist as "hand-set only" master switches -- see settings.py's own
+    # UNIVERSE_SYNC_ENABLED/AGENTIC_DISCOVERY_ENABLED field docstrings for the
+    # endpoint-level safeguards that remain independent of this flag:
+    # STATE_API_TOKEN / FOLLOW_API_TOKEN command-token guards respectively).
+    "UNIVERSE_SYNC_ENABLED",
+    "AGENTIC_DISCOVERY_ENABLED",
     "NEWS_HISTORY_CAPTURE_ENABLED",
     "DB_POOL_SIZE",
     "DB_MAX_OVERFLOW",

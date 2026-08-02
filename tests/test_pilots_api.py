@@ -2822,9 +2822,9 @@ class TestAutomationWritesInvariants:
         assert "ORCHESTRATOR_INTERVAL_SECONDS" in pilots_api.env_io.ALLOWED_KEYS
 
     def test_automation_writes_enabled_is_not_gui_writable(self):
-        """The D5/BROKERAGE_CONNECT_ENABLED invariant: a GUI bug must never
+        """The D5 invariant: a GUI bug must never
         be able to flip this on. It must be in NEITHER allowlist nor
-        secret-list (hand-set in .env only, like its sibling)."""
+        secret-list (hand-set in .env only)."""
         assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
         assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
 
@@ -4383,10 +4383,14 @@ class TestAgenticWatchWrite:
 
 
 class TestAgenticDiscoveryInvariants:
-    def test_agentic_discovery_enabled_is_not_gui_writable(self):
-        """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI bug
-        must never flip this on. Neither allowlisted nor secret — hand-set only."""
-        assert "AGENTIC_DISCOVERY_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_agentic_discovery_enabled_is_gui_writable(self):
+        """AGENTIC_DISCOVERY_ENABLED was previously a hand-set-only invariant
+        (like STRATEGY_WRITES_ENABLED) but was made GUI-writable by operator
+        decision. It must stay a non-secret allowlisted key (PUT
+        /agentic/scan-config remains gated independently by FOLLOW_API_TOKEN via
+        require_agentic_discovery_enabled's command-token dependency, so this
+        flag's own writability is not the sole safeguard)."""
+        assert "AGENTIC_DISCOVERY_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "AGENTIC_DISCOVERY_ENABLED" not in pilots_api.env_io.SECRET_KEYS
 
 

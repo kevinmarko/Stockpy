@@ -236,7 +236,7 @@ class Settings(BaseSettings):
             "ORCHESTRATOR_DAEMON_TOKEN guard already protecting POST /jobs. "
             "False (default) preserves today's compose-only behavior. "
             "Deliberately excluded from gui/env_io.py's ALLOWED_KEYS/SECRET_KEYS "
-            "(hand-set in .env only) -- same treatment as BROKERAGE_CONNECT_ENABLED "
+            "(hand-set in .env only) -- same treatment as AUTOMATION_WRITES_ENABLED "
             "-- because this flag gates execution of the global kill switch, a "
             "forced Robinhood re-login, and arbitrary flags to the orchestrators, "
             "a materially bigger risk than the fixed 7-job-type dispatch "
@@ -2674,24 +2674,24 @@ class Settings(BaseSettings):
     # (api/pilots_api.py POST /brokerage/connect, /brokerage/disconnect —
     # see data/brokerage_credentials.py). Default False: credential intake over
     # HTTP is a deliberate departure from this project's normal hand-edit-.env
-    # posture, so it must be explicitly opted into. Deliberately NOT in
-    # gui/env_io.py's ALLOWED_KEYS — a GUI bug must never be able to flip this
-    # on; set it by hand in .env. The endpoints are ALSO gated by
-    # FOLLOW_API_TOKEN (fail-closed command token, reused from the follow
-    # write-path) and a loopback-only check — three independent gates, not one.
+    # posture, so it must be explicitly opted into. GUI-writable (added to
+    # gui/env_io.py's ALLOWED_KEYS by operator decision) — the endpoints remain
+    # gated by TWO further independent checks: FOLLOW_API_TOKEN (fail-closed
+    # command token, reused from the follow write-path) and a loopback-only
+    # check, so flipping this flag alone is not sufficient to enable intake.
     BROKERAGE_CONNECT_ENABLED: bool = Field(
         default=False,
         description=(
             "Enables the Pilots API's brokerage-credential connect/disconnect "
             "endpoints. Off by default; also requires FOLLOW_API_TOKEN and a "
-            "loopback (127.0.0.1) request. Never GUI-writable."
+            "loopback (127.0.0.1) request."
         ),
     )
     # Master switch for the Pilots API's Data & Automation WRITE endpoints
     # (api/pilots_api.py PUT /automation/schedule/interval, POST /automation/resume
-    # — see the Data & Automation plan). Mirrors BROKERAGE_CONNECT_ENABLED exactly:
-    # default False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI bug
-    # must never be able to flip this on; hand-set in .env only). Deliberately
+    # — see the Data & Automation plan). Default False, deliberately NOT in
+    # gui/env_io.py's ALLOWED_KEYS (a GUI bug must never be able to flip this
+    # on; hand-set in .env only). Deliberately
     # does NOT gate POST /automation/run or POST /automation/pause — those already
     # sit behind require_command_token alone, matching the existing
     # POST /pilots/{id}/follow precedent (which writes an order queue under
@@ -2714,7 +2714,7 @@ class Settings(BaseSettings):
     # set -> .env). A DEDICATED flag, not AUTOMATION_WRITES_ENABLED: that flag was
     # scoped to the daemon interval and kill-switch resume; signal-weight tuning
     # changes WHAT THE PLATFORM RECOMMENDS and must not ride in on it. Mirrors
-    # BROKERAGE_CONNECT_ENABLED exactly: default False, deliberately NOT in
+    # AUTOMATION_WRITES_ENABLED exactly: default False, deliberately NOT in
     # gui/env_io.py's ALLOWED_KEYS (a GUI bug must never flip it on; hand-set in
     # .env only), and also requires FOLLOW_API_TOKEN. GET /strategy/matrix is
     # read-only and NOT gated by this flag (require_read_token alone, matching
@@ -2735,7 +2735,7 @@ class Settings(BaseSettings):
     # resume and to signal-weight tuning respectively — flipping an AI capability
     # (which provider narrates a rationale, whether the Gravity AI runner or Opal
     # research agent can fire) is its own risk class and must not ride in on
-    # either. Mirrors BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED exactly:
+    # either. Mirrors AUTOMATION_WRITES_ENABLED / STRATEGY_WRITES_ENABLED exactly:
     # default False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI bug
     # must never flip it on; hand-set in .env only), and also requires
     # FOLLOW_API_TOKEN. GET /llm/status is read-only and NOT gated by this flag
@@ -2757,10 +2757,9 @@ class Settings(BaseSettings):
     # not AUTOMATION_WRITES_ENABLED/STRATEGY_WRITES_ENABLED/LLM_WRITES_ENABLED: this
     # changes WHAT THE AGENT DISCOVERS (which symbols get scanned and fed toward the
     # gated order queue), its own risk class, and must not ride in on any of those.
-    # Mirrors BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED / LLM_WRITES_ENABLED
-    # exactly: default False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI
-    # bug must never flip it on; hand-set in .env only), and also requires
-    # FOLLOW_API_TOKEN. GET /agentic/status and GET /agentic/discovery are read-only
+    # Default False; GUI-writable (added to gui/env_io.py's ALLOWED_KEYS by operator
+    # decision) — the endpoint remains gated by FOLLOW_API_TOKEN independently of
+    # this flag. GET /agentic/status and GET /agentic/discovery are read-only
     # and NOT gated by this flag (require_read_token alone, matching GET
     # /brokerage/status, GET /strategy/matrix, and GET /llm/status).
     AGENTIC_DISCOVERY_ENABLED: bool = Field(
@@ -2768,9 +2767,7 @@ class Settings(BaseSettings):
         description=(
             "Enables PUT /agentic/scan-config on the Pilots API (Robinhood broker-scan "
             "config -> output/scan_configs.json, consumed by the agentic-discovery "
-            "skill). Off by default; also requires FOLLOW_API_TOKEN. Never "
-            "GUI-writable — hand-set in .env only, so discovery-scan configuration "
-            "cannot ride in on any other writes-enabled flag."
+            "skill). Off by default; also requires FOLLOW_API_TOKEN."
         ),
     )
     # Master switch for the Pilots API's general Settings Manager WRITE endpoint
@@ -2784,8 +2781,8 @@ class Settings(BaseSettings):
     # risk-gate tunables are their own risk class (they change how large a
     # position gets and when the risk gate blocks an order, not just what gets
     # scanned or which LLM narrates) and must not ride in on any of those.
-    # Mirrors BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED /
-    # LLM_WRITES_ENABLED / AGENTIC_DISCOVERY_ENABLED exactly: default False,
+    # Mirrors AUTOMATION_WRITES_ENABLED / STRATEGY_WRITES_ENABLED /
+    # LLM_WRITES_ENABLED exactly: default False,
     # deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI bug must never
     # flip it on; hand-set in .env only), and also requires FOLLOW_API_TOKEN.
     # GET /settings/tunables is read-only and NOT gated by this flag
@@ -2856,14 +2853,14 @@ class Settings(BaseSettings):
     # (api/pilots_api.py PUT /observability/macro-gate -- flips
     # MACRO_REGIME_GATE_ENABLED itself to .env). A DEDICATED flag, not
     # GENERAL_SETTINGS_WRITES_ENABLED/STRATEGY_WRITES_ENABLED/AUTOMATION_WRITES_ENABLED/
-    # LLM_WRITES_ENABLED/AGENTIC_DISCOVERY_ENABLED: this is not a sizing/forecasting
+    # LLM_WRITES_ENABLED: this is not a sizing/forecasting
     # tunable riding alongside dozens of others -- it is THE operator-controlled
     # bypass for PreTradeRiskGate.macro_kill_switch_check (the recession/credit-event
     # BUY veto; see risk_gate.py). Disabling it, even accidentally via a shared
     # flag some unrelated feature also gates, would silently remove that veto. Its
     # own risk class, must not ride in on any sibling flag. Mirrors
     # GENERAL_SETTINGS_WRITES_ENABLED / STRATEGY_WRITES_ENABLED /
-    # LLM_WRITES_ENABLED / AGENTIC_DISCOVERY_ENABLED exactly: default False,
+    # LLM_WRITES_ENABLED exactly: default False,
     # deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI bug must never flip
     # it on; hand-set in .env only), and also requires FOLLOW_API_TOKEN. Note
     # MACRO_REGIME_GATE_ENABLED itself (the key this endpoint writes) IS already
@@ -2894,8 +2891,8 @@ class Settings(BaseSettings):
     # re-uses whatever is already configured, but every call is still a real,
     # live network login against the operator's actual brokerage account and
     # must not ride in on a flag named for a different action. Mirrors
-    # BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED / LLM_WRITES_ENABLED /
-    # AGENTIC_DISCOVERY_ENABLED / GENERAL_SETTINGS_WRITES_ENABLED /
+    # AUTOMATION_WRITES_ENABLED / STRATEGY_WRITES_ENABLED / LLM_WRITES_ENABLED /
+    # GENERAL_SETTINGS_WRITES_ENABLED /
     # MACRO_GATE_WRITES_ENABLED exactly: default False, deliberately NOT in
     # gui/env_io.py's ALLOWED_KEYS (a GUI bug must never flip it on; hand-set in
     # .env only), and also requires FOLLOW_API_TOKEN and the same loopback-only
@@ -3635,7 +3632,7 @@ class Settings(BaseSettings):
     # `main.py` subprocess via gui.orchestrator_runner.launch_symbol_retry, the
     # SAME launcher the Streamlit Launcher tab's dead-letter Retry button
     # already calls). A DEDICATED flag, per this codebase's established
-    # pattern (see BROKERAGE_REFRESH_ENABLED / AGENTIC_DISCOVERY_ENABLED /
+    # pattern (see BROKERAGE_REFRESH_ENABLED /
     # GENERAL_SETTINGS_WRITES_ENABLED / MACRO_GATE_WRITES_ENABLED above): a
     # write with a real persistence/subprocess/network cost gets its OWN
     # flag, never rides in on an unrelated one (e.g. AUTOMATION_WRITES_ENABLED,
@@ -3661,10 +3658,11 @@ class Settings(BaseSettings):
     # `POST /data/sync` respectively (see .claude/skills/pilots-endpoint/
     # SKILL.md §1's "fail-closed command + dedicated master flag" tier).
     # Both default to False (today's exact behavior — neither endpoint exists
-    # in a reachable form until explicitly enabled) and are DELIBERATELY in
-    # NEITHER gui/env_io.py's ALLOWED_KEYS NOR SECRET_KEYS — hand-set in
-    # .env only, exactly like BROKERAGE_CONNECT_ENABLED / STRATEGY_WRITES_ENABLED
-    # / AGENTIC_DISCOVERY_ENABLED above.
+    # in a reachable form until explicitly enabled). PROMPT_REGISTRY_WRITES_ENABLED
+    # is DELIBERATELY in NEITHER gui/env_io.py's ALLOWED_KEYS NOR SECRET_KEYS —
+    # hand-set in .env only, exactly like STRATEGY_WRITES_ENABLED /
+    # AUTOMATION_WRITES_ENABLED above. UNIVERSE_SYNC_ENABLED (below) is GUI-writable
+    # by operator decision — see its own Field description.
     PROMPT_REGISTRY_WRITES_ENABLED: bool = Field(
         default=False,
         description=(
@@ -3689,7 +3687,10 @@ class Settings(BaseSettings):
             "(runs data.portfolio_sync.async_sync_now() -- a live Robinhood/broker "
             "read plus a DEFAULT_TICKERS .env write). A DEDICATED flag: this is a "
             "real broker call with a real .env side effect, a materially different "
-            "risk from every fail-open GET on this API. `GET /data/sync-report` "
+            "risk from every fail-open GET on this API. GUI-writable (added to "
+            "gui/env_io.py's ALLOWED_KEYS by operator decision) -- the endpoint "
+            "remains gated by the STATE_API_TOKEN command-token guard below "
+            "independently of this flag. `GET /data/sync-report` "
             "remains read-only and NOT gated by this flag. Sits behind the "
             "fail-closed require_write_token guard (STATE_API_TOKEN), matching this "
             "module's existing PUT /data/universe posture. POST /data/sync never "
