@@ -3009,11 +3009,19 @@ class GravityAIAuditor:
             # return {} here -- otherwise a live network call to Yahoo simply
             # succeeds for a real ticker like "AAPL" and the fallback path
             # (the thing under test) is never exercised at all.
-            import os as _os_o
+            # NOTE: settings.settings is a pydantic singleton populated once
+            # from .env at import time -- patching os.environ here is a
+            # no-op against it (same pitfall documented at check (g) above),
+            # so an operator .env with FUNDAMENTALS_SOURCE=fmp silently
+            # routes this check through the FMP chain instead of the
+            # intended default (non-FMP) path under test. Patch the
+            # singleton directly, matching (g)/(h).
             from data.market_data import CompositeProvider
-            with patch.dict(_os_o.environ, {
-                "FINNHUB_API_KEY": "", "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": "",
-            }):
+            with patch.multiple(
+                "settings.settings",
+                FUNDAMENTALS_SOURCE=None, MARKET_DATA_PROVIDER=None,
+                FINNHUB_API_KEY="", ALPACA_API_KEY="", ALPACA_SECRET_KEY="",
+            ):
                 cp = CompositeProvider()
                 yf_calls = {"n": 0}
 
@@ -3038,12 +3046,15 @@ class GravityAIAuditor:
             # After the Finnhub→Yahoo migration, a default CompositeProvider must
             # expose source_name == "yahoo_computed" (the statement-computed
             # engine), so data/historical_store.py labels cached rows honestly.
-            import os as _os_p
-            with patch.dict(_os_p.environ, {
-                "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": "",
-            }):
-                _os_p.environ.pop("MARKET_DATA_PROVIDER", None)
-                _os_p.environ.pop("FUNDAMENTALS_SOURCE", None)
+            # NOTE: same os.environ-vs-settings.settings pitfall as check (o)
+            # above -- patch the singleton, not the environment, so an
+            # operator .env with FUNDAMENTALS_SOURCE=fmp/MARKET_DATA_PROVIDER=fmp
+            # can't leak into this "default is Yahoo" assertion.
+            with patch.multiple(
+                "settings.settings",
+                MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE=None,
+                ALPACA_API_KEY="", ALPACA_SECRET_KEY="",
+            ):
                 cp_default = CompositeProvider()
                 default_source = cp_default.source_name
                 fund_provider_name = type(cp_default._fundamentals_provider).__name__
@@ -4944,8 +4955,16 @@ class GravityAIAuditor:
                 def list_watchlist_names(self): return list(self._wl)
 
             fc = _FakeClient()
-            with patch.object(rc, "_watchlist_tickers",
-                              side_effect=lambda n: fc._wl.get(n, [])):
+            # NOTE: must also neutralize Source C (SYNC_WATCHLIST_FILES /
+            # _watchlist_files_from_env) -- otherwise a real operator .env
+            # setting for that var leaks a genuine watchlist file into this
+            # hermetic fixture and the assertion below fails on unrelated
+            # real tickers, not a discover_universe bug.
+            with (
+                patch.object(rc, "_watchlist_tickers",
+                             side_effect=lambda n: fc._wl.get(n, [])),
+                patch.object(rc, "_watchlist_files_from_env", return_value=[]),
+            ):
                 uni = rc.discover_universe(fc)
             dedup_ok = uni == ["AAPL", "MSFT", "NVDA"]
             audit["checks"]["discover_universe_dedup_sort"] = {
@@ -9794,22 +9813,28 @@ class GravityAIAuditor:
             )
             all_pass = all_pass and rt_ok
 
-            # ── 6. settings.FUNDAMENTALS_REFRESH_DAYS == 1 ──────────────────
-            from settings import settings as _s
-            frd_ok = getattr(_s, "FUNDAMENTALS_REFRESH_DAYS", None) == 1
+            # ── 6. FUNDAMENTALS_REFRESH_DAYS declared default == 1 ──────────
+            # NOTE: assert against the FIELD's declared default, not the live
+            # settings.settings singleton -- an operator .env legitimately
+            # overriding this tunable (e.g. throttling refresh cadence) must
+            # not be reported as a code regression here.
+            from settings import Settings
+            frd_default = Settings.model_fields["FUNDAMENTALS_REFRESH_DAYS"].default
+            frd_ok = frd_default == 1
             _chk(
-                "settings.FUNDAMENTALS_REFRESH_DAYS == 1",
+                "Settings.FUNDAMENTALS_REFRESH_DAYS declared default == 1",
                 frd_ok,
-                f"FUNDAMENTALS_REFRESH_DAYS={getattr(_s, 'FUNDAMENTALS_REFRESH_DAYS', None)}",
+                f"declared_default={frd_default}",
             )
             all_pass = all_pass and frd_ok
 
-            # ── 7. settings.MACRO_REFRESH_HOURS == 12 ───────────────────────
-            mrh_ok = getattr(_s, "MACRO_REFRESH_HOURS", None) == 12
+            # ── 7. MACRO_REFRESH_HOURS declared default == 12 ───────────────
+            mrh_default = Settings.model_fields["MACRO_REFRESH_HOURS"].default
+            mrh_ok = mrh_default == 12
             _chk(
-                "settings.MACRO_REFRESH_HOURS == 12",
+                "Settings.MACRO_REFRESH_HOURS declared default == 12",
                 mrh_ok,
-                f"MACRO_REFRESH_HOURS={getattr(_s, 'MACRO_REFRESH_HOURS', None)}",
+                f"declared_default={mrh_default}",
             )
             all_pass = all_pass and mrh_ok
 
@@ -15727,28 +15752,43 @@ class GravityAIAuditor:
             ok8 = False
             detail8 = "skipped — create_readonly_db_engine missing"
             if has_ro:
-                records: list = []
-
-                class _Capture(_logging.Handler):
-                    def emit(self, record):
-                        records.append(record.getMessage())
-
-                cap = _Capture()
-                dbc_logger = _logging.getLogger("db_config")
-                prior_level = dbc_logger.level
-                dbc_logger.addHandler(cap)
-                dbc_logger.setLevel(_logging.INFO)
+                from settings import settings as _settings93_ro
+                prior_ro_dsn8 = getattr(_settings93_ro, "MCP_DATABASE_URL_RO", None)
                 try:
-                    # construct-only, never connects
-                    db_config.create_readonly_db_engine(
-                        "postgresql://user:supersecretpw@localhost/testdb"
-                    )
+                    # Neutralize the operator's real MCP_DATABASE_URL_RO so this
+                    # check exercises the intended defense-in-depth-only branch
+                    # (postgresql_readonly=True layered on create_db_engine)
+                    # regardless of what's actually configured in .env -- a
+                    # malformed/garbage value there must degrade this ONE
+                    # check, never crash the whole step (see except below).
+                    _settings93_ro.MCP_DATABASE_URL_RO = None
+                    records: list = []
+
+                    class _Capture(_logging.Handler):
+                        def emit(self, record):
+                            records.append(record.getMessage())
+
+                    cap = _Capture()
+                    dbc_logger = _logging.getLogger("db_config")
+                    prior_level = dbc_logger.level
+                    dbc_logger.addHandler(cap)
+                    dbc_logger.setLevel(_logging.INFO)
+                    try:
+                        # construct-only, never connects
+                        db_config.create_readonly_db_engine(
+                            "postgresql://user:supersecretpw@localhost/testdb"
+                        )
+                    finally:
+                        dbc_logger.removeHandler(cap)
+                        dbc_logger.setLevel(prior_level)
+                    logged = "\n".join(records)
+                    ok8 = "supersecretpw" not in logged
+                    detail8 = f"secret_leaked={'supersecretpw' in logged}"
+                except Exception as exc:  # noqa: BLE001 — degrade this check, don't crash the step
+                    ok8 = False
+                    detail8 = f"errored: {type(exc).__name__}: {exc}"
                 finally:
-                    dbc_logger.removeHandler(cap)
-                    dbc_logger.setLevel(prior_level)
-                logged = "\n".join(records)
-                ok8 = "supersecretpw" not in logged
-                detail8 = f"secret_leaked={'supersecretpw' in logged}"
+                    _settings93_ro.MCP_DATABASE_URL_RO = prior_ro_dsn8
             all_pass = _chk("read-only Postgres engine never logs the DSN (CONSTRAINT #3)", ok8, detail8) and all_pass
 
             # ── 9: MCP_DATABASE_URL_RO (restricted-role DSN) seam ──────────
@@ -15771,6 +15811,9 @@ class GravityAIAuditor:
                     ignores_primary = "primaryhost" not in str(eng9.url)
                     ok9 = uses_restricted and ignores_primary
                     detail9 = f"uses_restricted={uses_restricted} ignores_primary={ignores_primary}"
+                except Exception as exc:  # noqa: BLE001 — degrade this check, don't crash the step
+                    ok9 = False
+                    detail9 = f"errored: {type(exc).__name__}: {exc}"
                 finally:
                     _settings93.MCP_DATABASE_URL_RO = prior_ro_dsn
             all_pass = _chk(
