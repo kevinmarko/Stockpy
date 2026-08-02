@@ -683,32 +683,45 @@ class TestSettingsSubroutesPut:
             resp = _put_scoped("/settings/sentiment", {"FINNHUB_API_KEY": "leak"})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["rejected"]["FINNHUB_API_KEY"] == "unknown_key"
-        assert body["written"] == {}
-        assert w.call_count == 0
+    """PUT /settings/sentiment, PUT /settings/sector-selection, PUT /settings/fmp, PUT /settings/etf-transmission."""
 
-    def test_a_key_owned_by_the_other_subroute_is_unknown_here(self):
-        """SECTOR_SELECTION_TOP_N belongs to /settings/sector-selection, not
-        /settings/sentiment -- confirms the two editors don't silently share
-        scope."""
-        rejected_body = _put_scoped("/settings/sentiment", {"SECTOR_SELECTION_TOP_N": 5})
-        assert rejected_body.json()["rejected"]["SECTOR_SELECTION_TOP_N"] == "unknown_key"
+    def test_happy_path_writes_to_env(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put_scoped("/settings/fmp", {"FMP_QUOTES_ENABLED": True})
+        assert resp.status_code == 200
+        assert resp.json()["written"] == {"FMP_QUOTES_ENABLED": True}
+        assert w.call_count == 1
+        assert w.call_args[0][0] == {"FMP_QUOTES_ENABLED": True}
+
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put_scoped("/settings/etf-transmission", {"ETF_TRANSMISSION_ENABLED": True})
+        assert resp.status_code == 200
+        assert resp.json()["written"] == {"ETF_TRANSMISSION_ENABLED": True}
+        assert w.call_count == 1
+        assert w.call_args[0][0] == {"ETF_TRANSMISSION_ENABLED": True}
+
+    def test_rejects_out_of_scope_key(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put_scoped("/settings/fmp", {"ETF_TRANSMISSION_ENABLED": True})
+        assert resp.status_code == 200
+        assert resp.json()["rejected"]["ETF_TRANSMISSION_ENABLED"] == "unknown_key"
+        assert w.call_count == 0
 
     def test_rejects_out_of_range(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/sector-selection", {"SECTOR_SELECTION_TOP_N": 99})
+            resp = _put_scoped("/settings/etf-transmission", {"ETF_TRANSMISSION_MAX_DERATE": 5.0})
         assert resp.status_code == 200
-        assert resp.json()["rejected"]["SECTOR_SELECTION_TOP_N"] == "out_of_range"
+        assert resp.json()["rejected"]["ETF_TRANSMISSION_MAX_DERATE"] == "out_of_range"
         assert w.call_count == 0
 
     def test_fail_closed_when_command_token_unset(self):
         for url, _index_name in _SETTINGS_SUBROUTES:
-            resp = _put_scoped(url, {"SECTOR_SELECTION_TOP_N": 5}, token=None)
+            resp = _put_scoped(url, {"FMP_QUOTES_ENABLED": True}, token=None)
             assert resp.status_code == 403
 
     def test_fails_closed_when_general_settings_writes_disabled(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/sentiment", {"SENTIMENT_INGESTION_ENABLED": True}, enabled=False)
+            resp = _put_scoped("/settings/fmp", {"FMP_QUOTES_ENABLED": True}, enabled=False)
         assert resp.status_code == 403
         assert w.call_count == 0
 

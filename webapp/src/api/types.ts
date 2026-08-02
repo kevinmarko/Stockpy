@@ -1501,6 +1501,7 @@ export interface TunablesUpdateResult {
   written: Record<string, number | boolean | string>;
   rejected: Record<string, string>;
   applies: "next_daemon_restart";
+  note?: string;
 }
 
 // ---------------------------------------------------------------------------

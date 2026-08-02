@@ -991,10 +991,19 @@ export function Observability() {
           <SizingCapAuditSection audit={data.sizing_cap_audit} />
 
           {/* ETF volatility transmission — per-symbol diagnostic view. */}
-          <SectionHeading
-            title="ETF volatility transmission"
-            sub="Ben-David, Franzoni &amp; Moussawi (2018) — non-diversifiable variance from heavy ETF wrapping"
-          />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+            <SectionHeading
+              title="ETF volatility transmission"
+              sub="Ben-David, Franzoni &amp; Moussawi (2018) — non-diversifiable variance from heavy ETF wrapping"
+            />
+            <Button
+              variant="neutral"
+              onClick={() => nav("/settings/etf-transmission")}
+              style={{ marginBottom: "var(--s-2-5)", fontSize: "var(--t-caption)" }}
+            >
+              Configure ETF transmission →
+            </Button>
+          </div>
           <EtfTransmissionSection etf={data.etf_transmission} />
 
           {/* Heartbeat age — current sample only, no fabricated trend. */}
