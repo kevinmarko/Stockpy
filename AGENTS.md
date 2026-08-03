@@ -65,6 +65,26 @@ section for the full detail.
   codebase has repeatedly caught real bugs here; when adding anything
   time-series-shaped, ask "could this see the future?" and write a
   perturbation test if the answer isn't obviously no.
+- **New admin/API write or execution capabilities default to ON, not gated
+  behind a fresh opt-in flag.** (Operator decision, 2026-08-03.) The 11
+  existing fail-closed gates in `gui/env_io.py::EXCLUDED_FROM_GUI`
+  (`AI_GENERATION_API_ENABLED`, `AUTOMATION_WRITES_ENABLED`,
+  `BROKERAGE_REFRESH_ENABLED`, `COMMAND_EXECUTION_ENABLED`,
+  `DEAD_LETTER_RETRY_ENABLED`, `GENERAL_SETTINGS_WRITES_ENABLED`,
+  `LLM_WRITES_ENABLED`, `MACRO_GATE_WRITES_ENABLED`,
+  `PROMPT_REGISTRY_WRITES_ENABLED`, `RAG_QUERY_API_ENABLED`,
+  `STRATEGY_WRITES_ENABLED`) predate this decision and are unaffected — do
+  not flip their defaults without being explicitly asked to. Going forward,
+  when you build a *new* admin/API capability (a new write endpoint, a new
+  command dispatch, a new automation trigger), ship it active by default
+  instead of behind a freshly-added `_ENABLED` flag defaulting `False`;
+  requiring a new opt-in flag for every new admin feature was judged too
+  much overhead. This is scoped narrowly to admin/write/execution surface
+  area and does **not** extend to anything that changes what the pipeline
+  computes or trades on — new signal modules, sizing changes, new data
+  sources, forecasting changes all keep the existing default-`False`/opt-in
+  convention, since a silent behavior change on `git pull` is a real risk
+  for a live capital account.
 
 ## 3. Non-negotiable workflow rules
 
