@@ -4076,21 +4076,32 @@ def _validate_and_write_payload(
     ------------------------------------------------------------------
     Two behaviours this function gained, both load-bearing
     ------------------------------------------------------------------
-    **1. Dangerous-key confirmation.** ``settings_keysets.DANGEROUS_KEYS``
-    (``ADVISORY_ONLY``, ``DRY_RUN``, ``ROBINHOOD_EXECUTION_MODE``,
-    ``MACRO_REGIME_GATE_ENABLED``, ``FMP_BARS_ENABLED``,
-    ``FMP_BARS_ADJUSTMENT``, ``CORS_ALLOWED_ORIGINS``, + the 11 hand-set-only
-    write gates) now require the caller to echo the field's own name back in
-    ``confirm``: ``{"values": {"ADVISORY_ONLY": false}, "confirm":
-    {"ADVISORY_ONLY": "ADVISORY_ONLY"}}``. Missing -> ``confirmation_required``;
-    present but not an exact match -> ``confirmation_mismatch``. Before this,
-    five of those fields — including ``ADVISORY_ONLY``, the execution
-    quarantine AGENTS.md §2 calls load-bearing safety infrastructure — were one
-    ordinary ``PUT`` away from ``false`` with no confirmation of any kind.
+    **1. Dangerous-key confirmation, scoped to writes through THIS function.**
+    ``settings_keysets.DANGEROUS_KEYS`` fields accepted here (``ADVISORY_ONLY``,
+    ``DRY_RUN``, ``ROBINHOOD_EXECUTION_MODE``, ``MACRO_REGIME_GATE_ENABLED``,
+    ``FMP_BARS_ENABLED``, ``FMP_BARS_ADJUSTMENT``, ``CORS_ALLOWED_ORIGINS`` —
+    the other 11 ``DANGEROUS_KEYS`` members are hand-set-only master switches
+    never in ``env_io.ALLOWED_KEYS``, so they are already rejected as
+    ``forbidden_key`` above and never reach this gate) now require the caller
+    to echo the field's own name back in ``confirm``: ``{"values":
+    {"ADVISORY_ONLY": false}, "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY"}}``.
+    Missing -> ``confirmation_required``; present but not an exact match ->
+    ``confirmation_mismatch``. Before this, five of those fields — including
+    ``ADVISORY_ONLY``, the execution quarantine AGENTS.md §2 calls
+    load-bearing safety infrastructure — were one ordinary ``PUT`` *through
+    this function* away from ``false`` with no confirmation of any kind.
     Rejection is strictly PER KEY: a batch mixing an unconfirmed dangerous key
     with ordinary tunables still writes the ordinary ones (this repo's existing
     partial-success convention), so the gate cannot be worked around by
     bundling and cannot punish an unrelated edit.
+
+    **This gate does NOT cover every write path for these fields.**
+    ``PUT /automation/execution-mode`` writes ``ADVISORY_ONLY`` (and, via
+    ``gui.strategy_registry.set_active_mode``, ``DRY_RUN``/``ALPACA_PAPER``)
+    directly and predates this function — it has its own confirm-button UX in
+    the webapp's Execution Mode control, but not this typed-name echo. Do not
+    read the framing above as "ADVISORY_ONLY now always requires typed
+    confirmation" — it means that within the five ``/settings/*`` editors.
 
     **2. Live apply.** Every accepted key is still written to ``.env`` exactly
     as before (durable across restarts, unchanged). Additionally, a key the

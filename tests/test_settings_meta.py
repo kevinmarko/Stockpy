@@ -168,6 +168,23 @@ class TestRestartReason:
         reason = settings_meta.restart_reason("ANYTHING", data=d)
         assert "could not be read" in reason
 
+    def test_a_field_absent_from_a_loaded_artifact_is_not_told_the_report_is_unreadable(
+        self, tmp_path
+    ):
+        """The regression this guards: an artifact that parsed FINE but simply
+        has never mentioned this field (e.g. a tunable added to an editor
+        since the last `--write` run) was reporting the exact same "the
+        report could not be read" sentence as a genuinely corrupt/missing
+        file -- false, since every other field on the same request classifies
+        correctly from the same data. The two situations need different
+        prose."""
+        d = settings_meta.load_liveness(path=_artifact(tmp_path, _SAMPLE))
+        assert d["loaded"] is True
+        reason = settings_meta.restart_reason("A_BRAND_NEW_FIELD", data=d)
+        assert "could not be read" not in reason
+        assert "not listed in the settings-liveness report" in reason
+        assert "settings_liveness.py --write" in reason
+
 
 # ---------------------------------------------------------------------------
 # The live-apply AND, and the env-pin downgrade

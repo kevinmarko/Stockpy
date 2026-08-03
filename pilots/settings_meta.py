@@ -357,9 +357,26 @@ def restart_reason(key: str, *, data: Optional[Dict[str, Any]] = None) -> Option
     if cls in ("live_safe", "no_op"):
         return None
     if cls == CLASSIFICATION_UNKNOWN:
-        # Honest about the gap rather than inventing a capture site.
+        # Honest about the gap rather than inventing a capture site. These are
+        # two different situations and must not share one message: a genuinely
+        # unreadable artifact (`loaded: False`) vs. one that parsed fine but
+        # simply has never mentioned this field (`loaded: True` — e.g. a field
+        # added to an editor since the last `--write` run). Claiming "could not
+        # be read" in the second case is itself false — every other field on
+        # the same request classified correctly from the same data — and sends
+        # an operator debugging JSON parsing instead of regenerating the
+        # artifact.
+        if not d.get("loaded"):
+            return (
+                "The settings-liveness report could not be read, so this "
+                "field's behaviour could not be verified — it is treated as "
+                "needing a restart, and is not applied to the running "
+                "process."
+            )
         return (
-            "The settings-liveness report could not be read, so this field's "
+            "This field is not listed in the settings-liveness report "
+            "(docs/settings_liveness.json may be out of date — regenerate "
+            "with `python3 scripts/settings_liveness.py --write`), so its "
             "behaviour could not be verified — it is treated as needing a "
             "restart, and is not applied to the running process."
         )
@@ -548,7 +565,20 @@ def field_metadata(
         "capture_sites": capture_sites(key, data=d),
         "env_pinned": is_pinned,
         "dangerous": is_dangerous(key),
-        "source": SOURCE_RUNTIME_STORE if key in stored else SOURCE_ENV_FILE,
+        # Raw membership in ``stored`` is NOT enough: a pin always wins over
+        # the store (see applies_for's own ordering, checked first there for
+        # the same reason), so a key that is BOTH stored and pinned is
+        # currently active from the real shell export, not the store --
+        # reporting "runtime_store" for it would contradict this same
+        # payload's own "env_pinned": true one line up. A store entry can
+        # also be a stale/invalid leftover the last apply skipped (e.g. a
+        # field whose bounds changed after it was written, or the file
+        # edited by hand) -- ``bootstrap`` keys are refused by the writer so
+        # they can never legitimately reach the store at all. Neither of
+        # those is applied either, so neither may claim this source.
+        "source": (
+            SOURCE_RUNTIME_STORE if (key in stored and not is_pinned) else SOURCE_ENV_FILE
+        ),
     }
 
 

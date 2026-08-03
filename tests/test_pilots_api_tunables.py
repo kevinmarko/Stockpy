@@ -20,6 +20,14 @@ JSON-encode); PUT is gated on BOTH the fail-closed command token AND the
 dedicated ``GENERAL_SETTINGS_WRITES_ENABLED`` flag; and that the token is never
 logged (CONSTRAINT #3). ``env_io.write_many_atomic`` is patched so no test ever
 touches a real ``.env``.
+
+Several PUT tests below exercise a live-safe field (e.g. ``KELLY_FRACTION``)
+through the real endpoint with ``write_many_atomic`` mocked but
+``runtime_flags_writer.write_override`` left genuinely live — proving the
+field really does apply immediately, not just that the code claims it does.
+``_isolated_runtime_flags_store`` (autouse) redirects that real writer's
+target file to a throwaway path so those writes never touch this checkout's
+own ``output/runtime_flags.json``.
 """
 
 from __future__ import annotations
@@ -31,12 +39,14 @@ import json
 import pathlib
 from unittest import mock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from settings import settings
 from settings_keysets import DANGEROUS_KEYS
 import api.pilots_api as pilots_api
 import pilots.settings_meta as settings_meta
+import runtime_flags
 
 # Starlette's TestClient defaults request.client.host to the literal
 # string "testclient" -- NOT loopback -- which would trip
@@ -44,6 +54,22 @@ import pilots.settings_meta as settings_meta
 # on every one of this file's existing zero-config-behavior assertions.
 # An explicit loopback host here is what these tests have always meant.
 client = TestClient(pilots_api.app, client=("127.0.0.1", 54123))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime_flags_store(tmp_path, monkeypatch):
+    """Redirect the real runtime-flags store for every test in this file.
+
+    PUT handlers call ``runtime_flags_writer.write_override`` with no
+    ``path=`` override, exactly like production — so without this, a test
+    that PUTs a live-safe field through the real endpoint writes to this
+    checkout's actual ``output/runtime_flags.json`` instead of an isolated
+    file. ``INVESTYO_RUNTIME_FLAGS_PATH`` is the one override both the
+    writer and the reader (``runtime_flags.load_store``) already respect.
+    """
+    monkeypatch.setenv(
+        runtime_flags.PATH_OVERRIDE_ENV_VAR, str(tmp_path / "runtime_flags.json")
+    )
 
 _CMD_TOKEN = "cmd-tok"
 _READ_TOKEN = "read-tok"
@@ -450,7 +476,11 @@ class TestPutTunables:
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["applies"] == "next_daemon_restart"
+        # KELLY_FRACTION is live_safe (applies immediately via the real
+        # writer, genuinely invoked here); LOG_LEVEL/DRY_RUN are
+        # restart_required — an honest rollup of a mixed batch is "mixed",
+        # not a blanket "next_daemon_restart" (see _settings_editor_payload).
+        assert body["applies"] == "mixed"
         assert body["rejected"] == {}
         # Echoes the REQUEST/coerced values, not the (stale) settings singleton.
         assert body["written"] == {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True}
@@ -651,7 +681,14 @@ class TestSettingsSubroutesGetShape:
                 resp = client.get(url)
             assert resp.status_code == 200
             body = resp.json()
-            assert body["applies"] == "next_daemon_restart"
+            # The four subroutes genuinely differ (sector-selection is all
+            # live_safe; the others mix live_safe and restart_required
+            # fields) -- assert self-consistency against the real rollup
+            # helper rather than one hardcoded value across all of them.
+            states = [
+                f["liveness"]["applies"] for g in body["groups"] for f in g["fields"]
+            ]
+            assert body["applies"] == settings_meta.summarize_applies(states)["applies"]
             index = getattr(pilots_api, index_name)
             served_keys = {f["key"] for g in body["groups"] for f in g["fields"]}
             assert served_keys == set(index), f"{url}: served keys != {index_name}"
@@ -993,6 +1030,24 @@ class TestEnvPinningComputedFresh:
             if f["liveness"]["source"] == "runtime_store"
         ]
         assert others == [key]
+
+    def test_a_pinned_key_never_reports_runtime_store_even_if_also_stored(self):
+        """A real shell export always wins over the store (see applies_for's
+        own ordering) -- so a key that is BOTH pinned AND has a stale/leftover
+        store entry must not claim "source": "runtime_store". That combo would
+        contradict this same payload's own "env_pinned": true on the same
+        field."""
+        key = "KELLY_FRACTION"
+        with mock.patch.object(
+            settings_meta, "runtime_store_keys", return_value=frozenset({key})
+        ):
+            with mock.patch.object(
+                settings_meta, "env_pinned_keys", return_value=frozenset({key})
+            ):
+                body = _get("/settings/tunables")
+        f = _find_field(body, key)
+        assert f["liveness"]["env_pinned"] is True
+        assert f["liveness"]["source"] == "env_file"
 
 
 class TestGetDegradesWhenLivenessArtifactUnreadable:
