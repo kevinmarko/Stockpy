@@ -39,3 +39,25 @@ export function writeCacheEntry<T>(key: string, data: T): void {
     /* quota exceeded / storage disabled — caching is best-effort, never fatal */
   }
 }
+
+/**
+ * Removes every entry this module has ever written to localStorage and
+ * returns the count actually removed. Backs the Settings screen's "Clear
+ * Data Cache" action.
+ *
+ * Unlike read/writeCacheEntry (best-effort and silent on failure, since
+ * caching is only ever an optimization), this deliberately does NOT swallow
+ * a storage failure — the whole point of a "clear cache" button is an
+ * honest report of what happened, so a thrown error here must propagate to
+ * the caller rather than be reported as a silent success (CONSTRAINT #4:
+ * never tell the operator an action succeeded when it didn't).
+ */
+export function clearAllCacheEntries(): number {
+  const keys: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(PREFIX)) keys.push(k);
+  }
+  for (const k of keys) localStorage.removeItem(k);
+  return keys.length;
+}

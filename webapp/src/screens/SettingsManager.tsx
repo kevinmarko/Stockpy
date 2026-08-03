@@ -2,9 +2,11 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { TunableField, TunablesResponse } from "../api/types";
+import { clearAllCacheEntries } from "../api/offlineCache";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, EmptyState, ErrorState, Input, Loading, Notice, Select, Textarea } from "../components/ui";
+import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { TunableGroupCard } from "../components/TunableGroupCard";
 import { theme } from "../theme";
@@ -107,6 +109,29 @@ function TunablesEditor({
   const baselineInit = useMemo(() => buildBaseline(data.groups), [data]);
   const [baseline, setBaseline] = useState<Record<string, EditVal>>(baselineInit);
   const [edited, setEdited] = useState<Record<string, EditVal>>(baselineInit);
+
+  // "Clear Data Cache" (Danger Zone) -- clears this browser's localStorage-backed
+  // offline-response cache (webapp/src/api/offlineCache.ts). There is no
+  // server-side cache-clearing endpoint for this button to call; this IS the
+  // one cache the webapp itself owns and can honestly clear. See
+  // clearAllCacheEntries()'s docstring for why a failure here is surfaced
+  // rather than swallowed.
+  const [cacheModalOpen, setCacheModalOpen] = useState(false);
+  const [cacheResult, setCacheResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const confirmClearCache = () => {
+    setCacheModalOpen(false);
+    try {
+      const n = clearAllCacheEntries();
+      setCacheResult({
+        ok: true,
+        message: n > 0
+          ? `Cleared ${n} cached response${n === 1 ? "" : "s"} from this browser.`
+          : "Nothing to clear — no cached responses were stored in this browser.",
+      });
+    } catch (err: any) {
+      setCacheResult({ ok: false, message: `Failed to clear cache: ${err?.message || err}` });
+    }
+  };
 
   const mutation = useMutation((values: Record<string, number | boolean | string>) =>
     api.updateTunables(values),
@@ -288,7 +313,10 @@ function TunablesEditor({
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
             <div>
               <div style={{ fontWeight: 700, color: theme.textPrimary }}>Clear Data Cache</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>Purge all local cache files (historical data).</div>
+              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
+                Clear this browser&apos;s cached API responses (used as an offline fallback). Does
+                not touch server-side data or the running engine.
+              </div>
             </div>
             <button
               style={{
@@ -301,17 +329,44 @@ function TunablesEditor({
                 cursor: "pointer",
                 fontSize: "var(--t-caption)",
               }}
-              onClick={() => {
-                if (confirm("Are you sure you want to clear the data cache? This cannot be undone.")) {
-                  alert("Cache cleared.");
-                }
-              }}
+              onClick={() => setCacheModalOpen(true)}
+              data-testid="clear-cache-button"
             >
               Clear Cache
             </button>
           </div>
+
+          {cacheResult && (
+            <Notice variant={cacheResult.ok ? "success" : "warn"} data-testid="cache-cleared-notice">
+              <span>{cacheResult.ok ? "✅" : "⚠️"}</span>
+              <span>{cacheResult.message}</span>
+            </Notice>
+          )}
         </div>
       </section>
+
+      {cacheModalOpen && (
+        <Modal ariaLabel="Confirm clear data cache" onClose={() => setCacheModalOpen(false)}>
+          <div data-testid="clear-cache-confirm">
+            <div className="tile-label" style={{ marginBottom: "var(--s-2)" }}>
+              Clear data cache?
+            </div>
+            <p style={{ color: theme.textSecondary, marginTop: 0 }}>
+              This clears this browser&apos;s cached API responses (used as an offline fallback
+              when the network is unreachable). It does not affect server-side data, the
+              database, or the running engine, and cannot be undone.
+            </p>
+            <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
+              <Button variant="neutral" onClick={() => setCacheModalOpen(false)} data-testid="clear-cache-cancel">
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={confirmClearCache} data-testid="clear-cache-confirm-yes">
+                Yes, clear it
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
         <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>

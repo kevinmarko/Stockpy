@@ -12,6 +12,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "./SettingsManager";
 import { api, ApiError } from "../api/client";
+import { readCacheEntry, writeCacheEntry } from "../api/offlineCache";
 import type { TunablesResponse } from "../api/types";
 
 function baseTunables(overrides: Partial<TunablesResponse> = {}): TunablesResponse {
@@ -79,7 +80,10 @@ function renderScreen() {
 }
 
 describe("SettingsManager screen", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
 
   it("renders groups and a field of every widget type", async () => {
     vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
@@ -227,5 +231,67 @@ describe("SettingsManager screen", () => {
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
     expect(spy.mock.calls[0][0]).toEqual({ CORS_ALLOWED_ORIGINS: '["https://example.com"]' });
+  });
+
+  describe("Danger Zone — Clear Data Cache", () => {
+    // Regression coverage for the bug this screen shipped with: the button
+    // used to show a native confirm() then just alert("Cache cleared.") with
+    // no actual side effect. These tests pin the real side effect (the
+    // browser's localStorage-backed offline-response cache from
+    // api/offlineCache.ts is actually emptied) rather than merely asserting
+    // an alert fired.
+
+    it("confirming actually empties the offline-response cache and reports how many entries were cleared", async () => {
+      writeCacheEntry("/pilots", { some: "data" });
+      writeCacheEntry("/portfolio", { other: "data" });
+      expect(readCacheEntry("/pilots")).not.toBeNull();
+      expect(readCacheEntry("/portfolio")).not.toBeNull();
+
+      vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
+      renderScreen();
+      await screen.findByRole("heading", { name: "Runtime tunables" });
+
+      await userEvent.click(screen.getByTestId("clear-cache-button"));
+      expect(await screen.findByTestId("clear-cache-confirm")).toBeInTheDocument();
+      await userEvent.click(screen.getByTestId("clear-cache-confirm-yes"));
+
+      // The real side effect: both cache entries are actually gone.
+      expect(readCacheEntry("/pilots")).toBeNull();
+      expect(readCacheEntry("/portfolio")).toBeNull();
+
+      const notice = await screen.findByTestId("cache-cleared-notice");
+      expect(notice).toHaveTextContent("Cleared 2 cached responses from this browser.");
+      // The confirmation dialog is dismissed after confirming.
+      expect(screen.queryByTestId("clear-cache-confirm")).not.toBeInTheDocument();
+    });
+
+    it("reports honestly when there is nothing cached to clear, instead of a fabricated success", async () => {
+      vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
+      renderScreen();
+      await screen.findByRole("heading", { name: "Runtime tunables" });
+
+      await userEvent.click(screen.getByTestId("clear-cache-button"));
+      await userEvent.click(await screen.findByTestId("clear-cache-confirm-yes"));
+
+      expect(await screen.findByTestId("cache-cleared-notice")).toHaveTextContent(
+        "Nothing to clear",
+      );
+    });
+
+    it("Cancel leaves the cache untouched and closes the dialog with no action taken", async () => {
+      writeCacheEntry("/pilots", { some: "data" });
+
+      vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
+      renderScreen();
+      await screen.findByRole("heading", { name: "Runtime tunables" });
+
+      await userEvent.click(screen.getByTestId("clear-cache-button"));
+      expect(await screen.findByTestId("clear-cache-confirm")).toBeInTheDocument();
+      await userEvent.click(screen.getByTestId("clear-cache-cancel"));
+
+      expect(screen.queryByTestId("clear-cache-confirm")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("cache-cleared-notice")).not.toBeInTheDocument();
+      expect(readCacheEntry("/pilots")).not.toBeNull();
+    });
   });
 });
