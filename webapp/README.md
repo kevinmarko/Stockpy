@@ -25,9 +25,19 @@ Everything is driven by `import.meta.env` (copy `.env.example` → `.env.local`)
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `VITE_USE_MOCK` | `true` | **The switch.** `true` = offline `src/api/mock.ts`; `false` = hit the live API. |
+| `VITE_USE_MOCK` | `true` | **The switch.** `true` = offline `src/api/mock.ts`; `false` = hit the live API. Strict vocabulary: `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`, case-insensitive. Anything else is a startup error, never a silent fall-back to mock. |
 | `VITE_API_BASE_URL` | `http://localhost:8602` | Base URL of `api/pilots_api.py`. |
-| `VITE_API_TOKEN` | *(empty)* | Bearer token → `Authorization: Bearer <token>` (matches `STATE_API_TOKEN`). |
+| `VITE_DATA_API_BASE_URL` | `http://localhost:8603` | Base URL of `api/data_api.py` (separate process) — serves `/data/*`, `/api/chat`, `/ws/ticks/*`. |
+| `VITE_METRICS_API_BASE_URL` | `http://localhost:8604` | Base URL of `api/metrics_api.py` (separate process) — serves `/metrics/*`. |
+| `VITE_CONTROL_API_BASE_URL` | `http://localhost:8601` | Base URL of `api/control_api.py` (orchestrator daemon) — serves `/status`, `/run*`, `/pipeline/*`, `/jobs*`, `/daemon/*`. |
+| `VITE_API_TOKEN` | *(empty)* | Bearer token → `Authorization: Bearer <token>` (matches `STATE_API_TOKEN`). Ignored on non-loopback origins — see `src/auth/apiToken.ts`. |
+
+All four base URLs must be absolute `http:`/`https:` URLs with no query string
+or fragment (a path prefix such as `https://host.example.com/pilots` is fine —
+that's the single-origin reverse-proxy case). An **empty** value means "use the
+default above", not "use an empty base URL". Validation lives in
+`src/config/env.ts`; a bad value renders a startup error screen instead of
+failing silently.
 
 To go live: run `uvicorn api.pilots_api:app --port 8602`, then set
 `VITE_USE_MOCK=false` (and a token if the API requires one). No component code

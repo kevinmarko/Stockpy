@@ -13,9 +13,9 @@
  * so the zero-config `npm run dev` experience is unaffected.
  */
 
-const SESSION_KEY = "stockpy.api_token";
+import { config, LOOPBACK_HOSTNAMES } from "../config/env";
 
-const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+const SESSION_KEY = "stockpy.api_token";
 
 export function isLoopbackOrigin(): boolean {
   return LOOPBACK_HOSTNAMES.has(window.location.hostname);
@@ -42,7 +42,7 @@ export function setStoredToken(token: string): void {
 export function getEffectiveToken(): string {
   const stored = getStoredToken();
   if (stored) return stored;
-  if (isLoopbackOrigin()) return import.meta.env.VITE_API_TOKEN ?? "";
+  if (isLoopbackOrigin()) return config.apiToken;
   return "";
 }
 

@@ -117,30 +117,28 @@ import type {
   OptionsAnalyticsSummaryResponse,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
+import { config } from "../config/env";
 
-const BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8602"
-).replace(/\/+$/, "");
+// All five settings below are resolved and VALIDATED once in config/env.ts
+// (trailing slashes stripped, protocol/query/fragment checked, and an
+// empty-but-present value resolved to the documented default rather than to
+// "" — which used to silently turn every fetch into a relative same-origin
+// request). This module just reads the already-clean values.
+const BASE_URL = config.apiBaseUrl;
 // The Phase-4 data/metrics engines are SEPARATE FastAPI processes on their own
 // ports (data_api :8603, metrics_api :8604) — they cannot be mounted into the
 // Pilots API (its AST guard forbids the heavy-engine imports they require). So
 // the client routes by path prefix to the right origin; each falls back to the
 // Pilots base's host if unset (i.e. a single-origin reverse-proxy deployment
 // where one host proxies /data/* and /metrics/* works with zero extra config).
-const DATA_BASE_URL = (
-  import.meta.env.VITE_DATA_API_BASE_URL ?? "http://localhost:8603"
-).replace(/\/+$/, "");
-const METRICS_BASE_URL = (
-  import.meta.env.VITE_METRICS_API_BASE_URL ?? "http://localhost:8604"
-).replace(/\/+$/, "");
+const DATA_BASE_URL = config.dataApiBaseUrl;
+const METRICS_BASE_URL = config.metricsApiBaseUrl;
 // The Control API (orchestrator daemon: live status + stage-scoped run
 // triggers) is ALSO a separate origin (:8601), not part of the Pilots API. The
 // Pipeline Dashboard's /status, /run, /run/{id}/status and /pipeline/* calls
 // must route here, or they 404 against the Pilots base in live mode. Falls back
 // to the Pilots host if unset (single-origin reverse-proxy deployment).
-const CONTROL_BASE_URL = (
-  import.meta.env.VITE_CONTROL_API_BASE_URL ?? "http://localhost:8601"
-).replace(/\/+$/, "");
+const CONTROL_BASE_URL = config.controlApiBaseUrl;
 // Resolved once at module load. On a non-loopback origin with nothing in
 // sessionStorage yet, this is "" and every request goes out unauthenticated
 // -- by design: <TokenGate> (rendered before the rest of the app on a
@@ -214,8 +212,14 @@ export function jobStreamUrl(jobId: string, offset = 0): string {
 
 // Default to MOCK unless explicitly told to go live. This means a fresh checkout
 // runs fully offline with zero config; flip VITE_USE_MOCK=false to hit the API.
-export const USE_MOCK =
-  (import.meta.env.VITE_USE_MOCK ?? "true").toLowerCase() !== "false";
+//
+// Parsed strictly in config/env.ts against a closed vocabulary (true/false/
+// 1/0/yes/no/on/off). Anything else is a hard config error rather than a
+// silent fall-back to mock — the old `!== "false"` test meant `VITE_USE_MOCK=0`
+// or a typo left the app rendering fabricated data while the operator believed
+// it was live. Stays a top-level `export const` (not a property read) because
+// tests spread it over a module mock: see components/LogStream.test.tsx.
+export const USE_MOCK = config.useMock;
 
 async function http<T>(
   path: string,
