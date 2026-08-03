@@ -4049,3 +4049,43 @@ class Settings(BaseSettings):
 
 # Module-level singleton imported across the platform.
 settings = Settings()
+
+
+# =============================================================================
+# Runtime settings store (read path) — layered ON TOP of the singleton above.
+# =============================================================================
+# `runtime_flags.apply_overrides` lets a field value come from
+# `output/runtime_flags.json` in addition to real env vars and `.env`. It is a
+# NO-OP unless that file exists, which it does not on any install today (the
+# writer that creates it is a separate, later change). See runtime_flags.py's
+# module docstring for the JSON shape, the precedence rule
+# (real shell env > store > .env > default), and why this is a post-construction
+# `setattr` layer rather than a pydantic settings source.
+#
+# Placement: this MUST run after `settings = Settings()` — it mutates the
+# already-constructed singleton, because 146+ modules do
+# `from settings import settings` and bind the OBJECT, so the singleton can
+# never be reconstructed or reassigned once this module finishes importing.
+#
+# The import is deferred to here (rather than the module header) and wrapped so
+# that ANY failure — a missing/corrupt runtime_flags.py, an unanticipated bug
+# inside it, a broken python-dotenv install — degrades to "no overrides
+# applied" instead of breaking `import settings` for the ENTIRE application.
+# Every entry point in this platform imports this module; a raise here is a
+# total outage. runtime_flags.py is independently defensive per CONSTRAINT #6;
+# this is the outermost belt-and-suspenders net, not a substitute for that.
+#
+# RUNTIME_FLAGS_REPORT is descriptive only — nothing reads it to make a
+# decision. A later task surfaces it to an operator (notably
+# `.skipped_env_pinned`, which explains why a store edit did not take effect).
+try:
+    import runtime_flags as _runtime_flags
+
+    RUNTIME_FLAGS_REPORT = _runtime_flags.apply_overrides(settings)
+except Exception:  # pragma: no cover - defensive; must never break the import
+    logger.warning(
+        "runtime_flags override layer failed to load; continuing with "
+        "environment/.env-sourced settings only.",
+        exc_info=True,
+    )
+    RUNTIME_FLAGS_REPORT = None

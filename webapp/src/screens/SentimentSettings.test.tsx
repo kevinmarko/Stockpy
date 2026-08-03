@@ -2,11 +2,11 @@
  * SentimentSettings.test.tsx — the dedicated /settings/sentiment sub-route
  * screen (a thin wrapper around GenericSettingsEditor). Exercises the same
  * honesty invariants SettingsManager.test.tsx covers for the general
- * tunables editor -- GenericSettingsEditor is the shared engine behind both
- * screens, so this file is the primary coverage for that engine's dirty-
- * tracking, save-only-changed-keys, per-key rejection, and null-never-
- * fabricated-as-zero behavior, scoped through the sentiment screen's own
- * api methods and field set.
+ * tunables editor -- GenericSettingsEditor is the shared engine behind all
+ * five settings editors, so this file is the primary coverage for that
+ * engine's dirty-tracking, save-only-changed-keys, per-key rejection, and
+ * null-never-fabricated-as-zero behavior, scoped through the sentiment
+ * screen's own api methods and field set.
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -154,6 +154,18 @@ describe("SentimentSettings screen", () => {
     renderScreen();
     const notice = await screen.findByTestId("env-drift-notice");
     expect(notice).toHaveTextContent("SENTIMENT_INGESTION_ENABLED");
+  });
+
+  it("does not render the general-tunables screen's Danger Zone", async () => {
+    // GenericSettingsEditor backs all five settings editors, but the Danger
+    // Zone (Restart Daemon / Clear Data Cache) is opt-in via its `dangerZone`
+    // prop and only /settings/tunables passes one. Pins that it does not leak
+    // into the four scoped editors.
+    vi.spyOn(api, "getSentimentSettings").mockResolvedValue(baseSentimentTunables());
+    renderScreen();
+    await screen.findByRole("heading", { name: "Sentiment & News Ingestion" });
+    expect(screen.queryByRole("heading", { name: "Danger Zone" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("clear-cache-button")).not.toBeInTheDocument();
   });
 
   it("a plain 'string' field (SENTIMENT_SOURCES) renders as a single-line input, not a textarea", async () => {
