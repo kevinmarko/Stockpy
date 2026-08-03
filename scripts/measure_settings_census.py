@@ -1193,7 +1193,15 @@ def print_summary(data: Dict[str, Any]) -> None:
     if el["allowed_keys_duplicates"]:
         for k, c in el["allowed_keys_duplicates"].items():
             p(f"      dup x{c}: {k}")
-    p(f"  SECRET_KEYS ....................... {el['secret_keys_len']} "
+    # Every value printed below the "SECRET_KEYS"/"phantom_secret_keys"/etc. labels
+    # in this function is a Settings.model_fields FIELD NAME (a Python identifier
+    # like "FRED_API_KEY"), never a real credential value -- this script never
+    # instantiates Settings() or reads .env, so no actual secret material ever
+    # exists in memory here. CodeQL's py/clear-text-logging-sensitive-data query
+    # flags these heuristically on the "secret"-shaped variable/label names alone;
+    # the lgtm suppressions below are a deliberate, reviewed false-positive
+    # dismissal, not a statement that real secrets are safe to log.
+    p(f"  SECRET_KEYS ....................... {el['secret_keys_len']} "  # lgtm[py/clear-text-logging-sensitive-data]
       f"(unique {el['secret_keys_unique_len']})")
     p(f"  _JSON_KEYS ........................ {el['json_keys_len']}")
     p(f"  EXCLUDED_FROM_GUI ................. {el['excluded_from_gui_len']}")
@@ -1210,18 +1218,18 @@ def print_summary(data: Dict[str, Any]) -> None:
         p(f"      ! {n}")
 
     p("\n[4] SECRET_KEYS SANITY")
-    p(f"  phantom SECRET_KEYS entries ....... {ss['phantom_count']}")
+    p(f"  phantom SECRET_KEYS entries ....... {ss['phantom_count']}")  # lgtm[py/clear-text-logging-sensitive-data]
     for n in ss["phantom_secret_keys"]:
-        p(f"      ! {n}")
+        p(f"      ! {n}")  # lgtm[py/clear-text-logging-sensitive-data] -- field NAME, not its value
     p(f"  credential-pattern matches ........ "
       f"{len(ss['pattern_matches_protected'])} protected / "
       f"{len(ss['pattern_matches_unprotected'])} not in SECRET_KEYS")
-    p(f"  REAL GAPS (str-shaped, unprotected) {ss['pattern_real_gap_count']}")
+    p(f"  REAL GAPS (str-shaped, unprotected) {ss['pattern_real_gap_count']}")  # lgtm[py/clear-text-logging-sensitive-data]
     for r in ss["pattern_real_gaps"]:
-        p(f"      !! {r['field']} :: {r['type']} (in ALLOWED_KEYS={r['in_allowed_keys']})")
-    p(f"  wide-pattern extra gaps ........... {ss['wide_pattern_extra_gap_count']}")
+        p(f"      !! {r['field']} :: {r['type']} (in ALLOWED_KEYS={r['in_allowed_keys']})")  # lgtm[py/clear-text-logging-sensitive-data]
+    p(f"  wide-pattern extra gaps ........... {ss['wide_pattern_extra_gap_count']}")  # lgtm[py/clear-text-logging-sensitive-data]
     for r in ss["wide_pattern_extra_gaps"]:
-        p(f"      ? {r['field']} :: {r['type']} (in ALLOWED_KEYS={r['in_allowed_keys']})")
+        p(f"      ? {r['field']} :: {r['type']} (in ALLOWED_KEYS={r['in_allowed_keys']})")  # lgtm[py/clear-text-logging-sensitive-data]
 
     p("\n[5] HAND-SET-ONLY MARKERS IN settings.py")
     p(f"  fields carrying a marker .......... {hs['marked_field_count']}")
@@ -1676,14 +1684,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     data = collect_census()
+    # `data` is pure structural census metadata (field names, counts, line numbers)
+    # from Settings.model_fields and an AST parse of settings.py -- this function
+    # never instantiates Settings() or reads .env, so no real secret VALUE is ever
+    # present in `data`. It happens to contain a "secret_keys_sanity" section whose
+    # payload is itself a list of field NAME strings (e.g. "FRED_API_KEY"), which is
+    # what trips CodeQL's naming-heuristic clear-text-logging query below.
 
     if not args.quiet and not args.json:
         print_summary(data)
     if args.json:
-        print(json.dumps(data, indent=2, sort_keys=False))
+        print(json.dumps(data, indent=2, sort_keys=False))  # lgtm[py/clear-text-logging-sensitive-data]
     if args.write:
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
-        JSON_OUT.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+        JSON_OUT.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")  # lgtm[py/clear-text-logging-sensitive-data]
         MD_OUT.write_text(render_markdown(data), encoding="utf-8")
         if not args.quiet:
             print(f"wrote {JSON_OUT.relative_to(_REPO_ROOT)}")
