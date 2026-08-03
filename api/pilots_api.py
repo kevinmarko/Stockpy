@@ -102,11 +102,11 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from dotenv import load_dotenv as _load_dotenv
 
-from settings import ENV_PATH, settings
+from settings import ENV_PATH, Settings, settings
 from settings import INTERVAL_MAX_SECONDS as _INTERVAL_MAX_SECONDS
 from settings import validate_interval_seconds as _validate_interval_seconds
 
@@ -2561,27 +2561,64 @@ def set_llm_setting(body: LlmSettingUpdateRequest) -> Dict[str, Any]:
     engine objects at construction time), every key ``PUT /llm/setting``
     validates against is read fresh via ``getattr(settings, ...)`` on each
     use, never cached — see ``LIVE_PATCHABLE_KEYS``'s docstring. So once the
-    ``.env`` write succeeds, this ALSO ``setattr``s the value directly onto
-    the process's live ``settings`` object, and ``applies`` is honestly
+    ``.env`` write succeeds, this ALSO patches the value directly onto the
+    process's live ``settings`` object, and ``applies`` is honestly
     ``"immediately"``: this API's very next ``GET /llm/status`` (and the
     advisory/orchestrator pipeline's own next cycle, in THIS process) sees
     it. A separately-running process (e.g. a Streamlit session) still needs
-    its own restart — ``settings`` is per-process, not shared memory. The
-    echoed ``value`` reflects the REQUEST BODY, not a re-read of ``settings``
-    (equivalent now that the patch has already applied, but keeps the
-    contract simple).
+    its own restart — ``settings`` is per-process, not shared memory.
+
+    The in-process patch goes through ``Settings.__pydantic_validator__.
+    validate_assignment`` — pydantic's own validated-assignment machinery —
+    rather than a bare ``setattr``. A bare ``setattr`` was the original bug
+    here: ``value: Union[bool, str]`` on the request body means a JSON
+    request like ``{"value": "false"}`` binds ``body.value`` to the Python
+    **string** ``"false"`` (the ``str`` arm of the union matches first), and
+    ``setattr(settings, key, "false")`` onto a ``bool`` field left the raw
+    string sitting where a bool belongs — read back later as truthy
+    (``bool("false")`` is ``True`` in plain Python), silently ENABLING the
+    capability in-process while ``.env`` correctly recorded ``false``.
+    ``validate_assignment`` coerces (and runs any ``@field_validator`` on the
+    field) exactly as a real assignment to ``settings`` would, and raises
+    ``ValidationError`` — mapped to a 422 here — instead of writing a bad
+    value anywhere, in-process or to ``.env``. This only applies to
+    ``LIVE_PATCHABLE_KEYS`` (guaranteed ``bool``/``str`` fields); a
+    non-live-patched key is written to ``.env`` exactly as before, with no
+    in-process coercion attempted (nothing is mutated in-process for it
+    either way). The echoed ``value`` reflects what was ACTUALLY applied —
+    the coerced value for a live-patched key (so the response can never
+    disagree with what ``GET /llm/status`` reads next), or the request body
+    for a non-live-patched key (nothing to coerce; it isn't applied
+    in-process at all).
     """
     try:
         ai_control_center.validate_toggle_write(body.key)
     except (env_io.SecretWriteError, env_io.DisallowedKeyError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    env_io.write_setting(body.key, body.value)
+
     applied_live = body.key in ai_control_center.LIVE_PATCHABLE_KEYS
+    applied_value: Any = body.value
     if applied_live:
-        setattr(settings, body.key, body.value)
+        # Validate + coerce BEFORE writing anything (to .env or in-process)
+        # so a bad value is rejected cleanly with no partial write left
+        # behind on either side.
+        try:
+            Settings.__pydantic_validator__.validate_assignment(settings, body.key, body.value)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid value for {body.key!r}: {exc.errors()[0]['msg']}",
+            ) from exc
+        # validate_assignment already wrote the coerced value into
+        # settings.__dict__[body.key] in place; read it back so both the
+        # .env write below and the response echo use the SAME value that's
+        # now actually live, never the raw (possibly wrongly-typed) request.
+        applied_value = getattr(settings, body.key)
+
+    env_io.write_setting(body.key, body.value)
     return {
         "written": [body.key],
-        "value": body.value,
+        "value": applied_value,
         "applies": "immediately" if applied_live else "next_daemon_restart",
         "note": (
             "Written to .env and applied immediately to this process — no "
