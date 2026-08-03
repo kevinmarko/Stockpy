@@ -19,6 +19,25 @@ import {
 
 const SESSION_KEY = "stockpy.api_token";
 
+/**
+ * Re-import apiToken.ts with `VITE_*` values stubbed BEFORE evaluation.
+ *
+ * The build-time token is now resolved once, at module-evaluation time, in
+ * src/config/env.ts (which apiToken.ts reads via `config.apiToken`) rather
+ * than on every getEffectiveToken() call. That is production-equivalent:
+ * Vite statically replaces `import.meta.env.VITE_API_TOKEN` with a string
+ * literal at build time, so the value provably cannot change during the life
+ * of the page — only a post-import `vi.stubEnv` could ever tell the two apart.
+ * So these tests stub first and then re-evaluate the module graph, exactly as
+ * api/client.test.ts's importLiveClient() helper already does for the same
+ * reason.
+ */
+async function importApiTokenWithEnv(env: Record<string, string>) {
+  for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+  vi.resetModules();
+  return import("./apiToken");
+}
+
 function setHostname(hostname: string) {
   Object.defineProperty(window, "location", {
     value: { ...window.location, hostname },
@@ -32,6 +51,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.resetModules();
   setHostname("localhost");
 });
 
@@ -80,16 +100,20 @@ describe("getEffectiveToken", () => {
     expect(getEffectiveToken()).toBe("stored-token");
   });
 
-  it("falls back to VITE_API_TOKEN only on loopback with nothing stored", () => {
+  it("falls back to VITE_API_TOKEN only on loopback with nothing stored", async () => {
     setHostname("127.0.0.1");
-    vi.stubEnv("VITE_API_TOKEN", "build-time-token");
-    expect(getEffectiveToken()).toBe("build-time-token");
+    const mod = await importApiTokenWithEnv({
+      VITE_API_TOKEN: "build-time-token",
+    });
+    expect(mod.getEffectiveToken()).toBe("build-time-token");
   });
 
-  it("never falls back to the build-time token on a non-loopback origin", () => {
+  it("never falls back to the build-time token on a non-loopback origin", async () => {
     setHostname("192.168.1.42");
-    vi.stubEnv("VITE_API_TOKEN", "build-time-token");
-    expect(getEffectiveToken()).toBe("");
+    const mod = await importApiTokenWithEnv({
+      VITE_API_TOKEN: "build-time-token",
+    });
+    expect(mod.getEffectiveToken()).toBe("");
   });
 
   it("uses a stored token on a non-loopback origin too", () => {
