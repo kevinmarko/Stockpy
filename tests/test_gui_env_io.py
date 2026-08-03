@@ -131,6 +131,17 @@ def test_allowlisted_keys_nonempty_and_excludes_secrets():
     assert keys.isdisjoint(set(env_io.SECRET_KEYS))
 
 
+def test_allowed_keys_has_no_duplicates():
+    """ALLOWED_KEYS is a tuple, not a set, so a duplicate entry (e.g. the same
+    key re-added under a later audit block without noticing an earlier block
+    already carries it) silently survives -- it doesn't break write_setting,
+    but it does mean two comment blocks silently disagree about where a key
+    "belongs", and any future doc-block edit can drift the two copies apart.
+    Pins the count so a reintroduced duplicate fails loudly instead of
+    quietly accumulating."""
+    assert len(env_io.ALLOWED_KEYS) == len(set(env_io.ALLOWED_KEYS))
+
+
 # ---------------------------------------------------------------------------
 # Settings <-> env_io classification parity (2026-08 allowlist audit)
 # ---------------------------------------------------------------------------

@@ -364,6 +364,24 @@ class TestTunablesEnvDrift:
         assert resp.status_code == 200  # never 500 on a hand-mangled .env
         assert "CORS_ALLOWED_ORIGINS" not in resp.json()["env_drift"]["keys"]
 
+    def test_env_drift_parses_env_file_once_not_per_key(self, tmp_path):
+        """``_TUNABLE_INDEX`` alone carries dozens of keys -- before the
+        ``env_io.read_raw()`` fix, ``_tunables_env_drift`` called
+        ``env_io.get_value()`` (and thus re-parsed the whole ``.env``) once per
+        key. Pins it at exactly one full-file parse per GET, regardless of how
+        many keys the editor serves."""
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"KELLY_FRACTION={settings.KELLY_FRACTION}\n", encoding="utf-8")
+        real_dotenv_values = pilots_api.env_io.dotenv_values
+        with mock.patch.object(
+            pilots_api.env_io, "dotenv_values", wraps=real_dotenv_values
+        ) as spy:
+            with mock.patch.object(settings, "STATE_API_TOKEN", None):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    resp = client.get("/settings/tunables")
+        assert resp.status_code == 200
+        assert spy.call_count == 1
+
 
 # ---------------------------------------------------------------------------
 # PUT /settings/tunables — writes

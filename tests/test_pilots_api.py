@@ -3052,6 +3052,23 @@ class TestStrategyMatrixRead:
         assert resp.status_code == 200  # never 500 on a hand-mangled .env
         assert resp.json()["env_drift"]["detected"] is False
 
+    def test_env_drift_parses_env_file_once_not_per_key(self, tmp_path):
+        """``_env_drift`` checks two keys (SIGNAL_WEIGHTS,
+        DISABLED_SIGNAL_MODULES) -- before the ``env_io.read_raw()`` fix, each
+        used its own ``env_io.get_value()`` call, so a single GET /strategy/matrix
+        re-parsed ``.env`` twice. Pins it at exactly one full-file parse."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("SIGNAL_WEIGHTS={}\n", encoding="utf-8")
+        real_dotenv_values = pilots_api.env_io.dotenv_values
+        with mock.patch.object(
+            pilots_api.env_io, "dotenv_values", wraps=real_dotenv_values
+        ) as spy:
+            with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    resp = client.get("/strategy/matrix")
+        assert resp.status_code == 200
+        assert spy.call_count == 1
+
 
 class TestStrategyModulesWrite:
     def test_fails_closed_when_strategy_writes_disabled(self):

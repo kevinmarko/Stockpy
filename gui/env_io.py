@@ -434,7 +434,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "CORRELATION_CLUSTER_LOOKBACK_DAYS",
     "CORRELATION_CLUSTER_THRESHOLD",
     "DATA_FRESHNESS_TTL_SECONDS",
-    "FINNHUB_RATE_LIMIT_PER_MIN",
     "FOLLOW_MIN_AMOUNT",
     "FORECAST_SKILL_MIN_OBS",
     "FUNDAMENTALS_CACHE_TTL_SECONDS",
@@ -457,19 +456,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # Per-regime signal weight overrides merged onto SIGNAL_WEIGHTS (JSON dict;
     # see _JSON_KEYS).
     "REGIME_SIGNAL_WEIGHTS",
-    # Related Sector Selection (data/sector_selection_heat.py) -- semantic
-    # similarity + Gaussian-response Sector Heat term. Not covered by PR #560.
-    "SECTOR_SELECTION_ENABLED",
-    "SECTOR_SELECTION_TOP_N",
-    "SECTOR_SELECTION_HEAT_A",
-    "SECTOR_SELECTION_HEAT_B",
-    "SECTOR_SELECTION_HEAT_C",
-    "SECTOR_SELECTION_HEAT_LOOKBACK_DAYS",
-    "SECTOR_SELECTION_W1",
-    "SECTOR_SELECTION_W2",
-    "SECTOR_SIMILARITY_EMBEDDER",
-    "SECTOR_SIMILARITY_MODEL",
-    "SECTOR_SIMILARITY_POOLING",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
 )
 
@@ -705,6 +691,33 @@ def get_value(key: str, default: str = "") -> str:
     raw = _raw_env()
     value = raw.get(key)
     return default if value is None else str(value)
+
+
+def read_raw() -> Dict[str, Optional[str]]:
+    """Public, single-parse snapshot of the raw ``.env`` file.
+
+    For callers that need to check MANY keys in one pass (e.g. drift-detection
+    across N settings — see ``api/pilots_api.py``'s ``_env_drift``/
+    ``_tunables_env_drift``), prefer this over N calls to :func:`get_value`:
+    ``get_value`` re-parses the whole file on every call, which is fine for a
+    single lookup but turns an N-key loop into N full-file re-parses of an
+    ``.env`` that can run to hundreds of keys. Call this once, then look up
+    each key against the returned dict.
+
+    Unlike :func:`get_value`, this returns values verbatim with no per-key
+    default substitution and includes secret keys unmasked — it is a raw file
+    read, not a display-safe one. Callers that render secrets to a user must
+    apply :func:`mask_secret` themselves; callers that need per-key defaulting
+    should do ``raw.get(key, default)`` (or ``"" if raw.get(key) is None else
+    str(raw.get(key))`` to match :func:`get_value`'s exact semantics).
+
+    Returns
+    -------
+    dict[str, str | None]
+        The same mapping :func:`dotenv_values` returns — empty dict if
+        ``.env`` doesn't exist or fails to parse (never raises).
+    """
+    return _raw_env()
 
 
 def is_secret(key: str) -> bool:
