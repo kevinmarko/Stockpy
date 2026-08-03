@@ -56,14 +56,14 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3542,
+      "line": 3549,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3627,
+      "line": 3634,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -124,7 +124,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 330,
+  "files_scanned": 331,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -374,7 +374,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 643,
+    "attr": 644,
     "factory_param": 4,
     "getattr_const": 246,
     "os_environ": 16
@@ -1049,7 +1049,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:3793",
+        "site": "api/pilots_api.py:3800",
         "via": []
       }
     ],
@@ -1060,7 +1060,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:3792",
+        "site": "api/pilots_api.py:3799",
         "via": []
       }
     ],
@@ -1071,7 +1071,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:3917",
+        "site": "api/pilots_api.py:3924",
         "via": []
       },
       {
@@ -1146,7 +1146,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:3897",
+        "site": "api/pilots_api.py:3904",
         "via": []
       },
       {
