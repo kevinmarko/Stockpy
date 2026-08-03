@@ -850,6 +850,102 @@ class TestConcurrentWriters:
 
 
 # ===========================================================================
+# The write is atomic — temp file + os.replace, never in place
+# ===========================================================================
+
+
+class TestAtomicWrite:
+    """The store must never be written in place.
+
+    A direct ``store.write_text(...)`` would pass every other test in this
+    file — verified by mutation: swapping ``_atomic_write_json``'s temp-file
+    body for an in-place write left all 100 other tests green. The claim is
+    load-bearing (a crash or a full disk partway through an in-place write
+    truncates the operator's whole override set, and ``runtime_flags.py`` reads
+    this file at every ``import settings``), so it is pinned directly.
+    """
+
+    def test_the_store_is_replaced_via_a_temp_file_never_written_in_place(
+        self, store: Path, live: Settings, no_dotenv, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The anti-in-place pin: ``os.replace`` must be what publishes the new
+        contents, and its source must be a temp sibling — not the store."""
+        calls: list[tuple[str, str]] = []
+        real_replace = os.replace
+
+        def spy(src, dst, *args, **kwargs):
+            calls.append((str(src), str(dst)))
+            return real_replace(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(writer.os, "replace", spy)
+        result = writer.write_override(FIELD, 300, path=store)
+
+        assert result.ok is True
+        assert len(calls) == 1, "the store must be published by exactly one replace"
+        src, dst = calls[0]
+        assert dst == str(store.resolve())
+        assert Path(src).name.startswith(f"{store.name}.tmp."), (
+            "the new contents must be staged in a temp sibling, not written "
+            "into the store directly"
+        )
+        assert Path(src).parent == store.resolve().parent, (
+            "the temp file must share the store's directory, or os.replace is "
+            "a cross-filesystem copy and no longer atomic"
+        )
+
+    def test_a_failure_at_the_publish_step_leaves_the_previous_store_intact(
+        self, store: Path, live: Settings, no_dotenv
+    ):
+        """The property atomicity actually buys: a failed write is a no-op, not
+        a truncated file. An in-place writer would have already clobbered the
+        previous overrides before it could fail."""
+        writer.write_override(FIELD, 300, actor="first", path=store)
+        writer.write_override(OTHER_FIELD, 0.4, actor="first", path=store)
+        before = store.read_text(encoding="utf-8")
+
+        def boom(src, dst, *args, **kwargs):
+            raise OSError(28, "No space left on device")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(writer.os, "replace", boom)
+            result = writer.write_override(FIELD, 999, path=store)
+
+        assert result.ok is False
+        assert result.persisted is False
+        assert result.applies == writer.APPLIES_REFUSED
+        # The whole previous store survives, byte for byte.
+        assert store.read_text(encoding="utf-8") == before
+        flags, error = runtime_flags.load_store(store)
+        assert error is None, "the store must still be loadable by the read path"
+        assert flags == {FIELD: 300, OTHER_FIELD: 0.4}
+        # And the failed value never went live either.
+        assert live.BETA_LOOKBACK_DAYS == 300
+
+    def test_no_temp_file_is_left_behind_when_the_write_fails(
+        self, store: Path, live: Settings, no_dotenv
+    ):
+        """``output/`` is an operator-visible directory; a failed write must not
+        litter it with orphaned ``.tmp.<pid>.<tid>`` files."""
+
+        def boom(src, dst, *args, **kwargs):
+            raise OSError(28, "No space left on device")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(writer.os, "replace", boom)
+            writer.write_override(FIELD, 300, path=store)
+
+        assert not list(store.parent.glob(f"{store.name}.tmp*")), (
+            "a failed write left its temp file behind"
+        )
+
+    def test_a_successful_write_leaves_no_temp_file(
+        self, store: Path, live: Settings, no_dotenv
+    ):
+        writer.write_override(FIELD, 300, path=store)
+        assert not list(store.parent.glob(f"{store.name}.tmp*"))
+
+
+# ===========================================================================
 # A damaged store — the two modes are handled differently on purpose
 # ===========================================================================
 
