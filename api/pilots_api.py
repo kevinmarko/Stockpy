@@ -2656,7 +2656,14 @@ def get_brokerage_status() -> Dict[str, Any]:
         has_account_snapshot = HistoricalStore(readonly=True).latest_account_snapshot() is not None
     except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> honest False
         logger.warning("pilots_api: brokerage status account-snapshot check failed: %s", exc)
-    return {"connected": connected, "has_account_snapshot": has_account_snapshot}
+    return {
+        "connected": connected,
+        "has_account_snapshot": has_account_snapshot,
+        # Same live settings value data/robinhood_portfolio.py actually
+        # branches on for its Tier-3 login gate — read-only here, no write
+        # path (see CLAUDE.md's Robinhood auto-refresh gate bullet).
+        "auto_refresh_enabled": bool(settings.ROBINHOOD_AUTO_REFRESH_ENABLED),
+    }
 
 
 @app.post(

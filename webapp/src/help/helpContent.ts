@@ -157,6 +157,19 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "0.1 to 1: a filter for 'rumor mill' spikes — low credibility means the sentiment reading is likely noise rather than a durable signal.",
   "volatility persistence":
     "A GJR-GARCH measure of how long a volatility shock takes to decay back toward baseline for a symbol. Computed independently from price history, not from the sentiment agent — it stays populated even when the sentiment agent itself is unavailable.",
+  // The three entries below back the Settings screen's Data Auto-Refresh
+  // card. Deliberately written with ZERO numeric literals: the interval,
+  // floors, and defaults they describe are user-set local device
+  // preferences (localStorage), not values sourced from GET /thresholds --
+  // quoting a current number here would describe something that can drift
+  // out from under the text with no update mechanism to catch it. Covered
+  // by helpContent.test.ts's "contains no digit" assertion.
+  "auto-refresh":
+    "A master switch, off by default, that lets each screen reload its own data in the background on a timer you control, plus a toggle for each data category and a shared refresh interval. Polling pauses automatically while this browser tab is in the background, and — if you turn that option on — while the market is closed, so nothing refreshes uselessly off-hours.",
+  "market session":
+    "Whether the primary US equity market is open right now, computed locally from the current time against the exchange's trading calendar rather than fetched from the server. Auto-refresh's 'pause when market closed' option reads this to decide whether background polling should pause or keep running.",
+  "safety telemetry":
+    "A switch separate from the auto-refresh master above, governing only the kill-switch and heartbeat readout in the top bar. It keeps polling on its own schedule even when auto-refresh is turned off or the market is closed — a stale safety reading is treated as a risk here, not as something worth pausing to save a background request.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -322,7 +335,14 @@ export const TAB_HELP: Record<string, TabHelp> = {
     title: "Data & Automation",
     description:
       "Operate the platform without SSHing into the host: pipeline status and manual triggers, the automated run schedule, the kill switch and execution mode, which tickers are tracked, your brokerage connection, active Pilot follows, and app/update status — all in one place.",
-    keyConcepts: ["kill switch", "execution mode", "advisory only"],
+    keyConcepts: [
+      "kill switch",
+      "execution mode",
+      "advisory only",
+      "auto-refresh",
+      "safety telemetry",
+      "market session",
+    ],
   },
   "symbol-detail": {
     title: "Symbol Detail",

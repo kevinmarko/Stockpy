@@ -13,8 +13,9 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "./Settings";
+import { AutoRefreshProvider } from "../components/AutoRefreshContext";
 import { api } from "../api/client";
-import type { AutomationSchedule, AutomationStatus, Follow, FollowResult, LlmProviderName, LlmStatus, TriggerRunResult } from "../api/types";
+import type { AutomationSchedule, AutomationStatus, BrokerageStatus, Follow, FollowResult, LlmProviderName, LlmStatus, TriggerRunResult } from "../api/types";
 import { writeOnboarding, readOnboarding } from "../onboarding";
 import { __resetMockDataUniverse } from "../api/mock";
 
@@ -35,7 +36,9 @@ vi.mock("virtual:pwa-register/react", () => ({
 function renderSettings() {
   return render(
     <MemoryRouter initialEntries={["/settings"]}>
-      <Settings />
+      <AutoRefreshProvider>
+        <Settings />
+      </AutoRefreshProvider>
     </MemoryRouter>
   );
 }
@@ -729,6 +732,7 @@ describe("Settings screen — Brokerage", () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: false,
       has_account_snapshot: false,
+      auto_refresh_enabled: true,
     });
     renderSettings();
 
@@ -742,6 +746,7 @@ describe("Settings screen — Brokerage", () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: false,
       has_account_snapshot: false,
+      auto_refresh_enabled: true,
     });
     renderSettings();
 
@@ -755,8 +760,8 @@ describe("Settings screen — Brokerage", () => {
   it("disconnected: clicking the .env-credentials button on success flips the section to connected", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getBrokerageStatus")
-      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false })
-      .mockResolvedValue({ connected: true, has_account_snapshot: true });
+      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true })
+      .mockResolvedValue({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true });
     const refreshSpy = vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
       total_equity: 48213.55,
       buying_power: 6120.4,
@@ -787,6 +792,7 @@ describe("Settings screen — Brokerage", () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: false,
       has_account_snapshot: false,
+      auto_refresh_enabled: true,
     });
     vi.spyOn(api, "refreshBrokerage").mockRejectedValueOnce(
       new Error("Could not refresh the Robinhood account snapshot.")
@@ -808,6 +814,7 @@ describe("Settings screen — Brokerage", () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: true,
       has_account_snapshot: true,
+      auto_refresh_enabled: true,
     });
     renderSettings();
 
@@ -819,8 +826,8 @@ describe("Settings screen — Brokerage", () => {
   it("a successful connect flips the section to the connected state", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getBrokerageStatus")
-      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false })
-      .mockResolvedValue({ connected: true, has_account_snapshot: true });
+      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true })
+      .mockResolvedValue({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true });
     const connectSpy = vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
       connected: true,
       verified: true,
@@ -847,8 +854,8 @@ describe("Settings screen — Brokerage", () => {
   it("Disconnect (after confirm) calls the API and returns to the connect form", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getBrokerageStatus")
-      .mockResolvedValueOnce({ connected: true, has_account_snapshot: true })
-      .mockResolvedValue({ connected: false, has_account_snapshot: false });
+      .mockResolvedValueOnce({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true })
+      .mockResolvedValue({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true });
     const disconnectSpy = vi
       .spyOn(api, "disconnectBrokerage")
       .mockResolvedValueOnce({ connected: false });
@@ -875,9 +882,9 @@ describe("Settings screen — Brokerage", () => {
       // 1) initial mount, 2) doRefresh's own reload() (still connected --
       // a successful refresh doesn't change credential presence), 3) the
       // reload() after Disconnect actually clears them.
-      .mockResolvedValueOnce({ connected: true, has_account_snapshot: true })
-      .mockResolvedValueOnce({ connected: true, has_account_snapshot: true })
-      .mockResolvedValue({ connected: false, has_account_snapshot: false });
+      .mockResolvedValueOnce({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true })
+      .mockResolvedValueOnce({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true })
+      .mockResolvedValue({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true });
     vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
       total_equity: 48213.55,
       buying_power: 6120.4,
@@ -913,9 +920,9 @@ describe("Settings screen — Brokerage", () => {
       // 1) initial mount, 2) doRefresh's own reload() after the failed
       // .env-credentials attempt (still disconnected), 3) RobinhoodConnectForm's
       // onConnected reload() after the typed-form connect actually succeeds.
-      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false })
-      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false })
-      .mockResolvedValue({ connected: true, has_account_snapshot: true });
+      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true })
+      .mockResolvedValueOnce({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true })
+      .mockResolvedValue({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true });
     vi.spyOn(api, "refreshBrokerage").mockRejectedValueOnce(
       new Error("Could not refresh the Robinhood account snapshot.")
     );
@@ -956,6 +963,7 @@ describe("Settings screen — Brokerage", () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: true,
       has_account_snapshot: true,
+      auto_refresh_enabled: true,
     });
     const refreshSpy = vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
       total_equity: 48213.55,
@@ -982,6 +990,7 @@ describe("Settings screen — Brokerage", () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: true,
       has_account_snapshot: true,
+      auto_refresh_enabled: true,
     });
     vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
       total_equity: 48213.55,
@@ -1009,6 +1018,7 @@ describe("Settings screen — Brokerage", () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: true,
       has_account_snapshot: true,
+      auto_refresh_enabled: true,
     });
     vi.spyOn(api, "refreshBrokerage").mockRejectedValueOnce(
       new Error("Could not refresh the Robinhood account snapshot.")
@@ -1125,5 +1135,155 @@ describe("Settings screen — Tracked universe", () => {
   it("renders the coverage-reconciliation diagnostic alongside the manager", async () => {
     renderSettings();
     expect(await screen.findByTestId("universe-coverage")).toBeInTheDocument();
+  });
+});
+
+describe("Settings screen — Data Auto-Refresh", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders the Data Auto-Refresh card with master toggle and interval controls", async () => {
+    renderSettings();
+    expect(await screen.findByTestId("auto-refresh-section")).toBeInTheDocument();
+    expect(screen.getByText("Data Auto-Refresh")).toBeInTheDocument();
+    expect(screen.getAllByText("Enable Auto-Refresh")[0]).toBeInTheDocument();
+    expect(screen.getAllByText("Pause When Market Closed")[0]).toBeInTheDocument();
+  });
+
+  it("toggles master auto-refresh and persists to localStorage", async () => {
+    renderSettings();
+    const masterToggle = await screen.findByTestId("auto-refresh-master-toggle");
+
+    expect(masterToggle).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(masterToggle);
+    expect(masterToggle).toHaveAttribute("aria-checked", "true");
+    expect(localStorage.getItem("stockpy.auto_refresh.enabled")).toBe("1");
+  });
+
+  it("updates interval via preset button clicks", async () => {
+    renderSettings();
+    const section = await screen.findByTestId("auto-refresh-section");
+    const button60s = within(section).getByRole("button", { name: "60s" });
+
+    await userEvent.click(button60s);
+    expect(localStorage.getItem("stockpy.auto_refresh.interval_ms")).toBe("60000");
+  });
+
+  it("badge reads Disabled by default, and Active with a live category count once master is on and market-closed pausing is off", async () => {
+    renderSettings();
+    const section = await screen.findByTestId("auto-refresh-section");
+    expect(within(section).getByText(/Auto-refresh Disabled/)).toBeInTheDocument();
+
+    // Turn off "pause when market closed" first to avoid time-of-day
+    // flakiness (a genuinely-closed market at test-run time would otherwise
+    // leave the badge on "Paused — market closed" instead of "Active").
+    await userEvent.click(within(section).getByTestId("auto-refresh-pause-closed-toggle"));
+    await userEvent.click(within(section).getByTestId("auto-refresh-master-toggle"));
+
+    expect(
+      await within(section).findByText(/Auto-refresh Active — 5 of 5 categories, \d+s/)
+    ).toBeInTheDocument();
+  });
+
+  it("debounced custom-duration input writes to localStorage after the debounce window", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    const input = await screen.findByLabelText("Custom duration (sec)");
+
+    await user.clear(input);
+    await user.type(input, "45");
+
+    await waitFor(
+      () => expect(localStorage.getItem("stockpy.auto_refresh.interval_ms")).toBe("45000"),
+      { timeout: 3000 }
+    );
+  });
+
+  it("an out-of-range custom duration shows the invalid hint and never writes", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    const input = await screen.findByLabelText("Custom duration (sec)");
+
+    await user.clear(input);
+    await user.type(input, "2");
+
+    expect(await screen.findByText("Must be between 5 and 86400 seconds.")).toBeInTheDocument();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+
+    // Give the debounce window (500ms) time to fire if it were going to --
+    // it must not, since the value is out of range.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(localStorage.getItem("stockpy.auto_refresh.interval_ms")).toBeNull();
+  });
+
+  it("shows the relabeled 'Options & Market Analytics' category, never the old string", async () => {
+    renderSettings();
+    const section = await screen.findByTestId("auto-refresh-section");
+    expect(within(section).getByText("Options & Market Analytics")).toBeInTheDocument();
+    expect(within(section).queryByText("Options Matrix & Analytics")).not.toBeInTheDocument();
+  });
+
+  it("safety-telemetry toggle defaults on and is independent of the master toggle", async () => {
+    renderSettings();
+    const section = await screen.findByTestId("auto-refresh-section");
+    const safetyToggle = within(section).getByTestId("auto-refresh-safety-telemetry-toggle");
+    const masterToggle = within(section).getByTestId("auto-refresh-master-toggle");
+
+    expect(safetyToggle).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.click(masterToggle); // master ON
+    await userEvent.click(masterToggle); // master back OFF
+    expect(safetyToggle).toHaveAttribute("aria-checked", "true"); // unaffected either way
+
+    await userEvent.click(safetyToggle);
+    expect(safetyToggle).toHaveAttribute("aria-checked", "false");
+    expect(masterToggle).toHaveAttribute("aria-checked", "false"); // still unaffected
+  });
+
+  it("renders the Robinhood section with its own toggle (off by default) and minute-based presets", async () => {
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: false,
+      has_account_snapshot: false,
+      auto_refresh_enabled: true,
+    } as BrokerageStatus);
+    renderSettings();
+    const section = await screen.findByTestId("auto-refresh-section");
+
+    const robinhoodToggle = within(section).getByTestId("auto-refresh-robinhood-toggle");
+    expect(robinhoodToggle).toHaveAttribute("aria-checked", "false");
+
+    for (const label of ["15m", "30m", "1h", "4h", "12h"]) {
+      expect(within(section).getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    // 1h is the documented default selection.
+    expect(await within(section).findByRole("button", { name: "1h" })).toHaveClass("btn-primary");
+  });
+
+  it("shows a cached-data-only warning when the backend Robinhood login gate is off", async () => {
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: false,
+      has_account_snapshot: false,
+      auto_refresh_enabled: false,
+    } as BrokerageStatus);
+    renderSettings();
+
+    expect(await screen.findByText(/refresh cached data only/i)).toBeInTheDocument();
+  });
+
+  it("does not show the cached-data-only warning when the backend Robinhood login gate is on", async () => {
+    vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
+      connected: false,
+      has_account_snapshot: false,
+      auto_refresh_enabled: true,
+    } as BrokerageStatus);
+    renderSettings();
+
+    await screen.findByTestId("auto-refresh-robinhood-toggle");
+    expect(screen.queryByText(/refresh cached data only/i)).not.toBeInTheDocument();
   });
 });

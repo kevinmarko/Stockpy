@@ -16,6 +16,7 @@ import type {
   StrategyModuleRow,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice } from "../components/ui";
 import { Modal } from "../components/Modal";
@@ -62,6 +63,7 @@ export function StrategyMatrix() {
     () => api.getStrategyMatrix(),
     [],
   );
+  useAutoPoll(reload, "signals", { hasError: error != null });
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/settings"));
 
   return (

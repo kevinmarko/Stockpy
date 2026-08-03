@@ -364,7 +364,11 @@ describe("mock API — brokerage-connect contract", () => {
 
   it("getBrokerageStatus() starts disconnected", async () => {
     const status = await mockApi.getBrokerageStatus();
-    expect(status).toEqual({ connected: false, has_account_snapshot: false });
+    expect(status).toEqual({
+      connected: false,
+      has_account_snapshot: false,
+      auto_refresh_enabled: true,
+    });
   });
 
   it("connectBrokerage() with all three fields succeeds and flips status", async () => {

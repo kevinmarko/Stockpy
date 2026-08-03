@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { Bar, Fundamentals, MacroSnapshot, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { ErrorState, Loading, Table, Tile } from "../components/ui";
 import { PerfLine } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
@@ -112,6 +113,14 @@ export function DataExplorer() {
   const [symbol, setSymbol] = useState("AAPL");
   const bars = useApi<Bar[]>(() => api.getDataBars(symbol, 120), [symbol]);
   const fundamentals = useApi<Fundamentals>(() => api.getDataFundamentals(symbol), [symbol]);
+  useAutoPoll(
+    () => {
+      bars.reload();
+      fundamentals.reload();
+    },
+    "options",
+    { hasError: bars.error != null }
+  );
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
   return (

@@ -14,6 +14,7 @@ import type {
 } from "../api/types";
 import { LOG_LEVELS } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, Notice, Select, Table, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
@@ -840,6 +841,15 @@ export function Observability() {
     status: logsStatus,
     reload: logsReload,
   } = useApi<LogAggregation>(() => api.getObservabilityLogs(300), []);
+
+  useAutoPoll(
+    () => {
+      reload();
+      logsReload();
+    },
+    "observability",
+    { hasError: error != null }
+  );
 
   return (
     <div className="screen">

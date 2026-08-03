@@ -6,7 +6,8 @@ import { DataTable, type Column } from "../components/DataTable";
 import { Button } from "../components/ui";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
-import { usePoll } from "../hooks/usePoll";
+import { useAutoPoll } from "../hooks/useAutoPoll";
+import { useAutoRefresh } from "../components/AutoRefreshContext";
 import type { JobRecord, ObservabilitySummary } from "../api/types";
 import { theme } from "../theme";
 import { timeAgo } from "../format";
@@ -60,7 +61,14 @@ function fmtBytesShort(n: number | null): string {
  *  stayed read-only for). */
 function SystemResourcesPanel() {
   const telemetry = useApi<ObservabilitySummary>(() => api.getObservabilitySummary("1W", 10), []);
-  usePoll(telemetry.reload, TELEMETRY_POLL_MS, true);
+  const { autoRefreshIntervalMs } = useAutoRefresh();
+  // TELEMETRY_POLL_MS is a FLOOR, not a target: this is a heavier composite
+  // read that must never poll faster than its original cadence even if the
+  // operator picks a short global interval.
+  useAutoPoll(telemetry.reload, "observability", {
+    hasError: telemetry.error != null,
+    customIntervalMs: Math.max(TELEMETRY_POLL_MS, autoRefreshIntervalMs),
+  });
   const t = telemetry.data?.system_telemetry;
 
   if (telemetry.loading && !t) {

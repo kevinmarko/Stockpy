@@ -98,3 +98,19 @@ describe("TAB_HELP content integrity", () => {
     }
   });
 });
+
+describe("Data auto-refresh glossary entries", () => {
+  // These describe user-set localStorage preferences (the refresh interval,
+  // per-category floors/defaults), not a GET /thresholds-sourced value, so
+  // quoting a current number here would describe something that can drift
+  // with no update mechanism to catch it -- see helpContent.ts's comment
+  // just above these three entries.
+  it("contain zero numeric literals", () => {
+    for (const key of ["auto-refresh", "safety telemetry", "market session"]) {
+      const entry = GLOSSARY[key];
+      expect(entry, `missing GLOSSARY entry "${key}"`).toBeDefined();
+      expect(typeof entry).toBe("string");
+      expect(entry as string).not.toMatch(/\d/);
+    }
+  });
+});

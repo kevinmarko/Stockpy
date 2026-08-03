@@ -17,6 +17,7 @@ import type {
   PairsRadar as PairsRadarT,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, Notice } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
@@ -279,6 +280,7 @@ export function PairsRadar() {
     () => api.getPairs(),
     []
   );
+  useAutoPoll(reload, "options", { hasError: error != null });
   const [showRecompute, setShowRecompute] = useState(false);
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 

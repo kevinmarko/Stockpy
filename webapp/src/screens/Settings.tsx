@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { api } from "../api/client";
 import type {
@@ -31,6 +31,12 @@ import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { UniverseManager } from "../components/UniverseManager";
 import { UniverseCoverage } from "../components/UniverseCoverage";
 import { TabGuide } from "../components/TabGuide";
+import { Toggle } from "../components/Toggle";
+import {
+  useAutoRefresh,
+  CATEGORY_INTERVAL_RULES,
+  type AutoRefreshCategory,
+} from "../components/AutoRefreshContext";
 import { fmtAge, fmtDate, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
@@ -64,6 +70,20 @@ export function Settings() {
     status: scheduleHttpStatus,
     reload: reloadSchedule,
   } = useApi<AutomationSchedule>(() => api.getAutomationSchedule(), []);
+
+  // Fetched ONCE at this level and shared by both BrokerageSection AND
+  // AutoRefreshSection's Robinhood card -- both need GET /brokerage/status
+  // (connect/disconnect state for one, the read-only auto_refresh_enabled
+  // server gate for the other), and a second independent useApi() call site
+  // would double the real network calls on every mount/reload, desyncing
+  // any test (or real caller) that counts calls to api.getBrokerageStatus.
+  const {
+    data: brokerageData,
+    loading: brokerageLoading,
+    error: brokerageError,
+    status: brokerageHttpStatus,
+    reload: reloadBrokerage,
+  } = useApi<BrokerageStatus>(() => api.getBrokerageStatus(), []);
 
   // Poll every 3s ONLY while a run is actually in flight -- not a phone's
   // radio budget spent polling a status that changes once every 5 minutes.
@@ -116,6 +136,8 @@ export function Settings() {
             onRetry={reloadSchedule}
           />
 
+          <AutoRefreshSection brokerageStatus={brokerageData} />
+
           {status && (
             <SignalGenerationSection
               active={status.kill_switch.active}
@@ -156,7 +178,13 @@ export function Settings() {
           <EtfTransmissionLink />
           <PromptRegistryLink />
           <ActiveFollowsSection />
-          <BrokerageSection />
+          <BrokerageSection
+            data={brokerageData}
+            loading={brokerageLoading}
+            error={brokerageError}
+            httpStatus={brokerageHttpStatus}
+            reload={reloadBrokerage}
+          />
           <AiControlCenterLink />
         </div>
 
@@ -244,11 +272,19 @@ function AiControlCenterLink() {
  * An honest failure (no usable credentials configured at all) surfaces the
  * same way either way: refresh.error, never a fabricated success.
  */
-function BrokerageSection() {
-  const { data, loading, error, status, reload } = useApi<BrokerageStatus>(
-    () => api.getBrokerageStatus(),
-    []
-  );
+function BrokerageSection({
+  data,
+  loading,
+  error,
+  httpStatus: status,
+  reload,
+}: {
+  data: BrokerageStatus | null;
+  loading: boolean;
+  error: string | null;
+  httpStatus: number | null;
+  reload: () => void;
+}) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const disconnect = useMutation(() => api.disconnectBrokerage());
   const refresh = useMutation(() => api.refreshBrokerage());
@@ -1477,5 +1513,406 @@ function ResetOnboardingSection() {
         </Modal>
       )}
     </SectionCard>
+  );
+}
+
+function AutoRefreshSection({
+  brokerageStatus,
+}: {
+  /** Fetched once at the Settings() level and passed down -- see that
+   * component's comment for why this can't be a second independent
+   * useApi(getBrokerageStatus) call site. */
+  brokerageStatus: BrokerageStatus | null;
+}) {
+  const {
+    autoRefreshEnabled,
+    pauseWhenMarketClosed,
+    autoRefreshIntervalMs,
+    portfolioRefreshEnabled,
+    dashboardRefreshEnabled,
+    signalsRefreshEnabled,
+    observabilityRefreshEnabled,
+    optionsRefreshEnabled,
+    robinhoodRefreshEnabled,
+    safetyTelemetryEnabled,
+    isTabVisible,
+    isMarketOpen,
+    categoryIntervalMs,
+    setAutoRefreshEnabled,
+    setPauseWhenMarketClosed,
+    setAutoRefreshIntervalMs,
+    setCategoryRefreshEnabled,
+    setCategoryIntervalMs,
+    setSafetyTelemetryEnabled,
+  } = useAutoRefresh();
+
+  const [customInputSec, setCustomInputSec] = useState<string>(
+    String(Math.round(autoRefreshIntervalMs / 1000))
+  );
+
+  // Sync internal input state when external autoRefreshIntervalMs changes (e.g. preset clicked)
+  useEffect(() => {
+    setCustomInputSec(String(Math.round(autoRefreshIntervalMs / 1000)));
+  }, [autoRefreshIntervalMs]);
+
+  const parsedCustomSec = parseInt(customInputSec, 10);
+  const customInvalid =
+    isNaN(parsedCustomSec) || parsedCustomSec < 5 || parsedCustomSec > 86400;
+
+  // Debounce custom interval input changes (500ms). Gated on the SAME
+  // customInvalid predicate the hint below renders, so an out-of-range value
+  // shows the hint AND never silently writes -- previously this just
+  // no-op'd on an out-of-range value with zero user feedback.
+  useEffect(() => {
+    if (customInvalid) return;
+    const timer = setTimeout(() => {
+      setAutoRefreshIntervalMs(parsedCustomSec * 1000);
+    }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customInputSec, customInvalid, setAutoRefreshIntervalMs]);
+
+  const presets = [
+    { label: "15s", ms: 15_000 },
+    { label: "30s", ms: 30_000 },
+    { label: "60s", ms: 60_000 },
+    { label: "2m", ms: 120_000 },
+    { label: "5m", ms: 300_000 },
+  ];
+
+  const currentSec = Math.round(autoRefreshIntervalMs / 1000);
+
+  // Only the 5 ordinary categories -- Robinhood is a structurally different
+  // concern (a real broker login, not a local DB read) with its own section
+  // below, and deliberately excluded from this count.
+  const enabledCategoryCount = [
+    portfolioRefreshEnabled,
+    dashboardRefreshEnabled,
+    signalsRefreshEnabled,
+    observabilityRefreshEnabled,
+    optionsRefreshEnabled,
+  ].filter(Boolean).length;
+
+  // Three real states with real precedence (market-closed outlasts a tab
+  // hidden for seconds, so it's checked first), plus the "on but nothing
+  // selected" case -- the same class of lie ("Active" while doing nothing)
+  // this whole card exists to avoid.
+  let statusValue = "Disabled";
+  let statusGood: boolean | null = null;
+  if (autoRefreshEnabled) {
+    if (pauseWhenMarketClosed && !isMarketOpen) {
+      statusValue = "Paused — market closed";
+      statusGood = false;
+    } else if (!isTabVisible) {
+      // Correct but nearly unobservable in practice -- nobody reads this
+      // badge on a hidden tab. Paired with static prose below ("Polling
+      // also pauses while this tab is in the background").
+      statusValue = "Paused — tab hidden";
+      statusGood = false;
+    } else if (enabledCategoryCount === 0) {
+      statusValue = "On, but no categories selected";
+      statusGood = false;
+    } else {
+      statusValue = `Active — ${enabledCategoryCount} of 5 categories, ${currentSec}s`;
+      statusGood = true;
+    }
+  }
+
+  return (
+    <section className="card card-pad" data-testid="auto-refresh-section">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-2)" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Data Auto-Refresh</h2>
+        <MetricBadge label="Auto-refresh" value={statusValue} good={statusGood} />
+      </div>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", margin: "0 0 var(--s-2)", lineHeight: 1.5 }}>
+        Automatically reload screen data at a configured interval. Polling
+        also pauses while this tab is in the background, and (if enabled
+        below) while the market is closed. Two heavy reads keep their own
+        slower floor no matter how short an interval you pick: the top bar's
+        macro regime read and the Console's host telemetry.
+      </p>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", margin: "0 0 var(--s-3)", lineHeight: 1.5 }}>
+        Note: Console, Agentic status, and dashboard alerts no longer
+        auto-refresh out of the box under this master switch — turn it on
+        here to restore that.
+      </p>
+
+      {/* Master Toggle */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)", padding: "var(--s-2)", background: "var(--surface-2)", borderRadius: "var(--r-sm)" }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: "var(--t-label)" }}>Enable Auto-Refresh</div>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
+            Master switch for screen data auto-polling. Safety telemetry
+            below is separate.
+          </div>
+        </div>
+        <Toggle
+          label="Enable Auto-Refresh"
+          checked={autoRefreshEnabled}
+          onChange={(val) => setAutoRefreshEnabled(val)}
+          dataTestId="auto-refresh-master-toggle"
+        />
+      </div>
+
+      {/* Pause When Market Closed Toggle */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)", padding: "var(--s-2)", background: "var(--surface-2)", borderRadius: "var(--r-sm)" }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: "var(--t-label)" }}>Pause When Market Closed</div>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>Pause auto-polling on weekends &amp; after-hours</div>
+        </div>
+        <Toggle
+          label="Pause When Market Closed"
+          checked={pauseWhenMarketClosed}
+          onChange={(val) => setPauseWhenMarketClosed(val)}
+          dataTestId="auto-refresh-pause-closed-toggle"
+        />
+      </div>
+
+      {/* Interval Selector */}
+      <div style={{ marginBottom: "var(--s-4)" }}>
+        <div style={{ fontWeight: 600, fontSize: "var(--t-label)", marginBottom: "var(--s-1)" }}>
+          Refresh Interval
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", alignItems: "center", marginBottom: "var(--s-2)" }}>
+          {presets.map((p) => (
+            <button
+              key={p.ms}
+              className={`btn btn-sm ${autoRefreshIntervalMs === p.ms ? "btn-primary" : "btn-subtle"}`}
+              onClick={() => {
+                setAutoRefreshIntervalMs(p.ms);
+                setCustomInputSec(String(p.ms / 1000));
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <Input
+          label="Custom duration (sec)"
+          type="number"
+          inputMode="numeric"
+          min={5}
+          max={86400}
+          value={customInputSec}
+          onChange={(e) => setCustomInputSec(e.target.value)}
+          invalid={customInvalid}
+          hint={customInvalid ? "Must be between 5 and 86400 seconds." : undefined}
+        />
+      </div>
+
+      {/* Screen Categories */}
+      <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-3)" }}>
+        <div style={{ fontWeight: 600, fontSize: "var(--t-label)", marginBottom: "var(--s-2)" }}>
+          Active Categories
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-2)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={portfolioRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("portfolio", e.target.checked)}
+            />
+            Portfolio &amp; Pilots
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={dashboardRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("dashboard", e.target.checked)}
+            />
+            Main Dashboard
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={signalsRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("signals", e.target.checked)}
+            />
+            Signals &amp; Strategy Matrix
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={observabilityRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("observability", e.target.checked)}
+            />
+            Observability &amp; Telemetry
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", fontSize: "var(--t-caption)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={optionsRefreshEnabled}
+              onChange={(e) => setCategoryRefreshEnabled("options", e.target.checked)}
+            />
+            Options &amp; Market Analytics
+          </label>
+        </div>
+      </div>
+
+      {/* Safety telemetry -- a SEPARATE switch from the master above. Its own
+          bordered section, not folded into "Active Categories": governing
+          only the kill-switch/heartbeat poll, on by default, and deliberately
+          NOT gated by market session or tab visibility (see TopStatusBar). */}
+      <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-3)", marginTop: "var(--s-3)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ paddingRight: "var(--s-3)" }}>
+            <div style={{ fontWeight: 600, fontSize: "var(--t-label)" }}>Safety telemetry</div>
+            <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)", lineHeight: 1.4 }}>
+              Independent of the master switch above — this governs only the
+              kill-switch/heartbeat poll in the top bar. It keeps running
+              even when the market is closed or auto-refresh is off: a stale
+              kill-switch reading is a safety risk, not a battery
+              optimization, so it isn't gated the same way.
+            </div>
+          </div>
+          <Toggle
+            label="Safety telemetry"
+            checked={safetyTelemetryEnabled}
+            onChange={(val) => setSafetyTelemetryEnabled(val)}
+            dataTestId="auto-refresh-safety-telemetry-toggle"
+          />
+        </div>
+      </div>
+
+      <RobinhoodRefreshSection
+        robinhoodRefreshEnabled={robinhoodRefreshEnabled}
+        setCategoryRefreshEnabled={setCategoryRefreshEnabled}
+        categoryIntervalMs={categoryIntervalMs}
+        setCategoryIntervalMs={setCategoryIntervalMs}
+        brokerageStatus={brokerageStatus}
+      />
+    </section>
+  );
+}
+
+const ROBINHOOD_PRESETS_MIN: { label: string; min: number }[] = [
+  { label: "15m", min: 15 },
+  { label: "30m", min: 30 },
+  { label: "1h", min: 60 },
+  { label: "4h", min: 240 },
+  { label: "12h", min: 720 },
+];
+
+/**
+ * Robinhood auto-refresh -- its own bordered block, NOT a peer inside the
+ * "Active Categories" grid: this category alone triggers a real broker
+ * login (see ROBINHOOD_AUTO_REFRESH_ENABLED in CLAUDE.md), a structurally
+ * different cost from every other category's local DB read, so it defaults
+ * OFF, uses minute-granularity presets with a 15-minute floor, and surfaces
+ * (read-only) whether the server is even willing to log in on its own.
+ *
+ * Does NOT make the server-side ROBINHOOD_AUTO_REFRESH_ENABLED flag writable
+ * from here -- it's already writable via the Runtime Tunables editor, which
+ * correctly shows the ".env-only, applies on next daemon restart" contract;
+ * duplicating a toggle here would look instant when it isn't.
+ */
+function RobinhoodRefreshSection({
+  robinhoodRefreshEnabled,
+  setCategoryRefreshEnabled,
+  categoryIntervalMs,
+  setCategoryIntervalMs,
+  brokerageStatus,
+}: {
+  robinhoodRefreshEnabled: boolean;
+  setCategoryRefreshEnabled: (category: AutoRefreshCategory, enabled: boolean) => void;
+  categoryIntervalMs: Partial<Record<AutoRefreshCategory, number>>;
+  setCategoryIntervalMs: (category: AutoRefreshCategory, ms: number) => void;
+  /** Passed down from Settings() -- a second independent
+   * useApi(getBrokerageStatus) call site here would double the real network
+   * calls (and desync any caller counting them) alongside BrokerageSection's
+   * own fetch of the exact same endpoint. */
+  brokerageStatus: BrokerageStatus | null;
+}) {
+  const rule = CATEGORY_INTERVAL_RULES.robinhood;
+  const robinhoodDefaultMs = rule?.default ?? 3_600_000;
+  const robinhoodFloorMs = rule?.min ?? 900_000;
+  const floorMin = Math.round(robinhoodFloorMs / 60_000);
+
+  const robinhoodIntervalMs = categoryIntervalMs.robinhood ?? robinhoodDefaultMs;
+  const robinhoodIntervalMin = Math.round(robinhoodIntervalMs / 60_000);
+
+  const [customMin, setCustomMin] = useState<string>(String(robinhoodIntervalMin));
+
+  useEffect(() => {
+    setCustomMin(String(Math.round(robinhoodIntervalMs / 60_000)));
+  }, [robinhoodIntervalMs]);
+
+  const parsedCustomMin = parseInt(customMin, 10);
+  const customInvalid =
+    isNaN(parsedCustomMin) || parsedCustomMin < floorMin || parsedCustomMin > 1440;
+
+  useEffect(() => {
+    if (customInvalid) return;
+    const timer = setTimeout(() => {
+      setCategoryIntervalMs("robinhood", parsedCustomMin * 60_000);
+    }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customMin, customInvalid, setCategoryIntervalMs]);
+
+  const serverGateEnabled = brokerageStatus?.auto_refresh_enabled;
+
+  return (
+    <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: "var(--s-3)", marginTop: "var(--s-3)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-1-5)" }}>
+        <div style={{ fontWeight: 600, fontSize: "var(--t-label)" }}>Robinhood</div>
+        <Toggle
+          label="Robinhood auto-refresh"
+          checked={robinhoodRefreshEnabled}
+          onChange={(val) => setCategoryRefreshEnabled("robinhood", val)}
+          dataTestId="auto-refresh-robinhood-toggle"
+        />
+      </div>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "0 0 var(--s-2)", lineHeight: 1.5 }}>
+        Every refresh performs a real Robinhood login. Robinhood's own
+        account snapshot only refreshes about every 20 hours, so anything
+        under an hour is wasted work — and repeated automated logins are
+        what can trigger security challenges. Minimum 15 minutes.
+      </p>
+
+      {brokerageStatus && (
+        <div style={{ marginBottom: "var(--s-2)" }}>
+          <MetricBadge
+            label="Backend login gate"
+            value={serverGateEnabled ? "on" : "off — cached data only"}
+            good={serverGateEnabled ?? null}
+          />
+        </div>
+      )}
+      {brokerageStatus && serverGateEnabled === false && (
+        <Notice variant="warn" style={{ marginBottom: "var(--s-2)" }}>
+          <span>⚠️</span>
+          <span>
+            The backend is configured not to log in to Robinhood on its own,
+            so this toggle will refresh cached data only — it cannot produce
+            a fresh snapshot. Change <code>ROBINHOOD_AUTO_REFRESH_ENABLED</code>{" "}
+            in Settings Manager (applies on the next daemon restart).
+          </span>
+        </Notice>
+      )}
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", alignItems: "center", marginBottom: "var(--s-2)" }}>
+        {ROBINHOOD_PRESETS_MIN.map((p) => (
+          <button
+            key={p.min}
+            className={`btn btn-sm ${robinhoodIntervalMin === p.min ? "btn-primary" : "btn-subtle"}`}
+            onClick={() => setCategoryIntervalMs("robinhood", p.min * 60_000)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <Input
+        label="Custom duration (min)"
+        type="number"
+        inputMode="numeric"
+        min={floorMin}
+        max={1440}
+        value={customMin}
+        onChange={(e) => setCustomMin(e.target.value)}
+        invalid={customInvalid}
+        hint={customInvalid ? `Must be at least ${floorMin} minutes.` : undefined}
+      />
+    </div>
   );
 }

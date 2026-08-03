@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { ModelRow, Thresholds } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { DeployableBadge, ErrorState, Loading, MetricBadge, InfoTip } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
 import { loadThresholds } from "../help/thresholds";
@@ -77,6 +78,7 @@ export function Models() {
     () => api.getModels(),
     []
   );
+  useAutoPoll(reload, "signals", { hasError: error != null });
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
   // Live deployability-gate thresholds (GET /thresholds, session-cached) so

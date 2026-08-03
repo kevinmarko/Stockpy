@@ -17,6 +17,7 @@ import type {
   SentimentHistory,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { ErrorState, Loading, Notice, Tile } from "../components/ui";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
@@ -243,6 +244,7 @@ export function SentimentDynamics() {
     () => api.getSentimentDynamics(symbol),
     [symbol]
   );
+  useAutoPoll(reload, "options", { hasError: error != null });
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
   return (

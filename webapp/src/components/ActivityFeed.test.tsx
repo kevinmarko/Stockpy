@@ -9,8 +9,9 @@
  * module; we spy on api.getAlerts only for the error / edge fixtures.
  */
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActivityFeed } from "./ActivityFeed";
+import { AutoRefreshProvider } from "./AutoRefreshContext";
 import { api } from "../api/client";
 import { ApiError } from "../api/types";
 import { theme } from "../theme";
@@ -144,13 +145,31 @@ describe("ActivityFeed — error vs cold-start", () => {
 });
 
 describe("ActivityFeed — refresh & polling", () => {
+  // Auto-poll is now gated behind AutoRefreshContext (default OFF for the
+  // master switch) -- seed localStorage so these tests exercise the same
+  // "auto-refresh genuinely on" state the old unconditional setInterval used
+  // to provide unconditionally.
+  beforeEach(() => {
+    localStorage.setItem("stockpy.auto_refresh.enabled", "1");
+    localStorage.setItem("stockpy.auto_refresh.pause_when_closed", "0");
+    localStorage.setItem("stockpy.auto_refresh.observability_enabled", "1");
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
   it("triggers a fetch on the manual Refresh button", async () => {
     vi.useFakeTimers();
     const spy = vi
       .spyOn(api, "getAlerts")
       .mockResolvedValue({ entries: [], reason: null });
 
-    render(<ActivityFeed limit={5} />);
+    render(
+      <AutoRefreshProvider>
+        <ActivityFeed limit={5} />
+      </AutoRefreshProvider>
+    );
     expect(spy).toHaveBeenCalledTimes(1); // mount
     await act(async () => {}); // flush the mount fetch so the in-flight guard clears
 
@@ -164,7 +183,11 @@ describe("ActivityFeed — refresh & polling", () => {
       .spyOn(api, "getAlerts")
       .mockResolvedValue({ entries: [], reason: null });
 
-    render(<ActivityFeed limit={5} pollIntervalMs={10000} />);
+    render(
+      <AutoRefreshProvider>
+        <ActivityFeed limit={5} pollIntervalMs={10000} />
+      </AutoRefreshProvider>
+    );
     await act(async () => {});
     expect(spy).toHaveBeenCalledTimes(1);
 
@@ -181,7 +204,11 @@ describe("ActivityFeed — refresh & polling", () => {
       .spyOn(api, "getAlerts")
       .mockResolvedValue({ entries: [], reason: null });
 
-    render(<ActivityFeed pollIntervalMs={15000} />);
+    render(
+      <AutoRefreshProvider>
+        <ActivityFeed pollIntervalMs={15000} />
+      </AutoRefreshProvider>
+    );
     await act(async () => {});
     expect(spy).toHaveBeenCalledTimes(1);
 
@@ -189,5 +216,27 @@ describe("ActivityFeed — refresh & polling", () => {
       vi.advanceTimersByTime(15000);
     });
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ActivityFeed — master switch off by default", () => {
+  it("does not poll when the master auto-refresh switch is off (default, unseeded state)", async () => {
+    vi.useFakeTimers();
+    const spy = vi
+      .spyOn(api, "getAlerts")
+      .mockResolvedValue({ entries: [], reason: null });
+
+    render(
+      <AutoRefreshProvider>
+        <ActivityFeed pollIntervalMs={10000} />
+      </AutoRefreshProvider>
+    );
+    await act(async () => {});
+    expect(spy).toHaveBeenCalledTimes(1); // the initial mount fetch always happens
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(spy).toHaveBeenCalledTimes(1); // master switch defaults off -- no background poll
   });
 });

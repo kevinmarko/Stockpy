@@ -2,15 +2,15 @@
  * TopStatusBar.test.tsx — the always-on top bar. Its three headline claims
  * (heartbeat, kill switch, regime) must all come from real GET
  * /automation/status / GET /observability/summary data, never local fake
- * state — this is the regression test for that. Also covers the pure
- * `computeMarketSession` ET-time classifier directly (weekday/weekend,
- * RTH/pre-post/closed boundaries) since driving that through the rendered
- * component would require mocking the system timezone.
+ * state — this is the regression test for that. The pure `computeMarketSession`
+ * ET-time classifier itself lives in marketSession.ts and is covered directly
+ * by marketSession.test.ts.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi, afterEach } from "vitest";
-import { TopStatusBar, computeMarketSession } from "./TopStatusBar";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
+import { TopStatusBar } from "./TopStatusBar";
+import { AutoRefreshProvider } from "./AutoRefreshContext";
 import { ToastProvider } from "./ToastContext";
 import { DensityProvider } from "./DensityContext";
 import { api } from "../api/client";
@@ -28,6 +28,21 @@ function renderBar() {
     <ToastProvider>
       <DensityProvider>
         <TopStatusBar />
+      </DensityProvider>
+    </ToastProvider>
+  );
+}
+
+// Wraps in a real AutoRefreshProvider (rather than the useAutoRefresh
+// out-of-provider fallback renderBar() gets by default) so localStorage-driven
+// state -- the master toggle, safetyTelemetryEnabled -- actually takes effect.
+function renderBarWithAutoRefresh() {
+  return render(
+    <ToastProvider>
+      <DensityProvider>
+        <AutoRefreshProvider>
+          <TopStatusBar />
+        </AutoRefreshProvider>
       </DensityProvider>
     </ToastProvider>
   );
@@ -191,27 +206,68 @@ describe("TopStatusBar", () => {
   });
 });
 
-describe("computeMarketSession", () => {
-  // All instants below are given as UTC ISO strings so the test is
-  // timezone-independent regardless of the machine running it; the function
-  // itself converts to America/New_York internally.
-  it("classifies a weekday during regular trading hours as RTH (Open)", () => {
-    // 2026-07-16 is a Thursday. 14:00 UTC = 10:00 ET (summer, UTC-4).
-    expect(computeMarketSession(new Date("2026-07-16T14:00:00Z"))).toBe("RTH (Open)");
+describe("TopStatusBar — auto-refresh wiring", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.useFakeTimers();
   });
 
-  it("classifies a weekday before the open as PRE/POST", () => {
-    // 09:00 UTC = 05:00 ET.
-    expect(computeMarketSession(new Date("2026-07-16T09:00:00Z"))).toBe("PRE/POST");
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    localStorage.clear();
   });
 
-  it("classifies a weekday late at night as CLOSED", () => {
-    // 03:00 UTC = 23:00 ET (previous day).
-    expect(computeMarketSession(new Date("2026-07-16T03:00:00Z"))).toBe("CLOSED");
+  it("master auto-refresh OFF still lets the automation (kill-switch/heartbeat) poll fire -- safety telemetry is independent", async () => {
+    // localStorage empty -> master auto-refresh defaults OFF, safety
+    // telemetry defaults ON.
+    const automationSpy = vi
+      .spyOn(api, "getAutomationStatus")
+      .mockResolvedValue(automationStatus());
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValue(observabilitySummary());
+
+    renderBarWithAutoRefresh();
+    await act(async () => {});
+    expect(automationSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_000); // AUTOMATION_POLL_MS
+    });
+    expect(automationSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("classifies a Saturday as CLOSED even during what would be RTH hours on a weekday", () => {
-    // 2026-07-18 is a Saturday. 14:00 UTC = 10:00 ET.
-    expect(computeMarketSession(new Date("2026-07-18T14:00:00Z"))).toBe("CLOSED");
+  it("safetyTelemetryEnabled=false via localStorage stops the automation poll and shows the caution indicator", async () => {
+    localStorage.setItem("stockpy.auto_refresh.safety_telemetry_enabled", "0");
+    const automationSpy = vi
+      .spyOn(api, "getAutomationStatus")
+      .mockResolvedValue(automationStatus());
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValue(observabilitySummary());
+
+    renderBarWithAutoRefresh();
+    await act(async () => {});
+    expect(automationSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("safety-telemetry-off-indicator")).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_000); // AUTOMATION_POLL_MS
+    });
+    expect(automationSpy).toHaveBeenCalledTimes(1); // no background poll fired
+  });
+
+  it("the regime poll DOES respect the master toggle being off", async () => {
+    // localStorage empty -> master auto-refresh defaults OFF.
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(automationStatus());
+    const regimeSpy = vi
+      .spyOn(api, "getObservabilitySummary")
+      .mockResolvedValue(observabilitySummary());
+
+    renderBarWithAutoRefresh();
+    await act(async () => {});
+    expect(regimeSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(300_000); // REGIME_POLL_MS
+    });
+    expect(regimeSpy).toHaveBeenCalledTimes(1); // no background poll fired
   });
 });
