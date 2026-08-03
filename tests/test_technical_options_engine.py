@@ -504,6 +504,9 @@ class TestBuildPremiumDirectiveFmpHealthAndEarnings:
         assert row["Days_To_Earnings"] is None
         assert row["Earnings_Risk"] is False
         assert row["Realized_Vol_30D"] is None
+        assert row["Analyst_Target_Consensus"] is None
+        assert row["Analyst_Target_Upside"] is None
+        assert row["Analyst_Grade_Score"] is None
         assert row["News_Snippets"] == []
         assert row["Peers"] == []
 
@@ -527,6 +530,21 @@ class TestBuildPremiumDirectiveFmpHealthAndEarnings:
         assert row["Realized_Vol_30D"] == 0.22
         assert row["News_Snippets"] == news
         assert row["Peers"] == peers
+
+    def test_analyst_kwargs_pass_through_verbatim(self):
+        """The three analyst-consensus kwargs are a pure passthrough too --
+        this function never fetches or recomputes them (they're sourced from
+        the existing HistoricalStore analyst-snapshot table by the one
+        production caller, reporting/options_snapshot.py)."""
+        bars = _ohlcv(252, seed=26)
+        row = build_premium_directive(
+            "ANALYST", bars, spot_price=float(bars["Close"].iloc[-1]),
+            analyst_target_consensus=180.0, analyst_target_upside=0.2,
+            analyst_grade_score=0.4,
+        )
+        assert row["Analyst_Target_Consensus"] == 180.0
+        assert row["Analyst_Target_Upside"] == 0.2
+        assert row["Analyst_Grade_Score"] == 0.4
 
     def test_earnings_within_target_dte_sets_earnings_risk_true(self):
         bars = _ohlcv(252, seed=22)

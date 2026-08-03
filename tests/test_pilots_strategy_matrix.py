@@ -450,8 +450,12 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # (SQLAlchemy + db_config only -- confirmed dependency-light by
         # inspection, imports none of the AST-forbidden heavy engines and
         # not `signals`) inside its own lazy, function-local import. `data`
-        # is allowed here specifically for that one narrow store read.
-        allowed = allowed | {"data"}
+        # is allowed here specifically for that one narrow store read -- also
+        # covers the module's second lazy read, data.historical_store
+        # .HistoricalStore(readonly=True).get_sector_snapshots(), which
+        # bulk-attaches each row's FMP sector P/E / 1-day-change snapshot.
+        # `datetime` computes that second read's `as_of=date.today()` cutoff.
+        allowed = allowed | {"data", "datetime"}
     if module_name == "reports":
         # pilots.reports (GET /reports, GET /reports/{name}) needs datetime
         # for the manifest's mtime/generated_at ISO timestamps -- everything

@@ -195,6 +195,84 @@ describe("OptionsMatrix screen (real mock API)", () => {
     expect(within(xomCard).queryByText(/Earnings in/)).not.toBeInTheDocument();
   });
 
+  it("renders the Piotroski F-Score badge and FCF Yield line on the compact card at the boundary values, and renders neither when absent", async () => {
+    renderScreen();
+    // AAPL: Piotroski_F_Score 7 -> "good" (>= 7 Strong) badge.
+    const aaplCard = (await screen.findByText("AAPL")).closest('[role="button"]') as HTMLElement;
+    const aaplBadge = within(aaplCard).getByText(/F-Score: 7\/9/);
+    expect(aaplBadge).toHaveClass("badge-good");
+    expect(aaplCard.textContent).toMatch(/FCF Yield:\s*\+?4\.5%/);
+
+    // MSFT: Piotroski_F_Score 3 -> "bad" (<= 3 Weak) badge; FCF_Yield negative.
+    const msftCard = screen.getByText("MSFT").closest('[role="button"]') as HTMLElement;
+    const msftBadge = within(msftCard).getByText(/F-Score: 3\/9/);
+    expect(msftBadge).toHaveClass("badge-bad");
+    expect(msftCard.textContent).toMatch(/FCF Yield:\s*-1\.0%/);
+
+    // NVDA: Piotroski_F_Score 5 -> neutral badge (neither good nor bad).
+    const nvdaCard = screen.getByText("NVDA").closest('[role="button"]') as HTMLElement;
+    const nvdaBadge = within(nvdaCard).getByText(/F-Score: 5\/9/);
+    expect(nvdaBadge).not.toHaveClass("badge-good");
+    expect(nvdaBadge).not.toHaveClass("badge-bad");
+
+    // XOM carries neither field -- no badge, no FCF Yield line.
+    const xomCard = screen.getByText("XOM").closest('[role="button"]') as HTMLElement;
+    expect(within(xomCard).queryByText(/F-Score/)).not.toBeInTheDocument();
+    expect(within(xomCard).queryByText(/FCF Yield/)).not.toBeInTheDocument();
+  });
+
+  it("renders Analyst Consensus, News, and Peers in the detail sheet for fixture rows that have them, and renders nothing for a row that doesn't", async () => {
+    renderScreen();
+
+    // AAPL: consensus target, upside vs. Price, grade badge, headlines, peer chips.
+    await userEvent.click(await screen.findByText("AAPL"));
+    const aaplSheet = await screen.findByRole("dialog", { name: /AAPL options directive/ });
+    expect(within(aaplSheet).getByText("Analyst Consensus")).toBeInTheDocument();
+    expect(within(aaplSheet).getByText(/\$235\.50/)).toBeInTheDocument();
+    expect(within(aaplSheet).getByText(/Upside/)).toBeInTheDocument();
+    expect(within(aaplSheet).getByText(/Grade 0\.42/)).toBeInTheDocument();
+    expect(within(aaplSheet).getByText("News & Peers")).toBeInTheDocument();
+    const headlineLink = within(aaplSheet).getByRole("link", {
+      name: /Apple Unveils New Services Push/,
+    }) as HTMLAnchorElement;
+    expect(headlineLink.href).toContain("example.com/news/aapl-1");
+    expect(headlineLink.target).toBe("_blank");
+    expect(within(aaplSheet).getByText("MSFT")).toBeInTheDocument();
+    expect(within(aaplSheet).getByText("GOOGL")).toBeInTheDocument();
+    expect(within(aaplSheet).getByText("AMZN")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+
+    // MSFT: downside case (target below Price) + a negative grade -> "weak"
+    // badge styling, and colored as a decline, not growth.
+    await userEvent.click(screen.getByText("MSFT"));
+    const msftSheet = await screen.findByRole("dialog", { name: /MSFT options directive/ });
+    expect(within(msftSheet).getByText(/Downside/)).toBeInTheDocument();
+    const msftGradeBadge = within(msftSheet).getByText(/Grade -0\.22/);
+    expect(msftGradeBadge).toHaveClass("badge-bad");
+    await userEvent.keyboard("{Escape}");
+
+    // NVDA: Peers only, no News_Snippets, no analyst snapshot -- proves the
+    // two News & Peers sub-blocks are independently conditional, and that
+    // Analyst Consensus renders nothing (no placeholder) when absent.
+    await userEvent.click(screen.getByText("NVDA"));
+    const nvdaSheet = await screen.findByRole("dialog", { name: /NVDA options directive/ });
+    expect(within(nvdaSheet).queryByText("Analyst Consensus")).not.toBeInTheDocument();
+    expect(within(nvdaSheet).getByText("News & Peers")).toBeInTheDocument();
+    expect(within(nvdaSheet).getByText("AMD")).toBeInTheDocument();
+    // No News_Snippets on this fixture row -- the only link in the sheet is
+    // the standing "View NVDA ->" footer link, never a fabricated headline.
+    const nvdaLinks = within(nvdaSheet).getAllByRole("link");
+    expect(nvdaLinks).toHaveLength(1);
+    expect(nvdaLinks[0]).toHaveTextContent(/View NVDA/);
+    await userEvent.keyboard("{Escape}");
+
+    // XOM: none of the new fields -- neither section renders at all.
+    await userEvent.click(screen.getByText("XOM"));
+    const xomSheet = await screen.findByRole("dialog", { name: /XOM options directive/ });
+    expect(within(xomSheet).queryByText("Analyst Consensus")).not.toBeInTheDocument();
+    expect(within(xomSheet).queryByText("News & Peers")).not.toBeInTheDocument();
+  });
+
   it("filter chips narrow the visible cards", async () => {
     renderScreen();
     await screen.findByText("AAPL");

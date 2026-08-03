@@ -252,7 +252,7 @@ def test_symbols_compare_shape_and_values():
     assert set(aapl) == {
         "symbol", "found", "reason", "score", "action", "kelly_target",
         "conviction", "garch_vol", "meta_label_composite", "regime_multiplier",
-        "score_components",
+        "score_components", "sector", "sector_pe", "sector_change_pct",
     }
     assert aapl["found"] is True
     assert aapl["score"] == 96.8

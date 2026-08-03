@@ -409,6 +409,16 @@ const liveApi = {
     ),
   getDataFundamentals: (symbol: string) =>
     http<Fundamentals>(`/data/fundamentals/${encodeURIComponent(symbol)}`),
+  // On-demand FMP peer-comparison ticker group (settings.FMP_PEERS_ENABLED,
+  // default False -> {peers: [], reason: "..."} with zero network calls).
+  // Powers SymbolComparison.tsx's "Suggest peers for this ticker" affordance.
+  // A DIFFERENT gate/call-site from the options-matrix's own batched peer
+  // fetch (FMP_OPTIONS_CONTEXT_ENABLED) -- this one is a single per-click
+  // user-triggered lookup.
+  getPeers: (symbol: string) =>
+    http<{ symbol: string; peers: string[]; reason: string | null }>(
+      `/data/peers/${encodeURIComponent(symbol)}`
+    ),
   getMacro: () => http<MacroSnapshot>("/data/macro"),
   getMacroHistory: (series = "VIXCLS", lookbackDays = 180) =>
     http<MacroHistorySeries>(

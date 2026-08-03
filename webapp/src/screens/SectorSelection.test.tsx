@@ -114,6 +114,8 @@ describe("SectorSelection screen (real mock API)", () => {
           rank: null,
           selected: false,
           degraded_reason: "no_embedder",
+          pe: null,
+          change_pct: null,
         },
       ],
       embedder: "none",
@@ -124,7 +126,64 @@ describe("SectorSelection screen (real mock API)", () => {
     renderScreen();
     expect(await screen.findByText("Technology")).toBeInTheDocument();
     expect(screen.getByText("No similarity backend configured")).toBeInTheDocument();
-    // Five numeric/rank cells all render the dash, never a fabricated 0.
-    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(5);
+    // Seven numeric/rank cells (including the new P/E and 1D Chg columns)
+    // all render the dash, never a fabricated 0.
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(7);
+  });
+
+  it("renders the P/E and 1D Chg columns with real values from the mock sector snapshot", async () => {
+    renderScreen();
+    await screen.findByText("New Energy");
+
+    const row = screen.getByText("New Energy").closest("tr")!;
+    // Every fully-populated candidate row carries a real pe/change_pct value
+    // (mockSectorSelection's fixture) -- the last two `.num` cells (P/E, 1D
+    // Chg) must be real numbers, never a dash, for this covered sector.
+    const numCells = row.querySelectorAll("td.num");
+    const [peCell, changeCell] = [numCells[numCells.length - 2], numCells[numCells.length - 1]];
+    expect(peCell.textContent).not.toContain("—");
+    expect(changeCell.textContent).not.toContain("—");
+    expect(changeCell.textContent).toMatch(/%/);
+  });
+
+  it("a candidate sector with no FMP valuation snapshot renders honest dashes for P/E and 1D Chg", async () => {
+    renderScreen();
+    await screen.findByText("New Energy");
+
+    // "Charging Post" is the mock's deliberate no-snapshot row (index 4) --
+    // its similarity fields are populated but pe/change_pct are null.
+    const row = screen.getByText("Charging Post").closest("tr")!;
+    const numCells = row.querySelectorAll("td.num");
+    const [peCell, changeCell] = [numCells[numCells.length - 2], numCells[numCells.length - 1]];
+    expect(peCell.textContent).toContain("—");
+    expect(changeCell.textContent).toContain("—");
+  });
+
+  it("`pe`/`change_pct` being absent entirely (backend omits the optional fields) still renders honest dashes, never a crash", async () => {
+    const legacyRow: SectorSelectionView = {
+      target_symbol: "AAPL",
+      as_of: "2026-07-26",
+      top_n: 3,
+      rows: [
+        {
+          sector: "Technology",
+          cosine_similarity: 0.5,
+          ingestion_volume: 10,
+          sector_heat_factor: 0.6,
+          correlation_coefficient: 0.3,
+          rank: 1,
+          selected: true,
+          degraded_reason: null,
+          // pe/change_pct deliberately omitted (optional fields)
+        },
+      ],
+      embedder: "sbert",
+      pooling: "max",
+      reason: null,
+    };
+    vi.spyOn(api, "getSectorSelection").mockResolvedValueOnce(legacyRow);
+    renderScreen();
+    const row = (await screen.findByText("Technology")).closest("tr")!;
+    expect(row.textContent).toContain("—");
   });
 });

@@ -80,12 +80,14 @@ describe("SymbolComparison", () => {
           kelly_target: 0.041, conviction: 0.72, garch_vol: 0.243,
           meta_label_composite: 1.0, regime_multiplier: 1.0,
           score_components: { momentum: 9.0, value: -3.0 },
+          sector: "Information Technology", sector_pe: 31.4, sector_change_pct: 0.0087,
         },
         {
           symbol: "ZZZ", found: false, reason: "Not tracked in the latest snapshot.",
           score: null, action: null, kelly_target: null, conviction: null,
           garch_vol: null, meta_label_composite: null, regime_multiplier: null,
           score_components: null,
+          sector: null, sector_pe: null, sector_change_pct: null,
         },
       ],
       modules: ["momentum", "value"],
@@ -109,12 +111,14 @@ describe("SymbolComparison", () => {
           kelly_target: 0.02, conviction: 0.6, garch_vol: 0.2,
           meta_label_composite: null, regime_multiplier: null,
           score_components: { momentum: 5.0 },
+          sector: "Information Technology", sector_pe: 31.4, sector_change_pct: 0.0087,
         },
         {
           symbol: "MSFT", found: true, reason: null, score: 40, action: "HOLD",
           kelly_target: 0.0, conviction: 0.5, garch_vol: 0.18,
           meta_label_composite: 1.0, regime_multiplier: 1.0,
           score_components: { momentum: 3.0 },
+          sector: "Information Technology", sector_pe: 31.4, sector_change_pct: 0.0087,
         },
       ],
       modules: ["momentum"],
@@ -143,11 +147,13 @@ describe("SymbolComparison", () => {
           symbol: "AAPL", found: true, reason: null, score: 50, action: "BUY",
           kelly_target: 0.02, conviction: 0.6, garch_vol: 0.2,
           meta_label_composite: 1.0, regime_multiplier: 1.0, score_components: null,
+          sector: "Information Technology", sector_pe: 31.4, sector_change_pct: 0.0087,
         },
         {
           symbol: "MSFT", found: true, reason: null, score: 40, action: "HOLD",
           kelly_target: 0.0, conviction: 0.5, garch_vol: 0.18,
           meta_label_composite: 1.0, regime_multiplier: 1.0, score_components: null,
+          sector: "Information Technology", sector_pe: 31.4, sector_change_pct: 0.0087,
         },
       ],
       modules: [],
@@ -179,5 +185,76 @@ describe("SymbolComparison", () => {
     fireEvent.click(await checkbox("AAPL"));
     fireEvent.click(await checkbox("MSFT"));
     expect(await screen.findByText(/boom/)).toBeInTheDocument();
+  });
+
+  it("renders Sector / Sector P/E / Sector 1D Chg rows with real values", async () => {
+    render(<SymbolComparison />);
+    fireEvent.click(await checkbox("AAPL"));
+    fireEvent.click(await checkbox("MSFT"));
+    await screen.findByRole("table");
+
+    const sectorRow = screen.getByText("Sector").closest("tr")!;
+    expect(sectorRow.textContent).toContain("Technology");
+
+    const peRow = screen.getByText("Sector P/E").closest("tr")!;
+    expect(peRow.textContent).toContain("31.4");
+
+    const chgRow = screen.getByText("Sector 1D Chg").closest("tr")!;
+    expect(chgRow.textContent).toContain("+0.87%");
+  });
+
+  it("a sector with no FMP valuation snapshot renders honest dashes, never a fabricated value", async () => {
+    render(<SymbolComparison />);
+    fireEvent.click(await checkbox("DUK")); // Utilities -- deliberately absent from the mock snapshot
+    fireEvent.click(await checkbox("AAPL"));
+    await screen.findByRole("table");
+
+    const sectorRow = screen.getByText("Sector").closest("tr")!;
+    expect(sectorRow.textContent).toContain("Utilities");
+
+    const peRow = screen.getByText("Sector P/E").closest("tr")!;
+    expect(peRow.textContent).toContain("—"); // DUK's cell
+    expect(peRow.textContent).toContain("31.4"); // AAPL's real value still renders
+  });
+
+  it("fetches per-symbol Individual P/E from GET /data/fundamentals after the compare response resolves", async () => {
+    render(<SymbolComparison />);
+    fireEvent.click(await checkbox("AAPL"));
+    fireEvent.click(await checkbox("MSFT"));
+    await screen.findByRole("table");
+
+    const peLabel = await screen.findByText("Individual P/E");
+    await waitFor(() => {
+      expect(peLabel.closest("tr")!.textContent).toContain("24.6");
+    });
+  });
+
+  it("'Suggest peers' adds returned peers to the selection, respecting the selection cap", async () => {
+    render(<SymbolComparison />);
+    fireEvent.click(await checkbox("AAPL"));
+
+    const suggestBtn = await screen.findByTestId("suggest-peers-button");
+    expect(suggestBtn).toHaveTextContent("Suggest peers for AAPL");
+    fireEvent.click(suggestBtn);
+
+    // AAPL's mock peer group is [MSFT, GOOGL, AMZN]; only 2 fit under the
+    // 3-symbol cap (AAPL already occupies one slot) -- first 2 win, AMZN
+    // does not, and the cap disables any further selection.
+    await waitFor(async () => {
+      expect(await checkbox("MSFT")).toBeChecked();
+    });
+    expect(await checkbox("GOOGL")).toBeChecked();
+    expect(await checkbox("AMZN")).toBeDisabled();
+    expect(await checkbox("AMZN")).not.toBeChecked();
+  });
+
+  it("shows an honest note (never an error) when the suggested symbol has no peer data", async () => {
+    render(<SymbolComparison />);
+    fireEvent.click(await checkbox("NVDA")); // not in the mock's fixture peer groups
+
+    fireEvent.click(await screen.findByTestId("suggest-peers-button"));
+    expect(await screen.findByTestId("suggest-peers-note")).toHaveTextContent(
+      "No peer data available for this symbol."
+    );
   });
 });

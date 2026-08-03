@@ -691,6 +691,51 @@ class Settings(BaseSettings):
             "earnings-events store, not a fresh fetch of their own."
         ),
     )
+    FMP_OPTIONS_CONTEXT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the FMP market/qualitative-context overlay "
+            "bundled into the options premium-directive matrix (reporting/"
+            "options_snapshot.py::write_options_matrix → technical_options_"
+            "engine.build_premium_directive). False (the default) is a "
+            "complete no-op reproducing today's exact behavior: News_Snippets "
+            "stays [], Peers stays [], and zero additional FMP requests are "
+            "attempted. When True, gates two endpoints for every symbol in "
+            "the options matrix: recent news headlines, capped at 3 per "
+            "symbol (`/news/stock` via data.fmp_feeds_company.fetch_stock_"
+            "news), and the peer-comparison ticker group (`/peers` via "
+            "data.fmp_feeds_market.fetch_peer_group). Kept separate from "
+            "FMP_OPTIONS_HEALTH_ENABLED even though the call-site pattern is "
+            "identical (a bundled gate checked before the per-symbol loop, "
+            "independent try/except per sub-fetch inside it) because it is a "
+            "different overlay concept — market/qualitative context (what is "
+            "being said about this name, and what else trades like it) "
+            "rather than balance-sheet health."
+        ),
+    )
+    FMP_PEERS_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the on-demand GET /data/peers/{symbol} "
+            "endpoint (api/data_api.py) — a single, per-click, operator-"
+            "triggered FMP peer-group lookup (`/peers` via "
+            "data.fmp_feeds_market.fetch_peer_group) for the webapp's "
+            "'Suggest peers for this ticker' affordance on SymbolComparison. "
+            "False (the default) is a complete no-op: the endpoint returns "
+            "an empty peer list + an honest reason, with ZERO network calls "
+            "— fetch_peer_group is never even imported. Deliberately kept "
+            "SEPARATE from FMP_OPTIONS_CONTEXT_ENABLED, which already gates "
+            "a DIFFERENT call site of the same fetch_peer_group function: a "
+            "per-cycle BATCH fetch across the whole options-matrix universe "
+            "(reporting/options_snapshot.py). Same rate-limit-cadence "
+            "reasoning as the FMP_INSIDER_ENABLED / FMP_SECTOR_SNAPSHOT_"
+            "ENABLED precedent above — one flag per call-site SHAPE, not "
+            "per underlying vendor function: a single user-triggered click "
+            "and a per-cycle loop over an entire universe have completely "
+            "different cost/cadence profiles and must be independently "
+            "controllable."
+        ),
+    )
     # ── FMP behavior knobs ───────────────────────────────────────────────
     FMP_FALLBACK_ENABLED: bool = Field(
         default=True,

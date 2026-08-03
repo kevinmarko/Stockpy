@@ -219,6 +219,22 @@ const SECTOR_OF: Record<string, string> = {
   DUK: "Utilities",
 };
 
+// Dated FMP sector P/E + 1-day-change snapshot fixture, keyed by the same
+// sector names as SECTOR_OF -- mirrors data/historical_store.py's
+// get_sector_snapshots() shape (fraction change_pct, not a percent number).
+// "Utilities" is deliberately OMITTED so DUK exercises the honest "sector
+// has no snapshot" null branch, matching this fixture's existing convention
+// of using DUK for other honest-null cases (see getSymbolsCompare below).
+const SECTOR_SNAPSHOT: Record<string, { pe: number; change_pct: number }> = {
+  Technology: { pe: 31.4, change_pct: 0.0087 },
+  Communication: { pe: 22.1, change_pct: -0.0032 },
+  "Consumer Disc.": { pe: 26.8, change_pct: 0.0015 },
+  Financials: { pe: 14.9, change_pct: 0.0041 },
+  Healthcare: { pe: 19.3, change_pct: -0.0011 },
+  Energy: { pe: 11.6, change_pct: -0.0128 },
+  Industrials: { pe: 20.5, change_pct: 0.0023 },
+};
+
 function h(
   sharpe: number | null,
   dsr: number | null,
@@ -2462,6 +2478,27 @@ function mockSectorSelection(target: string, n = 3): SectorSelectionView {
         sector_heat_factor: +(rng() * 0.8).toFixed(3),
         correlation_coefficient: null,
         degraded_reason: "no_sector_description",
+        pe: +(15 + rng() * 20).toFixed(1),
+        change_pct: +((rng() - 0.5) * 0.04).toFixed(4),
+      };
+    }
+    if (i === 4) {
+      // Honesty branch: this candidate sector has no FMP valuation snapshot
+      // at all (feed disabled, or this sector name isn't covered) -- pe/
+      // change_pct must be null, never a fabricated/neighboring value
+      // (CONSTRAINT #4), independent of the similarity fields above (which
+      // are still fully populated for this row).
+      const cos = +(0.2 + rng() * 0.6).toFixed(3);
+      const shf = +(0.3 + rng() * 0.5).toFixed(3);
+      return {
+        sector,
+        cosine_similarity: cos,
+        ingestion_volume: +(rng() * 60).toFixed(1),
+        sector_heat_factor: shf,
+        correlation_coefficient: +(cos * shf).toFixed(4),
+        degraded_reason: "review_unavailable",
+        pe: null,
+        change_pct: null,
       };
     }
     if (i === 5) {
@@ -2473,6 +2510,8 @@ function mockSectorSelection(target: string, n = 3): SectorSelectionView {
         sector_heat_factor: null,
         correlation_coefficient: null,
         degraded_reason: "no_volume_observed",
+        pe: +(15 + rng() * 20).toFixed(1),
+        change_pct: +((rng() - 0.5) * 0.04).toFixed(4),
       };
     }
     const cos = +(0.2 + rng() * 0.6).toFixed(3);
@@ -2484,6 +2523,8 @@ function mockSectorSelection(target: string, n = 3): SectorSelectionView {
       sector_heat_factor: shf,
       correlation_coefficient: +(cos * shf).toFixed(4),
       degraded_reason: "review_unavailable",
+      pe: +(15 + rng() * 20).toFixed(1),
+      change_pct: +((rng() - 0.5) * 0.04).toFixed(4),
     };
   });
 
@@ -3033,6 +3074,17 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
     Days_To_Earnings: null,
     Earnings_Risk: false,
     Realized_Vol_30D: 0.21,
+    // FMP market/qualitative-context overlay (settings.FMP_OPTIONS_CONTEXT_ENABLED)
+    // + analyst consensus (settings.FMP_ANALYST_ENABLED, read from the existing
+    // HistoricalStore analyst-snapshot table).
+    News_Snippets: [
+      { title: "Apple Unveils New Services Push Ahead of Holiday Quarter", url: "https://example.com/news/aapl-1", published_date: "2026-08-01T14:05:00Z", site: "Reuters" },
+      { title: "Analysts Raise Price Targets on Apple After Strong Guidance", url: "https://example.com/news/aapl-2", published_date: "2026-07-31T09:20:00Z", site: "Bloomberg" },
+    ],
+    Peers: ["MSFT", "GOOGL", "AMZN"],
+    Analyst_Target_Consensus: 235.5,
+    Analyst_Target_Upside: (235.5 / 214.9) - 1,
+    Analyst_Grade_Score: 0.42,
   },
   {
     // 4 legs, engine omits per-leg Delta -> Short_Delta/Long_Delta null.
@@ -3076,6 +3128,17 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
     Days_To_Earnings: 12,
     Earnings_Risk: true,
     Realized_Vol_30D: 0.19,
+    // FMP market/qualitative-context overlay + analyst consensus -- a
+    // downside/sell-leaning case (target below Price, negative grade score)
+    // so the detail sheet's decline coloring and "weak" grade badge are
+    // exercised alongside AAPL's upside/buy-leaning case above.
+    News_Snippets: [
+      { title: "Microsoft Cloud Growth Slows Amid Enterprise Spending Pullback", url: "https://example.com/news/msft-1", published_date: "2026-07-30T11:00:00Z", site: "CNBC" },
+    ],
+    Peers: ["AAPL", "GOOGL", "ORCL"],
+    Analyst_Target_Consensus: 405.0,
+    Analyst_Target_Upside: (405.0 / 431.2) - 1,
+    Analyst_Grade_Score: -0.22,
   },
   {
     // Debit spread: theta is the initializer default 0.0, NOT a measurement.
@@ -3115,6 +3178,11 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
     Days_To_Earnings: 45,
     Earnings_Risk: false,
     Realized_Vol_30D: 0.41,
+    // Peers only, no News_Snippets/analyst fields -- proves the News & Peers
+    // section's two sub-blocks are independently conditional (peers render,
+    // news doesn't), and that the Analyst Consensus section stays absent
+    // (no placeholder) when the store had no snapshot for this symbol.
+    Peers: ["AMD", "AVGO", "QCOM"],
   },
   {
     // Covered Call: 1 short leg, no long leg -> Long_Strike null. Theta default.
@@ -4741,6 +4809,9 @@ export const mockApi = {
           meta_label_composite: null,
           regime_multiplier: null,
           score_components: null,
+          sector: null,
+          sector_pe: null,
+          sector_change_pct: null,
         };
       }
 
@@ -4762,6 +4833,13 @@ export const mockApi = {
       // pretending every symbol always has them.
       const hasRegimeFields = sym !== "DUK";
 
+      // sector_pe/sector_change_pct: bulk-attached by sector name, mirroring
+      // the real backend's ONE-call-per-request pattern. DUK's sector
+      // ("Utilities") is deliberately absent from SECTOR_SNAPSHOT, so it
+      // exercises the honest "sector has no snapshot" null branch here too.
+      const sector = SECTOR_OF[sym] ?? null;
+      const sectorSnap = sector ? SECTOR_SNAPSHOT[sector] : undefined;
+
       return {
         symbol: sym,
         found: true,
@@ -4778,6 +4856,9 @@ export const mockApi = {
           trend: +rng().toFixed(3),
           value: +((rng() - 0.5) * 2).toFixed(3),
         },
+        sector,
+        sector_pe: sectorSnap?.pe ?? null,
+        sector_change_pct: sectorSnap?.change_pct ?? null,
       };
     });
 
@@ -5825,6 +5906,26 @@ export const mockApi = {
       trailingEps: 6.42,
       // honest null: this symbol's provider didn't compute a payout ratio
       payoutRatio: null,
+    });
+  },
+
+  // On-demand FMP peer-comparison ticker group -- mirrors the real
+  // GET /data/peers/{symbol} contract (settings.FMP_PEERS_ENABLED gate) with
+  // a small fixed peer list for a couple of fixture symbols, and an honest
+  // empty list + reason for anything else (never a fabricated peer group).
+  async getPeers(
+    symbol: string
+  ): Promise<{ symbol: string; peers: string[]; reason: string | null }> {
+    const sym = symbol.toUpperCase().trim();
+    const PEER_GROUPS: Record<string, string[]> = {
+      AAPL: ["MSFT", "GOOGL", "AMZN"],
+      MSFT: ["AAPL", "GOOGL", "ADBE"],
+    };
+    const peers = PEER_GROUPS[sym] ?? [];
+    return delay({
+      symbol: sym,
+      peers,
+      reason: peers.length ? null : "No peer data available for this symbol.",
     });
   },
 

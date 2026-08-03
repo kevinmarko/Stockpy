@@ -42,6 +42,7 @@ import pytest
 from data.fmp_feeds_market import (
     _pct_to_fraction,
     fetch_insider_stats,
+    fetch_peer_group,
     fetch_realized_volatility,
     fetch_sector_snapshot,
 )
@@ -394,6 +395,76 @@ class TestPctToFraction:
     def test_just_beyond_threshold_refuses(self):
         result = _pct_to_fraction(50.01)
         assert result != result  # NaN
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# data/fmp_feeds_market.py::fetch_peer_group
+#
+# Backs the new on-demand GET /data/peers/{symbol} endpoint (api/data_api.py,
+# settings.FMP_PEERS_ENABLED) AND the existing FMP_OPTIONS_CONTEXT_ENABLED
+# options-matrix batch overlay (reporting/options_snapshot.py) -- this
+# function itself had ZERO test coverage anywhere in the repo before this
+# file, confirmed by grep. CONSTRAINT #6: `[]` on any failure, never raises.
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestFetchPeerGroup:
+    def test_happy_path_peers_list_shape(self, fmp_settings):
+        payload = [{"symbol": "AAPL", "peersList": ["msft", "  googl  ", "amzn"]}]
+        with patch(
+            "data.fmp_client.requests.get", return_value=_resp(200, payload=payload),
+        ) as get:
+            result = fetch_peer_group("aapl")
+
+        assert get.call_count == 1
+        assert get.call_args.args[0].endswith("/peers")
+        assert get.call_args.kwargs["params"]["symbol"] == "AAPL"
+        assert result == ["MSFT", "GOOGL", "AMZN"]
+
+    def test_happy_path_bare_list_of_strings_shape(self, fmp_settings):
+        # Defensive fallback shape: a bare list of ticker strings with no
+        # wrapping {"peersList": [...]} envelope.
+        payload = ["msft", "googl", "  amzn  "]
+        with patch("data.fmp_client.requests.get", return_value=_resp(200, payload=payload)):
+            result = fetch_peer_group("AAPL")
+        assert result == ["MSFT", "GOOGL", "AMZN"]
+
+    def test_malformed_peers_list_value_not_a_list_returns_empty(self, fmp_settings):
+        payload = [{"symbol": "AAPL", "peersList": "not-a-list"}]
+        with patch("data.fmp_client.requests.get", return_value=_resp(200, payload=payload)):
+            result = fetch_peer_group("AAPL")
+        assert result == []
+
+    def test_malformed_bare_list_with_non_string_entries_filters_them_out(self, fmp_settings):
+        payload = ["msft", 123, None, {"nested": True}, "googl"]
+        with patch("data.fmp_client.requests.get", return_value=_resp(200, payload=payload)):
+            result = fetch_peer_group("AAPL")
+        assert result == ["MSFT", "GOOGL"]
+
+    def test_empty_payload_returns_empty_list(self, fmp_settings):
+        with patch("data.fmp_client.requests.get", return_value=_resp(200, payload=[])):
+            result = fetch_peer_group("AAPL")
+        assert result == []
+
+    def test_unexpected_dict_payload_shape_returns_empty_list_never_raises(self, fmp_settings):
+        payload = {"symbol": "AAPL", "note": "no peersList key at all"}
+        with patch("data.fmp_client.requests.get", return_value=_resp(200, payload=payload)):
+            result = fetch_peer_group("AAPL")
+        assert result == []
+
+    def test_transport_error_degrades_to_empty_list_never_raises(self, fmp_settings):
+        with patch(
+            "data.fmp_client.requests.get", side_effect=ConnectionError("boom"),
+        ) as get:
+            result = fetch_peer_group("AAPL")  # must not raise
+        assert result == []
+        assert get.call_count == 1  # a transport error is not retried
+
+    def test_no_api_key_returns_empty_list_with_zero_network_calls(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_API_KEY", None)
+        with patch("data.fmp_client.requests.get") as get:
+            result = fetch_peer_group("AAPL")
+        assert result == []
+        get.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────────

@@ -275,6 +275,44 @@ def get_fundamental_history(symbol: str) -> Dict[str, Dict[str, Any]]:
     return _clean_nan(df.to_dict(orient="index"))
 
 
+@app.get("/data/peers/{symbol}", dependencies=[Depends(require_token)])
+def get_peer_group(symbol: str) -> Dict[str, Any]:
+    """On-demand FMP peer-comparison ticker group for one symbol (``/peers``),
+    powering the webapp's "Suggest peers for this ticker" affordance on
+    ``SymbolComparison.tsx``.
+
+    Gated by ``settings.FMP_PEERS_ENABLED`` (default ``False``) — a
+    DIFFERENT gate from ``FMP_OPTIONS_CONTEXT_ENABLED``, which already
+    covers a per-cycle BATCH ``fetch_peer_group`` call across the whole
+    options-matrix universe; this is a single, per-click, operator-triggered
+    fetch with its own rate-limit/cadence shape (mirrors the
+    ``FMP_INSIDER_ENABLED``/``FMP_SECTOR_SNAPSHOT_ENABLED`` precedent of one
+    flag per call-site shape). ``fetch_peer_group`` itself already never
+    raises (CONSTRAINT #6 — it degrades to ``[]`` on any failure), so the
+    flag-off path and any live fetch/parse failure both degrade to an
+    honest empty list + ``reason`` string here, never a 500.
+    """
+    sym = symbol.upper().strip()
+    if not getattr(settings, "FMP_PEERS_ENABLED", False):
+        return {
+            "symbol": sym,
+            "peers": [],
+            "reason": "FMP peer-group lookup is disabled (FMP_PEERS_ENABLED=False).",
+        }
+    from data.fmp_feeds_market import fetch_peer_group
+
+    try:
+        peers = fetch_peer_group(sym)
+    except Exception as exc:  # defensive — fetch_peer_group already dead-letters
+        logger.warning("data_api: peer-group fetch failed for %s: %s", sym, exc)
+        peers = []
+    return {
+        "symbol": sym,
+        "peers": peers,
+        "reason": None if peers else "No peer data available for this symbol.",
+    }
+
+
 @app.get("/data/macro", dependencies=[Depends(require_token)])
 def get_macro_raw() -> Dict[str, Any]:
     """Raw current-snapshot macro dict (VIX, yield curve, Sahm, etc.)."""

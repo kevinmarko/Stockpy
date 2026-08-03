@@ -6,7 +6,7 @@ import { useApi } from "../hooks/useApi";
 import { ErrorState, Input, InfoTip, Loading, Notice, StaleDataNotice, Table } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { fmtDate, fmtNum } from "../format";
+import { fmtDate, fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
 
 const MIN_N = 1;
@@ -35,10 +35,30 @@ function degradedReasonLabel(reason: string): string {
   }
 }
 
-function NumCell({ value, digits = 3 }: { value: number | null; digits?: number }) {
+function NumCell({ value, digits = 3 }: { value: number | null | undefined; digits?: number }) {
   return (
     <td className="num">
       {value == null ? <span className="muted">—</span> : fmtNum(value, digits)}
+    </td>
+  );
+}
+
+/**
+ * Dated FMP sector 1-day-change cell — colored using this codebase's
+ * established growth/decline convention (see the `correlation_coefficient`
+ * cell just below, and `theme.growth`/`theme.decline` elsewhere). `null`/
+ * `undefined` (no snapshot for this sector) renders an honest dash, never a
+ * fabricated 0%.
+ */
+function ChangePctCell({ value }: { value: number | null | undefined }) {
+  return (
+    <td
+      className="num"
+      style={{
+        color: value == null ? undefined : value >= 0 ? theme.growth : theme.decline,
+      }}
+    >
+      {value == null ? <span className="muted">—</span> : fmtPct(value, 2, { fromFraction: true, signed: true })}
     </td>
   );
 }
@@ -85,6 +105,8 @@ function SectorRow({ row }: { row: SectorSelectionRow }) {
       <td className="num">
         {row.rank == null ? <span className="muted">—</span> : `#${row.rank}`}
       </td>
+      <NumCell value={row.pe} digits={1} />
+      <ChangePctCell value={row.change_pct} />
     </tr>
   );
 }
@@ -228,6 +250,8 @@ export function SectorSelection() {
                   <th className="num">Heat (SHF)</th>
                   <th className="num">Coefficient</th>
                   <th className="num">Rank</th>
+                  <th className="num">P/E</th>
+                  <th className="num">1D Chg</th>
                 </tr>
               </thead>
               <tbody>

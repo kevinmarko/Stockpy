@@ -740,6 +740,9 @@ def build_premium_directive(
     fcf_yield: Optional[float] = None,
     days_to_earnings: Optional[int] = None,
     realized_vol_30d: Optional[float] = None,
+    analyst_target_consensus: Optional[float] = None,
+    analyst_target_upside: Optional[float] = None,
+    analyst_grade_score: Optional[float] = None,
     news_snippets: Optional[List[Dict[str, Any]]] = None,
     peers_list: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
@@ -832,6 +835,23 @@ def build_premium_directive(
         historical baseline this function can rank it against locally, and
         fabricating a percentile from one data point would violate
         CONSTRAINT #4. Defaults to ``None``.
+    analyst_target_consensus, analyst_target_upside, analyst_grade_score :
+        FMP-sourced analyst price-target consensus + upside-vs-spot + grade
+        score, gated by the pre-existing ``settings.FMP_ANALYST_ENABLED``
+        (no new flag — this reuses the SAME feature FMP_ANALYST_ENABLED
+        already gates for the main dashboard's diagnostic columns). Unlike
+        the FMP-health kwargs above, these are NOT fetched fresh for the
+        options matrix at all — ``reporting/options_snapshot.py::
+        write_options_matrix`` reads the EXISTING durable analyst-snapshot
+        table (``HistoricalStore.get_analyst_snapshot``, populated earlier in
+        the same cycle by ``pipeline/production_steps.py::_apply_fmp_
+        analyst``) and computes ``analyst_target_upside`` locally from that
+        snapshot's ``target_consensus`` against the current quote price,
+        mirroring ``_apply_fmp_analyst``'s own upside calculation exactly.
+        This function remains a PURE, no-I/O passthrough — all three default
+        to ``None`` and are copied verbatim onto the returned row
+        (``Analyst_Target_Consensus``, ``Analyst_Target_Upside``,
+        ``Analyst_Grade_Score``), never recomputed here (CONSTRAINT #4).
     news_snippets, peers_list :
         Optional pass-throughs (FMP stock-news headlines / peer-group
         tickers) surfaced verbatim onto ``News_Snippets`` (default ``[]``,
@@ -890,6 +910,9 @@ def build_premium_directive(
         "Days_To_Earnings": days_to_earnings,
         "Earnings_Risk": has_earnings_risk,
         "Realized_Vol_30D": realized_vol_30d,
+        "Analyst_Target_Consensus": analyst_target_consensus,
+        "Analyst_Target_Upside": analyst_target_upside,
+        "Analyst_Grade_Score": analyst_grade_score,
         "News_Snippets": news_snippets or [],
         "Peers": peers_list or [],
     }

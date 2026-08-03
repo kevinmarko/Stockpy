@@ -9,8 +9,8 @@ import {
   Tooltip,
   Legend,
 } from "recharts";
-import { api } from "../api/client";
-import type { SymbolCompareResponse, UniverseResponse } from "../api/types";
+import { api, ApiError } from "../api/client";
+import type { Fundamentals, SymbolCompareResponse, UniverseResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Table,  } from "./ui";
 import { Toggle } from "./Toggle";
@@ -69,12 +69,49 @@ export function SymbolComparison() {
     [selected.join(",")]
   );
 
-  const toggleSelect = (symbol: string) => {
-    const next = selected.includes(symbol)
-      ? selected.filter((s) => s !== symbol)
-      : selected.length >= MAX_SELECTED
-        ? selected
-        : [...selected, symbol];
+  // Per-symbol P/E — distinct from the SECTOR-level P/E carried on
+  // `compare.data.symbols[].sector_pe` above. Fetched client-side, one call
+  // per selected symbol against the already-existing GET
+  // /data/fundamentals/{symbol}, AFTER the compare response resolves (never
+  // baked into pilots/symbols.py::compare_symbols itself — that reader is
+  // persisted-state-only, no live engine imports). One symbol's fetch
+  // failing never blanks the others (CONSTRAINT #6) — it's simply omitted,
+  // rendering "—" for that symbol's Individual P/E row.
+  const fundamentals = useApi<Record<string, Fundamentals>>(
+    () =>
+      !compare.data
+        ? Promise.resolve({})
+        : Promise.all(
+            selected.map((sym) =>
+              api
+                .getDataFundamentals(sym)
+                .then((f): [string, Fundamentals | null] => [sym, f])
+                .catch((e: unknown): [string, Fundamentals | null] => {
+                  // One symbol's fetch failing must never blank the others
+                  // (CONSTRAINT #6) -- but a 404 ("no fundamentals coverage
+                  // for this symbol", the honest/expected case) is a
+                  // materially different situation from a genuine fetch
+                  // failure (network error, 5xx, timeout). Both still render
+                  // "—" for this row (matching this codebase's
+                  // convention of never distinguishing "unavailable" from
+                  // "not computed" in the UI itself), but a real failure is
+                  // logged so it's visible in devtools rather than silently
+                  // indistinguishable from an honest absence.
+                  if (!(e instanceof ApiError) || e.status !== 404) {
+                    console.warn(`getDataFundamentals(${sym}) failed:`, e);
+                  }
+                  return [sym, null];
+                })
+            )
+          ).then((entries) =>
+            Object.fromEntries(
+              entries.filter((e): e is [string, Fundamentals] => e[1] != null)
+            )
+          ),
+    [selected.join(","), compare.data]
+  );
+
+  const persistSelection = (next: string[]) => {
     setSelected(next);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -83,12 +120,48 @@ export function SymbolComparison() {
     }
   };
 
-  const clearAll = () => {
-    setSelected([]);
+  const toggleSelect = (symbol: string) => {
+    const next = selected.includes(symbol)
+      ? selected.filter((s) => s !== symbol)
+      : selected.length >= MAX_SELECTED
+        ? selected
+        : [...selected, symbol];
+    persistSelection(next);
+  };
+
+  const clearAll = () => persistSelection([]);
+
+  // "Suggest peers for {symbol}" — an on-demand FMP peer-group lookup
+  // (GET /data/peers/{symbol}, settings.FMP_PEERS_ENABLED) for the first
+  // selected symbol, adding as many returned peers as fit under
+  // MAX_SELECTED — never erroring when the full peer list would overflow
+  // the cap, it just adds what fits (CONSTRAINT #6-flavored UX: a partial
+  // result is still a useful result).
+  const [peersLoading, setPeersLoading] = useState(false);
+  const [peersNote, setPeersNote] = useState<string | null>(null);
+  const suggestPeersFor = selected[0];
+
+  const handleSuggestPeers = async () => {
+    if (!suggestPeersFor) return;
+    setPeersLoading(true);
+    setPeersNote(null);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
-    } catch {
-      /* ignore */
+      const result = await api.getPeers(suggestPeersFor);
+      const room = MAX_SELECTED - selected.length;
+      const candidates = result.peers.filter((p) => !selected.includes(p));
+      if (candidates.length === 0) {
+        setPeersNote(result.reason ?? `No new peers found for ${suggestPeersFor}.`);
+        return;
+      }
+      if (room <= 0) {
+        setPeersNote(`Selection is full (max ${MAX_SELECTED}) — remove a symbol to add a peer.`);
+        return;
+      }
+      persistSelection([...selected, ...candidates.slice(0, room)]);
+    } catch (e) {
+      setPeersNote(e instanceof Error ? e.message : "Failed to fetch peers.");
+    } finally {
+      setPeersLoading(false);
     }
   };
 
@@ -163,6 +236,25 @@ export function SymbolComparison() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {suggestPeersFor && (
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginBottom: "var(--s-4)" }}>
+          <button
+            className="btn btn-neutral"
+            data-testid="suggest-peers-button"
+            onClick={handleSuggestPeers}
+            disabled={peersLoading}
+            style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2-5)" }}
+          >
+            {peersLoading ? "Finding peers…" : `Suggest peers for ${suggestPeersFor}`}
+          </button>
+          {peersNote && (
+            <span data-testid="suggest-peers-note" style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>
+              {peersNote}
+            </span>
+          )}
         </div>
       )}
 
@@ -241,6 +333,52 @@ export function SymbolComparison() {
                   {compare.data.symbols.map((s) => (
                     <td key={s.symbol} className="num">
                       {fmtNum(s.regime_multiplier, 2)}
+                    </td>
+                  ))}
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Sector</td>
+                  {compare.data.symbols.map((s) => (
+                    <td key={s.symbol}>{s.sector ?? "—"}</td>
+                  ))}
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Sector P/E</td>
+                  {compare.data.symbols.map((s) => (
+                    <td key={s.symbol} className="num">{fmtNum(s.sector_pe, 1)}</td>
+                  ))}
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Sector 1D Chg</td>
+                  {compare.data.symbols.map((s) => (
+                    <td
+                      key={s.symbol}
+                      className="num"
+                      style={{
+                        color:
+                          s.sector_change_pct == null
+                            ? undefined
+                            : s.sector_change_pct >= 0
+                              ? theme.growth
+                              : theme.decline,
+                      }}
+                    >
+                      {fmtPct(s.sector_change_pct, 2, { fromFraction: true, signed: true })}
+                    </td>
+                  ))}
+                </tr>
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Individual P/E</td>
+                  {compare.data.symbols.map((s) => (
+                    <td key={s.symbol} className="num">
+                      {fundamentals.loading
+                        ? "…"
+                        : fmtNum(
+                            typeof fundamentals.data?.[s.symbol]?.trailingPE === "number"
+                              ? (fundamentals.data![s.symbol]!.trailingPE as number)
+                              : null,
+                            1
+                          )}
                     </td>
                   ))}
                 </tr>
