@@ -79,7 +79,7 @@ describe("FmpSettings screen", () => {
     await user.click(saveBtn);
 
     await waitFor(() => {
-      expect(updateSpy).toHaveBeenCalledWith({ FMP_QUOTES_ENABLED: true });
+      expect(updateSpy).toHaveBeenCalledWith({ FMP_QUOTES_ENABLED: true }, {});
     });
   });
 
