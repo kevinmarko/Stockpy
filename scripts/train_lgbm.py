@@ -163,17 +163,22 @@ def build_training_panel(
 
 
 def compute_cpcv_metrics(panel: TrainingPanel) -> dict:
-    """Run CPCV over the panel and return {'dsr','pbo','mean_oos_sharpe'}.
+    """Run CPCV over the panel and return
+    {'dsr','pbo','mean_oos_sharpe','mean_oos_max_dd'}.
 
     Uses ``run_cpcv_evaluation`` with a LightGBM-ranker strategy_fn: each CPCV
     fold trains a fresh ranker on the train slice, then measures long-short
     return of the top-vs-bottom ranked names on BOTH the train and test slices.
     DSR / PBO are then derived from the IS/OOS Sharpe matrix by the runner.
+    ``mean_oos_max_dd`` is pulled straight from ``run_cpcv_evaluation``'s own
+    return dict (its already-computed mean per-path out-of-sample max
+    drawdown for the DSR-selected strategy) -- never recomputed or derived
+    independently here.
 
     Returns metrics as ``None`` (honest) when the panel is too small to yield
     any CPCV path.
     """
-    empty = {"dsr": None, "pbo": None, "mean_oos_sharpe": None}
+    empty = {"dsr": None, "pbo": None, "mean_oos_sharpe": None, "mean_oos_max_dd": None}
     if panel.X.empty or panel.n_dates < 6:
         logger.warning("CPCV skipped: too few dates (%d) for path evaluation.", panel.n_dates)
         return empty
@@ -246,6 +251,7 @@ def compute_cpcv_metrics(panel: TrainingPanel) -> dict:
         "dsr": float(result["dsr"]),
         "pbo": float(result["pbo"]),
         "mean_oos_sharpe": float(result["mean_oos_sharpe"]),
+        "mean_oos_max_dd": float(result["mean_oos_max_dd"]),
     }
 
 
@@ -444,6 +450,8 @@ def run_training(
         hyperparameters=ranker.params if model_saved else None,
         train_window=train_window,
         features=list(FEATURE_COLUMNS) if model_saved else None,
+        cpcv_mean_oos_sharpe=metrics.get("mean_oos_sharpe"),
+        cpcv_mean_oos_max_dd=metrics.get("mean_oos_max_dd"),
     )
 
     return {

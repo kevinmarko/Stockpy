@@ -369,6 +369,7 @@ class TestRegimeOverlay:
         out = obs.regime_overlay(None)
         assert out["market_regime"] is None
         assert out["sahm_rule"] is None
+        assert out["macro_kill_switch"] is None
         assert out["reason"]
 
     def test_full_snapshot_maps_every_field(self):
@@ -382,6 +383,7 @@ class TestRegimeOverlay:
             "hmm_risk_on_probability": 0.78,
             "kill_switch_active": False,
             "macro_regime_gate_enabled": True,
+            "macro_kill_switch": False,
         }
         out = obs.regime_overlay(snap)
         assert out["as_of"] == "2026-07-11T21:05:00+00:00"
@@ -393,6 +395,7 @@ class TestRegimeOverlay:
         assert out["hmm_risk_on_probability"] == pytest.approx(0.78)
         assert out["kill_switch_active"] is False
         assert out["macro_regime_gate_enabled"] is True
+        assert out["macro_kill_switch"] is False
         assert out["reason"] is None
 
     def test_missing_hmm_field_is_null_not_fabricated(self):
@@ -405,6 +408,27 @@ class TestRegimeOverlay:
     def test_empty_dict_snapshot_is_treated_as_cold_start(self):
         out = obs.regime_overlay({})
         assert out["reason"]
+
+    def test_macro_kill_switch_passes_through_true(self):
+        """A pure passthrough of the snapshot's already-computed verdict —
+        regime_overlay never re-derives it from raw thresholds itself."""
+        snap = {"timestamp": "t", "market_regime": "RECESSION", "macro_kill_switch": True}
+        out = obs.regime_overlay(snap)
+        assert out["macro_kill_switch"] is True
+
+    def test_macro_kill_switch_missing_from_snapshot_is_null_not_false(self):
+        """A snapshot written before this field existed (or with no macro DTO
+        that cycle) must degrade to None, never a fabricated False that would
+        read as 'confirmed not tripped' (CONSTRAINT #4)."""
+        snap = {"timestamp": "t", "market_regime": "NEUTRAL"}
+        out = obs.regime_overlay(snap)
+        assert "macro_kill_switch" in out
+        assert out["macro_kill_switch"] is None
+
+    def test_empty_regime_macro_kill_switch_is_null(self):
+        """_empty_regime's all-None shape includes macro_kill_switch."""
+        out = obs._empty_regime("cold start")
+        assert out["macro_kill_switch"] is None
 
 
 # ---------------------------------------------------------------------------

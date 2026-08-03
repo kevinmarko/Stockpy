@@ -42,6 +42,7 @@ import pytest
 
 import main_orchestrator as mo
 import reporting.state_snapshot as ss
+from dto_models import MacroEconomicDTO
 from settings import settings
 
 # The three operator metrics this hardening pass cares about most.
@@ -487,3 +488,116 @@ class TestAdvisoryNewFieldsRoundTrip:
         for key in ("xsec_12_1m", "xsec_momentum_rank", "mfe", "mae", "edge_ratio"):
             assert sig[key] is None, f"{key} must be null when absent from key_indicators"
             assert sig[key] != 0.0
+
+
+# ── macro_kill_switch passthrough (both writers) ─────────────────────────────
+
+
+def _real_macro_dto(**overrides) -> MacroEconomicDTO:
+    """A genuine ``MacroEconomicDTO`` (not the SimpleNamespace ``_macro()``
+    stand-in used elsewhere in this file) so ``.killSwitch`` is the REAL
+    computed property, not a hand-set attribute. Used only by the tests below,
+    which specifically verify the writers read the DTO's own computation
+    rather than re-deriving it from raw fields."""
+    kwargs = dict(
+        yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0,
+        sahm_rule_indicator=0.1, vix_value=15.0, hmm_risk_on_probability=0.8,
+    )
+    kwargs.update(overrides)
+    return MacroEconomicDTO(**kwargs)
+
+
+class TestMacroKillSwitchPassthrough:
+    def test_advisory_emits_macro_kill_switch_key_when_dto_present(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        dto = _real_macro_dto()  # RISK ON, nothing tripped
+        result = SimpleNamespace(
+            snapshot=SimpleNamespace(positions={}),
+            recommendations=[_recommendation("AAPL")],
+        )
+        ss.write_state_snapshot(result, dto)
+        snap = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert "macro_kill_switch" in snap
+        assert snap["macro_kill_switch"] is False
+
+    def test_advisory_macro_kill_switch_absent_when_dto_is_none(self, tmp_path, monkeypatch):
+        """Never a fabricated False when there is no macro data this cycle —
+        the key itself is absent, mirroring every other macro_fields entry."""
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        result = SimpleNamespace(
+            snapshot=SimpleNamespace(positions={}),
+            recommendations=[_recommendation("AAPL")],
+        )
+        ss.write_state_snapshot(result, None)
+        snap = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert "macro_kill_switch" not in snap
+
+    def test_advisory_macro_kill_switch_null_for_fake_dto_without_property(
+        self, tmp_path, monkeypatch
+    ):
+        """A fake/stub macro_dto (e.g. the file's own ``_macro()`` SimpleNamespace
+        fixture) lacking the ``killSwitch`` property degrades to an honest
+        None rather than raising — proving the writer's outer try/except
+        never silently drops the WHOLE snapshot over this one new field."""
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        result = SimpleNamespace(
+            snapshot=SimpleNamespace(positions={}),
+            recommendations=[_recommendation("AAPL")],
+        )
+        ss.write_state_snapshot(result, _macro())
+        snap = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert "macro_kill_switch" in snap
+        assert snap["macro_kill_switch"] is None
+
+    def test_advisory_records_true_via_hmm_agreement_branch_below_base_thresholds(
+        self, tmp_path, monkeypatch
+    ):
+        """The load-bearing regression test: sahm_rule_indicator and vix are
+        BOTH below their BASE thresholds (0.5 / 30), so a naive re-derivation
+        of the kill switch from raw fields (sahm>=0.5 or vix>30) would wrongly
+        report False. The real DTO's HMM-agreement branch (rules-based regime
+        RECESSION + HMM second opinion agrees) fires the LOWERED vix threshold
+        (25) instead, so the true, honest answer is True. This proves the
+        writer trusts ``macro_dto.killSwitch`` itself rather than re-deriving
+        it from macro_raw/threshold literals."""
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        dto = MacroEconomicDTO(
+            yield_curve_10y_2y=-0.5, high_yield_oas=7.0, inflation_rate=2.0,
+            sahm_rule_indicator=0.1, vix_value=27.0, hmm_risk_on_probability=0.1,
+        )
+        # Sanity: prove the scenario is genuinely below BOTH base thresholds,
+        # and that killSwitch fires ONLY via the HMM-agreement branch.
+        assert dto.sahm_rule_indicator < 0.5
+        assert dto.vix < 30.0
+        assert dto.market_regime == "RECESSION"
+        assert dto.killSwitch is True
+
+        result = SimpleNamespace(
+            snapshot=SimpleNamespace(positions={}),
+            recommendations=[_recommendation("AAPL")],
+        )
+        ss.write_state_snapshot(result, dto)
+        snap = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert snap["macro_kill_switch"] is True
+
+    def test_orchestrator_emits_macro_kill_switch_key_when_passed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        final_df = pd.DataFrame([{"Symbol": "AAPL", "Action Signal": "BUY"}])
+        mo._write_state_snapshot(
+            {"market_regime": "RISK ON"}, final_df, ["AAPL"], macro_kill_switch=True,
+        )
+        snap = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert "macro_kill_switch" in snap
+        assert snap["macro_kill_switch"] is True
+
+    def test_orchestrator_macro_kill_switch_defaults_none_when_not_passed(
+        self, tmp_path, monkeypatch
+    ):
+        """The caller-omitted default is None (unknown), never a fabricated
+        False that would read as 'confirmed not tripped'."""
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        final_df = pd.DataFrame([{"Symbol": "AAPL", "Action Signal": "BUY"}])
+        mo._write_state_snapshot({"market_regime": "RISK ON"}, final_df, ["AAPL"])
+        snap = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
+        assert "macro_kill_switch" in snap
+        assert snap["macro_kill_switch"] is None

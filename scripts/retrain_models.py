@@ -118,6 +118,21 @@ def retrain_all(
     ``any_crash`` flag drives the process exit code. This function itself never
     raises for a per-model failure — it records it and continues.
     """
+    # Staleness sweep: warn (once per model, deduped) about any model that was
+    # already past its retrain window BEFORE this run started. Lazy-imported
+    # (pilots.models pulls in gui.help_content's own import chain) and
+    # wrapped so a staleness-check failure can never block the actual
+    # retraining below (CONSTRAINT #6).
+    try:
+        from pilots.models import model_registry_rows
+        import alerting
+
+        for row in model_registry_rows():
+            if row.get("needs_retrain") is True:
+                alerting.send_model_staleness_alert(row["name"], row["age_days"])
+    except Exception as exc:  # noqa: BLE001 - a staleness check must never block retraining
+        logger.warning("Model staleness sweep failed: %s", exc)
+
     report = RetrainReport()
 
     lgbm_tickers = tickers if tickers else list(_DEFAULT_TICKERS)
