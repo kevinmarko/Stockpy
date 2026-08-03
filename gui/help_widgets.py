@@ -107,9 +107,9 @@ def glossary_chip(term: str) -> None:
     _popover = getattr(st, "popover", None)
     if _popover is not None:
         with _popover(entry.term):
-            st.caption(entry.plain_english)
+            st.caption(entry.resolved_plain_english())
     else:
-        st.caption(f"**{entry.term}** — {entry.plain_english}")
+        st.caption(f"**{entry.term}** — {entry.resolved_plain_english()}")
 
 
 def why_callout(text: Optional[str]) -> None:
