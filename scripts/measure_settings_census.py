@@ -1145,8 +1145,11 @@ def collect_census() -> Dict[str, Any]:
     reads = collect_read_forms(model_fields)
 
     return {
+        # No `repo_root` here on purpose: it used to bake in an ABSOLUTE path to
+        # whichever checkout (often a `.claude/worktrees/...` clone) generated
+        # the file, which made the committed artifact worktree-dependent and
+        # its diffs noisy across machines. Nothing in the tree reads it.
         "meta": {
-            "repo_root": str(_REPO_ROOT),
             "git_commit": commit,
             "generator": "scripts/measure_settings_census.py",
         },
