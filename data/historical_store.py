@@ -217,7 +217,7 @@ ALTER TABLE fundamentals_history ADD COLUMN report_date TEXT
 
 _FUNDAMENTALS_HISTORY_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS idx_fund_history_symbol
-    ON fundamentals_history (symbol)
+    ON fundamentals_history (symbol, as_of DESC)
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -264,7 +264,7 @@ CREATE TABLE IF NOT EXISTS news_history (
 
 _NEWS_HISTORY_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS idx_news_history_symbol
-    ON news_history (symbol)
+    ON news_history (symbol, as_of DESC)
 """
 
 # Timezone used by resolve_trading_day() -- same ZoneInfo pattern already used
@@ -996,6 +996,36 @@ class HistoricalStore:
                 symbol, exc,
             )
             return self._live_fetch(symbol, lookback_days, _provider)
+
+    def get_bars_bulk(
+        self,
+        symbols: List[str],
+        lookback_days: int = 504,
+        *,
+        provider=None,
+    ) -> Dict[str, pd.DataFrame]:
+        """Fetch price bars for multiple symbols concurrently in parallel using bounded worker threads.
+        Returns a dictionary mapping symbol -> pd.DataFrame.
+        """
+        symbols = [s.upper() for s in symbols]
+        results: Dict[str, pd.DataFrame] = {}
+        if not symbols:
+            return results
+
+        def _fetch_one(sym: str) -> tuple[str, pd.DataFrame]:
+            return sym, self.get_bars(sym, lookback_days, provider=provider)
+
+        workers = max(1, min(len(symbols), int(getattr(settings, "DATA_FETCH_MAX_CONCURRENCY", 8))))
+        if workers == 1 or len(symbols) <= 1:
+            for sym in symbols:
+                k, df = _fetch_one(sym)
+                results[k] = df
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for sym, df in pool.map(_fetch_one, symbols):
+                    results[sym] = df
+
+        return results
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public API — Account snapshots (Phase 2)

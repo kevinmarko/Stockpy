@@ -279,6 +279,7 @@ import gui.robinhood_execution_panel as execution_panel
 # rather than raising. Not on the AST-guard deny-list (agents/, langgraph,
 # qdrant_client are none of the seven forbidden heavy-engine names).
 from agents.rag_orchestrator import run_rag_query
+from agents.supervisor import run_two_agent_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +295,8 @@ app = FastAPI(
     version="0.1.0",
 )
 
+from fastapi.middleware.gzip import GZipMiddleware
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ALLOWED_ORIGINS,
@@ -302,6 +305,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Authorization", "Content-Type"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # The performance ?range= toggles the PWA exposes (echoed for API symmetry — no
 # per-range curve is persisted yet, see pilots/performance.py).
@@ -4761,3 +4765,25 @@ def post_rag_query(body: RagQueryRequest) -> Dict[str, Any]:
         "analysis": analysis if analysis else None,
         "available": bool(analysis),
     }
+
+class MultiAgentRequest(BaseModel):
+    symbols: List[str] = Field(..., min_length=1)
+    query: str = Field(default="")
+
+@app.post(
+    "/agents/analyze",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_rag_query_enabled),
+    ],
+)
+def post_agents_analyze(body: MultiAgentRequest) -> Dict[str, Any]:
+    """Triggers the multi-agent orchestration workflow."""
+    if not body.symbols:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "empty_symbols", "message": "At least one symbol must be provided."},
+        )
+
+    result = run_two_agent_analysis(tickers=body.symbols, user_query=body.query)
+    return result

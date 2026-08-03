@@ -296,24 +296,12 @@ class DataEngine(IDataProvider):
 
         lookback_days = int(getattr(settings, "BARS_BACKFILL_DAYS", 504))
 
-        def _fetch_one(symbol: str) -> tuple[str, Optional[pd.DataFrame]]:
-            try:
-                df = _store.get_bars(symbol, lookback_days=lookback_days, provider=_provider)
-                if df is not None and not df.empty:
-                    logger.info(f"Retrieved cached/incremental technical time series for {symbol}")
-                    return symbol, df
-                logger.warning(f"No technical series found for {symbol} via HistoricalStore")
-            except Exception as e:
-                logger.error(f"Failed to fetch cached technical series for {symbol}: {e}")
-            return symbol, None
-
-        workers = max(1, int(getattr(settings, "DATA_FETCH_MAX_CONCURRENCY", 8)))
-        if workers == 1 or len(tickers) <= 1:
-            pairs = [_fetch_one(symbol) for symbol in tickers]
-        else:
-            with ThreadPoolExecutor(max_workers=min(workers, len(tickers))) as pool:
-                pairs = list(pool.map(_fetch_one, tickers))
-        return {symbol: df for symbol, df in pairs if df is not None}
+        try:
+            bulk_map = _store.get_bars_bulk(tickers, lookback_days=lookback_days, provider=_provider)
+            return {sym: df for sym, df in bulk_map.items() if df is not None and not df.empty}
+        except Exception as e:
+            logger.error(f"Failed to fetch bulk cached technical series: {e}")
+            return self.fetch_technical_raw(tickers)
 
     def fetch_fundamentals_raw(self, tickers: List[str]) -> Dict[str, Dict[str, Any]]:
         """

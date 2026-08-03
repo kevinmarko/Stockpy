@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { useDensity } from "./DensityContext";
+import { useDebounce } from "../hooks/useDebounce";
 
 export interface Column<T> {
   key: string;
@@ -14,6 +15,8 @@ interface DataTableProps<T> {
   groupByKey?: keyof T;
   onRowClick?: (row: T) => void;
   copyableJson?: boolean;
+  pageSize?: number;
+  debounceMs?: number;
 }
 
 export function DataTable<T extends Record<string, any>>({
@@ -22,12 +25,16 @@ export function DataTable<T extends Record<string, any>>({
   groupByKey,
   onRowClick,
   copyableJson = true,
+  pageSize = 50,
+  debounceMs = 0,
 }: DataTableProps<T>) {
   const { density } = useDensity();
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search, debounceMs);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [page, setPage] = useState(1);
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -39,12 +46,12 @@ export function DataTable<T extends Record<string, any>>({
   };
 
   const filteredData = useMemo(() => {
-    if (!search.trim()) return data;
-    const q = search.toLowerCase();
+    if (!debouncedSearch.trim()) return data;
+    const q = debouncedSearch.toLowerCase();
     return data.filter((row) =>
       Object.values(row).some((val) => String(val).toLowerCase().includes(q))
     );
-  }, [data, search]);
+  }, [data, debouncedSearch]);
 
   const sortedData = useMemo(() => {
     if (!sortKey) return filteredData;
@@ -56,6 +63,13 @@ export function DataTable<T extends Record<string, any>>({
       return 0;
     });
   }, [filteredData, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedData.length / pageSize));
+  const paginatedData = useMemo(() => {
+    if (groupByKey || !pageSize) return sortedData;
+    const start = (page - 1) * pageSize;
+    return sortedData.slice(start, start + pageSize);
+  }, [sortedData, page, pageSize, groupByKey]);
 
   // Grouped logic if groupByKey is provided
   const groups = useMemo(() => {
@@ -70,10 +84,6 @@ export function DataTable<T extends Record<string, any>>({
   }, [sortedData, groupByKey]);
 
   const toggleGroup = (key: string) => {
-    // A group with no entry yet is *effectively* expanded (the render below
-    // defaults `isExpanded` to `true` via `?? true`). Inverting the raw
-    // `prev[key]` (`undefined`) gives `true` again -- a no-op on the very
-    // first click of any group. Invert the same effective default instead.
     setExpandedGroups((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));
   };
 
@@ -93,7 +103,10 @@ export function DataTable<T extends Record<string, any>>({
           type="text"
           placeholder="Filter data..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(1);
+          }}
           style={{
             background: "var(--surface)",
             color: "var(--text-primary)",
@@ -105,7 +118,7 @@ export function DataTable<T extends Record<string, any>>({
           }}
         />
         <span style={{ fontSize: "var(--t-micro)", color: "var(--text-muted)" }}>
-          Showing {sortedData.length} records
+          Showing {sortedData.length} records {totalPages > 1 && `(Page ${page} of ${totalPages})`}
         </span>
       </div>
 
@@ -185,14 +198,14 @@ export function DataTable<T extends Record<string, any>>({
                   </React.Fragment>
                 );
               })
-            ) : sortedData.length === 0 ? (
+            ) : paginatedData.length === 0 ? (
               <tr>
                 <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ padding: "var(--s-4)", textAlign: "center", color: "var(--text-muted)" }}>
                   No matching records found.
                 </td>
               </tr>
             ) : (
-              sortedData.map((row, idx) => (
+              paginatedData.map((row, idx) => (
                 <tr
                   key={idx}
                   onClick={() => onRowClick && onRowClick(row)}
@@ -231,6 +244,44 @@ export function DataTable<T extends Record<string, any>>({
           </tbody>
         </table>
       </div>
+
+      {!groupByKey && totalPages > 1 && (
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "var(--s-2)" }}>
+          <button
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            style={{
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--r-xs)",
+              color: "var(--text-primary)",
+              padding: "var(--s-1) var(--s-3)",
+              cursor: page <= 1 ? "not-allowed" : "pointer",
+              opacity: page <= 1 ? 0.5 : 1,
+            }}
+          >
+            Previous
+          </button>
+          <span style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
+            Page {page} of {totalPages}
+          </span>
+          <button
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            style={{
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--r-xs)",
+              color: "var(--text-primary)",
+              padding: "var(--s-1) var(--s-3)",
+              cursor: page >= totalPages ? "not-allowed" : "pointer",
+              opacity: page >= totalPages ? 0.5 : 1,
+            }}
+          >
+            Next
+          </button>
+        </div>
+      )}
     </div>
   );
 }
