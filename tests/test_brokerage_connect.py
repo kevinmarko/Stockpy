@@ -341,10 +341,15 @@ class TestBrokerageStatus:
             def latest_account_snapshot(self):
                 return None
 
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
-            resp = loopback_client.get("/brokerage/status")
+        with mock.patch.object(settings, "ROBINHOOD_AUTO_REFRESH_ENABLED", True):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
+                resp = loopback_client.get("/brokerage/status")
         assert resp.status_code == 200
-        assert resp.json() == {"connected": False, "has_account_snapshot": False}
+        assert resp.json() == {
+            "connected": False,
+            "has_account_snapshot": False,
+            "auto_refresh_enabled": True,
+        }
 
     def test_status_connected_with_snapshot(self, monkeypatch):
         monkeypatch.setattr(
@@ -355,10 +360,37 @@ class TestBrokerageStatus:
             def latest_account_snapshot(self):
                 return object()
 
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
-            resp = loopback_client.get("/brokerage/status")
+        with mock.patch.object(settings, "ROBINHOOD_AUTO_REFRESH_ENABLED", True):
+            with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
+                resp = loopback_client.get("/brokerage/status")
         assert resp.status_code == 200
-        assert resp.json() == {"connected": True, "has_account_snapshot": True}
+        assert resp.json() == {
+            "connected": True,
+            "has_account_snapshot": True,
+            "auto_refresh_enabled": True,
+        }
+
+    def test_status_auto_refresh_enabled_reflects_settings_value(self, monkeypatch):
+        """auto_refresh_enabled mirrors the live settings.ROBINHOOD_AUTO_REFRESH_ENABLED
+        value -- the SAME field data/robinhood_portfolio.py's Tier-3 login gate
+        actually branches on -- never a hardcoded literal, and read-only (no
+        write path exists on this endpoint)."""
+        monkeypatch.setattr(
+            pilots_api.brokerage_credentials, "rh_credentials_present", lambda: False
+        )
+
+        class _EmptyStore:
+            def latest_account_snapshot(self):
+                return None
+
+        with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
+            with mock.patch.object(settings, "ROBINHOOD_AUTO_REFRESH_ENABLED", False):
+                resp = loopback_client.get("/brokerage/status")
+            assert resp.json()["auto_refresh_enabled"] is False
+
+            with mock.patch.object(settings, "ROBINHOOD_AUTO_REFRESH_ENABLED", True):
+                resp = loopback_client.get("/brokerage/status")
+            assert resp.json()["auto_refresh_enabled"] is True
 
     def test_status_not_gated_by_brokerage_connect_enabled(self, monkeypatch):
         """Status is read-only and must remain reachable even when connect

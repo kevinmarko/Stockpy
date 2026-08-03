@@ -7,6 +7,7 @@ import type {
   SignalModuleScore,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { Button, ErrorState, Loading, Table, Tile } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
@@ -166,6 +167,7 @@ function GlobalImportancePanel() {
     }
     return api.getSignalImportance(symbols);
   }, []);
+  useAutoPoll(reload, "signals", { hasError: error != null });
 
   const maxAbs = Math.max(0, ...(data?.rows.map((r) => r.mean_abs_contribution ?? 0) ?? []));
 
@@ -247,6 +249,7 @@ export function SignalBreakdown() {
     () => api.getSignalBreakdown(symbol),
     [symbol]
   );
+  useAutoPoll(reload, "signals", { hasError: error != null });
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
   return (

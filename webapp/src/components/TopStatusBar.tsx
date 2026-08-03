@@ -6,6 +6,9 @@ import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { usePoll } from "../hooks/usePoll";
+import { useAutoPoll } from "../hooks/useAutoPoll";
+import { useAutoRefresh } from "./AutoRefreshContext";
+import { computeMarketSession } from "../marketSession";
 import type { AutomationStatus, ObservabilitySummary } from "../api/types";
 
 const AUTOMATION_POLL_MS = 30_000;
@@ -16,46 +19,31 @@ const AUTOMATION_POLL_MS = 30_000;
 // screen.
 const REGIME_POLL_MS = 300_000;
 
-/** Exported for direct unit testing (see TopStatusBar.test.tsx) -- easier to
- *  drive with fixed Date instances than mocking the system clock/timezone
- *  through the whole rendered component. */
-export function computeMarketSession(now: Date): "RTH (Open)" | "PRE/POST" | "CLOSED" {
-  // NYSE hours are defined in Eastern Time regardless of the operator's own
-  // timezone -- deriving from the browser's local hour (the original bug
-  // here) reads as "market open" for a non-ET operator at the wrong moment.
-  // This is a real, deterministic function of wall-clock time (not fabricated
-  // data), but it IS just a schedule approximation -- it doesn't know about
-  // early closes or exchange holidays.
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour: "numeric",
-    minute: "numeric",
-    hour12: false,
-    weekday: "short",
-  }).formatToParts(now);
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  const weekday = get("weekday");
-  const hour = Number(get("hour"));
-  const minute = Number(get("minute"));
-  const minutesSinceMidnight = hour * 60 + minute;
-
-  if (weekday === "Sat" || weekday === "Sun") return "CLOSED";
-  if (minutesSinceMidnight >= 9 * 60 + 30 && minutesSinceMidnight < 16 * 60) return "RTH (Open)";
-  if (minutesSinceMidnight >= 4 * 60 && minutesSinceMidnight < 20 * 60) return "PRE/POST";
-  return "CLOSED";
-}
-
 export function TopStatusBar() {
   const { addToast } = useToast();
   const [marketSession, setMarketSession] = useState(() => computeMarketSession(new Date()));
   const [showKillSwitchModal, setShowKillSwitchModal] = useState(false);
   const [reason, setReason] = useState("");
 
+  const { safetyTelemetryEnabled, autoRefreshIntervalMs } = useAutoRefresh();
+
   const automation = useApi<AutomationStatus>(() => api.getAutomationStatus(), []);
-  usePoll(automation.reload, AUTOMATION_POLL_MS, true);
+  // Kill-switch/heartbeat telemetry -- deliberately outside the
+  // market-session/visibility/category auto-refresh gates (a plain usePoll,
+  // not useAutoPoll). A stale kill-switch reading is a safety issue, not a
+  // battery optimization, so it gets its own independent toggle
+  // (safetyTelemetryEnabled) rather than folding under the data auto-refresh
+  // master switch.
+  usePoll(automation.reload, AUTOMATION_POLL_MS, safetyTelemetryEnabled);
 
   const regime = useApi<ObservabilitySummary>(() => api.getObservabilitySummary("1M", 30), []);
-  usePoll(regime.reload, REGIME_POLL_MS, true);
+  // Heavy composite read -- the Math.max is a FLOOR, not an override: this
+  // must never poll faster than its own cadence just because the operator
+  // picked a short global auto-refresh interval.
+  useAutoPoll(regime.reload, "observability", {
+    hasError: regime.error != null,
+    customIntervalMs: Math.max(REGIME_POLL_MS, autoRefreshIntervalMs),
+  });
 
   useEffect(() => {
     const interval = setInterval(() => setMarketSession(computeMarketSession(new Date())), 60_000);
@@ -132,6 +120,17 @@ export function TopStatusBar() {
             <span style={{ color: heartbeatColor }}>{heartbeatIcon}</span>
             <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{heartbeatLabel}</span>
             <span style={{ color: "var(--text-muted)", fontSize: "var(--t-micro)" }}>({snapshotAgeLabel})</span>
+            {!safetyTelemetryEnabled && (
+              <span
+                role="img"
+                aria-label="Safety telemetry auto-refresh is off"
+                title="Safety telemetry auto-refresh is off in Settings → Data Auto-Refresh. This row shows the state as of the last page load."
+                data-testid="safety-telemetry-off-indicator"
+                style={{ color: "var(--caution)", fontSize: "var(--t-micro)" }}
+              >
+                ⚠
+              </span>
+            )}
           </div>
 
           {/* Macro Regime — read-only; there is no operator override for the

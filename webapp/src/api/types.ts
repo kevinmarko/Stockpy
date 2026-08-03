@@ -510,6 +510,11 @@ export interface SymbolCompareResponse {
 export interface BrokerageStatus {
   connected: boolean;
   has_account_snapshot: boolean;
+  /** Read-only mirror of the live `settings.ROBINHOOD_AUTO_REFRESH_ENABLED`
+   *  server gate -- the same value `data/robinhood_portfolio.py` branches on
+   *  for its Tier-3 login. No write path: this is `.env`-only, applies on
+   *  next daemon restart. */
+  auto_refresh_enabled: boolean;
 }
 
 /**

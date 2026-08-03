@@ -232,17 +232,18 @@ export default function App() {
                   <Route path="/data-explorer" element={<DataExplorer />} />
                   <Route path="/signals" element={<SignalBreakdown />} />
                   <Route path="/sentiment" element={<SentimentDynamics />} />
-                  <Route path="/forecasts" element={<ForecastViewer />} />
-                  <Route path="/forecasts/backfill" element={<ForecastBackfillScreen />} />
-                  <Route path="/sectors" element={<SectorSelection />} />
+                  <Route path="/forecast" element={<ForecastViewer />} />
+                  <Route path="/forecast/backfill" element={<ForecastBackfillScreen />} />
+                  <Route path="/sector-selection" element={<SectorSelection />} />
                   <Route path="/commands" element={<Commands />} />
                   <Route path="/console" element={<Console />} />
-                  <Route path="/reports" element={<ReportLibrary />} />
+                  <Route path="/operations/reports" element={<ReportLibrary />} />
                   <Route path="/agentic" element={<AgenticTrading />} />
                   <Route path="/research" element={<ResearchHub />} />
                   <Route path="/trading" element={<TradingHub />} />
                   <Route path="/operations" element={<OperationsHub />} />
                   <Route path="/portfolio" element={<Portfolio />} />
+                  <Route path="/help" element={<Help />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/settings/strategy" element={<StrategyMatrix />} />
                   <Route path="/settings/tunables" element={<SettingsManager />} />

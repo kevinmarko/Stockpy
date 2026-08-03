@@ -2,7 +2,9 @@ import { useState } from "react";
 import { api } from "../api/client";
 import type { CoverageStatus, SyncReportResponse, SyncReportSymbol } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { Button, ErrorState, Loading, MetricBadge,  } from "./ui";
+import { useAutoPoll } from "../hooks/useAutoPoll";
+import { useAutoRefresh } from "./AutoRefreshContext";
+import { Button, ErrorState, Loading, MetricBadge } from "./ui";
 import { Toggle } from "./Toggle";
 import { theme } from "../theme";
 import { fmtNum, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
@@ -139,11 +141,44 @@ function DetailRow({ r }: { r: SyncReportSymbol }) {
   );
 }
 
-export function UniverseCoverage() {
+/**
+ * UniverseCoverageIdle — rendered whenever the "robinhood" auto-refresh
+ * category is off and the operator hasn't explicitly loaded the report yet.
+ * `GET /data/sync-report` recomputes coverage live and can trigger a REAL
+ * Robinhood login when the cached account snapshot is stale (see
+ * ROBINHOOD_AUTO_REFRESH_ENABLED in CLAUDE.md) — unlike every other
+ * diagnostic panel in this app, this one must NOT fetch on mount by default.
+ * "Sync Now" (`POST /data/sync`) is a different, always-manual-only mutation
+ * (discovers + persists `DEFAULT_TICKERS`) that stays reachable here too; a
+ * successful sync arms the live view so the operator immediately sees what
+ * they just synced.
+ */
+function UniverseCoverageIdle({ onLoad }: { onLoad: () => void }) {
+  return (
+    <div data-testid="universe-coverage" style={{ marginTop: "var(--s-4)" }}>
+      <SyncNowControl onSynced={onLoad} />
+      <div className="empty" data-testid="universe-coverage-idle" style={{ padding: "var(--s-4)" }}>
+        <p style={{ margin: "0 0 var(--s-2-5)" }}>
+          Coverage report not loaded. Fetching it can trigger a live
+          Robinhood login.
+        </p>
+        <Button onClick={onLoad} variant="neutral" data-testid="universe-coverage-load">
+          Load coverage report
+        </Button>
+        <p style={{ fontSize: "var(--t-caption)", color: theme.textMuted, margin: "var(--s-2-5) 0 0" }}>
+          — or turn on Robinhood auto-refresh in Data Auto-Refresh below.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function UniverseCoverageLive() {
   const { data, loading, error, status, reload } = useApi<SyncReportResponse>(
     () => api.getSyncReport(),
     [],
   );
+  useAutoPoll(reload, "robinhood", { hasError: error != null });
   const [gapsOnly, setGapsOnly] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -182,6 +217,22 @@ export function UniverseCoverage() {
       )}
     </div>
   );
+}
+
+/**
+ * UniverseCoverage — gates the fetch itself, not just a subsequent poll.
+ * Opening this component (e.g. by visiting Settings) must never itself
+ * trigger a live Robinhood login: the idle view renders (and mounts no
+ * `useApi`/`useAutoPoll` at all) until the "robinhood" category is on, or the
+ * operator explicitly arms it via "Load coverage report" / a manual sync.
+ */
+export function UniverseCoverage() {
+  const { robinhoodRefreshEnabled } = useAutoRefresh();
+  const [armed, setArmed] = useState(false);
+  if (!robinhoodRefreshEnabled && !armed) {
+    return <UniverseCoverageIdle onLoad={() => setArmed(true)} />;
+  }
+  return <UniverseCoverageLive />;
 }
 
 function UniverseCoverageBody({

@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { ApiError } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { usePoll } from "../hooks/usePoll";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -46,8 +46,14 @@ export function AgenticTrading() {
   const status = useApi<AgenticStatus>(() => api.getAgenticStatus(), []);
   const brokerageStatus = useApi<BrokerageStatus>(() => api.getBrokerageStatus(), []);
 
-  usePoll(status.reload, 30_000, !status.loading);
-  usePoll(brokerageStatus.reload, 30_000, !brokerageStatus.loading);
+  useAutoPoll(
+    () => {
+      status.reload();
+      brokerageStatus.reload();
+    },
+    "portfolio",
+    { enabled: !status.loading && !brokerageStatus.loading, hasError: status.error != null }
+  );
 
   const [refreshToken, setRefreshToken] = useState(0);
   const [showAuthModal, setShowAuthModal] = useState(false);

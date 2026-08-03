@@ -12,7 +12,7 @@
  */
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -20,6 +20,7 @@ import { api } from "./api/client";
 import type { LlmProviderName, LlmStatus } from "./api/types";
 import { writeOnboarding } from "./onboarding";
 import { ChatProvider } from "./chat/ChatContext";
+import { NAV_ITEMS } from "./navigation";
 
 const _noCall = (provider: LlmProviderName) => ({
   provider,
@@ -350,4 +351,61 @@ describe("App — Settings gear + nav", () => {
     // Still on Dashboard -- clicking the plain-text header did nothing.
     expect(screen.queryByText("Data & Automation")).not.toBeInTheDocument();
   });
+});
+
+/**
+ * A probe that outlives any single screen's own loading/empty state -- reads
+ * `useLocation()` from the SAME router context App's own <Routes> resolve
+ * against, so it catches a route silently falling through the `path="*"`
+ * catch-all (Navigate to "/") even on a screen that renders fine either way.
+ * This is the regression test for the 5-route corruption described in
+ * agile-doodling-rabin.md 1a: wrapping the app in <AutoRefreshProvider>
+ * silently renamed /forecast, /forecast/backfill, /sector-selection,
+ * /operations/reports and deleted the /help route entirely.
+ */
+function LocationProbe({ onLocation }: { onLocation: (pathname: string) => void }) {
+  const location = useLocation();
+  useEffect(() => {
+    onLocation(location.pathname);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+  return null;
+}
+
+describe("App — route table integrity (regression: 5 corrupted route paths)", () => {
+  beforeEach(() => {
+    writeOnboarding({ completed: true });
+    Object.defineProperty(navigator, "serviceWorker", {
+      value: {},
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+    vi.clearAllMocks();
+  });
+
+  it.each(NAV_ITEMS.map((item) => [item.label, item.to] as const))(
+    "%s (%s) resolves directly -- not silently redirected via the '*' catch-all to '/'",
+    async (_label, to) => {
+      let observedPathname: string | null = null;
+      render(
+        <MemoryRouter initialEntries={[to]}>
+          <ChatProvider>
+            <App />
+            <LocationProbe
+              onLocation={(p) => {
+                observedPathname = p;
+              }}
+            />
+          </ChatProvider>
+        </MemoryRouter>
+      );
+
+      await waitFor(() => expect(observedPathname).not.toBeNull());
+      expect(observedPathname).toBe(to);
+    }
+  );
 });

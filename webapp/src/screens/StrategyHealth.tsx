@@ -12,6 +12,7 @@ import type {
   Thresholds,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useAutoPoll } from "../hooks/useAutoPoll";
 import { DeployableBadge, ErrorState, InfoTip, Loading, Select, Table } from "../components/ui";
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
@@ -337,6 +338,7 @@ function AiDisagreementSection() {
     () => api.getAiDisagreements(),
     []
   );
+  useAutoPoll(reload, "observability", { hasError: error != null });
 
   return (
     <section style={{ marginTop: "var(--s-6)" }}>
@@ -394,6 +396,7 @@ function GravityAuditSection() {
     () => api.getGravityAuditStatus(),
     []
   );
+  useAutoPoll(reload, "observability", { hasError: error != null });
 
   return (
     <section style={{ marginTop: "var(--s-6)" }}>
@@ -503,6 +506,7 @@ export function StrategyHealth() {
     () => api.getStrategyHealth(),
     []
   );
+  useAutoPoll(reload, "observability", { hasError: error != null });
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/marketplace"));
 
   // Live deployability-gate thresholds (GET /thresholds, session-cached) so the

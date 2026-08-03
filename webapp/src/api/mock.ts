@@ -903,6 +903,24 @@ function readBrokerageRefreshDegraded(): boolean {
   }
 }
 
+// ---- Local ROBINHOOD_AUTO_REFRESH_ENABLED server-gate simulation
+// (localStorage) -- mirrors the real settings.ROBINHOOD_AUTO_REFRESH_ENABLED
+// field GET /brokerage/status now echoes read-only (default True). No
+// dedicated UI control (this is a read-only .env-only server setting in the
+// real app too), same "flip it from devtools" convention as
+// BROKERAGE_REFRESH_DEGRADED_KEY above:
+//   localStorage.setItem("stockpy.mock.brokerage_auto_refresh_disabled", "1")  // simulate the server gate off
+//   localStorage.removeItem("stockpy.mock.brokerage_auto_refresh_disabled")    // back to the default-True gate
+const BROKERAGE_AUTO_REFRESH_DISABLED_KEY = "stockpy.mock.brokerage_auto_refresh_disabled";
+
+function readBrokerageAutoRefreshEnabled(): boolean {
+  try {
+    return localStorage.getItem(BROKERAGE_AUTO_REFRESH_DISABLED_KEY) !== "1";
+  } catch {
+    return true;
+  }
+}
+
 // ---- Local kill-switch simulation (localStorage) so pause/resume have a
 // visible, persistent round-trip effect in the demo, same convention as the
 // brokerage-connect marker above. ----
@@ -5126,6 +5144,7 @@ export const mockApi = {
       {
         connected: readBrokerageConnected(),
         has_account_snapshot: readBrokerageConnected(),
+        auto_refresh_enabled: readBrokerageAutoRefreshEnabled(),
       },
       80
     );

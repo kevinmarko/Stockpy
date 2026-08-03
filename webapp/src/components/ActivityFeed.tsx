@@ -4,6 +4,8 @@ import type { AlertEntry, AlertsFeed } from "../api/types";
 import { ApiError } from "../api/types";
 import { ErrorState, Loading,  } from "./ui";
 import { Toggle } from "./Toggle";
+import { useAutoPoll } from "../hooks/useAutoPoll";
+import { useAutoRefresh } from "./AutoRefreshContext";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
 
@@ -117,10 +119,16 @@ function AlertCard({ entry }: { entry: AlertEntry }) {
 export function ActivityFeed({
   limit = 20,
   pilotIds,
-  pollIntervalMs = 30000,
+  pollIntervalMs,
   categoryFilter,
 }: { limit?: number; pilotIds?: string[]; pollIntervalMs?: number; categoryFilter?: string | null }) {
   const [pollingActive, setPollingActive] = useState(true);
+  const { autoRefreshEnabled, observabilityRefreshEnabled } = useAutoRefresh();
+  // The local toggle only controls whether THIS component asks to poll --
+  // it can't override the global master switch or the "observability"
+  // category being off. Rendering it as if it still worked in that case
+  // would be a second lie about whether polling is actually happening.
+  const pollingGatedOff = !autoRefreshEnabled || !observabilityRefreshEnabled;
   // Keep the whole feed (not just entries) so the honest `reason` string is
   // available for the empty state instead of a hardcoded placeholder.
   const [feed, setFeed] = useState<AlertsFeed | null>(null);
@@ -162,13 +170,17 @@ export function ActivityFeed({
     fetchAlerts(false);
   }, [fetchAlerts]);
 
-  useEffect(() => {
-    if (!pollingActive) return;
-    const interval = setInterval(() => {
-      fetchAlerts(true);
-    }, pollIntervalMs);
-    return () => clearInterval(interval);
-  }, [pollingActive, pollIntervalMs, fetchAlerts]);
+  // hasError: false is deliberate -- fetchAlerts(true)'s background mode
+  // already swallows failures by design (see the catch block above), so
+  // there's no error signal here to back off on. customIntervalMs is only
+  // passed through when a caller actually supplies pollIntervalMs; otherwise
+  // it's undefined and useAutoPoll falls through to the global/category
+  // interval via resolveIntervalMs("observability").
+  useAutoPoll(() => fetchAlerts(true), "observability", {
+    enabled: pollingActive,
+    hasError: false,
+    customIntervalMs: pollIntervalMs,
+  });
 
   const handleManualRefresh = () => {
     fetchAlerts(false);
@@ -205,10 +217,11 @@ export function ActivityFeed({
             Refresh
           </button>
           <Toggle
-            label="Auto-poll"
+            label={pollingGatedOff ? "Auto-poll (off in Settings)" : "Auto-poll"}
             checked={pollingActive}
             onChange={setPollingActive}
             dataTestId="toggle-polling-checkbox"
+            disabled={pollingGatedOff}
           />
         </div>
       </div>
