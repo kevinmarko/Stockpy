@@ -243,6 +243,7 @@ import gui.robinhood_execution_panel as execution_panel
 # rather than raising. Not on the AST-guard deny-list (agents/, langgraph,
 # qdrant_client are none of the seven forbidden heavy-engine names).
 from agents.rag_orchestrator import run_rag_query
+from agents.supervisor import run_two_agent_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -4545,3 +4546,50 @@ def post_rag_query(body: RagQueryRequest) -> Dict[str, Any]:
         "analysis": analysis if analysis else None,
         "available": bool(analysis),
     }
+
+
+class MultiAgentAnalysisRequest(BaseModel):
+    tickers: List[str]
+    query: str
+    context: Optional[Dict[str, Any]] = None
+
+
+@app.post(
+    "/analysis/multi-agent",
+    dependencies=[
+        Depends(require_read_token),
+    ],
+)
+def post_multi_agent_analysis(body: MultiAgentAnalysisRequest) -> Dict[str, Any]:
+    """
+    On-demand multi-agent analysis workflow using LangGraph.
+    
+    Protected by the read token since the execution agent's ADVISORY_ONLY 
+    mode is hardcoded and orders are only hypothetical recommendations evaluated
+    through the PreTradeRiskGate, not submitted.
+    """
+    if not body.tickers:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "empty_tickers", "message": "At least one ticker must be provided."},
+        )
+        
+    if not body.query:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "empty_query", "message": "Query must not be empty."},
+        )
+
+    try:
+        final_state = run_two_agent_analysis(
+            tickers=body.tickers,
+            query=body.query,
+            context=body.context
+        )
+        return final_state
+    except Exception as e:
+        logger.error(f"Failed to run multi-agent analysis: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "analysis_failed", "message": str(e)}
+        )

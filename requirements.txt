@@ -155,3 +155,9 @@ mcp<2.0.0
 tabulate
 
 google-antigravity>=0.1.0
+
+# Multi-agent LangGraph workflow
+langgraph>=0.1.0
+langchain-core>=0.2.0
+langchain-openai>=0.1.0
+langchain-anthropic>=0.1.0
