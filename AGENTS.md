@@ -161,16 +161,53 @@ duplicate that detail here; this file is the map, not the territory.
 ## 6. Common commands
 
 ```bash
-./setup.sh                          # create .venv (Python 3.12, via uv), install deps
-python3 main.py                     # one advisory cycle (add --interval N to loop)
-python3 main_orchestrator.py        # full async pipeline
-pytest                              # full test suite
-pytest tests/test_foo.py -k bar     # one test
-cd webapp && npm run dev            # Pilots PWA (primary frontend) — mock data by default
-streamlit run gui/app.py            # legacy Command Center GUI — decommissioned, see §1
-python scripts/preflight_check.py   # pre-live readiness gate (exit 0 = all pass)
-python -m execution.kill_switch --status   # check the global kill switch
-make verify                         # env check + tests + one live cycle
+# ── Web app (primary interface) ────────────────────────────────────────────────
+./launch_webapp.command              # Starts Pilots PWA + backend APIs automatically (Mock or Live)
+cd webapp && npm install
+npm run dev                          # http://localhost:5173 — offline mock data by default
+VITE_USE_MOCK=false npm run dev      # against the live backend (see below)
+uvicorn api.pilots_api:app --port 8602    # backend the PWA talks to (+ data_api:8603 / metrics_api:8604 as needed)
+
+# ── Legacy desktop app — decommissioned, no new development ───────────────────
+# gui/ (Streamlit "InvestYo Command Center") and app_shell.py/desktop/'s native-shell
+# modules are frozen; see "Frontend strategy" above. Kept runnable for existing setups.
+#   chmod +x launch.command launch_app.command   # one-time setup, already done
+# REFRESH_INTERVAL_SECONDS at the top of launch.command controls single-run (=0)
+# vs interval-loop (>0, default 60 s) mode.
+# The script verifies .venv exists and that Python is exactly 3.12.x before
+# launching, then pauses ("Press any key") on exit so errors are always visible.
+
+./launch_app.command                 # legacy: opens the unified Command Center in a native
+                                      # desktop window (pywebview) with an always-on
+                                      # background refresh loop tied to the window's lifecycle
+python3 app_shell.py [--interval N]  # what launch_app.command runs under the hood
+./scripts/build_macos_app.command    # ONE-TIME (legacy): builds InvestYo.app (real macOS app
+                                      # bundle, custom icon, no Terminal flash) that runs
+                                      # launch_app.command — drag the result into /Applications
+                                      # or the Dock; not committed to git (bakes in an absolute
+                                      # path — see .gitignore)
+streamlit run gui/app.py             # legacy: InvestYo Command Center — full 18-tab operational GUI
+./launch_gui.command                 # legacy: same as above, macOS double-click launcher
+
+# ── Backend pipeline (unaffected by the frontend decommission) ────────────────
+./setup.sh                       # creates .venv (Python 3.12, via uv — https://astral.sh/uv), installs requirements.txt
+# Everything below works either after `source .venv/bin/activate`, or prefixed
+# with `uv run` (e.g. `uv run pytest`) to skip activation entirely — uv
+# auto-discovers .venv in the repo root, no pyproject.toml required.
+python3 main.py                  # clean advisory orchestrator — runs one full cycle (or loops with --interval N); use --refresh-account to force Robinhood re-auth
+python3 main.py --interval 60   # refresh market data every 60 s; Robinhood account fetched at most once/day
+python3 main.py --refresh-account  # force fresh Robinhood login on this launch, then resume normal daily-cache behavior
+python3 main_orchestrator.py     # newer async master orchestrator (data acquisition, schema validation, HTML report compilation)
+pytest                           # run test suite
+pytest tests/test_quantitative_models.py            # run a single test file
+pytest tests/test_quantitative_models.py::test_graham_number_imaginary_bounds  # run a single test
+python3 database_setup.py        # (re)build the SQLite schema in quant_platform.db from config.COLUMN_SCHEMA
+python3 -m validation.harness --strategy <name> --start YYYY-MM-DD --end YYYY-MM-DD # run strategy validation harness
+python scripts/preflight_check.py            # pre-live readiness gate (exit 0 = all pass)
+python scripts/preflight_check.py --json     # machine-readable JSON output
+python -m execution.kill_switch --status     # check / activate / deactivate the global kill switch
+make verify                                  # env-var check + pytest + one live run_once() + print summary
+./verify.command                             # same as make verify, macOS double-click
 ```
 
 `main.py`/`main_orchestrator.py` auto-re-exec themselves under `.venv`'s

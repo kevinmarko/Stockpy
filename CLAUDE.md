@@ -75,6 +75,7 @@ being sunset.
 
 ```bash
 # ── Web app (primary interface) ────────────────────────────────────────────────
+./launch_webapp.command              # Starts Pilots PWA + backend APIs automatically (Mock or Live)
 cd webapp && npm install
 npm run dev                          # http://localhost:5173 — offline mock data by default
 VITE_USE_MOCK=false npm run dev      # against the live backend (see below)
