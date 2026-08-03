@@ -3058,6 +3058,51 @@ def get_automation_schedule() -> Dict[str, Any]:
     }
 
 
+@app.get("/system/cron-status", dependencies=[Depends(require_read_token)])
+def get_system_cron_status() -> Dict[str, Any]:
+    """Parse deploy/crontab.txt and return the schedule."""
+    import pathlib
+    crontab_path = pathlib.Path(__file__).parent.parent / "deploy" / "crontab.txt"
+    jobs = []
+    
+    if not crontab_path.exists():
+        return {"jobs": [], "error": "crontab.txt not found"}
+        
+    current_title = ""
+    current_desc: list = []
+    
+    try:
+        with open(crontab_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("# ──"):
+                    current_title = line.strip("# ─").strip()
+                    current_desc = []
+                elif line.startswith("# ==") or line.startswith("# Install:") or line.startswith("# All times") or line.startswith("# US Eastern"):
+                    continue
+                elif line.startswith("#"):
+                    current_desc.append(line.lstrip("#").strip())
+                else:
+                    parts = line.split(maxsplit=5)
+                    if len(parts) >= 6:
+                        schedule = " ".join(parts[:5])
+                        command = parts[5]
+                        jobs.append({
+                            "title": current_title or "Cron Job",
+                            "description": " ".join(current_desc),
+                            "schedule": schedule,
+                            "command": command,
+                        })
+                        current_desc = []
+        return {"jobs": jobs}
+    except Exception as exc:  # noqa: BLE001 - dead-letter
+        logger.warning("pilots_api: get_system_cron_status failed: %s", exc)
+        return {"jobs": [], "error": str(exc)}
+
+
+
 # ---------------------------------------------------------------------------
 # Data & Automation — WRITE endpoints (Phase 3). Auth posture, per endpoint:
 #
@@ -3632,6 +3677,13 @@ def get_settings_tunables() -> Dict[str, Any]:
     }
 
 
+@app.put(
+    "/settings/tunables",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
 @app.patch(
     "/settings/tunables",
     dependencies=[
@@ -4008,6 +4060,13 @@ def get_settings_sentiment() -> Dict[str, Any]:
     }
 
 
+@app.put(
+    "/settings/sentiment",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
 @app.patch(
     "/settings/sentiment",
     dependencies=[
@@ -4030,6 +4089,13 @@ def get_settings_sector_selection() -> Dict[str, Any]:
     }
 
 
+@app.put(
+    "/settings/sector-selection",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
 @app.patch(
     "/settings/sector-selection",
     dependencies=[
@@ -4052,6 +4118,13 @@ def get_settings_fmp() -> Dict[str, Any]:
     }
 
 
+@app.put(
+    "/settings/fmp",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
 @app.patch(
     "/settings/fmp",
     dependencies=[
@@ -4074,6 +4147,13 @@ def get_settings_etf_transmission() -> Dict[str, Any]:
     }
 
 
+@app.put(
+    "/settings/etf-transmission",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
 @app.patch(
     "/settings/etf-transmission",
     dependencies=[
