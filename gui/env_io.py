@@ -457,6 +457,18 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # see _JSON_KEYS).
     "REGIME_SIGNAL_WEIGHTS",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
+    # RLHF Calibration Review Queue operator tunables (rlhf_calibration_store.py).
+    # RLHF_CALIBRATION_ENABLED is GUI-writable here (created directly in
+    # ALLOWED_KEYS, not reclassified into it -- see AGENTS.md's 2026-08-03
+    # convention: a new admin/write capability with no capital/execution
+    # risk ships active by default AND doesn't need the old "hand-set only"
+    # treatment). Mirrors AGENTIC_DISCOVERY_ENABLED/BROKERAGE_CONNECT_ENABLED/
+    # UNIVERSE_SYNC_ENABLED above: the endpoint stays independently gated by
+    # FOLLOW_API_TOKEN regardless of this flag's GUI-writability.
+    "RLHF_CALIBRATION_ENABLED",
+    "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
+    "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
+    "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.

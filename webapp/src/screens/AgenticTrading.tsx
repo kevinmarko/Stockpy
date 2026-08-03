@@ -26,6 +26,7 @@ import { CopyCommandBlock } from "../components/CopyCommandBlock";
 import { DecisionModal } from "../components/DecisionModal";
 import { KillSwitchToggle } from "../components/KillSwitchToggle";
 import { Modal } from "../components/Modal";
+import { RlhfReviewQueue } from "../components/RlhfReviewQueue";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
 import { timeAgo } from "../format";
@@ -126,6 +127,8 @@ export function AgenticTrading() {
       <DiscoverySection refreshToken={refreshToken} />
 
       <ExecutionQueueSection />
+
+      <RlhfReviewQueue refreshToken={refreshToken} />
 
       <DecisionJournalSection refreshToken={refreshToken} />
 

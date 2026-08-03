@@ -1,10 +1,10 @@
 {
   "meta": {
-    "git_commit": "1abb3f798eab4e88f7ebdd6502b534b3280151e7",
+    "git_commit": "0d8cf588f547f11470d09c3b65f381023919924e",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
-    "total_fields": 320,
+    "total_fields": 324,
     "label_by_field": {
       "FRED_API_KEY": "str",
       "ALPACA_API_KEY": "Optional[str]",
@@ -243,6 +243,10 @@
       "LLM_WRITES_ENABLED": "bool",
       "AGENTIC_DISCOVERY_ENABLED": "bool",
       "GENERAL_SETTINGS_WRITES_ENABLED": "bool",
+      "RLHF_CALIBRATION_ENABLED": "bool",
+      "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD": "float",
+      "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED": "bool",
+      "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED": "bool",
       "AI_GENERATION_API_ENABLED": "bool",
       "RAG_QUERY_API_ENABLED": "bool",
       "MACRO_GATE_WRITES_ENABLED": "bool",
@@ -329,8 +333,8 @@
     },
     "counts_by_label": {
       "int": 89,
-      "bool": 85,
-      "float": 56,
+      "bool": 88,
+      "float": 57,
       "Optional[str]": 43,
       "str": 34,
       "list[str]": 7,
@@ -409,6 +413,9 @@
       "PYTRENDS_ENABLED",
       "RAG_PORTFOLIO_CONTEXT_ENABLED",
       "RAG_QUERY_API_ENABLED",
+      "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
+      "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
+      "RLHF_CALIBRATION_ENABLED",
       "ROBINHOOD_AUTO_REFRESH_ENABLED",
       "SECTOR_HEAT_ENABLED",
       "SECTOR_SELECTION_ENABLED",
@@ -426,7 +433,7 @@
       "VALIDATION_HARNESS_OOS_GATE_ENABLED",
       "WIKIPEDIA_ATTENTION_ENABLED"
     ],
-    "enabled_suffix_count": 75
+    "enabled_suffix_count": 78
   },
   "settings_source": {
     "fields_without_source_line": [],
@@ -668,94 +675,98 @@
       "LLM_WRITES_ENABLED": 2885,
       "AGENTIC_DISCOVERY_ENABLED": 2906,
       "GENERAL_SETTINGS_WRITES_ENABLED": 2932,
-      "AI_GENERATION_API_ENABLED": 2962,
-      "RAG_QUERY_API_ENABLED": 2984,
-      "MACRO_GATE_WRITES_ENABLED": 3014,
-      "BROKERAGE_REFRESH_ENABLED": 3043,
-      "AGENTIC_MAX_CANDIDATES": 3060,
-      "OPTIONS_MATRIX_ENABLED": 3076,
-      "PAIRS_SNAPSHOT_ENABLED": 3084,
-      "PAIRS_SNAPSHOT_MAX_PAIRS": 3092,
-      "MULTIFACTOR_MICROCAP_THRESHOLD": 3101,
-      "META_LABEL_MIN_CONFIDENCE": 3117,
-      "META_LABELING_ENABLED": 3132,
-      "SNAPSHOT_HISTORY_DAYS": 3150,
-      "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 3157,
-      "WATCH_RULES_FILE": 3171,
-      "RATIONALE_VERBOSITY": 3192,
-      "NEWS_LOOKBACK_DAYS": 3209,
-      "FINBERT_ENABLED": 3217,
-      "FINBERT_BATCH_SIZE": 3226,
-      "FINBERT_SCORE_CACHE_ENABLED": 3236,
-      "LLM_COMMENTARY_ENABLED": 3259,
-      "LLM_COMMENTARY_RATIONALE_PROVIDER": 3268,
-      "LLM_COMMENTARY_ALERT_PROVIDER": 3277,
-      "LLM_COMMENTARY_CACHE_PATH": 3286,
-      "LLM_COMMENTARY_TIMEOUT_SECONDS": 3293,
-      "LLM_STATUS_MAX_AGE_HOURS": 3300,
-      "ANTHROPIC_API_KEY": 3312,
-      "GEMINI_API_KEY": 3321,
-      "OPAL_RESEARCH_ENABLED": 3337,
-      "OPAL_RESEARCH_PROVIDER": 3347,
-      "OPAL_RESEARCH_MODEL": 3355,
-      "OPAL_RESEARCH_TIMEOUT_SECONDS": 3365,
-      "OPENAI_API_KEY": 3373,
-      "GRAVITY_AI_RUNNER_ENABLED": 3391,
-      "GRAVITY_AI_RUNNER_OUTPUT_PATH": 3401,
-      "NEWS_EARNINGS_SUPPRESS_HOURS": 3408,
-      "NEWS_EARNINGS_DAMPEN_DAYS": 3416,
-      "SENTIMENT_SOCIAL_BLEND_WEIGHT": 3424,
-      "CORRELATION_CLUSTER_LOOKBACK_DAYS": 3442,
-      "CORRELATION_CLUSTER_THRESHOLD": 3450,
-      "USE_DUAL_MOMENTUM_OVERLAY": 3461,
-      "DUAL_MOMENTUM_SAFE_ASSET": 3469,
-      "DUAL_MOMENTUM_RISKY_ASSETS": 3473,
-      "PROMPT_REGISTRY_ENABLED": 3488,
-      "PROMPT_REGISTRY_BACKEND": 3495,
-      "PROMPT_REGISTRY_URL": 3502,
-      "PROMPT_REGISTRY_TOKEN": 3510,
-      "PROMPT_REGISTRY_PUBLISH_TOKEN": 3518,
-      "PROMPT_REGISTRY_SIGNING_KEY": 3526,
-      "PROMPT_REGISTRY_PINS": 3535,
-      "PROMPT_REGISTRY_REFRESH_SECONDS": 3545,
-      "PROMPT_CACHE_DIR": 3553,
-      "PROMPT_CACHE_KEEP_VERSIONS": 3561,
-      "PROMPT_MAX_CHARS": 3569,
-      "RAG_PORTFOLIO_CONTEXT_ENABLED": 3586,
-      "RAG_PORTFOLIO_CONTEXT_PROVIDER": 3598,
-      "RAG_EMBEDDING_PROVIDER": 3607,
-      "RAG_INDEX_MAX_DOCUMENTS": 3616,
-      "RAG_RETRIEVAL_TOP_K": 3625,
-      "RAG_INDEX_LOOKBACK_DAYS": 3632,
-      "ETF_HOLDINGS_ENABLED": 3651,
-      "ETF_HOLDINGS_TICKERS": 3664,
-      "ETF_HOLDINGS_REFRESH_DAYS": 3681,
-      "ETF_HOLDINGS_ISSUER_CSV_ENABLED": 3694,
-      "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE": 3710,
-      "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD": 3724,
-      "OPTIONS_TRUE_IVR_ENABLED": 3735,
-      "DEAD_LETTER_RETRY_ENABLED": 3785,
-      "PROMPT_REGISTRY_WRITES_ENABLED": 3807,
-      "UNIVERSE_SYNC_ENABLED": 3824,
-      "FORECAST_BACKFILL_HORIZONS": 3845,
-      "FORECAST_BACKFILL_LOOKBACK_YEARS": 3852,
-      "FORECAST_BACKFILL_MOMENTUM_WINDOW": 3863,
-      "FORECAST_BACKFILL_VOL_SHORT_WINDOW": 3867,
-      "FORECAST_BACKFILL_VOL_LONG_WINDOW": 3871,
-      "FORECAST_BACKFILL_RSI_WINDOW": 3875,
-      "FORECAST_BACKFILL_MACD_FAST": 3879,
-      "FORECAST_BACKFILL_MACD_SLOW": 3883,
-      "FORECAST_BACKFILL_VOL_RATIO_WINDOW": 3887,
-      "FORECAST_BACKFILL_TRAIN_SPLIT": 3891,
-      "FORECAST_BACKFILL_N_ESTIMATORS": 3895,
-      "FORECAST_BACKFILL_MAX_DEPTH": 3899,
-      "FORECAST_BACKFILL_RANDOM_STATE": 3903,
-      "FORECAST_BACKFILL_CLASSIFIER_TYPE": 3907
+      "RLHF_CALIBRATION_ENABLED": 2950,
+      "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD": 2962,
+      "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED": 2970,
+      "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED": 2982,
+      "AI_GENERATION_API_ENABLED": 3010,
+      "RAG_QUERY_API_ENABLED": 3032,
+      "MACRO_GATE_WRITES_ENABLED": 3062,
+      "BROKERAGE_REFRESH_ENABLED": 3091,
+      "AGENTIC_MAX_CANDIDATES": 3108,
+      "OPTIONS_MATRIX_ENABLED": 3124,
+      "PAIRS_SNAPSHOT_ENABLED": 3132,
+      "PAIRS_SNAPSHOT_MAX_PAIRS": 3140,
+      "MULTIFACTOR_MICROCAP_THRESHOLD": 3149,
+      "META_LABEL_MIN_CONFIDENCE": 3165,
+      "META_LABELING_ENABLED": 3180,
+      "SNAPSHOT_HISTORY_DAYS": 3198,
+      "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 3205,
+      "WATCH_RULES_FILE": 3219,
+      "RATIONALE_VERBOSITY": 3240,
+      "NEWS_LOOKBACK_DAYS": 3257,
+      "FINBERT_ENABLED": 3265,
+      "FINBERT_BATCH_SIZE": 3274,
+      "FINBERT_SCORE_CACHE_ENABLED": 3284,
+      "LLM_COMMENTARY_ENABLED": 3307,
+      "LLM_COMMENTARY_RATIONALE_PROVIDER": 3316,
+      "LLM_COMMENTARY_ALERT_PROVIDER": 3325,
+      "LLM_COMMENTARY_CACHE_PATH": 3334,
+      "LLM_COMMENTARY_TIMEOUT_SECONDS": 3341,
+      "LLM_STATUS_MAX_AGE_HOURS": 3348,
+      "ANTHROPIC_API_KEY": 3360,
+      "GEMINI_API_KEY": 3369,
+      "OPAL_RESEARCH_ENABLED": 3385,
+      "OPAL_RESEARCH_PROVIDER": 3395,
+      "OPAL_RESEARCH_MODEL": 3403,
+      "OPAL_RESEARCH_TIMEOUT_SECONDS": 3413,
+      "OPENAI_API_KEY": 3421,
+      "GRAVITY_AI_RUNNER_ENABLED": 3439,
+      "GRAVITY_AI_RUNNER_OUTPUT_PATH": 3449,
+      "NEWS_EARNINGS_SUPPRESS_HOURS": 3456,
+      "NEWS_EARNINGS_DAMPEN_DAYS": 3464,
+      "SENTIMENT_SOCIAL_BLEND_WEIGHT": 3472,
+      "CORRELATION_CLUSTER_LOOKBACK_DAYS": 3490,
+      "CORRELATION_CLUSTER_THRESHOLD": 3498,
+      "USE_DUAL_MOMENTUM_OVERLAY": 3509,
+      "DUAL_MOMENTUM_SAFE_ASSET": 3517,
+      "DUAL_MOMENTUM_RISKY_ASSETS": 3521,
+      "PROMPT_REGISTRY_ENABLED": 3536,
+      "PROMPT_REGISTRY_BACKEND": 3543,
+      "PROMPT_REGISTRY_URL": 3550,
+      "PROMPT_REGISTRY_TOKEN": 3558,
+      "PROMPT_REGISTRY_PUBLISH_TOKEN": 3566,
+      "PROMPT_REGISTRY_SIGNING_KEY": 3574,
+      "PROMPT_REGISTRY_PINS": 3583,
+      "PROMPT_REGISTRY_REFRESH_SECONDS": 3593,
+      "PROMPT_CACHE_DIR": 3601,
+      "PROMPT_CACHE_KEEP_VERSIONS": 3609,
+      "PROMPT_MAX_CHARS": 3617,
+      "RAG_PORTFOLIO_CONTEXT_ENABLED": 3634,
+      "RAG_PORTFOLIO_CONTEXT_PROVIDER": 3646,
+      "RAG_EMBEDDING_PROVIDER": 3655,
+      "RAG_INDEX_MAX_DOCUMENTS": 3664,
+      "RAG_RETRIEVAL_TOP_K": 3673,
+      "RAG_INDEX_LOOKBACK_DAYS": 3680,
+      "ETF_HOLDINGS_ENABLED": 3699,
+      "ETF_HOLDINGS_TICKERS": 3712,
+      "ETF_HOLDINGS_REFRESH_DAYS": 3729,
+      "ETF_HOLDINGS_ISSUER_CSV_ENABLED": 3742,
+      "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE": 3758,
+      "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD": 3772,
+      "OPTIONS_TRUE_IVR_ENABLED": 3783,
+      "DEAD_LETTER_RETRY_ENABLED": 3833,
+      "PROMPT_REGISTRY_WRITES_ENABLED": 3855,
+      "UNIVERSE_SYNC_ENABLED": 3872,
+      "FORECAST_BACKFILL_HORIZONS": 3893,
+      "FORECAST_BACKFILL_LOOKBACK_YEARS": 3900,
+      "FORECAST_BACKFILL_MOMENTUM_WINDOW": 3911,
+      "FORECAST_BACKFILL_VOL_SHORT_WINDOW": 3915,
+      "FORECAST_BACKFILL_VOL_LONG_WINDOW": 3919,
+      "FORECAST_BACKFILL_RSI_WINDOW": 3923,
+      "FORECAST_BACKFILL_MACD_FAST": 3927,
+      "FORECAST_BACKFILL_MACD_SLOW": 3931,
+      "FORECAST_BACKFILL_VOL_RATIO_WINDOW": 3935,
+      "FORECAST_BACKFILL_TRAIN_SPLIT": 3939,
+      "FORECAST_BACKFILL_N_ESTIMATORS": 3943,
+      "FORECAST_BACKFILL_MAX_DEPTH": 3947,
+      "FORECAST_BACKFILL_RANDOM_STATE": 3951,
+      "FORECAST_BACKFILL_CLASSIFIER_TYPE": 3955
     }
   },
   "env_io_lists": {
-    "allowed_keys_len": 264,
-    "allowed_keys_unique_len": 264,
+    "allowed_keys_len": 268,
+    "allowed_keys_unique_len": 268,
     "allowed_keys_duplicates": {},
     "allowed_keys_duplicate_total_extra": 0,
     "secret_keys_len": 40,
@@ -824,7 +835,7 @@
   "partition": {
     "counts": {
       "SECRET": 38,
-      "IN_ALLOWED_KEYS": 264,
+      "IN_ALLOWED_KEYS": 268,
       "UNCLASSIFIED": 18
     },
     "secret": [
@@ -1079,6 +1090,10 @@
       "REQUIRED_RETURN_RATE",
       "RISK_FREE_RATE",
       "RISK_GATE_ENFORCE_MARKET_HOURS",
+      "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
+      "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
+      "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
+      "RLHF_CALIBRATION_ENABLED",
       "ROBINHOOD_AUTO_REFRESH_ENABLED",
       "ROBINHOOD_EXECUTION_MODE",
       "ROBINHOOD_LIMIT_BUFFER_BPS",
@@ -1157,7 +1172,7 @@
       {
         "field": "AI_GENERATION_API_ENABLED",
         "in_excluded_from_gui": true,
-        "settings_py_line": 2962,
+        "settings_py_line": 3010,
         "description": "Enables POST /data/ai/{commentary,chart,research}/{symbol} on the Data API. Off by default -- exposing paid Claude/Gemini/Opal calls over a fail-open HTTP API is its own risk/cost class, separate f..."
       },
       {
@@ -1175,7 +1190,7 @@
       {
         "field": "BROKERAGE_REFRESH_ENABLED",
         "in_excluded_from_gui": true,
-        "settings_py_line": 3043,
+        "settings_py_line": 3091,
         "description": "Enables POST /brokerage/refresh on the Pilots API (forces a live Robinhood re-login + account-snapshot fetch, bypassing the daily cache). Off by default; also requires FOLLOW_API_TOKEN and a loopba..."
       },
       {
@@ -1187,7 +1202,7 @@
       {
         "field": "DEAD_LETTER_RETRY_ENABLED",
         "in_excluded_from_gui": true,
-        "settings_py_line": 3785,
+        "settings_py_line": 3833,
         "description": "Enables POST /dead-letter/retry on the Pilots API (re-runs main.py for one dead-lettered symbol, advisory-only -- no orders). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable -- h..."
       },
       {
@@ -1199,13 +1214,13 @@
       {
         "field": "GRAVITY_AI_RUNNER_OUTPUT_PATH",
         "in_excluded_from_gui": true,
-        "settings_py_line": 3401,
+        "settings_py_line": 3449,
         "description": "Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored."
       },
       {
         "field": "LLM_COMMENTARY_CACHE_PATH",
         "in_excluded_from_gui": true,
-        "settings_py_line": 3286,
+        "settings_py_line": 3334,
         "description": "JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored."
       },
       {
@@ -1217,7 +1232,7 @@
       {
         "field": "MACRO_GATE_WRITES_ENABLED",
         "in_excluded_from_gui": true,
-        "settings_py_line": 3014,
+        "settings_py_line": 3062,
         "description": "Enables PUT /observability/macro-gate on the Pilots API (flips MACRO_REGIME_GATE_ENABLED -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable \u2014 hand-set in .env only, so thi..."
       },
       {
@@ -1229,19 +1244,19 @@
       {
         "field": "PROMPT_CACHE_DIR",
         "in_excluded_from_gui": true,
-        "settings_py_line": 3553,
+        "settings_py_line": 3601,
         "description": "Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback."
       },
       {
         "field": "PROMPT_REGISTRY_WRITES_ENABLED",
         "in_excluded_from_gui": true,
-        "settings_py_line": 3807,
+        "settings_py_line": 3855,
         "description": "FAIL-CLOSED master switch for api/pilots_api.py's `PUT /prompts/pin` (pins/clears a prompt ID's PROMPT_REGISTRY_PINS entry -- changes WHICH PROMPT TEXT THE PLATFORM ACTUALLY RUNS, a real behavioral..."
       },
       {
         "field": "RAG_QUERY_API_ENABLED",
         "in_excluded_from_gui": true,
-        "settings_py_line": 2984,
+        "settings_py_line": 3032,
         "description": "Enables POST /rag/query on the Pilots API (agents/rag_orchestrator.py's run_rag_query, calling a paid LLM provider). Off by default -- see AI_GENERATION_API_ENABLED for the same risk-class reasonin..."
       },
       {
@@ -1259,7 +1274,7 @@
       {
         "field": "WATCH_RULES_FILE",
         "in_excluded_from_gui": true,
-        "settings_py_line": 3171,
+        "settings_py_line": 3219,
         "description": "Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op)."
       }
     ],
@@ -1429,18 +1444,18 @@
     "marked_fields": [
       {
         "field": "AI_GENERATION_API_ENABLED",
-        "settings_py_line": 2962,
+        "settings_py_line": 3010,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 2943,
+            "line": 2991,
             "origin": "# comment",
             "text": "Never GUI-writable \u2014 hand-set in .env only (deliberately NOT in gui/env_io.py's ALLOWED_KEYS).",
             "matched": "Never GUI-writable"
           },
           {
             "file": "settings.py",
-            "line": 2962,
+            "line": 3010,
             "origin": "Field(description=...)",
             "text": "Never GUI-writable \u2014 hand-set in .env only.",
             "matched": "Never GUI-writable"
@@ -1475,18 +1490,18 @@
       },
       {
         "field": "BROKERAGE_REFRESH_ENABLED",
-        "settings_py_line": 3043,
+        "settings_py_line": 3091,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 3024,
+            "line": 3072,
             "origin": "# comment",
             "text": "Mirrors AUTOMATION_WRITES_ENABLED / STRATEGY_WRITES_ENABLED / LLM_WRITES_ENABLED / GENERAL_SETTINGS_WRITES_ENABLED / MACRO_GATE_WRITES_ENABLED exactly: default False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a G",
             "matched": "NOT in gui/env_io.py's ALLOWED_KEYS"
           },
           {
             "file": "settings.py",
-            "line": 3043,
+            "line": 3091,
             "origin": "Field(description=...)",
             "text": "Never GUI-writable \u2014 hand-set in .env only, so on-demand refresh cannot ride in on BROKERAGE_CONNECT_ENABLED (a different action: credential intake, not re-use of already-configured credentials).",
             "matched": "Never GUI-writable"
@@ -1514,18 +1529,18 @@
       },
       {
         "field": "DEAD_LETTER_RETRY_ENABLED",
-        "settings_py_line": 3785,
+        "settings_py_line": 3833,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 3771,
+            "line": 3819,
             "origin": "# comment",
             "text": "Default False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS or SECRET_KEYS (a GUI bug must never flip it on;",
             "matched": "NOT in gui/env_io.py's ALLOWED_KEYS"
           },
           {
             "file": "settings.py",
-            "line": 3785,
+            "line": 3833,
             "origin": "Field(description=...)",
             "text": "Never GUI-writable -- hand-set in .env only, so a single-symbol pipeline re-run cannot ride in on any other writes-enabled flag.",
             "matched": "Never GUI-writable"
@@ -1615,18 +1630,18 @@
       },
       {
         "field": "MACRO_GATE_WRITES_ENABLED",
-        "settings_py_line": 3014,
+        "settings_py_line": 3062,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 2993,
+            "line": 3041,
             "origin": "# comment",
             "text": "Mirrors GENERAL_SETTINGS_WRITES_ENABLED / STRATEGY_WRITES_ENABLED / LLM_WRITES_ENABLED exactly: default False, deliberately NOT in gui/env_io.py's ALLOWED_KEYS (a GUI bug must never flip it on;",
             "matched": "NOT in gui/env_io.py's ALLOWED_KEYS"
           },
           {
             "file": "settings.py",
-            "line": 3014,
+            "line": 3062,
             "origin": "Field(description=...)",
             "text": "Never GUI-writable \u2014 hand-set in .env only, so this recession/credit-event BUY-veto bypass cannot ride in on any other writes-enabled flag.",
             "matched": "Never GUI-writable"
@@ -1654,11 +1669,11 @@
       },
       {
         "field": "PROMPT_REGISTRY_PUBLISH_TOKEN",
-        "settings_py_line": 3518,
+        "settings_py_line": 3566,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 3518,
+            "line": 3566,
             "origin": "Field(description=...)",
             "text": "SECRET \u2014 never GUI-writable, never logged.",
             "matched": "never GUI-writable"
@@ -1670,11 +1685,11 @@
       },
       {
         "field": "PROMPT_REGISTRY_SIGNING_KEY",
-        "settings_py_line": 3526,
+        "settings_py_line": 3574,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 3526,
+            "line": 3574,
             "origin": "Field(description=...)",
             "text": "SECRET \u2014 never GUI-writable, never logged.",
             "matched": "never GUI-writable"
@@ -1686,11 +1701,11 @@
       },
       {
         "field": "PROMPT_REGISTRY_TOKEN",
-        "settings_py_line": 3510,
+        "settings_py_line": 3558,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 3510,
+            "line": 3558,
             "origin": "Field(description=...)",
             "text": "SECRET \u2014 never GUI-writable, never logged.",
             "matched": "never GUI-writable"
@@ -1702,11 +1717,11 @@
       },
       {
         "field": "PROMPT_REGISTRY_URL",
-        "settings_py_line": 3502,
+        "settings_py_line": 3550,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 3502,
+            "line": 3550,
             "origin": "Field(description=...)",
             "text": "SECRET \u2014 never GUI-writable, never logged.",
             "matched": "never GUI-writable"
@@ -1718,11 +1733,11 @@
       },
       {
         "field": "PROMPT_REGISTRY_WRITES_ENABLED",
-        "settings_py_line": 3807,
+        "settings_py_line": 3855,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 3796,
+            "line": 3844,
             "origin": "# comment",
             "text": "PROMPT_REGISTRY_WRITES_ENABLED is DELIBERATELY in NEITHER gui/env_io.py's ALLOWED_KEYS NOR SECRET_KEYS \u2014 hand-set in .env only, exactly like STRATEGY_WRITES_ENABLED / AUTOMATION_WRITES_ENABLED above.",
             "matched": "hand-set in .env only"
@@ -1734,18 +1749,18 @@
       },
       {
         "field": "RAG_QUERY_API_ENABLED",
-        "settings_py_line": 2984,
+        "settings_py_line": 3032,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 2972,
+            "line": 3020,
             "origin": "# comment",
             "text": "Same risk class as AI_GENERATION_API_ENABLED (a paid external LLM call, via llm/router.py::get_rationale_provider, reachable over an API gated only by require_command_token otherwise), so it gets the same fail-closed tre",
             "matched": "never GUI-writable"
           },
           {
             "file": "settings.py",
-            "line": 2984,
+            "line": 3032,
             "origin": "Field(description=...)",
             "text": "Never GUI-writable \u2014 hand-set in .env only.",
             "matched": "Never GUI-writable"
@@ -1801,7 +1816,7 @@
       {
         "candidate_field": "RAG_PORTFOLIO_CONTEXT_PROVIDER",
         "file": "settings.py",
-        "line": 3598,
+        "line": 3646,
         "origin": "Field(description=...)",
         "text": "Requires the matching API key (ANTHROPIC_API_KEY or GEMINI_API_KEY, both classified as SECRET_KEYS \u2014 never GUI-writable).",
         "matched": "never GUI-writable",
@@ -1816,7 +1831,7 @@
   },
   "write_endpoints_pilots_api": {
     "file": "api/pilots_api.py",
-    "total_write_method_routes": 26,
+    "total_write_method_routes": 29,
     "mutating_settings_routes": 11,
     "env_writing_routes": 11,
     "live_setattr_routes": 0,
@@ -1831,7 +1846,7 @@
         "route": "/pilots/forecast_backfill/run",
         "method": "POST",
         "function": "run_forecast_backfill_endpoint",
-        "line": 897,
+        "line": 983,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1848,7 +1863,7 @@
         "route": "/portfolio/attribution/brinson-fachler",
         "method": "POST",
         "function": "post_brinson_fachler_attribution",
-        "line": 1458,
+        "line": 1544,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1865,7 +1880,7 @@
         "route": "/observability/macro-gate",
         "method": "PUT",
         "function": "put_macro_gate",
-        "line": 1569,
+        "line": 1655,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -1888,7 +1903,7 @@
         "route": "/decisions",
         "method": "POST",
         "function": "create_decision",
-        "line": 2142,
+        "line": 2228,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1905,7 +1920,7 @@
         "route": "/follows",
         "method": "PUT",
         "function": "upsert_follow",
-        "line": 2216,
+        "line": 2302,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1922,7 +1937,7 @@
         "route": "/pilots/{pilot_id}/follow",
         "method": "POST",
         "function": "follow_pilot",
-        "line": 2227,
+        "line": 2313,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1939,7 +1954,7 @@
         "route": "/agentic/scan-config",
         "method": "PUT",
         "function": "put_agentic_scan_config",
-        "line": 2388,
+        "line": 2474,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1960,7 +1975,7 @@
         "route": "/agentic/watch",
         "method": "POST",
         "function": "post_agentic_watch",
-        "line": 2417,
+        "line": 2503,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1978,10 +1993,61 @@
         "applies_declared_via_helper": []
       },
       {
+        "route": "/rlhf/proposals",
+        "method": "POST",
+        "function": "create_rlhf_proposal",
+        "line": 2631,
+        "writes_env": false,
+        "env_write_calls_direct": [],
+        "env_write_calls_via_helper": [],
+        "live_setattr": false,
+        "live_setattr_sites": [],
+        "live_setattr_via_helper": [],
+        "live_daemon_push": false,
+        "live_daemon_push_calls": [],
+        "applies_values": [],
+        "applies_declared_directly": [],
+        "applies_declared_via_helper": []
+      },
+      {
+        "route": "/rlhf/proposals/{proposal_id}/review",
+        "method": "POST",
+        "function": "review_rlhf_proposal",
+        "line": 2697,
+        "writes_env": false,
+        "env_write_calls_direct": [],
+        "env_write_calls_via_helper": [],
+        "live_setattr": false,
+        "live_setattr_sites": [],
+        "live_setattr_via_helper": [],
+        "live_daemon_push": false,
+        "live_daemon_push_calls": [],
+        "applies_values": [],
+        "applies_declared_directly": [],
+        "applies_declared_via_helper": []
+      },
+      {
+        "route": "/rlhf/export-sft",
+        "method": "POST",
+        "function": "export_rlhf_sft",
+        "line": 2746,
+        "writes_env": false,
+        "env_write_calls_direct": [],
+        "env_write_calls_via_helper": [],
+        "live_setattr": false,
+        "live_setattr_sites": [],
+        "live_setattr_via_helper": [],
+        "live_daemon_push": false,
+        "live_daemon_push_calls": [],
+        "applies_values": [],
+        "applies_declared_directly": [],
+        "applies_declared_via_helper": []
+      },
+      {
         "route": "/llm/setting",
         "method": "PUT",
         "function": "set_llm_setting",
-        "line": 2551,
+        "line": 2851,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2006,7 +2072,7 @@
         "route": "/brokerage/connect",
         "method": "POST",
         "function": "connect_brokerage",
-        "line": 2677,
+        "line": 2977,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2023,7 +2089,7 @@
         "route": "/brokerage/disconnect",
         "method": "POST",
         "function": "disconnect_brokerage",
-        "line": 2719,
+        "line": 3019,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2040,7 +2106,7 @@
         "route": "/brokerage/refresh",
         "method": "POST",
         "function": "refresh_brokerage",
-        "line": 2741,
+        "line": 3041,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2057,7 +2123,7 @@
         "route": "/automation/run",
         "method": "POST",
         "function": "trigger_automation_run",
-        "line": 3061,
+        "line": 3361,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2074,7 +2140,7 @@
         "route": "/automation/pause",
         "method": "POST",
         "function": "pause_automation",
-        "line": 3101,
+        "line": 3401,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2091,7 +2157,7 @@
         "route": "/automation/resume",
         "method": "POST",
         "function": "resume_automation",
-        "line": 3127,
+        "line": 3427,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2108,7 +2174,7 @@
         "route": "/automation/schedule/interval",
         "method": "PUT",
         "function": "set_automation_interval",
-        "line": 3158,
+        "line": 3458,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2135,7 +2201,7 @@
         "route": "/strategy/modules",
         "method": "PUT",
         "function": "set_strategy_modules",
-        "line": 3241,
+        "line": 3541,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_many_atomic"
@@ -2158,7 +2224,7 @@
         "route": "/automation/execution-mode",
         "method": "PUT",
         "function": "update_execution_mode",
-        "line": 3282,
+        "line": 3582,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2181,7 +2247,7 @@
         "route": "/settings/tunables",
         "method": "PUT",
         "function": "put_settings_tunables",
-        "line": 3609,
+        "line": 3917,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2204,7 +2270,7 @@
         "route": "/settings/sentiment",
         "method": "PUT",
         "function": "put_settings_sentiment",
-        "line": 3985,
+        "line": 4293,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2227,7 +2293,7 @@
         "route": "/settings/sector-selection",
         "method": "PUT",
         "function": "put_settings_sector_selection",
-        "line": 4007,
+        "line": 4315,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2250,7 +2316,7 @@
         "route": "/settings/fmp",
         "method": "PUT",
         "function": "put_settings_fmp",
-        "line": 4029,
+        "line": 4337,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2273,7 +2339,7 @@
         "route": "/settings/etf-transmission",
         "method": "PUT",
         "function": "put_settings_etf_transmission",
-        "line": 4051,
+        "line": 4359,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2296,7 +2362,7 @@
         "route": "/dead-letter/retry",
         "method": "POST",
         "function": "post_dead_letter_retry",
-        "line": 4172,
+        "line": 4480,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2317,7 +2383,7 @@
         "route": "/prompts/pin",
         "method": "PUT",
         "function": "put_prompts_pin",
-        "line": 4322,
+        "line": 4630,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2340,7 +2406,7 @@
         "route": "/rag/query",
         "method": "POST",
         "function": "post_rag_query",
-        "line": 4399,
+        "line": 4707,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2686,7 +2752,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 332,
+    "files_scanned": 334,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2710,10 +2776,10 @@
     ],
     "distinct_settings_alias_count": 17,
     "form_a_attribute": {
-      "total_reads": 612,
-      "distinct_fields": 191,
+      "total_reads": 618,
+      "distinct_fields": 195,
       "counts": {
-        "OUTPUT_DIR": 114,
+        "OUTPUT_DIR": 115,
         "SIGNAL_WEIGHTS": 20,
         "DASHBOARD_REFRESH_SECONDS": 18,
         "DISABLED_SIGNAL_MODULES": 14,
@@ -2820,6 +2886,7 @@
         "PROMPT_REGISTRY_SIGNING_KEY": 2,
         "PROMPT_REGISTRY_URL": 2,
         "PROMPT_REGISTRY_WRITES_ENABLED": 2,
+        "RLHF_CALIBRATION_ENABLED": 2,
         "SECTOR_HEAT_ENABLED": 2,
         "SECTOR_SIMILARITY_POOLING": 2,
         "SENTIMENT_AUDIT_ENABLED": 2,
@@ -2875,6 +2942,9 @@
         "RH_PASSWORD": 1,
         "RH_USERNAME": 1,
         "RISK_GATE_ENFORCE_MARKET_HOURS": 1,
+        "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED": 1,
+        "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED": 1,
+        "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD": 1,
         "ROBINHOOD_PASSWORD": 1,
         "ROBINHOOD_USERNAME": 1,
         "SECTOR_HEAT_LOOKBACK_DAYS": 1,
@@ -3087,17 +3157,17 @@
         },
         {
           "file": "api/pilots_api.py",
-          "line": 2620,
+          "line": 2920,
           "expr": "getattr(settings, body.key)"
         },
         {
           "file": "api/pilots_api.py",
-          "line": 3549,
+          "line": 3857,
           "expr": "getattr(settings, key, None)"
         },
         {
           "file": "api/pilots_api.py",
-          "line": 3634,
+          "line": 3942,
           "expr": "getattr(settings, key, None)"
         },
         {
@@ -3165,7 +3235,7 @@
         "os.getenv()": 8
       }
     },
-    "fields_reached_by_any_form": 311,
+    "fields_reached_by_any_form": 315,
     "fields_only_via_b_or_d": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3438,7 +3508,7 @@
       {
         "field": "EDGAR_FULLTEXT_CHUNK_TOKENS",
         "name_literal_sites": [
-          "api/pilots_api.py:3800"
+          "api/pilots_api.py:4108"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -3446,7 +3516,7 @@
       {
         "field": "EDGAR_FULLTEXT_FORMS",
         "name_literal_sites": [
-          "api/pilots_api.py:3799"
+          "api/pilots_api.py:4107"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -3454,7 +3524,7 @@
       {
         "field": "ETF_HOLDINGS_TICKERS",
         "name_literal_sites": [
-          "api/pilots_api.py:3924",
+          "api/pilots_api.py:4232",
           "gui/panels/settings_manager.py:122"
         ],
         "name_literal_site_count": 2,
@@ -3463,7 +3533,7 @@
       {
         "field": "FMP_ECON_INDICATORS",
         "name_literal_sites": [
-          "api/pilots_api.py:3904",
+          "api/pilots_api.py:4212",
           "gui/panels/settings_manager.py:158"
         ],
         "name_literal_site_count": 2,

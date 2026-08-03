@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 
 from settings import settings
 from pilots import catalog
+from rlhf_calibration_store import RlhfCalibrationStore
 import api.pilots_api as pilots_api
 
 # Starlette's TestClient defaults request.client.host to the literal
@@ -4829,3 +4830,479 @@ class TestRagQueryInvariants:
         only, same treatment as AI_GENERATION_API_ENABLED."""
         assert "RAG_QUERY_API_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
         assert "RAG_QUERY_API_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+
+
+# ---------------------------------------------------------------------------
+# RLHF Calibration Review Queue (GET /rlhf/summary, POST /rlhf/proposals,
+# POST /rlhf/proposals/{id}/review, POST /rlhf/export-sft) — every proposal is
+# hypothetical/paper-only (rlhf_calibration_store.py), so the write endpoints
+# are gated by require_command_token + require_rlhf_calibration_enabled
+# (RLHF_CALIBRATION_ENABLED, default True). Every test isolates the store's
+# SQLite backend to a tmp_path file via settings.DATABASE_URL so nothing here
+# ever touches the real repo-root quant_platform.db.
+# ---------------------------------------------------------------------------
+
+
+def _rlhf_db_url(tmp_path) -> str:
+    return f"sqlite:///{tmp_path / 'rlhf_test.db'}"
+
+
+class TestRlhfSummaryRead:
+    def test_cold_start_shape(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                resp = client.get("/rlhf/summary")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {"proposals", "kpis", "writable", "reason"}
+        assert body["proposals"] == []
+        assert body["kpis"]["pending_count"] == 0
+        assert body["kpis"]["average_human_rating"] is None
+        assert body["reason"] is not None  # honest "no pending proposals" / missing table
+
+    def test_fail_open_read_with_no_token(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                resp = client.get("/rlhf/summary")
+        assert resp.status_code == 200
+
+    def test_401_on_wrong_read_token(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                resp = client.get("/rlhf/summary", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
+
+    def test_writable_tracks_the_flag(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "DATABASE_URL", db_url):
+                with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                    on = client.get("/rlhf/summary").json()
+                with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", False):
+                    off = client.get("/rlhf/summary").json()
+        assert on["writable"] is True
+        assert off["writable"] is False
+
+    def test_real_data_shape(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        with mock.patch.object(settings, "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED", False):
+            RlhfCalibrationStore(db_url=db_url).create_proposal(
+                symbol="AAPL",
+                action="BUY",
+                rationale="RSI oversold with bullish sentiment shift.",
+                confidence=0.65,
+            )
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "DATABASE_URL", db_url):
+                resp = client.get("/rlhf/summary")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["proposals"]) == 1
+        assert body["proposals"][0]["symbol"] == "AAPL"
+        assert body["proposals"][0]["status"] == "pending"
+        assert body["kpis"]["pending_count"] == 1
+        assert body["reason"] is None
+
+    def test_limit_out_of_range_is_422(self, tmp_path):
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                too_low = client.get("/rlhf/summary", params={"limit": 0})
+                too_high = client.get("/rlhf/summary", params={"limit": 201})
+        assert too_low.status_code == 422
+        assert too_high.status_code == 422
+
+    def test_never_500_on_corrupt_db_file(self, tmp_path):
+        db_file = tmp_path / "corrupt.db"
+        db_file.write_bytes(b"not a sqlite file at all")
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            with mock.patch.object(settings, "DATABASE_URL", f"sqlite:///{db_file}"):
+                resp = client.get("/rlhf/summary")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["proposals"] == []
+        assert body["kpis"]["pending_count"] == 0
+
+
+class TestRlhfProposalsCreate:
+    """POST /rlhf/proposals — exists mainly for API completeness/testability
+    (see require_rlhf_calibration_enabled's docstring): the webapp itself only
+    ever calls the review/export endpoints, a sibling MCP tool creates real
+    proposals directly against the store. Used here to build fixture data for
+    the review/export test classes below through the real API."""
+
+    def _auth(self):
+        return {"Authorization": f"Bearer {_CMD_TOKEN}"}
+
+    def _payload(self, **overrides):
+        payload = dict(
+            symbol="AAPL",
+            action="BUY",
+            rationale="RSI oversold with bullish sentiment shift.",
+            confidence=0.55,
+            price=180.5,
+        )
+        payload.update(overrides)
+        return payload
+
+    def test_fails_closed_when_rlhf_calibration_disabled(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", False):
+                resp = client.post("/rlhf/proposals", json=self._payload(), headers=self._auth())
+        assert resp.status_code == 403
+
+    def test_fails_closed_when_follow_token_unset(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                resp = client.post(
+                    "/rlhf/proposals", json=self._payload(),
+                    headers={"Authorization": "Bearer anything"},
+                )
+        assert resp.status_code == 403
+
+    def test_401_on_wrong_command_token(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                resp = client.post(
+                    "/rlhf/proposals", json=self._payload(),
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401
+
+    def test_happy_path_with_price_supplied(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                    resp = client.post(
+                        "/rlhf/proposals", json=self._payload(price=123.45), headers=self._auth(),
+                    )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert body["action"] == "BUY"
+        assert body["price"] == pytest.approx(123.45)
+        assert body["quote_source"] == "caller_supplied"
+        assert body["status"] == "pending"
+        assert "id" in body
+
+    def test_happy_path_omits_price_live_quote_succeeds(self, tmp_path):
+        fake_quote = mock.Mock(price=201.11)
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                    with mock.patch.object(pilots_api, "get_provider") as gp:
+                        gp.return_value.get_latest_quote.return_value = fake_quote
+                        resp = client.post(
+                            "/rlhf/proposals",
+                            json=self._payload(price=None),
+                            headers=self._auth(),
+                        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["price"] == pytest.approx(201.11)
+        assert body["quote_source"] == "live"
+        gp.return_value.get_latest_quote.assert_called_once_with("AAPL")
+
+    def test_live_quote_market_data_error_degrades_honestly(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                    with mock.patch.object(pilots_api, "get_provider") as gp:
+                        gp.return_value.get_latest_quote.side_effect = pilots_api.MarketDataError(
+                            "no quote available"
+                        )
+                        resp = client.post(
+                            "/rlhf/proposals",
+                            json=self._payload(price=None),
+                            headers=self._auth(),
+                        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["price"] is None
+        assert body["quote_source"] == "unavailable"
+
+    def test_hold_action_skips_quote_fetch_even_without_price(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                    with mock.patch.object(pilots_api, "get_provider") as gp:
+                        resp = client.post(
+                            "/rlhf/proposals",
+                            json=self._payload(action="HOLD", price=None),
+                            headers=self._auth(),
+                        )
+        assert resp.status_code == 200
+        assert resp.json()["quote_source"] == "unavailable"
+        gp.assert_not_called()
+
+    def test_invalid_action_returns_422(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                    resp = client.post(
+                        "/rlhf/proposals",
+                        json=self._payload(action="SHORT", price=100.0),
+                        headers=self._auth(),
+                    )
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "invalid_action"
+
+    def test_invalid_confidence_returns_422(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                    resp = client.post(
+                        "/rlhf/proposals",
+                        json=self._payload(confidence=1.5, price=100.0),
+                        headers=self._auth(),
+                    )
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "invalid_confidence"
+
+    def test_write_never_logs_token(self, tmp_path, caplog):
+        with caplog.at_level("DEBUG"):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                    with mock.patch.object(settings, "DATABASE_URL", _rlhf_db_url(tmp_path)):
+                        client.post("/rlhf/proposals", json=self._payload(), headers=self._auth())
+        assert _CMD_TOKEN not in caplog.text
+
+
+class TestRlhfProposalReview:
+    def _auth(self):
+        return {"Authorization": f"Bearer {_CMD_TOKEN}"}
+
+    def _create(self, db_url, **overrides):
+        payload = dict(
+            symbol="MSFT",
+            action="BUY",
+            rationale="Momentum breakout above 50DMA.",
+            confidence=0.6,
+            price=310.0,
+        )
+        payload.update(overrides)
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED", False):
+                    with mock.patch.object(settings, "DATABASE_URL", db_url):
+                        resp = client.post("/rlhf/proposals", json=payload, headers=self._auth())
+        assert resp.status_code == 200
+        return resp.json()
+
+    def test_404_not_found(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", db_url):
+                    resp = client.post(
+                        "/rlhf/proposals/999999/review",
+                        json={"human_rating": 4},
+                        headers=self._auth(),
+                    )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "not_found"
+
+    def test_409_already_reviewed(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        row = self._create(db_url)
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", db_url):
+                    first = client.post(
+                        f"/rlhf/proposals/{row['id']}/review",
+                        json={"human_rating": 3}, headers=self._auth(),
+                    )
+                    second = client.post(
+                        f"/rlhf/proposals/{row['id']}/review",
+                        json={"human_rating": 4}, headers=self._auth(),
+                    )
+        assert first.status_code == 200
+        assert second.status_code == 409
+        assert second.json()["detail"] == "already_reviewed"
+
+    def test_422_invalid_rating(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        row = self._create(db_url)
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", db_url):
+                    resp = client.post(
+                        f"/rlhf/proposals/{row['id']}/review",
+                        json={"human_rating": 9}, headers=self._auth(),
+                    )
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "invalid_rating"
+
+    def test_happy_path(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        row = self._create(db_url)
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", False):
+                    with mock.patch.object(settings, "DATABASE_URL", db_url):
+                        resp = client.post(
+                            f"/rlhf/proposals/{row['id']}/review",
+                            json={
+                                "human_rating": 4,
+                                "human_correction": "Good call, would size smaller.",
+                            },
+                            headers=self._auth(),
+                        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "reviewed"
+        assert body["human_rating"] == 4
+        assert body["human_correction"] == "Good call, would size smaller."
+        assert body["sft_exported"] is False
+
+    def test_auto_export_on_five_star_when_enabled(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        row = self._create(db_url)
+        out_dir = tmp_path / "output_rlhf"
+        out_dir.mkdir()
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", True):
+                    with mock.patch.object(settings, "DATABASE_URL", db_url):
+                        with mock.patch.object(settings, "OUTPUT_DIR", out_dir):
+                            resp = client.post(
+                                f"/rlhf/proposals/{row['id']}/review",
+                                json={"human_rating": 5},
+                                headers=self._auth(),
+                            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["sft_exported"] is True
+        sft_file = out_dir / "rlhf_sft_dataset.jsonl"
+        assert sft_file.exists()
+        lines = sft_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["messages"][-1]["role"] == "assistant"
+        assert "MSFT" in record["messages"][1]["content"]
+
+    def test_no_auto_export_when_flag_off(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        row = self._create(db_url)
+        out_dir = tmp_path / "output_rlhf_off"
+        out_dir.mkdir()
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", False):
+                    with mock.patch.object(settings, "DATABASE_URL", db_url):
+                        with mock.patch.object(settings, "OUTPUT_DIR", out_dir):
+                            resp = client.post(
+                                f"/rlhf/proposals/{row['id']}/review",
+                                json={"human_rating": 5},
+                                headers=self._auth(),
+                            )
+        assert resp.status_code == 200
+        assert resp.json()["sft_exported"] is False
+        assert not (out_dir / "rlhf_sft_dataset.jsonl").exists()
+
+    def test_write_never_logs_token(self, tmp_path, caplog):
+        db_url = _rlhf_db_url(tmp_path)
+        row = self._create(db_url)
+        with caplog.at_level("DEBUG"):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                    with mock.patch.object(settings, "DATABASE_URL", db_url):
+                        client.post(
+                            f"/rlhf/proposals/{row['id']}/review",
+                            json={"human_rating": 3}, headers=self._auth(),
+                        )
+        assert _CMD_TOKEN not in caplog.text
+
+
+class TestRlhfExportSft:
+    def _auth(self):
+        return {"Authorization": f"Bearer {_CMD_TOKEN}"}
+
+    def _create_and_review(self, db_url, rating, **overrides):
+        payload = dict(
+            symbol="GOOG",
+            action="SELL",
+            rationale="Overextended vs 50DMA.",
+            confidence=0.7,
+            price=150.0,
+        )
+        payload.update(overrides)
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED", False):
+                    with mock.patch.object(settings, "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", False):
+                        with mock.patch.object(settings, "DATABASE_URL", db_url):
+                            created = client.post(
+                                "/rlhf/proposals", json=payload, headers=self._auth()
+                            ).json()
+                            reviewed = client.post(
+                                f"/rlhf/proposals/{created['id']}/review",
+                                json={"human_rating": rating},
+                                headers=self._auth(),
+                            ).json()
+        return reviewed
+
+    def test_happy_path_exports_five_star_unexported_row(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        row = self._create_and_review(db_url, rating=5)
+        assert row["sft_exported"] is False
+
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", db_url):
+                    with mock.patch.object(settings, "OUTPUT_DIR", out_dir):
+                        resp = client.post("/rlhf/export-sft", headers=self._auth())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["exported_count"] == 1
+        assert body["proposal_ids"] == [row["id"]]
+        assert body["file"] == str(out_dir / "rlhf_sft_dataset.jsonl")
+        assert (out_dir / "rlhf_sft_dataset.jsonl").exists()
+
+        # A second call finds nothing left to export -- already marked.
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", db_url):
+                    with mock.patch.object(settings, "OUTPUT_DIR", out_dir):
+                        again = client.post("/rlhf/export-sft", headers=self._auth())
+        assert again.json()["exported_count"] == 0
+
+    def test_no_op_when_none_qualify(self, tmp_path):
+        db_url = _rlhf_db_url(tmp_path)
+        out_dir = tmp_path / "out2"
+        out_dir.mkdir()
+        self._create_and_review(db_url, rating=3)  # not 5-star -- doesn't qualify
+
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                with mock.patch.object(settings, "DATABASE_URL", db_url):
+                    with mock.patch.object(settings, "OUTPUT_DIR", out_dir):
+                        resp = client.post("/rlhf/export-sft", headers=self._auth())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["exported_count"] == 0
+        assert body["proposal_ids"] == []
+        assert not (out_dir / "rlhf_sft_dataset.jsonl").exists()
+
+    def test_fails_closed_when_rlhf_calibration_disabled(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", False):
+                resp = client.post("/rlhf/export-sft", headers=self._auth())
+        assert resp.status_code == 403
+
+    def test_401_on_wrong_command_token(self, tmp_path):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "RLHF_CALIBRATION_ENABLED", True):
+                resp = client.post("/rlhf/export-sft", headers={"Authorization": "Bearer WRONG"})
+        assert resp.status_code == 401
+
+
+class TestRlhfCalibrationInvariants:
+    def test_rlhf_calibration_enabled_is_gui_writable_but_never_secret(self):
+        """Mirrors test_reclassified_flags_are_now_gui_writable's assertions
+        (tests/test_gui_env_io.py): created directly in ALLOWED_KEYS per
+        AGENTS.md's 2026-08-03 convention, not hand-set-only — the endpoint
+        stays independently gated by FOLLOW_API_TOKEN regardless."""
+        assert "RLHF_CALIBRATION_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
+        assert "RLHF_CALIBRATION_ENABLED" not in pilots_api.env_io.SECRET_KEYS

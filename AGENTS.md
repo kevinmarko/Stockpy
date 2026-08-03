@@ -2,7 +2,7 @@
 
 This file is the model-agnostic onboarding prompt for **any** AI coding assistant
 (Claude, GPT, Gemini, Cursor, Aider, Codex, etc.) working in this repository. If
-your tool reads a tool-specific file instead (`CLAUDE.md`, `GEMINI.md`), read
+your tool reads a tool-specific file instead (`CLAUDE.md`), read
 this one first — it is the shortest path to not breaking something.
 
 ---

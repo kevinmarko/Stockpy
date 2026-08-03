@@ -2776,6 +2776,100 @@ export interface WatchResult {
 }
 
 // ---------------------------------------------------------------------------
+// RLHF Calibration Review Queue — nests INSIDE the Agentic Trading screen
+// (RlhfReviewQueue.tsx), NOT a standalone route and NOT the unrelated
+// `/calibration` statistical-reliability screen. An AI trading agent
+// proposes a hypothetical paper trade via an MCP tool + the API; a human
+// operator reviews it here and submits a 1-5 star rating plus an optional
+// corrective comment, feeding an eventual SFT (supervised fine-tuning)
+// export. There is deliberately no webapp-side "create proposal" form.
+// ---------------------------------------------------------------------------
+
+/**
+ * One AI-proposed hypothetical paper trade awaiting (or having received) a
+ * human rating. Every field the backend can legitimately omit is `| null`
+ * (CONSTRAINT #4 — never a fabricated default): `price`/`quantity` when the
+ * agent couldn't resolve a live quote, `rsi`/`sentiment_score` when that
+ * technical/sentiment input wasn't available, `extra_context` when the agent
+ * attached no additional structured context. `auto_approved` proposals are
+ * already `status: "reviewed"` with `human_rating: null` — they never appear
+ * in a pending queue and were never rated by a human.
+ */
+export interface RlhfProposal {
+  id: number;
+  created_at: string; // ISO timestamp
+  symbol: string;
+  action: "BUY" | "SELL" | "HOLD";
+  quantity: number | null;
+  price: number | null;
+  rationale: string;
+  confidence: number; // [0,1] fraction, NOT a percent
+  rsi: number | null;
+  sentiment_score: number | null;
+  extra_context: Record<string, unknown> | null;
+  status: "pending" | "reviewed";
+  human_rating: 1 | 2 | 3 | 4 | 5 | null;
+  human_correction: string | null;
+  reviewed_at: string | null;
+  auto_approved: boolean;
+  sft_exported: boolean;
+}
+
+/**
+ * GET /rlhf/summary -> kpis. `average_human_rating` is `null` (never a
+ * fabricated 0) until at least one proposal has actually been rated by a
+ * human. `rating_distribution` is keyed "1".."5".
+ */
+export interface RlhfKpis {
+  pending_count: number;
+  reviewed_count: number;
+  average_human_rating: number | null;
+  rating_distribution: Record<string, number>;
+  auto_approved_count: number;
+  sft_exported_count: number;
+}
+
+/**
+ * GET /rlhf/summary?limit=50 — the RLHF Review Queue's composite. `proposals`
+ * is the PENDING queue only (already-reviewed proposals still count toward
+ * `kpis`, just not this list). `writable` tracks
+ * `settings.RLHF_CALIBRATION_ENABLED` server-side (mirrors AgenticDiscovery's
+ * `writable`); `reason` is set when `proposals` is empty and there's a reason
+ * worth surfacing (e.g. "no proposals yet").
+ */
+export interface RlhfSummary {
+  proposals: RlhfProposal[];
+  kpis: RlhfKpis;
+  writable: boolean;
+  reason: string | null;
+}
+
+/** Body for POST /rlhf/proposals/{id}/review. */
+export interface RlhfReviewSubmitRequest {
+  human_rating: 1 | 2 | 3 | 4 | 5;
+  human_correction?: string;
+}
+
+/**
+ * POST /rlhf/proposals/{id}/review response — the updated proposal plus
+ * whether it triggered an SFT export as a side effect (`sft_exported` is
+ * already one of RlhfProposal's own fields; it's called out again here since
+ * that's the specific thing this response is confirming). A 404
+ * (`not_found`) or 409 (`already_reviewed`) surfaces as an `ApiError` with
+ * the stable tag in its message, per this endpoint's documented failure
+ * contract (a 422 `invalid_rating` is prevented client-side by the star
+ * control never submitting anything outside 1-5).
+ */
+export type RlhfReviewSubmitResult = RlhfProposal & { sft_exported: boolean };
+
+/** POST /rlhf/export-sft response. No request body. */
+export interface RlhfSftExportResult {
+  exported_count: number;
+  file: string;
+  proposal_ids: number[];
+}
+
+// ---------------------------------------------------------------------------
 // GET /data/ai/disagreements — G15: durable per-symbol Claude-vs-Gemini
 // verdict comparison. The legacy Streamlit AI Insights tab's "Aggregate
 // Claude vs Gemini disagreement" table is built from TWO st.session_state
