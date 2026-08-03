@@ -37,10 +37,12 @@ the tree:
 
 ``TestHandSetMarkerDrift``
     Re-derives the "never GUI-writable / hand-set in .env only" marker set
-    from the CURRENT ``settings.py`` (not from the committed census artifact,
-    which has no freshness guard of its own) and asserts it equals
-    ``HAND_SET_ONLY_KEYS``. This is the test that fires when someone adds a
-    hand-set-only field to ``settings.py`` and forgets this module.
+    from the CURRENT ``settings.py`` and asserts it equals
+    ``HAND_SET_ONLY_KEYS``, then cross-checks the committed census artifact
+    (which has its own freshness guard,
+    ``tests/test_measure_settings_census.py::TestCommittedArtifactIsFresh``)
+    as a secondary confirmation. This is the test that fires when someone
+    adds a hand-set-only field to ``settings.py`` and forgets this module.
 
 ``TestDangerousKeysAlreadyExposedByShippedEditors``
     Pins the exact set of ``DANGEROUS_KEYS`` that ALREADY have a live,
@@ -320,10 +322,15 @@ class TestHandSetMarkerDrift:
     """Source (a) must track ``settings.py``'s marker comments exactly.
 
     The authoritative check re-derives the markers from the CURRENT
-    ``settings.py`` using the census script's own detector. That matters:
-    ``docs/settings_field_census.json`` is a committed artifact with no
-    freshness test of its own, so comparing only against it would pass
-    silently if someone added a marker without regenerating the census.
+    ``settings.py`` using the census script's own detector, rather than
+    trusting the committed ``docs/settings_field_census.json`` outright.
+    That artifact does now have its own freshness guard (see
+    ``TestLivenessCrossReference`` above for the sibling pattern against
+    ``docs/settings_liveness.json``), but re-deriving here keeps a
+    marker-drift failure and a stale-census failure independently
+    diagnosable instead of one test's fix masking the other's cause. The
+    committed artifact is still cross-checked below as a secondary,
+    redundant confirmation.
     """
 
     @staticmethod
