@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "f5344d12ece3de05bd2e12c87cf040fb80db8db4",
+    "git_commit": "bf95b3a92eaf9709db108b97ba42baa32e0f86a8",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2769,7 +2769,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 338,
+    "files_scanned": 339,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2789,9 +2789,10 @@
       "_settings_singleton",
       "_wf_settings",
       "platform_settings",
-      "settings"
+      "settings",
+      "settings_module.settings"
     ],
-    "distinct_settings_alias_count": 17,
+    "distinct_settings_alias_count": 18,
     "form_a_attribute": {
       "total_reads": 624,
       "distinct_fields": 197,
@@ -3151,7 +3152,7 @@
       }
     },
     "form_c_getattr_dynamic": {
-      "total_sites": 15,
+      "total_sites": 17,
       "sites": [
         {
           "file": "Gravity AI Review Suite.py",
@@ -3227,6 +3228,16 @@
           "file": "llm/status_store.py",
           "line": 212,
           "expr": "getattr(settings, attr, None)"
+        },
+        {
+          "file": "runtime_flags_writer.py",
+          "line": 774,
+          "expr": "getattr(settings_module.settings, key, None)"
+        },
+        {
+          "file": "runtime_flags_writer.py",
+          "line": 783,
+          "expr": "getattr(settings_module.settings, key, None)"
         }
       ]
     },
