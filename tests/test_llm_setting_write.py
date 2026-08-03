@@ -111,6 +111,97 @@ class TestLlmSettingWriteHappyPath:
         assert _CMD_TOKEN not in caplog.text
 
 
+class TestLlmSettingWriteStringBooleanCoercion:
+    """Regression coverage for the string/bool mis-application bug.
+
+    ``LlmSettingUpdateRequest.value: Union[bool, str]`` means a JSON request
+    body like ``{"key": "LLM_COMMENTARY_ENABLED", "value": "false"}`` binds
+    ``body.value`` to the Python **string** ``"false"``, not the boolean
+    ``False`` — the ``str`` arm of the union matches the JSON string type
+    before pydantic ever considers coercing it to ``bool``. The endpoint used
+    to do a bare ``setattr(settings, key, body.value)`` for any
+    ``LIVE_PATCHABLE_KEYS`` field, which set that raw string directly onto a
+    ``bool`` field: ``bool("false")`` is ``True`` in plain Python, so the
+    capability was silently ENABLED in-process while ``.env`` correctly
+    recorded ``false`` — a live/on-disk split invisible to the caller, since
+    the response also echoed the raw uncoerced ``body.value``. The fix routes
+    the in-process mirror through ``Settings.__pydantic_validator__.
+    validate_assignment`` (real pydantic coercion, not a hand-rolled bool
+    parser) before mutating ``settings`` or building the response.
+    """
+
+    def test_json_string_false_coerces_to_actual_bool_false(self):
+        # Assertions on the mutated attribute happen INSIDE the patch
+        # contexts (see TestLlmSettingWriteLivePatch's comment below):
+        # mock.patch.object restores the PRE-patch value on __exit__
+        # regardless of any mutation during the block.
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", True):
+                    with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                        resp = _put("LLM_COMMENTARY_ENABLED", "false")
+                        assert resp.status_code == 200
+                        # (a) the in-process attribute is the real bool False
+                        # -- not a truthy non-empty string masquerading as one.
+                        assert settings.LLM_COMMENTARY_ENABLED is False
+                        # (b) the response echoes the COERCED bool, matching
+                        # what GET /llm/status will read next -- never the
+                        # raw "false" string.
+                        body = resp.json()
+                        assert body["value"] is False
+                        # (c) .env persistence is untouched by this fix --
+                        # env_io.write_setting still receives exactly the
+                        # request body's original value, and it already
+                        # serializes a JSON string "false" to .env correctly
+                        # on its own (that half of the pipeline was never
+                        # the bug).
+                        w.assert_called_once_with("LLM_COMMENTARY_ENABLED", "false")
+
+    def test_json_string_true_coerces_to_actual_bool_true(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", False):
+                    with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                        resp = _put("LLM_COMMENTARY_ENABLED", "true")
+                        assert resp.status_code == 200
+                        assert settings.LLM_COMMENTARY_ENABLED is True
+                        body = resp.json()
+                        assert body["value"] is True
+                        w.assert_called_once_with("LLM_COMMENTARY_ENABLED", "true")
+
+    def test_real_json_boolean_still_works_unchanged(self):
+        """The legitimate case -- an actual JSON boolean, not a string --
+        must keep behaving exactly as before: the coercion path is a no-op
+        for an already-correctly-typed value. Companion to
+        TestLlmSettingWriteHappyPath::test_writes_bool_toggle_and_echoes_request,
+        re-asserted here alongside the string cases for a direct before/after
+        comparison."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", False):
+                    with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                        resp = _put("LLM_COMMENTARY_ENABLED", True)
+                        assert resp.status_code == 200
+                        assert settings.LLM_COMMENTARY_ENABLED is True
+                        body = resp.json()
+                        assert body["value"] is True
+                        w.assert_called_once_with("LLM_COMMENTARY_ENABLED", True)
+
+    def test_uncoercible_value_rejected_cleanly_with_no_partial_write(self):
+        """A value pydantic can't coerce to bool at all (not "true"/"false"/
+        a real JSON bool) is rejected with 422 -- and NEITHER the in-process
+        settings attribute NOR .env is touched, so no partial write is left
+        behind on either side."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "LLM_WRITES_ENABLED", True):
+                with mock.patch.object(settings, "LLM_COMMENTARY_ENABLED", False):
+                    with mock.patch.object(pilots_api.env_io, "write_setting") as w:
+                        resp = _put("LLM_COMMENTARY_ENABLED", "not-a-bool")
+                        assert resp.status_code == 422
+                        assert settings.LLM_COMMENTARY_ENABLED is False
+                        assert w.call_count == 0
+
+
 class TestLlmSettingWriteLivePatch:
     """The whole point of this endpoint over a plain .env write: every key it
     validates against is read fresh via getattr(settings, ...) on each use
