@@ -54,6 +54,39 @@ def write_store(path: Path, flags: dict, *, version: int = runtime_flags.SCHEMA_
     return path
 
 
+def run_in_fresh_interpreter(
+    code: str, store: Path, *, scrub_env: tuple[str, ...] = ()
+) -> str:
+    """Run ``code`` in a pristine interpreter with the store path pointed at
+    ``store``; return its stdout.
+
+    A subprocess rather than an in-process check, because what is worth proving
+    here is a property of a REAL ``import settings`` — and this pytest process
+    already imported it at collection time, with ~1300 other tests free to have
+    patched the singleton since (``conftest.py`` alone patches four fields on
+    it via autouse fixtures). A fresh interpreter is both the stronger proof
+    and the only deterministic one under pytest-xdist.
+    """
+    env = dict(os.environ)
+    env[runtime_flags.PATH_OVERRIDE_ENV_VAR] = str(store)
+    for name in scrub_env:
+        env.pop(name, None)
+        env.pop(name.lower(), None)
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"`import settings` FAILED in a fresh interpreter.\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    return proc.stdout.strip()
+
+
 @pytest.fixture
 def no_dotenv(monkeypatch: pytest.MonkeyPatch):
     """Pin ``.env`` parsing to empty so env-pinning tests are deterministic.
@@ -231,40 +264,38 @@ class TestByteIdenticalWithNoFile:
         assert report.skipped_invalid == {}
         assert report.skipped_unknown == ()
 
-    def test_settings_singleton_matches_a_fresh_construction(self):
-        """End-to-end: the real singleton — which HAS been through the
-        settings.py integration point — equals a fresh, un-applied
-        ``Settings()``.
+    def test_real_singleton_matches_a_fresh_construction(self, tmp_path: Path):
+        """The whole-application version of the property, in a REAL process.
 
-        Skipped (not failed) if a real store file exists on this machine, since
-        then a difference would be correct behavior rather than a regression.
+        The singleton produced by a genuine ``import settings`` — which HAS run
+        the ``settings.py`` integration point — must be field-for-field
+        identical to a fresh, never-applied ``Settings()`` when no store file
+        exists. This is the claim the PR rests on.
 
-        The four excluded fields are patched on the singleton by ``conftest.py``'s
-        two AUTOUSE fixtures (``_no_gdelt_throttle_in_tests`` /
-        ``_no_fmp_throttle_in_tests``), which zero the real ``time.sleep``-based
-        rate limiters for every test in the suite. Their divergence is caused by
-        the test harness, not by this module, so comparing them here would
-        measure the fixtures. The remaining 316 fields still carry the property.
+        Runs in a fresh interpreter deliberately. Doing it in-process compares
+        a singleton that ~1300 tests (and ``conftest.py``'s own autouse
+        fixtures, which zero four rate-limiter fields on it) are free to have
+        patched, so an in-process version measures test pollution rather than
+        this module — it failed exactly that way under xdist before being
+        rewritten.
         """
-        if runtime_flags.DEFAULT_STORE_PATH.exists():
-            pytest.skip("a real runtime_flags.json exists on this machine")
-        if os.environ.get(runtime_flags.PATH_OVERRIDE_ENV_VAR):
-            pytest.skip("store path is overridden in this environment")
+        missing = tmp_path / "definitely-absent.json"
+        assert not missing.exists()
 
-        patched_by_conftest_autouse_fixtures = {
-            "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
-            "GDELT_RETRY_BACKOFF_SECONDS",
-            "FMP_MIN_REQUEST_INTERVAL_SECONDS",
-            "FMP_RETRY_BACKOFF_SECONDS",
-        }
-        live = settings_module.settings.model_dump()
-        fresh = Settings().model_dump()
-        for key in patched_by_conftest_autouse_fixtures:
-            live.pop(key, None)
-            fresh.pop(key, None)
-
-        assert len(fresh) >= 300, "sanity: the exclusion list must stay tiny"
-        assert live == fresh
+        out = run_in_fresh_interpreter(
+            "import settings\n"
+            "from settings import Settings\n"
+            "live = settings.settings.model_dump()\n"
+            "fresh = Settings().model_dump()\n"
+            "diff = sorted(k for k in live if live[k] != fresh[k])\n"
+            "assert len(live) >= 300, 'sanity: model should have ~320 fields'\n"
+            "print('EQUAL' if not diff else 'DIFFERS: ' + repr(diff))\n",
+            missing,
+        )
+        assert out == "EQUAL", (
+            f"the real settings singleton diverged from a fresh Settings() with "
+            f"no store file present — the no-op property is broken. {out}"
+        )
 
     def test_integration_point_ran_and_reported(self):
         """settings.py must actually expose the report — proves the wiring
@@ -649,25 +680,14 @@ class TestSettingsPyIntegration:
     store file on disk, produces an overridden singleton."""
 
     def _run(self, tmp_path: Path, store: Path, expr: str) -> str:
-        env = dict(os.environ)
-        env[runtime_flags.PATH_OVERRIDE_ENV_VAR] = str(store)
-        # Must not be env-pinned in the child, or the store would (correctly)
-        # be skipped and this test would be measuring the wrong thing.
-        env.pop("BETA_LOOKBACK_DAYS", None)
-        env.pop("beta_lookback_days", None)
-        proc = subprocess.run(
-            [sys.executable, "-c", f"import settings; print({expr})"],
-            cwd=str(REPO_ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=300,
+        # BETA_LOOKBACK_DAYS is scrubbed from the child's environment because a
+        # real shell export would (correctly) pin it and skip the store — this
+        # test would then be measuring the precedence rule, not the wiring.
+        return run_in_fresh_interpreter(
+            f"import settings; print({expr})",
+            store,
+            scrub_env=("BETA_LOOKBACK_DAYS",),
         )
-        assert proc.returncode == 0, (
-            f"`import settings` FAILED in a subprocess.\n"
-            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-        )
-        return proc.stdout.strip()
 
     def test_real_import_settings_applies_the_override(self, tmp_path: Path):
         store = write_store(tmp_path / "runtime_flags.json", {"BETA_LOOKBACK_DAYS": 377})

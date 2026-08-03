@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "7adbaeca70e2fca61eb8e21e8356674c97345741",
+    "git_commit": "901430f0a670751dd62dbdde72a9816ee5a11a14",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2686,7 +2686,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 330,
+    "files_scanned": 332,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3430,9 +3430,10 @@
       {
         "field": "AI_GENERATION_API_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:173"
+          "api/data_api.py:173",
+          "settings_keysets.py:250"
         ],
-        "name_literal_site_count": 1,
+        "name_literal_site_count": 2,
         "likely_dynamic_read": true
       },
       {
