@@ -490,6 +490,91 @@ function Candle(props: {
   );
 }
 
+function ForecastTooltip({ active, payload, label }: any) {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    const isForecast = data.mid !== undefined;
+
+    return (
+      <div
+        style={{
+          background: theme.surface3,
+          border: `1px solid ${theme.borderStrong}`,
+          borderRadius: 8,
+          padding: "var(--s-2) var(--s-3)",
+          color: theme.textPrimary,
+          fontSize: "var(--t-caption)",
+          boxShadow: "var(--shadow-card)",
+          minWidth: 180,
+        }}
+      >
+        <div
+          style={{
+            marginBottom: "var(--s-1-5)",
+            fontWeight: 600,
+            color: theme.textSecondary,
+            borderBottom: `1px solid ${theme.border}`,
+            paddingBottom: 4,
+          }}
+        >
+          {fmtDateTime(label)}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-1)" }}>
+          {!isForecast ? (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                <span style={{ color: theme.textSecondary }}>Close</span>
+                <span className="num" style={{ fontWeight: 700 }}>${data.c?.toFixed(2)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                <span style={{ color: theme.textSecondary }}>Open</span>
+                <span className="num">${data.o?.toFixed(2)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                <span style={{ color: theme.textSecondary }}>High</span>
+                <span className="num" style={{ color: theme.growth }}>${data.h?.toFixed(2)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                <span style={{ color: theme.textSecondary }}>Low</span>
+                <span className="num" style={{ color: theme.decline }}>${data.l?.toFixed(2)}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                <span style={{ color: theme.textSecondary, fontWeight: 600 }}>Forecast</span>
+                <span className="num" style={{ fontWeight: 700, color: theme.accent }}>${data.mid?.toFixed(2)}</span>
+              </div>
+              {data.coneLower !== undefined && data.coneLower !== null && data.coneUpper !== undefined && data.coneUpper !== null && (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                    <span style={{ color: theme.textSecondary }}>Cone High</span>
+                    <span className="num">${data.coneUpper?.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                    <span style={{ color: theme.textSecondary }}>Cone Low</span>
+                    <span className="num">${data.coneLower?.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
+                    <span style={{ color: theme.textSecondary }}>Interval</span>
+                    <span className="num" style={{ color: theme.caution }}>
+                      ${(data.coneUpper - data.coneLower).toFixed(2)} ({(
+                        ((data.coneUpper - data.coneLower) / data.mid) *
+                        100
+                      ).toFixed(1)}%)
+                    </span>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
 /**
  * ForecastCandleChart — price history as candlesticks + a forward projection
  * line + a confidence cone that widens per horizon, all on ONE continuous date
@@ -624,23 +709,7 @@ export function ForecastCandleChart({
             tickFormatter={(v: number) => v.toFixed(0)}
           />
           <Tooltip
-            contentStyle={chartTooltipStyle}
-            labelFormatter={(l) => fmtDateTime(String(l))}
-            formatter={(val, name, entry: { payload?: Row }) => {
-              const p: Row = entry?.payload ?? { date: "" };
-              if (name === "range")
-                return [typeof p.c === "number" ? p.c.toFixed(2) : "—", "Close"];
-              if (name === "mid")
-                return [typeof val === "number" ? val.toFixed(2) : "—", "Forecast"];
-              if (name === "coneLower")
-                return [typeof val === "number" ? val.toFixed(2) : "—", "Cone low"];
-              if (name === "coneBand")
-                return [
-                  typeof p.coneUpper === "number" ? p.coneUpper.toFixed(2) : "—",
-                  "Cone high",
-                ];
-              return [typeof val === "number" ? val.toFixed(2) : "—", name];
-            }}
+            content={<ForecastTooltip />}
             cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
           />
           {/* Confidence cone — stacked-area trick: an invisible baseline at
