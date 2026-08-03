@@ -122,9 +122,23 @@
       "line": 212,
       "resolved_by_factory": null,
       "rules": []
+    },
+    {
+      "expr": "getattr(settings_module.settings, key, None)",
+      "file": "runtime_flags_writer.py",
+      "line": 774,
+      "resolved_by_factory": null,
+      "rules": []
+    },
+    {
+      "expr": "getattr(settings_module.settings, key, None)",
+      "file": "runtime_flags_writer.py",
+      "line": 783,
+      "resolved_by_factory": null,
+      "rules": []
     }
   ],
-  "files_scanned": 338,
+  "files_scanned": 339,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",

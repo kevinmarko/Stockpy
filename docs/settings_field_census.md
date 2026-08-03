@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `f5344d12ece3de05bd2e12c87cf040fb80db8db4`
+- Measured at commit: `bf95b3a92eaf9709db108b97ba42baa32e0f86a8`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -213,22 +213,22 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **338** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **339** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
-The singleton is bound under **17** distinct local names
+The singleton is bound under **18** distinct local names
 across the tree, which is why this is an AST pass and not a grep:
 
 ```
-_S.settings, _bl_settings, _live_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings
+_S.settings, _bl_settings, _live_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings_module.settings
 ```
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 624 | 197 |
 | (b) `getattr(settings, "KEY", default)` | 244 | 149 |
-| (c) `getattr(settings, <var>)` (dynamic) | 15 sites | n/a — key not statically known |
+| (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 16 | 13 |
 
 Fields reached by at least one form: **317** of 326.
@@ -379,7 +379,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `SENTIMENT_LLM_VERIFICATION_PROVIDER` | b | 1 | 0 |
 | `VALIDATION_HARNESS_OOS_GATE_ENABLED` | b | 1 | 0 |
 
-### Dynamic `getattr` sites (form c) — **15**
+### Dynamic `getattr` sites (form c) — **17**
 
 The key is not a literal, so no static analysis can attribute these to a field name.
 
@@ -400,6 +400,8 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `gui/panels/settings_manager.py:203` | `getattr(settings, key, '')` |
 | `gui/panels/settings_manager.py:271` | `getattr(settings, key, [])` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
+| `runtime_flags_writer.py:774` | `getattr(settings_module.settings, key, None)` |
+| `runtime_flags_writer.py:783` | `getattr(settings_module.settings, key, None)` |
 
 ### Fields read via `os.environ` (form d) — 13 field(s)
 
