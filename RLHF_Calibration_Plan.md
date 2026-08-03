@@ -1,34 +1,56 @@
-# RLHF Calibration Plan Data App
+# RLHF Calibration Review Queue
 
-This document serves as the master plan for implementing the RLHF Calibration Plan Data App.
+**Status: shipped.** This document originally sketched a plan (routing to a
+new `/rlhf-calibration` page, a KPI panel citing RL-training metrics like
+"Reward Model Score"/"Policy KL Divergence", an optional AI chat panel).
+What actually got built differs from that sketch in a few load-bearing ways,
+documented below so a future reader doesn't go looking for a page or metric
+that was deliberately not built this way. See this PR's diff for the full
+implementation.
 
-## 1. Overview
-The RLHF (Reinforcement Learning from Human Feedback) Calibration Data App will be built as a new dashboard within the existing `webapp/` Pilots PWA. This ensures compliance with the project's strategy to use a unified React + Vite frontend for all operator-facing tooling.
+## What this is
 
-## 2. Technical Stack
-- **Frontend**: React + Vite (hosted in `webapp/`)
-- **Styling**: Vanilla CSS / Tailwind (matching existing zinc palette and minimal chrome style)
-- **Visualizations**: ECharts / Recharts (depending on existing dependencies in `webapp/package.json`)
-- **Backend API**: Python FastAPI (`api/pilots_api.py` or new dedicated router)
+A human operator reviews an AI trading agent's hypothetical **paper-trade
+proposals** — a symbol, action, rationale, confidence, and technical context
+snapshot — and submits a 1-5 star rating plus an optional corrective
+comment. A 5-star rating can be exported to a JSONL supervised-fine-tuning
+(SFT) dataset. Nothing here places a real order or touches real capital;
+proposals are entirely separate from `TransactionsStore` (which backs real-
+trade MAE/MFE evaluation) and from Alpaca paper-trading mode.
 
-## 3. Implementation Steps
+## Where it actually lives
 
-### Phase 1: Foundation
-1. **Routing**: Add a new route `/rlhf-calibration` in the main React application router.
-2. **Layout**: Create the base page component `RLHFCalibration.tsx` using the standard dashboard layout.
+- **Not a new route.** It's a "RLHF Review Queue" section nested inside the
+  existing `/agentic` screen (`webapp/src/screens/AgenticTrading.tsx`,
+  component `webapp/src/components/RlhfReviewQueue.tsx`). This repo already
+  has an unrelated `/calibration` screen (a statistical reliability curve —
+  conviction bins vs. realized win rate), so naming the new feature
+  "Calibration" anywhere user-facing would have collided with it.
+- **KPIs are the real, computable ones** — pending count, average human
+  rating, rating distribution, auto-approved count, SFT-exported count —
+  not the RL-training metrics originally sketched, which this platform
+  doesn't and won't compute (no RL policy training exists here).
+- **No chat panel.** Deferred as a separate follow-up.
+- **No webapp "create proposal" form.** Proposals originate only from an AI
+  agent, via a new MCP tool (`propose_paper_trade_for_review` in
+  `investyo_mcp_server.py`) or directly via `POST /rlhf/proposals`. The
+  webapp is review-only.
 
-### Phase 2: UI Components
-1. **KPI Metrics Panel**: A top-level panel showing key calibration metrics (e.g., Reward Model Score, Policy KL Divergence, Human Alignment Score).
-2. **Calibration Chart**: A time-series or scatter plot component (`CalibrationChart.tsx`) to visualize calibration drift over time.
-3. **Data Grid**: A tabular view of recent feedback samples and their corresponding model adjustments.
+## Where the pieces are
 
-### Phase 3: Backend Integration
-1. **API Endpoints**: Expose data from the backend via FastAPI endpoints (e.g., `GET /api/rlhf/metrics`, `GET /api/rlhf/history`).
-2. **Data Fetching Hooks**: Implement React hooks (`useRLHFMetrics`, `useRLHFHistory`) to fetch and cache data on the client side.
+| Layer | File |
+|---|---|
+| Store (SQLAlchemy, `rlhf_calibration_proposals` table) | `rlhf_calibration_store.py` |
+| Dependency-light read helper | `pilots/rlhf_review_queue.py` |
+| API endpoints | `api/pilots_api.py` (`GET /rlhf/summary`, `POST /rlhf/proposals`, `POST /rlhf/proposals/{id}/review`, `POST /rlhf/export-sft`) |
+| Settings | `settings.py` (`RLHF_CALIBRATION_ENABLED`, `RLHF_CALIBRATION_CONFIDENCE_THRESHOLD`, `RLHF_CALIBRATION_AUTO_APPROVE_ENABLED`, `RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED`) |
+| MCP tool | `investyo_mcp_server.py::propose_paper_trade_for_review` |
+| Webapp | `webapp/src/components/RlhfReviewQueue.tsx`, wired into `AgenticTrading.tsx` |
+| SFT export | `output/rlhf_sft_dataset.jsonl` (append-only, gitignored) |
 
-### Phase 4: Optional AI Chat Integration
-1. **Chat Panel**: If requested, integrate a Gemini-powered chat interface allowing natural language queries against the RLHF dataset.
-
-## 4. Unresolved Dependencies (Action Items)
-- **Data Source**: Determine which SQLite tables or external APIs hold the raw RLHF data.
-- **Specific Visualizations**: Finalize the exact metrics to be displayed on the charts.
+`RLHF_CALIBRATION_ENABLED` defaults `True` (paper-only, no capital/execution
+risk — ships active per this repo's 2026-08-03 admin-write-gate
+convention). The two auto-* behaviors (skip human review above a confidence
+threshold; auto-export a 5-star rating) default `False` — both change what
+counts as "reviewed"/"exported" without a human in the loop, so they stay
+opt-in.
