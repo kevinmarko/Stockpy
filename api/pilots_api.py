@@ -1882,14 +1882,18 @@ def _env_drift() -> Dict[str, Any]:
     daemon keep serving the OLD values until restart — this surfaces that pending
     change (mirrors ``GET /automation/schedule``'s ``drift`` field). Dead-letter:
     any parse failure -> ``detected: False`` (a hand-mangled ``.env`` must never
-    500)."""
+    500). Uses ``env_io.read_raw()`` for a single ``.env`` parse shared across
+    both keys, instead of one ``env_io.get_value()`` call (and thus one
+    full-file re-parse) per key."""
     keys: List[str] = []
     try:
+        raw_env = env_io.read_raw()
         for key, live in (
             ("SIGNAL_WEIGHTS", dict(settings.SIGNAL_WEIGHTS or {})),
             ("DISABLED_SIGNAL_MODULES", list(settings.DISABLED_SIGNAL_MODULES or [])),
         ):
-            raw = env_io.get_value(key, "")
+            value = raw_env.get(key)
+            raw = "" if value is None else str(value)
             if not raw:
                 continue
             on_disk = json.loads(raw)
@@ -3484,11 +3488,18 @@ def _tunables_env_drift(index_spec: Dict[str, tuple]) -> Dict[str, Any]:
     live singleton, so after a successful PUT this stays serving the OLD values
     until restart — this surfaces that pending change. Dead-letter per key: a
     parse failure for one key is skipped rather than failing the whole check
-    (CONSTRAINT #6 — a hand-mangled ``.env`` must never 500 this endpoint)."""
+    (CONSTRAINT #6 — a hand-mangled ``.env`` must never 500 this endpoint).
+    Calls ``env_io.read_raw()`` ONCE up front rather than ``env_io.get_value()``
+    per key — with up to ~133 tunables served across five of these calls per
+    settings-screen refresh, per-key ``get_value()`` calls meant a full ``.env``
+    re-parse per key; ``read_raw()`` never raises (see its own docstring), so
+    hoisting it above the per-key dead-letter loop is safe."""
     keys: List[str] = []
+    raw_env = env_io.read_raw()
     for key, (kind, _extras) in index_spec.items():
         try:
-            raw = env_io.get_value(key, "")
+            value = raw_env.get(key)
+            raw = "" if value is None else str(value)
             if raw == "":
                 continue
             live = getattr(settings, key, None)
