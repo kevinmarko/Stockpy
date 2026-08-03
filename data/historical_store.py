@@ -3600,10 +3600,20 @@ class HistoricalStore:
         from settings import settings  # avoid circular import at module top
 
         max_date = self.latest_bar_date(symbol)
-        # UTC-based date (tz-naive, midnight-normalized) for consistency with the
-        # fundamentals/macro paths, which use datetime.now(timezone.utc).date().
-        # Matches the tz-naive normalized bar dates returned by latest_bar_date().
-        today = pd.Timestamp(datetime.now(timezone.utc).date())
+        # Market-timezone (America/New_York) date, NOT UTC. Daily OHLCV bars are
+        # dated by the US trading day, and UTC is 4-5 hours AHEAD of ET -- a raw
+        # `datetime.now(timezone.utc).date()` flips to the next calendar date
+        # every evening (~8pm-midnight ET) while the US trading day hasn't
+        # actually advanced, making this check wrongly conclude a trading day
+        # has elapsed and attempt a top-up that isn't needed yet. For a
+        # readonly=True store (e.g. pilots/rolling_beta.py) that spurious
+        # top-up's write always fails ("attempt to write a readonly database"),
+        # which get_bars()'s except then silently converts into a real,
+        # unmocked live-provider fetch. Same ZoneInfo already used by
+        # resolve_trading_day()/execution/risk_gate.py/engine/advisory_agent.py
+        # for RTH detection -- tz-naive midnight-normalized to match the
+        # tz-naive normalized bar dates returned by latest_bar_date().
+        today = pd.Timestamp(datetime.now(_SENTIMENT_ET).date())
 
         if max_date is None:
             fetch_days = settings.BARS_BACKFILL_DAYS
