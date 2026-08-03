@@ -11,6 +11,17 @@ All threshold values are imported from ``settings``, ``validation.thresholds``,
 and ``engine.advisory.CONFIG`` so the explanations automatically stay in sync
 with the live configuration.  Never hard-code numeric thresholds here.
 
+**``settings.X`` values specifically must never be snapshotted into a
+module-level constant.**  ``settings`` is expected to be hot-reloadable
+in-process, so a plain ``_FOO = settings.BAR`` module-level assignment reads
+once at import time and is then stale for the lifetime of the process — this
+module is imported by live backend code (``api/pilots_api.py``,
+``pilots/models.py``), not only the GUI, so that staleness is a real bug, not
+a cosmetic one.  Any text that interpolates a ``settings.X`` value MUST be
+built from a zero-arg callable (see the small ``_kelly_cap_pct()``-style
+helpers below) evaluated at *read* time via ``resolved_plain_english()`` /
+``metric_help()`` / ``section_help()`` — never read a bare module constant.
+
 Exported public API
 -------------------
 ``GlossaryEntry``
@@ -39,7 +50,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 # Live threshold imports — do NOT replace these with hard-coded literals.
 from engine.advisory import CONFIG as _ADVISORY_CONFIG
@@ -71,17 +82,34 @@ class GlossaryEntry:
     ----------
     term : str
         Display name (title-cased).
-    plain_english : str
+    plain_english : str or Callable[[], str]
         One-to-three sentence explanation a non-quant can understand.
         Must not embed raw numeric thresholds — reference live values instead.
+        Entries whose text interpolates a live ``settings.X`` value store a
+        zero-arg callable here (built once at import time, but not *invoked*
+        until read) rather than a pre-formatted string, so the value reflects
+        whatever ``settings.X`` holds at read time, not at import time.  Use
+        :meth:`resolved_plain_english` to get the actual string — never read
+        this field directly unless you are prepared to handle both shapes.
     guide_anchor : str or None
         GitHub-style heading slug from ``docs/HOW_TO_GUIDE.md`` (includes
         the leading ``#``).  ``None`` when no dedicated section exists yet.
     """
 
     term: str
-    plain_english: str
+    plain_english: Union[str, Callable[[], str]]
     guide_anchor: Optional[str] = None
+
+    def resolved_plain_english(self) -> str:
+        """Return ``plain_english`` as a string, calling it if it is callable.
+
+        This is the correct way for any caller to read the explanation text —
+        it transparently handles both the plain-string case and the
+        live-config-sourced callable case.  Never raises: a callable is
+        assumed to be one of this module's own zero-arg helper functions.
+        """
+        value = self.plain_english
+        return value() if callable(value) else value
 
 
 @dataclass(frozen=True)
@@ -118,7 +146,7 @@ class TabHelp:
 
 def _g(
     term: str,
-    plain_english: str,
+    plain_english: Union[str, Callable[[], str]],
     guide_anchor: Optional[str] = None,
 ) -> GlossaryEntry:
     return GlossaryEntry(term=term, plain_english=plain_english, guide_anchor=guide_anchor)
@@ -144,23 +172,70 @@ def _t(
 # GLOSSARY — keyed by lower-cased term
 # ---------------------------------------------------------------------------
 # Every value in this section uses live imported constants rather than hard-coded
-# numbers.  f-strings are evaluated once at module-import time; if you need
-# dynamic values, use a function instead of a module-level dict entry.
+# numbers.  Plain f-strings are evaluated once at module-import time — fine for
+# constants that never change in-process (e.g. engine.advisory.CONFIG,
+# validation.thresholds).  But settings.X in particular is expected to be
+# hot-reloadable in-process (see settings.py), so ANY value read from
+# `settings.X` MUST be wrapped in a zero-arg function (below) and referenced by
+# calling that function *inside* the f-string/dict-value, never by reading a
+# module-level constant that snapshotted settings.X once at import time.  A
+# dict/GlossaryEntry value that itself interpolates one of these calls into a
+# final string must ALSO become a zero-arg callable (`lambda: f"...{_fn()}..."`)
+# rather than a plain string — otherwise the interpolation still only happens
+# once, at import time, and the fix is a no-op.  See resolved_plain_english() /
+# metric_help() / section_help(), which transparently call such callables.
 
 _VIX_THRESH = int(_ADVISORY_CONFIG["macro_vix_gate_threshold"])
 _SAHM_THRESH = _ADVISORY_CONFIG["macro_sahm_gate_threshold"]
-_KELLY_CAP_PCT = int(settings.KELLY_CAP * 100)
-_KELLY_FRACTION = settings.KELLY_FRACTION
-_CONV_DELTA = settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD
+
+
+def _kelly_cap_pct() -> int:
+    return int(settings.KELLY_CAP * 100)
+
+
+def _kelly_fraction() -> float:
+    return settings.KELLY_FRACTION
+
+
+def _conv_delta() -> float:
+    return settings.SNAPSHOT_CONVICTION_DELTA_THRESHOLD
+
+
 _RH_QUEUE_STALE_MIN = int(_RH_QUEUE_STALE_SECONDS // 60)
-_RH_MAX_NOTIONAL = settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
-_PROGRESS_POLL_SECONDS = settings.PROGRESS_POLL_SECONDS
-_SIZING_CAP_ALERT_THRESHOLD_PCT = int(settings.SIZING_CAP_ALERT_THRESHOLD_PCT * 100)
-_SIZING_CAP_ESCALATION_THRESHOLD_CYCLES = settings.SIZING_CAP_ESCALATION_THRESHOLD_CYCLES
-_SIZING_CAP_ESCALATION_FACTOR = settings.SIZING_CAP_ESCALATION_FACTOR
-_ETF_TRANSMISSION_MAX_DERATE_PCT = int(settings.ETF_TRANSMISSION_MAX_DERATE * 100)
-_ETF_TRANSMISSION_OWNERSHIP_REFERENCE_PCT = int(settings.ETF_TRANSMISSION_OWNERSHIP_REFERENCE * 100)
-_ETF_TRANSMISSION_MIN_MULTIPLIER = settings.ETF_TRANSMISSION_MIN_MULTIPLIER
+
+
+def _rh_max_notional() -> float:
+    return settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
+
+
+def _progress_poll_seconds() -> int:
+    return settings.PROGRESS_POLL_SECONDS
+
+
+def _sizing_cap_alert_threshold_pct() -> int:
+    return int(settings.SIZING_CAP_ALERT_THRESHOLD_PCT * 100)
+
+
+def _sizing_cap_escalation_threshold_cycles() -> int:
+    return settings.SIZING_CAP_ESCALATION_THRESHOLD_CYCLES
+
+
+def _sizing_cap_escalation_factor() -> float:
+    return settings.SIZING_CAP_ESCALATION_FACTOR
+
+
+def _etf_transmission_max_derate_pct() -> int:
+    return int(settings.ETF_TRANSMISSION_MAX_DERATE * 100)
+
+
+def _etf_transmission_ownership_reference_pct() -> int:
+    return int(settings.ETF_TRANSMISSION_OWNERSHIP_REFERENCE * 100)
+
+
+def _etf_transmission_min_multiplier() -> float:
+    return settings.ETF_TRANSMISSION_MIN_MULTIPLIER
+
+
 # Retrain window (days) used by the Analytics ML-model-monitoring section to
 # flag a stale model. No dedicated setting exists, so this mirrors the default
 # ml.meta_labeling.MetaLabeler(retrain_freq_days=30) cadence and the LGBM ranker's
@@ -213,19 +288,23 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     # ── Sizing & Kelly ────────────────────────────────────────────────────────
     "kelly target": _g(
         "Kelly Target",
-        f"The suggested fraction of your total capital to put into one position, "
-        f"derived from the fractional Kelly formula using your real trade history.  "
-        f"The formula's raw result is capped at {_KELLY_CAP_PCT}% "
-        f"(KELLY_CAP) and then further capped by a per-name advisory ceiling.  "
-        f"A value of 0.14 means 'up to 14% of your capital' — still advisory only.",
+        lambda: (
+            "The suggested fraction of your total capital to put into one position, "
+            "derived from the fractional Kelly formula using your real trade history.  "
+            f"The formula's raw result is capped at {_kelly_cap_pct()}% "
+            "(KELLY_CAP) and then further capped by a per-name advisory ceiling.  "
+            "A value of 0.14 means 'up to 14% of your capital' — still advisory only."
+        ),
         "#8-understanding-position-sizing-kelly-target",
     ),
     "kelly fraction": _g(
         "Kelly Fraction",
-        f"A safety multiplier applied to the raw Kelly bet.  The platform uses "
-        f"{_KELLY_FRACTION} (half-Kelly), which cuts the theoretical bet in "
-        f"half to reduce the risk of ruin from estimation errors in win-rate "
-        f"and payoff calculations.",
+        lambda: (
+            "A safety multiplier applied to the raw Kelly bet.  The platform uses "
+            f"{_kelly_fraction()} (half-Kelly), which cuts the theoretical bet in "
+            "half to reduce the risk of ruin from estimation errors in win-rate "
+            "and payoff calculations."
+        ),
         "#8-understanding-position-sizing-kelly-target",
     ),
     "vol-target fallback": _g(
@@ -257,10 +336,12 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     ),
     "conviction delta": _g(
         "Conviction Delta",
-        f"The change in conviction between two pipeline runs for the same ticker.  "
-        f"Moves of ≥ {_CONV_DELTA} are highlighted in the 'Δ Since Last Run' band "
-        f"at the top of the HTML report so you can quickly spot meaningful shifts "
-        f"without reading every row.",
+        lambda: (
+            "The change in conviction between two pipeline runs for the same ticker.  "
+            f"Moves of ≥ {_conv_delta()} are highlighted in the 'Δ Since Last Run' band "
+            "at the top of the HTML report so you can quickly spot meaningful shifts "
+            "without reading every row."
+        ),
         "#6-understanding-the-output",
     ),
     "calibration": _g(
@@ -1110,8 +1191,13 @@ TAB_HELP: Dict[str, TabHelp] = {
 # ---------------------------------------------------------------------------
 # SECTION_HELP — section-level tooltip strings (used in panel headers)
 # ---------------------------------------------------------------------------
+# Values are ordinarily plain strings.  A value that interpolates a live
+# settings.X value is instead a zero-arg callable (see comment above GLOSSARY)
+# so it is read fresh on every section_help() call — never call METRIC_HELP /
+# SECTION_HELP dict values directly; always go through metric_help()/
+# section_help(), which resolve either shape transparently.
 
-SECTION_HELP: Dict[str, str] = {
+SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     "strategy_matrix.mode_consistency": (
         "ALPACA_PAPER and DRY_RUN are written together so the mode is "
         "fully consistent — no half-flips."
@@ -1226,9 +1312,9 @@ SECTION_HELP: Dict[str, str] = {
         "placement the receipts log doesn't confirm — investigate before the next "
         "run. The ledger is tolerated as absent (no placements yet)."
     ),
-    "pipeline_progress": (
+    "pipeline_progress": lambda: (
         "Percentage of pipeline stages completed for the current run.  "
-        f"Refreshes every {_PROGRESS_POLL_SECONDS} seconds while a run is "
+        f"Refreshes every {_progress_poll_seconds()} seconds while a run is "
         "active.  Advisory-only — no orders are placed; this only reflects "
         "analysis progress."
     ),
@@ -1244,30 +1330,30 @@ SECTION_HELP: Dict[str, str] = {
         "(FRED data).  They reflect conditions at pipeline execution time, "
         "not real-time — run the orchestrator to refresh."
     ),
-    "observability.etf_transmission": (
+    "observability.etf_transmission": lambda: (
         "Ben-David, Franzoni & Moussawi (2018): ETF arbitrage transmits a "
         "shock in one constituent to its otherwise-healthy basket peers, so "
         "a heavily ETF-wrapped name carries extra non-fundamental, "
         "non-diversifiable variance. Three independent, opt-in layers: "
         "measurement (`ETF_Ownership_Pct`/`ETF_Comovement_R2`/"
         "`ETF_Primary_Wrapper`), a per-name sizing derate (up to "
-        f"{_ETF_TRANSMISSION_MAX_DERATE_PCT}% at "
-        f"{_ETF_TRANSMISSION_OWNERSHIP_REFERENCE_PCT}%+ ETF ownership, "
-        f"floored at {_ETF_TRANSMISSION_MIN_MULTIPLIER:.2f}x), and a "
+        f"{_etf_transmission_max_derate_pct()}% at "
+        f"{_etf_transmission_ownership_reference_pct()}%+ ETF ownership, "
+        f"floored at {_etf_transmission_min_multiplier():.2f}x), and a "
         "portfolio-level covariance overlay that inflates co-movement "
         "between co-held names in the gross-exposure cap. This panel is "
         "read-only — it never writes a setting."
     ),
-    "observability.sizing_cap_audit": (
+    "observability.sizing_cap_audit": lambda: (
         "Durable log of position-sizing guardrail events — `sizing/"
         "position_sizer.py`'s `was_capped`/`binding_constraint` telemetry, "
         "persisted every cycle (`sizing/cap_audit_store.py`) instead of being "
         "overwritten. Shows which names have hit KELLY_CAP, "
         "MAX_POSITION_WEIGHT, the portfolio-wide MAX_PORTFOLIO_GROSS cap, or "
-        f"cap-aware escalation (a name capped {_SIZING_CAP_ESCALATION_THRESHOLD_CYCLES} "
-        f"consecutive cycles is down-weighted {_SIZING_CAP_ESCALATION_FACTOR:.2f}x when "
+        f"cap-aware escalation (a name capped {_sizing_cap_escalation_threshold_cycles()} "
+        f"consecutive cycles is down-weighted {_sizing_cap_escalation_factor():.2f}x when "
         f"enabled), and how often — not just this cycle's snapshot. A "
-        f"threshold alert fires when ≥{_SIZING_CAP_ALERT_THRESHOLD_PCT}% of names "
+        f"threshold alert fires when ≥{_sizing_cap_alert_threshold_pct()}% of names "
         "are capped in one cycle."
     ),
     "strategy_health_gates": (
@@ -1323,12 +1409,14 @@ SECTION_HELP: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 # METRIC_HELP — column/metric-level tooltip strings
 # ---------------------------------------------------------------------------
+# Same rule as SECTION_HELP above: a value that interpolates a live settings.X
+# value is a zero-arg callable, resolved transparently by metric_help().
 
-METRIC_HELP: Dict[str, str] = {
-    "Kelly Target": (
-        f"Suggested position size as a fraction of capital (e.g. 0.14 = 14%).  "
-        f"Capped at {_KELLY_CAP_PCT}% by KELLY_CAP and further capped by the "
-        f"advisory single-name ceiling.  Always advisory — not an instruction to trade."
+METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
+    "Kelly Target": lambda: (
+        "Suggested position size as a fraction of capital (e.g. 0.14 = 14%).  "
+        f"Capped at {_kelly_cap_pct()}% by KELLY_CAP and further capped by the "
+        "advisory single-name ceiling.  Always advisory — not an instruction to trade."
     ),
     "Conviction": (
         "Confidence score [0, 1].  Combined from signal strength, macro alignment, "
@@ -1534,11 +1622,11 @@ METRIC_HELP: Dict[str, str] = {
     ),
 
     # ── Robinhood execution bridge — per-intent status + reconciliation ──────
-    "robinhood_execution.placed_count": (
+    "robinhood_execution.placed_count": lambda: (
         "Rows in the append-only placement ledger "
         "(`output/execution_placed.jsonl`) — one per real order the agent "
         "submitted (each capped at "
-        f"${_RH_MAX_NOTIONAL:,.2f} notional/order via "
+        f"${_rh_max_notional():,.2f} notional/order via "
         "`ROBINHOOD_MAX_NOTIONAL_PER_ORDER`)."
     ),
     "robinhood_execution.matched": (
@@ -1679,8 +1767,16 @@ def get_glossary(term: str) -> Optional[GlossaryEntry]:
 
 
 def metric_help(key: str) -> str:
-    """Return the tooltip string for column *key*, or empty string if unknown."""
-    return METRIC_HELP.get(key, "")
+    """Return the tooltip string for column *key*, or empty string if unknown.
+
+    A METRIC_HELP value that interpolates a live ``settings.X`` value is
+    stored as a zero-arg callable (see the comment above METRIC_HELP) rather
+    than a plain string — resolved here, on every call, so the returned text
+    always reflects the current ``settings.X`` value, never a stale snapshot
+    taken at module-import time.
+    """
+    value = METRIC_HELP.get(key, "")
+    return value() if callable(value) else value
 
 
 def section_help(key: str) -> str:
@@ -1688,9 +1784,12 @@ def section_help(key: str) -> str:
 
     Mirrors :func:`metric_help` — an empty string is the correct sentinel for a
     missing key (renders no caption, never raises — CONSTRAINT #6).  Never add a
-    default-fallback value here; ``""`` is the intended miss behaviour.
+    default-fallback value here; ``""`` is the intended miss behaviour.  Also
+    mirrors :func:`metric_help` in resolving a zero-arg-callable value (a
+    live-``settings.X``-sourced entry) on every call, never at import time.
     """
-    return SECTION_HELP.get(key, "")
+    value = SECTION_HELP.get(key, "")
+    return value() if callable(value) else value
 
 
 def search_glossary(query: str) -> List[GlossaryEntry]:
@@ -1704,7 +1803,7 @@ def search_glossary(query: str) -> List[GlossaryEntry]:
     results: List[GlossaryEntry] = []
     try:
         for entry in GLOSSARY.values():
-            if q in entry.term.lower() or q in entry.plain_english.lower():
+            if q in entry.term.lower() or q in entry.resolved_plain_english().lower():
                 results.append(entry)
     except Exception:  # pragma: no cover — defensive guard only
         logger.warning("search_glossary: unexpected error for query %r", query)

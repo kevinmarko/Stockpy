@@ -186,7 +186,10 @@ class TestGlossary:
         from gui.help_content import GLOSSARY
 
         for key, entry in GLOSSARY.items():
-            assert entry.plain_english.strip(), f"plain_english is empty for {key!r}"
+            # Some entries store plain_english as a zero-arg callable (values
+            # sourced from live settings.X) rather than a plain string —
+            # resolved_plain_english() handles both transparently.
+            assert entry.resolved_plain_english().strip(), f"plain_english is empty for {key!r}"
 
     def test_advisory_mode_entry_mentions_no_orders(self) -> None:
         from gui.help_content import GLOSSARY
@@ -297,7 +300,12 @@ class TestSectionAndMetricHelp:
         from gui.help_content import SECTION_HELP
 
         for k, v in SECTION_HELP.items():
-            assert isinstance(v, str) and v.strip(), f"SECTION_HELP[{k!r}] is empty or not a string"
+            # Some values are zero-arg callables (values sourced from live
+            # settings.X) rather than plain strings — resolve before checking.
+            resolved = v() if callable(v) else v
+            assert isinstance(resolved, str) and resolved.strip(), (
+                f"SECTION_HELP[{k!r}] is empty or not a string"
+            )
 
     def test_metric_help_non_empty(self) -> None:
         from gui.help_content import METRIC_HELP
@@ -308,9 +316,10 @@ class TestSectionAndMetricHelp:
         from gui.help_content import METRIC_HELP
 
         for key in ("Kelly Target", "Conviction", "VIX", "RSI", "GARCH Vol"):
-            assert key in METRIC_HELP and METRIC_HELP[key].strip(), (
-                f"METRIC_HELP[{key!r}] is missing or empty"
-            )
+            assert key in METRIC_HELP
+            value = METRIC_HELP[key]
+            resolved = value() if callable(value) else value
+            assert resolved.strip(), f"METRIC_HELP[{key!r}] is missing or empty"
 
 
 # ---------------------------------------------------------------------------

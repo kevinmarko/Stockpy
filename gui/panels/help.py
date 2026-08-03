@@ -120,7 +120,7 @@ def render_help() -> None:
     else:
         for entry in results:
             with st.expander(f"**{entry.term}**"):
-                st.markdown(entry.plain_english)
+                st.markdown(entry.resolved_plain_english())
                 if entry.guide_anchor:
                     _section = _load_guide_section(entry.guide_anchor)
                     if _section:
