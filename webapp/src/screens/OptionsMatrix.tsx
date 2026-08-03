@@ -13,7 +13,7 @@ import { Button, ErrorState, Input, InfoTip, Loading, Notice, Select, StaleDataN
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
-import { fmtNum, fmtUsd, timeAgo } from "../format";
+import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { realizableTheta, effectiveIvr } from "../optionsHonesty";
 import {
@@ -229,6 +229,19 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
         {typeof d.Net_Debt_EBITDA === "number" && (
           <span style={{ fontSize: "var(--t-micro)", color: theme.textSecondary }}>
             Net Debt/EBITDA: <span className="num">{fmtNum(d.Net_Debt_EBITDA, 1)}x</span>
+          </span>
+        )}
+        {typeof d.Piotroski_F_Score === "number" && (
+          <span
+            className={`badge ${d.Piotroski_F_Score >= 7 ? "badge-good" : d.Piotroski_F_Score <= 3 ? "badge-bad" : "badge-warn"}`}
+            title="Piotroski F-Score (0-9): >= 7 Strong, <= 3 Weak"
+          >
+            F-Score: {d.Piotroski_F_Score}/9
+          </span>
+        )}
+        {typeof d.FCF_Yield === "number" && (
+          <span style={{ fontSize: "var(--t-micro)", color: theme.textSecondary }}>
+            FCF Yield: <span className="num">{fmtPct(d.FCF_Yield, 1, { fromFraction: true, signed: true })}</span>
           </span>
         )}
         {isFlagged(d) && (
@@ -521,6 +534,84 @@ function DetailSheet({ d, dte, asOf, onClose }: { d: OptionsDirective; dte: numb
           </ul>
         )}
       </section>
+
+      {/* Analyst Consensus -- CONSTRAINT #4: no placeholder/empty state when
+          absent, matching every other conditional section on this screen. */}
+      {d.Analyst_Target_Consensus != null && (
+        <section style={{ marginTop: "var(--s-4)" }}>
+          <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1-5)" }}>Analyst Consensus</h3>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-3)", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>Price Target</div>
+              <div className="num" style={{ fontSize: "var(--t-input)", fontWeight: 700 }}>
+                {fmtUsd(d.Analyst_Target_Consensus)}
+              </div>
+            </div>
+            {(() => {
+              const upside =
+                d.Analyst_Target_Upside != null
+                  ? d.Analyst_Target_Upside
+                  : d.Price != null && d.Price > 0
+                    ? d.Analyst_Target_Consensus! / d.Price - 1
+                    : null;
+              if (upside == null) return null;
+              const color = upside >= 0 ? theme.growth : theme.decline;
+              return (
+                <div>
+                  <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700, textTransform: "uppercase" }}>
+                    {upside >= 0 ? "Upside" : "Downside"}
+                  </div>
+                  <div className="num" style={{ fontSize: "var(--t-input)", fontWeight: 700, color }}>
+                    {fmtPct(upside, 1, { fromFraction: true, signed: true })}
+                  </div>
+                </div>
+              );
+            })()}
+            {typeof d.Analyst_Grade_Score === "number" && (
+              <span
+                className={`badge ${d.Analyst_Grade_Score > 0.15 ? "badge-good" : d.Analyst_Grade_Score < -0.15 ? "badge-bad" : "badge-warn"}`}
+                title="Analyst grade score: net buy-rated tilt, roughly in [-1, 1]"
+              >
+                Grade {fmtNum(d.Analyst_Grade_Score, 2)}
+              </span>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* News & Peers -- two independently-conditional sub-blocks. */}
+      {((Array.isArray(d.News_Snippets) && d.News_Snippets.length > 0) ||
+        (Array.isArray(d.Peers) && d.Peers.length > 0)) && (
+        <section style={{ marginTop: "var(--s-4)" }}>
+          <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1-5)" }}>News & Peers</h3>
+          {Array.isArray(d.News_Snippets) && d.News_Snippets.length > 0 && (
+            <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+              {d.News_Snippets.map((n, i) => (
+                <li key={i} style={{ marginBottom: "var(--s-1-5)" }}>
+                  <a
+                    href={n.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: theme.accent, fontSize: "var(--t-label)", fontWeight: 600, textDecoration: "none" }}
+                  >
+                    {n.title}
+                  </a>
+                  <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginTop: 2 }}>
+                    {[n.site, n.published_date].filter(Boolean).join(" · ")}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {Array.isArray(d.Peers) && d.Peers.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-1-5)", marginTop: "var(--s-2)" }}>
+              {d.Peers.map((p) => (
+                <span key={p} className="chip">{p}</span>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <div style={{ marginTop: "var(--s-4-5)" }}>
         <Link to={`/symbol/${d.Symbol}`} className="btn" style={{ display: "inline-block" }}>

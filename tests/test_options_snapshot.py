@@ -84,6 +84,8 @@ def enabled(monkeypatch):
     monkeypatch.setattr(settings, "OPTIONS_MATRIX_ENABLED", True)
     monkeypatch.setattr(settings, "FMP_OPTIONS_HEALTH_ENABLED", False)
     monkeypatch.setattr(settings, "FMP_EARNINGS_ENABLED", False)
+    monkeypatch.setattr(settings, "FMP_OPTIONS_CONTEXT_ENABLED", False)
+    monkeypatch.setattr(settings, "FMP_ANALYST_ENABLED", False)
     return settings
 
 
@@ -119,17 +121,26 @@ class TestWriteOptionsMatrixFmpFlagsOff:
         assert directive["Days_To_Earnings"] is None
         assert directive["Earnings_Risk"] is False
         assert directive["Realized_Vol_30D"] is None
+        assert directive["News_Snippets"] == []
+        assert directive["Peers"] == []
+        assert directive["Analyst_Target_Consensus"] is None
+        assert directive["Analyst_Target_Upside"] is None
+        assert directive["Analyst_Grade_Score"] is None
 
     def test_fmp_fetch_functions_never_imported_or_called(self, enabled, tmp_path):
         with patch("data.fmp_feeds_company.fetch_financial_scores") as mock_scores, \
              patch("data.fmp_feeds_company.fetch_key_ratios_ttm") as mock_ratios, \
              patch("data.fmp_feeds_market.fetch_realized_volatility") as mock_vol, \
+             patch("data.fmp_feeds_company.fetch_stock_news") as mock_news, \
+             patch("data.fmp_feeds_market.fetch_peer_group") as mock_peers, \
              patch("data.historical_store.HistoricalStore") as mock_store:
             write_options_matrix(["AAPL"], provider=_FakeProvider(), output_dir=tmp_path)
 
         mock_scores.assert_not_called()
         mock_ratios.assert_not_called()
         mock_vol.assert_not_called()
+        mock_news.assert_not_called()
+        mock_peers.assert_not_called()
         mock_store.assert_not_called()
 
 
@@ -247,3 +258,125 @@ class TestWriteOptionsMatrixEarningsFlagOn:
         directive = payload["directives"][0]
         assert directive["Days_To_Earnings"] is None
         assert directive["Symbol"] == "AAPL"
+
+
+class TestWriteOptionsMatrixContextFlagOn:
+    """settings.FMP_OPTIONS_CONTEXT_ENABLED -- news headlines (capped at 3) +
+    peer-group tickers, each independently try/excepted per symbol."""
+
+    def test_news_and_peers_populate_the_directive(self, enabled, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_OPTIONS_CONTEXT_ENABLED", True)
+        news = [
+            {"title": "Headline 1", "url": "http://x/1", "published_date": "2026-08-01", "site": "s"},
+            {"title": "Headline 2", "url": "http://x/2", "published_date": "2026-08-01", "site": "s"},
+        ]
+        with patch(
+            "data.fmp_feeds_company.fetch_stock_news", return_value=news,
+        ) as mock_news, patch(
+            "data.fmp_feeds_market.fetch_peer_group", return_value=["MSFT", "GOOGL"],
+        ):
+            write_options_matrix(["AAPL"], provider=_FakeProvider(), output_dir=tmp_path)
+
+        payload = json.loads((tmp_path / "options_matrix.json").read_text())
+        directive = payload["directives"][0]
+        assert directive["News_Snippets"] == news
+        assert directive["Peers"] == ["MSFT", "GOOGL"]
+        # Capped at 3, not fetch_stock_news's own default of 5.
+        mock_news.assert_called_once_with("AAPL", limit=3)
+
+    def test_a_failing_news_fetch_does_not_blank_peers_or_abort_the_row(
+        self, enabled, tmp_path, monkeypatch,
+    ):
+        """fetch_stock_news raising must not prevent fetch_peer_group's real
+        data (or the base directive) from still landing on the SAME symbol's
+        row (CONSTRAINT #6 -- one bad sub-fetch is dead-lettered independently)."""
+        monkeypatch.setattr(settings, "FMP_OPTIONS_CONTEXT_ENABLED", True)
+        with patch(
+            "data.fmp_feeds_company.fetch_stock_news", side_effect=RuntimeError("news boom"),
+        ), patch(
+            "data.fmp_feeds_market.fetch_peer_group", return_value=["MSFT"],
+        ):
+            path = write_options_matrix(["AAPL"], provider=_FakeProvider(), output_dir=tmp_path)
+
+        assert path is not None
+        payload = json.loads((tmp_path / "options_matrix.json").read_text())
+        directive = payload["directives"][0]
+        assert directive["News_Snippets"] == []
+        assert directive["Peers"] == ["MSFT"]
+        assert directive["Symbol"] == "AAPL"
+        assert "Strategy" in directive
+
+
+class TestWriteOptionsMatrixAnalystFlagOn:
+    """settings.FMP_ANALYST_ENABLED (pre-existing flag, no new flag added here)
+    -- analyst consensus is READ from the existing HistoricalStore
+    analyst-snapshot table, never fetched fresh by this writer."""
+
+    def test_analyst_snapshot_populates_the_directive_including_upside(
+        self, enabled, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setattr(settings, "FMP_ANALYST_ENABLED", True)
+        mock_store = MagicMock()
+        mock_store.get_analyst_snapshot.return_value = {
+            "target_consensus": 180.0, "grade_score": 0.4,
+        }
+        with patch("data.historical_store.HistoricalStore", return_value=mock_store):
+            write_options_matrix(
+                ["AAPL"], provider=_FakeProvider({"AAPL": 150.0}), output_dir=tmp_path,
+            )
+
+        payload = json.loads((tmp_path / "options_matrix.json").read_text())
+        directive = payload["directives"][0]
+        assert directive["Analyst_Target_Consensus"] == pytest.approx(180.0)
+        assert directive["Analyst_Target_Upside"] == pytest.approx((180.0 / 150.0) - 1.0)
+        assert directive["Analyst_Grade_Score"] == pytest.approx(0.4)
+
+    def test_store_read_failure_degrades_to_none_without_aborting_the_row(
+        self, enabled, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setattr(settings, "FMP_ANALYST_ENABLED", True)
+        mock_store = MagicMock()
+        mock_store.get_analyst_snapshot.side_effect = RuntimeError("db boom")
+        with patch("data.historical_store.HistoricalStore", return_value=mock_store):
+            path = write_options_matrix(["AAPL"], provider=_FakeProvider(), output_dir=tmp_path)
+
+        assert path is not None
+        payload = json.loads((tmp_path / "options_matrix.json").read_text())
+        directive = payload["directives"][0]
+        assert directive["Analyst_Target_Consensus"] is None
+        assert directive["Analyst_Target_Upside"] is None
+        assert directive["Analyst_Grade_Score"] is None
+        assert directive["Symbol"] == "AAPL"
+
+    def test_missing_or_non_positive_price_leaves_upside_none(self, enabled, tmp_path, monkeypatch):
+        """A valid target_consensus with an unusable price must still surface
+        the consensus itself -- only the upside ratio (which needs a real
+        positive price to anchor against) degrades to None."""
+        monkeypatch.setattr(settings, "FMP_ANALYST_ENABLED", True)
+        mock_store = MagicMock()
+        mock_store.get_analyst_snapshot.return_value = {"target_consensus": 180.0}
+        with patch("data.historical_store.HistoricalStore", return_value=mock_store):
+            write_options_matrix(
+                ["AAPL"], provider=_FakeProvider({"AAPL": 0.0}), output_dir=tmp_path,
+            )
+
+        payload = json.loads((tmp_path / "options_matrix.json").read_text())
+        directive = payload["directives"][0]
+        assert directive["Analyst_Target_Consensus"] == pytest.approx(180.0)
+        assert directive["Analyst_Target_Upside"] is None
+
+    def test_fresh_fetch_function_is_never_called(self, enabled, tmp_path, monkeypatch):
+        """Load-bearing: proves the store-read design, not a fresh fetch --
+        the FMP fresh-fetch analyst function must never be invoked anywhere
+        in this reporting/options_snapshot.py write path."""
+        monkeypatch.setattr(settings, "FMP_ANALYST_ENABLED", True)
+        mock_store = MagicMock()
+        mock_store.get_analyst_snapshot.return_value = {
+            "target_consensus": 180.0, "grade_score": 0.4,
+        }
+        with patch("data.historical_store.HistoricalStore", return_value=mock_store), patch(
+            "data.fmp_feeds_company.fetch_analyst_snapshot",
+        ) as mock_fresh_fetch:
+            write_options_matrix(["AAPL"], provider=_FakeProvider(), output_dir=tmp_path)
+
+        mock_fresh_fetch.assert_not_called()

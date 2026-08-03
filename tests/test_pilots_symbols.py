@@ -11,6 +11,7 @@ signal, so those must surface as ``None`` (never ``0.0``).
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -490,6 +491,7 @@ class TestCompareSymbols:
                 "symbol", "found", "reason", "score", "action", "kelly_target",
                 "conviction", "garch_vol", "meta_label_composite",
                 "regime_multiplier", "score_components",
+                "sector", "sector_pe", "sector_change_pct",
             }
 
     def test_values_carried_through_for_found_symbol(self, snapshot):
@@ -504,6 +506,7 @@ class TestCompareSymbols:
         assert row["meta_label_composite"] == pytest.approx(1.0)
         assert row["regime_multiplier"] == pytest.approx(1.0)
         assert isinstance(row["score_components"], dict) and row["score_components"]
+        assert row["sector"] == "Information Technology"
 
     def test_action_prefers_advisory_action_over_raw(self):
         snap = {"timestamp": "t", "signals": [
@@ -519,7 +522,8 @@ class TestCompareSymbols:
         assert zz["found"] is False
         assert zz["reason"] == "Not tracked in the latest snapshot."
         for k in ("score", "action", "kelly_target", "conviction", "garch_vol",
-                  "meta_label_composite", "regime_multiplier", "score_components"):
+                  "meta_label_composite", "regime_multiplier", "score_components",
+                  "sector", "sector_pe", "sector_change_pct"):
             assert zz[k] is None, k
 
     def test_cold_start_all_rows_honest_not_found(self):
@@ -572,3 +576,83 @@ class TestCompareSymbols:
         assert compare_symbols("not a dict", ["AAPL"])["symbols"][0]["found"] is False
         assert compare_symbols({"signals": "nope"}, ["AAPL"])["symbols"][0]["found"] is False
         assert compare_symbols(None, None)["symbols"] == []
+
+
+# ---------------------------------------------------------------------------
+# compare_symbols -- sector/sector_pe/sector_change_pct bulk-attached FMP
+# sector-valuation-snapshot decoration (Module 5.2). Unrelated to score/
+# action/sizing -- a pure valuation-context addition.
+# ---------------------------------------------------------------------------
+
+class TestCompareSymbolsSectorValuation:
+    def test_sector_pe_and_change_pct_populated_from_bulk_snapshot(self, monkeypatch, snapshot):
+        mock_hs = MagicMock()
+        mock_hs.get_sector_snapshots.return_value = {
+            "Information Technology": {
+                "sector": "Information Technology", "date": "2026-08-02",
+                "pe": 31.4, "change_pct": 0.0087,
+            },
+        }
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda *a, **k: mock_hs)
+
+        row = compare_symbols(snapshot, ["AAPL"])["symbols"][0]
+        assert row["sector"] == "Information Technology"
+        assert row["sector_pe"] == pytest.approx(31.4)
+        assert row["sector_change_pct"] == pytest.approx(0.0087)
+
+    def test_bulk_fetch_called_exactly_once_for_multiple_symbols(self, monkeypatch, snapshot):
+        mock_hs = MagicMock()
+        mock_hs.get_sector_snapshots.return_value = {}
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda *a, **k: mock_hs)
+
+        compare_symbols(snapshot, ["AAPL", "MSFT", "NVDA", "JPM"])
+        mock_hs.get_sector_snapshots.assert_called_once()
+
+    def test_sector_missing_from_snapshot_gets_none_never_a_neighboring_value(self, monkeypatch, snapshot):
+        mock_hs = MagicMock()
+        # Only "Energy" is covered -- AAPL's real sector ("Information
+        # Technology") must NOT borrow Energy's numbers.
+        mock_hs.get_sector_snapshots.return_value = {
+            "Energy": {"sector": "Energy", "date": "2026-08-02", "pe": 11.0, "change_pct": -0.02},
+        }
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda *a, **k: mock_hs)
+
+        row = compare_symbols(snapshot, ["AAPL"])["symbols"][0]
+        assert row["sector"] == "Information Technology"
+        assert row["sector_pe"] is None
+        assert row["sector_change_pct"] is None
+
+    def test_bulk_fetch_failure_degrades_to_none_never_crashes(self, monkeypatch, snapshot):
+        def _boom(*args, **kwargs):
+            raise RuntimeError("db unreachable")
+
+        monkeypatch.setattr("data.historical_store.HistoricalStore", _boom)
+        result = compare_symbols(snapshot, ["AAPL", "MSFT"])
+        # CONSTRAINT #6: score/action/etc are completely unaffected -- only
+        # the new sector_pe/sector_change_pct fields degrade.
+        for row in result["symbols"]:
+            assert row["found"] is True
+            assert row["sector_pe"] is None
+            assert row["sector_change_pct"] is None
+        assert result["symbols"][0]["score"] == pytest.approx(96.8)
+
+    def test_symbol_with_no_sector_gets_none_without_a_fabricated_match(self, monkeypatch):
+        mock_hs = MagicMock()
+        mock_hs.get_sector_snapshots.return_value = {
+            "Technology": {"sector": "Technology", "pe": 30.0, "change_pct": 0.01},
+        }
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda *a, **k: mock_hs)
+
+        snap = {"timestamp": "t", "signals": [{"symbol": "ZZ", "score": 1.0}]}  # no sector key
+        row = compare_symbols(snap, ["ZZ", "QQ"])["symbols"][0]
+        assert row["sector"] is None
+        assert row["sector_pe"] is None
+        assert row["sector_change_pct"] is None
+
+    def test_not_found_row_has_none_for_all_three_sector_fields(self, snapshot):
+        row = compare_symbols(snapshot, ["ZZZ", "AAPL"])["symbols"][0]
+        assert row["symbol"] == "ZZZ"
+        assert row["found"] is False
+        assert row["sector"] is None
+        assert row["sector_pe"] is None
+        assert row["sector_change_pct"] is None

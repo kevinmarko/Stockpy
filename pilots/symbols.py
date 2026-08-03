@@ -404,6 +404,16 @@ def compare_symbols(snapshot: Any, tickers: List[str]) -> Dict[str, Any]:
     here (not client-side) so every symbol renders bars on the same set of
     modules even when one symbol's aggregator skipped a module this cycle.
 
+    ``sector`` is read straight off the same ``signals[]`` entry (mirrors
+    ``symbol_detail``'s ``identity.sector`` extraction). ``sector_pe``/
+    ``sector_change_pct`` are attached from ONE bulk
+    ``HistoricalStore(readonly=True).get_sector_snapshots(as_of=<today>)``
+    call — made ONCE per invocation, never per symbol — matched onto each
+    FOUND row by its ``sector``. Both are ``None`` when the symbol has no
+    sector, the sector has no snapshot, or the bulk fetch itself fails
+    (independently try/excepted — CONSTRAINT #6); this is diagnostic
+    valuation context and never affects ``score``/``action``/sizing.
+
     Never raises (CONSTRAINT #6); degrades to ``{"as_of": None, "symbols": [],
     "modules": []}`` on totally malformed input.
     """
@@ -411,6 +421,25 @@ def compare_symbols(snapshot: Any, tickers: List[str]) -> Dict[str, Any]:
         cf = scoring._coerce_float
         cold_start = not isinstance(snapshot, dict)
         as_of = None if cold_start else snapshot.get("timestamp")
+
+        # Bulk sector-valuation-snapshot fetch — ONE call for the whole
+        # comparison, never per symbol. Independently try/excepted: a
+        # HistoricalStore failure degrades sector_pe/sector_change_pct to
+        # None on every row without affecting anything else in the response.
+        # No settings gate here — a pure DB read of a table that's only ever
+        # non-empty when settings.FMP_SECTOR_SNAPSHOT_ENABLED is already on
+        # elsewhere; off means an empty table and an honest None here.
+        sector_snapshots: Dict[str, Any] = {}
+        try:
+            from data.historical_store import HistoricalStore
+            import datetime as _dt
+
+            sector_snapshots = HistoricalStore(readonly=True).get_sector_snapshots(
+                as_of=_dt.date.today().isoformat(),
+            )
+        except Exception as exc:  # noqa: BLE001 — dead-letter, CONSTRAINT #6
+            logger.debug("get_sector_snapshots unavailable: %s", exc)
+            sector_snapshots = {}
 
         rows: List[dict] = []
         seen: set = set()
@@ -439,12 +468,17 @@ def compare_symbols(snapshot: Any, tickers: List[str]) -> Dict[str, Any]:
                     "meta_label_composite": None,
                     "regime_multiplier": None,
                     "score_components": None,
+                    "sector": None,
+                    "sector_pe": None,
+                    "sector_change_pct": None,
                 })
                 continue
 
             components = _clean_components(sig.get("score_components"))
             if components:
                 modules.update(components.keys())
+            sector = _clean_str(sig.get("sector"))
+            snap = sector_snapshots.get(sector) if sector else None
             rows.append({
                 "symbol": symbol,
                 "found": True,
@@ -457,6 +491,9 @@ def compare_symbols(snapshot: Any, tickers: List[str]) -> Dict[str, Any]:
                 "meta_label_composite": cf(sig.get("meta_label_composite")),
                 "regime_multiplier": cf(sig.get("regime_multiplier")),
                 "score_components": components,
+                "sector": sector,
+                "sector_pe": (snap.get("pe") if snap else None),
+                "sector_change_pct": (snap.get("change_pct") if snap else None),
             })
 
         return {"as_of": as_of, "symbols": rows, "modules": sorted(modules)}

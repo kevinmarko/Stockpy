@@ -476,6 +476,20 @@ export interface SymbolCompareRow {
   meta_label_composite: number | null;
   regime_multiplier: number | null;
   score_components: Record<string, number> | null;
+  /**
+   * Sector name straight off the same signals[] entry (mirrors
+   * SymbolDetail's identity.sector). `sector_pe`/`sector_change_pct` are
+   * attached from ONE bulk HistoricalStore.get_sector_snapshots() call per
+   * request (never per symbol) -- diagnostic valuation CONTEXT, distinct
+   * from the symbol's own individual P/E (fetched client-side per symbol
+   * from GET /data/fundamentals/{symbol} -- see SymbolComparison.tsx).
+   * `null` when the symbol has no sector, the sector has no snapshot (e.g.
+   * FMP_SECTOR_SNAPSHOT_ENABLED is off), or the bulk fetch itself failed --
+   * never a fabricated/neighboring-sector value (CONSTRAINT #4).
+   */
+  sector: string | null;
+  sector_pe: number | null;
+  sector_change_pct: number | null;
 }
 
 /**
@@ -856,6 +870,18 @@ export interface SectorSelectionRow {
   rank: number | null;
   selected: boolean;
   degraded_reason: string | null;
+  /**
+   * Dated FMP sector P/E + 1-day-change snapshot (data/historical_store.py's
+   * get_sector_snapshots, populated only when
+   * settings.FMP_SECTOR_SNAPSHOT_ENABLED) -- pure valuation-context
+   * decoration bulk-attached by sector name, UNRELATED to the semantic
+   * cosine-similarity ranking above (never feeds correlation_coefficient or
+   * rank). `null` when this sector has no snapshot (feed disabled, or this
+   * sector name wasn't covered) -- never a fabricated/neighboring value
+   * (CONSTRAINT #4). `change_pct` is a FRACTION (0.0123 = +1.23%, not 1.23).
+   */
+  pe?: number | null;
+  change_pct?: number | null;
 }
 
 export interface SectorSelectionView {
@@ -986,6 +1012,15 @@ export interface OptionsDirective {
   Days_To_Earnings?: number | null;
   Earnings_Risk?: boolean | null;
   Realized_Vol_30D?: number | null;
+  Analyst_Target_Consensus?: number | null;
+  /**
+   * Fraction, e.g. `0.12` means +12% upside vs. `Price` -- this codebase's
+   * "percent as fraction" convention, NOT the `debtToEquity`-style ×100
+   * convention (see the Footguns doc: these two are easy to confuse).
+   */
+  Analyst_Target_Upside?: number | null;
+  /** Roughly in [-1, 1]; positive = more buy-rated. */
+  Analyst_Grade_Score?: number | null;
   News_Snippets?: Array<{ title: string; url: string; published_date?: string; site?: string }> | null;
   Peers?: string[] | null;
   [key: string]: unknown;

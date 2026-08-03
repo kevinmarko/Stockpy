@@ -127,18 +127,44 @@ def write_options_matrix(
             logger.warning("options matrix: FMP health overlay unavailable: %s", exc)
             fmp_health_enabled = False
 
+    # ── Optional FMP market/qualitative-context overlay (settings.
+    # FMP_OPTIONS_CONTEXT_ENABLED) — news headlines + peer-group tickers. A
+    # DIFFERENT overlay concept than the health block above (market/
+    # qualitative context vs. balance-sheet health), so it gets its own gate,
+    # even though the call-site pattern (bundled flag check before the loop,
+    # independent try/except per sub-fetch inside it) is identical.
+    fmp_context_enabled = bool(getattr(settings, "FMP_OPTIONS_CONTEXT_ENABLED", False))
+    fetch_stock_news = fetch_peer_group = None
+    if fmp_context_enabled:
+        try:
+            from data.fmp_feeds_company import fetch_stock_news
+            from data.fmp_feeds_market import fetch_peer_group
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("options matrix: FMP context overlay unavailable: %s", exc)
+            fmp_context_enabled = False
+
+    # ── Earnings-proximity (settings.FMP_EARNINGS_ENABLED) and analyst
+    # consensus (settings.FMP_ANALYST_ENABLED) both reuse EXISTING durable
+    # HistoricalStore tables rather than a fresh fetch of their own — see
+    # pipeline/production_steps.py's _apply_fmp_earnings / _apply_fmp_analyst
+    # for the identical read pattern this mirrors (that step runs earlier in
+    # the same cycle, inside StrategyEvalStep, well before StateSnapshotStep
+    # calls this writer, so the store is fresh by the time we read it here).
+    # ONE shared HistoricalStore instance serves both blocks below.
     fmp_earnings_enabled = bool(getattr(settings, "FMP_EARNINGS_ENABLED", False))
-    earnings_store = None
+    fmp_analyst_enabled = bool(getattr(settings, "FMP_ANALYST_ENABLED", False))
+    store = None
     earnings_as_of: Optional[str] = None
-    if fmp_earnings_enabled:
+    if fmp_earnings_enabled or fmp_analyst_enabled:
         try:
             from data.historical_store import HistoricalStore
 
-            earnings_store = HistoricalStore()
+            store = HistoricalStore()
             earnings_as_of = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("options matrix: earnings-events store unavailable: %s", exc)
+            logger.warning("options matrix: historical store unavailable: %s", exc)
             fmp_earnings_enabled = False
+            fmp_analyst_enabled = False
 
     macro_proxy = _MacroProxy(float(vix), str(market_regime))
     directives: List[Dict[str, Any]] = []
@@ -157,6 +183,11 @@ def write_options_matrix(
             fcf_yield: Optional[float] = None
             realized_vol_30d: Optional[float] = None
             days_to_earnings: Optional[int] = None
+            analyst_target_consensus: Optional[float] = None
+            analyst_target_upside: Optional[float] = None
+            analyst_grade_score: Optional[float] = None
+            news_snippets: Optional[List[Dict[str, Any]]] = None
+            peers_list: Optional[List[str]] = None
 
             if fmp_health_enabled:
                 try:
@@ -177,9 +208,21 @@ def write_options_matrix(
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("options matrix: realized-volatility failed for %s: %s", symbol, exc)
 
-            if fmp_earnings_enabled and earnings_store is not None:
+            if fmp_context_enabled:
                 try:
-                    future_rows = earnings_store.get_earnings_events(
+                    # Capped at 3 (not fetch_stock_news's own default of 5) to
+                    # keep the JSON payload and options-matrix UI compact.
+                    news_snippets = fetch_stock_news(symbol, limit=3)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("options matrix: stock news failed for %s: %s", symbol, exc)
+                try:
+                    peers_list = fetch_peer_group(symbol)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("options matrix: peer group failed for %s: %s", symbol, exc)
+
+            if fmp_earnings_enabled and store is not None:
+                try:
+                    future_rows = store.get_earnings_events(
                         symbol, after=earnings_as_of, limit=1,
                     )
                     if future_rows:
@@ -190,6 +233,37 @@ def write_options_matrix(
                             days_to_earnings = (d_next - d_as_of).days
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("options matrix: days-to-earnings failed for %s: %s", symbol, exc)
+
+            if fmp_analyst_enabled and store is not None:
+                try:
+                    snapshot = store.get_analyst_snapshot(symbol)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("options matrix: analyst snapshot failed for %s: %s", symbol, exc)
+                    snapshot = None
+                if snapshot:
+                    tc = snapshot.get("target_consensus")
+                    if tc is not None:
+                        try:
+                            analyst_target_consensus = float(tc)
+                        except (TypeError, ValueError):
+                            analyst_target_consensus = None
+                    # Mirrors _apply_fmp_analyst's own upside calculation
+                    # exactly: NaN/None unless the price is a valid positive
+                    # float (a missing/zero/negative price can't anchor an
+                    # upside ratio -- CONSTRAINT #4, never fabricate).
+                    if analyst_target_consensus is not None:
+                        try:
+                            price_f = float(quote.price)
+                        except (TypeError, ValueError):
+                            price_f = None
+                        if price_f is not None and price_f > 0:
+                            analyst_target_upside = (analyst_target_consensus / price_f) - 1.0
+                    gs = snapshot.get("grade_score")
+                    if gs is not None:
+                        try:
+                            analyst_grade_score = float(gs)
+                        except (TypeError, ValueError):
+                            analyst_grade_score = None
 
             row = build_premium_directive(
                 symbol,
@@ -205,6 +279,11 @@ def write_options_matrix(
                 fcf_yield=fcf_yield,
                 days_to_earnings=days_to_earnings,
                 realized_vol_30d=realized_vol_30d,
+                analyst_target_consensus=analyst_target_consensus,
+                analyst_target_upside=analyst_target_upside,
+                analyst_grade_score=analyst_grade_score,
+                news_snippets=news_snippets,
+                peers_list=peers_list,
             )
             directives.append(_json_safe(row))
         except MarketDataError as exc:  # noqa: PERF203

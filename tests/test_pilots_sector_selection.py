@@ -2,7 +2,10 @@
 reader powering GET /sector/selection."""
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import MagicMock
+
+import pytest
 
 from data.sector_correlation_store import SectorCorrelationStore
 from pilots.sector_selection import sector_selection_view
@@ -149,3 +152,111 @@ class TestReadFailureResilience:
         result = sector_selection_view("NIO", 3, store=store)
         assert result["rows"] == []
         assert result["reason"] is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# pe/change_pct -- bulk-attached FMP sector-valuation-snapshot decoration
+# (data/historical_store.py::get_sector_snapshots), unrelated to the
+# semantic similarity ranking above. Module 5.1.
+# ─────────────────────────────────────────────────────────────────────────
+
+class TestSectorValuationSnapshot:
+    def _seeded_store(self, sectors=("Technology",)):
+        store = SectorCorrelationStore(db_url="sqlite:///:memory:")
+        store.record_correlations(
+            [_row(sector, i + 1, 0.9 - i * 0.1) for i, sector in enumerate(sectors)],
+            as_of="2026-07-21", target_symbol="NIO",
+        )
+        return store
+
+    def test_pe_and_change_pct_populated_from_snapshot(self, monkeypatch):
+        mock_hs = MagicMock()
+        mock_hs.get_sector_snapshots.return_value = {
+            "Technology": {
+                "sector": "Technology", "date": "2026-08-02",
+                "pe": 28.5, "change_pct": 0.012,
+            },
+        }
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda *a, **k: mock_hs)
+
+        result = sector_selection_view("NIO", 3, store=self._seeded_store())
+        row = result["rows"][0]
+        assert row["sector"] == "Technology"
+        assert row["pe"] == pytest.approx(28.5)
+        assert row["change_pct"] == pytest.approx(0.012)
+
+    def test_bulk_fetch_is_called_exactly_once_not_per_row(self, monkeypatch):
+        mock_hs = MagicMock()
+        mock_hs.get_sector_snapshots.return_value = {}
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda *a, **k: mock_hs)
+
+        sector_selection_view(
+            "NIO", 3, store=self._seeded_store(("Technology", "Energy", "Financials")),
+        )
+        mock_hs.get_sector_snapshots.assert_called_once()
+        assert mock_hs.get_sector_snapshots.call_args.kwargs["as_of"] == date.today().isoformat()
+
+    def test_sector_missing_from_snapshot_gets_none_never_a_neighboring_value(self, monkeypatch):
+        mock_hs = MagicMock()
+        # Only "Energy" is covered by the snapshot -- "Technology" (this
+        # row's sector) must NOT borrow Energy's numbers.
+        mock_hs.get_sector_snapshots.return_value = {
+            "Energy": {"sector": "Energy", "date": "2026-08-02", "pe": 11.0, "change_pct": -0.02},
+        }
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda *a, **k: mock_hs)
+
+        result = sector_selection_view("NIO", 3, store=self._seeded_store(("Technology",)))
+        row = result["rows"][0]
+        assert row["pe"] is None
+        assert row["change_pct"] is None
+
+    def test_snapshot_table_empty_gets_none_for_every_row(self, monkeypatch):
+        """The realistic default state: FMP_SECTOR_SNAPSHOT_ENABLED is off
+        elsewhere, so the table is empty and get_sector_snapshots() returns
+        {} -- every row's pe/change_pct honestly nulls, the similarity
+        ranking is completely unaffected."""
+        mock_hs = MagicMock()
+        mock_hs.get_sector_snapshots.return_value = {}
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda *a, **k: mock_hs)
+
+        result = sector_selection_view(
+            "NIO", 3, store=self._seeded_store(("Technology", "Energy")),
+        )
+        assert result["reason"] is None
+        for row in result["rows"]:
+            assert row["pe"] is None
+            assert row["change_pct"] is None
+
+    def test_bulk_fetch_failure_degrades_both_fields_to_none_never_crashes(self, monkeypatch):
+        def _boom(*args, **kwargs):
+            raise RuntimeError("db unreachable")
+
+        monkeypatch.setattr("data.historical_store.HistoricalStore", _boom)
+
+        result = sector_selection_view(
+            "NIO", 3, store=self._seeded_store(("Technology", "Energy")),
+        )
+        # CONSTRAINT #6: the similarity ranking itself is completely
+        # unaffected by a HistoricalStore failure -- only pe/change_pct null.
+        assert result["reason"] is None
+        assert len(result["rows"]) == 2
+        for row in result["rows"]:
+            assert row["pe"] is None
+            assert row["change_pct"] is None
+
+    def test_historical_store_import_failure_degrades_gracefully(self, monkeypatch):
+        """A totally broken import path (e.g. data.historical_store itself
+        fails to import) must not crash the similarity ranking either."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _broken_import(name, *args, **kwargs):
+            if name == "data.historical_store":
+                raise ImportError("simulated broken module")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _broken_import)
+        result = sector_selection_view("NIO", 3, store=self._seeded_store())
+        assert result["rows"][0]["pe"] is None
+        assert result["rows"][0]["change_pct"] is None
