@@ -168,6 +168,8 @@ import type {
   PromptPinResult,
   DataSyncResult,
   ProviderStatus,
+  MultiAgentRequest,
+  MultiAgentResponse,
 } from "./types";
 
 const SECTORS = [
@@ -6993,6 +6995,26 @@ export const mockApi = {
       summary: mockForecastBackfill(),
       sample_rows: 11080,
     });
+  },
+  async analyzeAgents(req: MultiAgentRequest): Promise<MultiAgentResponse> {
+    return delay({
+      tickers: req.symbols,
+      user_query: req.query || "Analyze these stocks",
+      research_data: {
+        signals: {},
+        news_context: "Mock news context for " + req.symbols.join(", "),
+        fundamentals_valid: true,
+      },
+      execution_plan: {
+        advisory_summary: "Mock advisory summary.",
+        hypothetical_orders: [],
+        mode: "advisory",
+        live_trading_enabled: false,
+        risk_check_passed: true,
+      },
+      errors: [],
+      workflow_status: "success",
+    }, 1000);
   },
 };
 

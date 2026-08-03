@@ -45,6 +45,7 @@ import { TradingHub } from "./screens/TradingHub";
 import { OperationsHub } from "./screens/OperationsHub";
 import { Help } from "./screens/Help";
 import { Onboarding } from "./screens/Onboarding";
+import { MultiAgentAnalysis } from "./screens/MultiAgentAnalysis";
 import { readOnboarding } from "./onboarding";
 import { TokenGate } from "./components/TokenGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -240,6 +241,7 @@ export default function App() {
                   <Route path="/operations/reports" element={<ReportLibrary />} />
                   <Route path="/agentic" element={<AgenticTrading />} />
                   <Route path="/research" element={<ResearchHub />} />
+                  <Route path="/multi-agent" element={<MultiAgentAnalysis />} />
                   <Route path="/trading" element={<TradingHub />} />
                   <Route path="/operations" element={<OperationsHub />} />
                   <Route path="/portfolio" element={<Portfolio />} />

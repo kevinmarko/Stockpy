@@ -3323,4 +3323,27 @@ export interface ForecastBackfillSummary {
   synthetic_tickers?: string[];
 }
 
+export interface MultiAgentRequest {
+  symbols: string[];
+  query?: string;
+}
 
+export interface MultiAgentResponse {
+  tickers: string[];
+  user_query: string;
+  research_data: {
+    signals: Record<string, any>;
+    news_context: string;
+    fundamentals_valid: boolean;
+  } | null;
+  execution_plan: {
+    advisory_summary: string;
+    hypothetical_orders: any[];
+    risk_check_passed?: boolean;
+    mode: string;
+    live_trading_enabled: boolean;
+    fallback_activated?: boolean;
+  } | null;
+  errors: string[];
+  workflow_status: string;
+}

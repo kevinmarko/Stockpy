@@ -313,8 +313,13 @@ export function SymbolDetail() {
             </span>
           </div>
         </div>
-        <div className="num" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
-          {fmtUsd(identity.price)}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--s-1)" }}>
+          <div className="num" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
+            {fmtUsd(identity.price)}
+          </div>
+          <Button variant="neutral" onClick={() => nav(`/multi-agent?symbols=${data.symbol}`)}>
+            Run AI Analysis
+          </Button>
         </div>
       </div>
 

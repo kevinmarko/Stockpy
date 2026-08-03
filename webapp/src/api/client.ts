@@ -120,6 +120,8 @@ import type {
   OrderBookLadderResponse,
   ModelComparisonResponse,
   OptionsAnalyticsSummaryResponse,
+  MultiAgentRequest,
+  MultiAgentResponse,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
@@ -745,6 +747,11 @@ const liveApi = {
     http<{ status: string; summary: ForecastBackfillSummary; sample_rows: number }>("/pilots/forecast_backfill/run", {
       method: "POST",
       body: JSON.stringify(params ?? {}),
+    }),
+  analyzeAgents: (req: MultiAgentRequest) =>
+    http<MultiAgentResponse>("/agents/analyze", {
+      method: "POST",
+      body: JSON.stringify(req),
     }),
 };
 
