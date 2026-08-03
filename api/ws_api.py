@@ -170,3 +170,91 @@ async def ws_tick_endpoint(
             await websocket.close(code=1011)
         except Exception:
             pass
+
+
+class TrainingStatusManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+        self.lock = asyncio.Lock()
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        async with self.lock:
+            self.active_connections.append(websocket)
+
+    async def disconnect(self, websocket: WebSocket):
+        async with self.lock:
+            if websocket in self.active_connections:
+                self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: str):
+        async with self.lock:
+            for connection in self.active_connections[:]:
+                try:
+                    await connection.send_text(message)
+                except Exception:
+                    if connection in self.active_connections:
+                        self.active_connections.remove(connection)
+
+
+training_status_manager = TrainingStatusManager()
+
+
+@ws_router.websocket("/ws/training/status")
+async def ws_training_status_endpoint(
+    websocket: WebSocket,
+    token: Optional[str] = Query(default=None),
+):
+    """Stream live training-job status events (started/finished) to any
+    connected client. Auth matches ws_tick_endpoint's convention -- a
+    ?token= query param or Authorization: Bearer header, checked against
+    the same STATE_API_TOKEN-derived gate."""
+    auth_header = websocket.headers.get("authorization")
+    if not _check_ws_token(token, auth_header):
+        await websocket.close(code=4003)
+        logger.warning("ws_training_status_endpoint: rejected unauthenticated connection")
+        return
+
+    await training_status_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await training_status_manager.disconnect(websocket)
+    except Exception as exc:
+        logger.error("ws_training_status_endpoint error: %s", exc)
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+        await training_status_manager.disconnect(websocket)
+
+
+_MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Called once from the hosting FastAPI app's startup event so that a
+    SYNCHRONOUS route (which FastAPI runs in a threadpool with no event
+    loop of its own) can still schedule a coroutine onto the real running
+    loop. Without this, a sync route's asyncio.get_running_loop() call
+    always raises RuntimeError."""
+    global _MAIN_LOOP
+    _MAIN_LOOP = loop
+
+
+def broadcast_training_status_threadsafe(message: str) -> None:
+    """Fire-and-forget: schedule training_status_manager.broadcast(message)
+    from a non-loop thread (a sync FastAPI route calls this directly).
+    No-ops (logs at debug) if the loop was never captured -- e.g. this
+    module imported standalone in a test with no running app / no startup
+    event ever fired. Never raises."""
+    if _MAIN_LOOP is None:
+        logger.debug("broadcast_training_status_threadsafe: no loop captured yet")
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(
+            training_status_manager.broadcast(message), _MAIN_LOOP
+        )  # do not .result() -- fire-and-forget from a sync caller
+    except Exception as exc:  # noqa: BLE001 - a broadcast must never crash the caller
+        logger.warning("broadcast_training_status_threadsafe failed: %s", exc)

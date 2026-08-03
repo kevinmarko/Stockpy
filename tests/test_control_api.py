@@ -1171,6 +1171,48 @@ def test_control_api_never_imports_pipeline_engines_directly():
     assert not overlap, f"api/control_api.py must not import {overlap}"
 
 
+# ---------------------------------------------------------------------------
+# Training-status broadcast wiring (POST /jobs -> /ws/training/status)
+# ---------------------------------------------------------------------------
+
+
+def test_no_duplicate_ws_jobs_route_exists():
+    """This app must have exactly one job-log-streaming mechanism -- the
+    pre-existing SSE ``GET /jobs/{job_id}/stream`` -- never a duplicate WS
+    variant living under a ``/ws/jobs/`` path."""
+    ws_jobs_paths = [
+        route.path for route in control_api.app.routes
+        if getattr(route, "path", "").startswith("/ws/jobs/")
+    ]
+    assert ws_jobs_paths == []
+
+
+def test_create_job_exception_mapping_never_references_broadcast():
+    """Pins that a training-status broadcast failure can never be
+    misreported as an HTTP 400/409/403 about the job itself -- the
+    broadcast call must live strictly AFTER the
+    ``RuntimeError/ValueError/PermissionError`` exception-mapping block,
+    never inside it."""
+    import inspect
+    import re
+
+    source = inspect.getsource(control_api.create_job)
+
+    # Isolate just the exception-mapping try/except block: from the first
+    # `try:` immediately preceding `job_manager.start_job` through the last
+    # `except PermissionError` clause's body.
+    match = re.search(
+        r"try:\s*\n\s*rec = job_manager\.start_job.*?except PermissionError as err:\s*\n\s*raise HTTPException\(status_code=403.*?\n",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None, "could not locate the exception-mapping block in create_job's source"
+    exception_mapping_block = match.group(0)
+
+    assert "ws_api" not in exception_mapping_block
+    assert "broadcast" not in exception_mapping_block
+
+
 def test_daemon_properties_are_never_called_as_methods():
     """Static guard for the whole bug CLASS behind the POST /daemon/restart
     500. Derives the property set from the REAL OrchestratorDaemon (never a
