@@ -1,7 +1,7 @@
 {
   "meta": {
-    "repo_root": "/Users/kevinlee/Stockpy-live/.claude/worktrees/auto-backtest-strategy-health-8e21ae",
-    "git_commit": "84c192778931e5850e6815e98ee0c4b1aadd5f4b",
+    "repo_root": "/Users/kevinlee/Stockpy-live/.claude/worktrees/recurring-issue-98f29a",
+    "git_commit": "b214599ad717c8a915f56e77d4c1d8121cfcbe9e",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2687,7 +2687,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 329,
+    "files_scanned": 330,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3145,13 +3145,12 @@
       ]
     },
     "form_d_os_environ": {
-      "total_reads": 19,
-      "distinct_fields": 15,
+      "total_reads": 16,
+      "distinct_fields": 13,
       "counts": {
         "FINNHUB_RATE_LIMIT_PER_MIN": 2,
         "FUNDAMENTALS_CACHE_TTL_SECONDS": 2,
         "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS": 2,
-        "ROBINHOOD_EXECUTION_MODE": 2,
         "ALERT_CHANNELS": 1,
         "ALERT_EMAIL_FROM": 1,
         "ALERT_EMAIL_SMTP_HOST": 1,
@@ -3161,12 +3160,10 @@
         "ALERT_NTFY_TOPIC": 1,
         "ALERT_SLACK_WEBHOOK_URL": 1,
         "LOG_LEVEL": 1,
-        "PROMPT_REGISTRY_SIGNING_KEY": 1,
-        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 1
+        "PROMPT_REGISTRY_SIGNING_KEY": 1
       },
       "shapes": {
         "os.environ.get()": 8,
-        "os.environ[...]": 3,
         "os.getenv()": 8
       }
     },

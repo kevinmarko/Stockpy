@@ -182,8 +182,8 @@ because their name appears as a string literal feeding one of the dispatchers ab
 ### 120 fields are invisible to attribute-only analysis
 
 This is the headline structural number. Reads break down as 611 via `settings.KEY`
-(191 distinct fields), 246 via `getattr(settings, "KEY", default)` (150 distinct), and 19
-via `os.environ` (15 distinct). **120 fields are reached only via the `getattr`-literal or
+(191 distinct fields), 246 via `getattr(settings, "KEY", default)` (150 distinct), and 16
+via `os.environ` (13 distinct). **120 fields are reached only via the `getattr`-literal or
 `os.environ` forms and never via plain attribute access** — 113 only via `getattr`-literal,
 7 only via `os.environ`.
 
