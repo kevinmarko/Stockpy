@@ -3,7 +3,7 @@
 Plain-English triage of the measured snapshot in
 [`settings_field_census.md`](settings_field_census.md). That file is the data; this file is
 the "so what". Every number quoted here comes from
-`scripts/measure_settings_census.py` run against commit `e7e64529`.
+`scripts/measure_settings_census.py` run against commit `84c19277`.
 
 Regenerate both with:
 
@@ -17,7 +17,7 @@ python3 scripts/measure_settings_census.py --write
 
 ### Nothing credential-shaped is missing from `SECRET_KEYS`
 
-This was the highest-priority thing to check, and the answer is clean. Sweeping all 318
+This was the highest-priority thing to check, and the answer is clean. Sweeping all 320
 fields for `TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL|MFA` returns 20 matches: **19 are
 already in `SECRET_KEYS`**, and the single unprotected match is `EDGAR_FULLTEXT_CHUNK_TOKENS`
 — an `int` chunk size, not a credential, exactly the false positive the name pattern is
@@ -50,7 +50,7 @@ is true of six sibling fields (`ALERT_NTFY_TOPIC`, `ALERT_EMAIL_SMTP_HOST`,
 `ALERT_EMAIL_SMTP_PORT`, `ALERT_SLACK_WEBHOOK_URL`, `ALERT_CHANNELS`, plus
 `FINNHUB_RATE_LIMIT_PER_MIN` elsewhere).
 
-This is **documented and deliberate** — `settings.py:1092-1093` says the notifier "keeps
+This is **documented and deliberate** — `settings.py:1137-1138` says the notifier "keeps
 reading `os.getenv` directly so it stays importable without a full `Settings()` load" — so
 it is not a new bug and I am not calling it one. Two things are still worth flagging:
 
@@ -66,13 +66,14 @@ it is not a new bug and I am not calling it one. Two things are still worth flag
    the `settings` singleton can never affect an `os.getenv` call. Any liveness classifier
    must treat form (d) as "never live-patchable", not as an ordinary read.
 
-### Not security, but a correctness bug: `ALLOWED_KEYS` has 12 duplicate entries
+### `ALLOWED_KEYS` duplicate-entry bug — now fixed
 
-`len(ALLOWED_KEYS) == 274` but `len(set(...)) == 262`. Twelve keys appear twice —
-`FINNHUB_RATE_LIMIT_PER_MIN` and eleven `SECTOR_SELECTION_*` / `SECTOR_SIMILARITY_*` keys.
-The duplicate bug reported in earlier rounds **is still present**. It is benign at runtime
-(membership tests are unaffected) but it means any count derived from `len(ALLOWED_KEYS)`
-is wrong by 12. Reported, not fixed, per the brief.
+Earlier rounds reported `len(ALLOWED_KEYS) == 274` against `len(set(...)) == 262` — twelve
+keys appearing twice (`FINNHUB_RATE_LIMIT_PER_MIN` plus eleven `SECTOR_SELECTION_*` /
+`SECTOR_SIMILARITY_*` keys) — and flagged it as reported-but-unfixed. PR #574
+(`fix-env-io-dedup-drift`) fixed it: `ALLOWED_KEYS` is now `len == 264` with **zero**
+duplicates (`len(ALLOWED_KEYS) == len(set(ALLOWED_KEYS)) == 264`). No action needed;
+recorded here only so a stale copy of this doc doesn't get re-reported as still open.
 
 ---
 
@@ -86,9 +87,9 @@ Using the brief's three-way split (`SECRET` / `IN_ALLOWED_KEYS` / `UNCLASSIFIED`
 | Bucket | Count |
 |---|---|
 | `SECRET` | 38 |
-| `IN_ALLOWED_KEYS` | 262 |
+| `IN_ALLOWED_KEYS` | 264 |
 | `UNCLASSIFIED` | 18 |
-| **Total** | **318** |
+| **Total** | **320** |
 
 But `UNCLASSIFIED` is misleading as a name here, because `gui/env_io.py` has a **third**
 classification set the brief's partition does not mention: `EXCLUDED_FROM_GUI` (18 entries).
@@ -131,7 +132,7 @@ should build on `EXCLUDED_FROM_GUI` rather than discovering these 18 as "unknown
 
 The brief asked specifically for these, and this is where the interesting findings are.
 
-### 14 dynamic `getattr(settings, <var>)` sites
+### 15 dynamic `getattr(settings, <var>)` sites
 
 Few enough to name in full. Every one of them is a **name-driven dispatch**: the key
 arrives as a variable, so no static analysis can attribute it to a field.
@@ -141,8 +142,9 @@ arrives as a variable, so no static analysis can attribute it to a field.
 | `api/auth.py:140` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:160` | `getattr(settings, flag_name, False)` |
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
-| `api/pilots_api.py:3494` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:3579` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:2620` | `getattr(settings, body.key)` |
+| `api/pilots_api.py:3542` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:3627` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:119` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:80` | `getattr(_settings, name, None)` |
 | `gui/panels/ai_control_center.py:164` | `getattr(settings, tkey, False)` |
@@ -153,6 +155,13 @@ arrives as a variable, so no static analysis can attribute it to a field.
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
 | `Gravity AI Review Suite.py:2714` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
 
+`api/pilots_api.py:2620` is new since the last pass — PR #575 (`fix-llm-setting-coercion`)
+added it inside `set_llm_setting` (`PUT /llm/setting`). It is not a fresh dispatch risk like
+the two below: `body.key` was already validated against `gui.env_io.ALLOWED_KEYS` a few lines
+earlier, and this call only reads back the value that `validate_assignment` (see §4) just
+coerced and wrote in-process, so the response echoes what's actually live rather than the
+raw (possibly wrongly-typed) request body.
+
 Two of these are **security-critical** and deserve naming individually:
 
 - **`api/auth.py:140`** is inside `make_command_token_guard(token_setting_name, ...)`. The
@@ -160,7 +169,7 @@ Two of these are **security-critical** and deserve naming individually:
   name (`"ORCHESTRATOR_DAEMON_TOKEN"`, `"FOLLOW_API_TOKEN"`). A liveness classifier that
   concluded "these token fields are never read" would be badly wrong.
 - **`api/data_api.py:160`** is inside `require_ai_capability_enabled(flag_name, ...)`,
-  called with `"AI_GENERATION_API_ENABLED"` (L172) and `"UNIVERSE_SYNC_ENABLED"` (L1012).
+  called with `"AI_GENERATION_API_ENABLED"` (L173) and `"UNIVERSE_SYNC_ENABLED"` (L1051).
   `UNIVERSE_SYNC_ENABLED` gates the `POST /data/sync` write endpoint and has **zero**
   statically-attributable reads anywhere in the tree. It is enforced entirely through this
   one dynamic lookup.
@@ -170,17 +179,17 @@ Two of these are **security-critical** and deserve naming individually:
 because their name appears as a string literal feeding one of the dispatchers above. Only
 2 are genuinely unreferenced (below).
 
-### 118 fields are invisible to attribute-only analysis
+### 120 fields are invisible to attribute-only analysis
 
 This is the headline structural number. Reads break down as 611 via `settings.KEY`
-(191 distinct fields), 243 via `getattr(settings, "KEY", default)` (148 distinct), and 16
-via `os.environ` (13 distinct). **118 fields are reached only via the `getattr`-literal or
-`os.environ` forms and never via plain attribute access** — 111 only via `getattr`-literal,
+(191 distinct fields), 246 via `getattr(settings, "KEY", default)` (150 distinct), and 19
+via `os.environ` (15 distinct). **120 fields are reached only via the `getattr`-literal or
+`os.environ` forms and never via plain attribute access** — 113 only via `getattr`-literal,
 7 only via `os.environ`.
 
-In other words, of the 309 fields reached by any static form, attribute access alone reaches
-only 191 — an analysis that looked for `settings.KEY` and nothing else would miss **118 of
-309, or 38%**. That is almost certainly how earlier hand-counts went wrong.
+In other words, of the 311 fields reached by any static form, attribute access alone reaches
+only 191 — an analysis that looked for `settings.KEY` and nothing else would miss **120 of
+311, or 39%**. That is almost certainly how earlier hand-counts went wrong.
 A large contiguous block of these is the FMP and forecast-backfill families, which were
 written throughout in the `getattr(settings, "X", default)` style.
 
@@ -210,25 +219,41 @@ declare an `applies` value (once conditional expressions and shared-helper respo
 resolved — a naive check reports 4). The mechanisms:
 
 1. **`.env` write** via `env_io.write_*` — all 11 routes. Durable; effective next launch.
-2. **In-process `setattr(settings, ...)`** — exactly one route, `PUT /llm/setting`, and only
-   for the 11 keys in `gui/ai_control_center.py::LIVE_PATCHABLE_KEYS`. This is the *only*
-   existing hot-reload beachhead in the codebase and is the obvious thing for the new system
-   to generalize.
+2. **In-process live patch** — exactly one route, `PUT /llm/setting`, and only for the 11
+   keys in `gui/ai_control_center.py::LIVE_PATCHABLE_KEYS`. This is the *only* existing
+   hot-reload beachhead in the codebase and is the obvious thing for the new system to
+   generalize.
 3. **HTTP push into a separately-running daemon** via `daemon_client.set_*` — one route,
    `PUT /automation/schedule/interval`. Neither of the other two mechanisms describes it:
    the value lands in another process entirely.
 
+> Measurement caveat worth knowing: the census JSON now reports `live_setattr_routes: 0` for
+> `api/pilots_api.py`, which looks like mechanism 2 disappeared. It didn't — PR #575
+> (`fix-llm-setting-coercion`) replaced a bare `setattr(settings, key, value)` in
+> `set_llm_setting` with `Settings.__pydantic_validator__.validate_assignment(settings,
+> body.key, body.value)`, specifically to fix a real bug (a `Union[bool, str]` request body
+> meant a JSON `{"value": "false"}` bound to the Python string `"false"`, and a bare
+> `setattr` onto a `bool` field left that string sitting where a bool belongs — read back
+> later as truthy). The route still live-patches the singleton in-process, verified directly
+> in `api/pilots_api.py`'s `set_llm_setting` (confirmed: `validate_assignment` is the only
+> call of its kind in the file, so this remains exactly one route). The census script's
+> `_live_setattr_sites` structural detector only recognises a literal `setattr(...)` call or
+> a plain `X.attr = ...` assignment, so it no longer sees this site — a script blind spot
+> introduced by that fix, not an actual behavior change. If a future pass wants
+> `live_setattr_routes` to be trustworthy again, `_live_setattr_sites` needs a third pattern
+> for `Settings.__pydantic_validator__.validate_assignment(...)`.
+
 There is also **one mutating route outside `pilots_api.py`** — `PUT /data/universe`
-(`api/data_api.py:384`), which writes `.env` and declares no `applies` value at all. Any
+(`api/data_api.py:422`), which writes `.env` and declares no `applies` value at all. Any
 inventory scoped to `pilots_api.py` alone will miss it.
 
 ---
 
 ## 5. Things a future pass should not have to re-derive
 
-- 318 fields; **0** fall outside the recognised type kinds (bool/int/float/str/`Optional[str]`/
+- 320 fields; **0** fall outside the recognised type kinds (bool/int/float/str/`Optional[str]`/
   `list[str]`/`list[int]`/`Path`/4 distinct `dict[...]` shapes), so a kind-derivation switch
-  over those categories is currently **total**. 73 fields end in `_ENABLED`.
+  over those categories is currently **total**. 75 fields end in `_ENABLED`.
 - 329 production files scanned, **0 parse failures** — the read-form numbers have no
   silent undercount from unparseable files.
 - The singleton is bound under **18 distinct local names**. Any future tooling must resolve

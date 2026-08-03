@@ -229,7 +229,7 @@ _S.settings, _bl_settings, _live_settings, _oos_gate_settings, _rh_settings, _s,
 | (a) `settings.KEY` | 611 | 191 |
 | (b) `getattr(settings, "KEY", default)` | 246 | 150 |
 | (c) `getattr(settings, <var>)` (dynamic) | 15 sites | n/a — key not statically known |
-| (d) `os.environ` / `os.getenv("KEY")` | 16 | 13 |
+| (d) `os.environ` / `os.getenv("KEY")` | 19 | 15 |
 
 Fields reached by at least one form: **311** of 320.
 
@@ -401,7 +401,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `gui/panels/settings_manager.py:271` | `getattr(settings, key, [])` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
 
-### Fields read via `os.environ` (form d) — 13 field(s)
+### Fields read via `os.environ` (form d) — 15 field(s)
 
 `.env` is loaded into the `Settings` model directly by pydantic-settings; it is only
 copied into the real `os.environ` when something calls `load_dotenv()`. A field read
@@ -413,6 +413,7 @@ this way therefore reads a *different source* than `settings.KEY` does — see C
 | `FINNHUB_RATE_LIMIT_PER_MIN` | 2 | **no** |
 | `FUNDAMENTALS_CACHE_TTL_SECONDS` | 2 | yes |
 | `FUNDAMENTALS_NEG_CACHE_TTL_SECONDS` | 2 | yes |
+| `ROBINHOOD_EXECUTION_MODE` | 2 | yes |
 | `ALERT_CHANNELS` | 1 | **no** |
 | `ALERT_EMAIL_FROM` | 1 | yes |
 | `ALERT_EMAIL_SMTP_HOST` | 1 | **no** |
@@ -423,6 +424,7 @@ this way therefore reads a *different source* than `settings.KEY` does — see C
 | `ALERT_SLACK_WEBHOOK_URL` | 1 | **no** |
 | `LOG_LEVEL` | 1 | yes |
 | `PROMPT_REGISTRY_SIGNING_KEY` | 1 | yes |
+| `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` | 1 | yes |
 
 ---
 
