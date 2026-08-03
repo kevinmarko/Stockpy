@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 244,
+    "live_safe": 242,
     "no_op": 2,
     "restart_required": 78,
-    "total": 324
+    "total": 322
   },
   "dynamic_sites": [
     {
@@ -49,35 +49,35 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 2920,
+      "line": 2632,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3857,
+      "line": 3570,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3942,
+      "line": 3655,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(_settings, k, None)",
       "file": "data/brokerage_credentials.py",
-      "line": 119,
+      "line": 125,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(_settings, name, None)",
       "file": "data/robinhood_portfolio.py",
-      "line": 80,
+      "line": 83,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -124,7 +124,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 334,
+  "files_scanned": 336,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -313,13 +313,11 @@
     "REDDIT_CLIENT_ID",
     "REDDIT_CLIENT_SECRET",
     "REDDIT_USER_AGENT",
-    "RH_MFA_SECRET",
+    "RH_LOGIN_DEADLINE_SECONDS",
+    "RH_LOGIN_GRACE_SECONDS",
+    "RH_LOGIN_STARTUP_SECONDS",
     "RH_PASSWORD",
     "RH_USERNAME",
-    "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
-    "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
-    "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
-    "RLHF_CALIBRATION_ENABLED",
     "ROBINHOOD_AUTO_REFRESH_ENABLED",
     "ROBINHOOD_EXECUTION_MODE",
     "ROBINHOOD_LIMIT_BUFFER_BPS",
@@ -378,15 +376,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 656,
+    "attr": 650,
     "factory_param": 4,
-    "getattr_const": 245,
+    "getattr_const": 244,
     "os_environ": 16
   },
   "read_forms_distinct_fields": {
-    "attr": 198,
+    "attr": 196,
     "factory_param": 4,
-    "getattr_const": 150,
+    "getattr_const": 149,
     "os_environ": 13
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -590,7 +588,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:282",
+        "site": "api/pilots_api.py:279",
         "via": []
       },
       {
@@ -780,15 +778,6 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rlhf_calibration_store.py:109",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
         "site": "sizing/cap_audit_store.py:85",
         "via": []
       },
@@ -864,24 +853,6 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:69",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
-        "site": "rlhf_calibration_store.py:114",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
-        "site": "rlhf_calibration_store.py:116",
         "via": []
       },
       {
@@ -991,24 +962,6 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rlhf_calibration_store.py:114",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
-        "site": "rlhf_calibration_store.py:116",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
         "site": "sizing/cap_audit_store.py:90",
         "via": []
       },
@@ -1098,7 +1051,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4108",
+        "site": "api/pilots_api.py:3821",
         "via": []
       }
     ],
@@ -1109,7 +1062,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4107",
+        "site": "api/pilots_api.py:3820",
         "via": []
       }
     ],
@@ -1120,7 +1073,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4232",
+        "site": "api/pilots_api.py:3945",
         "via": []
       },
       {
@@ -1195,7 +1148,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4212",
+        "site": "api/pilots_api.py:3925",
         "via": []
       },
       {
@@ -1226,7 +1179,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:535",
+        "site": "api/pilots_api.py:501",
         "via": []
       }
     ],
@@ -1666,15 +1619,6 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rlhf_calibration_store.py:114",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "cross_module_init_helper"
-        ],
         "site": "sizing/cap_audit_store.py:90",
         "via": []
       },
@@ -1967,7 +1911,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/robinhood_client.py:103",
+        "site": "data/robinhood_client.py:104",
         "via": []
       }
     ],
@@ -1978,7 +1922,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/robinhood_client.py:102",
+        "site": "data/robinhood_client.py:103",
         "via": []
       }
     ],
@@ -2070,7 +2014,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:530",
+        "site": "api/pilots_api.py:496",
         "via": []
       },
       {
@@ -2099,7 +2043,7 @@
     "ORCHESTRATOR_DAEMON_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "cross_module_init_helper": 38,
+    "cross_module_init_helper": 32,
     "decorator_arg": 13,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 10,
