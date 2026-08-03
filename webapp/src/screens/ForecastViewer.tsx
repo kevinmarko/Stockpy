@@ -7,7 +7,7 @@ import { ErrorState, Loading, Tile } from "../components/ui";
 import { AttentionHeatmapStrip, ForecastCandleChart } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { useToast } from "../components/ToastContext";
+import toast from "react-hot-toast";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -64,7 +64,6 @@ function ForecastView({
   lookbackDays: number;
   onLookbackChange: (days: number) => void;
 }) {
-  const { addToast } = useToast();
   const [selectedHorizon, setSelectedHorizon] = useState<number | null>(30);
 
   // Export handlers -- both built from the real forecast result `d`, never
@@ -86,11 +85,14 @@ function ForecastView({
     link.click();
     document.body.removeChild(link);
 
-    addToast({
-      type: "success",
-      title: "Exported CSV",
-      description: `Saved ${symbol}_forecast_data.csv to downloads.`,
-    });
+    toast.success(
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Exported CSV</span>
+        <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+          Saved {symbol}_forecast_data.csv to downloads.
+        </span>
+      </div>
+    );
   };
 
   const handleExportJSON = () => {
@@ -103,11 +105,14 @@ function ForecastView({
     link.click();
     document.body.removeChild(link);
 
-    addToast({
-      type: "success",
-      title: "Exported JSON",
-      description: `Saved ${symbol}_forecast_data.json to downloads.`,
-    });
+    toast.success(
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Exported JSON</span>
+        <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+          Saved {symbol}_forecast_data.json to downloads.
+        </span>
+      </div>
+    );
   };
 
   // Map the 8 named band fields onto ForecastCandleChart's forecast prop. A

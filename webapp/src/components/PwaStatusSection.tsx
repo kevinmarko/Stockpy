@@ -1,6 +1,6 @@
 import { usePwaStatus } from "../hooks/usePwaStatus";
 import { theme } from "../theme";
-import { Button, Notice } from "./ui";
+import { Button, Notice, MetricBadge } from "./ui";
 
 function StatusRow({
   label,
@@ -11,19 +11,16 @@ function StatusRow({
   value: string;
   tone: "good" | "warn" | "neutral";
 }) {
-  const color =
-    tone === "good" ? theme.growth : tone === "warn" ? theme.caution : theme.textMuted;
-  const dot = tone === "good" ? "●" : tone === "warn" ? "●" : "○";
   return (
     <div
       className="row"
-      style={{ padding: "var(--s-2-5) 0", display: "flex", justifyContent: "space-between" }}
+      style={{ padding: "var(--s-2-5) 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}
     >
       <span className="row-title">{label}</span>
-      <span style={{ color, fontWeight: 600, display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
-        <span aria-hidden>{dot}</span>
-        {value}
-      </span>
+      <MetricBadge
+        label={value}
+        good={tone === "good" ? true : tone === "warn" ? false : null}
+      />
     </div>
   );
 }

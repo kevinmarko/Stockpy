@@ -1,5 +1,5 @@
 /**
- * App.test.tsx — nav/gear wiring for the Data & Automation fold-in, plus the
+ * App.test.tsx — nav/gear wiring for the ⚙️ General & Execution fold-in, plus the
  * 2026-07 navigation rework: the gear button navigates to /settings (instead
  * of opening a local sheet), it still carries the needRefresh "update
  * available" dot from any screen, the /settings route resolves to the real
@@ -124,7 +124,7 @@ describe("App — Settings gear + nav", () => {
 
     await user.click(screen.getByTestId("settings-button"));
 
-    expect(await screen.findByText("Data & Automation")).toBeInTheDocument();
+    expect(await screen.findByText("⚙️ General & Execution")).toBeInTheDocument();
     // No sheet/backdrop scaffold left behind by the old drawer pattern.
     expect(screen.queryByTestId("pwa-status-sheet")).not.toBeInTheDocument();
   });
@@ -168,7 +168,7 @@ describe("App — Settings gear + nav", () => {
 
   it("the /settings route resolves directly (deep link)", async () => {
     renderApp("/settings");
-    expect(await screen.findByText("Data & Automation")).toBeInTheDocument();
+    expect(await screen.findByText("⚙️ General & Execution")).toBeInTheDocument();
   });
 
   it("the Settings screen's App-status section renders (PwaStatusSection fold-in)", async () => {
@@ -264,7 +264,7 @@ describe("App — Settings gear + nav", () => {
     const dialog = await screen.findByRole("dialog", { name: "More sections" });
     await user.click(within(dialog).getByRole("button", { name: "Settings" }));
 
-    expect(await screen.findByText("Data & Automation")).toBeInTheDocument();
+    expect(await screen.findByText("⚙️ General & Execution")).toBeInTheDocument();
     expect(
       screen.queryByRole("dialog", { name: "More sections" })
     ).not.toBeInTheDocument();
@@ -311,7 +311,7 @@ describe("App — Settings gear + nav", () => {
     expect(
       await screen.findByRole("dialog", { name: "More sections" })
     ).toBeInTheDocument();
-    expect(screen.queryByText("Data & Automation")).not.toBeInTheDocument();
+    expect(screen.queryByText("⚙️ General & Execution")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -349,7 +349,7 @@ describe("App — Settings gear + nav", () => {
     await user.click(header);
 
     // Still on Dashboard -- clicking the plain-text header did nothing.
-    expect(screen.queryByText("Data & Automation")).not.toBeInTheDocument();
+    expect(screen.queryByText("⚙️ General & Execution")).not.toBeInTheDocument();
   });
 });
 

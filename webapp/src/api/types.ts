@@ -16,6 +16,18 @@ export type JobType =
   | "orchestrator"
   | "command";
 
+export interface CronJob {
+  title: string;
+  description: string;
+  schedule: string;
+  command: string;
+}
+
+export interface CronStatus {
+  jobs: CronJob[];
+  error?: string;
+}
+
 export interface JobRecord {
   job_id: string;
   job_type: JobType;
@@ -532,9 +544,12 @@ export interface BrokerageConnectRequest {
 
 /** POST /brokerage/connect response. Never echoes credential values. */
 export interface BrokerageConnectResult {
-  connected: boolean;
-  verified: boolean;
-  has_account_snapshot: boolean;
+  connected?: boolean;
+  verified?: boolean;
+  has_account_snapshot?: boolean;
+  task_id?: string;
+  status?: "pending" | "success" | "error";
+  error?: string;
 }
 
 /** POST /brokerage/disconnect response. */

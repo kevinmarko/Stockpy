@@ -28,6 +28,7 @@ import type {
   BrokerageStatus,
   CalibrationSummary,
   ControlStatus,
+  CronStatus,
   DecisionCreateRequest,
   DecisionCreateResult,
   DecisionEntry,
@@ -490,34 +491,36 @@ const liveApi = {
   // Read the allowlisted, non-secret settings grouped for display; write only
   // the changed keys back. The PUT does NOT reach the running process — see
   // TunablesResponse.applies ("next_daemon_restart").
+  // Tunables & settings
+  getCronStatus: () => http<CronStatus>("/system/cron-status"),
   getTunables: () => http<TunablesResponse>("/settings/tunables"),
   updateTunables: (values: Record<string, number | boolean | string>) =>
     http<TunablesUpdateResult>("/settings/tunables", {
-      method: "PUT",
+      method: "PATCH",
       body: JSON.stringify({ values }),
     }),
   getSentimentSettings: () => http<TunablesResponse>("/settings/sentiment"),
   updateSentimentSettings: (values: Record<string, number | boolean | string>) =>
     http<TunablesUpdateResult>("/settings/sentiment", {
-      method: "PUT",
+      method: "PATCH",
       body: JSON.stringify({ values }),
     }),
   getSectorSelectionSettings: () => http<TunablesResponse>("/settings/sector-selection"),
   updateSectorSelectionSettings: (values: Record<string, number | boolean | string>) =>
     http<TunablesUpdateResult>("/settings/sector-selection", {
-      method: "PUT",
+      method: "PATCH",
       body: JSON.stringify({ values }),
     }),
   getFmpSettings: () => http<TunablesResponse>("/settings/fmp"),
   updateFmpSettings: (values: Record<string, number | boolean | string>) =>
     http<TunablesUpdateResult>("/settings/fmp", {
-      method: "PUT",
+      method: "PATCH",
       body: JSON.stringify({ values }),
     }),
   getEtfTransmissionSettings: () => http<TunablesResponse>("/settings/etf-transmission"),
   updateEtfTransmissionSettings: (values: Record<string, number | boolean | string>) =>
     http<TunablesUpdateResult>("/settings/etf-transmission", {
-      method: "PUT",
+      method: "PATCH",
       body: JSON.stringify({ values }),
     }),
   getFollows: () => http<Follow[]>("/follows"),
@@ -648,6 +651,7 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify(creds),
     }),
+  getConnectBrokerageStatus: (taskId: string) => http<BrokerageConnectResult>(`/brokerage/connect/${taskId}`),
   disconnectBrokerage: () =>
     http<BrokerageDisconnectResult>("/brokerage/disconnect", {
       method: "POST",

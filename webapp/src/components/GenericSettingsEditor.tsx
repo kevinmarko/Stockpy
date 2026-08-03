@@ -8,6 +8,7 @@ import { Button, EmptyState, ErrorState, Input, Loading, Notice, Select, Textare
 import { Toggle } from "../components/Toggle";
 import { TunableGroupCard } from "../components/TunableGroupCard";
 import { theme } from "../theme";
+import { TagInput } from "./TagInput";
 
 type EditVal = string | boolean;
 
@@ -249,11 +250,25 @@ function SettingsForm({
         );
       })}
 
-      <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
-        <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>
-          {dirty ? `Save ${dirtyKeys.length} change${dirtyKeys.length === 1 ? "" : "s"}` : "Save changes"}
-        </Button>
-      </div>
+      {dirty && (
+        <div
+          style={{
+            position: "sticky",
+            bottom: "var(--safe-bottom)",
+            marginTop: "var(--s-4)",
+            padding: "var(--s-2)",
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--r-md)",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+            zIndex: 10,
+          }}
+        >
+          <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>
+            Save {dirtyKeys.length} change{dirtyKeys.length === 1 ? "" : "s"}
+          </Button>
+        </div>
+      )}
     </>
   );
 }
@@ -268,6 +283,19 @@ function isJsonBlob(f: TunableField): boolean {
   } catch {
     return false;
   }
+}
+
+function humanizeKey(key: string): string {
+  if (!key.includes("_") && key.includes(" ")) return key;
+  return key
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function isTagList(f: TunableField): boolean {
+  if (f.type !== "string") return false;
+  return f.key.endsWith("_SOURCES") || f.key.endsWith("_TICKERS") || f.key.endsWith("_LIST");
 }
 
 function FieldRow({
@@ -295,7 +323,7 @@ function FieldRow({
           <Toggle
             checked={value === true}
             onChange={(v) => onChange(v)}
-            label={f.key}
+            label={humanizeKey(f.key)}
           />
           <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", margin: "var(--s-1-5) 0 0" }}>
             {f.description}
@@ -303,7 +331,7 @@ function FieldRow({
         </>
       ) : f.type === "enum" ? (
         <Select
-          label={f.key}
+          label={humanizeKey(f.key)}
           value={String(value)}
           onChange={(e) => onChange(e.target.value)}
           options={(f.options ?? []).map((o) => ({ value: o, label: o }))}
@@ -311,7 +339,7 @@ function FieldRow({
         />
       ) : isJsonBlob(f) ? (
         <Textarea
-          label={f.key}
+          label={humanizeKey(f.key)}
           value={value as string}
           onChange={(e) => onChange(e.target.value)}
           rows={4}
@@ -320,9 +348,17 @@ function FieldRow({
           invalid={invalid}
           hint={f.description ?? undefined}
         />
+      ) : isTagList(f) ? (
+        <TagInput
+          label={humanizeKey(f.key)}
+          value={typeof value === "string" && value.length > 0 ? value.split(",").map(s => s.trim()) : []}
+          onChange={(arr) => onChange(arr.join(","))}
+          hint={f.description ?? undefined}
+          invalid={invalid}
+        />
       ) : (
         <Input
-          label={f.key}
+          label={humanizeKey(f.key)}
           type={f.type === "number" ? "number" : "text"}
           inputMode={f.type === "number" ? "decimal" : undefined}
           min={f.min}

@@ -92,6 +92,7 @@ figure.
 from __future__ import annotations
 
 import json
+import uuid
 import logging
 import math
 import re
@@ -99,7 +100,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -244,6 +245,8 @@ import gui.robinhood_execution_panel as execution_panel
 from agents.rag_orchestrator import run_rag_query
 
 logger = logging.getLogger(__name__)
+
+_LOGIN_TASKS: Dict[str, Dict[str, Any]] = {}
 
 app = FastAPI(
     title="InvestYo Pilots API",
@@ -2674,7 +2677,7 @@ def get_brokerage_status() -> Dict[str, Any]:
         Depends(require_loopback),
     ],
 )
-def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
+def connect_brokerage(body: BrokerageConnectRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     """Verify Robinhood credentials with a read-only login, then persist them
     to the local ``.env`` (and the live process environment) ONLY on success.
 
@@ -2691,21 +2694,51 @@ def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
     written to ``.env`` on success. Ongoing unattended re-fetches rely on
     ``robin_stocks``' own device-session pickle established by this verify
     call, not a stored MFA secret."""
-    verified = robinhood_portfolio.verify_credentials(
-        body.username, body.password, body.mfa_code
-    )
-    if not verified:
-        raise HTTPException(
-            status_code=401,
-            detail="Could not verify Robinhood credentials.",
-        )
-    brokerage_credentials.write_rh_credentials(body.username, body.password)
-    account_present = False
-    try:
-        account_present = HistoricalStore(readonly=True).latest_account_snapshot() is not None
-    except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> honest False
-        logger.warning("pilots_api: connect account-snapshot check failed: %s", exc)
-    return {"connected": True, "verified": True, "has_account_snapshot": account_present}
+    
+    task_id = str(uuid.uuid4())
+    _LOGIN_TASKS[task_id] = {"status": "pending"}
+    
+    def _do_connect(tid: str, req_body: BrokerageConnectRequest):
+        try:
+            verified = robinhood_portfolio.verify_credentials(
+                req_body.username, req_body.password, req_body.mfa_code
+            )
+            if not verified:
+                _LOGIN_TASKS[tid] = {"status": "error", "error": "Could not verify Robinhood credentials."}
+                return
+            brokerage_credentials.write_rh_credentials(req_body.username, req_body.password)
+            account_present = False
+            try:
+                account_present = HistoricalStore(readonly=True).latest_account_snapshot() is not None
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("pilots_api: connect account-snapshot check failed: %s", exc)
+            _LOGIN_TASKS[tid] = {
+                "status": "success",
+                "result": {"connected": True, "verified": True, "has_account_snapshot": account_present}
+            }
+        except Exception as exc:
+            _LOGIN_TASKS[tid] = {"status": "error", "error": str(exc)}
+            
+    background_tasks.add_task(_do_connect, task_id, body)
+    return {"task_id": task_id, "status": "pending"}
+
+
+@app.get("/brokerage/connect/{task_id}", dependencies=[Depends(require_read_token)])
+def get_connect_status(task_id: str) -> Dict[str, Any]:
+    if task_id not in _LOGIN_TASKS:
+        raise HTTPException(status_code=404, detail="Login task not found")
+    
+    task_state = _LOGIN_TASKS[task_id]
+    if task_state["status"] == "pending":
+        return {"task_id": task_id, "status": "pending"}
+    elif task_state["status"] == "error":
+        return {"task_id": task_id, "status": "error", "error": task_state.get("error")}
+    else:
+        # Success
+        result = task_state.get("result", {})
+        result["task_id"] = task_id
+        result["status"] = "success"
+        return result
 
 
 @app.post(
@@ -3599,7 +3632,7 @@ def get_settings_tunables() -> Dict[str, Any]:
     }
 
 
-@app.put(
+@app.patch(
     "/settings/tunables",
     dependencies=[
         Depends(require_command_token),
@@ -3975,7 +4008,7 @@ def get_settings_sentiment() -> Dict[str, Any]:
     }
 
 
-@app.put(
+@app.patch(
     "/settings/sentiment",
     dependencies=[
         Depends(require_command_token),
@@ -3997,7 +4030,7 @@ def get_settings_sector_selection() -> Dict[str, Any]:
     }
 
 
-@app.put(
+@app.patch(
     "/settings/sector-selection",
     dependencies=[
         Depends(require_command_token),
@@ -4019,7 +4052,7 @@ def get_settings_fmp() -> Dict[str, Any]:
     }
 
 
-@app.put(
+@app.patch(
     "/settings/fmp",
     dependencies=[
         Depends(require_command_token),
@@ -4041,7 +4074,7 @@ def get_settings_etf_transmission() -> Dict[str, Any]:
     }
 
 
-@app.put(
+@app.patch(
     "/settings/etf-transmission",
     dependencies=[
         Depends(require_command_token),

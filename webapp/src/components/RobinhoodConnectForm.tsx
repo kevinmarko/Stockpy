@@ -37,11 +37,24 @@ export function RobinhoodConnectForm({ onConnected }: { onConnected?: () => void
     setStatus("connecting");
     setError(null);
     try {
-      await api.connectBrokerage({
+      let res = await api.connectBrokerage({
         username,
         password,
         mfa_code: mfaCode,
       });
+
+      if (res.status === "pending" && res.task_id) {
+        const taskId = res.task_id;
+        while (res.status === "pending") {
+          await new Promise((r) => setTimeout(r, 1000));
+          res = await api.getConnectBrokerageStatus(taskId);
+        }
+      }
+
+      if (res.status === "error") {
+        throw new ApiError(res.error || "Could not verify Robinhood credentials.", 401);
+      }
+
       setStatus("connected");
       onConnected?.();
     } catch (e) {

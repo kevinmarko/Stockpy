@@ -47,7 +47,8 @@ describe("Toggle", () => {
 
     onChange.mockClear();
     await user.keyboard("{Enter}");
-    expect(onChange).toHaveBeenCalledWith(true);
+    // It was toggled to true by the Space key, so it toggles to false now
+    expect(onChange).toHaveBeenCalledWith(false);
   });
 
   it("disabled: click is a no-op", async () => {

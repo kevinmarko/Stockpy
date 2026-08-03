@@ -16,6 +16,15 @@ import { SentimentSettings } from "./SentimentSettings";
 import { api, ApiError } from "../api/client";
 import type { TunablesResponse } from "../api/types";
 
+vi.mock("../components/TagInput", () => ({
+  TagInput: ({ label, value, onChange }: any) => (
+    <label>
+      {label}
+      <input type="text" value={(value || []).join(",")} onChange={(e) => onChange(e.target.value.split(","))} />
+    </label>
+  )
+}));
+
 function baseSentimentTunables(overrides: Partial<TunablesResponse> = {}): TunablesResponse {
   return {
     applies: "next_daemon_restart",
@@ -24,12 +33,12 @@ function baseSentimentTunables(overrides: Partial<TunablesResponse> = {}): Tunab
         name: "Sentiment Ingestion Core",
         fields: [
           {
-            key: "SENTIMENT_INGESTION_ENABLED", value: false, type: "boolean",
+            key: "Sentiment Ingestion Enabled", value: false, type: "boolean",
             default: false, description: "Master switch for multi-source sentiment ingestion.",
           },
           {
             // Honest absent value -> empty input, never a fabricated 0.
-            key: "SENTIMENT_INGESTION_LOOKBACK_DAYS", value: null, type: "number",
+            key: "Sentiment Ingestion Lookback Days", value: null, type: "number",
             min: 1, max: 90, step: 1, default: 1,
             description: "Calendar days of lookback per ingestion cycle.",
           },
@@ -39,7 +48,7 @@ function baseSentimentTunables(overrides: Partial<TunablesResponse> = {}): Tunab
         name: "AI Credibility Verification",
         fields: [
           {
-            key: "SENTIMENT_LLM_VERIFICATION_PROVIDER", value: "none", type: "enum",
+            key: "Sentiment Llm Verification Provider", value: "none", type: "enum",
             options: ["claude", "gemini", "openai", "none"], default: "none",
             description: "Which LLM provider backs sentiment-document verification.",
           },
@@ -49,7 +58,7 @@ function baseSentimentTunables(overrides: Partial<TunablesResponse> = {}): Tunab
         name: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
         fields: [
           {
-            key: "SENTIMENT_SOURCES", value: "yahoo_rss,gdelt,reddit,edgar", type: "string",
+            key: "Sentiment Sources", value: "yahoo_rss,gdelt,reddit,edgar", type: "string",
             default: "yahoo_rss,gdelt,reddit,edgar", description: "Enabled sentiment-source provider names.",
           },
         ],
@@ -77,7 +86,7 @@ describe("SentimentSettings screen", () => {
     expect(await screen.findByRole("heading", { name: "Sentiment & News Ingestion" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Sentiment Ingestion Core" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "AI Credibility Verification" })).toBeInTheDocument();
-    expect(screen.getByLabelText("SENTIMENT_INGESTION_ENABLED")).toBeInTheDocument();
+    expect(screen.getByLabelText("Sentiment Ingestion Enabled")).toBeInTheDocument();
     expect(spy).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("applies-notice")).toBeInTheDocument();
   });
@@ -85,7 +94,7 @@ describe("SentimentSettings screen", () => {
   it("renders a null number value as an empty input, not 0", async () => {
     vi.spyOn(api, "getSentimentSettings").mockResolvedValue(baseSentimentTunables());
     renderScreen();
-    const input = (await screen.findByLabelText("SENTIMENT_INGESTION_LOOKBACK_DAYS")) as HTMLInputElement;
+    const input = (await screen.findByLabelText("Sentiment Ingestion Lookback Days")) as HTMLInputElement;
     expect(input.value).toBe("");
     expect(input.value).not.toBe("0");
   });
@@ -93,7 +102,7 @@ describe("SentimentSettings screen", () => {
   it("renders the enum widget as a select with the real backend options", async () => {
     vi.spyOn(api, "getSentimentSettings").mockResolvedValue(baseSentimentTunables());
     renderScreen();
-    const select = (await screen.findByLabelText("SENTIMENT_LLM_VERIFICATION_PROVIDER")) as HTMLSelectElement;
+    const select = (await screen.findByLabelText("Sentiment Llm Verification Provider")) as HTMLSelectElement;
     expect(select.tagName).toBe("SELECT");
     expect(Array.from(select.options).map((o) => o.value)).toEqual(["claude", "gemini", "openai", "none"]);
   });
@@ -114,30 +123,30 @@ describe("SentimentSettings screen", () => {
   it("Save sends ONLY the changed key to updateSentimentSettings", async () => {
     vi.spyOn(api, "getSentimentSettings").mockResolvedValue(baseSentimentTunables());
     const spy = vi.spyOn(api, "updateSentimentSettings").mockResolvedValue({
-      written: { SENTIMENT_INGESTION_ENABLED: true },
+      written: { "Sentiment Ingestion Enabled": true },
       rejected: {},
       applies: "next_daemon_restart",
     });
     renderScreen();
-    await userEvent.click(await screen.findByRole("switch", { name: "SENTIMENT_INGESTION_ENABLED" }));
+    await userEvent.click(await screen.findByRole("switch", { name: "Sentiment Ingestion Enabled" }));
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-    expect(spy.mock.calls[0][0]).toEqual({ SENTIMENT_INGESTION_ENABLED: true });
+    expect(spy.mock.calls[0][0]).toEqual({ "Sentiment Ingestion Enabled": true });
   });
 
   it("surfaces per-key rejected reasons from the backend and keeps the key dirty", async () => {
     vi.spyOn(api, "getSentimentSettings").mockResolvedValue(baseSentimentTunables());
     vi.spyOn(api, "updateSentimentSettings").mockResolvedValue({
       written: {},
-      rejected: { SENTIMENT_INGESTION_LOOKBACK_DAYS: "out_of_range: must be within [1, 90]." },
+      rejected: { "Sentiment Ingestion Lookback Days": "out_of_range: must be within [1, 90]." },
       applies: "next_daemon_restart",
     });
     renderScreen();
-    const input = (await screen.findByLabelText("SENTIMENT_INGESTION_LOOKBACK_DAYS")) as HTMLInputElement;
+    const input = (await screen.findByLabelText("Sentiment Ingestion Lookback Days")) as HTMLInputElement;
     await userEvent.clear(input);
     await userEvent.type(input, "5");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
-    expect(await screen.findByTestId("rejected-SENTIMENT_INGESTION_LOOKBACK_DAYS")).toHaveTextContent(/out_of_range/);
+    expect(await screen.findByTestId("rejected-Sentiment Ingestion Lookback Days")).toHaveTextContent(/out_of_range/);
     expect(screen.getByRole("button", { name: /Save/ })).toBeEnabled();
   });
 
@@ -146,20 +155,20 @@ describe("SentimentSettings screen", () => {
       baseSentimentTunables({
         env_drift: {
           detected: true,
-          keys: ["SENTIMENT_INGESTION_ENABLED"],
+          keys: ["Sentiment Ingestion Enabled"],
           note: "An .env write is pending — restart to apply.",
         },
       }),
     );
     renderScreen();
     const notice = await screen.findByTestId("env-drift-notice");
-    expect(notice).toHaveTextContent("SENTIMENT_INGESTION_ENABLED");
+    expect(notice).toHaveTextContent("Sentiment Ingestion Enabled");
   });
 
-  it("a plain 'string' field (SENTIMENT_SOURCES) renders as a single-line input, not a textarea", async () => {
+  it("a plain 'string' field (Sentiment Sources) renders as a single-line input, not a textarea", async () => {
     vi.spyOn(api, "getSentimentSettings").mockResolvedValue(baseSentimentTunables());
     renderScreen();
-    const field = (await screen.findByLabelText("SENTIMENT_SOURCES")) as HTMLInputElement;
+    const field = (await screen.findByLabelText("Sentiment Sources")) as HTMLInputElement;
     expect(field.tagName).toBe("INPUT");
     expect(field.value).toBe("yahoo_rss,gdelt,reddit,edgar");
   });
@@ -167,15 +176,15 @@ describe("SentimentSettings screen", () => {
   it("editing a comma-separated string field sends the raw string on save", async () => {
     vi.spyOn(api, "getSentimentSettings").mockResolvedValue(baseSentimentTunables());
     const spy = vi.spyOn(api, "updateSentimentSettings").mockResolvedValue({
-      written: { SENTIMENT_SOURCES: "yahoo_rss,gdelt" },
+      written: { "Sentiment Sources": "yahoo_rss,gdelt" },
       rejected: {},
       applies: "next_daemon_restart",
     });
     renderScreen();
-    const field = (await screen.findByLabelText("SENTIMENT_SOURCES")) as HTMLInputElement;
+    const field = (await screen.findByLabelText("Sentiment Sources")) as HTMLInputElement;
     fireEvent.change(field, { target: { value: "yahoo_rss,gdelt" } });
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-    expect(spy.mock.calls[0][0]).toEqual({ SENTIMENT_SOURCES: "yahoo_rss,gdelt" });
+    expect(spy.mock.calls[0][0]).toEqual({ "Sentiment Sources": "yahoo_rss,gdelt" });
   });
 });

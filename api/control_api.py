@@ -696,3 +696,52 @@ def stream_job_logs(
 
     return StreamingResponse(log_event_generator(), media_type="text/event-stream")
 
+
+@app.get("/system/cron-status", dependencies=[Depends(require_read_token)])
+def get_system_cron_status() -> Dict[str, Any]:
+    """Parse deploy/crontab.txt and return the schedule."""
+    import pathlib
+    crontab_path = pathlib.Path(__file__).parent.parent / "deploy" / "crontab.txt"
+    jobs = []
+    
+    if not crontab_path.exists():
+        return {"jobs": [], "error": "crontab.txt not found"}
+        
+    current_title = ""
+    current_desc = []
+    
+    try:
+        with open(crontab_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("# ──"):
+                    current_title = line.strip("# ─").strip()
+                    current_desc = []
+                elif line.startswith("# =="):
+                    continue
+                elif line.startswith("# Install:"):
+                    continue
+                elif line.startswith("# All times"):
+                    continue
+                elif line.startswith("# US Eastern"):
+                    continue
+                elif line.startswith("#"):
+                    current_desc.append(line.lstrip("#").strip())
+                else:
+                    parts = line.split(maxsplit=5)
+                    if len(parts) >= 6:
+                        schedule = " ".join(parts[:5])
+                        command = parts[5]
+                        jobs.append({
+                            "title": current_title or "Cron Job",
+                            "description": " ".join(current_desc),
+                            "schedule": schedule,
+                            "command": command
+                        })
+                    current_title = ""
+                    current_desc = []
+        return {"jobs": jobs}
+    except Exception as e:
+        return {"jobs": [], "error": str(e)}

@@ -257,15 +257,15 @@ export function MetricBadge({
   value,
   good,
 }: {
-  label: string;
-  value: string;
+  label?: string;
+  value?: string;
   good?: boolean | null;
 }) {
   const cls =
     good == null ? "badge badge-neutral" : good ? "badge badge-good" : "badge badge-warn";
   return (
     <span className={cls}>
-      {label} {value}
+      {label && value ? `${label} ${value}` : label || value}
     </span>
   );
 }
@@ -515,16 +515,23 @@ export function Input({
         aria-describedby={hintId}
       />
       {hint && (
-        <div
-          id={hintId}
-          style={{
-            marginTop: "var(--s-1-5)",
-            fontSize: "var(--t-caption)",
-            color: invalid ? "var(--decline)" : "var(--text-muted)",
-          }}
-        >
-          {hint}
-        </div>
+        invalid ? (
+          <div
+            id={hintId}
+            style={{
+              marginTop: "var(--s-1-5)",
+              fontSize: "var(--t-caption)",
+              color: "var(--decline)",
+            }}
+          >
+            {hint}
+          </div>
+        ) : (
+          <details id={hintId} style={{ marginTop: "var(--s-1-5)", fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
+            <summary style={{ cursor: "pointer", userSelect: "none", color: "var(--text-secondary)", outline: "none" }}>More info</summary>
+            <div style={{ marginTop: "var(--s-1)", lineHeight: 1.4 }}>{hint}</div>
+          </details>
+        )
       )}
     </div>
   );
@@ -606,16 +613,23 @@ export function Select({
         </select>
       </div>
       {hint && (
-        <div
-          id={hintId}
-          style={{
-            marginTop: 6,
-            fontSize: "var(--t-caption)",
-            color: invalid ? "var(--decline)" : "var(--text-muted)",
-          }}
-        >
-          {hint}
-        </div>
+        invalid ? (
+          <div
+            id={hintId}
+            style={{
+              marginTop: 6,
+              fontSize: "var(--t-caption)",
+              color: "var(--decline)",
+            }}
+          >
+            {hint}
+          </div>
+        ) : (
+          <details id={hintId} style={{ marginTop: 6, fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
+            <summary style={{ cursor: "pointer", userSelect: "none", color: "var(--text-secondary)", outline: "none" }}>More info</summary>
+            <div style={{ marginTop: "var(--s-1)", lineHeight: 1.4 }}>{hint}</div>
+          </details>
+        )
       )}
     </div>
   );
@@ -679,16 +693,23 @@ export function Textarea({
         aria-describedby={hintId}
       />
       {hint && (
-        <div
-          id={hintId}
-          style={{
-            marginTop: 6,
-            fontSize: "var(--t-caption)",
-            color: invalid ? "var(--decline)" : "var(--text-muted)",
-          }}
-        >
-          {hint}
-        </div>
+        invalid ? (
+          <div
+            id={hintId}
+            style={{
+              marginTop: 6,
+              fontSize: "var(--t-caption)",
+              color: "var(--decline)",
+            }}
+          >
+            {hint}
+          </div>
+        ) : (
+          <details id={hintId} style={{ marginTop: 6, fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
+            <summary style={{ cursor: "pointer", userSelect: "none", color: "var(--text-secondary)", outline: "none" }}>More info</summary>
+            <div style={{ marginTop: "var(--s-1)", lineHeight: 1.4 }}>{hint}</div>
+          </details>
+        )
       )}
     </div>
   );
