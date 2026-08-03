@@ -1648,7 +1648,31 @@ def get_models() -> List[Dict[str, Any]]:
 
     ``cpcv_dsr``/``pbo`` are ``null`` for an un-validated model (CONSTRAINT #4).
     ``[]`` when the registry is missing/unreadable; never 500s (CONSTRAINT #6)."""
-    return models.model_registry_rows()
+    rows = models.model_registry_rows()
+    
+    # Inject macro gate status
+    import json
+    from settings import settings
+    
+    macro_gate_paused = False
+    try:
+        snapshot_path = settings.OUTPUT_DIR / "state_snapshot.json"
+        if snapshot_path.exists():
+            payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            regime = payload.get("regime", {})
+            gate_enabled = regime.get("macro_regime_gate_enabled", True)
+            if gate_enabled:
+                sahm = regime.get("sahm_rule", 0.0)
+                vix = regime.get("vix", 0.0)
+                hy = regime.get("high_yield_oas", 0.0)
+                macro_gate_paused = bool(sahm >= 0.5 or vix > 30 or hy > 6.0)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Failed to read macro status for models: %s", exc)
+
+    for row in rows:
+        row["macro_gate_paused"] = macro_gate_paused
+        
+    return rows
 
 
 @app.get("/options", dependencies=[Depends(require_read_token)])

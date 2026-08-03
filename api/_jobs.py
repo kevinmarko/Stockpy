@@ -30,6 +30,8 @@ from gui.orchestrator_runner import (
     launch_orchestrator,
     launch_preflight,
     launch_pytest,
+    launch_train_meta_labelers,
+    launch_train_lgbm,
     launch_validation_run,
     launch_verify,
     stop_run,
@@ -43,6 +45,8 @@ class JobType(str, enum.Enum):
     PREFLIGHT = "preflight"
     PYTEST = "pytest"
     VALIDATION = "validation"
+    TRAIN_META = "train_meta"
+    TRAIN_LGBM = "train_lgbm"
     VERIFY = "verify"
     GRAVITY = "gravity"
     ADVISORY = "advisory"
@@ -137,6 +141,11 @@ class JobManager:
                         "comma-separated string), start (YYYY-MM-DD), end (YYYY-MM-DD)"
                     )
                 handle = launch_validation_run(strategies, start, end)
+            elif job_type == JobType.TRAIN_META:
+                signal = params.get("signal")
+                handle = launch_train_meta_labelers(signal=signal)
+            elif job_type == JobType.TRAIN_LGBM:
+                handle = launch_train_lgbm()
             elif job_type == JobType.VERIFY:
                 handle = launch_verify()
             elif job_type == JobType.GRAVITY:

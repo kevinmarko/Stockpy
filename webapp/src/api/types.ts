@@ -940,6 +940,8 @@ export interface ModelRow {
   trained_date: string | null;
   cpcv_dsr: number | null; // null for an un-validated model
   pbo: number | null;
+  sharpe: number | null;
+  max_dd: number | null;
   n_train: number | null;
   deployable: boolean | null;
   notes: string | null;
@@ -2246,6 +2248,8 @@ export interface SignalImportanceRow {
   // when n_symbols_scored is 0 (never a fabricated 0, which would read as
   // "definitely unimportant" rather than "no data this batch").
   mean_abs_contribution: number | null;
+  normalized_contribution?: number | null;
+  config_weight?: number | null;
   n_symbols_scored: number;
 }
 

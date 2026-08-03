@@ -6,6 +6,7 @@ import { api } from '../api/client';
 interface SHAPFeature {
   name: string;
   value: number;
+  config_weight?: number;
 }
 
 /**
@@ -23,8 +24,12 @@ function useUniverseWideImportance(): { data: SHAPFeature[] | null; loading: boo
     if (symbols.length === 0) return [];
     const importance = await api.getSignalImportance(symbols);
     return importance.rows
-      .filter((r) => r.mean_abs_contribution !== null)
-      .map((r) => ({ name: r.name, value: r.mean_abs_contribution as number }));
+      .filter((r) => r.normalized_contribution != null || r.mean_abs_contribution != null)
+      .map((r) => ({ 
+        name: r.name, 
+        value: r.normalized_contribution ?? (r.mean_abs_contribution as number),
+        config_weight: r.config_weight ?? undefined
+      }));
   }, []);
   return { data, loading, error };
 }
@@ -58,8 +63,13 @@ export default function SignalDriverWeights({ data: overrideData }: { data?: SHA
         >
           <p style={{ margin: 0, fontWeight: 600, color: "var(--text-primary)" }}>{point.name}</p>
           <p style={{ margin: "var(--s-1) 0 0", fontSize: "var(--t-body)", color: isPositive ? "var(--growth)" : "var(--decline)" }}>
-            Mean |Contribution|: {(point.value * 100).toFixed(1)}%
+            Normalized Contribution: {(Math.abs(point.value) * 100).toFixed(1)}%
           </p>
+          {point.config_weight !== undefined && (
+            <p style={{ margin: "var(--s-0-5) 0 0", fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
+              Absolute Config Weight: {point.config_weight.toFixed(2)}
+            </p>
+          )}
         </div>
       );
     }

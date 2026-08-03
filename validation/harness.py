@@ -903,6 +903,26 @@ class StrategyValidationHarness:
         # history reflects the report's final state either way.
         self._append_validation_history(report)
 
+        # 6d. Write to the durable SQLite ValidationHistoryStore
+        try:
+            from desktop.validation_history_store import ValidationHistoryStore
+            store = ValidationHistoryStore()
+            store.record_validation(
+                strategy_name=report.name,
+                metrics={
+                    "oos_max_dd": report.max_dd,
+                    "oos_sortino": report.sortino,
+                    "pbo": report.pbo,
+                    "dsr": report.dsr,
+                    "n_trials": report.n_trials,
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "StrategyValidationHarness.run(%s): failed to write to ValidationHistoryStore: %s",
+                strategy_name, exc
+            )
+
         # 7. Render HTML report (after family_multiple_testing is populated so
         # the template can surface it if desired).
         self._render_html_report(report)

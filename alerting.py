@@ -329,3 +329,23 @@ def summarize_run(result: Any) -> str:
             )
 
     return "\n".join(lines)
+
+
+def send_model_staleness_alert(model_key: str, days_old: int) -> None:
+    """Send an alert when a model exceeds the staleness threshold.
+    
+    Parameters
+    ----------
+    model_key : str
+        The identifier of the stale model.
+    days_old : int
+        The number of days since the model was last trained.
+    """
+    if days_old <= 30:
+        return
+        
+    title = f"InvestYo ⚠ Model Stale: {model_key}"
+    message = f"Model '{model_key}' is {days_old} days old (exceeds 30-day threshold). Consider retraining."
+    
+    logger.warning("Model staleness alert: %s is %d days old.", model_key, days_old)
+    notify(title, message, priority="high")

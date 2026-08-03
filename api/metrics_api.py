@@ -455,13 +455,26 @@ def _signal_importance(symbols: List[str]) -> Dict[str, Any]:
     all_names = set(sums) | {
         getattr(mod, "name", name) for name, mod in global_registry.get_all().items()
     }
+    # Calculate sum for normalization
+    total_abs_contribution = sum(
+        (sums[name] / counts[name]) for name in all_names if counts.get(name, 0) > 0
+    )
+
     rows: List[Dict[str, Any]] = []
     for name in sorted(all_names):
         n = counts.get(name, 0)
+        mean_abs = (sums[name] / n) if n > 0 else None
+        
+        normalized = None
+        if mean_abs is not None and total_abs_contribution > 0:
+            normalized = mean_abs / total_abs_contribution
+            
         rows.append(
             {
                 "name": name,
-                "mean_abs_contribution": (sums[name] / n) if n > 0 else None,
+                "mean_abs_contribution": mean_abs,
+                "normalized_contribution": normalized,
+                "config_weight": float(settings.SIGNAL_WEIGHTS.get(name, 0.0)),
                 "n_symbols_scored": n,
             }
         )
@@ -477,6 +490,31 @@ def _signal_importance(symbols: List[str]) -> Dict[str, Any]:
         "n_symbols_requested": len(capped),
         "n_symbols_scored": n_symbols_scored,
     }
+
+@app.get("/metrics/models/history", dependencies=[Depends(require_token)])
+def get_validation_history() -> Dict[str, Any]:
+    """Comparative multi-model validation returns history."""
+    from desktop.validation_history_store import ValidationHistoryStore
+    import collections
+    store = ValidationHistoryStore(readonly=True)
+    history = store.get_recent(limit=1000)
+    
+    models = collections.defaultdict(list)
+    for row in history:
+        models[row["strategy_name"]].append({
+            "run_date": row["timestamp"],
+            "cpcv_dsr": row["dsr"],
+            "pbo": row["pbo"],
+            "sharpe": row["oos_sortino"],  # closest to sharpe
+            "max_dd": row["oos_max_dd"],
+            "n_trials": row["n_trials"]
+        })
+        
+    formatted_models = [
+        {"model_name": name, "history": runs}
+        for name, runs in models.items()
+    ]
+    return {"models": formatted_models}
 
 
 # NOTE: this static-path route MUST be registered BEFORE the parameterized

@@ -170,3 +170,130 @@ async def ws_tick_endpoint(
             await websocket.close(code=1011)
         except Exception:
             pass
+
+
+@ws_router.websocket("/ws/jobs/{job_id}/stream")
+async def ws_job_stream_endpoint(
+    websocket: WebSocket,
+    job_id: str,
+    token: Optional[str] = Query(default=None),
+):
+    """Stream live logs for a job over WebSocket.
+    
+    Auth is checked similarly to ws_tick_endpoint via query token or auth header.
+    """
+    auth_header = websocket.headers.get("authorization")
+    if not _check_ws_token(token, auth_header):
+        await websocket.close(code=4003)
+        logger.warning("ws_job_stream_endpoint: rejected unauthenticated connection for job %s", job_id)
+        return
+
+    from api._jobs import job_manager
+    from api._redact import redact_line
+    import time as _time
+
+    rec = job_manager.get_job(job_id)
+    if not rec:
+        await websocket.close(code=4004)
+        logger.warning("ws_job_stream_endpoint: job %s not found", job_id)
+        return
+
+    await websocket.accept()
+    logger.info("ws_job_stream_endpoint: client connected for job %s", job_id)
+
+    log_path = rec.handle.log_path
+    current_offset = 0
+    last_sent = _time.monotonic()
+    
+    try:
+        while True:
+            sent_any = False
+            if log_path.exists():
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(current_offset)
+                    lines = f.readlines()
+                    if lines:
+                        for line in lines:
+                            scrubbed = redact_line(line.rstrip("\n"))
+                            await websocket.send_text(json.dumps({
+                                "id": current_offset,
+                                "data": scrubbed
+                            }))
+                        current_offset = f.tell()
+                        sent_any = True
+
+            if not rec.handle.is_running():
+                await websocket.send_text(json.dumps({
+                    "event": "end",
+                    "data": f"Job completed with exit code {rec.exit_code()}"
+                }))
+                break
+
+            now = _time.monotonic()
+            if sent_any:
+                last_sent = now
+            elif now - last_sent >= 15.0:
+                await websocket.send_text(json.dumps({"event": "heartbeat"}))
+                last_sent = now
+
+            await asyncio.sleep(0.5)
+
+    except WebSocketDisconnect:
+        logger.info("ws_job_stream_endpoint: client disconnected from job %s", job_id)
+    except Exception as exc:
+        logger.error("ws_job_stream_endpoint error for job %s: %s", job_id, exc)
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+
+class TrainingStatusManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+        self.lock = asyncio.Lock()
+        
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        async with self.lock:
+            self.active_connections.append(websocket)
+            
+    async def disconnect(self, websocket: WebSocket):
+        async with self.lock:
+            if websocket in self.active_connections:
+                self.active_connections.remove(websocket)
+                
+    async def broadcast(self, message: str):
+        async with self.lock:
+            for connection in self.active_connections[:]:
+                try:
+                    await connection.send_text(message)
+                except Exception:
+                    if connection in self.active_connections:
+                        self.active_connections.remove(connection)
+
+training_status_manager = TrainingStatusManager()
+
+@ws_router.websocket("/ws/training/status")
+async def ws_training_status_endpoint(
+    websocket: WebSocket,
+    token: Optional[str] = Query(default=None),
+):
+    """Stream live training status events."""
+    auth_header = websocket.headers.get("authorization")
+    if not _check_ws_token(token, auth_header):
+        await websocket.close(code=4003)
+        return
+        
+    await training_status_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await training_status_manager.disconnect(websocket)
+    except Exception as exc:
+        logger.error("ws_training_status error: %s", exc)
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+        await training_status_manager.disconnect(websocket)

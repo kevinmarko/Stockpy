@@ -134,6 +134,9 @@ GRAVITY_LOG_PATH: Path = settings.OUTPUT_DIR / "gravity_run.log"
 # diagnostics from across the platform (CONSTRAINT #2 — observable feedback).
 TELEMETRY_LOG_PATH = _REPO_ROOT / "logs" / "investyo.log"
 
+# Log written by ``launch_train_meta_labelers``
+TRAIN_META_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_train_meta.log"
+
 # Env vars the pipeline NEEDS to produce non-trivial output. Missing values are
 # surfaced as a pre-launch warning in the UI rather than discovered after a
 # silent degraded run. Only the *minimum* set required for a useful refresh —
@@ -349,12 +352,16 @@ def launch_orchestrator(dry_run: bool = False, refresh_account: bool = False) ->
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -410,12 +417,16 @@ def launch_advisory_main(refresh_account: bool = False) -> RunHandle:
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -507,12 +518,16 @@ def launch_scheduled_advisory(
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -580,12 +595,16 @@ def launch_daemon_engine(interval_seconds: int = 300, *, refresh_account: bool =
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -635,12 +654,16 @@ def launch_pytest() -> RunHandle:
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -687,12 +710,16 @@ def launch_preflight() -> RunHandle:
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -771,12 +798,16 @@ def launch_validation_run(strategies: List[str], start: str, end: str) -> RunHan
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -789,6 +820,44 @@ def launch_validation_run(strategies: List[str], start: str, end: str) -> RunHan
         refresh_account=False,
         log_path=VALIDATION_LOG_PATH,
         mode="validation",
+        _popen=popen,
+    )
+
+
+def launch_train_meta_labelers(signal: Optional[str] = None) -> RunHandle:
+    """Spawn ``scripts.train_meta_labelers`` as a non-blocking subprocess."""
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "-m", "scripts.train_meta_labelers"]
+    if signal:
+        cmd.extend(["--signal", signal])
+
+    log_file = open(TRAIN_META_LOG_PATH, "w", encoding="utf-8")
+    log_file.write(f"# InvestYo train meta labelers @ {time.strftime('%Y-%m-%d %H:%M:%S')} (signal={signal})\n")
+    log_file.flush()
+
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=env,
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched train_meta_labelers pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=False,
+        log_path=TRAIN_META_LOG_PATH,
+        mode="train_meta",
         _popen=popen,
     )
 
@@ -827,12 +896,16 @@ def launch_gravity_audit() -> RunHandle:
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -882,12 +955,16 @@ def launch_verify() -> RunHandle:
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -1001,12 +1078,16 @@ def launch_manifest_command(
     )
     log_file.flush()
 
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
     popen = subprocess.Popen(
         cmd,
         cwd=str(_REPO_ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
+        env=env,
         bufsize=1,
         text=True,
     )
@@ -1267,6 +1348,10 @@ def launch_symbol_retry(
         f"(refresh_account={refresh_account})\n"
     )
     log_file.flush()
+
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
 
     popen = subprocess.Popen(
         cmd,
@@ -1590,3 +1675,27 @@ def compute_run_progress(handle: Optional["RunHandle"]) -> Optional["RunProgress
     except Exception as exc:  # noqa: BLE001 - a progress poll must never crash a rerun
         logger.debug("compute_run_progress failed: %s", exc)
         return None
+
+
+def launch_train_lgbm() -> RunHandle:
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    cmd: List[str] = [sys.executable, "-m", "scripts.train_lgbm"]
+    
+    log_file = open(TRAIN_LGBM_LOG_PATH, "w", encoding="utf-8")
+    log_file.write(f"# InvestYo train lgbm @ {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    log_file.flush()
+    
+    env = os.environ.copy()
+    if getattr(settings, "STATE_API_TOKEN", None):
+        env["STATE_API_TOKEN"] = settings.STATE_API_TOKEN
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=env,
+        bufsize=1,
+        text=True,
+    )
+    return RunHandle("train_lgbm", popen, TRAIN_LGBM_LOG_PATH)

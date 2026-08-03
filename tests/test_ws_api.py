@@ -136,3 +136,44 @@ class TestBuildTickPayloadRestFallback:
 
         payload = asyncio.run(ws_api._build_tick_payload("AAPL"))
         assert payload == {"symbol": "AAPL", "error": "quote unavailable"}
+
+class TestTrainingStatusBroadcast:
+    def test_manager_connect_disconnect_broadcast(self):
+        """Test TrainingStatusManager connect, disconnect, and broadcast methods."""
+        from api.ws_api import TrainingStatusManager
+        manager = TrainingStatusManager()
+        
+        class FakeWebsocket:
+            def __init__(self):
+                self.messages = []
+                self.accepted = False
+                
+            async def accept(self):
+                self.accepted = True
+                
+            async def send_text(self, data):
+                self.messages.append(data)
+
+        async def main():
+            ws1 = FakeWebsocket()
+            ws2 = FakeWebsocket()
+            
+            await manager.connect(ws1)
+            assert ws1.accepted
+            assert len(manager.active_connections) == 1
+            
+            await manager.connect(ws2)
+            assert len(manager.active_connections) == 2
+            
+            await manager.broadcast('{"event": "training_started"}')
+            assert len(ws1.messages) == 1
+            assert len(ws2.messages) == 1
+            
+            await manager.disconnect(ws1)
+            assert len(manager.active_connections) == 1
+            
+            await manager.broadcast('{"event": "training_finished"}')
+            assert len(ws1.messages) == 1
+            assert len(ws2.messages) == 2
+            
+        asyncio.run(main())

@@ -49,15 +49,28 @@ export default function ModelComparisonChart() {
               width: "100%",
               height: "100%",
               display: "flex",
+              flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              textAlign: "center",
-              fontSize: "var(--t-body)",
-              color: "var(--text-muted)",
-              padding: "0 var(--s-6)",
+              position: "relative",
+              overflow: "hidden",
             }}
           >
-            Unavailable — no deployed model has tracked return history to compare yet.
+            <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.1, pointerEvents: "none" }} viewBox="0 0 100 100" preserveAspectRatio="none">
+              <path d="M0,80 Q25,60 50,70 T100,20" fill="none" stroke="#3b82f6" strokeWidth="2" />
+              <path d="M0,90 Q25,70 50,80 T100,40" fill="none" stroke="#10b981" strokeWidth="2" strokeDasharray="4 4" />
+            </svg>
+            <div style={{ position: "relative", zIndex: 1, textAlign: "center", padding: "0 var(--s-6)" }}>
+              <p style={{ fontSize: "var(--t-body)", color: "var(--text-muted)", marginBottom: "var(--s-4)" }}>
+                Unavailable — no deployed model has tracked return history to compare yet.
+              </p>
+              <button 
+                className="btn btn-secondary"
+                onClick={() => window.open("https://github.com/kevinmarko/Stockpy/blob/main/docs/VALIDATION_STRATEGY_FIX_LOG.md", "_blank")}
+              >
+                View Validation Logs
+              </button>
+            </div>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">

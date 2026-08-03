@@ -170,6 +170,12 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+try:
+    from api.ws_api import ws_router
+    app.include_router(ws_router)
+except ImportError as _ws_e:
+    logger.warning("ws_router mount skipped in control_api: %s", _ws_e)
+
 # ---------------------------------------------------------------------------
 # Daemon registry — set once by the process entrypoint after daemon.start()
 # ---------------------------------------------------------------------------
@@ -555,11 +561,22 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
         jtype = JobType(body.job_type)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=f"Unknown job_type: {body.job_type!r}") from err
-
     try:
         rec = job_manager.start_job(jtype, body.params)
-    except RuntimeError as err:
-        raise HTTPException(status_code=409, detail=str(err)) from err
+        
+        # Broadcast training status
+        if jtype in (JobType.TRAIN_META,):
+            from api.ws_api import training_status_manager
+            import asyncio
+            import json
+            try:
+                loop = asyncio.get_running_loop()
+                msg = json.dumps({"job_id": rec.job_id, "status": "started", "progress": 0.0, "message": f"{rec.job_type.value} started"})
+                loop.create_task(training_status_manager.broadcast(msg))
+            except Exception:
+                pass
+                
+    except RuntimeError as err:        raise HTTPException(status_code=409, detail=str(err)) from err
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
     except PermissionError as err:
