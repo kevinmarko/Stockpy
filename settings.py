@@ -132,7 +132,7 @@ class Settings(BaseSettings):
     #   1.  Secrets / credentials .............. FRED, Alpaca, State API token
     #   2.  Market-data layer .................. provider, Finnhub, cache TTLs
     #   3.  Robinhood — legacy SMS login ....... ROBINHOOD_USERNAME/PASSWORD
-    #   4.  Robinhood — portfolio TOTP ......... RH_USERNAME/PASSWORD/MFA_SECRET
+    #   4.  Robinhood — portfolio login ........ RH_USERNAME/PASSWORD, device-approval login timeouts
     #   5.  Order management / broker .......... DRY_RUN, ADVISORY_ONLY, webhook
     #   6.  Pre-trade risk gate ................ correlation, loss limit, HMM
     #   7.  Kill switch ........................ FLATTEN_ON_KILL
@@ -889,29 +889,65 @@ class Settings(BaseSettings):
         default=None,
         description="Robinhood account password for TOTP-authenticated read-only portfolio snapshot.",
     )
-    RH_MFA_SECRET: Optional[str] = Field(
-        default=None,
-        description=(
-            "Base32 TOTP secret from the Robinhood MFA setup page. Used to generate "
-            "the 6-digit code via pyotp.TOTP(RH_MFA_SECRET).now() — never logged or cached."
-        ),
-    )
+    # RH_MFA_SECRET (Base32 TOTP secret) was removed when Robinhood login moved
+    # to device-approval push (data.robinhood_login_worker) — passing an
+    # mfa_code short-circuits the push workflow entirely, so a TOTP secret is
+    # no longer usable here. See docs/settings_liveness.json history / the PR
+    # that retired it for the full rationale.
+    #
     # data.robinhood_portfolio.fetch_account_snapshot()'s Tier 3 (live fetch) runs
     # automatically whenever the cached snapshot is older than max_age_hours (default
     # 20h) — every one of its ~8 call sites (GUI panels, the MCP server, the Pilots/
-    # data APIs, portfolio_sync, llm_commentary) inherits this, so once credentials
-    # start failing, every poll from every surface re-attempts a Robinhood login with
-    # no shared cooldown. Default True preserves that exact behavior. Set False to
-    # make the live fetch strictly opt-in: only `force=True` (i.e. `python3 main.py
-    # --refresh-account`) ever logs in; every other caller gets the best available
-    # cached snapshot regardless of staleness.
+    # data APIs, portfolio_sync, llm_commentary) inherits this. Under device-approval
+    # login, an unattended Tier-3 attempt can never succeed (it needs a human to tap
+    # approve on their phone) — it only ever raises RobinhoodApprovalRequired and
+    # dead-letters. Default False reflects that: live login only happens when
+    # explicitly forced (--refresh-account, or the webapp's Connect/Refresh flows,
+    # both of which run the login in a supervised, killable worker a human is
+    # expected to be watching); every other caller gets the best available cached
+    # snapshot regardless of staleness rather than spawning a doomed login attempt
+    # every cycle. Set True to restore the old always-attempt behavior (meaningful
+    # only if a future login mode restores unattended capability).
     ROBINHOOD_AUTO_REFRESH_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "When True (default), fetch_account_snapshot() automatically re-logs-in "
-            "to Robinhood whenever the cached snapshot exceeds max_age_hours. When "
-            "False, live login only happens when explicitly forced (--refresh-account) "
-            "— all other callers get the cached snapshot regardless of staleness."
+            "When True, fetch_account_snapshot() automatically re-logs-in to "
+            "Robinhood whenever the cached snapshot exceeds max_age_hours. Default "
+            "False: device-approval login needs a human to tap approve, so an "
+            "unattended background attempt can never succeed — live login only "
+            "happens when explicitly forced (--refresh-account, or the webapp's "
+            "Connect/Refresh flows); all other callers get the cached snapshot "
+            "regardless of staleness."
+        ),
+    )
+    # data/robinhood_login.py's killable-subprocess login worker. All three
+    # default to values measured/estimated against robin_stocks' own device-
+    # approval wait windows (authentication.py's two 120s walls back-to-back)
+    # plus interpreter startup and network round-trips -- see
+    # docs/known_issues or the introducing PR for the full derivation.
+    RH_LOGIN_DEADLINE_SECONDS: int = Field(
+        default=180,
+        description=(
+            "Hard wall-clock deadline for one device-approval login attempt, from "
+            "worker start to a terminal result. The worker is SIGKILLed if it "
+            "hasn't produced a result by then -- about the longest a human will "
+            "hold their phone waiting for a push notification."
+        ),
+    )
+    RH_LOGIN_GRACE_SECONDS: int = Field(
+        default=5,
+        description=(
+            "SIGTERM-to-SIGKILL grace period when a login worker is cancelled or "
+            "hits its deadline."
+        ),
+    )
+    RH_LOGIN_STARTUP_SECONDS: int = Field(
+        default=30,
+        description=(
+            "If the login worker process hasn't emitted its first 'started' event "
+            "within this many seconds, it's treated as a failed launch (bad "
+            "interpreter, import error) and killed rather than waited out for the "
+            "full RH_LOGIN_DEADLINE_SECONDS."
         ),
     )
     # --- Order management (execution/order_manager.py) ---

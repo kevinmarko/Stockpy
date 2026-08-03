@@ -76,9 +76,11 @@ Checks (15 total)
    robinhood_queue_fresh        — when mode=live, output/execution_queue.json must
                                   exist and its generated_at be < 30 min old.
                                   Non-live → pass.  Never auto-skipped.
-   robinhood_mfa_configured     — WARNING-only: RH_MFA_SECRET set (else login
-                                  falls back to interactive MFA, breaking
-                                  unattended runs).  Any mode.  Never auto-skipped.
+   robinhood_session_present    — WARNING-only: a cached Robinhood device-
+                                  approval session (~/.tokens/robinhood.pickle)
+                                  exists and is non-empty (else the next login
+                                  needs a fresh device approval).  Any mode.
+                                  Never auto-skipped.
  4. advisory_only_active        — settings.ADVISORY_ONLY=True (Tier 5.1
                                   quarantine).  When True, the broker-readiness
                                   checks (alpaca_configured / alpaca_paper_mode
@@ -149,7 +151,7 @@ Checks (15 total)
 Note: the "(N total)" figure above and the numbered list are historical and
 have drifted from ALL_CHECKS as checks were added over time (23 entries as
 of this writing, most recently robinhood_execution_mode /
-robinhood_kill_switch_clear / robinhood_queue_fresh / robinhood_mfa_configured
+robinhood_kill_switch_clear / robinhood_queue_fresh / robinhood_session_present
 / env_no_duplicate_keys / alert_channels_reachable, none of which carry a
 number above). ALL_CHECKS is the single source of truth for the actual set
 and order of checks that run.
@@ -548,37 +550,49 @@ def check_robinhood_queue_fresh(max_age_minutes: float = 30.0) -> CheckResult:
         return CheckResult(name, False, f"Could not read execution queue: {exc}")
 
 
-def check_robinhood_mfa_configured() -> CheckResult:
-    """WARNING-ONLY: flag when RH_MFA_SECRET is unset (interactive MFA fallback).
+def check_robinhood_session_present() -> CheckResult:
+    """WARNING-ONLY: flag when no cached Robinhood device-approval session
+    exists.
 
-    ``data/robinhood_portfolio.py`` and ``data/robinhood_client.py`` fall back to
-    prompting for the 6-digit MFA code interactively when ``RH_MFA_SECRET`` is
-    empty.  That is fine for an attended session but breaks unattended/scheduled
-    runs, which will block forever waiting on stdin.  This is a hygiene reminder,
-    not a hard gate, so it is **warning-only** (never blocking) and applies in
-    every mode.
+    Robinhood login is device-approval push (the operator taps "approve" in
+    the Robinhood app) rather than a typed TOTP/SMS code, so a login attempt
+    can never complete unattended — it always needs a human watching their
+    phone at the moment of the request. A cached session pickle
+    (``~/.tokens/robinhood.pickle``, guarded by ``data/robinhood_session.py``)
+    means the device Robinhood already trusts is being reused, which
+    typically avoids a fresh device-approval prompt on the next login
+    (subject to Robinhood's own device-token lifetime — this check cannot
+    promise a login will be silent, only that one isn't obviously needed).
+    This is a hygiene reminder, not a hard gate, so it is **warning-only**
+    (never blocking) and applies in every mode.
 
-    Never auto-skipped under ADVISORY_ONLY — the Robinhood path is orthogonal to
-    the Alpaca quarantine.
+    Never auto-skipped under ADVISORY_ONLY — the Robinhood path is orthogonal
+    to the Alpaca quarantine.
     """
-    name = "robinhood_mfa_configured"
+    name = "robinhood_session_present"
     try:
-        secret = getattr(settings, "RH_MFA_SECRET", None)
+        from data import robinhood_session
+        present = robinhood_session._is_loadable_session(robinhood_session._PICKLE_PATH)
     except Exception as exc:
         return CheckResult(
             name, True,
-            f"⚠️  Could not read RH_MFA_SECRET ({exc}) — skipping check.",
+            f"⚠️  Could not check for a cached Robinhood session ({exc}) — skipping check.",
             warning=True,
         )
-    if not secret:
+    if not present:
         return CheckResult(
             name, True,
-            "⚠️  RH_MFA_SECRET is not set — Robinhood login will fall back to "
-            "interactive MFA (prompts for a 6-digit code). Unattended/scheduled "
-            "runs will block on stdin. Set RH_MFA_SECRET in .env for headless auth.",
+            "⚠️  No cached Robinhood session found — the next login will need "
+            "a fresh device approval (tap 'approve' in the Robinhood app). Run "
+            "`python3 main.py --refresh-account` (or the Pilots PWA's connect "
+            "flow) with your phone nearby.",
             warning=True,
         )
-    return CheckResult(name, True, "RH_MFA_SECRET is configured (headless MFA available).")
+    return CheckResult(
+        name, True,
+        "A cached Robinhood session is present — the next login may not "
+        "require a fresh device approval.",
+    )
 
 
 def check_alpaca_configured() -> CheckResult:
@@ -1255,7 +1269,7 @@ ALL_CHECKS = [
     check_robinhood_execution_mode,
     check_robinhood_kill_switch_clear,
     check_robinhood_queue_fresh,
-    check_robinhood_mfa_configured,
+    check_robinhood_session_present,
     check_alpaca_configured,
     check_macro_regime_gate_enabled,
     check_alpaca_paper_mode,

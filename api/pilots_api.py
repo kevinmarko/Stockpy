@@ -32,11 +32,18 @@ for the full rationale. Gated behind THREE independent controls, all of which
 must pass: (1) ``settings.BROKERAGE_CONNECT_ENABLED`` (default ``False``,
 GUI-writable), (2) the same fail-closed ``FOLLOW_API_TOKEN`` command
 token as the follow write-path, (3) ``require_loopback`` — the request must
-originate from ``127.0.0.1``/``::1``. Credentials are verified with a
-read-only login (``data.robinhood_portfolio.verify_credentials``) BEFORE they
-are ever persisted, and are never logged, cached, or echoed back
-(CONSTRAINT #3). This remains a single-operator, single-machine model — not a
-multi-user credential vault.
+originate from ``127.0.0.1``/``::1``. ``POST /brokerage/connect`` and
+``POST /brokerage/refresh`` are asynchronous, job-based endpoints (202 +
+``job_id``, polled via ``GET /brokerage/login/status/{job_id}``) — Robinhood
+device-approval login needs a human to tap "approve" in the Robinhood app,
+which can take up to ``RH_LOGIN_DEADLINE_SECONDS``, too long to hold an HTTP
+request open. Login itself runs in an isolated, killable subprocess
+(``data.robinhood_login_worker``, launched via ``data.robinhood_login`` and
+glued to this API by ``api._rh_login``) — never in this process. Credentials
+are persisted to ``.env`` by a background watcher thread ONLY once a
+"connect" job's login actually succeeds, and are never logged, cached, or
+echoed back (CONSTRAINT #3). This remains a single-operator, single-machine
+model — not a multi-user credential vault.
 
 Run standalone:
     uvicorn api.pilots_api:app --port 8602
@@ -221,6 +228,16 @@ from reporting.progress import read_progress
 # module top (not lazily) so tests can `mock.patch.object(pilots_api, ...)`.
 import data.robinhood_portfolio as robinhood_portfolio
 import data.brokerage_credentials as brokerage_credentials
+
+# Device-approval login job primitive (start/poll/cancel a killable, isolated
+# login-worker subprocess) — see data/robinhood_login.py and
+# data/robinhood_login_worker.py. api._rh_login is the thin Pilots-API-specific
+# glue that also arranges for RH_USERNAME/RH_PASSWORD to be persisted on a
+# successful "connect" job (see its own module docstring). Neither
+# data.robinhood_login nor data.robinhood_login_worker is on this module's
+# AST-guard deny-list. Imported at module top so tests can
+# `mock.patch.object(pilots_api, "rh_login", ...)`.
+import api._rh_login as rh_login
 
 # LLM configuration status (GET /llm/status). `gui.ai_control_center` is
 # stdlib-only + Streamlit-free (the headless status logic); `llm.status_store`
@@ -674,20 +691,15 @@ class DecisionCreateRequest(BaseModel):
 
 class BrokerageConnectRequest(BaseModel):
     """Body for ``POST /brokerage/connect``. Never logged (CONSTRAINT #3) —
-    Pydantic's default repr is not invoked anywhere in this module's logging."""
+    Pydantic's default repr is not invoked anywhere in this module's logging.
+
+    No ``mfa_code`` field: Robinhood login here uses device-approval push
+    login (``data.robinhood_login_worker``) — the operator taps "approve" in
+    the Robinhood app itself, so no authenticator code is ever collected or
+    submitted over HTTP."""
 
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
-    mfa_code: str = Field(
-        default="",
-        description=(
-            "Current 6-digit code from the user's authenticator app. "
-            "Required — interactive MFA prompting is not available over "
-            "HTTP, so a login attempt with no MFA code is treated as a "
-            "verification failure. Used once to verify the login, then "
-            "discarded — never persisted to .env or anywhere else."
-        ),
-    )
 
 
 class ForecastBackfillRunRequest(BaseModel):
@@ -2968,6 +2980,7 @@ def get_brokerage_status() -> Dict[str, Any]:
 
 @app.post(
     "/brokerage/connect",
+    status_code=202,
     dependencies=[
         Depends(require_brokerage_connect_enabled),
         Depends(require_command_token),
@@ -2975,37 +2988,30 @@ def get_brokerage_status() -> Dict[str, Any]:
     ],
 )
 def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
-    """Verify Robinhood credentials with a read-only login, then persist them
-    to the local ``.env`` (and the live process environment) ONLY on success.
+    """Start an asynchronous device-approval login job that verifies
+    candidate Robinhood credentials, returning immediately (202) with the
+    job's initial status rather than blocking on the login itself.
 
     Gated by three independent controls (see the dependencies above):
     ``BROKERAGE_CONNECT_ENABLED``, the fail-closed follow command token, and a
-    loopback-only request check. Credential values are never logged, cached,
-    or echoed back in the response (CONSTRAINT #3) — on failure this returns a
-    plain 401 with no detail about which field was wrong (username vs.
-    password vs. MFA), since that distinction itself would leak information
-    about a candidate credential.
+    loopback-only request check.
 
-    ``body.mfa_code`` (a one-time 6-digit authenticator code) is used only to
-    verify the login and is never persisted — only username/password are
-    written to ``.env`` on success. Ongoing unattended re-fetches rely on
-    ``robin_stocks``' own device-session pickle established by this verify
-    call, not a stored MFA secret."""
-    verified = robinhood_portfolio.verify_credentials(
-        body.username, body.password, body.mfa_code
-    )
-    if not verified:
-        raise HTTPException(
-            status_code=401,
-            detail="Could not verify Robinhood credentials.",
-        )
-    brokerage_credentials.write_rh_credentials(body.username, body.password)
-    account_present = False
-    try:
-        account_present = HistoricalStore(readonly=True).latest_account_snapshot() is not None
-    except Exception as exc:  # noqa: BLE001 - dead-letter: cold DB -> honest False
-        logger.warning("pilots_api: connect account-snapshot check failed: %s", exc)
-    return {"connected": True, "verified": True, "has_account_snapshot": account_present}
+    Robinhood's device-approval flow requires a human to tap "approve" in the
+    Robinhood app — that can take anywhere from a few seconds up to the full
+    ``RH_LOGIN_DEADLINE_SECONDS`` window, far too long to hold an HTTP request
+    open. Instead this launches an isolated, killable login-worker subprocess
+    (``data.robinhood_login_worker``, via ``api._rh_login.start_connect_job``)
+    and hands back its ``job_id`` immediately; the caller polls
+    ``GET /brokerage/login/status/{job_id}`` for ``phase``/``state`` until it
+    reaches a terminal state (``succeeded``/``failed``/``timeout``/
+    ``cancelled``). ``RH_USERNAME``/``RH_PASSWORD`` are persisted to ``.env``
+    by a background watcher thread (``api._rh_login``) the moment — and only
+    if — the job's state becomes ``"succeeded"``; never before, never on
+    failure/timeout/cancellation, and never inside this handler itself.
+    Credential values are never logged, cached, or echoed back in any
+    response (CONSTRAINT #3)."""
+    job = rh_login.start_connect_job(body.username, body.password)
+    return rh_login.serialize_job(job)
 
 
 @app.post(
@@ -3032,64 +3038,79 @@ def disconnect_brokerage() -> Dict[str, Any]:
 
 @app.post(
     "/brokerage/refresh",
+    status_code=202,
     dependencies=[
         Depends(require_brokerage_refresh_enabled),
         Depends(require_command_token),
         Depends(require_loopback),
     ],
 )
-def refresh_brokerage() -> Any:
-    """Force an on-demand Robinhood re-login + account-snapshot refresh,
-    bypassing the daily cache — the webapp/API equivalent of
+def refresh_brokerage() -> Dict[str, Any]:
+    """Start an asynchronous on-demand Robinhood re-login + account-snapshot
+    refresh job, bypassing the daily cache — the webapp/API equivalent of
     ``python3 main.py --refresh-account`` and the Streamlit GUI's "Force fresh
     login (bypass cache)" checkbox on the Live Inventory / Paper Monitor tabs.
 
-    Calls ``data.robinhood_portfolio.fetch_account_snapshot(force=True)``,
-    which unconditionally re-authenticates against Robinhood and overrides
-    ``ROBINHOOD_AUTO_REFRESH_ENABLED`` for this one fetch (see that function's
-    own docstring), then writes both the JSON cache and the DB. Gated by three
-    independent controls (see the dependencies above): a DEDICATED
-    ``BROKERAGE_REFRESH_ENABLED`` flag (not ``BROKERAGE_CONNECT_ENABLED`` — see
-    ``require_brokerage_refresh_enabled``), the fail-closed follow command
-    token, and the same loopback-only check as ``/brokerage/connect`` and
-    ``/brokerage/disconnect``.
+    Gated by three independent controls (see the dependencies above): a
+    DEDICATED ``BROKERAGE_REFRESH_ENABLED`` flag (not
+    ``BROKERAGE_CONNECT_ENABLED`` — see ``require_brokerage_refresh_enabled``),
+    the fail-closed follow command token, and the same loopback-only check as
+    ``/brokerage/connect`` and ``/brokerage/disconnect``.
 
-    ``fetch_account_snapshot`` itself already degrades a live-fetch failure to
-    the last cached snapshot when one exists (never a crash) — that case
-    returns here as a normal 200 (a real, if stale, snapshot), same as
-    ``GET /portfolio``'s ``is_stale``/``age_hours`` fields already surface.
-    This endpoint only raises when NO snapshot — fresh or cached — is
-    available at all (e.g. missing/invalid credentials on a first-ever
-    refresh): a plain-string 502, same posture as ``/brokerage/connect``'s
-    plain-401 (no structured ``{error, message}`` tag — there is no request
-    body / form field for a frontend to highlight here, just a pass/fail
-    live call, so a dict detail would only round-trip through client.ts's
-    ``String(body.detail)`` as ``"[object Object]"``). The underlying
-    exception is logged server-side only, never echoed to the client
-    (CONSTRAINT #3: never leak which credential was wrong)."""
+    Returns immediately (202) with the started job's initial status — the
+    same isolated device-approval worker flow as ``/brokerage/connect``, via
+    ``api._rh_login.start_refresh_job``. Poll
+    ``GET /brokerage/login/status/{job_id}`` for progress; the job's eventual
+    ``"succeeded"``/``"failed"``/``"timeout"``/``"cancelled"`` state is now the
+    only place a login-level failure can surface. The old
+    try/except-around-a-blocking-call translated to a 502 is gone for exactly
+    that reason — starting a job launches a subprocess and returns
+    immediately, it does not itself perform any Robinhood network call, so
+    there is no longer a blocking login result here to translate.
+    ``start_refresh_job`` (via ``data.robinhood_login.start_login``) does call
+    ``subprocess.Popen``, which can in principle raise ``OSError`` if process
+    creation itself fails (e.g. resource exhaustion) — the try/except below
+    exists solely to translate that unlikely case to a clean 502 rather than a
+    raw 500, matching this endpoint's pre-existing error-translation posture."""
     try:
-        snapshot = robinhood_portfolio.fetch_account_snapshot(force=True)
-    except Exception as exc:  # noqa: BLE001 - translate to a clean 502
-        logger.error("pilots_api: brokerage refresh failed: %s", exc)
+        job = rh_login.start_refresh_job()
+    except Exception as exc:  # noqa: BLE001 - OSError etc. from subprocess.Popen -> clean 502
+        logger.error("pilots_api: brokerage refresh job could not be started: %s", exc)
         raise HTTPException(
             status_code=502,
-            detail="Could not refresh the Robinhood account snapshot.",
+            detail="Could not start the Robinhood account refresh.",
         ) from exc
+    return rh_login.serialize_job(job)
+
+
+@app.get(
+    "/brokerage/login/status/{job_id}",
+    dependencies=[Depends(require_read_token), Depends(require_loopback)],
+)
+def get_brokerage_login_status(job_id: str) -> Dict[str, Any]:
+    """Poll the state of a login job started by ``POST /brokerage/connect`` or
+    ``POST /brokerage/refresh``. 404 if the job_id is unknown."""
+    job = rh_login.get_login_state(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown login job.")
+    return rh_login.serialize_job(job)
+
+
+@app.post(
+    "/brokerage/login/cancel/{job_id}",
+    dependencies=[Depends(require_command_token), Depends(require_loopback)],
+)
+def cancel_brokerage_login(job_id: str) -> Dict[str, Any]:
+    """Cancel an in-flight login job (SIGTERM -> SIGKILL the isolated worker
+    process). 404 if the job_id is unknown. Reports honestly if the kill
+    could not be confirmed rather than claiming success it didn't achieve."""
     try:
-        payload = _serialize_portfolio(snapshot)
-    except Exception as exc:  # noqa: BLE001 - defensive: malformed snapshot
-        logger.warning("pilots_api: refresh serialization failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail="Snapshot refreshed but could not be read back.",
-        ) from exc
-    # _serialize_portfolio hardcodes "db" (correct for GET /portfolio, which
-    # reads HistoricalStore directly) — this endpoint triggered a live fetch,
-    # so relabel honestly. Still "live" even on the internal stale-cache
-    # fallback inside fetch_account_snapshot: `is_stale`/`age_hours` above
-    # already surface that degradation; the DATA didn't come from this
-    # request reading the DB, it came from what the live-fetch call returned.
-    payload["source"] = "live"
+        stopped = rh_login.cancel_login(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown login job.")
+    job = rh_login.get_login_state(job_id)
+    payload = rh_login.serialize_job(job) if job else {"job_id": job_id}
+    payload["cancelled"] = stopped
     return payload
 
 

@@ -60,7 +60,7 @@ def test_write_setting_refuses_secret(temp_env):
 
 
 def test_is_secret_classification():
-    assert env_io.is_secret("RH_MFA_SECRET") is True
+    assert env_io.is_secret("RH_PASSWORD") is True
     assert env_io.is_secret("KELLY_FRACTION") is False
 
 

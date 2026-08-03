@@ -1,10 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
-import { ApiError } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { useAutoPoll } from "../hooks/useAutoPoll";
+import { useBrokerageLoginJob } from "../hooks/useBrokerageLoginJob";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -27,6 +27,7 @@ import { DecisionModal } from "../components/DecisionModal";
 import { KillSwitchToggle } from "../components/KillSwitchToggle";
 import { Modal } from "../components/Modal";
 import { RlhfReviewQueue } from "../components/RlhfReviewQueue";
+import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
 import { timeAgo } from "../format";
@@ -58,20 +59,45 @@ export function AgenticTrading() {
 
   const [refreshToken, setRefreshToken] = useState(0);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [isRefreshingData, setIsRefreshingData] = useState(false);
 
-  const refreshAll = async () => {
-    setIsRefreshingData(true);
-    try {
-      await api.refreshBrokerage();
-    } catch {
-      // ignore
-    }
+  // Drives the header's "Refresh Data" button through the same async
+  // device-approval-push job flow as the auth modal's RobinhoodConnectForm
+  // (a SEPARATE hook instance -- POST /brokerage/refresh needs no typed
+  // credentials, it just re-authenticates with whatever is already
+  // configured server-side), rather than the old fire-and-forget
+  // `await api.refreshBrokerage()` call, which the new async contract would
+  // otherwise make a no-op (the 202 response returns before the login
+  // actually finishes).
+  const brokerageRefresh = useBrokerageLoginJob();
+  const isRefreshingData = brokerageRefresh.starting || brokerageRefresh.job?.state === "running";
+
+  const reloadAll = () => {
     setRefreshToken((t) => t + 1);
     status.reload();
     brokerageStatus.reload();
-    setIsRefreshingData(false);
   };
+
+  const refreshAll = () => {
+    void brokerageRefresh.start("refresh");
+  };
+
+  // Reload everything the instant the refresh job reaches a terminal state
+  // (success or otherwise) -- keyed on job_id + state so each new refresh
+  // attempt's own terminal transition fires this again.
+  useEffect(() => {
+    if (brokerageRefresh.job && brokerageRefresh.job.state !== "running") {
+      reloadAll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brokerageRefresh.job?.job_id, brokerageRefresh.job?.state]);
+
+  const refreshFailureNotice = brokerageRefresh.error
+    ? brokerageRefresh.error
+    : brokerageRefresh.job?.state === "timeout"
+      ? "No response came through in time. The last known data is still shown."
+      : brokerageRefresh.job?.state === "failed"
+        ? "Could not refresh the Robinhood account snapshot."
+        : null;
 
   return (
     <div className="screen">
@@ -115,6 +141,13 @@ export function AgenticTrading() {
 
       <TabGuide tabKey="agentic" />
 
+      {refreshFailureNotice && (
+        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
+          <span>⚠️</span>
+          <span>{refreshFailureNotice}</span>
+        </Notice>
+      )}
+
       {status.stale && <StaleDataNotice cachedAt={status.cachedAt} onRetry={status.reload} />}
       {status.loading && <Loading lines={3} />}
       {!status.loading && status.error && (
@@ -135,13 +168,16 @@ export function AgenticTrading() {
       <ControlsSection status={status.data} onChanged={status.reload} />
 
       {showAuthModal && (
-        <RobinhoodAuthModal
-          onClose={() => setShowAuthModal(false)}
-          onConnected={() => {
-            setShowAuthModal(false);
-            refreshAll();
-          }}
-        />
+        <Modal ariaLabel="Robinhood Authentication Modal" onClose={() => setShowAuthModal(false)}>
+          <RobinhoodConnectForm
+            title="Robinhood On-Demand Authentication"
+            subtitle="Approve the login with a tap in your Robinhood mobile app — verified with a read-only, on-demand login."
+            onConnected={() => {
+              setShowAuthModal(false);
+              reloadAll();
+            }}
+          />
+        </Modal>
       )}
     </div>
   );
@@ -549,105 +585,6 @@ function CandidateRow({ c }: { c: DiscoveryCandidate }) {
         />
       )}
     </div>
-  );
-}
-
-function RobinhoodAuthModal({
-  onClose,
-  onConnected,
-}: {
-  onClose: () => void;
-  onConnected: () => void;
-}) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [mfaCode, setMfaCode] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setPending(true);
-    setError(null);
-    try {
-      await api.connectBrokerage({
-        username: username.trim(),
-        password: password.trim(),
-        mfa_code: mfaCode.trim(),
-      });
-      onConnected();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not verify Robinhood credentials.");
-    } finally {
-      setPending(false);
-    }
-  };
-
-  return (
-    <Modal ariaLabel="Robinhood Authentication Modal" onClose={onClose}>
-      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
-        Robinhood On-Demand Authentication
-      </h2>
-      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
-        Verify credentials with a read-only login.
-      </p>
-
-      {error && (
-        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
-          <span>⚠️</span>
-          <span>{error}</span>
-        </Notice>
-      )}
-
-      <form onSubmit={submit}>
-        <Input
-          label="Email / Username"
-          type="email"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="name@domain.com"
-        />
-        <Input
-          label="Password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="••••••••••••"
-        />
-        <Input
-          label="Authenticator app code"
-          type="password"
-          inputMode="numeric"
-          value={mfaCode}
-          onChange={(e) => setMfaCode(e.target.value)}
-          placeholder="123456"
-          hint={
-            // The backend (POST /brokerage/connect -> verify_credentials) never
-            // falls through to an interactive MFA prompt over HTTP -- a headless
-            // request must not risk blocking on stdin -- so it treats a missing
-            // or empty mfa_code as a verification failure, not "no MFA needed".
-            // This field must stay required; see RobinhoodConnectForm.tsx for
-            // the same, correct, existing contract.
-            "Open your authenticator app and enter the current 6-digit code. It's used once to verify the login — nothing beyond that is stored."
-          }
-        />
-
-        <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4)" }}>
-          <Button variant="neutral" type="button" onClick={onClose} style={{ flex: 1 }}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            type="submit"
-            disabled={!username.trim() || !password.trim() || mfaCode.trim().length !== 6 || pending}
-            pending={pending}
-            style={{ flex: 2 }}
-          >
-            {pending ? "Authenticating…" : "Connect Robinhood"}
-          </Button>
-        </div>
-      </form>
-    </Modal>
   );
 }
 

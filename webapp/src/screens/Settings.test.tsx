@@ -15,7 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "./Settings";
 import { AutoRefreshProvider } from "../components/AutoRefreshContext";
 import { api } from "../api/client";
-import type { AutomationSchedule, AutomationStatus, BrokerageStatus, Follow, FollowResult, LlmProviderName, LlmStatus, TriggerRunResult } from "../api/types";
+import { ApiError } from "../api/types";
+import type { AutomationSchedule, AutomationStatus, BrokerageLoginJob, BrokerageStatus, Follow, FollowResult, LlmProviderName, LlmStatus, TriggerRunResult } from "../api/types";
 import { writeOnboarding, readOnboarding } from "../onboarding";
 import { __resetMockDataUniverse } from "../api/mock";
 
@@ -728,6 +729,26 @@ describe("Settings screen — Brokerage", () => {
     delete (navigator as { serviceWorker?: unknown }).serviceWorker;
   });
 
+  /** A `BrokerageLoginJob` fixture, terminal by default -- these tests mock
+   *  connectBrokerage/refreshBrokerage's OWN resolved value directly (rather
+   *  than exercising useBrokerageLoginJob's 2s poll), so a test can return an
+   *  already-succeeded/failed/timed-out job on the very first (202-equivalent)
+   *  response and never need fake timers. The poll loop itself is covered by
+   *  useBrokerageLoginJob.test.ts and RobinhoodConnectForm.test.tsx. */
+  function loginJob(overrides: Partial<BrokerageLoginJob> = {}): BrokerageLoginJob {
+    return {
+      job_id: "job-1",
+      mode: "connect",
+      state: "succeeded",
+      phase: "done",
+      error_code: null,
+      seconds_remaining: 170,
+      connected: true,
+      has_account_snapshot: true,
+      ...overrides,
+    };
+  }
+
   it("disconnected: renders the Robinhood connect form, no Disconnect button", async () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: false,
@@ -738,7 +759,7 @@ describe("Settings screen — Brokerage", () => {
 
     expect(await screen.findByLabelText(/robinhood email/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/authenticator app code/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/authenticator/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Disconnect" })).not.toBeInTheDocument();
   });
 
@@ -762,18 +783,9 @@ describe("Settings screen — Brokerage", () => {
     vi.spyOn(api, "getBrokerageStatus")
       .mockResolvedValueOnce({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true })
       .mockResolvedValue({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true });
-    const refreshSpy = vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
-      total_equity: 48213.55,
-      buying_power: 6120.4,
-      total_unrealized_pl: 3182.19,
-      total_dividends: 412.66,
-      position_count: 6,
-      positions: [],
-      fetched_at: new Date().toISOString(),
-      source: "live",
-      is_stale: false,
-      age_hours: 0,
-    });
+    const refreshSpy = vi
+      .spyOn(api, "refreshBrokerage")
+      .mockResolvedValueOnce(loginJob({ mode: "refresh" }));
     renderSettings();
 
     await user.click(
@@ -787,15 +799,18 @@ describe("Settings screen — Brokerage", () => {
     expect(screen.queryByLabelText(/robinhood email/i)).not.toBeInTheDocument();
   });
 
-  it("disconnected: an honest failure (no usable .env credentials) shows the error, form stays put", async () => {
+  it("disconnected: an honest failure (no usable .env credentials) shows the specific reason, form stays put", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: false,
       has_account_snapshot: false,
       auto_refresh_enabled: true,
     });
-    vi.spyOn(api, "refreshBrokerage").mockRejectedValueOnce(
-      new Error("Could not refresh the Robinhood account snapshot.")
+    // The new async contract always 202s the POST itself -- an honest "no
+    // credentials to try" failure is discovered via the job's OWN terminal
+    // state, not a rejected request.
+    vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce(
+      loginJob({ mode: "refresh", state: "failed", error_code: "no_credentials", connected: false, has_account_snapshot: false })
     );
     renderSettings();
 
@@ -804,7 +819,7 @@ describe("Settings screen — Brokerage", () => {
     );
 
     expect(
-      await screen.findByText("Could not refresh the Robinhood account snapshot.")
+      await screen.findByText(/no robinhood credentials were available to try/i)
     ).toBeInTheDocument();
     // Still disconnected -- the typed form remains available as a fallback.
     expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();
@@ -828,16 +843,11 @@ describe("Settings screen — Brokerage", () => {
     vi.spyOn(api, "getBrokerageStatus")
       .mockResolvedValueOnce({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true })
       .mockResolvedValue({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true });
-    const connectSpy = vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
-      connected: true,
-      verified: true,
-      has_account_snapshot: true,
-    });
+    const connectSpy = vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce(loginJob());
     renderSettings();
 
     await user.type(await screen.findByLabelText(/robinhood email/i), "user@example.com");
     await user.type(screen.getByLabelText(/^password$/i), "sUp3rS3cr3t!!");
-    await user.type(screen.getByLabelText(/authenticator app code/i), "123456");
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
     // Reloaded /brokerage/status now reports connected -> Disconnect appears,
@@ -846,7 +856,6 @@ describe("Settings screen — Brokerage", () => {
     expect(connectSpy).toHaveBeenCalledWith({
       username: "user@example.com",
       password: "sUp3rS3cr3t!!",
-      mfa_code: "123456",
     });
     expect(document.body.textContent).not.toContain("sUp3rS3cr3t!!");
   });
@@ -876,7 +885,7 @@ describe("Settings screen — Brokerage", () => {
     // Regression: found by manually driving the app in mock mode -- a
     // successful refresh's Notice survived a subsequent Disconnect and kept
     // rendering ("Refreshed just now...") in the now-disconnected section,
-    // because `refresh`'s useMutation state was never reset on disconnect.
+    // because the refresh job's state was never reset on disconnect.
     const user = userEvent.setup();
     vi.spyOn(api, "getBrokerageStatus")
       // 1) initial mount, 2) doRefresh's own reload() (still connected --
@@ -885,30 +894,23 @@ describe("Settings screen — Brokerage", () => {
       .mockResolvedValueOnce({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true })
       .mockResolvedValueOnce({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true })
       .mockResolvedValue({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true });
-    vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
-      total_equity: 48213.55,
-      buying_power: 6120.4,
-      total_unrealized_pl: 3182.19,
-      total_dividends: 412.66,
-      position_count: 6,
-      positions: [],
-      fetched_at: new Date().toISOString(),
-      source: "live",
-      is_stale: false,
-      age_hours: 0,
-    });
+    vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce(loginJob({ mode: "refresh" }));
     vi.spyOn(api, "disconnectBrokerage").mockResolvedValueOnce({ connected: false });
     renderSettings();
 
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
-    expect(await screen.findByText(/total equity/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/refreshed — robinhood account snapshot updated/i)
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
     const dialog = await screen.findByRole("dialog", { name: "Disconnect brokerage" });
     await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
 
     await screen.findByLabelText(/robinhood email/i); // back to the connect form
-    expect(screen.queryByText(/total equity/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/refreshed — robinhood account snapshot updated/i)
+    ).not.toBeInTheDocument();
   });
 
   it("A successful typed-credential connect clears a stale '.env credentials' failure notice", async () => {
@@ -923,31 +925,26 @@ describe("Settings screen — Brokerage", () => {
       .mockResolvedValueOnce({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true })
       .mockResolvedValueOnce({ connected: false, has_account_snapshot: false, auto_refresh_enabled: true })
       .mockResolvedValue({ connected: true, has_account_snapshot: true, auto_refresh_enabled: true });
-    vi.spyOn(api, "refreshBrokerage").mockRejectedValueOnce(
-      new Error("Could not refresh the Robinhood account snapshot.")
+    vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce(
+      loginJob({ mode: "refresh", state: "failed", error_code: "no_credentials", connected: false, has_account_snapshot: false })
     );
-    vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
-      connected: true,
-      verified: true,
-      has_account_snapshot: true,
-    });
+    vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce(loginJob());
     renderSettings();
 
     await user.click(
       await screen.findByRole("button", { name: /connect using \.env credentials/i })
     );
     expect(
-      await screen.findByText("Could not refresh the Robinhood account snapshot.")
+      await screen.findByText(/no robinhood credentials were available to try/i)
     ).toBeInTheDocument();
 
     await user.type(screen.getByLabelText(/robinhood email/i), "user@example.com");
     await user.type(screen.getByLabelText(/^password$/i), "sUp3rS3cr3t!!");
-    await user.type(screen.getByLabelText(/authenticator app code/i), "123456");
-    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+    await user.click(screen.getByRole("button", { name: /try again|^connect$/i }));
 
     await screen.findByRole("button", { name: "Disconnect" }); // now connected
     expect(
-      screen.queryByText("Could not refresh the Robinhood account snapshot.")
+      screen.queryByText(/no robinhood credentials were available to try/i)
     ).not.toBeInTheDocument();
   });
 
@@ -965,55 +962,46 @@ describe("Settings screen — Brokerage", () => {
       has_account_snapshot: true,
       auto_refresh_enabled: true,
     });
-    const refreshSpy = vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
-      total_equity: 48213.55,
-      buying_power: 6120.4,
-      total_unrealized_pl: 3182.19,
-      total_dividends: 412.66,
-      position_count: 6,
-      positions: [],
-      fetched_at: new Date().toISOString(),
-      source: "live",
-      is_stale: false,
-      age_hours: 0,
-    });
+    const refreshSpy = vi
+      .spyOn(api, "refreshBrokerage")
+      .mockResolvedValueOnce(loginJob({ mode: "refresh" }));
     renderSettings();
 
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
 
     expect(refreshSpy).toHaveBeenCalledTimes(1);
-    expect(await screen.findByText(/total equity/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/refreshed — robinhood account snapshot updated/i)
+    ).toBeInTheDocument();
   });
 
-  it("Force fresh login degraded to a stale cached snapshot shows the honest degraded notice", async () => {
+  it("Force fresh login timing out shows the honest timeout notice, never claiming denial", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: true,
       has_account_snapshot: true,
       auto_refresh_enabled: true,
     });
-    vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce({
-      total_equity: 48213.55,
-      buying_power: 6120.4,
-      total_unrealized_pl: 3182.19,
-      total_dividends: 412.66,
-      position_count: 6,
-      positions: [],
-      fetched_at: new Date().toISOString(),
-      source: "live",
-      is_stale: true,
-      age_hours: 48,
-    });
+    vi.spyOn(api, "refreshBrokerage").mockResolvedValueOnce(
+      loginJob({
+        mode: "refresh",
+        state: "timeout",
+        phase: "awaiting_approval",
+        error_code: "timeout",
+        seconds_remaining: 0,
+      })
+    );
     renderSettings();
 
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
 
     expect(
-      await screen.findByText(/login failed; showing the last cached snapshot instead/i)
+      await screen.findByText(/no approval came through in time\. nothing was saved\./i)
     ).toBeInTheDocument();
+    expect(screen.queryByText(/denied/i)).not.toBeInTheDocument();
   });
 
-  it("a refresh failure shows a warning notice, not a crash", async () => {
+  it("a refresh request-level failure shows a warning notice, not a crash", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: true,
@@ -1021,7 +1009,7 @@ describe("Settings screen — Brokerage", () => {
       auto_refresh_enabled: true,
     });
     vi.spyOn(api, "refreshBrokerage").mockRejectedValueOnce(
-      new Error("Could not refresh the Robinhood account snapshot.")
+      new ApiError("Could not refresh the Robinhood account snapshot.", 502)
     );
     renderSettings();
 

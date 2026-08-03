@@ -241,17 +241,25 @@ describe("client.ts — live client (mocked fetch)", () => {
     expect(result).toEqual({ connected: false, has_account_snapshot: false });
   });
 
-  it("connectBrokerage() POSTs credentials as JSON to /brokerage/connect", async () => {
+  it("connectBrokerage() POSTs credentials (no mfa_code) as JSON to /brokerage/connect", async () => {
     const mod = await importLiveClient();
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({ connected: true, verified: true, has_account_snapshot: false })
+      jsonResponse({
+        job_id: "job-1",
+        mode: "connect",
+        state: "running",
+        phase: "starting",
+        error_code: null,
+        seconds_remaining: 180,
+        connected: false,
+        has_account_snapshot: false,
+      })
     );
 
     await mod.api.connectBrokerage({
       username: "user@example.com",
       password: "hunter2",
-      mfa_code: "123456",
     });
 
     const [url, init] = fetchMock.mock.calls[0];
@@ -260,26 +268,98 @@ describe("client.ts — live client (mocked fetch)", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       username: "user@example.com",
       password: "hunter2",
-      mfa_code: "123456",
     });
   });
 
-  it("connectBrokerage() surfaces a 401 verification failure as an ApiError", async () => {
+  it("connectBrokerage() surfaces a request-level failure as an ApiError", async () => {
     const mod = await importLiveClient();
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
     fetchMock.mockResolvedValueOnce(
       jsonResponse(
-        { detail: "Could not verify Robinhood credentials." },
-        { status: 401, ok: false }
+        { detail: "Could not start the login process." },
+        { status: 500, ok: false }
       )
     );
 
     await expect(
-      mod.api.connectBrokerage({ username: "u", password: "wrong", mfa_code: "123456" })
+      mod.api.connectBrokerage({ username: "u", password: "wrong" })
     ).rejects.toMatchObject({
-      status: 401,
-      message: "Could not verify Robinhood credentials.",
+      status: 500,
+      message: "Could not start the login process.",
     });
+  });
+
+  it("getBrokerageLoginStatus() calls GET /brokerage/login/status/{job_id}", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        job_id: "job-1",
+        mode: "connect",
+        state: "running",
+        phase: "awaiting_approval",
+        error_code: null,
+        seconds_remaining: 178,
+        connected: false,
+        has_account_snapshot: false,
+      })
+    );
+
+    const result = await mod.api.getBrokerageLoginStatus("job-1");
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/brokerage/login/status/job-1");
+    expect(result.phase).toBe("awaiting_approval");
+  });
+
+  it("cancelBrokerageLogin() POSTs to /brokerage/login/cancel/{job_id}", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        job_id: "job-1",
+        mode: "connect",
+        state: "cancelled",
+        phase: "awaiting_approval",
+        error_code: "cancelled",
+        seconds_remaining: 150,
+        connected: false,
+        has_account_snapshot: false,
+        cancelled: true,
+      })
+    );
+
+    const result = await mod.api.cancelBrokerageLogin("job-1");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/brokerage/login/cancel/job-1");
+    expect(init.method).toBe("POST");
+    expect(result.cancelled).toBe(true);
+  });
+
+  it("refreshBrokerage() POSTs with no body to /brokerage/refresh", async () => {
+    const mod = await importLiveClient();
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        job_id: "job-2",
+        mode: "refresh",
+        state: "running",
+        phase: "starting",
+        error_code: null,
+        seconds_remaining: 180,
+        connected: true,
+        has_account_snapshot: true,
+      })
+    );
+
+    const result = await mod.api.refreshBrokerage();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://localhost:8602/brokerage/refresh");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+    expect(result.mode).toBe("refresh");
   });
 
   it("disconnectBrokerage() POSTs to /brokerage/disconnect", async () => {

@@ -169,7 +169,7 @@ describe("Onboarding — step 1 (connect brokerage)", () => {
 });
 
 describe("Onboarding — step 1 (connect Robinhood)", () => {
-  it("selecting Connect Robinhood reveals the credential form and hides it once connected", async () => {
+  it("selecting Connect Robinhood reveals the credential form (no MFA/authenticator field) and hides it once connected", async () => {
     renderOnboarding();
     await goToStep1();
 
@@ -177,15 +177,15 @@ describe("Onboarding — step 1 (connect Robinhood)", () => {
 
     expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/authenticator app code/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/authenticator/i)).not.toBeInTheDocument();
   });
 
-  it("the Connect button stays disabled until all three fields are filled", async () => {
+  it("the Connect button stays disabled until both fields are filled", async () => {
     renderOnboarding();
     await goToStep1();
     fireEvent.click(screen.getByText(/connect robinhood/i));
 
-    const connectBtn = screen.getByRole("button", { name: /connect$/i });
+    const connectBtn = screen.getByRole("button", { name: /^connect$/i });
     expect(connectBtn).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText(/robinhood email/i), {
@@ -196,15 +196,25 @@ describe("Onboarding — step 1 (connect Robinhood)", () => {
     fireEvent.change(screen.getByLabelText(/^password$/i), {
       target: { value: "hunter2" },
     });
-    expect(connectBtn).toBeDisabled();
-
-    fireEvent.change(screen.getByLabelText(/authenticator app code/i), {
-      target: { value: "123456" },
-    });
     expect(connectBtn).toBeEnabled();
   });
 
   it("a successful connect enables Continue and never displays the submitted password", async () => {
+    // The real mock's connectBrokerage() 202s a running job that only
+    // reaches state: "succeeded" after several seconds of the happy-path
+    // lifecycle (mock.ts's _mockLoginJobStatus) -- resolve it as already
+    // terminal here so this test doesn't need fake timers to drive the poll
+    // (that lifecycle is already covered by RobinhoodConnectForm.test.tsx).
+    vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
+      job_id: "job-1",
+      mode: "connect",
+      state: "succeeded",
+      phase: "done",
+      error_code: null,
+      seconds_remaining: 170,
+      connected: true,
+      has_account_snapshot: true,
+    });
     renderOnboarding();
     await goToStep1();
     fireEvent.click(screen.getByText(/connect robinhood/i));
@@ -215,12 +225,9 @@ describe("Onboarding — step 1 (connect Robinhood)", () => {
     fireEvent.change(screen.getByLabelText(/^password$/i), {
       target: { value: "sUp3rS3cr3tPassw0rd!!" },
     });
-    fireEvent.change(screen.getByLabelText(/authenticator app code/i), {
-      target: { value: "123456" },
-    });
 
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: /connect$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
 
     await screen.findByText(/connect robinhood — connected/i);
     expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
@@ -229,11 +236,11 @@ describe("Onboarding — step 1 (connect Robinhood)", () => {
     expect(document.body.textContent).not.toContain("sUp3rS3cr3tPassw0rd!!");
   });
 
-  it("a failed verification shows an inline error and keeps Continue disabled", async () => {
+  it("a request-level connect failure shows an inline error and keeps Continue disabled", async () => {
     const spy = vi
       .spyOn(api, "connectBrokerage")
       .mockRejectedValueOnce(
-        new ApiError("Could not verify Robinhood credentials.", 401)
+        new ApiError("Could not reach the backend to start the login.", 502)
       );
 
     renderOnboarding();
@@ -246,14 +253,39 @@ describe("Onboarding — step 1 (connect Robinhood)", () => {
     fireEvent.change(screen.getByLabelText(/^password$/i), {
       target: { value: "wrongpassword" },
     });
-    fireEvent.change(screen.getByLabelText(/authenticator app code/i), {
-      target: { value: "123456" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /connect$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
 
-    await screen.findByText(/could not verify robinhood credentials/i);
+    await screen.findByText(/could not reach the backend to start the login/i);
     expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
     spy.mockRestore();
+  });
+
+  it("an honest job-level failure (auth_failed) shows the specific reason and keeps Continue disabled", async () => {
+    vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
+      job_id: "job-1",
+      mode: "connect",
+      state: "failed",
+      phase: "authenticating",
+      error_code: "auth_failed",
+      seconds_remaining: 175,
+      connected: false,
+      has_account_snapshot: false,
+    });
+
+    renderOnboarding();
+    await goToStep1();
+    fireEvent.click(screen.getByText(/connect robinhood/i));
+
+    fireEvent.change(screen.getByLabelText(/robinhood email/i), {
+      target: { value: "user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(/^password$/i), {
+      target: { value: "wrongpassword" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await screen.findByText(/robinhood rejected that username or password/i);
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
   });
 });
 

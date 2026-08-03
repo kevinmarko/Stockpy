@@ -112,7 +112,37 @@ class _FakeRHelper:
 
 
 class TestLogin:
+    """login() now refuses outside the isolated device-approval login worker
+    (RH_LOGIN_WORKER=1) -- see data/robinhood_login_worker.py. Every test of
+    the underlying credential/response-handling logic below sets that marker
+    so it actually exercises that logic rather than accidentally passing
+    because the guard alone already returns False for an unrelated reason;
+    the guard itself gets its own dedicated test."""
+
+    def test_refuses_outside_isolated_worker(self, monkeypatch):
+        """The guard itself: even with good credentials and a login call that
+        WOULD succeed, login() refuses unless RH_LOGIN_WORKER=1 is set --
+        calling r.login() directly outside the isolated worker risks hanging
+        forever on robin_stocks' own no-timeout device-approval prompt loop."""
+        monkeypatch.delenv("RH_LOGIN_WORKER", raising=False)
+        monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_USERNAME", "u@example.com")
+        monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_PASSWORD", "pw")
+        called = []
+        monkeypatch.setattr(
+            robinhood_client.r,
+            "login",
+            lambda u, p: called.append(1) or {"access_token": "tok123"},
+        )
+
+        client = RobinhoodClient()
+        ok = client.login()
+
+        assert ok is False
+        assert client.is_authenticated is False
+        assert called == []
+
     def test_missing_credentials_short_circuits(self, monkeypatch):
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
         monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_USERNAME", None)
         monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_PASSWORD", None)
         called = []
@@ -126,6 +156,7 @@ class TestLogin:
         assert called == []
 
     def test_successful_login_sets_authenticated(self, monkeypatch):
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
         monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_USERNAME", "u@example.com")
         monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_PASSWORD", "pw")
         monkeypatch.setattr(
@@ -139,6 +170,7 @@ class TestLogin:
         assert client.is_authenticated is True
 
     def test_response_without_access_token_is_a_failed_login(self, monkeypatch):
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
         monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_USERNAME", "u@example.com")
         monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_PASSWORD", "pw")
         monkeypatch.setattr(robinhood_client.r, "login", lambda u, p: {"detail": "mfa_required"})
@@ -150,6 +182,7 @@ class TestLogin:
         assert client.is_authenticated is False
 
     def test_login_exception_degrades_to_false(self, monkeypatch):
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
         monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_USERNAME", "u@example.com")
         monkeypatch.setattr(robinhood_client.settings, "ROBINHOOD_PASSWORD", "pw")
 

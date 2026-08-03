@@ -15,6 +15,8 @@ import type {
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
 import { useMutation } from "../hooks/useMutation";
+import { useBrokerageLoginJob } from "../hooks/useBrokerageLoginJob";
+import { PHASE_LABEL, formatLoginCountdown, loginFailureMessage } from "../brokerageLoginCopy";
 import {
   Button,
   EmptyState,
@@ -259,18 +261,19 @@ function AiControlCenterLink() {
  * whatever the server actually returned and never echoes credentials. Reuses
  * the SAME RobinhoodConnectForm as onboarding so the intake path can't drift.
  *
- * The refreshBrokerage() button (POST /brokerage/refresh) is deliberately
- * NOT gated on `data.connected` -- unlike connect/disconnect, it never reads
- * a request body; it just calls fetch_account_snapshot(force=True)
- * server-side, which logs in with whatever RH_USERNAME/RH_PASSWORD/
- * RH_MFA_SECRET is already configured in THIS MACHINE's .env, no typed input
+ * The "Force fresh login" / "Connect using .env credentials" button (POST
+ * /brokerage/refresh) is deliberately NOT gated on `data.connected` -- unlike
+ * connect/disconnect, it never reads a request body; it just starts an async
+ * device-approval-push login job server-side (`useBrokerageLoginJob`, the
+ * SAME hook RobinhoodConnectForm drives) against whatever RH_USERNAME/
+ * RH_PASSWORD is already configured in THIS MACHINE's .env, no typed input
  * needed. That works identically regardless of what `data.connected` (a
  * client-side read of the SAME env vars, which can be stale relative to a
  * just-restarted backend, or simply not yet reflect a hand-edited .env)
  * currently reports -- so the button is offered in both branches, as a
  * faster alternative to typing credentials into RobinhoodConnectForm below.
- * An honest failure (no usable credentials configured at all) surfaces the
- * same way either way: refresh.error, never a fabricated success.
+ * An honest failure (including a job that times out) surfaces the same way
+ * either way, never a fabricated success.
  */
 function BrokerageSection({
   data,
@@ -287,7 +290,8 @@ function BrokerageSection({
 }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const disconnect = useMutation(() => api.disconnectBrokerage());
-  const refresh = useMutation(() => api.refreshBrokerage());
+  const refresh = useBrokerageLoginJob();
+  const refreshRunning = refresh.starting || refresh.job?.state === "running";
 
   const doDisconnect = async () => {
     await disconnect.run();
@@ -296,11 +300,20 @@ function BrokerageSection({
     reload();
   };
 
-  const doRefresh = async () => {
+  const doRefresh = () => {
     disconnect.reset(); // clear a stale disconnect notice from before this attempt
-    await refresh.run();
-    reload(); // pick up the (possibly now-populated) connected/has_account_snapshot flags
+    void refresh.start("refresh");
   };
+
+  // Reload the moment the refresh job reaches a terminal state (success or
+  // otherwise) -- keyed on job_id + state so a retried refresh's own
+  // terminal transition fires this again too.
+  useEffect(() => {
+    if (refresh.job && refresh.job.state !== "running") {
+      reload(); // pick up the (possibly now-populated) connected/has_account_snapshot flags
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refresh.job?.job_id, refresh.job?.state]);
 
   return (
     <SectionCard
@@ -329,12 +342,22 @@ function BrokerageSection({
               display: "flex",
               gap: "var(--s-2-5)",
               flexWrap: "wrap",
+              alignItems: "center",
               marginTop: data.connected ? "var(--s-3)" : 0,
             }}
           >
-            <Button variant="neutral" onClick={doRefresh} pending={refresh.pending}>
-              {data.connected ? "🔐 Force fresh login" : "🔐 Connect using .env credentials"}
+            <Button variant="neutral" onClick={doRefresh} pending={refreshRunning}>
+              {refreshRunning
+                ? "Connecting…"
+                : data.connected
+                  ? "🔐 Force fresh login"
+                  : "🔐 Connect using .env credentials"}
             </Button>
+            {refreshRunning && refresh.job && (
+              <Button variant="neutral" onClick={() => void refresh.cancel()}>
+                Cancel
+              </Button>
+            )}
             {data.connected && (
               <Button
                 variant="neutral"
@@ -344,6 +367,20 @@ function BrokerageSection({
               </Button>
             )}
           </div>
+          {refreshRunning && refresh.job && (
+            <p
+              style={{
+                color: theme.textSecondary,
+                fontSize: "var(--t-caption)",
+                marginTop: "var(--s-1-5)",
+                marginBottom: 0,
+              }}
+            >
+              <span aria-hidden>📱</span> Open the Robinhood app and approve
+              this login — {PHASE_LABEL[refresh.job.phase]}{" "}
+              {formatLoginCountdown(refresh.job.seconds_remaining)} remaining
+            </p>
+          )}
           <p
             style={{
               color: theme.textMuted,
@@ -361,9 +398,8 @@ function BrokerageSection({
             ) : (
               <>
                 Logs in with <code>RH_USERNAME</code>/<code>RH_PASSWORD</code>
-                {" "}(and <code>RH_MFA_SECRET</code>, if set) already in this
-                machine's <code>.env</code> — no typing required. Haven't set
-                those yet? Use the form below instead.
+                {" "}already in this machine's <code>.env</code> — no typing
+                required. Haven't set those yet? Use the form below instead.
               </>
             )}
           </p>
@@ -373,17 +409,21 @@ function BrokerageSection({
               <span>{refresh.error}</span>
             </Notice>
           )}
-          {refresh.result && !refresh.error && (
+          {!refresh.error && refresh.job?.state === "succeeded" && (
             <Notice variant="success" style={{ marginTop: "var(--s-2-5)" }}>
               <span>✅</span>
-              <span>
-                Refreshed {timeAgo(refresh.result.fetched_at)}
-                {refresh.result.is_stale
-                  ? " — Robinhood login failed; showing the last cached snapshot instead."
-                  : ` — ${fmtUsd(refresh.result.total_equity)} total equity.`}
-              </span>
+              <span>Refreshed — Robinhood account snapshot updated.</span>
             </Notice>
           )}
+          {!refresh.error &&
+            refresh.job &&
+            refresh.job.state !== "running" &&
+            refresh.job.state !== "succeeded" && (
+              <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
+                <span>⚠️</span>
+                <span>{loginFailureMessage(refresh.job)}</span>
+              </Notice>
+            )}
           {disconnect.error && (
             <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
               <span>⚠️</span>

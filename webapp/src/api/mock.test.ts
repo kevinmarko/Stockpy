@@ -13,7 +13,7 @@
  * Mock layer only — no network, no live API.
  */
 
-import { afterEach, beforeEach, describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { mockApi } from "./mock";
 import { ApiError } from "./types";
 import type {
@@ -354,81 +354,172 @@ describe("mock API — /symbols/{ticker} contract", () => {
   });
 });
 
-describe("mock API — brokerage-connect contract", () => {
+describe("mock API — async device-approval-push brokerage login contract", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.useFakeTimers();
   });
   afterEach(() => {
     localStorage.clear();
+    vi.useRealTimers();
   });
 
   it("getBrokerageStatus() starts disconnected", async () => {
-    const status = await mockApi.getBrokerageStatus();
-    expect(status).toEqual({
+    const statusPromise = mockApi.getBrokerageStatus();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await statusPromise).toEqual({
       connected: false,
       has_account_snapshot: false,
       auto_refresh_enabled: true,
     });
   });
 
-  it("connectBrokerage() with all three fields succeeds and flips status", async () => {
-    const result = await mockApi.connectBrokerage({
+  it("connectBrokerage() immediately returns a running job (202-equivalent), never a synchronous verify result", async () => {
+    const jobPromise = mockApi.connectBrokerage({
       username: "user@example.com",
       password: "hunter2",
-      mfa_code: "123456",
     });
-    expect(result).toEqual({ connected: true, verified: true, has_account_snapshot: false });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
 
-    const status = await mockApi.getBrokerageStatus();
-    expect(status.connected).toBe(true);
+    expect(job.mode).toBe("connect");
+    expect(job.state).toBe("running");
+    expect(typeof job.job_id).toBe("string");
+    expect(job.connected).toBe(false);
   });
 
   it("connectBrokerage() never echoes the submitted credential values", async () => {
-    const result = await mockApi.connectBrokerage({
+    const jobPromise = mockApi.connectBrokerage({
       username: "user@example.com",
       password: "sUp3rS3cr3t!!",
-      mfa_code: "123456",
     });
-    expect(JSON.stringify(result)).not.toContain("sUp3rS3cr3t");
-    expect(JSON.stringify(result)).not.toContain("123456");
-  });
-
-  it("connectBrokerage() rejects with ApiError(401) when a field is blank", async () => {
-    await expect(
-      mockApi.connectBrokerage({ username: "", password: "pw", mfa_code: "123456" })
-    ).rejects.toBeInstanceOf(ApiError);
-    await expect(
-      mockApi.connectBrokerage({ username: "u", password: "pw", mfa_code: "" })
-    ).rejects.toMatchObject({ status: 401 });
-  });
-
-  it("disconnectBrokerage() clears the connected state", async () => {
-    await mockApi.connectBrokerage({
-      username: "user@example.com",
-      password: "hunter2",
-      mfa_code: "123456",
-    });
-    expect((await mockApi.getBrokerageStatus()).connected).toBe(true);
-
-    const result = await mockApi.disconnectBrokerage();
-    expect(result).toEqual({ connected: false });
-    expect((await mockApi.getBrokerageStatus()).connected).toBe(false);
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+    expect(JSON.stringify(job)).not.toContain("sUp3rS3cr3t");
   });
 
   it("never persists the raw credential strings to localStorage", async () => {
-    await mockApi.connectBrokerage({
+    const jobPromise = mockApi.connectBrokerage({
       username: "user@example.com",
       password: "sUp3rS3cr3t!!",
-      mfa_code: "123456",
     });
+    await vi.advanceTimersByTimeAsync(150);
+    await jobPromise;
+
     const dump: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)!;
       dump.push(`${key}=${localStorage.getItem(key)}`);
     }
-    const joined = dump.join("\n");
-    expect(joined).not.toContain("sUp3rS3cr3t");
-    expect(joined).not.toContain("123456");
+    expect(dump.join("\n")).not.toContain("sUp3rS3cr3t");
+  });
+
+  it("getBrokerageLoginStatus() eventually reports success, flipping getBrokerageStatus().connected", async () => {
+    const jobPromise = mockApi.connectBrokerage({
+      username: "user@example.com",
+      password: "hunter2",
+    });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+
+    // Past the happy-path lifecycle's "done" threshold (see mock.ts's
+    // _mockLoginJobStatus phase timeline).
+    await vi.advanceTimersByTimeAsync(8000);
+    const statusPromise = mockApi.getBrokerageLoginStatus(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    const finalStatus = await statusPromise;
+
+    expect(finalStatus.state).toBe("succeeded");
+    expect(finalStatus.connected).toBe(true);
+    expect(finalStatus.has_account_snapshot).toBe(true);
+
+    const brokerageStatusPromise = mockApi.getBrokerageStatus();
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await brokerageStatusPromise).connected).toBe(true);
+  });
+
+  it("getBrokerageLoginStatus() for an unknown job_id throws ApiError(404)", async () => {
+    // The guard throws synchronously (before the delay()/timer), so no
+    // timer advance is needed for the rejection itself to be observed.
+    await expect(mockApi.getBrokerageLoginStatus("no-such-job")).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("cancelBrokerageLogin() reports state: cancelled and cancelled: true", async () => {
+    const jobPromise = mockApi.connectBrokerage({ username: "u@example.com", password: "pw" });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+
+    const cancelPromise = mockApi.cancelBrokerageLogin(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    const cancelled = await cancelPromise;
+
+    expect(cancelled.state).toBe("cancelled");
+    expect(cancelled.cancelled).toBe(true);
+  });
+
+  it("cancelBrokerageLogin() for an unknown job_id throws ApiError(404)", async () => {
+    // Guarded synchronously (before any job mutation), so no timer advance needed.
+    await expect(mockApi.cancelBrokerageLogin("no-such-job")).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("refreshBrokerage() with nothing ever connected eventually fails with error_code: no_credentials", async () => {
+    const jobPromise = mockApi.refreshBrokerage();
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+    expect(job.mode).toBe("refresh");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    const statusPromise = mockApi.getBrokerageLoginStatus(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    const finalStatus = await statusPromise;
+
+    expect(finalStatus.state).toBe("failed");
+    expect(finalStatus.error_code).toBe("no_credentials");
+  });
+
+  it("the stockpy.mock.brokerage_login_timeout marker makes a job time out instead of succeeding", async () => {
+    localStorage.setItem("stockpy.mock.brokerage_login_timeout", "1");
+    const jobPromise = mockApi.connectBrokerage({ username: "u@example.com", password: "pw" });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+
+    await vi.advanceTimersByTimeAsync(180_000);
+    const statusPromise = mockApi.getBrokerageLoginStatus(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    const finalStatus = await statusPromise;
+
+    expect(finalStatus.state).toBe("timeout");
+    expect(finalStatus.error_code).toBe("timeout");
+    expect(finalStatus.seconds_remaining).toBe(0);
+  });
+
+  it("disconnectBrokerage() clears the connected state", async () => {
+    const jobPromise = mockApi.connectBrokerage({
+      username: "user@example.com",
+      password: "hunter2",
+    });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+    await vi.advanceTimersByTimeAsync(8000);
+    const successStatusPromise = mockApi.getBrokerageLoginStatus(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    await successStatusPromise;
+
+    const statusPromise = mockApi.getBrokerageStatus();
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await statusPromise).connected).toBe(true);
+
+    const disconnectPromise = mockApi.disconnectBrokerage();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(await disconnectPromise).toEqual({ connected: false });
+
+    const afterPromise = mockApi.getBrokerageStatus();
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await afterPromise).connected).toBe(false);
   });
 });
 

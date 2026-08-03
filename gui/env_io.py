@@ -147,6 +147,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # Phase 4); the API's response makes that explicit via its own
     # `applies: "next_daemon_restart"` field rather than implying a live change.
     "ORCHESTRATOR_INTERVAL_SECONDS",
+    # Robinhood device-approval login worker timing (data/robinhood_login.py).
+    # Non-secret timeout tunables, no credential material — a GUI bug here can
+    # only make a login attempt time out sooner/later or wait a different
+    # grace period on cancel, never leak a credential or bypass a gate.
+    "RH_LOGIN_DEADLINE_SECONDS",
+    "RH_LOGIN_GRACE_SECONDS",
+    "RH_LOGIN_STARTUP_SECONDS",
     # Hosts api/pilots_api.py inside the orchestrator daemon process on
     # PILOTS_API_PORT. Non-secret; the follow write-path's command token
     # (FOLLOW_API_TOKEN) stays in SECRET_KEYS.
@@ -483,7 +490,6 @@ SECRET_KEYS: tuple[str, ...] = (
     "ROBINHOOD_PASSWORD",
     "RH_USERNAME",
     "RH_PASSWORD",
-    "RH_MFA_SECRET",
     # Postgres/Supabase DSN — may embed user:pass@host; never logged, never
     # returned in cleartext by the GUI (CONSTRAINT #3).
     "DATABASE_URL",

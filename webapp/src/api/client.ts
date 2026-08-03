@@ -22,8 +22,9 @@ import type {
   BrinsonFachlerResult,
   BrinsonFachlerRow,
   BrokerageConnectRequest,
-  BrokerageConnectResult,
   BrokerageDisconnectResult,
+  BrokerageLoginCancelResult,
+  BrokerageLoginJob,
   BrokerageRefreshResult,
   BrokerageStatus,
   CalibrationSummary,
@@ -648,7 +649,7 @@ const liveApi = {
       body: JSON.stringify({ key, value }),
     }),
   connectBrokerage: (creds: BrokerageConnectRequest) =>
-    http<BrokerageConnectResult>("/brokerage/connect", {
+    http<BrokerageLoginJob>("/brokerage/connect", {
       method: "POST",
       body: JSON.stringify(creds),
     }),
@@ -657,10 +658,15 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify({}),
     }),
+  // No body -- the backend re-authenticates with whatever RH_USERNAME/
+  // RH_PASSWORD is already configured server-side.
   refreshBrokerage: () =>
-    http<BrokerageRefreshResult>("/brokerage/refresh", {
+    http<BrokerageRefreshResult>("/brokerage/refresh", { method: "POST" }),
+  getBrokerageLoginStatus: (jobId: string) =>
+    http<BrokerageLoginJob>(`/brokerage/login/status/${encodeURIComponent(jobId)}`),
+  cancelBrokerageLogin: (jobId: string) =>
+    http<BrokerageLoginCancelResult>(`/brokerage/login/cancel/${encodeURIComponent(jobId)}`, {
       method: "POST",
-      body: JSON.stringify({}),
     }),
   // ---- Agentic Trading tab ----
   getAgenticStatus: () => http<AgenticStatus>("/agentic/status"),

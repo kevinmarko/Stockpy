@@ -522,19 +522,14 @@ export interface BrokerageStatus {
  * operator's own local backend — see api/pilots_api.py's module docstring for
  * the three independent server-side gates (BROKERAGE_CONNECT_ENABLED,
  * FOLLOW_API_TOKEN, loopback-only). Never persisted client-side.
+ *
+ * No `mfa_code` — Robinhood login is device-approval PUSH now (the operator
+ * taps "approve" in the Robinhood mobile app), not a typed 6-digit TOTP code.
+ * The backend confirms/denies this asynchronously; see `BrokerageLoginJob`.
  */
 export interface BrokerageConnectRequest {
   username: string;
   password: string;
-  /** Current 6-digit authenticator-app code. Verified once, never persisted. */
-  mfa_code: string;
-}
-
-/** POST /brokerage/connect response. Never echoes credential values. */
-export interface BrokerageConnectResult {
-  connected: boolean;
-  verified: boolean;
-  has_account_snapshot: boolean;
 }
 
 /** POST /brokerage/disconnect response. */
@@ -542,18 +537,84 @@ export interface BrokerageDisconnectResult {
   connected: boolean;
 }
 
+/** `POST /brokerage/{connect,refresh}` and `GET
+ * /brokerage/login/status/{job_id}` all report the SAME job shape. */
+export type BrokerageLoginMode = "connect" | "refresh";
+
 /**
- * POST /brokerage/refresh response — forces a live Robinhood re-login +
- * account-snapshot fetch bypassing the daily cache (the webapp equivalent of
- * `python3 main.py --refresh-account` / the Streamlit GUI's "Force fresh
- * login" checkbox). Shape-identical to GET /portfolio's `Portfolio` — the
- * backend reuses the same serializer — except `source` is always `"live"`
- * here rather than `"db"`, since this request triggered a live fetch rather
- * than reading HistoricalStore directly. A degraded-to-stale-cache result
- * (fetch_account_snapshot's own internal fallback) still returns 200 here —
- * check `is_stale`/`age_hours`, don't assume success means fully fresh.
+ * "running" is the only state where `phase` is meaningful; only "failed" |
+ * "timeout" | "cancelled" ever carry a non-null `error_code`.
  */
-export type BrokerageRefreshResult = Portfolio;
+export type BrokerageLoginState = "running" | "succeeded" | "failed" | "timeout" | "cancelled";
+
+/** Only meaningful while `state === "running"`. */
+export type BrokerageLoginPhase =
+  | "starting"
+  | "authenticating"
+  | "awaiting_approval"
+  | "verifying"
+  | "fetching_snapshot"
+  | "done";
+
+export type BrokerageLoginErrorCode =
+  | null
+  | "no_credentials"
+  | "challenge_unsupported"
+  | "auth_failed"
+  | "child_start_failed"
+  | "timeout"
+  | "cancelled";
+
+/**
+ * `POST /brokerage/connect` / `POST /brokerage/refresh` (202) and `GET
+ * /brokerage/login/status/{job_id}` all return this shape — an async
+ * device-approval-push login job, polled to completion rather than verified
+ * synchronously (the operator approves in the Robinhood mobile app; there is
+ * no 6-digit code to submit). `seconds_remaining` counts down from the
+ * server's own login deadline and is RE-SYNCED on every poll — never a
+ * free-running client-side timer, so a wedged backend can't show a
+ * plausible-looking countdown for a job that isn't actually progressing.
+ *
+ * `connected` is true only once RH_USERNAME/RH_PASSWORD have actually been
+ * persisted server-side (only ever happens after a "connect" job reaches
+ * `state: "succeeded"`); `has_account_snapshot` is independent of this job
+ * (whether an account snapshot already exists in the DB at all).
+ *
+ * Honesty note: a "timeout" is NEVER presented as "you denied the login" —
+ * the backend's login library has no separate code path for a denied push
+ * vs. one simply never seen, so this type (and every UI reading it) must not
+ * invent that distinction either.
+ */
+export interface BrokerageLoginJob {
+  job_id: string;
+  mode: BrokerageLoginMode;
+  state: BrokerageLoginState;
+  phase: BrokerageLoginPhase;
+  error_code: BrokerageLoginErrorCode;
+  seconds_remaining: number;
+  connected: boolean;
+  has_account_snapshot: boolean;
+}
+
+/**
+ * POST /brokerage/login/cancel/{job_id} response — the job shape plus an
+ * honest `cancelled` flag (`false` if the kill could not be confirmed
+ * server-side, NOT assumed true just because the request itself succeeded).
+ */
+export interface BrokerageLoginCancelResult extends BrokerageLoginJob {
+  cancelled: boolean;
+}
+
+/**
+ * POST /brokerage/refresh response — starts an async live Robinhood
+ * re-login + account-snapshot fetch bypassing the daily cache (the webapp
+ * equivalent of `python3 main.py --refresh-account` / the Streamlit GUI's
+ * "Force fresh login" checkbox), polled the same way `connectBrokerage`'s
+ * job is (see `BrokerageLoginJob`) — no separate synchronous `Portfolio`
+ * result anymore; re-fetch `GET /portfolio` once the job succeeds if the
+ * refreshed figures themselves are needed.
+ */
+export type BrokerageRefreshResult = BrokerageLoginJob;
 
 // ---------------------------------------------------------------------------
 // GET /llm/status — LLM provider configuration + last-real-call telemetry.

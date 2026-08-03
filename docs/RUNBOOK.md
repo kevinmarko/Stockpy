@@ -331,8 +331,8 @@ print(f'Fetched at: {snap.fetched_at}  Positions: {len(snap.positions)}')
 
 | Cause | Fix |
 |-------|-----|
-| Robinhood MFA challenge triggered | Run `python3 main.py --refresh-account`; enter MFA code at the terminal prompt |
-| `RH_MFA_SECRET` wrong or rotated | Re-scan the TOTP QR code in the Robinhood app; update `RH_MFA_SECRET` in `.env` |
+| Robinhood device-approval challenge triggered | Run `python3 main.py --refresh-account` from a real terminal; approve the login on your phone within `RH_LOGIN_DEADLINE_SECONDS` (180s default) — or use the webapp's Settings → Connect/Refresh, which drives the same isolated login worker |
+| No approval arrived before the deadline | Nothing was saved (see `docs/known_issues/robinhood_device_approval_login_hang_risk.md`); just retry — the login worker never leaves a half-authenticated state behind |
 | `RH_USERNAME` / `RH_PASSWORD` invalid | Verify credentials; Robinhood sometimes forces a password reset after a security event |
 | Network partition during overnight run | Retry manually; stale cache is returned (not an error) on live-fetch failure — the platform degrades gracefully |
 | Cache file corrupt | Delete `cache/account_snapshot.json` and re-run; a missing cache triggers a live fetch |
@@ -502,7 +502,7 @@ variable 'RH_USERNAME' is missing or empty` — yet your `.env` clearly contains
 reads `.env` into `Settings()` but does NOT propagate values to `os.environ`.
 `data/robinhood_portfolio.py` used to read credentials via `os.environ.get()` directly,
 so it saw empty strings unless `load_dotenv()` had been called first. Fixed: credentials
-are now read via `settings.settings.RH_USERNAME`/`RH_PASSWORD`/`RH_MFA_SECRET`
+are now read via `settings.settings.RH_USERNAME`/`RH_PASSWORD`
 (`_require_setting`, renamed from `_require_env`) — which loads `.env` independently
 through pydantic-settings' own mechanism and needs no `load_dotenv()` call to see a
 value at all.
@@ -538,9 +538,10 @@ run it from.
 
 **Companion symptoms**:
 
-- `RH_MFA_SECRET` empty → requires TOTP MFA. Enable Authenticator-app MFA in Robinhood
-  (Settings → Security → Two-Factor Authentication → Authenticator App), copy the Base32
-  secret, paste into `RH_MFA_SECRET=`.
+- Robinhood login now uses device-approval push (2026-08) — there is no MFA secret to
+  configure at all. Set `RH_USERNAME`/`RH_PASSWORD` only; approve the login attempt by
+  tapping the notification in the Robinhood app. See
+  `docs/known_issues/robinhood_device_approval_login_hang_risk.md`.
 - `WATCHLIST` unset AND no `watchlist.txt` AND no held positions → empty universe. Fix
   with: `WATCHLIST=SPY,QQQ,AAPL` in `.env`, or `watchlist.txt` (one ticker per line), or
   tickers in **Sheet2 column A** of the Google Sheet (last-resort fallback).

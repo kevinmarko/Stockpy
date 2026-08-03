@@ -31,8 +31,10 @@ import type {
   ScanConfigResult,
   WatchResult,
   BrokerageConnectRequest,
-  BrokerageConnectResult,
   BrokerageDisconnectResult,
+  BrokerageLoginCancelResult,
+  BrokerageLoginJob,
+  BrokerageLoginPhase,
   BrokerageRefreshResult,
   BrokerageStatus,
   CalibrationSummary,
@@ -889,24 +891,159 @@ function writeBrokerageConnected(connected: boolean) {
   }
 }
 
-// ---- Local brokerage-refresh degraded-fetch simulation (localStorage) so
-// the "live login failed, falling back to the last cached snapshot" honest
-// branch (fetch_account_snapshot's own internal stale-cache fallback -- see
-// api/pilots_api.py's refresh_brokerage docstring) is reachable by actually
-// running the app with USE_MOCK=true, not only through a hand-crafted test
-// spy override. No dedicated UI control, same reasoning as
-// OBSERVABILITY_COLD_START_KEY below -- flip it from the browser devtools
-// console instead:
-//   localStorage.setItem("stockpy.mock.brokerage_refresh_degraded", "1")  // next refresh is stale
-//   localStorage.removeItem("stockpy.mock.brokerage_refresh_degraded")    // back to a fresh refresh
-const BROKERAGE_REFRESH_DEGRADED_KEY = "stockpy.mock.brokerage_refresh_degraded";
+// ---- Local login-job simulation (async device-approval push login) --
+// mirrors the POST /brokerage/{connect,refresh} -> poll GET
+// /brokerage/login/status/{job_id} contract: no synchronous verify, no
+// mfa_code, a believable "running through a few phases, then done" lifecycle
+// driven purely off elapsed wall-clock time since the job started (works
+// the same whether that's real time or vi.useFakeTimers()' fake clock). No
+// dedicated UI control for forcing the timeout branch, same "flip it from
+// devtools" convention as the other markers in this file:
+//   localStorage.setItem("stockpy.mock.brokerage_login_timeout", "1")  // next login job times out instead of succeeding
+//   localStorage.removeItem("stockpy.mock.brokerage_login_timeout")   // back to the happy path
+const BROKERAGE_LOGIN_TIMEOUT_KEY = "stockpy.mock.brokerage_login_timeout";
 
-function readBrokerageRefreshDegraded(): boolean {
+function readBrokerageLoginTimeout(): boolean {
   try {
-    return localStorage.getItem(BROKERAGE_REFRESH_DEGRADED_KEY) === "1";
+    return localStorage.getItem(BROKERAGE_LOGIN_TIMEOUT_KEY) === "1";
   } catch {
     return false;
   }
+}
+
+// Matches the real backend's default login deadline (see the API contract).
+const BROKERAGE_LOGIN_DEADLINE_SECONDS = 180;
+
+interface _MockLoginJob {
+  mode: "connect" | "refresh";
+  startedAt: number; // Date.now() at creation -- elapsed time drives phase/state below
+  cancelled: boolean;
+  simulateTimeout: boolean;
+  // Refresh-only: true when the job started with nothing to refresh (mirrors
+  // the honest "no usable .env credentials" failure the old synchronous
+  // refreshBrokerage() used to throw for). Connect always has typed
+  // credentials by the time the form's submit button is enabled, so this is
+  // never set for a "connect" job.
+  noCredentials: boolean;
+}
+let _mockLoginJobSeq = 0;
+const _mockLoginJobs: Record<string, _MockLoginJob> = {};
+
+/** Derives the CURRENT `BrokerageLoginJob` status for a tracked job purely
+ *  from elapsed time -- no separate "advance the mock forward" call needed,
+ *  so a real 2s-interval poll and a test's `vi.advanceTimersByTime` both
+ *  just work. */
+function _mockLoginJobStatus(jobId: string, job: _MockLoginJob): BrokerageLoginJob {
+  const elapsedSeconds = (Date.now() - job.startedAt) / 1000;
+  const secondsRemaining = Math.max(
+    0,
+    Math.round(BROKERAGE_LOGIN_DEADLINE_SECONDS - elapsedSeconds)
+  );
+  const connected = readBrokerageConnected();
+
+  if (job.cancelled) {
+    return {
+      job_id: jobId,
+      mode: job.mode,
+      state: "cancelled",
+      phase: "awaiting_approval",
+      error_code: "cancelled",
+      seconds_remaining: secondsRemaining,
+      connected,
+      has_account_snapshot: connected,
+    };
+  }
+
+  if (job.noCredentials) {
+    // A believable brief "starting" beat before the honest failure, rather
+    // than a same-tick reject -- matches the real async shape (a job that
+    // fails is still a job, discovered through a status poll).
+    if (elapsedSeconds < 1) {
+      return {
+        job_id: jobId,
+        mode: job.mode,
+        state: "running",
+        phase: "starting",
+        error_code: null,
+        seconds_remaining: secondsRemaining,
+        connected,
+        has_account_snapshot: connected,
+      };
+    }
+    return {
+      job_id: jobId,
+      mode: job.mode,
+      state: "failed",
+      phase: "starting",
+      error_code: "no_credentials",
+      seconds_remaining: secondsRemaining,
+      connected,
+      has_account_snapshot: connected,
+    };
+  }
+
+  if (job.simulateTimeout) {
+    if (elapsedSeconds >= BROKERAGE_LOGIN_DEADLINE_SECONDS) {
+      return {
+        job_id: jobId,
+        mode: job.mode,
+        state: "timeout",
+        phase: "awaiting_approval",
+        error_code: "timeout",
+        seconds_remaining: 0,
+        connected,
+        has_account_snapshot: connected,
+      };
+    }
+    return {
+      job_id: jobId,
+      mode: job.mode,
+      state: "running",
+      phase: "awaiting_approval",
+      error_code: null,
+      seconds_remaining: secondsRemaining,
+      connected,
+      has_account_snapshot: connected,
+    };
+  }
+
+  // Happy path: starting -> authenticating -> awaiting_approval -> verifying
+  // -> fetching_snapshot -> succeeded. Timed so a 2s-interval poller sees a
+  // couple of "running" polls (awaiting_approval) before success, rather
+  // than resolving on the very first poll.
+  let phase: BrokerageLoginPhase;
+  if (elapsedSeconds < 1) phase = "starting";
+  else if (elapsedSeconds < 2) phase = "authenticating";
+  else if (elapsedSeconds < 5) phase = "awaiting_approval";
+  else if (elapsedSeconds < 6) phase = "verifying";
+  else if (elapsedSeconds < 7) phase = "fetching_snapshot";
+  else phase = "done";
+
+  if (phase !== "done") {
+    return {
+      job_id: jobId,
+      mode: job.mode,
+      state: "running",
+      phase,
+      error_code: null,
+      seconds_remaining: secondsRemaining,
+      connected,
+      has_account_snapshot: connected,
+    };
+  }
+
+  if (job.mode === "connect") writeBrokerageConnected(true);
+  const nowConnected = readBrokerageConnected();
+  return {
+    job_id: jobId,
+    mode: job.mode,
+    state: "succeeded",
+    phase: "done",
+    error_code: null,
+    seconds_remaining: secondsRemaining,
+    connected: nowConnected,
+    has_account_snapshot: true,
+  };
 }
 
 // ---- Local ROBINHOOD_AUTO_REFRESH_ENABLED server-gate simulation
@@ -5308,19 +5445,27 @@ export const mockApi = {
     );
   },
 
-  async connectBrokerage(
-    creds: BrokerageConnectRequest
-  ): Promise<BrokerageConnectResult> {
-    // Simulated verification only — the mock never contacts a real broker and
-    // never persists the credential strings themselves, only a boolean marker.
-    const verified = Boolean(
-      creds.username.trim() && creds.password.trim() && creds.mfa_code.trim()
-    );
-    if (!verified) {
-      throw new ApiError("Could not verify Robinhood credentials.", 401);
-    }
-    writeBrokerageConnected(true);
-    return delay({ connected: true, verified: true, has_account_snapshot: false }, 500);
+  async connectBrokerage(creds: BrokerageConnectRequest): Promise<BrokerageLoginJob> {
+    // Never contacts a real broker and never persists the credential strings
+    // themselves -- only a boolean "connected" marker (writeBrokerageConnected,
+    // flipped once the job actually SUCCEEDS -- see _mockLoginJobStatus).
+    // No synchronous verify anymore: the real POST /brokerage/connect always
+    // 202s with a running job; username/password are trusted here purely to
+    // seed the mock account, mirroring the real backend never rejecting the
+    // POST itself for a bad password (that surfaces later, through a poll,
+    // as state: "failed" / error_code: "auth_failed" -- not modeled here
+    // since the submit button already requires both fields non-empty).
+    void creds;
+    const jobId = `mock-login-job-${++_mockLoginJobSeq}`;
+    const job: _MockLoginJob = {
+      mode: "connect",
+      startedAt: Date.now(),
+      cancelled: false,
+      simulateTimeout: readBrokerageLoginTimeout(),
+      noCredentials: false,
+    };
+    _mockLoginJobs[jobId] = job;
+    return delay(_mockLoginJobStatus(jobId, job), 150);
   },
 
   async disconnectBrokerage(): Promise<BrokerageDisconnectResult> {
@@ -5329,31 +5474,35 @@ export const mockApi = {
   },
 
   async refreshBrokerage(): Promise<BrokerageRefreshResult> {
-    // Honesty branch: nothing is configured to log back into — mirrors the
-    // real backend's 502 when fetch_account_snapshot has neither a fresh
-    // live fetch nor any cached snapshot to fall back on (e.g. never
-    // connected). A longer delay than the other brokerage calls simulates a
-    // real login round-trip rather than a local cache read.
-    if (!readBrokerageConnected()) {
-      throw new ApiError("Could not refresh the Robinhood account snapshot.", 502);
-    }
-    if (readBrokerageRefreshDegraded()) {
-      // Honesty branch: fetch_account_snapshot's own internal fallback —
-      // the live login failed, so a real (if stale) PREVIOUSLY cached
-      // snapshot was returned instead of a fresh one. fetched_at/age_hours
-      // are deliberately NOT reset to "now", unlike the healthy branch below.
-      return delay({ ...PORTFOLIO, is_stale: true, source: "live" }, 900);
-    }
-    return delay(
-      {
-        ...PORTFOLIO,
-        fetched_at: new Date().toISOString(),
-        is_stale: false,
-        age_hours: 0,
-        source: "live",
-      },
-      900
-    );
+    // Honesty branch, ported from the old synchronous refreshBrokerage():
+    // nothing is configured to log back into (never connected) -- mirrors
+    // the real backend discovering it has no usable credentials, surfaced
+    // through the FIRST status poll as state: "failed" / error_code:
+    // "no_credentials" rather than rejecting this call itself (the real
+    // POST /brokerage/refresh always 202s with a running job).
+    const jobId = `mock-login-job-${++_mockLoginJobSeq}`;
+    const job: _MockLoginJob = {
+      mode: "refresh",
+      startedAt: Date.now(),
+      cancelled: false,
+      simulateTimeout: readBrokerageLoginTimeout(),
+      noCredentials: !readBrokerageConnected(),
+    };
+    _mockLoginJobs[jobId] = job;
+    return delay(_mockLoginJobStatus(jobId, job), 150);
+  },
+
+  async getBrokerageLoginStatus(jobId: string): Promise<BrokerageLoginJob> {
+    const job = _mockLoginJobs[jobId];
+    if (!job) throw new ApiError("Unknown login job.", 404);
+    return delay(_mockLoginJobStatus(jobId, job), 80);
+  },
+
+  async cancelBrokerageLogin(jobId: string): Promise<BrokerageLoginCancelResult> {
+    const job = _mockLoginJobs[jobId];
+    if (!job) throw new ApiError("Unknown login job.", 404);
+    job.cancelled = true;
+    return delay({ ..._mockLoginJobStatus(jobId, job), cancelled: true }, 100);
   },
 
   async getRealized(): Promise<RealizedPerformance> {
