@@ -1,18 +1,47 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
-import type { TunableField, TunablesResponse } from "../api/types";
+import type { TunableField, TunablesResponse, TunablesUpdateResult } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Input, Loading, Notice, Select, Textarea } from "../components/ui";
-import { Toggle } from "../components/Toggle";
-import { TunableGroupCard } from "../components/TunableGroupCard";
+import { Button, EmptyState, ErrorState, Input, Loading, Notice, Select, Textarea } from "./ui";
+import { Toggle } from "./Toggle";
+import { TunableGroupCard } from "./TunableGroupCard";
 import { theme } from "../theme";
 
+/**
+ * GenericSettingsEditor — THE settings-editor implementation for this PWA.
+ *
+ * Every scoped `.env`-write editor screen renders through this one component:
+ * the general runtime tunables (`/settings/tunables`, SettingsManager.tsx) plus
+ * the four narrower ones (`/settings/sentiment`, `/settings/sector-selection`,
+ * `/settings/fmp`, `/settings/etf-transmission`), one per scoped GET/PUT pair
+ * in `api/pilots_api.py` (`_TUNABLE_INDEX`, `_SENTIMENT_INDEX`,
+ * `_SECTOR_SELECTION_INDEX`, `_FMP_INDEX`, `_ETF_TRANSMISSION_INDEX`). Each
+ * screen is a thin wrapper supplying its own title/subtitle and its own api
+ * method pair; the dirty-tracking, validation, save-only-changed-keys,
+ * rejection-surfacing, and widget-selection logic all live here, once.
+ *
+ * This used to be two near-verbatim forks — SettingsManager.tsx carried its own
+ * private copy of all of the above and had already drifted from this file in
+ * small ways. Keep it one implementation: a per-field UI change made here must
+ * not need making twice.
+ *
+ * Honesty: an `.env` write does NOT reach the running process (settings is a
+ * process-lifetime singleton) — hence the persistent "applies on next restart"
+ * notice and the `applies: "next_daemon_restart"` contract. After Save the
+ * screen surfaces exactly which keys the server `written`, surfaces every
+ * per-key `rejected` reason (never swallowed), and resets the dirty baseline
+ * for written keys only. A field whose `value` is null renders an empty input,
+ * never a fabricated 0 (CONSTRAINT #4).
+ */
+
+// String-backed for number/enum/string inputs; boolean for toggles.
 type EditVal = string | boolean;
 
 function encodeValue(f: TunableField): EditVal {
   if (f.type === "boolean") return f.value === true;
+  // number/enum/string: null -> "" (empty input), never a fabricated default.
   return f.value === null || f.value === undefined ? "" : String(f.value);
 }
 
@@ -22,17 +51,29 @@ function buildBaseline(groups: TunablesResponse["groups"]): Record<string, EditV
   return out;
 }
 
-interface GenericSettingsEditorProps {
+export interface GenericSettingsEditorProps {
   title: string;
-  subtitle: string;
+  subtitle: ReactNode;
   backTo?: string;
   fetchSettings: () => Promise<TunablesResponse>;
-  updateSettings: (values: Record<string, number | boolean | string>) => Promise<{
-    written: Record<string, any>;
-    rejected: Record<string, string>;
-    applies: string;
-    note?: string;
-  }>;
+  updateSettings: (
+    values: Record<string, number | boolean | string>,
+  ) => Promise<TunablesUpdateResult>;
+  /**
+   * Empty-state copy for when the backend exposes zero fields. Defaults to the
+   * scoped-editor wording; the general tunables screen overrides it with its
+   * own (and with an explicit note that nothing is fabricated when a value is
+   * unavailable).
+   */
+  emptyTitle?: string;
+  emptyHint?: string;
+  /**
+   * Optional screen-specific section rendered between the group cards and the
+   * sticky Save bar, inside the same `hasFields` branch the fields render in.
+   * Only `/settings/tunables` passes one today (its Danger Zone); the other
+   * four editors pass nothing and render nothing extra, exactly as before.
+   */
+  dangerZone?: ReactNode;
 }
 
 export function GenericSettingsEditor({
@@ -41,6 +82,9 @@ export function GenericSettingsEditor({
   backTo = "/settings",
   fetchSettings,
   updateSettings,
+  emptyTitle = "No settings exposed",
+  emptyHint = "The backend returned no editable settings for this section.",
+  dangerZone,
 }: GenericSettingsEditorProps) {
   const nav = useNavigate();
   const { data, loading, error, status, reload } = useApi<TunablesResponse>(fetchSettings, []);
@@ -75,13 +119,15 @@ export function GenericSettingsEditor({
       {loading && <Loading lines={4} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && !hasFields && (
-        <EmptyState
-          title="No settings exposed"
-          hint="The backend returned no editable settings for this section."
-        />
+        <EmptyState title={emptyTitle} hint={emptyHint} />
       )}
       {!loading && !error && data && hasFields && (
-        <SettingsForm data={data} onReload={reload} updateSettings={updateSettings} />
+        <SettingsForm
+          data={data}
+          onReload={reload}
+          updateSettings={updateSettings}
+          dangerZone={dangerZone}
+        />
       )}
     </div>
   );
@@ -91,15 +137,14 @@ function SettingsForm({
   data,
   onReload,
   updateSettings,
+  dangerZone,
 }: {
   data: TunablesResponse;
   onReload: () => void;
-  updateSettings: (values: Record<string, number | boolean | string>) => Promise<{
-    written: Record<string, any>;
-    rejected: Record<string, string>;
-    applies: string;
-    note?: string;
-  }>;
+  updateSettings: (
+    values: Record<string, number | boolean | string>,
+  ) => Promise<TunablesUpdateResult>;
+  dangerZone?: ReactNode;
 }) {
   const flatFields = useMemo(() => data.groups.flatMap((g) => g.fields), [data]);
   const baselineInit = useMemo(() => buildBaseline(data.groups), [data]);
@@ -111,6 +156,9 @@ function SettingsForm({
   const setVal = (key: string, v: EditVal) =>
     setEdited((s) => ({ ...s, [key]: v }));
 
+  // A number field is invalid only when it's dirty AND not a finite in-bounds
+  // number. An unchanged field (including one that started null/empty) is never
+  // flagged, so a partially-set config doesn't block an unrelated edit's Save.
   const invalidKeys = useMemo(() => {
     const bad = new Set<string>();
     for (const f of flatFields) {
@@ -135,7 +183,7 @@ function SettingsForm({
 
   const dirtyKeys = useMemo(
     () => flatFields.filter((f) => edited[f.key] !== baseline[f.key]).map((f) => f.key),
-    [flatFields, edited, baseline]
+    [flatFields, edited, baseline],
   );
   const dirty = dirtyKeys.length > 0;
   const canSave = dirty && invalidKeys.size === 0 && !mutation.pending;
@@ -154,6 +202,8 @@ function SettingsForm({
     }
     const res = await mutation.run(payload);
     if (res) {
+      // Reset the dirty baseline for accepted keys only; rejected keys stay
+      // dirty so the operator can fix and re-submit them.
       setBaseline((b) => {
         const next = { ...b };
         for (const [k, v] of Object.entries(res.written)) {
@@ -161,7 +211,7 @@ function SettingsForm({
         }
         return next;
       });
-      onReload();
+      onReload(); // refresh so env_drift.detected surfaces the pending write
     }
   };
 
@@ -249,6 +299,8 @@ function SettingsForm({
         );
       })}
 
+      {dangerZone}
+
       <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
         <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>
           {dirty ? `Save ${dirtyKeys.length} change${dirtyKeys.length === 1 ? "" : "s"}` : "Save changes"}
@@ -258,6 +310,22 @@ function SettingsForm({
   );
 }
 
+function defaultLabel(f: TunableField): string {
+  if (f.default === null || f.default === undefined) return "—";
+  return String(f.default);
+}
+
+/**
+ * Wire type "string" covers two very different widgets: a plain scalar
+ * (SECTOR_FORECAST_CONFIG_PATH, PROMPT_REGISTRY_BACKEND, DEFAULT_TICKERS) and
+ * a JSON blob (SECTOR_FORECAST_CONFIGS, CORS_ALLOWED_ORIGINS) — the backend
+ * deliberately does NOT add a 5th TunableFieldType for the latter ("a JSON
+ * blob is still a string on the wire"), so the frontend tells them apart by
+ * content: a "string" field whose value/default parses as a JSON object or
+ * array renders as a multi-line textarea instead of a single-line input.
+ * Content-based (not key-name-based) so any future JSON-kind field the
+ * backend adds picks up the right widget with zero frontend changes.
+ */
 function isJsonBlob(f: TunableField): boolean {
   if (f.type !== "string") return false;
   const probe = f.value ?? f.default;
@@ -270,6 +338,14 @@ function isJsonBlob(f: TunableField): boolean {
   }
 }
 
+/**
+ * One editable field. This is the single place per-field UI is decided for all
+ * five editors — the planned per-key liveness/safety metadata (an
+ * applies-immediately vs. needs-restart badge, a disabled input for an
+ * env-pinned value, a type-the-key confirmation for a `DANGEROUS_KEYS` field —
+ * see `settings_keysets.py`) hooks in HERE, once, off new `TunableField`
+ * fields, rather than being added per screen.
+ */
 function FieldRow({
   field: f,
   value,
@@ -336,7 +412,7 @@ function FieldRow({
       )}
 
       <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1-5) 0 0" }}>
-        Default: {f.default === null || f.default === undefined ? "—" : String(f.default)}
+        Default: {defaultLabel(f)}
       </p>
 
       {rejectedReason && (
