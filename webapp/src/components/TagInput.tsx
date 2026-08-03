@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import CreatableSelect from "react-select/creatable";
 
 export function TagInput({
@@ -9,7 +9,7 @@ export function TagInput({
   invalid,
   id,
 }: {
-  label: string;
+  label?: ReactNode;
   value: string[];
   onChange: (v: string[]) => void;
   hint?: string;
@@ -24,13 +24,15 @@ export function TagInput({
 
   return (
     <div>
-      <label
-        htmlFor={inputId}
-        className="tile-label"
-        style={{ display: "block", marginBottom: "var(--s-1-5)" }}
-      >
-        {label}
-      </label>
+      {label && (
+        <label
+          htmlFor={inputId}
+          className="tile-label"
+          style={{ display: "block", marginBottom: "var(--s-1-5)" }}
+        >
+          {label}
+        </label>
+      )}
       <CreatableSelect
         inputId={inputId}
         isMulti

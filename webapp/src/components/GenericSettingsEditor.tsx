@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { TunableField, TunablesResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Input, Loading, Notice, Select, Textarea } from "../components/ui";
+import { Button, EmptyState, ErrorState, Input, Loading, Notice, Select, Textarea, InfoTip } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { TunableGroupCard } from "../components/TunableGroupCard";
 import { theme } from "../theme";
@@ -34,6 +34,7 @@ interface GenericSettingsEditorProps {
     applies: string;
     note?: string;
   }>;
+  labelMap?: Record<string, string>;
 }
 
 export function GenericSettingsEditor({
@@ -42,6 +43,7 @@ export function GenericSettingsEditor({
   backTo = "/settings",
   fetchSettings,
   updateSettings,
+  labelMap,
 }: GenericSettingsEditorProps) {
   const nav = useNavigate();
   const { data, loading, error, status, reload } = useApi<TunablesResponse>(fetchSettings, []);
@@ -82,7 +84,7 @@ export function GenericSettingsEditor({
         />
       )}
       {!loading && !error && data && hasFields && (
-        <SettingsForm data={data} onReload={reload} updateSettings={updateSettings} />
+        <SettingsForm data={data} onReload={reload} updateSettings={updateSettings} labelMap={labelMap} />
       )}
     </div>
   );
@@ -92,6 +94,7 @@ function SettingsForm({
   data,
   onReload,
   updateSettings,
+  labelMap,
 }: {
   data: TunablesResponse;
   onReload: () => void;
@@ -101,6 +104,7 @@ function SettingsForm({
     applies: string;
     note?: string;
   }>;
+  labelMap?: Record<string, string>;
 }) {
   const flatFields = useMemo(() => data.groups.flatMap((g) => g.fields), [data]);
   const baselineInit = useMemo(() => buildBaseline(data.groups), [data]);
@@ -243,6 +247,7 @@ function SettingsForm({
                   onChange={(v) => setVal(f.key, v)}
                   invalid={invalidKeys.has(f.key)}
                   rejectedReason={rejected[f.key] ?? null}
+                  labelMap={labelMap}
                 />
               ))}
             </div>
@@ -304,61 +309,79 @@ function FieldRow({
   onChange,
   invalid,
   rejectedReason,
+  labelMap,
 }: {
   field: TunableField;
   value: EditVal;
   onChange: (v: EditVal) => void;
   invalid: boolean;
   rejectedReason: string | null;
+  labelMap?: Record<string, string>;
 }) {
   const rangeMsg =
     f.min !== undefined || f.max !== undefined
       ? `Must be a number in [${f.min ?? "−∞"}, ${f.max ?? "∞"}].`
       : "Must be a number.";
 
+  const textLabel = labelMap?.[f.key] ?? humanizeKey(f.key);
+  const inputId = `field-${f.key}`;
+  const hasHint = Boolean(f.description);
+
   return (
     <div>
-      {f.type === "boolean" ? (
-        <>
-          <Toggle
-            checked={value === true}
-            onChange={(v) => onChange(v)}
-            label={humanizeKey(f.key)}
-          />
-          <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", margin: "var(--s-1-5) 0 0" }}>
-            {f.description}
-          </p>
-        </>
-      ) : f.type === "enum" ? (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: f.type === "boolean" ? 0 : "var(--s-1-5)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+          {f.type === "boolean" ? (
+             <Toggle
+               checked={value === true}
+               onChange={(v) => onChange(v)}
+               label={textLabel}
+             />
+          ) : (
+             <label htmlFor={inputId} className="tile-label" style={{ margin: 0 }}>
+               {textLabel}
+             </label>
+          )}
+          
+          {hasHint && (
+            <InfoTip content={f.description}>
+              <span style={{ cursor: "pointer", opacity: 0.7, fontSize: "14px" }}>ℹ️</span>
+            </InfoTip>
+          )}
+        </div>
+        <div style={{ fontSize: "11px", background: "var(--surface-3)", padding: "2px 6px", borderRadius: "10px", color: "var(--text-muted)", alignSelf: "flex-start" }}>
+          Default: {f.default === null || f.default === undefined ? "—" : String(f.default)}
+        </div>
+      </div>
+
+      {f.type === "boolean" ? null : f.type === "enum" ? (
         <Select
-          label={humanizeKey(f.key)}
+          id={inputId}
           value={String(value)}
           onChange={(e) => onChange(e.target.value)}
           options={(f.options ?? []).map((o) => ({ value: o, label: o }))}
-          hint={f.description ?? undefined}
+          hint={invalid ? "Invalid option." : undefined}
         />
       ) : isJsonBlob(f) ? (
         <Textarea
-          label={humanizeKey(f.key)}
+          id={inputId}
           value={value as string}
           onChange={(e) => onChange(e.target.value)}
           rows={4}
           spellCheck={false}
           monospace
           invalid={invalid}
-          hint={f.description ?? undefined}
         />
       ) : isTagList(f) ? (
         <TagInput
-          label={humanizeKey(f.key)}
+          id={inputId}
           value={typeof value === "string" && value.length > 0 ? value.split(",").map(s => s.trim()) : []}
           onChange={(arr) => onChange(arr.join(","))}
-          hint={f.description ?? undefined}
           invalid={invalid}
         />
       ) : (
         <Input
-          label={humanizeKey(f.key)}
+          id={inputId}
           type={f.type === "number" ? "number" : "text"}
           inputMode={f.type === "number" ? "decimal" : undefined}
           min={f.min}
@@ -367,13 +390,9 @@ function FieldRow({
           value={value as string}
           onChange={(e) => onChange(e.target.value)}
           invalid={invalid}
-          hint={invalid ? rangeMsg : f.description ?? undefined}
+          hint={invalid ? rangeMsg : undefined}
         />
       )}
-
-      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1-5) 0 0" }}>
-        Default: {f.default === null || f.default === undefined ? "—" : String(f.default)}
-      </p>
 
       {rejectedReason && (
         <Notice variant="warn" style={{ marginTop: "var(--s-2)" }} data-testid={`rejected-${f.key}`}>

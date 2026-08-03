@@ -1,4 +1,4 @@
-import { useId, useState, useEffect } from "react";
+import { useId, useState, useEffect, type ReactNode } from "react";
 import toast from "react-hot-toast";
 
 /**
@@ -27,7 +27,7 @@ export function Toggle({
 }: {
   checked: boolean;
   onChange: (next: boolean) => Promise<void> | void;
-  label: string;
+  label: ReactNode;
   disabled?: boolean;
   pending?: boolean;
   describedBy?: string;

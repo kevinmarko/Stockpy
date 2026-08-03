@@ -457,6 +457,7 @@ export function ErrorState({
  */
 export function Input({
   label,
+  hideLabel,
   value,
   onChange,
   type = "text",
@@ -471,7 +472,8 @@ export function Input({
   placeholder,
   className,
 }: {
-  label: string;
+  label?: ReactNode;
+  hideLabel?: boolean;
   value: string | number;
   onChange: (e: ChangeEvent<HTMLInputElement>) => void;
   type?: "text" | "number" | "email" | "password";
@@ -492,13 +494,15 @@ export function Input({
 
   return (
     <div>
-      <label
-        htmlFor={inputId}
-        className="tile-label"
-        style={{ display: "block", marginBottom: "var(--s-1-5)" }}
-      >
-        {label}
-      </label>
+      {label && !hideLabel && (
+        <label
+          htmlFor={inputId}
+          className="tile-label"
+          style={{ display: "block", marginBottom: "var(--s-1-5)" }}
+        >
+          {label}
+        </label>
+      )}
       <input
         id={inputId}
         className={`input ${className ?? ""}`}
@@ -566,7 +570,7 @@ export function Select({
   testId,
   className,
 }: {
-  label: string;
+  label?: ReactNode;
   hideLabel?: boolean;
   value: string;
   onChange: (e: ChangeEvent<HTMLSelectElement>) => void;
@@ -602,7 +606,7 @@ export function Select({
           disabled={disabled}
           aria-invalid={invalid ? "true" : undefined}
           aria-describedby={hintId}
-          aria-label={hideLabel ? label : undefined}
+          aria-label={hideLabel && typeof label === "string" ? label : undefined}
           data-testid={testId}
         >
           {options.map((o) => (
@@ -655,7 +659,7 @@ export function Textarea({
   spellCheck,
   monospace,
 }: {
-  label: string;
+  label?: ReactNode;
   value: string;
   onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void;
   rows?: number;
