@@ -14,7 +14,9 @@ export type JobType =
   | "gravity"
   | "advisory"
   | "orchestrator"
-  | "command";
+  | "command"
+  | "train_meta"
+  | "train_lgbm";
 
 export interface JobRecord {
   job_id: string;
@@ -1006,6 +1008,16 @@ export interface ModelRow {
   notes: string | null;
   age_days: number | null;
   needs_retrain: boolean | null;
+  // Honest CPCV out-of-sample Sharpe/MaxDD (validation/metrics.py's
+  // mean_oos_sharpe/mean_oos_max_dd -- the mean of each metric computed
+  // independently per CPCV path). `cpcv_mean_oos_max_dd` is a POSITIVE
+  // magnitude fraction (e.g. 0.28 = 28% drawdown), matching
+  // validation/stress_scenarios.py::compute_max_drawdown's convention --
+  // NOT the signed `PortfolioRiskMetrics.max_drawdown` convention used
+  // elsewhere in this file. `null` for an un-validated model (never a
+  // fabricated 0).
+  cpcv_mean_oos_sharpe: number | null;
+  cpcv_mean_oos_max_dd: number | null;
 }
 
 /**
@@ -1869,6 +1881,14 @@ export interface RegimeOverlay {
   hmm_risk_on_probability: number | null;
   kill_switch_active: boolean | null;
   macro_regime_gate_enabled: boolean | null;
+  // The real, DTO-sourced macro kill-switch verdict (Sahm Rule >= 0.5, VIX
+  // > 30, or HY OAS > 6% -- see PreTradeRiskGate.macro_kill_switch_check).
+  // A DIFFERENT mechanism from `kill_switch_active` above (the operator's
+  // manual global kill-switch FILE) -- never conflate the two. New BUY
+  // orders are actually paused for macro reasons only when BOTH this field
+  // AND `macro_regime_gate_enabled` are `true`. `null` when unknown (no
+  // state snapshot yet).
+  macro_kill_switch: boolean | null;
   reason: string | null; // present when no state snapshot exists yet
   /** Tracks MACRO_GATE_WRITES_ENABLED -- false means PUT /observability/macro-gate
    * is disabled server-side (403). Mirrors LlmStatus.writable. */
@@ -2308,6 +2328,17 @@ export interface SignalImportanceRow {
   // "definitely unimportant" rather than "no data this batch").
   mean_abs_contribution: number | null;
   n_symbols_scored: number;
+  // `mean_abs_contribution` normalized so every non-null row in a batch
+  // sums to ~1.0 -- a relative "share of total contribution" figure the
+  // absolute mean_abs_contribution alone doesn't give. Optional/undefined
+  // on a backend that hasn't been updated to serve it yet; `null` under the
+  // same condition mean_abs_contribution is null (nothing to normalize).
+  normalized_contribution?: number | null;
+  // The static settings.SIGNAL_WEIGHTS entry for this module -- a DIFFERENT
+  // number from mean_abs_contribution (a measured, symbol-averaged
+  // score*weight): this is the configured absolute weight itself. Optional/
+  // undefined on a backend that hasn't been updated to serve it yet.
+  config_weight?: number | null;
 }
 
 /**

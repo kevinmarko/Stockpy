@@ -111,6 +111,7 @@ function observabilitySummary(overrides: Partial<ObservabilitySummary> = {}): Ob
       hmm_risk_on_probability: null,
       kill_switch_active: null,
       macro_regime_gate_enabled: null,
+      macro_kill_switch: null,
       reason: "No state snapshot yet.",
       macro_gate_writable: false,
       macro_gate_writable_note: "Writes are disabled.",

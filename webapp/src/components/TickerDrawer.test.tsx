@@ -39,7 +39,7 @@ function observabilitySummary(entries: RiskGateBlockEntry[] = []): Observability
     regime: {
       as_of: null, market_regime: null, vix: null, sahm_rule: null, high_yield_oas: null,
       yield_curve: null, hmm_risk_on_probability: null, kill_switch_active: null,
-      macro_regime_gate_enabled: null, reason: "No state snapshot yet.",
+      macro_regime_gate_enabled: null, macro_kill_switch: null, reason: "No state snapshot yet.",
       macro_gate_writable: false, macro_gate_writable_note: "Writes are disabled.",
     },
     forecast_skill: { horizon_days: 30, window_days: 180, min_obs: 30, reliability_curve: [], skill_weights: {}, pending: 0, completed: 0, reason: "No forecast history yet." },
