@@ -911,7 +911,18 @@ class _ReadVisitor(ast.NodeVisitor):
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         kind = self._is_environ(node.value)
-        if kind and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+        if (
+            kind
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+            # Load context only. ``os.environ["X"] = v`` and ``del os.environ["X"]``
+            # are WRITES to the process environment, not reads of a setting; counting
+            # them inflates the os_environ form. Concrete case that surfaced this:
+            # ``Gravity AI Review Suite.py``'s execution-mode audit harness sets
+            # ``ROBINHOOD_EXECUTION_MODE``/``ROBINHOOD_MAX_NOTIONAL_PER_ORDER`` via
+            # subscript assignment, never reads them that way.
+            and isinstance(node.ctx, ast.Load)
+        ):
             if node.slice.value in self.fields:
                 self.env_reads.append((node.slice.value, node.lineno, f"{kind}[...]"))
         self.generic_visit(node)

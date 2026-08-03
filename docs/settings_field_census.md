@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `84c192778931e5850e6815e98ee0c4b1aadd5f4b`
+- Measured at commit: `b214599ad717c8a915f56e77d4c1d8121cfcbe9e`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -213,7 +213,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **329** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **330** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -229,7 +229,7 @@ _S.settings, _bl_settings, _live_settings, _oos_gate_settings, _rh_settings, _s,
 | (a) `settings.KEY` | 611 | 191 |
 | (b) `getattr(settings, "KEY", default)` | 246 | 150 |
 | (c) `getattr(settings, <var>)` (dynamic) | 15 sites | n/a — key not statically known |
-| (d) `os.environ` / `os.getenv("KEY")` | 19 | 15 |
+| (d) `os.environ` / `os.getenv("KEY")` | 16 | 13 |
 
 Fields reached by at least one form: **311** of 320.
 
@@ -401,7 +401,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `gui/panels/settings_manager.py:271` | `getattr(settings, key, [])` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
 
-### Fields read via `os.environ` (form d) — 15 field(s)
+### Fields read via `os.environ` (form d) — 13 field(s)
 
 `.env` is loaded into the `Settings` model directly by pydantic-settings; it is only
 copied into the real `os.environ` when something calls `load_dotenv()`. A field read
@@ -413,7 +413,6 @@ this way therefore reads a *different source* than `settings.KEY` does — see C
 | `FINNHUB_RATE_LIMIT_PER_MIN` | 2 | **no** |
 | `FUNDAMENTALS_CACHE_TTL_SECONDS` | 2 | yes |
 | `FUNDAMENTALS_NEG_CACHE_TTL_SECONDS` | 2 | yes |
-| `ROBINHOOD_EXECUTION_MODE` | 2 | yes |
 | `ALERT_CHANNELS` | 1 | **no** |
 | `ALERT_EMAIL_FROM` | 1 | yes |
 | `ALERT_EMAIL_SMTP_HOST` | 1 | **no** |
@@ -424,7 +423,6 @@ this way therefore reads a *different source* than `settings.KEY` does — see C
 | `ALERT_SLACK_WEBHOOK_URL` | 1 | **no** |
 | `LOG_LEVEL` | 1 | yes |
 | `PROMPT_REGISTRY_SIGNING_KEY` | 1 | yes |
-| `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` | 1 | yes |
 
 ---
 
