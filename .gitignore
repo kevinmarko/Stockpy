@@ -117,6 +117,13 @@ htmlcov/
 # already blanket-ignored above; this line documents the artifact explicitly.
 output/follows.json
 
+# Runtime settings store — per-machine operator overrides layered onto the
+# settings singleton at import time by runtime_flags.py. Machine-local state
+# that may hold values an operator set live; never committed. As with
+# follows.json above, output/ is already blanket-ignored — this documents the
+# artifact explicitly.
+output/runtime_flags.json
+
 # React PWA (webapp/) build + dependency artifacts — Vite/npm regenerate these;
 # never committed.
 webapp/node_modules/

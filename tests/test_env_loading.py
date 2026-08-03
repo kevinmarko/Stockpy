@@ -173,6 +173,34 @@ class TestEnvPathAnchor:
         assert settings_module.ENV_PATH.name == ".env"
         assert settings_module.ENV_PATH.is_absolute()
 
+    def test_runtime_flags_derives_the_same_anchor(self) -> None:
+        """``runtime_flags.py`` is a new ``.env`` locator, and it CANNOT import
+        ``ENV_PATH`` — it is a stdlib-only leaf imported BY ``settings.py``, so
+        importing settings back would be a circular import that breaks
+        ``import settings`` for the whole application. It therefore re-derives
+        the repo root from its own ``__file__``: the one case where
+        re-derivation is forced rather than sloppy.
+
+        This test is the guard that keeps that forced duplicate in sync. It
+        lives here (as well as in ``tests/test_runtime_flags.py``) so anyone
+        changing ENV_PATH sees the dependency in the file they are editing.
+
+        Why it matters: ``runtime_flags.real_environment_keys()`` decides which
+        fields are pinned by a real shell export by diffing ``os.environ``
+        against the parsed ``.env``. If it parsed a DIFFERENT ``.env`` than the
+        one pydantic-settings loaded, every field would be misclassified.
+        """
+        import settings as settings_module
+        import runtime_flags
+
+        derived = Path(runtime_flags.__file__).resolve().parent / ".env"
+        assert derived == settings_module.ENV_PATH
+        # ...and the store itself hangs off that same repo-root anchor.
+        assert (
+            runtime_flags.DEFAULT_STORE_PATH.parent.parent
+            == settings_module.ENV_PATH.parent
+        )
+
 
 # ===========================================================================
 # data/robinhood_portfolio.py::_require_setting (renamed from _require_env) —
