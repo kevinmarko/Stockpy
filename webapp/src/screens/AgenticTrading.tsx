@@ -526,7 +526,9 @@ function CandidateRow({ c }: { c: DiscoveryCandidate }) {
         )}
       </div>
       {c.scan_reason && (
-        <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>{c.scan_reason}</div>
+        <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>
+          {typeof c.scan_reason === 'object' ? JSON.stringify(c.scan_reason) : c.scan_reason}
+        </div>
       )}
       {added && (
         <div style={{ color: theme.growth, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>
