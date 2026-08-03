@@ -964,6 +964,52 @@ class TestJobsApi:
             second = client.post("/jobs", json={"job_type": "preflight"}, headers=headers)
         assert second.status_code == 409
 
+    def test_cross_type_single_flight_train_jobs_conflict(self, monkeypatch):
+        """TRAIN_LGBM and TRAIN_META share a single-flight group ("train")
+        since both write to the same ML registry -- starting a TRAIN_META job
+        while a TRAIN_LGBM job is still running must 409, even though they
+        are different job_type values (unlike the plain same-type-only check
+        every other job type still gets)."""
+        monkeypatch.setattr(jobs_module, "launch_train_lgbm", lambda: _FakeHandle(running=True))
+        monkeypatch.setattr(jobs_module, "launch_train_meta_labelers", lambda **kw: _FakeHandle(running=True))
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            first = client.post("/jobs", json={"job_type": "train_lgbm"}, headers=headers)
+            assert first.status_code == 200
+            second = client.post(
+                "/jobs", json={"job_type": "train_meta", "params": {"signal": "timeseries_momentum"}},
+                headers=headers,
+            )
+        assert second.status_code == 409
+
+    def test_cross_type_single_flight_reverse_order_also_conflicts(self, monkeypatch):
+        """Same as above with TRAIN_META launched first, TRAIN_LGBM second --
+        the conflict must not be order-dependent."""
+        monkeypatch.setattr(jobs_module, "launch_train_lgbm", lambda: _FakeHandle(running=True))
+        monkeypatch.setattr(jobs_module, "launch_train_meta_labelers", lambda **kw: _FakeHandle(running=True))
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            first = client.post("/jobs", json={"job_type": "train_meta"}, headers=headers)
+            assert first.status_code == 200
+            second = client.post("/jobs", json={"job_type": "train_lgbm"}, headers=headers)
+        assert second.status_code == 409
+
+    def test_train_job_does_not_conflict_with_unrelated_job_type(self, monkeypatch):
+        """A running TRAIN_LGBM job must not block an unrelated job type
+        (e.g. preflight) -- the widened single-flight check is scoped to the
+        "train" group only, not job launches in general."""
+        monkeypatch.setattr(jobs_module, "launch_train_lgbm", lambda: _FakeHandle(running=True))
+        monkeypatch.setattr(jobs_module, "launch_preflight", lambda: _FakeHandle(running=True))
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            first = client.post("/jobs", json={"job_type": "train_lgbm"}, headers=headers)
+            assert first.status_code == 200
+            second = client.post("/jobs", json={"job_type": "preflight"}, headers=headers)
+        assert second.status_code == 200
+
     def test_status_reflects_completion(self, monkeypatch):
         handle = _FakeHandle(running=True)
         monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
