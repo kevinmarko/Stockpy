@@ -5299,9 +5299,10 @@ class TestRlhfExportSft:
 
 
 class TestRlhfCalibrationInvariants:
-    def test_rlhf_calibration_enabled_is_not_gui_writable(self):
-        """Mirrors test_automation_writes_enabled_is_not_gui_writable: a GUI
-        bug must never flip this on. Neither allowlisted nor secret — hand-set
-        only, matching every other require_x_enabled master flag."""
-        assert "RLHF_CALIBRATION_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_rlhf_calibration_enabled_is_gui_writable_but_never_secret(self):
+        """Mirrors test_reclassified_flags_are_now_gui_writable's assertions
+        (tests/test_gui_env_io.py): created directly in ALLOWED_KEYS per
+        AGENTS.md's 2026-08-03 convention, not hand-set-only — the endpoint
+        stays independently gated by FOLLOW_API_TOKEN regardless."""
+        assert "RLHF_CALIBRATION_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "RLHF_CALIBRATION_ENABLED" not in pilots_api.env_io.SECRET_KEYS

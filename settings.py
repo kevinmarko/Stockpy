@@ -2955,10 +2955,8 @@ class Settings(BaseSettings):
             "POST /rlhf/export-sft). Paper-only -- no capital, broker, or "
             "execution risk -- so this ships active by default per this "
             "repo's 2026-08-03 convention that new admin/write capabilities "
-            "default ON rather than behind a fresh opt-in flag. Deliberately "
-            "excluded from gui/env_io.py's ALLOWED_KEYS/SECRET_KEYS (hand-set "
-            "in .env only), matching every other require_x_enabled master "
-            "flag."
+            "default ON. Also requires FOLLOW_API_TOKEN at the endpoint "
+            "level regardless of this flag's value."
         ),
     )
     RLHF_CALIBRATION_CONFIDENCE_THRESHOLD: float = Field(

@@ -507,9 +507,11 @@ def require_rlhf_calibration_enabled() -> None:
     ``rlhf_calibration_store.py``'s module docstring), so per this repo's
     2026-08-03 convention a new admin/write capability with no capital or
     execution risk ships active by default rather than behind a fresh opt-in
-    flag. Deliberately excluded from ``gui/env_io.py``'s
-    ``ALLOWED_KEYS``/``SECRET_KEYS`` (hand-set in ``.env`` only), matching
-    every other ``require_x_enabled`` master flag.
+    flag. GUI-writable in ``gui/env_io.py``'s ``ALLOWED_KEYS`` (created there
+    directly, not reclassified — mirrors ``AGENTIC_DISCOVERY_ENABLED``'s
+    precedent: this endpoint remains independently gated by
+    ``FOLLOW_API_TOKEN`` regardless of the flag's own GUI-writability, so a
+    GUI toggle alone can never bypass the command-token check).
 
     ``POST /rlhf/proposals`` exists even though the webapp itself never calls
     it — a sibling MCP tool creates real proposals by calling
