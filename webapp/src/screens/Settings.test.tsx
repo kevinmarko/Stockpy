@@ -933,7 +933,16 @@ describe("Settings screen — Brokerage", () => {
     await user.click(await screen.findByRole("button", { name: "Disconnect" }));
 
     // Confirm modal: disambiguate the modal's Disconnect from the section's.
-    const dialog = await screen.findByRole("dialog", { name: "Disconnect brokerage" });
+    // Opening it is a plain synchronous setState + render (no async chain),
+    // but under genuine CI CPU contention even that can take longer than the
+    // default 1000ms budget to actually get scheduled and committed -- same
+    // class of risk as the async-job-chain comment above, just without an
+    // async chain to blame it on.
+    const dialog = await screen.findByRole(
+      "dialog",
+      { name: "Disconnect brokerage" },
+      ASYNC_JOB_CHAIN_TIMEOUT
+    );
     await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
 
     await waitFor(() => expect(disconnectSpy).toHaveBeenCalledTimes(1));
@@ -964,7 +973,11 @@ describe("Settings screen — Brokerage", () => {
     );
 
     await user.click(await screen.findByRole("button", { name: "Disconnect" }));
-    const dialog = await screen.findByRole("dialog", { name: "Disconnect brokerage" });
+    const dialog = await screen.findByRole(
+      "dialog",
+      { name: "Disconnect brokerage" },
+      ASYNC_JOB_CHAIN_TIMEOUT
+    );
     await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
 
     // back to the connect form
