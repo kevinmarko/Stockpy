@@ -155,6 +155,29 @@ describe("Agentic Trading screen (real mock API)", () => {
     expect(within(zzzz).queryByText(/discovered/)).not.toBeInTheDocument();
   });
 
+  it("renders scan_reason object safely using JSON.stringify instead of [object Object]", async () => {
+    const objectReasonCandidate: DiscoveryCandidate = {
+      symbol: "SAP",
+      scan_name: "tech_scan",
+      scan_reason: { sector: "Technology", momentum: "high" } as unknown as string,
+      action: "BUY",
+      conviction: 0.8,
+      discovered_at: new Date().toISOString(),
+    };
+    vi.spyOn(api, "getAgenticDiscovery").mockResolvedValueOnce({
+      generated_at: new Date().toISOString(),
+      candidates: [objectReasonCandidate],
+      scan_configs: [],
+      reason: null,
+      writable: true,
+      note: "",
+    } satisfies AgenticDiscovery);
+    renderScreen();
+    const rows = await screen.findAllByTestId("discovery-candidate-row");
+    const sap = rows.find((r) => r.textContent?.includes("SAP"))!;
+    expect(within(sap).getByText(JSON.stringify({ sector: "Technology", momentum: "high" }))).toBeInTheDocument();
+  });
+
   it("renders the shared execution queue section (mode, placeable count, intents)", async () => {
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Robinhood execution queue" })).toBeInTheDocument();

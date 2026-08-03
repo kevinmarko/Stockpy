@@ -251,7 +251,7 @@ describe("SettingsManager screen", () => {
       renderScreen();
       await screen.findByRole("heading", { name: "Runtime tunables" });
 
-      await userEvent.click(screen.getByTestId("clear-cache-button"));
+      await userEvent.click(await screen.findByTestId("clear-cache-button"));
       expect(await screen.findByTestId("clear-cache-confirm")).toBeInTheDocument();
       await userEvent.click(screen.getByTestId("clear-cache-confirm-yes"));
 
@@ -270,7 +270,7 @@ describe("SettingsManager screen", () => {
       renderScreen();
       await screen.findByRole("heading", { name: "Runtime tunables" });
 
-      await userEvent.click(screen.getByTestId("clear-cache-button"));
+      await userEvent.click(await screen.findByTestId("clear-cache-button"));
       await userEvent.click(await screen.findByTestId("clear-cache-confirm-yes"));
 
       expect(await screen.findByTestId("cache-cleared-notice")).toHaveTextContent(
@@ -285,7 +285,7 @@ describe("SettingsManager screen", () => {
       renderScreen();
       await screen.findByRole("heading", { name: "Runtime tunables" });
 
-      await userEvent.click(screen.getByTestId("clear-cache-button"));
+      await userEvent.click(await screen.findByTestId("clear-cache-button"));
       expect(await screen.findByTestId("clear-cache-confirm")).toBeInTheDocument();
       await userEvent.click(screen.getByTestId("clear-cache-cancel"));
 
