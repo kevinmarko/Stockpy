@@ -872,6 +872,97 @@ class TestExecutePaperTrade:
 
 
 # ---------------------------------------------------------------------------
+# propose_paper_trade_for_review
+# ---------------------------------------------------------------------------
+
+
+class TestProposePaperTradeForReview:
+    def test_happy_path_pending_review(self, monkeypatch):
+        import rlhf_calibration_store
+
+        fake_store = MagicMock()
+        fake_store.create_proposal.return_value = 5
+        fake_store.get_by_id.return_value = {"id": 5, "auto_approved": False}
+        monkeypatch.setattr(rlhf_calibration_store, "RlhfCalibrationStore", lambda: fake_store)
+
+        result = srv.propose_paper_trade_for_review("aapl", "buy", "RSI oversold bounce", 0.6)
+
+        assert "Proposal #5" in result
+        assert "AAPL BUY" in result
+        assert "pending human review" in result
+        fake_store.create_proposal.assert_called_once()
+        assert fake_store.create_proposal.call_args.kwargs["symbol"] == "aapl"
+        assert fake_store.create_proposal.call_args.kwargs["extra_context"] is None
+
+    def test_auto_approved_message(self, monkeypatch):
+        import rlhf_calibration_store
+
+        fake_store = MagicMock()
+        fake_store.create_proposal.return_value = 9
+        fake_store.get_by_id.return_value = {"id": 9, "auto_approved": True}
+        monkeypatch.setattr(rlhf_calibration_store, "RlhfCalibrationStore", lambda: fake_store)
+
+        result = srv.propose_paper_trade_for_review("tsla", "sell", "Breakdown below support", 0.95)
+
+        assert "Proposal #9" in result
+        assert "auto-approved" in result
+        assert "95%" in result
+
+    def test_extra_context_parsed_from_json_string(self, monkeypatch):
+        import rlhf_calibration_store
+
+        fake_store = MagicMock()
+        fake_store.create_proposal.return_value = 1
+        fake_store.get_by_id.return_value = {"id": 1, "auto_approved": False}
+        monkeypatch.setattr(rlhf_calibration_store, "RlhfCalibrationStore", lambda: fake_store)
+
+        srv.propose_paper_trade_for_review(
+            "aapl", "buy", "reason", 0.5, extra_context='{"vix": 18.2}'
+        )
+
+        assert fake_store.create_proposal.call_args.kwargs["extra_context"] == {"vix": 18.2}
+
+    def test_malformed_extra_context_degrades_to_none(self, monkeypatch):
+        import rlhf_calibration_store
+
+        fake_store = MagicMock()
+        fake_store.create_proposal.return_value = 2
+        fake_store.get_by_id.return_value = {"id": 2, "auto_approved": False}
+        monkeypatch.setattr(rlhf_calibration_store, "RlhfCalibrationStore", lambda: fake_store)
+
+        result = srv.propose_paper_trade_for_review(
+            "aapl", "buy", "reason", 0.5, extra_context="{not valid json"
+        )
+
+        assert "Proposal #2" in result
+        assert fake_store.create_proposal.call_args.kwargs["extra_context"] is None
+
+    def test_invalid_action_returns_error_string_without_raising(self, monkeypatch):
+        import rlhf_calibration_store
+
+        fake_store = MagicMock()
+        fake_store.create_proposal.side_effect = ValueError("invalid action: 'YOLO'")
+        monkeypatch.setattr(rlhf_calibration_store, "RlhfCalibrationStore", lambda: fake_store)
+
+        result = srv.propose_paper_trade_for_review("aapl", "YOLO", "reason", 0.5)
+
+        assert "Failed to propose paper trade" in result
+        assert "invalid action" in result
+        fake_store.get_by_id.assert_not_called()
+
+    def test_store_exception_degrades_gracefully(self, monkeypatch):
+        import rlhf_calibration_store
+
+        fake_store = MagicMock()
+        fake_store.create_proposal.side_effect = RuntimeError("db locked")
+        monkeypatch.setattr(rlhf_calibration_store, "RlhfCalibrationStore", lambda: fake_store)
+
+        result = srv.propose_paper_trade_for_review("aapl", "buy", "reason", 0.5)
+
+        assert "Failed to log proposal" in result
+
+
+# ---------------------------------------------------------------------------
 # update_watch_rules
 # ---------------------------------------------------------------------------
 

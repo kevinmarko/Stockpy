@@ -2940,6 +2940,56 @@ class Settings(BaseSettings):
             "flag."
         ),
     )
+    # RLHF Calibration Review Queue (rlhf_calibration_store.py) -- an AI trading
+    # agent proposes a hypothetical PAPER trade (symbol/action/rationale/
+    # confidence/technical-context) and a human operator rates it 1-5 stars
+    # with an optional corrective comment. Entirely separate from real
+    # trading: no capital, no broker, no TransactionsStore/BrokerBase/
+    # OrderManager involvement (see that module's docstring for why mixing
+    # hypothetical proposals into TransactionsStore would be dangerous).
+    RLHF_CALIBRATION_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master switch for the RLHF Calibration Review Queue's write "
+            "endpoints (POST /rlhf/proposals, POST /rlhf/proposals/{id}/review, "
+            "POST /rlhf/export-sft). Paper-only -- no capital, broker, or "
+            "execution risk -- so this ships active by default per this "
+            "repo's 2026-08-03 convention that new admin/write capabilities "
+            "default ON rather than behind a fresh opt-in flag. Deliberately "
+            "excluded from gui/env_io.py's ALLOWED_KEYS/SECRET_KEYS (hand-set "
+            "in .env only), matching every other require_x_enabled master "
+            "flag."
+        ),
+    )
+    RLHF_CALIBRATION_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.8,
+        description=(
+            "Confidence [0,1] at or above which a new proposal is "
+            "auto-approved (skips mandatory human review) when "
+            "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED is True."
+        ),
+    )
+    RLHF_CALIBRATION_AUTO_APPROVE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, a proposal whose confidence clears "
+            "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD is marked reviewed "
+            "automatically (auto_approved=True, human_rating stays null -- "
+            "never a fabricated rating) instead of waiting for a human. "
+            "Default False: this changes what counts as 'reviewed' without a "
+            "human in the loop, so it stays opt-in rather than defaulting on "
+            "like RLHF_CALIBRATION_ENABLED."
+        ),
+    )
+    RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, a proposal that receives a 5-star human_rating is "
+            "automatically appended to the SFT JSONL export the moment the "
+            "review is submitted, instead of requiring a separate "
+            "POST /rlhf/export-sft call. Default False (opt-in)."
+        ),
+    )
     # Master switch for api/data_api.py's three on-demand AI generation endpoints
     # (POST /data/ai/commentary|chart|research/{symbol} -- Claude analyst note,
     # Gemini chart-vision read, Opal research brief). A DEDICATED flag, distinct

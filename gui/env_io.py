@@ -457,6 +457,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # see _JSON_KEYS).
     "REGIME_SIGNAL_WEIGHTS",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
+    # RLHF Calibration Review Queue operator tunables (rlhf_calibration_store.py).
+    # Non-secret; the write-endpoint master switch RLHF_CALIBRATION_ENABLED
+    # stays in EXCLUDED_FROM_GUI (hand-set only, matching every other
+    # require_x_enabled fail-closed flag).
+    "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
+    "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
+    "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -599,6 +606,7 @@ EXCLUDED_FROM_GUI: frozenset[str] = frozenset(
         "MACRO_GATE_WRITES_ENABLED",
         "PROMPT_REGISTRY_WRITES_ENABLED",
         "RAG_QUERY_API_ENABLED",
+        "RLHF_CALIBRATION_ENABLED",  # RLHF Calibration Review Queue write-endpoint master switch
         "STRATEGY_WRITES_ENABLED",
     }
 )

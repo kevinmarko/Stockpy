@@ -932,6 +932,71 @@ def execute_paper_trade(
         return f"Invalid side: '{side}'. Must be one of: buy, long, sell, short, close."
 
 @mcp.tool()
+def propose_paper_trade_for_review(
+    symbol: str,
+    action: str,
+    rationale: str,
+    confidence: float,
+    quantity: Optional[float] = None,
+    price: Optional[float] = None,
+    rsi: Optional[float] = None,
+    sentiment_score: Optional[float] = None,
+    extra_context: Optional[str] = None,
+) -> str:
+    """
+    Proposes a hypothetical paper trade for human RLHF calibration review — NOT a real or simulated order execution (no position/cash tracking; entirely separate from execute_paper_trade's TransactionsStore-backed paper ledger). A human operator will later review this proposal in the Pilots PWA and rate the decision 1-5 stars, with the rating optionally feeding a fine-tuning dataset.
+
+    Args:
+        symbol: The stock ticker (e.g. AAPL).
+        action: 'BUY', 'SELL', or 'HOLD'.
+        rationale: Plain-English explanation for the proposed decision — this is what the human will grade.
+        confidence: Confidence in this decision, as a fraction in [0, 1] (NOT a percent).
+        quantity: Optional proposed share quantity.
+        price: Optional reference price. If omitted, no live quote is fetched here — supply one if you have it from another tool call.
+        rsi: Optional RSI(14) reading informing this decision.
+        sentiment_score: Optional sentiment score informing this decision.
+        extra_context: Optional free-text JSON string with any other technical context worth capturing.
+    """
+    from rlhf_calibration_store import RlhfCalibrationStore
+
+    parsed_extra_context = None
+    if extra_context:
+        try:
+            parsed_extra_context = json.loads(extra_context)
+        except (TypeError, ValueError):
+            # Malformed JSON from the caller shouldn't sink the whole proposal --
+            # the rationale/confidence/etc. are still worth logging.
+            parsed_extra_context = None
+
+    store = RlhfCalibrationStore()
+    try:
+        new_id = store.create_proposal(
+            symbol=symbol,
+            action=action,
+            rationale=rationale,
+            confidence=confidence,
+            quantity=quantity,
+            price=price,
+            rsi=rsi,
+            sentiment_score=sentiment_score,
+            extra_context=parsed_extra_context,
+        )
+    except ValueError as e:
+        return f"Failed to propose paper trade: {str(e)}"
+    except Exception as e:
+        return f"Failed to log proposal: {str(e)}"
+
+    symbol_upper = symbol.upper().strip()
+    action_upper = action.upper().strip()
+    proposal = store.get_by_id(new_id)
+    if proposal is not None and proposal.get("auto_approved"):
+        return (
+            f"Proposal #{new_id} for {symbol_upper} {action_upper} logged and "
+            f"auto-approved (confidence {confidence:.0%} cleared the threshold)."
+        )
+    return f"Proposal #{new_id} for {symbol_upper} {action_upper} logged — pending human review."
+
+@mcp.tool()
 def update_watch_rules(
     action: str,
     symbol: str,

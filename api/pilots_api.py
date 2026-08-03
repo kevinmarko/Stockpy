@@ -97,6 +97,7 @@ import math
 import re
 import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -159,6 +160,7 @@ from pilots import (
     pairs,
     performance,
     realized,
+    rlhf_review_queue,
     rolling_beta,
     run_status,
     scoring,
@@ -172,11 +174,29 @@ from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
 from pilots.scan_config_store import ScanConfigStore
 
+# RLHF Calibration Review Queue write path (POST /rlhf/proposals,
+# POST /rlhf/proposals/{id}/review, POST /rlhf/export-sft) — a dedicated,
+# non-``pilots``-package store (see its own module docstring for why it is
+# NOT a TransactionsStore extension). Imported at module top, mirroring
+# FollowsStore/ScanConfigStore above, so tests can
+# ``mock.patch.object(pilots_api, "RlhfCalibrationStore", ...)``. Not on the
+# AST guard's heavy-engine deny-list — its own imports are db_config/settings/
+# stdlib only.
+from rlhf_calibration_store import (
+    ProposalAlreadyReviewedError,
+    ProposalNotFoundError,
+    RlhfCalibrationStore,
+)
+
 # Execution / persistence — explicitly ALLOWED here (unlike state_api.py),
 # forbidden only for the heavy calculation engines (see this module's AST guard
 # test). ``data.historical_store`` and ``execution.kill_switch`` are imported at
 # module top so tests can ``mock.patch.object(pilots_api, "HistoricalStore", ...)``.
 from data.historical_store import HistoricalStore
+# Best-effort live-quote enrichment for POST /rlhf/proposals when the caller
+# doesn't supply a price — same provider every other market-data read in this
+# codebase goes through (see settings.py's "Market-data layer" convention).
+from data.market_data import MarketDataError, get_provider
 from execution.kill_switch import GlobalKillSwitch
 
 # The Data & Automation surface (GET/POST/PUT /automation/*) reaches the
@@ -476,6 +496,35 @@ def require_rag_query_enabled() -> None:
         )
 
 
+def require_rlhf_calibration_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for the RLHF Calibration Review Queue's
+    write endpoints (``POST /rlhf/proposals``, ``POST
+    /rlhf/proposals/{id}/review``, ``POST /rlhf/export-sft``).
+
+    ``settings.RLHF_CALIBRATION_ENABLED`` defaults ``True`` — every proposal
+    here is hypothetical and paper-only (no capital, no broker, no
+    ``TransactionsStore``/``OrderManager`` involvement, see
+    ``rlhf_calibration_store.py``'s module docstring), so per this repo's
+    2026-08-03 convention a new admin/write capability with no capital or
+    execution risk ships active by default rather than behind a fresh opt-in
+    flag. Deliberately excluded from ``gui/env_io.py``'s
+    ``ALLOWED_KEYS``/``SECRET_KEYS`` (hand-set in ``.env`` only), matching
+    every other ``require_x_enabled`` master flag.
+
+    ``POST /rlhf/proposals`` exists even though the webapp itself never calls
+    it — a sibling MCP tool creates real proposals by calling
+    ``RlhfCalibrationStore`` directly, not through this HTTP API — it is kept
+    for API completeness and so this feature's own tests can create fixture
+    data through the real API rather than reaching into the store directly.
+    ``GET /rlhf/summary`` is read-only and NOT gated by this flag
+    (``require_read_token`` alone, matching every other GET here)."""
+    if not settings.RLHF_CALIBRATION_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="RLHF calibration writes are disabled (RLHF_CALIBRATION_ENABLED=false).",
+        )
+
+
 if not settings.STATE_API_TOKEN:
     logger.warning(
         "STATE_API_TOKEN not set — Pilots read endpoints are UNAUTHENTICATED. "
@@ -771,6 +820,41 @@ class WatchRequest(BaseModel):
     The symbol shape is validated in the writer (rejected, never sanitized)."""
 
     symbol: str = Field(..., min_length=1, max_length=16)
+
+
+class RlhfProposalCreateRequest(BaseModel):
+    """Body for ``POST /rlhf/proposals`` — records one hypothetical, paper-only
+    AI trade proposal (``rlhf_calibration_store.RlhfCalibrationStore
+    .create_proposal``). ``action``/``confidence`` are intentionally NOT
+    Pydantic-bounded here (no ``Literal``, no ``ge``/``le``) — the store is the
+    single source of truth for those two validations and raises ``ValueError``
+    with a message this endpoint maps to a stable ``invalid_action`` /
+    ``invalid_confidence`` 422 tag; duplicating the bound at this layer would
+    just produce a second, differently-shaped error response for the same
+    failure. ``price`` is optional — omitted, the handler best-effort resolves
+    a live quote (see ``create_rlhf_proposal``)."""
+
+    symbol: str = Field(..., min_length=1, max_length=20)
+    action: str = Field(..., min_length=1)
+    rationale: str = Field(..., min_length=1)
+    confidence: float
+    quantity: Optional[float] = None
+    price: Optional[float] = None
+    rsi: Optional[float] = None
+    sentiment_score: Optional[float] = None
+    extra_context: Optional[Dict[str, Any]] = None
+
+
+class RlhfProposalReviewRequest(BaseModel):
+    """Body for ``POST /rlhf/proposals/{id}/review`` — a human's 1-5 star
+    rating (+ optional corrective comment) for one proposal. ``human_rating``
+    is deliberately NOT Pydantic-bounded (see ``RlhfProposalCreateRequest``'s
+    docstring for why) — ``RlhfCalibrationStore.submit_review`` raises
+    ``ValueError`` for an out-of-range rating, mapped to a stable
+    ``invalid_rating`` 422 tag."""
+
+    human_rating: int
+    human_correction: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -2469,6 +2553,220 @@ def post_agentic_watch(body: WatchRequest) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# RLHF Calibration Review Queue (rlhf_calibration_store.py) — an AI trading
+# agent proposes a hypothetical PAPER trade and a human rates it 1-5 stars.
+# No capital, no broker, no TransactionsStore involvement (see that module's
+# docstring). Gated by require_rlhf_calibration_enabled — see that function's
+# docstring for why POST /rlhf/proposals exists despite the webapp never
+# calling it directly.
+# ---------------------------------------------------------------------------
+
+
+def _rlhf_sft_dataset_path() -> Path:
+    return settings.OUTPUT_DIR / "rlhf_sft_dataset.jsonl"
+
+
+def _append_sft_rows(proposals: List[Dict[str, Any]]) -> int:
+    """Appends one JSONL line per proposal to the SFT training-data export
+    (``settings.OUTPUT_DIR / "rlhf_sft_dataset.jsonl"``). Shared by ``POST
+    /rlhf/proposals/{id}/review``'s auto-export path and ``POST
+    /rlhf/export-sft``'s explicit batch path so the record shape can never
+    drift between the two.
+
+    A human's ``human_correction`` is the gold assistant label when present
+    (a human explicitly rewrote what the agent should have said); the
+    proposal's own ``rationale`` is the fallback otherwise. Raises on any I/O
+    failure — deliberately NOT try/except'd here, unlike ``_append_block_log``
+    — the two call sites need different degraded responses on failure (the
+    review endpoint must still return 200; the export endpoint must report
+    zero exported), so each wraps this call with its own recovery rather than
+    this helper picking one for both (CONSTRAINT #6 is satisfied at the
+    endpoint layer here, not this shared helper)."""
+    path = _rlhf_sft_dataset_path()
+    with open(path, "a", encoding="utf-8") as fh:
+        for row in proposals:
+            correction = (row.get("human_correction") or "").strip()
+            assistant_content = correction if correction else row.get("rationale", "")
+            record = {
+                "messages": [
+                    {"role": "system", "content": "You are a quantitative trading agent."},
+                    {
+                        "role": "user",
+                        "content": f"Evaluate {row['symbol']} — proposed action: {row['action']}.",
+                    },
+                    {"role": "assistant", "content": assistant_content},
+                ]
+            }
+            fh.write(json.dumps(record) + "\n")
+    return len(proposals)
+
+
+@app.get("/rlhf/summary", dependencies=[Depends(require_read_token)])
+def get_rlhf_summary(limit: int = Query(50, ge=1, le=200)) -> Dict[str, Any]:
+    """Pending review queue + aggregate KPIs for the RLHF Calibration Review
+    Queue screen. Composes the two read-only ``pilots.rlhf_review_queue``
+    views (each already dead-letter-safe — see that module's docstring) so
+    this never 500s, including on a cold start (no proposals table yet) or a
+    genuinely unreachable DB (CONSTRAINT #6). ``writable`` tracks
+    ``RLHF_CALIBRATION_ENABLED`` so the PWA knows whether to render the
+    review-submission form before the operator hits a 403."""
+    queue = rlhf_review_queue.pending_queue_view(limit=limit)
+    return {
+        "proposals": queue["proposals"],
+        "kpis": rlhf_review_queue.summary_stats_view(),
+        "writable": bool(settings.RLHF_CALIBRATION_ENABLED),
+        "reason": queue["reason"],
+    }
+
+
+@app.post(
+    "/rlhf/proposals",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_rlhf_calibration_enabled),
+    ],
+)
+def create_rlhf_proposal(body: RlhfProposalCreateRequest) -> Dict[str, Any]:
+    """Record one hypothetical, paper-only AI trade proposal.
+
+    When the caller omits ``price`` for a non-``HOLD`` action, best-effort
+    enriches with a live quote (``data.market_data.get_provider``) — a
+    ``MarketDataError`` here is advisory-only and never blocks proposal
+    creation, it just leaves ``price`` unset. ``quote_source`` in the response
+    tells the caller which of the three paths was taken: ``caller_supplied``
+    (a price was given), ``live`` (fetched here), or ``unavailable`` (a HOLD
+    needs no price, or the live fetch failed).
+
+    ``action``/``confidence`` validation lives entirely in
+    ``RlhfCalibrationStore.create_proposal`` (see ``RlhfProposalCreateRequest``'s
+    docstring) — its ``ValueError`` message is inspected once here to produce
+    a stable ``invalid_action`` / ``invalid_confidence`` 422 tag, since the
+    store itself raises a plain ``ValueError`` rather than two distinct
+    exception types."""
+    price = body.price
+    if price is not None:
+        quote_source = "caller_supplied"
+    elif body.action.strip().upper() == "HOLD":
+        quote_source = "unavailable"
+    else:
+        try:
+            quote = get_provider().get_latest_quote(body.symbol)
+            price = quote.price
+            quote_source = "live"
+        except MarketDataError as exc:
+            logger.debug(
+                "create_rlhf_proposal: live quote unavailable for %s: %s", body.symbol, exc
+            )
+            quote_source = "unavailable"
+
+    store = RlhfCalibrationStore()
+    try:
+        proposal_id = store.create_proposal(
+            symbol=body.symbol,
+            action=body.action,
+            rationale=body.rationale,
+            confidence=body.confidence,
+            quantity=body.quantity,
+            price=price,
+            rsi=body.rsi,
+            sentiment_score=body.sentiment_score,
+            extra_context=body.extra_context,
+        )
+    except ValueError as exc:
+        tag = "invalid_confidence" if "confidence" in str(exc) else "invalid_action"
+        raise HTTPException(status_code=422, detail=tag)
+
+    row = store.get_by_id(proposal_id)
+    if row is None:  # pragma: no cover - a successful write immediately unreadable
+        logger.error("create_rlhf_proposal: id=%s created but not readable back", proposal_id)
+        raise HTTPException(status_code=500, detail="proposal_created_but_unreadable")
+
+    row["quote_source"] = quote_source
+    return row
+
+
+@app.post(
+    "/rlhf/proposals/{proposal_id}/review",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_rlhf_calibration_enabled),
+    ],
+)
+def review_rlhf_proposal(proposal_id: int, body: RlhfProposalReviewRequest) -> Dict[str, Any]:
+    """Record a human's 1-5 star rating (+ optional corrective comment) for
+    one proposal. 404 ``not_found`` for an unknown id, 409
+    ``already_reviewed`` for a proposal that already has a review (including
+    an auto-approved one — a human can't "re-review" one), 422
+    ``invalid_rating`` for a rating outside 1-5.
+
+    On a 5-star rating with ``RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED``, the
+    row is best-effort appended to the SFT export via the SAME
+    ``_append_sft_rows`` helper ``POST /rlhf/export-sft`` uses, so the two
+    paths can never disagree on record shape — wrapped in try/except so an
+    export failure never fails the review response itself (the review was
+    already durably persisted by ``submit_review`` above this point)."""
+    store = RlhfCalibrationStore()
+    try:
+        row = store.submit_review(proposal_id, body.human_rating, body.human_correction)
+    except ProposalNotFoundError:
+        raise HTTPException(status_code=404, detail="not_found")
+    except ProposalAlreadyReviewedError:
+        raise HTTPException(status_code=409, detail="already_reviewed")
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_rating")
+
+    sft_exported = bool(row.get("sft_exported"))
+    if (
+        row.get("human_rating") == 5
+        and settings.RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED
+        and not sft_exported
+    ):
+        try:
+            _append_sft_rows([row])
+            store.mark_sft_exported([row["id"]])
+            sft_exported = True
+        except Exception as exc:  # noqa: BLE001 - best-effort: never fail the review response
+            logger.warning(
+                "review_rlhf_proposal: auto SFT export failed for id=%s: %s", proposal_id, exc
+            )
+
+    row["sft_exported"] = sft_exported
+    return row
+
+
+@app.post(
+    "/rlhf/export-sft",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_rlhf_calibration_enabled),
+    ],
+)
+def export_rlhf_sft() -> Dict[str, Any]:
+    """Batch-export every 5-star, not-yet-exported proposal to the SFT JSONL
+    dataset (``settings.OUTPUT_DIR / "rlhf_sft_dataset.jsonl"``).
+
+    Best-effort (CONSTRAINT #6): a file-append failure logs a warning and
+    returns a zeroed result rather than raising — ``mark_sft_exported`` is
+    only called on a successful append, so a failure never marks a row
+    exported when it wasn't actually written to the file."""
+    path = _rlhf_sft_dataset_path()
+    store = RlhfCalibrationStore()
+    rows = store.get_unexported_five_star()
+    if not rows:
+        return {"exported_count": 0, "file": str(path), "proposal_ids": []}
+
+    try:
+        _append_sft_rows(rows)
+    except Exception as exc:  # noqa: BLE001 - best-effort export, never fatal
+        logger.warning("export_rlhf_sft: file append failed: %s", exc)
+        return {"exported_count": 0, "file": str(path), "proposal_ids": []}
+
+    ids = [row["id"] for row in rows]
+    store.mark_sft_exported(ids)
+    return {"exported_count": len(rows), "file": str(path), "proposal_ids": ids}
+
+
+# ---------------------------------------------------------------------------
 # LLM configuration status + writes (AI Control Center — see module docstring)
 # ---------------------------------------------------------------------------
 
@@ -3463,6 +3761,14 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("ORCHESTRATOR_DAEMON_ENABLED", "bool", {}),
             ("PILOTS_API_ENABLED", "bool", {}),
             ("CORS_ALLOWED_ORIGINS", "json", {}),
+        ],
+    ),
+    (
+        "RLHF Calibration",
+        [
+            ("RLHF_CALIBRATION_AUTO_APPROVE_ENABLED", "bool", {}),
+            ("RLHF_CALIBRATION_CONFIDENCE_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", "bool", {}),
         ],
     ),
 ]

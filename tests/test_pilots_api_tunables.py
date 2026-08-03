@@ -54,6 +54,7 @@ _EXPECTED_GROUPS = [
     "Market Data",
     "Runtime & Ops",
     "Advanced / Config",
+    "RLHF Calibration",
 ]
 _VALID_TYPES = {"number", "boolean", "enum", "string"}
 
@@ -67,6 +68,15 @@ _NEW_ADVANCED_KEYS = {
     "CORS_ALLOWED_ORIGINS",
 }
 _JSON_KIND_KEYS = {"SECTOR_FORECAST_CONFIGS", "CORS_ALLOWED_ORIGINS"}
+
+# RLHF Calibration Review Queue operator tunables (rlhf_calibration_store.py) —
+# RLHF_CALIBRATION_ENABLED itself is deliberately NOT here (hand-set-only
+# master switch, see require_rlhf_calibration_enabled's docstring).
+_NEW_RLHF_KEYS = {
+    "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
+    "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
+    "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
+}
 
 
 @contextlib.contextmanager
@@ -271,7 +281,7 @@ class TestTunablesScopeInvariants:
             "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
             "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
             "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
-        } | _NEW_ADVANCED_KEYS
+        } | _NEW_ADVANCED_KEYS | _NEW_RLHF_KEYS
         assert set(pilots_api._TUNABLE_INDEX) == expected
 
     def test_excludes_other_screens_keys(self):
