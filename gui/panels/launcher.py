@@ -765,7 +765,6 @@ def _render_robinhood_execution_status() -> None:
         build_reconciliation_summary,
         derive_intent_status,
         is_queue_stale,
-        mfa_secret_configured,
         notification_age_seconds,
         ntfy_topic_configured,
         queue_age_seconds,
@@ -798,14 +797,6 @@ def _render_robinhood_execution_status() -> None:
         )
         st.error(f"Mode: **live** — {cap_note}. Placement still requires per-order "
                  "human confirmation in the agent session.")
-
-    if not mfa_secret_configured():
-        st.caption(
-            "ℹ️ `RH_MFA_SECRET` is not set — the next Robinhood account refresh "
-            "(`main.py --refresh-account`, or a stale-cache refresh) will fall back "
-            "to an interactive MFA prompt in the terminal. Set `RH_MFA_SECRET` in "
-            "`.env` (Base32 TOTP secret) to avoid this."
-        )
 
     if not ntfy_topic_configured():
         st.caption(

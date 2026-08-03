@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "ed095a92afb2b66719956cfe93390c5cd7ec4d29",
+    "git_commit": "0d8cf588f547f11470d09c3b65f381023919924e",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2771,11 +2771,10 @@
       "_settings_mod.settings",
       "_settings_singleton",
       "_wf_settings",
-      "obj",
       "platform_settings",
       "settings"
     ],
-    "distinct_settings_alias_count": 18,
+    "distinct_settings_alias_count": 17,
     "form_a_attribute": {
       "total_reads": 618,
       "distinct_fields": 195,
@@ -2978,7 +2977,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 246,
+      "total_reads": 245,
       "distinct_fields": 150,
       "counts": {
         "FMP_API_KEY": 10,
@@ -3020,7 +3019,6 @@
         "MARKET_DATA_WS_ENABLED": 2,
         "OPAL_RESEARCH_MODEL": 2,
         "OPAL_RESEARCH_PROVIDER": 2,
-        "RH_MFA_SECRET": 2,
         "SENTIMENT_LLM_VERIFICATION_ENABLED": 2,
         "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 2,
         "ADVISORY_REUSE_PIPELINE_COMPUTE": 1,
@@ -3121,6 +3119,7 @@
         "RAG_INDEX_MAX_DOCUMENTS": 1,
         "RAG_PORTFOLIO_CONTEXT_PROVIDER": 1,
         "RAG_RETRIEVAL_TOP_K": 1,
+        "RH_MFA_SECRET": 1,
         "ROBINHOOD_LIMIT_BUFFER_BPS": 1,
         "SECTOR_FORECAST_CONFIGS": 1,
         "SECTOR_FORECAST_CONFIG_PATH": 1,

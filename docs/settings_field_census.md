@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `ed095a92afb2b66719956cfe93390c5cd7ec4d29`
+- Measured at commit: `0d8cf588f547f11470d09c3b65f381023919924e`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -217,17 +217,17 @@ Scope: **334** production `.py` files (excludes `tests/`, `test_*.py`, `conftest
 
 Files that could not be parsed: **0**
 
-The singleton is bound under **18** distinct local names
+The singleton is bound under **17** distinct local names
 across the tree, which is why this is an AST pass and not a grep:
 
 ```
-_S.settings, _bl_settings, _live_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_mod.settings, _settings_singleton, _wf_settings, obj, platform_settings, settings
+_S.settings, _bl_settings, _live_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings
 ```
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 618 | 195 |
-| (b) `getattr(settings, "KEY", default)` | 246 | 150 |
+| (b) `getattr(settings, "KEY", default)` | 245 | 150 |
 | (c) `getattr(settings, <var>)` (dynamic) | 15 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 16 | 13 |
 

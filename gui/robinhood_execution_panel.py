@@ -21,7 +21,6 @@ Public API
 :func:`read_execution_receipts`  — tail ``output/execution_receipts.jsonl`` → list[dict].
 :func:`queue_age_seconds`        — age of the snapshot relative to ``now``.
 :func:`is_queue_stale`           — mirrors the skill's ~30-minute staleness rule.
-:func:`mfa_secret_configured`    — whether ``RH_MFA_SECRET`` is set (boolean only — never the value).
 :class:`NotificationState`      — the last ntfy push `execution/queue_builder.py` attempted (frozen).
 :func:`read_notification_state`  — parse ``output/execution_queue_notified.json`` → state or ``None``.
 :func:`notification_age_seconds` — age of a `NotificationState` relative to ``now``.
@@ -37,8 +36,8 @@ Constraints honoured
   ``[]`` — the GUI renders a "no data yet" hint, never a fabricated queue.
 * CONSTRAINT #6 (dead-letter): every read is wrapped in try/except; a bad file
   never raises past this module.
-* CONSTRAINT #3 (secrets): :func:`mfa_secret_configured` returns a boolean only
-  — the MFA secret value itself is never read into a variable that could be
+* CONSTRAINT #3 (secrets): :func:`ntfy_topic_configured` returns a boolean only
+  — the topic value itself is never read into a variable that could be
   displayed.
 """
 
@@ -529,19 +528,3 @@ def ntfy_topic_configured() -> bool:
         return False
 
 
-def mfa_secret_configured(settings_obj: Any = None) -> bool:
-    """Whether ``RH_MFA_SECRET`` is set to a non-empty value.
-
-    Returns a boolean only — the secret's value is never captured in a
-    variable outside this function's local scope, so it can never be
-    accidentally rendered (CONSTRAINT #3). Falls back to importing the
-    project's ``settings`` singleton when no object is supplied.
-    """
-    try:
-        obj = settings_obj
-        if obj is None:
-            from settings import settings as obj  # noqa: PLC0415
-        value = getattr(obj, "RH_MFA_SECRET", None)
-        return bool(value) and len(str(value).strip()) > 0
-    except Exception:
-        return False

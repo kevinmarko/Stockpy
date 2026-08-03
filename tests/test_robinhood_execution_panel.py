@@ -5,7 +5,6 @@ Covers:
 - read_execution_queue() against valid, corrupt, empty, and missing files.
 - read_execution_receipts() tail behavior + malformed-line tolerance.
 - queue_age_seconds() / is_queue_stale() against fixed clocks.
-- mfa_secret_configured() truth table.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -36,7 +34,6 @@ from gui.robinhood_execution_panel import (
     build_reconciliation_summary,
     derive_intent_status,
     is_queue_stale,
-    mfa_secret_configured,
     notification_age_seconds,
     ntfy_topic_configured,
     queue_age_seconds,
@@ -312,40 +309,6 @@ class TestQueueAge:
             max_notional_per_order=25.0, n_intents=0, n_placeable=0, intents=[],
         )
         assert is_queue_stale(snap) is True
-
-
-# ---------------------------------------------------------------------------
-# mfa_secret_configured
-# ---------------------------------------------------------------------------
-
-class TestMfaSecretConfigured:
-    def test_set_secret_returns_true(self):
-        fake_settings = SimpleNamespace(RH_MFA_SECRET="ABCDEFGHIJKLMNOP")
-        assert mfa_secret_configured(fake_settings) is True
-
-    def test_empty_string_returns_false(self):
-        fake_settings = SimpleNamespace(RH_MFA_SECRET="")
-        assert mfa_secret_configured(fake_settings) is False
-
-    def test_none_returns_false(self):
-        fake_settings = SimpleNamespace(RH_MFA_SECRET=None)
-        assert mfa_secret_configured(fake_settings) is False
-
-    def test_whitespace_only_returns_false(self):
-        fake_settings = SimpleNamespace(RH_MFA_SECRET="   ")
-        assert mfa_secret_configured(fake_settings) is False
-
-    def test_missing_attribute_returns_false(self):
-        fake_settings = SimpleNamespace()
-        assert mfa_secret_configured(fake_settings) is False
-
-    def test_object_raising_on_getattr_degrades_to_false(self):
-        class Boom:
-            @property
-            def RH_MFA_SECRET(self):
-                raise RuntimeError("boom")
-
-        assert mfa_secret_configured(Boom()) is False
 
 
 # ---------------------------------------------------------------------------
