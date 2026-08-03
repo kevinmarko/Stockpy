@@ -92,6 +92,12 @@ import type {
   RestartDaemonResult,
   RiskGateBlockEntry,
   RiskGateBlockLog,
+  RlhfProposal,
+  RlhfKpis,
+  RlhfSummary,
+  RlhfReviewSubmitRequest,
+  RlhfReviewSubmitResult,
+  RlhfSftExportResult,
   RealizedTrade,
   MetaLabelBin,
   MetaLabelDistribution,
@@ -4173,6 +4179,130 @@ const MOCK_DECISION_LOG: DecisionEntry[] = [
 ];
 
 /**
+ * In-memory RLHF proposal store backing the Agentic Trading screen's "RLHF
+ * Review Queue" section (RlhfReviewQueue.tsx) -- NOT the unrelated
+ * `/calibration` statistical-reliability screen. Proposals originate only
+ * from an AI agent via an MCP tool + the API; submitRlhfReview/exportRlhfSft
+ * mutate this array in place (mirrors MOCK_DECISION_LOG's logDecision
+ * pattern above) so a review genuinely disappears from the pending queue on
+ * refetch within the mock session, not persisted across a page reload.
+ *
+ * Deliberately exercises every honesty branch: id 1 is pending with a null
+ * `price`/`extra_context`/`rsi`/`sentiment_score` (agent couldn't resolve a
+ * live quote, attach context, or source either technical input); id 2 is
+ * `auto_approved: true` / already `status: "reviewed"` /
+ * `human_rating: null` (never appears in the pending list, never shows a
+ * rating control -- see getRlhfSummary's pending-only filter below); id 3 is
+ * a normal human-reviewed row with both a rating and a corrective comment,
+ * already exported to the SFT dataset; id 4 is a second pending row so the
+ * KPI counts aren't trivially 0/1; id 5 is reviewed, 5-starred, with no
+ * correction needed, and NOT yet exported -- the row exportRlhfSft acts on.
+ */
+const MOCK_RLHF_PROPOSALS: RlhfProposal[] = [
+  {
+    id: 1,
+    created_at: new Date(Date.now() - 45 * 60_000).toISOString(),
+    symbol: "NVDA",
+    action: "BUY",
+    quantity: 10,
+    price: null,
+    rationale:
+      "RSI(2) deeply oversold with price still above SMA_200 -- a classic Larry Connors mean-reversion setup, no earnings inside the expected holding window.",
+    confidence: 0.68,
+    rsi: null,
+    sentiment_score: null,
+    extra_context: null,
+    status: "pending",
+    human_rating: null,
+    human_correction: null,
+    reviewed_at: null,
+    auto_approved: false,
+    sft_exported: false,
+  },
+  {
+    id: 2,
+    created_at: new Date(Date.now() - 3 * 3600_000).toISOString(),
+    symbol: "TSLA",
+    action: "SELL",
+    quantity: 5,
+    price: 248.31,
+    rationale:
+      "HMM regime flipped risk-off and momentum decayed below the strong-uptrend filter -- sizing down ahead of a possible macro kill-switch trip.",
+    confidence: 0.91,
+    rsi: 71.4,
+    sentiment_score: -0.34,
+    extra_context: { hmm_risk_on_probability: 0.22, vix: 24.8 },
+    status: "reviewed",
+    human_rating: null,
+    human_correction: null,
+    reviewed_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    auto_approved: true,
+    sft_exported: false,
+  },
+  {
+    id: 3,
+    created_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
+    symbol: "AAPL",
+    action: "HOLD",
+    quantity: null,
+    price: 227.55,
+    rationale:
+      "Multifactor composite is neutral and there's no confirming catalyst -- staying flat rather than chasing a marginal signal.",
+    confidence: 0.54,
+    rsi: 49.1,
+    sentiment_score: 0.05,
+    extra_context: { multifactor_composite: 0.11 },
+    status: "reviewed",
+    human_rating: 4,
+    human_correction:
+      "Agreed with the hold, but the rationale undersells earnings-date risk -- should flag Days_To_Earnings explicitly next time.",
+    reviewed_at: new Date(Date.now() - 25 * 3600_000).toISOString(),
+    auto_approved: false,
+    sft_exported: true,
+  },
+  {
+    id: 4,
+    created_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+    symbol: "MSFT",
+    action: "BUY",
+    quantity: 8,
+    price: 412.02,
+    rationale:
+      "Cross-sectional 12-1M momentum rank in the top decile, low realized vol, quality factor z-score strongly positive.",
+    confidence: 0.77,
+    rsi: 58.9,
+    sentiment_score: 0.21,
+    extra_context: { xsec_momentum_rank: 0.94 },
+    status: "pending",
+    human_rating: null,
+    human_correction: null,
+    reviewed_at: null,
+    auto_approved: false,
+    sft_exported: false,
+  },
+  {
+    id: 5,
+    created_at: new Date(Date.now() - 30 * 3600_000).toISOString(),
+    symbol: "GOOGL",
+    action: "BUY",
+    quantity: 4,
+    price: 178.4,
+    rationale:
+      "Value + quality composite both strongly positive, sector rotation into Communication Services confirmed by Sector Heat Factor.",
+    confidence: 0.83,
+    rsi: 55.3,
+    sentiment_score: 0.28,
+    extra_context: null,
+    status: "reviewed",
+    human_rating: 5,
+    human_correction: null,
+    reviewed_at: new Date(Date.now() - 29 * 3600_000).toISOString(),
+    auto_approved: false,
+    sft_exported: false,
+  },
+];
+
+/**
  * Honest fixture for the CLI command manifest (GET /commands). Deliberately
  * exercises every branch the command bar must handle: a required option
  * (`validation.harness --strategy`), a variadic option (`preflight --skip`), a
@@ -6300,6 +6430,82 @@ export const mockApi = {
           : "Added to watchlist.txt — the pipeline will evaluate it on the next run. No order was placed.",
       },
       150
+    );
+  },
+
+  // ---- RLHF Calibration Review Queue ----
+  async getRlhfSummary(limit = 50): Promise<RlhfSummary> {
+    const cap = Math.max(1, Math.min(limit, 200));
+    // Newest first -- matches rlhf_calibration_store.get_pending's real
+    // `ORDER BY created_at DESC`, not fixture declaration order.
+    const pending = MOCK_RLHF_PROPOSALS.filter((p) => p.status === "pending")
+      .slice()
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, cap);
+    const reviewed = MOCK_RLHF_PROPOSALS.filter((p) => p.status === "reviewed");
+    const rated = reviewed.filter((p): p is RlhfProposal & { human_rating: 1 | 2 | 3 | 4 | 5 } => p.human_rating != null);
+
+    const distribution: Record<string, number> = { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 };
+    for (const p of rated) {
+      distribution[String(p.human_rating)] = (distribution[String(p.human_rating)] ?? 0) + 1;
+    }
+
+    const kpis: RlhfKpis = {
+      pending_count: MOCK_RLHF_PROPOSALS.filter((p) => p.status === "pending").length,
+      reviewed_count: reviewed.length,
+      average_human_rating: rated.length
+        ? rated.reduce((sum, p) => sum + p.human_rating, 0) / rated.length
+        : null,
+      rating_distribution: distribution,
+      auto_approved_count: MOCK_RLHF_PROPOSALS.filter((p) => p.auto_approved).length,
+      sft_exported_count: MOCK_RLHF_PROPOSALS.filter((p) => p.sft_exported).length,
+    };
+
+    return delay({
+      proposals: pending,
+      kpis,
+      writable: true,
+      reason:
+        pending.length === 0
+          ? "No pending proposals -- the agent hasn't proposed a paper trade yet."
+          : null,
+    });
+  },
+
+  async submitRlhfReview(id: number, body: RlhfReviewSubmitRequest): Promise<RlhfReviewSubmitResult> {
+    const proposal = MOCK_RLHF_PROPOSALS.find((p) => p.id === id);
+    if (!proposal) {
+      throw new ApiError(`not_found: no RLHF proposal with id ${id}.`, 404);
+    }
+    if (proposal.status === "reviewed") {
+      throw new ApiError(`already_reviewed: proposal ${id} was already reviewed.`, 409);
+    }
+    if (body.human_rating < 1 || body.human_rating > 5) {
+      throw new ApiError("invalid_rating: human_rating must be between 1 and 5.", 422);
+    }
+
+    proposal.status = "reviewed";
+    proposal.human_rating = body.human_rating;
+    proposal.human_correction = body.human_correction?.trim() || null;
+    proposal.reviewed_at = new Date().toISOString();
+    // Export happens only via the explicit exportRlhfSft call below -- a
+    // freshly reviewed proposal is never silently exported as a side effect
+    // of the review itself.
+    return delay({ ...proposal, sft_exported: proposal.sft_exported }, 150);
+  },
+
+  async exportRlhfSft(): Promise<RlhfSftExportResult> {
+    const eligible = MOCK_RLHF_PROPOSALS.filter(
+      (p) => p.status === "reviewed" && p.human_rating === 5 && !p.sft_exported
+    );
+    for (const p of eligible) p.sft_exported = true;
+    return delay(
+      {
+        exported_count: eligible.length,
+        file: "output/rlhf_sft_export.jsonl",
+        proposal_ids: eligible.map((p) => p.id),
+      },
+      200
     );
   },
 

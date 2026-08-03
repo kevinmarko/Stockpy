@@ -82,6 +82,10 @@ import type {
   SyncReportResponse,
   RecommendationsResponse,
   RestartDaemonResult,
+  RlhfSummary,
+  RlhfReviewSubmitRequest,
+  RlhfReviewSubmitResult,
+  RlhfSftExportResult,
   UniverseListResponse,
   Thresholds,
   SymbolOptions,
@@ -671,6 +675,16 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify({ symbol }),
     }),
+  // ---- RLHF Calibration Review Queue (nested inside Agentic Trading; pilots
+  // base, :8602) — rating an AI-proposed hypothetical paper trade, never a
+  // live order. See types.ts's RlhfProposal/RlhfSummary doc comments.
+  getRlhfSummary: (limit = 50) => http<RlhfSummary>(`/rlhf/summary?limit=${limit}`),
+  submitRlhfReview: (id: number, body: RlhfReviewSubmitRequest) =>
+    http<RlhfReviewSubmitResult>(`/rlhf/proposals/${id}/review`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  exportRlhfSft: () => http<RlhfSftExportResult>("/rlhf/export-sft", { method: "POST" }),
   // ---- Job Execution & Streaming ----
   createJob: (job_type: string, params?: Record<string, unknown>) =>
     http<JobRecord>("/jobs", {
