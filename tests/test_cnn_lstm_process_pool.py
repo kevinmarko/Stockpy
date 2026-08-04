@@ -173,26 +173,39 @@ class TestRealTensorFlowThroughThePool:
     regression here fails fast instead of hanging the suite. TensorFlow is
     an optional heavy dependency (requirements-optional.txt) NOT installed
     by CI or the base ./setup.sh -- unlike the rest of this file these tests
-    are not TensorFlow-free by design, so each one skips via
-    pytest.importorskip when it genuinely isn't available, rather than
-    failing (the worker subprocess uses the same sys.executable as this
-    test process, so that's an accurate proxy for whether it'll have
-    TensorFlow too)."""
+    are not TensorFlow-free by design, so each one skips when it genuinely
+    isn't usable, rather than failing.
+
+    Skip detection deliberately does NOT rely on a plain
+    ``pytest.importorskip("tensorflow")`` in this (parent) process: that's
+    an imperfect proxy for whether cnn_lstm_worker.py's own more specific
+    ``from tensorflow.keras... import ...`` chain succeeds in a FRESH,
+    separately-launched subprocess -- observed in CI to disagree (bare
+    ``import tensorflow`` succeeded here while the worker's own import
+    still failed, plausibly a partial/minimal TF install without the keras
+    submodules cnn_lstm_worker.py needs). Instead, each test calls the real
+    pool and skips on the worker's own authoritative
+    "tensorflow is not importable" RuntimeError, whatever the underlying
+    reason -- the direct, ground-truth signal, not a prediction of it."""
 
     def test_fit_predict_cnn_lstm_completes_through_the_real_pool(self):
-        pytest.importorskip("tensorflow")
         rng = np.random.RandomState(0)
         n_samples, lookback, n_features, n_horizons = 40, 10, 3, 4
         X_seq = rng.rand(n_samples, lookback, n_features)
         Y_seq = rng.rand(n_samples, n_horizons)
         last_window = rng.rand(1, lookback, n_features)
 
-        result = pool_mod.run_in_subprocess(
-            fit_predict_cnn_lstm,
-            (X_seq, Y_seq, last_window, n_horizons),
-            timeout_seconds=60,
-            max_workers=1,
-        )
+        try:
+            result = pool_mod.run_in_subprocess(
+                fit_predict_cnn_lstm,
+                (X_seq, Y_seq, last_window, n_horizons),
+                timeout_seconds=60,
+                max_workers=1,
+            )
+        except RuntimeError as exc:
+            if "tensorflow is not importable" in str(exc):
+                pytest.skip(f"TensorFlow unusable in the worker subprocess: {exc}")
+            raise
 
         assert len(result["pred_scaled"]) == n_horizons
         assert all(np.isfinite(x) for x in result["pred_scaled"])
@@ -204,19 +217,23 @@ class TestRealTensorFlowThroughThePool:
         test_sf_garch_lstm_smoke, but that test wasn't written as pool-
         mechanism regression coverage; this one is, and isolates the pool
         call from SFGarchLSTMModel's own GARCH-fitting logic."""
-        pytest.importorskip("tensorflow")
         rng = np.random.RandomState(0)
         n_samples, seq_len, n_features = 40, 10, 2
         X_seq = rng.rand(n_samples, seq_len, n_features)
         Y_seq = rng.rand(n_samples)
         predict_X_seq = rng.rand(5, seq_len, n_features)
 
-        result = pool_mod.run_in_subprocess(
-            fit_predict_or_infer_lstm,
-            (X_seq, Y_seq, predict_X_seq, 8, None),
-            timeout_seconds=60,
-            max_workers=1,
-        )
+        try:
+            result = pool_mod.run_in_subprocess(
+                fit_predict_or_infer_lstm,
+                (X_seq, Y_seq, predict_X_seq, 8, None),
+                timeout_seconds=60,
+                max_workers=1,
+            )
+        except RuntimeError as exc:
+            if "tensorflow is not importable" in str(exc):
+                pytest.skip(f"TensorFlow unusable in the worker subprocess: {exc}")
+            raise
 
         assert len(result["predictions"]) == 5
         assert all(np.isfinite(x) for x in result["predictions"])
