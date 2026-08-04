@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import signal
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -117,19 +118,23 @@ class _FakeWatcherThread:
     .join() a no-op (rather than blocking forever) since the real watcher
     thread in production genuinely never returns until a signal arrives.
 
-    ``run_forever`` constructs up to THREE threads via ``threading.Thread``:
+    ``run_forever`` constructs up to FOUR threads via ``threading.Thread``:
     the Control API server thread (``name="OrchestratorControlAPI"``,
     created first), the OPTIONAL Pilots API server thread
     (``name="PilotsAPI"``, created second, only when
-    ``settings.PILOTS_API_ENABLED``), and the SIGTERM/SIGINT watcher thread
-    (unnamed, created last). Tests that only care about the watcher use
-    ``watcher_instances()`` to filter ``instances`` down to the one whose
-    ``name`` is neither known API thread name, so this fake continues to
-    serve all three call sites without changing every existing assertion's
-    shape.
+    ``settings.PILOTS_API_ENABLED``), the OPTIONAL settings-refresher thread
+    (``name="OrchestratorDaemon-settings-refresher"``, created third, only
+    when ``settings.RUNTIME_FLAGS_REFRESH_ENABLED``), and the SIGTERM/SIGINT
+    watcher thread (unnamed, created last). Tests that only care about the
+    watcher use ``watcher_instances()`` to filter ``instances`` down to the
+    one whose ``name`` is none of the three known non-watcher names, so this
+    fake continues to serve all four call sites without changing every
+    existing assertion's shape.
     """
 
-    _API_THREAD_NAMES = frozenset({"OrchestratorControlAPI", "PilotsAPI"})
+    _API_THREAD_NAMES = frozenset({
+        "OrchestratorControlAPI", "PilotsAPI", "OrchestratorDaemon-settings-refresher",
+    })
 
     instances: list["_FakeWatcherThread"] = []
 
@@ -157,6 +162,10 @@ class _FakeWatcherThread:
     @classmethod
     def pilots_api_instances(cls) -> list["_FakeWatcherThread"]:
         return [t for t in cls.instances if t.name == "PilotsAPI"]
+
+    @classmethod
+    def refresher_instances(cls) -> list["_FakeWatcherThread"]:
+        return [t for t in cls.instances if t.name == "OrchestratorDaemon-settings-refresher"]
 
 
 class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
@@ -543,6 +552,170 @@ class TestPilotsAPIHosting(BaseDaemonEntrypointTest):
         self.assertIsNone(kwargs.get("pilots_api_port"))
         # Control API still got its one server as usual.
         self.assertEqual(len(self._fake_api_server_holder["instances"]), 1)
+
+
+class TestSettingsRefresherHosting(BaseDaemonEntrypointTest):
+    """settings.RUNTIME_FLAGS_REFRESH_ENABLED gates an OPTIONAL background
+    thread that periodically calls daemon.maybe_refresh_settings() so a
+    settings-store write served by ANOTHER process is picked up here without
+    a restart. False (the default) must reproduce every pre-existing
+    behavior byte-for-byte -- no thread, zero extra log lines, zero extra
+    teardown work."""
+
+    def setUp(self):
+        super().setUp()
+        _FakeWatcherThread.instances = []
+        self._thread_patcher = patch.object(self.mod.threading, "Thread", _FakeWatcherThread)
+        self._thread_patcher.start()
+        self.addCleanup(self._thread_patcher.stop)
+        self._sigmask_patcher = patch.object(self.mod.signal, "pthread_sigmask")
+        self._sigmask_patcher.start()
+        self.addCleanup(self._sigmask_patcher.stop)
+
+    def test_disabled_by_default_no_refresher_thread(self):
+        from settings import settings
+        self.assertFalse(settings.RUNTIME_FLAGS_REFRESH_ENABLED)  # precondition: real default
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+        with self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+
+        self.assertEqual(len(_FakeWatcherThread.refresher_instances()), 0)
+        # The other three threads (Control API + watcher; Pilots API is
+        # separately gated and off here too) are completely unaffected.
+        self.assertEqual(len(_FakeWatcherThread.watcher_instances()), 1)
+
+    def test_enabled_starts_a_daemon_thread_with_the_expected_name(self):
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+        with patch.object(settings, "RUNTIME_FLAGS_REFRESH_ENABLED", True), \
+             self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+
+        refresher_threads = _FakeWatcherThread.refresher_instances()
+        self.assertEqual(len(refresher_threads), 1)
+        self.assertTrue(refresher_threads[0].started)
+        self.assertTrue(refresher_threads[0].daemon)
+        # Started strictly after daemon.start() -- the whole point is to
+        # refresh settings on an ALREADY-RUNNING daemon.
+        instance.start.assert_called_once()
+
+    def test_teardown_stops_the_refresher_first_before_the_api_servers(self):
+        """Torn down FIRST, per the module's own _teardown() ordering
+        comment -- proven here via a shared call-order list every relevant
+        thread's/mock's join or shutdown call appends to. The patch on
+        _FakeWatcherThread.join must be installed at the CLASS level BEFORE
+        run_forever() is called -- by the time run_forever() returns,
+        teardown has already run (it happens in a `finally` block ahead of
+        the return), so patching a specific instance's .join() afterward, as
+        a first draft of this test tried, is always too late to observe
+        anything."""
+        from settings import settings
+
+        order: list[str] = []
+        daemon_cls, instance = self._make_mock_daemon_class()
+        instance.shutdown.side_effect = lambda *a, **kw: order.append("daemon.shutdown")
+
+        def _tracking_join(fake_thread_self, timeout=None):
+            order.append(f"{fake_thread_self.name}.join")
+
+        with patch.object(settings, "RUNTIME_FLAGS_REFRESH_ENABLED", True), \
+             self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"), \
+             patch.object(_FakeWatcherThread, "join", _tracking_join):
+            self.mod.run_forever(60)
+
+        relevant = [
+            o for o in order
+            if o in {
+                "OrchestratorDaemon-settings-refresher.join",
+                "OrchestratorControlAPI.join",
+                "daemon.shutdown",
+            }
+        ]
+        self.assertEqual(
+            relevant,
+            ["OrchestratorDaemon-settings-refresher.join", "OrchestratorControlAPI.join", "daemon.shutdown"],
+        )
+
+    def test_refresher_stop_event_is_set_before_the_join(self):
+        """The stop event, not just the join call, must actually fire --
+        otherwise a real (non-faked) thread would sit out its own join
+        timeout every single shutdown instead of waking immediately.
+
+        _FakeWatcherThread.join() is a no-op stub, so it can't prove the
+        real Event was set. Instead this reaches into the target closure's
+        own free variables (Python exposes them via __closure__/co_freevars)
+        to get the ACTUAL threading.Event object _teardown() called .set()
+        on, and checks it directly -- no mocking of Event.wait needed, and
+        none would help here anyway, since .wait() returns True immediately
+        whether the event was already set or genuinely just got set; calling
+        it at all proves nothing about WHEN that happened.
+        """
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+        with patch.object(settings, "RUNTIME_FLAGS_REFRESH_ENABLED", True), \
+             self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)  # teardown already ran by the time this returns
+
+        refresher_thread = _FakeWatcherThread.refresher_instances()[0]
+        closure_vars = dict(zip(
+            refresher_thread.target.__code__.co_freevars,
+            (cell.cell_contents for cell in refresher_thread.target.__closure__),
+        ))
+        self.assertTrue(closure_vars["_refresher_stop_event"].is_set())
+
+    def test_loop_calls_maybe_refresh_settings_once_per_tick(self):
+        """Direct behavioral test of the thread's target closure: each tick
+        that is NOT the stop signal calls daemon.maybe_refresh_settings()
+        exactly once, and the loop exits the moment wait() reports the stop
+        event."""
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+        with patch.object(settings, "RUNTIME_FLAGS_REFRESH_ENABLED", True), \
+             patch.object(settings, "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS", 5), \
+             self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+
+        refresher_thread = _FakeWatcherThread.refresher_instances()[0]
+        # False, False, True -- two real ticks, then the stop signal.
+        with patch.object(threading.Event, "wait", side_effect=[False, False, True]):
+            refresher_thread.target()
+
+        self.assertEqual(instance.maybe_refresh_settings.call_count, 2)
+
+    def test_refresh_tick_exception_never_escapes_the_loop(self):
+        """maybe_refresh_settings() is documented to never raise
+        (CONSTRAINT #6) -- but this loop must not depend on that contract
+        holding forever; a bug there must not silently kill the refresher
+        thread for the rest of the process's life."""
+        from settings import settings
+
+        daemon_cls, instance = self._make_mock_daemon_class()
+        instance.maybe_refresh_settings.side_effect = RuntimeError("boom")
+        with patch.object(settings, "RUNTIME_FLAGS_REFRESH_ENABLED", True), \
+             self._patch_daemon_class(daemon_cls), \
+             self._patch_uvicorn(), \
+             patch.object(self.mod, "_write_daemon_file"):
+            self.mod.run_forever(60)
+
+        refresher_thread = _FakeWatcherThread.refresher_instances()[0]
+        with patch.object(threading.Event, "wait", side_effect=[False, True]):
+            refresher_thread.target()  # must not raise despite the mock's side_effect
+
+        instance.maybe_refresh_settings.assert_called_once()
 
 
 class TestDaemonFileWriting(BaseDaemonEntrypointTest):

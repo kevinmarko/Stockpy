@@ -10,9 +10,12 @@ out of scope for these tests.
 """
 from __future__ import annotations
 
+import json
+import pathlib
 import signal
 import threading
 import time
+from unittest import mock
 
 import pytest
 
@@ -845,3 +848,283 @@ class TestTimerThreadSignalMaskInheritance:
                 d.shutdown(timeout=2.0)
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, prior_mask)
+
+
+def _write_store(tmp_path, flags: dict, *, version: int = 1):
+    """A runtime_flags.json-shaped fixture file, matching the real
+    {"version": 1, "flags": {KEY: {"value": ..., "updated_at": ...,
+    "updated_by": ...}}} shape runtime_flags.load_store() expects. Each
+    value in `flags` here is the RAW value; this wraps it in the envelope."""
+    store = tmp_path / "runtime_flags.json"
+    store.write_text(
+        json.dumps({
+            "version": version,
+            "flags": {
+                k: {"value": v, "updated_at": "2026-01-01T00:00:00+00:00", "updated_by": "test"}
+                for k, v in flags.items()
+            },
+        }),
+        encoding="utf-8",
+    )
+    return store
+
+
+@pytest.fixture(autouse=True)
+def _no_env_pins(monkeypatch):
+    """Env-pinning is a per-moment fact about the real shell environment
+    (see runtime_flags.real_environment_keys()) -- pin it empty so whether a
+    field counts as pinned in these tests depends only on what each test
+    itself sets up, never on the CI/developer machine's ambient environment.
+    Same rationale as tests/test_runtime_flags.py's own no_dotenv-style
+    fixtures."""
+    monkeypatch.setattr(daemon_runtime.runtime_flags, "real_environment_keys", lambda: frozenset())
+
+
+class TestMaybeRefreshSettingsDeferral:
+    def test_returns_none_and_does_nothing_while_a_run_is_in_flight(self, monkeypatch, tmp_path):
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            store = _write_store(tmp_path, {"KELLY_FRACTION": 0.6})
+            with mock.patch.object(
+                OrchestratorDaemon, "is_running", new_callable=mock.PropertyMock, return_value=True
+            ):
+                with mock.patch.object(daemon_runtime.runtime_flags, "apply_overrides") as spy:
+                    result = d.maybe_refresh_settings(path=store)
+            assert result is None
+            spy.assert_not_called()
+        finally:
+            d.shutdown(timeout=2.0)
+
+
+class TestMaybeRefreshSettingsNoStore:
+    def test_no_file_is_a_quiet_noop(self, monkeypatch, tmp_path):
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            missing = tmp_path / "does-not-exist.json"
+            assert d.maybe_refresh_settings(path=missing) is None
+            # And it remembers having checked -- a second call against the
+            # same still-missing path is ALSO a fast no-op (covered by
+            # TestMaybeRefreshSettingsChangeDetection below more directly,
+            # but worth a light touch here too).
+            with mock.patch.object(daemon_runtime.runtime_flags, "apply_overrides") as spy:
+                assert d.maybe_refresh_settings(path=missing) is None
+            spy.assert_not_called()
+        finally:
+            d.shutdown(timeout=2.0)
+
+
+class TestMaybeRefreshSettingsAppliesChanges:
+    def test_first_check_with_a_real_store_applies_it(self, monkeypatch, tmp_path):
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            store = _write_store(tmp_path, {"KELLY_FRACTION": 0.6})
+            report = d.maybe_refresh_settings(path=store)
+            assert report is not None
+            assert report.applied == {"KELLY_FRACTION": 0.6}
+
+            from settings import settings
+            assert settings.KELLY_FRACTION == 0.6
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_unchanged_file_on_the_next_check_is_a_noop(self, monkeypatch, tmp_path):
+        """The whole point of the mtime/size check: a poll tick against an
+        UNCHANGED store must not pay the cost of re-validating and
+        re-applying the same content."""
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            store = _write_store(tmp_path, {"KELLY_FRACTION": 0.6})
+            first = d.maybe_refresh_settings(path=store)
+            assert first is not None
+
+            with mock.patch.object(daemon_runtime.runtime_flags, "apply_overrides") as spy:
+                second = d.maybe_refresh_settings(path=store)
+            assert second is None
+            spy.assert_not_called()
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_a_real_content_change_is_detected_and_reapplied(self, monkeypatch, tmp_path):
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            store = _write_store(tmp_path, {"KELLY_FRACTION": 0.6})
+            d.maybe_refresh_settings(path=store)
+
+            # Overwrite with different content. Real filesystems can have
+            # coarse mtime resolution; rewriting with a different SIZE (a
+            # differently-formatted float) is what actually guarantees the
+            # (mtime_ns, size) tuple changes here, independent of clock
+            # granularity.
+            _write_store(tmp_path, {"KELLY_FRACTION": 0.75})
+
+            report = d.maybe_refresh_settings(path=store)
+            assert report is not None
+            assert report.applied == {"KELLY_FRACTION": 0.75}
+
+            from settings import settings
+            assert settings.KELLY_FRACTION == 0.75
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_env_pinned_key_is_skipped_not_applied(self, monkeypatch, tmp_path):
+        """Thin end-to-end confirmation that this method is wired to the
+        SAME env-pin precedence apply_overrides() already enforces
+        everywhere else -- a real shell export always wins over the store."""
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(
+            daemon_runtime.runtime_flags, "real_environment_keys",
+            lambda: frozenset({"KELLY_FRACTION"}),
+        )
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            from settings import settings
+            before = settings.KELLY_FRACTION
+
+            store = _write_store(tmp_path, {"KELLY_FRACTION": 0.6})
+            report = d.maybe_refresh_settings(path=store)
+
+            assert report is not None
+            assert "KELLY_FRACTION" in report.skipped_env_pinned
+            assert "KELLY_FRACTION" not in report.applied
+            assert settings.KELLY_FRACTION == before
+        finally:
+            d.shutdown(timeout=2.0)
+
+
+class TestMaybeRefreshSettingsIntervalHook:
+    def test_a_valid_interval_change_reaches_the_live_timer(self, monkeypatch, tmp_path):
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()  # interval_seconds=0 by default
+        d.start()
+        try:
+            assert d.status()["interval_seconds"] == 0
+
+            store = _write_store(tmp_path, {"ORCHESTRATOR_INTERVAL_SECONDS": 300})
+            report = d.maybe_refresh_settings(path=store)
+
+            assert report.applied == {"ORCHESTRATOR_INTERVAL_SECONDS": 300}
+            assert d.status()["interval_seconds"] == 300
+            assert d._timer_thread is not None  # set_interval() created it on demand
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_an_out_of_bounds_interval_applies_the_setting_but_not_the_timer(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """ORCHESTRATOR_INTERVAL_SECONDS carries no @field_validator of its
+        own -- only set_interval()'s stricter business rule
+        (validate_interval_seconds: 0 or [60, 86400]) enforces the bound.
+        apply_overrides() therefore accepts a value like 45 that
+        set_interval() then rejects. This is a genuinely reachable gap, not
+        a defensive-only branch -- proven by this test actually hitting it
+        -- and matches the SAME degrade-and-log behavior the established
+        write path (api/pilots_api.py's set_automation_interval) already
+        has for a live-apply rejection: the .env/settings write stands, the
+        live timer does not move, and both facts are surfaced rather than
+        one silently winning."""
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            assert d.status()["interval_seconds"] == 0
+
+            store = _write_store(tmp_path, {"ORCHESTRATOR_INTERVAL_SECONDS": 45})
+            with caplog.at_level("WARNING", logger="OrchestratorDaemon"):
+                report = d.maybe_refresh_settings(path=store)
+
+            assert report.applied == {"ORCHESTRATOR_INTERVAL_SECONDS": 45}
+            # The setting itself moved...
+            from settings import settings
+            assert settings.ORCHESTRATOR_INTERVAL_SECONDS == 45
+            # ...but the running timer's cadence did not, and no thread was
+            # spun up for a value that was never actually accepted live.
+            assert d.status()["interval_seconds"] == 0
+            assert d._timer_thread is None
+            assert any(
+                "ORCHESTRATOR_INTERVAL_SECONDS" in rec.message and "rejected" in rec.message
+                for rec in caplog.records
+            )
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_other_keys_changing_do_not_touch_the_timer(self, monkeypatch, tmp_path):
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon(interval_seconds=120)
+        d.start()
+        try:
+            store = _write_store(tmp_path, {"KELLY_FRACTION": 0.6})
+            with mock.patch.object(d, "set_interval") as spy:
+                d.maybe_refresh_settings(path=store)
+            spy.assert_not_called()
+            assert d.status()["interval_seconds"] == 120
+        finally:
+            d.shutdown(timeout=2.0)
+
+
+class TestMaybeRefreshSettingsNeverRaises:
+    """CONSTRAINT #6: every failure mode here degrades to 'try again next
+    tick,' never an exception escaping into the caller's polling loop."""
+
+    def test_corrupt_json_applies_nothing_and_does_not_raise(self, monkeypatch, tmp_path):
+        """The file exists (so the os.stat() half of this method succeeds
+        and treats it as "possibly changed"), but its content doesn't parse
+        -- runtime_flags.apply_overrides() degrades this to an ApplyReport
+        carrying .error and an empty .applied, per its own CONSTRAINT #6
+        contract, rather than raising. That report -- not None -- is what
+        this method correctly passes back; the only thing under test here
+        is that nothing raises and nothing gets applied."""
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            store = tmp_path / "runtime_flags.json"
+            store.write_text("{not valid json", encoding="utf-8")
+            report = d.maybe_refresh_settings(path=store)
+            assert report is not None
+            assert report.applied == {}
+            assert report.error is not None
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_unexpected_stat_failure_degrades_to_none(self, monkeypatch, tmp_path):
+        """FileNotFoundError is the one EXPECTED stat() outcome (handled as
+        "no store"); anything else -- e.g. a permissions error -- must still
+        degrade rather than propagate."""
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            store = _write_store(tmp_path, {"KELLY_FRACTION": 0.6})
+            with mock.patch.object(
+                pathlib.Path, "stat", side_effect=PermissionError("denied")
+            ):
+                assert d.maybe_refresh_settings(path=store) is None
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_apply_overrides_raising_unexpectedly_still_degrades(self, monkeypatch, tmp_path):
+        """apply_overrides() is itself documented to never raise -- this
+        proves the method doesn't SILENTLY DEPEND on that holding forever."""
+        _fast_ok_main_body(monkeypatch)
+        d = OrchestratorDaemon()
+        d.start()
+        try:
+            store = _write_store(tmp_path, {"KELLY_FRACTION": 0.6})
+            with mock.patch.object(
+                daemon_runtime.runtime_flags, "apply_overrides",
+                side_effect=RuntimeError("boom"),
+            ):
+                assert d.maybe_refresh_settings(path=store) is None
+        finally:
+            d.shutdown(timeout=2.0)
