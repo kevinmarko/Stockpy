@@ -30,13 +30,24 @@
 STARTED_PIDS=()
 
 # ── Always pause before the window closes; stop only backends we started ─────
+# Guarded with _cleaned so this can't run twice (see TERM/HUP traps below).
+_cleaned=false
 _on_exit() {
     local _exit_code=$?
+    $_cleaned && return
+    _cleaned=true
     for pid in "${STARTED_PIDS[@]}"; do
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null
         fi
     done
+    # Safety-net sweep: if the window/session was torn down abruptly (force-quit,
+    # crash) rather than via Ctrl+C, the foreground npm/vite tree can occasionally
+    # survive as an orphan and squat on :5173 for the next launch. Path-scoped to
+    # THIS project's vite binary only — never touches anything else.
+    if [ -n "$SCRIPT_DIR" ]; then
+        pkill -f "$SCRIPT_DIR/webapp/node_modules/.bin/vite" 2>/dev/null
+    fi
     echo ""
     echo "──────────────────────────────────────────────────────────────"
     case "$_exit_code" in
@@ -48,6 +59,10 @@ _on_exit() {
     echo ""
 }
 trap '_on_exit' EXIT
+# TERM/HUP (window closed, session torn down) don't exit a script by default once
+# trapped — route them through `exit` so the EXIT trap above still runs cleanup.
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # ── Navigate to the project root (same folder as this script) ─────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -117,30 +132,36 @@ _check_vite_port() {
     [ -z "$pid" ] && return 0
 
     cmd="$(ps -p "$pid" -ww -o command= 2>/dev/null)"
+
+    # Auto-heal the common case: a leftover Vite dev server from THIS project's
+    # own previous run (matched by process cwd) — never touches an unrelated
+    # process. No prompt: it's our own disposable dev server, safe to recycle.
+    if [[ "$cmd" == *"vite"* ]] && lsof -p "$pid" -a -d cwd 2>/dev/null | grep -q "$SCRIPT_DIR/webapp"; then
+        echo "  ⚠  Port $port was held by a leftover Vite server from a previous run"
+        echo "     of this project (PID $pid) — stopping it and continuing…"
+        kill "$pid" 2>/dev/null
+        for _ in $(seq 1 10); do
+            lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1 || break
+            sleep 0.3
+        done
+        if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
+            kill -9 "$pid" 2>/dev/null
+            sleep 0.5
+        fi
+        if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
+            echo "  ERROR: PID $pid did not release port $port. Free it manually and re-run."
+            exit 1
+        fi
+        echo "  ✓  Freed port $port."
+        return 0
+    fi
+
     echo ""
     echo "  ⚠  Port $port is already in use — Vite needs it (--strictPort) and"
     echo "     won't silently pick another port."
     echo "     PID $pid: ${cmd:-<unknown command>}"
-
-    # Only offer to auto-kill when it's plainly a leftover Vite dev server for
-    # THIS webapp (matched by process cwd) — never touch an unrelated process.
-    if [[ "$cmd" == *"vite"* ]] && lsof -p "$pid" -a -d cwd 2>/dev/null | grep -q "$SCRIPT_DIR/webapp"; then
-        local kill_choice
-        read -r -t 20 -p "  This looks like a leftover Vite server from this project. Kill it and continue? [y/N]: " kill_choice
-        echo ""
-        if [[ "$kill_choice" =~ ^[Yy]$ ]]; then
-            kill "$pid" 2>/dev/null
-            sleep 1
-            if lsof -nP -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1; then
-                echo "  ERROR: PID $pid did not release port $port. Free it manually and re-run."
-                exit 1
-            fi
-            echo "  ✓  Freed port $port."
-            return 0
-        fi
-    fi
-
-    echo "  ERROR: free port $port yourself, then re-run this script, e.g.:"
+    echo "  ERROR: this isn't a leftover server from this project — free port $port"
+    echo "         yourself, then re-run this script, e.g.:"
     echo "         kill $pid"
     exit 1
 }
