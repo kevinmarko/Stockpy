@@ -821,7 +821,7 @@ describe("Settings screen — Brokerage", () => {
     // See the timeout comment on the identically-shaped assertion in
     // "Force fresh login refreshes and shows a success notice" below.
     expect(
-      await screen.findByText(/no robinhood credentials were available to try/i, {}, { timeout: 12000 })
+      await screen.findByText(/no robinhood credentials were available to try/i, {}, { timeout: 25000 })
     ).toBeInTheDocument();
     // Still disconnected -- the typed form remains available as a fallback.
     expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();
@@ -913,7 +913,7 @@ describe("Settings screen — Brokerage", () => {
     // Vitest's own default 5000ms per-test timeout the whole time, so the
     // outer boundary killed the test before this inner one ever mattered.
     expect(
-      await screen.findByText(/refreshed — robinhood account snapshot updated/i, {}, { timeout: 12000 })
+      await screen.findByText(/refreshed — robinhood account snapshot updated/i, {}, { timeout: 25000 })
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
@@ -950,7 +950,7 @@ describe("Settings screen — Brokerage", () => {
     // See the timeout comment on the "Force fresh login" success-notice
     // assertion above -- same async job-status chain, same CI-only flake.
     expect(
-      await screen.findByText(/no robinhood credentials were available to try/i, {}, { timeout: 12000 })
+      await screen.findByText(/no robinhood credentials were available to try/i, {}, { timeout: 25000 })
     ).toBeInTheDocument();
 
     await user.type(screen.getByLabelText(/robinhood email/i), "user@example.com");
@@ -988,7 +988,7 @@ describe("Settings screen — Brokerage", () => {
     // See the timeout comment on the identically-shaped assertion in
     // "Disconnect clears a stale 'Force fresh login' success notice" above.
     expect(
-      await screen.findByText(/refreshed — robinhood account snapshot updated/i, {}, { timeout: 12000 })
+      await screen.findByText(/refreshed — robinhood account snapshot updated/i, {}, { timeout: 25000 })
     ).toBeInTheDocument();
   });
 

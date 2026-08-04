@@ -103,7 +103,12 @@ export default defineConfig({
     // load the whole test was killed by THIS timeout at the same moment,
     // making those inner bumps a no-op. Raised well above any single
     // findBy* timeout in the suite so the outer boundary is never the
-    // thing that fires first.
-    testTimeout: 15000,
+    // thing that fires first. 15000ms still wasn't enough under sustained
+    // GitHub Actions runner contention (confirmed: the identical assertion
+    // has also failed on main's own CI, not just this branch's -- a real,
+    // repo-wide scheduling-latency issue, not a logic bug in the async
+    // chain being asserted, which resolves in a single promise tick with
+    // no genuine computation to wait on) -- raised again to 30000ms.
+    testTimeout: 30000,
   },
 });
