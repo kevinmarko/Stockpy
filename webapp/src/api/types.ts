@@ -1553,13 +1553,85 @@ export interface StrategyModulesUpdateResult {
 // ---------------------------------------------------------------------------
 // GET/PUT /settings/tunables — the general runtime-settings editor. Reads the
 // platform's allowlisted, non-secret tunables grouped for display, and writes
-// only the changed keys back. Like every other .env-write surface in this PWA
-// the write does NOT reach the running process (settings is a process-lifetime
-// singleton) — hence `applies: "next_daemon_restart"`.
+// only the changed keys back.
+//
+// `applies` used to be the single literal "next_daemon_restart" for every
+// field on every screen. That was true when a write could only ever land in
+// `.env`, and stopped being true once the backend gained a runtime override
+// store — so it is now resolved PER FIELD (`TunableField.liveness`) and merely
+// SUMMARISED at the top level, where it can also be "mixed".
 // ---------------------------------------------------------------------------
 
 /** Widget kind for one tunable field. Enum fields additionally carry `options`. */
 export type TunableFieldType = "number" | "boolean" | "enum" | "string";
+
+/**
+ * What actually happens to the RUNNING process when one field is saved.
+ * Mirrors `pilots/settings_meta.py`'s four states exactly.
+ *
+ * - `immediately`         — pushed onto the live process; no restart needed.
+ * - `next_daemon_restart` — written to `.env`; the process keeps the old value.
+ * - `no_effect`           — nothing reads this field; writing it does nothing.
+ * - `env_pinned`          — a real shell export wins over both `.env` and the
+ *                           runtime store, so a write cannot take effect at all
+ *                           until that export is removed.
+ */
+export type AppliesState =
+  | "immediately"
+  | "next_daemon_restart"
+  | "no_effect"
+  | "env_pinned";
+
+/**
+ * A screen-level or request-level rollup of many fields' {@link AppliesState}.
+ * `"mixed"` when the fields disagree — deliberately NOT collapsed to the
+ * most-alarming or most-optimistic member, because either would misdescribe
+ * most of the set.
+ */
+export type AppliesSummary = AppliesState | "mixed";
+
+/** Where the currently-active value came from. */
+export type SettingSource = "runtime_store" | "env_file";
+
+/**
+ * Per-field liveness/safety metadata — the honest answer to "if I change this
+ * and press Save, what happens?" (`pilots/settings_meta.py::field_metadata`).
+ */
+export interface TunableLiveness {
+  applies: AppliesState;
+  /**
+   * Operator-readable sentence explaining WHY a restart is needed, or `null`
+   * for a field that needs none. Never a filler string (CONSTRAINT #4).
+   */
+  restart_reason: string | null;
+  /**
+   * `file:line` sites where the running process captured this value, so the
+   * restart claim is checkable rather than trusted. `[]` — not omitted — for a
+   * field with none; that empty list is the MEASURED answer, not "unknown".
+   */
+  capture_sites: string[];
+  /** A real shell export currently pins this field. */
+  env_pinned: boolean;
+  /**
+   * Writing this field requires an explicit confirmation
+   * (`settings_keysets.DANGEROUS_KEYS`). The UI raises a confirm dialog, but
+   * the gate itself is enforced SERVER-SIDE — this flag drives affordance, not
+   * safety.
+   */
+  dangerous: boolean;
+  source: SettingSource;
+}
+
+/**
+ * The confirmation map sent alongside a PUT. Each dangerous key must map to
+ * its OWN NAME (`{ ADVISORY_ONLY: "ADVISORY_ONLY" }`); anything else is
+ * rejected `confirmation_mismatch`, and omission is `confirmation_required`.
+ *
+ * Echoing the name (rather than a blanket boolean) is deliberate: confirming
+ * one dangerous field can never implicitly confirm a second one in the same
+ * batch.
+ */
+export type SettingsConfirmMap = Record<string, string>;
 
 /** One editable runtime setting (GET /settings/tunables). */
 export interface TunableField {
@@ -1581,6 +1653,16 @@ export interface TunableField {
   step?: number;
   /** enum fields only — the allowed values. */
   options?: string[];
+  /**
+   * Per-field liveness/safety metadata. The backend always sends this; it is
+   * optional here only so that a response from an OLDER backend still parses.
+   * Consumers must go through `resolveLiveness()` rather than reading it
+   * directly, which supplies the same conservative fallback the backend itself
+   * uses for a field it cannot classify (`next_daemon_restart`, no capture
+   * sites, not dangerous) instead of leaving `undefined` to be handled ad hoc
+   * at each use site.
+   */
+  liveness?: TunableLiveness;
 }
 
 /** A named cluster of related tunables (GET /settings/tunables). */
@@ -1591,7 +1673,14 @@ export interface TunableGroup {
 
 /** GET /settings/tunables — every editable runtime setting, grouped. */
 export interface TunablesResponse {
-  applies: "next_daemon_restart";
+  /**
+   * Rollup of every served field's `liveness.applies` — `"mixed"` when they
+   * disagree, which is the common case. Not a per-field claim: read
+   * `field.liveness.applies` for that.
+   */
+  applies: AppliesSummary;
+  /** How many fields sit in each state. Absent from an older backend. */
+  applies_counts?: Record<AppliesState, number>;
   groups: TunableGroup[];
   /**
    * Whether an `.env` write is pending against the running (in-process)
@@ -1606,12 +1695,30 @@ export interface TunablesResponse {
 /**
  * PUT /settings/tunables result. `written` echoes accepted key→value; `rejected`
  * maps a key to the reason it was refused (out of range, unknown, type
- * mismatch). Rejections are surfaced, never swallowed.
+ * mismatch, or a missing/mismatched dangerous-key confirmation). Rejections are
+ * surfaced, never swallowed.
+ *
+ * Reason tags the UI branches on: `unknown_key`, `forbidden_key`,
+ * `expected_boolean`, `expected_number`, `expected_integer`, `expected_string`,
+ * `invalid_option`, `out_of_range`, `invalid_json`, `confirmation_required`,
+ * `confirmation_mismatch`.
  */
 export interface TunablesUpdateResult {
   written: Record<string, number | boolean | string>;
   rejected: Record<string, string>;
-  applies: "next_daemon_restart";
+  /** Rollup of `per_key_applies` — `"mixed"` when the written keys disagree. */
+  applies: AppliesSummary;
+  /**
+   * The ACTUAL outcome per written key, not the a-priori prediction the GET
+   * made: whether each one reached the running process or only `.env`.
+   * Absent from an older backend.
+   */
+  per_key_applies?: Record<string, AppliesState>;
+  applies_counts?: Record<AppliesState, number>;
+  /** True only if at least one written key did NOT apply live. */
+  restart_required?: boolean;
+  restart_endpoint?: string;
+  /** One honest sentence about what this write actually did. */
   note?: string;
 }
 

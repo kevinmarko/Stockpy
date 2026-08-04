@@ -749,6 +749,66 @@ describe("Settings screen — Brokerage", () => {
     };
   }
 
+  /** Every test below clicks a button that starts (or finishes) a
+   *  useBrokerageLoginJob job. Once that job reaches a terminal state, a
+   *  useEffect in BrokerageSection or RobinhoodConnectForm calls reload()
+   *  (useApi's setTick), which re-invokes the mocked GET /brokerage/status
+   *  and toggles `loading` back to `true` and then `false` again before
+   *  the UI settles -- and `loading` gates the ENTIRE list of rows in that
+   *  section (`{!loading && !error && data && (...)}` in BrokerageSection),
+   *  so EVERYTHING in it (the notice, the connect form, the Disconnect
+   *  button) transiently unmounts and remounts once per completed job,
+   *  independent of whichever specific element a given assertion cares
+   *  about.
+   *
+   *  This produces two distinct failure modes, and fixing only one still
+   *  leaves the other:
+   *
+   *  1. `await screen.findByX(...)` resolves with a REFERENCE to whatever
+   *     matched at the instant it last checked -- but that reference can
+   *     go stale a microtask later if the very next thing to run is the
+   *     reload's own hide. A subsequent `expect(ref).toBeInTheDocument()`
+   *     then fails even though `findByX` itself "succeeded". Confirmed by
+   *     direct reproduction: `findByText` resolved with a real
+   *     HTMLSpanElement in ~7ms, and `toBeInTheDocument()` on that exact
+   *     element still failed, because the element had already been
+   *     detached by the time the assertion ran one line later.
+   *  2. Even once that's fixed for the FIRST assertion in a test (by
+   *     re-querying inside `waitFor` instead of trusting a stale
+   *     reference), a SECOND, unwrapped `getByX(...)` assertion right
+   *     after it is just as exposed -- `waitFor` only guarantees its own
+   *     query was true at the instant it resolved, not that the whole
+   *     section stays mounted for whatever runs next. Confirmed the same
+   *     way: wrapping only the first assertion in a test still left a
+   *     later plain `getByLabelText` failing intermittently.
+   *
+   *  Neither failure mode is timeout-length-related (both reproduce in
+   *  single-digit-to-low-triple-digit milliseconds, nowhere near even the
+   *  default 1000ms budget) and neither is timer-based, so fake timers
+   *  wouldn't help either -- there's no interval to fast-forward, just a
+   *  handful of chained promise-then/effect-render hops. The fix is
+   *  structural: every DOM-presence assertion downstream of one of these
+   *  clicks re-queries fresh on every retry via `waitForPresence` below,
+   *  so a transient unmount never gets mistaken for a permanent one.
+   *
+   *  The generous timeout is kept as a SEPARATE, genuine concern: this
+   *  codebase's own CI has independently observed (PR #591, PR #594) the
+   *  cumulative wall-clock cost of these chained hops occasionally
+   *  exceeding 1000ms under real CI CPU contention even once they resolve
+   *  correctly -- a different problem from the two races above, and one
+   *  a longer budget legitimately does fix.
+   */
+  const ASYNC_JOB_CHAIN_TIMEOUT = { timeout: 5000 };
+
+  /** Re-queries `getElement` on every retry instead of resolving once with
+   *  a reference that can go stale a microtask later -- see the comment
+   *  above. Use for every DOM-presence assertion downstream of a
+   *  login-job completion or a Disconnect, not just the first one in a
+   *  test. */
+  function waitForPresence(getElement: () => HTMLElement) {
+    return waitFor(() => expect(getElement()).toBeInTheDocument(), ASYNC_JOB_CHAIN_TIMEOUT);
+  }
+
   it("disconnected: renders the Robinhood connect form, no Disconnect button", async () => {
     vi.spyOn(api, "getBrokerageStatus").mockResolvedValue({
       connected: false,
@@ -795,7 +855,7 @@ describe("Settings screen — Brokerage", () => {
     expect(refreshSpy).toHaveBeenCalledTimes(1);
     // Reloaded /brokerage/status now reports connected -> Disconnect appears,
     // the typed-credential form is gone.
-    expect(await screen.findByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+    await waitForPresence(() => screen.getByRole("button", { name: "Disconnect" }));
     expect(screen.queryByLabelText(/robinhood email/i)).not.toBeInTheDocument();
   });
 
@@ -818,11 +878,11 @@ describe("Settings screen — Brokerage", () => {
       await screen.findByRole("button", { name: /connect using \.env credentials/i })
     );
 
-    expect(
-      await screen.findByText(/no robinhood credentials were available to try/i)
-    ).toBeInTheDocument();
+    await waitForPresence(() =>
+      screen.getByText(/no robinhood credentials were available to try/i)
+    );
     // Still disconnected -- the typed form remains available as a fallback.
-    expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();
+    await waitForPresence(() => screen.getByLabelText(/robinhood email/i));
   });
 
   it("connected: renders status + Disconnect, and never the credential form", async () => {
@@ -852,7 +912,7 @@ describe("Settings screen — Brokerage", () => {
 
     // Reloaded /brokerage/status now reports connected -> Disconnect appears,
     // the form (and the submitted password) is gone.
-    expect(await screen.findByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+    await waitForPresence(() => screen.getByRole("button", { name: "Disconnect" }));
     expect(connectSpy).toHaveBeenCalledWith({
       username: "user@example.com",
       password: "sUp3rS3cr3t!!",
@@ -873,12 +933,21 @@ describe("Settings screen — Brokerage", () => {
     await user.click(await screen.findByRole("button", { name: "Disconnect" }));
 
     // Confirm modal: disambiguate the modal's Disconnect from the section's.
-    const dialog = await screen.findByRole("dialog", { name: "Disconnect brokerage" });
+    // Opening it is a plain synchronous setState + render (no async chain),
+    // but under genuine CI CPU contention even that can take longer than the
+    // default 1000ms budget to actually get scheduled and committed -- same
+    // class of risk as the async-job-chain comment above, just without an
+    // async chain to blame it on.
+    const dialog = await screen.findByRole(
+      "dialog",
+      { name: "Disconnect brokerage" },
+      ASYNC_JOB_CHAIN_TIMEOUT
+    );
     await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
 
     await waitFor(() => expect(disconnectSpy).toHaveBeenCalledTimes(1));
     // Reloaded status now reports disconnected -> the connect form is back.
-    expect(await screen.findByLabelText(/robinhood email/i)).toBeInTheDocument();
+    await waitForPresence(() => screen.getByLabelText(/robinhood email/i));
   });
 
   it("Disconnect clears a stale 'Force fresh login' success notice, not just the connect form", async () => {
@@ -899,15 +968,20 @@ describe("Settings screen — Brokerage", () => {
     renderSettings();
 
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
-    expect(
-      await screen.findByText(/refreshed — robinhood account snapshot updated/i)
-    ).toBeInTheDocument();
+    await waitForPresence(() =>
+      screen.getByText(/refreshed — robinhood account snapshot updated/i)
+    );
 
-    await user.click(screen.getByRole("button", { name: "Disconnect" }));
-    const dialog = await screen.findByRole("dialog", { name: "Disconnect brokerage" });
+    await user.click(await screen.findByRole("button", { name: "Disconnect" }));
+    const dialog = await screen.findByRole(
+      "dialog",
+      { name: "Disconnect brokerage" },
+      ASYNC_JOB_CHAIN_TIMEOUT
+    );
     await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
 
-    await screen.findByLabelText(/robinhood email/i); // back to the connect form
+    // back to the connect form
+    await waitForPresence(() => screen.getByLabelText(/robinhood email/i));
     expect(
       screen.queryByText(/refreshed — robinhood account snapshot updated/i)
     ).not.toBeInTheDocument();
@@ -934,15 +1008,16 @@ describe("Settings screen — Brokerage", () => {
     await user.click(
       await screen.findByRole("button", { name: /connect using \.env credentials/i })
     );
-    expect(
-      await screen.findByText(/no robinhood credentials were available to try/i)
-    ).toBeInTheDocument();
+    await waitForPresence(() =>
+      screen.getByText(/no robinhood credentials were available to try/i)
+    );
 
-    await user.type(screen.getByLabelText(/robinhood email/i), "user@example.com");
+    await user.type(await screen.findByLabelText(/robinhood email/i), "user@example.com");
     await user.type(screen.getByLabelText(/^password$/i), "sUp3rS3cr3t!!");
     await user.click(screen.getByRole("button", { name: /try again|^connect$/i }));
 
-    await screen.findByRole("button", { name: "Disconnect" }); // now connected
+    // now connected
+    await waitForPresence(() => screen.getByRole("button", { name: "Disconnect" }));
     expect(
       screen.queryByText(/no robinhood credentials were available to try/i)
     ).not.toBeInTheDocument();
@@ -970,9 +1045,9 @@ describe("Settings screen — Brokerage", () => {
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
 
     expect(refreshSpy).toHaveBeenCalledTimes(1);
-    expect(
-      await screen.findByText(/refreshed — robinhood account snapshot updated/i)
-    ).toBeInTheDocument();
+    await waitForPresence(() =>
+      screen.getByText(/refreshed — robinhood account snapshot updated/i)
+    );
   });
 
   it("Force fresh login timing out shows the honest timeout notice, never claiming denial", async () => {
@@ -995,9 +1070,9 @@ describe("Settings screen — Brokerage", () => {
 
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
 
-    expect(
-      await screen.findByText(/no approval came through in time\. nothing was saved\./i)
-    ).toBeInTheDocument();
+    await waitForPresence(() =>
+      screen.getByText(/no approval came through in time\. nothing was saved\./i)
+    );
     expect(screen.queryByText(/denied/i)).not.toBeInTheDocument();
   });
 
@@ -1015,9 +1090,14 @@ describe("Settings screen — Brokerage", () => {
 
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
 
-    expect(
-      await screen.findByText("Could not refresh the Robinhood account snapshot.")
-    ).toBeInTheDocument();
+    // This path never touches refresh.job (the catch in start() sets `error`
+    // directly, so the reload-triggering effect never fires) -- no stale-
+    // reference race here, just a render that can genuinely take longer than
+    // 1000ms under full-suite CI CPU contention. Same generous budget for the
+    // same reason as the dialog-lookup comment above.
+    await waitForPresence(() =>
+      screen.getByText("Could not refresh the Robinhood account snapshot.")
+    );
   });
 });
 

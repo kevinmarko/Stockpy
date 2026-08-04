@@ -124,6 +124,15 @@ output/follows.json
 # artifact explicitly.
 output/runtime_flags.json
 
+# Runtime settings store — append-only audit trail of every write/delete
+# performed by runtime_flags_writer.py (who changed which field, when, and
+# whether it applied — never the value itself), plus the timestamped copies a
+# damaged store is quarantined to before a fresh one is written. Per-machine
+# operator history; never committed. Same blanket-ignored-but-documented-
+# explicitly treatment as the store above.
+output/runtime_flags_audit.jsonl
+output/runtime_flags.json.corrupt.*
+
 # React PWA (webapp/) build + dependency artifacts — Vite/npm regenerate these;
 # never committed.
 webapp/node_modules/

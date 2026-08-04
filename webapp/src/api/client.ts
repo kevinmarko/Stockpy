@@ -77,6 +77,7 @@ import type {
   SentimentHistory,
   TunablesResponse,
   TunablesUpdateResult,
+  SettingsConfirmMap,
   SymbolDetail,
   SymbolCompareResponse,
   UniverseResponse,
@@ -493,37 +494,60 @@ const liveApi = {
     }),
   // ---- General runtime tunables editor (pilots base, :8602) ----
   // Read the allowlisted, non-secret settings grouped for display; write only
-  // the changed keys back. The PUT does NOT reach the running process — see
-  // TunablesResponse.applies ("next_daemon_restart").
+  // the changed keys back.
+  //
+  // Whether a PUT reaches the RUNNING process is now per key, not a blanket
+  // "no": see each field's `liveness.applies` on the GET, and the write's own
+  // `per_key_applies` for what actually happened.
+  //
+  // `confirm` echoes each DANGEROUS_KEYS field's own name back
+  // (`{ ADVISORY_ONLY: "ADVISORY_ONLY" }`). Omitting it for such a key rejects
+  // that key with `confirmation_required` — per key, so the rest of the batch
+  // still writes.
   getTunables: () => http<TunablesResponse>("/settings/tunables"),
-  updateTunables: (values: Record<string, number | boolean | string>) =>
+  updateTunables: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/tunables", {
       method: "PUT",
-      body: JSON.stringify({ values }),
+      body: JSON.stringify({ values, confirm }),
     }),
   getSentimentSettings: () => http<TunablesResponse>("/settings/sentiment"),
-  updateSentimentSettings: (values: Record<string, number | boolean | string>) =>
+  updateSentimentSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/sentiment", {
       method: "PUT",
-      body: JSON.stringify({ values }),
+      body: JSON.stringify({ values, confirm }),
     }),
   getSectorSelectionSettings: () => http<TunablesResponse>("/settings/sector-selection"),
-  updateSectorSelectionSettings: (values: Record<string, number | boolean | string>) =>
+  updateSectorSelectionSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/sector-selection", {
       method: "PUT",
-      body: JSON.stringify({ values }),
+      body: JSON.stringify({ values, confirm }),
     }),
   getFmpSettings: () => http<TunablesResponse>("/settings/fmp"),
-  updateFmpSettings: (values: Record<string, number | boolean | string>) =>
+  updateFmpSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/fmp", {
       method: "PUT",
-      body: JSON.stringify({ values }),
+      body: JSON.stringify({ values, confirm }),
     }),
   getEtfTransmissionSettings: () => http<TunablesResponse>("/settings/etf-transmission"),
-  updateEtfTransmissionSettings: (values: Record<string, number | boolean | string>) =>
+  updateEtfTransmissionSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/etf-transmission", {
       method: "PUT",
-      body: JSON.stringify({ values }),
+      body: JSON.stringify({ values, confirm }),
     }),
   getFollows: () => http<Follow[]>("/follows"),
   follow: (id: string, amount: number) =>

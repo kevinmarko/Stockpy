@@ -141,12 +141,20 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # deliberately excluded from this allowlist for that reason.
     "DAEMON_SHUTDOWN_TIMEOUT_SECONDS",
     # The daemon's internal timer cadence. Writable via the Pilots API's
-    # PUT /automation/schedule/interval (api/pilots_api.py) and the GUI. A
-    # write here takes effect on the daemon's NEXT restart, not immediately
-    # (no live setter exists yet — see the Data & Automation plan's deferred
-    # Phase 4); the API's response makes that explicit via its own
-    # `applies: "next_daemon_restart"` field rather than implying a live change.
+    # PUT /automation/schedule/interval (api/pilots_api.py) and the GUI.
+    # Applied live via daemon_client.set_interval() -> the Control API ->
+    # OrchestratorDaemon.set_interval() when the daemon is reachable over
+    # loopback HTTP; degrades to "next_daemon_restart" only on an
+    # unreachable/misconfigured daemon (the response's own `applies` field
+    # reflects which actually happened, never assumed).
     "ORCHESTRATOR_INTERVAL_SECONDS",
+    # Cross-process settings hot-reload for the persistent orchestrator
+    # daemon (desktop/orchestrator_daemon.py). Non-secret operational
+    # tunables; a GUI bug here can only change how often/whether the daemon
+    # notices a settings-store write made by another process, never leak a
+    # credential or bypass a write gate.
+    "RUNTIME_FLAGS_REFRESH_ENABLED",
+    "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS",
     # Robinhood device-approval login worker timing (data/robinhood_login.py).
     # Non-secret timeout tunables, no credential material — a GUI bug here can
     # only make a login attempt time out sooner/later or wait a different

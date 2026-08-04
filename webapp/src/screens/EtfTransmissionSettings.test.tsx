@@ -86,7 +86,9 @@ describe("EtfTransmissionSettings screen", () => {
     await user.click(saveBtn);
 
     await waitFor(() => {
-      expect(updateSpy).toHaveBeenCalledWith({ ETF_TRANSMISSION_ENABLED: true });
+      // Second arg is the dangerous-key confirmation map — empty here because
+      // ETF_TRANSMISSION_ENABLED is not a DANGEROUS_KEYS member.
+      expect(updateSpy).toHaveBeenCalledWith({ ETF_TRANSMISSION_ENABLED: true }, {});
     });
   });
 

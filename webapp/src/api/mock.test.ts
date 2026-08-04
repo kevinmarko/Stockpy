@@ -23,6 +23,7 @@ import type {
   PerfRange,
   PilotSummary,
   PortfolioPositionView,
+  TunablesResponse,
 } from "./types";
 
 const CATEGORIES = [
@@ -238,6 +239,143 @@ describe("mock API — settings sub-routes serve their OWN field set (not the ge
     const result = await mockApi.updateSectorSelectionSettings({ SECTOR_SELECTION_TOP_N: 5 });
     expect(result.rejected).toEqual({});
     expect(result.written).toEqual({ SECTOR_SELECTION_TOP_N: 5 });
+  });
+});
+
+describe("mock API — per-field liveness metadata parity", () => {
+  const EDITORS = [
+    "getTunables",
+    "getSentimentSettings",
+    "getSectorSelectionSettings",
+    "getFmpSettings",
+    "getEtfTransmissionSettings",
+  ] as const;
+
+  async function allFields(method: string) {
+    const resp = await (mockApi as unknown as Record<string, () => Promise<TunablesResponse>>)[
+      method
+    ]();
+    return { resp, fields: resp.groups.flatMap((g) => g.fields) };
+  }
+
+  it("every field on every editor carries a complete liveness object", async () => {
+    for (const method of EDITORS) {
+      const { fields } = await allFields(method);
+      expect(fields.length).toBeGreaterThan(0);
+      for (const f of fields) {
+        expect(f.liveness, `${method}:${f.key}`).toBeDefined();
+        expect(Object.keys(f.liveness!).sort()).toEqual([
+          "applies",
+          "capture_sites",
+          "dangerous",
+          "env_pinned",
+          "restart_reason",
+          "source",
+        ]);
+        expect(Array.isArray(f.liveness!.capture_sites)).toBe(true);
+      }
+    }
+  });
+
+  it("covers all four applies states across the fixtures, not just one", async () => {
+    const seen = new Set<string>();
+    for (const method of EDITORS) {
+      const { fields } = await allFields(method);
+      for (const f of fields) seen.add(f.liveness!.applies);
+    }
+    expect(seen).toEqual(
+      new Set(["immediately", "next_daemon_restart", "no_effect", "env_pinned"]),
+    );
+  });
+
+  it("flags exactly the five dangerous keys these editors expose", async () => {
+    const dangerous = new Set<string>();
+    for (const method of EDITORS) {
+      const { fields } = await allFields(method);
+      for (const f of fields) if (f.liveness!.dangerous) dangerous.add(f.key);
+    }
+    expect(dangerous).toEqual(
+      new Set([
+        "ADVISORY_ONLY",
+        "DRY_RUN",
+        "CORS_ALLOWED_ORIGINS",
+        "FMP_BARS_ENABLED",
+        "FMP_BARS_ADJUSTMENT",
+      ]),
+    );
+  });
+
+  it("a live-safe field reports [] capture sites — the measured answer, never null", async () => {
+    const { fields } = await allFields("getTunables");
+    const live = fields.filter((f) => f.liveness!.applies === "immediately");
+    expect(live.length).toBeGreaterThan(0);
+    for (const f of live) expect(f.liveness!.capture_sites).toEqual([]);
+  });
+
+  it("a restart-required field names the capture sites that justify the claim", async () => {
+    const { fields } = await allFields("getTunables");
+    const needsRestart = fields.filter((f) => f.liveness!.applies === "next_daemon_restart");
+    expect(needsRestart.length).toBeGreaterThan(0);
+    for (const f of needsRestart) {
+      expect(f.liveness!.capture_sites.length).toBeGreaterThan(0);
+      expect(f.liveness!.restart_reason).toBeTruthy();
+    }
+  });
+
+  it("rolls the per-field states up into a summary plus honest counts", async () => {
+    const { resp, fields } = await allFields("getTunables");
+    expect(resp.applies).toBe("mixed");
+    const total = Object.values(resp.applies_counts!).reduce((a, b) => a + b, 0);
+    expect(total).toBe(fields.length);
+  });
+});
+
+describe("mock API — dangerous-key confirmation gate parity", () => {
+  // The mock must gate exactly as the real backend does. A mock that let
+  // ADVISORY_ONLY through unconfirmed would make demo mode disagree with
+  // production about the single most safety-relevant write in this app.
+
+  it("refuses ADVISORY_ONLY with no confirmation", async () => {
+    const result = await mockApi.updateTunables({ ADVISORY_ONLY: false });
+    expect(result.written).toEqual({});
+    expect(result.rejected).toEqual({ ADVISORY_ONLY: "confirmation_required" });
+  });
+
+  it("refuses ADVISORY_ONLY with a wrong confirmation", async () => {
+    const result = await mockApi.updateTunables(
+      { ADVISORY_ONLY: false },
+      { ADVISORY_ONLY: "yes" },
+    );
+    expect(result.written).toEqual({});
+    expect(result.rejected).toEqual({ ADVISORY_ONLY: "confirmation_mismatch" });
+  });
+
+  it("accepts ADVISORY_ONLY with the correct echo-the-name confirmation", async () => {
+    const result = await mockApi.updateTunables(
+      { ADVISORY_ONLY: false },
+      { ADVISORY_ONLY: "ADVISORY_ONLY" },
+    );
+    expect(result.rejected).toEqual({});
+    expect(result.written).toEqual({ ADVISORY_ONLY: false });
+  });
+
+  it("writes ordinary keys even when a dangerous key in the same batch is refused", async () => {
+    const result = await mockApi.updateTunables({
+      ADVISORY_ONLY: false,
+      KELLY_FRACTION: 0.6,
+    });
+    expect(result.written).toEqual({ KELLY_FRACTION: 0.6 });
+    expect(result.rejected).toEqual({ ADVISORY_ONLY: "confirmation_required" });
+  });
+
+  it("reports a value error on a key rather than masking it", async () => {
+    const result = await mockApi.updateTunables({ KELLY_FRACTION: 99 });
+    expect(result.rejected.KELLY_FRACTION).toMatch(/out_of_range/);
+  });
+
+  it("reports per-key applies covering exactly the written keys", async () => {
+    const result = await mockApi.updateTunables({ KELLY_FRACTION: 0.6 });
+    expect(Object.keys(result.per_key_applies!)).toEqual(Object.keys(result.written));
   });
 });
 
