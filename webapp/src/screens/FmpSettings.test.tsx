@@ -26,7 +26,7 @@ function baseFmpTunables(): TunablesResponse {
         name: "Primary Feeds",
         fields: [
           {
-            key: "FMP_QUOTES_ENABLED",
+            key: "Fmp Quotes Enabled",
             value: false,
             type: "boolean",
             default: false,
@@ -62,7 +62,7 @@ describe("FmpSettings screen", () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getFmpSettings").mockResolvedValue(baseFmpTunables());
     const updateSpy = vi.spyOn(api, "updateFmpSettings").mockResolvedValueOnce({
-      written: { FMP_QUOTES_ENABLED: true },
+      written: { "Fmp Quotes Enabled": true },
       rejected: {},
       applies: "next_daemon_restart",
       note: "Accepted values written to .env.",
@@ -71,7 +71,7 @@ describe("FmpSettings screen", () => {
     renderScreen();
     await screen.findByRole("heading", { name: "Financial Modeling Prep (FMP)" });
 
-    const toggle = screen.getByLabelText("FMP_QUOTES_ENABLED");
+    const toggle = screen.getByLabelText("Fmp Quotes Enabled");
     await user.click(toggle);
 
     const saveBtn = screen.getByRole("button", { name: /Save 1 change/i });
@@ -79,7 +79,7 @@ describe("FmpSettings screen", () => {
     await user.click(saveBtn);
 
     await waitFor(() => {
-      expect(updateSpy).toHaveBeenCalledWith({ FMP_QUOTES_ENABLED: true }, {});
+      expect(updateSpy).toHaveBeenCalledWith({ "Fmp Quotes Enabled": true }, {});
     });
   });
 
@@ -93,7 +93,7 @@ describe("FmpSettings screen", () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getFmpSettings").mockResolvedValue(baseFmpTunables());
     const fmpSpy = vi.spyOn(api, "updateFmpSettings").mockResolvedValue({
-      written: { FMP_QUOTES_ENABLED: true },
+      written: { "Fmp Quotes Enabled": true },
       rejected: {},
       applies: "next_daemon_restart",
     });
@@ -101,12 +101,12 @@ describe("FmpSettings screen", () => {
     const generalSpy = vi.spyOn(api, "updateTunables");
 
     renderScreen();
-    const toggle = await screen.findByLabelText("FMP_QUOTES_ENABLED");
+    const toggle = await screen.findByLabelText("Fmp Quotes Enabled");
     await user.click(toggle);
     await user.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() => expect(fmpSpy).toHaveBeenCalledTimes(1));
-    expect(fmpSpy.mock.calls[0][0]).toEqual({ FMP_QUOTES_ENABLED: true });
+    expect(fmpSpy.mock.calls[0][0]).toEqual({ "Fmp Quotes Enabled": true });
     expect(sentimentSpy).not.toHaveBeenCalled();
     expect(generalSpy).not.toHaveBeenCalled();
   });

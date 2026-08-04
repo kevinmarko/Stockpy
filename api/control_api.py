@@ -147,6 +147,7 @@ from api.cors import LAN_TAILSCALE_ORIGIN_REGEX
 from desktop.daemon_runtime import OrchestratorDaemon, RunRecord, TriggerOutcome
 from desktop.run_history_store import RunHistoryStore
 from execution.kill_switch import GlobalKillSwitch
+from pilots.run_status import parse_crontab_status
 
 logger = logging.getLogger(__name__)
 
@@ -775,3 +776,12 @@ def stream_job_logs(
 
     return StreamingResponse(log_event_generator(), media_type="text/event-stream")
 
+
+@app.get("/system/cron-status", dependencies=[Depends(require_read_token)])
+def get_system_cron_status() -> Dict[str, Any]:
+    """Parse deploy/crontab.txt and return the schedule.
+
+    Delegates to ``pilots.run_status.parse_crontab_status`` -- see that
+    function's docstring for the title/description-reset contract this used
+    to duplicate (and get subtly wrong) as an inline copy."""
+    return parse_crontab_status()

@@ -257,15 +257,15 @@ export function MetricBadge({
   value,
   good,
 }: {
-  label: string;
-  value: string;
+  label?: string;
+  value?: string;
   good?: boolean | null;
 }) {
   const cls =
     good == null ? "badge badge-neutral" : good ? "badge badge-good" : "badge badge-warn";
   return (
     <span className={cls}>
-      {label} {value}
+      {label && value ? `${label} ${value}` : label || value}
     </span>
   );
 }
@@ -457,6 +457,7 @@ export function ErrorState({
  */
 export function Input({
   label,
+  hideLabel,
   value,
   onChange,
   type = "text",
@@ -471,7 +472,8 @@ export function Input({
   placeholder,
   className,
 }: {
-  label: string;
+  label?: ReactNode;
+  hideLabel?: boolean;
   value: string | number;
   onChange: (e: ChangeEvent<HTMLInputElement>) => void;
   type?: "text" | "number" | "email" | "password";
@@ -492,13 +494,15 @@ export function Input({
 
   return (
     <div>
-      <label
-        htmlFor={inputId}
-        className="tile-label"
-        style={{ display: "block", marginBottom: "var(--s-1-5)" }}
-      >
-        {label}
-      </label>
+      {label && !hideLabel && (
+        <label
+          htmlFor={inputId}
+          className="tile-label"
+          style={{ display: "block", marginBottom: "var(--s-1-5)" }}
+        >
+          {label}
+        </label>
+      )}
       <input
         id={inputId}
         className={`input ${className ?? ""}`}
@@ -515,16 +519,23 @@ export function Input({
         aria-describedby={hintId}
       />
       {hint && (
-        <div
-          id={hintId}
-          style={{
-            marginTop: "var(--s-1-5)",
-            fontSize: "var(--t-caption)",
-            color: invalid ? "var(--decline)" : "var(--text-muted)",
-          }}
-        >
-          {hint}
-        </div>
+        invalid ? (
+          <div
+            id={hintId}
+            style={{
+              marginTop: "var(--s-1-5)",
+              fontSize: "var(--t-caption)",
+              color: "var(--decline)",
+            }}
+          >
+            {hint}
+          </div>
+        ) : (
+          <details id={hintId} style={{ marginTop: "var(--s-1-5)", fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
+            <summary style={{ cursor: "pointer", userSelect: "none", color: "var(--text-secondary)", outline: "none" }}>More info</summary>
+            <div style={{ marginTop: "var(--s-1)", lineHeight: 1.4 }}>{hint}</div>
+          </details>
+        )
       )}
     </div>
   );
@@ -559,7 +570,7 @@ export function Select({
   testId,
   className,
 }: {
-  label: string;
+  label?: ReactNode;
   hideLabel?: boolean;
   value: string;
   onChange: (e: ChangeEvent<HTMLSelectElement>) => void;
@@ -595,7 +606,7 @@ export function Select({
           disabled={disabled}
           aria-invalid={invalid ? "true" : undefined}
           aria-describedby={hintId}
-          aria-label={hideLabel ? label : undefined}
+          aria-label={hideLabel && typeof label === "string" ? label : undefined}
           data-testid={testId}
         >
           {options.map((o) => (
@@ -606,16 +617,23 @@ export function Select({
         </select>
       </div>
       {hint && (
-        <div
-          id={hintId}
-          style={{
-            marginTop: 6,
-            fontSize: "var(--t-caption)",
-            color: invalid ? "var(--decline)" : "var(--text-muted)",
-          }}
-        >
-          {hint}
-        </div>
+        invalid ? (
+          <div
+            id={hintId}
+            style={{
+              marginTop: 6,
+              fontSize: "var(--t-caption)",
+              color: "var(--decline)",
+            }}
+          >
+            {hint}
+          </div>
+        ) : (
+          <details id={hintId} style={{ marginTop: 6, fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
+            <summary style={{ cursor: "pointer", userSelect: "none", color: "var(--text-secondary)", outline: "none" }}>More info</summary>
+            <div style={{ marginTop: "var(--s-1)", lineHeight: 1.4 }}>{hint}</div>
+          </details>
+        )
       )}
     </div>
   );
@@ -641,7 +659,7 @@ export function Textarea({
   spellCheck,
   monospace,
 }: {
-  label: string;
+  label?: ReactNode;
   value: string;
   onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void;
   rows?: number;
@@ -679,16 +697,23 @@ export function Textarea({
         aria-describedby={hintId}
       />
       {hint && (
-        <div
-          id={hintId}
-          style={{
-            marginTop: 6,
-            fontSize: "var(--t-caption)",
-            color: invalid ? "var(--decline)" : "var(--text-muted)",
-          }}
-        >
-          {hint}
-        </div>
+        invalid ? (
+          <div
+            id={hintId}
+            style={{
+              marginTop: 6,
+              fontSize: "var(--t-caption)",
+              color: "var(--decline)",
+            }}
+          >
+            {hint}
+          </div>
+        ) : (
+          <details id={hintId} style={{ marginTop: 6, fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
+            <summary style={{ cursor: "pointer", userSelect: "none", color: "var(--text-secondary)", outline: "none" }}>More info</summary>
+            <div style={{ marginTop: "var(--s-1)", lineHeight: 1.4 }}>{hint}</div>
+          </details>
+        )
       )}
     </div>
   );

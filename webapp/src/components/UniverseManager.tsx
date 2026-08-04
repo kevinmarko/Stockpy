@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { UniverseListResponse } from "../api/types";
@@ -6,20 +6,8 @@ import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading } from "./ui";
 import { theme } from "../theme";
+import { Modal } from "./Modal";
 
-/**
- * Add/remove any stock from the tracked universe (`settings.DEFAULT_TICKERS`),
- * persisted via the data API's `PUT /data/universe`. Lives in Settings
- * alongside every other `.env`-write control in this app (Schedule, Execution
- * Mode, Signal modules, Brokerage) rather than on a browsing screen. Clicking
- * a chip's symbol navigates to that symbol's detail page by default, or calls
- * `onSelect` when the caller wants different behavior.
- *
- * After a write we render the PUT's *echoed* list, NOT a re-GET: in a live
- * process the GET reads the `settings` singleton, which a `.env` write does not
- * reach until the next process restart — a re-GET would show the old list and
- * look like the write failed.
- */
 export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => void }) {
   const nav = useNavigate();
   const loaded = useApi<UniverseListResponse>(() => api.getDataUniverse(), []);
@@ -27,8 +15,16 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
   const [symbols, setSymbols] = useState<string[] | null>(null);
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [bulkText, setBulkText] = useState("");
 
   const list = symbols ?? loaded.data?.symbols ?? [];
+  
+  const filteredList = useMemo(() => {
+    return list.filter(s => s.toLowerCase().includes(search.toLowerCase()));
+  }, [list, search]);
+
   const go = (symbol: string) => {
     if (onSelect) onSelect(symbol);
     else nav(`/symbol/${encodeURIComponent(symbol)}`);
@@ -58,6 +54,22 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
 
   const remove = (sym: string) => persist(list.filter((s) => s !== sym));
 
+  const addBulk = async () => {
+    const newSyms = bulkText.split(/[\s,]+/).map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
+    const uniqueNew = newSyms.filter(s => !list.includes(s));
+    if (uniqueNew.length > 0) {
+      await persist([...list, ...uniqueNew]);
+    }
+    setBulkImportOpen(false);
+    setBulkText("");
+  };
+
+  const clearAll = async () => {
+    if (window.confirm("Are you sure you want to clear all tracked symbols?")) {
+       await persist([]);
+    }
+  };
+
   return (
     <div data-testid="universe-manager">
       {loaded.loading && <Loading lines={1} />}
@@ -66,11 +78,30 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
       )}
       {!loaded.loading && !loaded.error && (
         <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-3)" }}>
-            {list.length === 0 ? (
-              <span style={{ fontSize: "var(--t-body)", color: theme.textMuted }}>No symbols tracked yet.</span>
+          <div style={{ display: "flex", gap: "var(--s-2)", marginBottom: "var(--s-3)", alignItems: "flex-end" }}>
+            <div style={{ flex: 1 }}>
+              <Input
+                label="Search Tracking List"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter symbols..."
+              />
+            </div>
+            <Button variant="neutral" onClick={() => setBulkImportOpen(true)} disabled={pending}>
+              Bulk Import CSV
+            </Button>
+            <Button variant="neutral" onClick={clearAll} disabled={pending || list.length === 0} style={{ color: theme.decline }}>
+              Clear All
+            </Button>
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-4)", maxHeight: "400px", overflowY: "auto", padding: "4px" }}>
+            {filteredList.length === 0 ? (
+              <span style={{ fontSize: "var(--t-body)", color: theme.textMuted }}>
+                {list.length === 0 ? "No symbols tracked yet." : "No symbols match your search."}
+              </span>
             ) : (
-              list.map((s) => (
+              filteredList.map((s) => (
                 <span
                   key={s}
                   data-testid={`universe-chip-${s}`}
@@ -132,6 +163,38 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
             </div>
           )}
         </>
+      )}
+
+      {bulkImportOpen && (
+        <Modal ariaLabel="Bulk Import" onClose={() => setBulkImportOpen(false)}>
+          <h2 style={{ margin: "0 0 var(--s-4) 0" }}>Bulk Import Tickers</h2>
+          <p style={{ color: theme.textSecondary, marginBottom: "var(--s-4)" }}>
+            Paste a comma-separated or space-separated list of tickers.
+          </p>
+          <textarea
+            value={bulkText}
+            onChange={(e) => setBulkText(e.target.value)}
+            style={{
+              width: "100%",
+              height: "150px",
+              background: theme.surface,
+              color: theme.textPrimary,
+              border: `1px solid ${theme.border}`,
+              borderRadius: "var(--r-md)",
+              padding: "var(--s-2)",
+              fontFamily: "monospace"
+            }}
+            placeholder="AAPL, MSFT, TSLA..."
+          />
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4)" }}>
+            <Button variant="neutral" onClick={() => setBulkImportOpen(false)} style={{ flex: 1 }}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={addBulk} pending={pending} style={{ flex: 2 }} disabled={bulkText.trim().length === 0}>
+              Import
+            </Button>
+          </div>
+        </Modal>
       )}
     </div>
   );

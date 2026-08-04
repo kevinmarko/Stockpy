@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useToast } from "./ToastContext";
+import toast from "react-hot-toast";
 import { Modal } from "./Modal";
 import { DensityToggle } from "./DensityToggle";
 import { api } from "../api/client";
@@ -21,7 +21,6 @@ const AUTOMATION_POLL_MS = 30_000;
 const REGIME_POLL_MS = 300_000;
 
 export function TopStatusBar() {
-  const { addToast } = useToast();
   const [marketSession, setMarketSession] = useState(() => computeMarketSession(new Date()));
   const [showKillSwitchModal, setShowKillSwitchModal] = useState(false);
   const [reason, setReason] = useState("");
@@ -76,13 +75,25 @@ export function TopStatusBar() {
     if (!result) return; // mutation error -- Notice below stays visible via the toast fallback
     setShowKillSwitchModal(false);
     reloadAutomation();
-    addToast({
-      type: killSwitchActive ? "success" : "error",
-      title: killSwitchActive ? "Kill Switch RESET (resumed)" : "Kill Switch TRIPPED (paused)",
-      description: killSwitchActive
-        ? "Recommendations resume on the next scheduled or manual run."
-        : "New recommendations stop until resumed. The schedule keeps running.",
-    });
+    if (killSwitchActive) {
+      toast.success(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Kill Switch RESET (resumed)</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            Recommendations resume on the next scheduled or manual run.
+          </span>
+        </div>
+      );
+    } else {
+      toast.error(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Kill Switch TRIPPED (paused)</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            New recommendations stop until resumed. The schedule keeps running.
+          </span>
+        </div>
+      );
+    }
   };
 
   const heartbeatLabel = daemonAlive == null ? "Unknown" : daemonAlive ? "Live" : "Offline";

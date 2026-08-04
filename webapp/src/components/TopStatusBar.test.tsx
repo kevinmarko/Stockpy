@@ -11,7 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { TopStatusBar } from "./TopStatusBar";
 import { AutoRefreshProvider } from "./AutoRefreshContext";
-import { ToastProvider } from "./ToastContext";
+import { ToastProvider } from "./ToastProvider";
 import { DensityProvider } from "./DensityContext";
 import { ExecutionModeProvider } from "./ExecutionModeContext";
 import { api } from "../api/client";

@@ -3352,6 +3352,16 @@ def get_automation_schedule() -> Dict[str, Any]:
     }
 
 
+@app.get("/system/cron-status", dependencies=[Depends(require_read_token)])
+def get_system_cron_status() -> Dict[str, Any]:
+    """Parse deploy/crontab.txt and return the schedule.
+
+    Delegates to ``pilots.run_status.parse_crontab_status`` -- shared with
+    ``api/control_api.py``'s identical endpoint so the two can't drift again
+    (this handler used to carry its own, independently-maintained copy)."""
+    return run_status.parse_crontab_status()
+
+
 # ---------------------------------------------------------------------------
 # Data & Automation — WRITE endpoints (Phase 3). Auth posture, per endpoint:
 #
@@ -3934,6 +3944,13 @@ def get_settings_tunables() -> Dict[str, Any]:
 
 
 @app.put(
+    "/settings/tunables",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
     "/settings/tunables",
     dependencies=[
         Depends(require_command_token),
@@ -4536,6 +4553,13 @@ def get_settings_sentiment() -> Dict[str, Any]:
         Depends(require_general_settings_writes_enabled),
     ],
 )
+@app.patch(
+    "/settings/sentiment",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
 def put_settings_sentiment(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update sentiment & news ingestion configuration in .env."""
     return _validate_and_write_payload(body.values, _SENTIMENT_INDEX, confirm=body.confirm)
@@ -4548,6 +4572,13 @@ def get_settings_sector_selection() -> Dict[str, Any]:
 
 
 @app.put(
+    "/settings/sector-selection",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
     "/settings/sector-selection",
     dependencies=[
         Depends(require_command_token),
@@ -4572,6 +4603,13 @@ def get_settings_fmp() -> Dict[str, Any]:
         Depends(require_general_settings_writes_enabled),
     ],
 )
+@app.patch(
+    "/settings/fmp",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
 def put_settings_fmp(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update Financial Modeling Prep (FMP) configuration in .env."""
     return _validate_and_write_payload(body.values, _FMP_INDEX, confirm=body.confirm)
@@ -4584,6 +4622,13 @@ def get_settings_etf_transmission() -> Dict[str, Any]:
 
 
 @app.put(
+    "/settings/etf-transmission",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
     "/settings/etf-transmission",
     dependencies=[
         Depends(require_command_token),

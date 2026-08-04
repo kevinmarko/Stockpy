@@ -249,7 +249,13 @@ describe("UniverseCoverage / AgenticTrading / Settings — auto-poll safety sour
 
   it("never passes refreshBrokerage or postDataSync into a useAutoPoll(...) call", () => {
     const files = [
-      "src/screens/Settings.tsx",
+      // Settings.tsx was split into SettingsLayout + these sub-screens --
+      // scan every one of them, since any could grow a useAutoPoll(...) call.
+      "src/screens/SettingsGeneral.tsx",
+      "src/screens/SettingsData.tsx",
+      "src/screens/SettingsUniverse.tsx",
+      "src/screens/SettingsBrokers.tsx",
+      "src/screens/SettingsModules.tsx",
       "src/screens/AgenticTrading.tsx",
       "src/components/UniverseCoverage.tsx",
     ];

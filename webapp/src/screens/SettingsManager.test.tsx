@@ -23,13 +23,13 @@ function baseTunables(overrides: Partial<TunablesResponse> = {}): TunablesRespon
         name: "Position Sizing",
         fields: [
           {
-            key: "KELLY_FRACTION", value: 0.5, type: "number",
+            key: "Kelly Fraction", value: 0.5, type: "number",
             min: 0, max: 1, step: 0.05, default: 0.5,
             description: "Fraction of full-Kelly used when sizing.",
           },
           {
             // Honest absent value -> empty input, never a fabricated 0.
-            key: "MACRO_REFRESH_HOURS", value: null, type: "number",
+            key: "Macro Refresh Hours", value: null, type: "number",
             min: 1, max: 168, step: 1, default: 12,
             description: "Hours before cached macro series re-fetch.",
           },
@@ -43,12 +43,12 @@ function baseTunables(overrides: Partial<TunablesResponse> = {}): TunablesRespon
             default: true, description: "Use GJR-GARCH sigma for the forecast.",
           },
           {
-            key: "FUNDAMENTALS_SOURCE", value: "yahoo", type: "enum",
+            key: "Fundamentals Source", value: "yahoo", type: "enum",
             options: ["yahoo", "yfinance_info"], default: "yahoo",
             description: "Primary fundamentals provider.",
           },
           {
-            key: "DEFAULT_TICKERS", value: "AAPL,MSFT", type: "string",
+            key: "Default Tickers", value: "AAPL,MSFT", type: "string",
             default: "", description: "Universe when no watchlist is set.",
           },
         ],
@@ -59,7 +59,7 @@ function baseTunables(overrides: Partial<TunablesResponse> = {}): TunablesRespon
           {
             // "string" wire type carrying a JSON blob -> renders as a textarea
             // (content-sniffed), not a single-line input.
-            key: "CORS_ALLOWED_ORIGINS", value: '["http://localhost:5173"]', type: "string",
+            key: "Cors Allowed Origins", value: '["http://localhost:5173"]', type: "string",
             default: '["http://localhost:5173"]',
             description: "Allowed browser origins for the CORS policy.",
           },
@@ -93,10 +93,10 @@ describe("SettingsManager screen", () => {
     expect(screen.getByRole("heading", { name: "Position Sizing" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Forecasting" })).toBeInTheDocument();
     // number, boolean, enum, string widgets
-    expect(screen.getByLabelText("KELLY_FRACTION")).toBeInTheDocument();
+    expect(screen.getByLabelText("Kelly Fraction")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "FORECAST_USE_GARCH_SIGMA" })).toBeInTheDocument();
-    expect(screen.getByLabelText("FUNDAMENTALS_SOURCE").tagName).toBe("SELECT");
-    expect(screen.getByLabelText("DEFAULT_TICKERS")).toBeInTheDocument();
+    expect(screen.getByLabelText("Fundamentals Source").tagName).toBe("SELECT");
+    expect(screen.getByLabelText("Default Tickers")).toBeInTheDocument();
     // persistent "applies on restart" notice
     expect(screen.getByTestId("applies-notice")).toBeInTheDocument();
   });
@@ -104,7 +104,7 @@ describe("SettingsManager screen", () => {
   it("renders a null number value as an empty input, not 0", async () => {
     vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
     renderScreen();
-    const input = (await screen.findByLabelText("MACRO_REFRESH_HOURS")) as HTMLInputElement;
+    const input = (await screen.findByLabelText("Macro Refresh Hours")) as HTMLInputElement;
     expect(input.value).toBe("");
     expect(input.value).not.toBe("0");
   });
@@ -125,33 +125,33 @@ describe("SettingsManager screen", () => {
   it("Save sends ONLY the changed key", async () => {
     vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
     const spy = vi.spyOn(api, "updateTunables").mockResolvedValue({
-      written: { KELLY_FRACTION: 0.6 },
+      written: { "Kelly Fraction": 0.6 },
       rejected: {},
       applies: "next_daemon_restart",
     });
     renderScreen();
-    const input = (await screen.findByLabelText("KELLY_FRACTION")) as HTMLInputElement;
+    const input = (await screen.findByLabelText("Kelly Fraction")) as HTMLInputElement;
     await userEvent.clear(input);
     await userEvent.type(input, "0.6");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-    expect(spy.mock.calls[0][0]).toEqual({ KELLY_FRACTION: 0.6 });
+    expect(spy.mock.calls[0][0]).toEqual({ "Kelly Fraction": 0.6 });
   });
 
   it("surfaces per-key rejected reasons and keeps the key dirty", async () => {
     vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
     vi.spyOn(api, "updateTunables").mockResolvedValue({
       written: {},
-      rejected: { KELLY_FRACTION: "out_of_range: must be within [0, 1]." },
+      rejected: { "Kelly Fraction": "out_of_range: must be within [0, 1]." },
       applies: "next_daemon_restart",
     });
     renderScreen();
-    const input = (await screen.findByLabelText("KELLY_FRACTION")) as HTMLInputElement;
+    const input = (await screen.findByLabelText("Kelly Fraction")) as HTMLInputElement;
     // A value that is valid client-side (in [0,1]) but the server still rejects.
     await userEvent.clear(input);
     await userEvent.type(input, "0.6");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
-    expect(await screen.findByTestId("rejected-KELLY_FRACTION")).toHaveTextContent(/out_of_range/);
+    expect(await screen.findByTestId("rejected-Kelly Fraction")).toHaveTextContent(/out_of_range/);
     // The key stays dirty -> Save remains enabled to fix and re-submit.
     expect(screen.getByRole("button", { name: /Save/ })).toBeEnabled();
   });
@@ -159,16 +159,16 @@ describe("SettingsManager screen", () => {
   it("surfaces written keys and resets the dirty baseline for them", async () => {
     vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
     vi.spyOn(api, "updateTunables").mockResolvedValue({
-      written: { KELLY_FRACTION: 0.6 },
+      written: { "Kelly Fraction": 0.6 },
       rejected: {},
       applies: "next_daemon_restart",
     });
     renderScreen();
-    const input = (await screen.findByLabelText("KELLY_FRACTION")) as HTMLInputElement;
+    const input = (await screen.findByLabelText("Kelly Fraction")) as HTMLInputElement;
     await userEvent.clear(input);
     await userEvent.type(input, "0.6");
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
-    expect(await screen.findByTestId("written-notice")).toHaveTextContent("KELLY_FRACTION");
+    expect(await screen.findByTestId("written-notice")).toHaveTextContent("Kelly Fraction");
     // No longer dirty -> Save disabled again.
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Save/ })).toBeDisabled(),
@@ -178,7 +178,7 @@ describe("SettingsManager screen", () => {
   it("marks an out-of-bounds number invalid and disables Save", async () => {
     vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
     renderScreen();
-    const input = (await screen.findByLabelText("KELLY_FRACTION")) as HTMLInputElement;
+    const input = (await screen.findByLabelText("Kelly Fraction")) as HTMLInputElement;
     await userEvent.clear(input);
     await userEvent.type(input, "5"); // > max 1
     expect(input).toHaveAttribute("aria-invalid", "true");
@@ -190,14 +190,14 @@ describe("SettingsManager screen", () => {
       baseTunables({
         env_drift: {
           detected: true,
-          keys: ["KELLY_FRACTION"],
+          keys: ["Kelly Fraction"],
           note: "An .env write is pending — restart to apply.",
         },
       }),
     );
     renderScreen();
     const notice = await screen.findByTestId("env-drift-notice");
-    expect(notice).toHaveTextContent("KELLY_FRACTION");
+    expect(notice).toHaveTextContent("Kelly Fraction");
   });
 
   it("no env_drift notice when nothing has drifted", async () => {
@@ -210,7 +210,7 @@ describe("SettingsManager screen", () => {
   it("a JSON-blob 'string' field renders as a multi-line textarea, not a single-line input", async () => {
     vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
     renderScreen();
-    const field = (await screen.findByLabelText("CORS_ALLOWED_ORIGINS")) as HTMLTextAreaElement;
+    const field = (await screen.findByLabelText("Cors Allowed Origins")) as HTMLTextAreaElement;
     expect(field.tagName).toBe("TEXTAREA");
     expect(field.value).toBe('["http://localhost:5173"]');
   });
@@ -218,19 +218,19 @@ describe("SettingsManager screen", () => {
   it("editing the JSON textarea and saving sends the raw string, not a re-parsed object", async () => {
     vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
     const spy = vi.spyOn(api, "updateTunables").mockResolvedValue({
-      written: { CORS_ALLOWED_ORIGINS: '["https://example.com"]' },
+      written: { "Cors Allowed Origins": '["https://example.com"]' },
       rejected: {},
       applies: "next_daemon_restart",
     });
     renderScreen();
-    const field = (await screen.findByLabelText("CORS_ALLOWED_ORIGINS")) as HTMLTextAreaElement;
+    const field = (await screen.findByLabelText("Cors Allowed Origins")) as HTMLTextAreaElement;
     // fireEvent (not userEvent.type) -- userEvent's keystroke simulation
     // treats "[" / "]" as special key-sequence delimiters, which would mangle
     // a literal JSON-array string typed keystroke-by-keystroke.
     fireEvent.change(field, { target: { value: '["https://example.com"]' } });
     await userEvent.click(screen.getByRole("button", { name: /Save/ }));
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
-    expect(spy.mock.calls[0][0]).toEqual({ CORS_ALLOWED_ORIGINS: '["https://example.com"]' });
+    expect(spy.mock.calls[0][0]).toEqual({ "Cors Allowed Origins": '["https://example.com"]' });
   });
 
   describe("Danger Zone — Clear Data Cache", () => {

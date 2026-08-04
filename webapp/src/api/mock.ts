@@ -40,7 +40,7 @@ import type {
   CalibrationSummary,
   CircuitBreakerSummary,
   CircuitBreakerTrip,
-  ControlStatus,
+  ControlStatus, CronStatus,
   CorrelationCluster,
   DecisionCreateRequest,
   DecisionCreateResult,
@@ -6358,6 +6358,25 @@ export const mockApi = {
         "running daemon, and any already-launched pipeline still use the " +
         "previous values until restarted.",
     });
+  },
+
+  async getCronStatus(): Promise<CronStatus> {
+    return {
+      jobs: [
+        {
+          title: "Daily: Full pipeline refresh + morning digest",
+          description: "Runs the master orchestrator",
+          schedule: "0 21 * * 1-5",
+          command: "cd /opt/investyo && .venv/bin/python main_orchestrator.py"
+        },
+        {
+          title: "Daily: Strategy validation staleness",
+          description: "Fires a CRITICAL alert",
+          schedule: "0 8 * * *",
+          command: "cd /opt/investyo && .venv/bin/python scripts/preflight_check.py"
+        }
+      ]
+    };
   },
 
   async getTunables(): Promise<TunablesResponse> {

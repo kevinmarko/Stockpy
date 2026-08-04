@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "9af8de18711ef22609becb05ad70fd2a44c534c5",
+    "git_commit": "c29dd79672d3bd456d1db6d65308bb4cf7661e33",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -1838,9 +1838,9 @@
   },
   "write_endpoints_pilots_api": {
     "file": "api/pilots_api.py",
-    "total_write_method_routes": 30,
-    "mutating_settings_routes": 11,
-    "env_writing_routes": 11,
+    "total_write_method_routes": 35,
+    "mutating_settings_routes": 16,
+    "env_writing_routes": 16,
     "live_setattr_routes": 0,
     "live_daemon_push_routes": 1,
     "routes_declaring_applies": 6,
@@ -2147,7 +2147,7 @@
         "route": "/automation/run",
         "method": "POST",
         "function": "trigger_automation_run",
-        "line": 3388,
+        "line": 3398,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2164,7 +2164,7 @@
         "route": "/automation/pause",
         "method": "POST",
         "function": "pause_automation",
-        "line": 3428,
+        "line": 3438,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2181,7 +2181,7 @@
         "route": "/automation/resume",
         "method": "POST",
         "function": "resume_automation",
-        "line": 3454,
+        "line": 3464,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2198,7 +2198,7 @@
         "route": "/automation/schedule/interval",
         "method": "PUT",
         "function": "set_automation_interval",
-        "line": 3485,
+        "line": 3495,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2225,7 +2225,7 @@
         "route": "/strategy/modules",
         "method": "PUT",
         "function": "set_strategy_modules",
-        "line": 3568,
+        "line": 3578,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_many_atomic"
@@ -2248,7 +2248,7 @@
         "route": "/automation/execution-mode",
         "method": "PUT",
         "function": "update_execution_mode",
-        "line": 3609,
+        "line": 3619,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2271,7 +2271,26 @@
         "route": "/settings/tunables",
         "method": "PUT",
         "function": "put_settings_tunables",
-        "line": 3943,
+        "line": 3960,
+        "writes_env": true,
+        "env_write_calls_direct": [],
+        "env_write_calls_via_helper": [
+          "_validate_and_write_payload"
+        ],
+        "live_setattr": false,
+        "live_setattr_sites": [],
+        "live_setattr_via_helper": [],
+        "live_daemon_push": false,
+        "live_daemon_push_calls": [],
+        "applies_values": [],
+        "applies_declared_directly": [],
+        "applies_declared_via_helper": []
+      },
+      {
+        "route": "/settings/tunables",
+        "method": "PATCH",
+        "function": "put_settings_tunables",
+        "line": 3960,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2290,7 +2309,26 @@
         "route": "/settings/sentiment",
         "method": "PUT",
         "function": "put_settings_sentiment",
-        "line": 4539,
+        "line": 4563,
+        "writes_env": true,
+        "env_write_calls_direct": [],
+        "env_write_calls_via_helper": [
+          "_validate_and_write_payload"
+        ],
+        "live_setattr": false,
+        "live_setattr_sites": [],
+        "live_setattr_via_helper": [],
+        "live_daemon_push": false,
+        "live_daemon_push_calls": [],
+        "applies_values": [],
+        "applies_declared_directly": [],
+        "applies_declared_via_helper": []
+      },
+      {
+        "route": "/settings/sentiment",
+        "method": "PATCH",
+        "function": "put_settings_sentiment",
+        "line": 4563,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2309,7 +2347,26 @@
         "route": "/settings/sector-selection",
         "method": "PUT",
         "function": "put_settings_sector_selection",
-        "line": 4557,
+        "line": 4588,
+        "writes_env": true,
+        "env_write_calls_direct": [],
+        "env_write_calls_via_helper": [
+          "_validate_and_write_payload"
+        ],
+        "live_setattr": false,
+        "live_setattr_sites": [],
+        "live_setattr_via_helper": [],
+        "live_daemon_push": false,
+        "live_daemon_push_calls": [],
+        "applies_values": [],
+        "applies_declared_directly": [],
+        "applies_declared_via_helper": []
+      },
+      {
+        "route": "/settings/sector-selection",
+        "method": "PATCH",
+        "function": "put_settings_sector_selection",
+        "line": 4588,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2328,7 +2385,26 @@
         "route": "/settings/fmp",
         "method": "PUT",
         "function": "put_settings_fmp",
-        "line": 4575,
+        "line": 4613,
+        "writes_env": true,
+        "env_write_calls_direct": [],
+        "env_write_calls_via_helper": [
+          "_validate_and_write_payload"
+        ],
+        "live_setattr": false,
+        "live_setattr_sites": [],
+        "live_setattr_via_helper": [],
+        "live_daemon_push": false,
+        "live_daemon_push_calls": [],
+        "applies_values": [],
+        "applies_declared_directly": [],
+        "applies_declared_via_helper": []
+      },
+      {
+        "route": "/settings/fmp",
+        "method": "PATCH",
+        "function": "put_settings_fmp",
+        "line": 4613,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2347,7 +2423,26 @@
         "route": "/settings/etf-transmission",
         "method": "PUT",
         "function": "put_settings_etf_transmission",
-        "line": 4593,
+        "line": 4638,
+        "writes_env": true,
+        "env_write_calls_direct": [],
+        "env_write_calls_via_helper": [
+          "_validate_and_write_payload"
+        ],
+        "live_setattr": false,
+        "live_setattr_sites": [],
+        "live_setattr_via_helper": [],
+        "live_daemon_push": false,
+        "live_daemon_push_calls": [],
+        "applies_values": [],
+        "applies_declared_directly": [],
+        "applies_declared_via_helper": []
+      },
+      {
+        "route": "/settings/etf-transmission",
+        "method": "PATCH",
+        "function": "put_settings_etf_transmission",
+        "line": 4638,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2366,7 +2461,7 @@
         "route": "/dead-letter/retry",
         "method": "POST",
         "function": "post_dead_letter_retry",
-        "line": 4714,
+        "line": 4759,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2387,7 +2482,7 @@
         "route": "/prompts/pin",
         "method": "PUT",
         "function": "put_prompts_pin",
-        "line": 4864,
+        "line": 4909,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2410,7 +2505,7 @@
         "route": "/rag/query",
         "method": "POST",
         "function": "post_rag_query",
-        "line": 4941,
+        "line": 4986,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2441,7 +2536,7 @@
           "route": "/run",
           "method": "POST",
           "function": "trigger_run",
-          "line": 352,
+          "line": 353,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2458,7 +2553,7 @@
           "route": "/pipeline/data",
           "method": "POST",
           "function": "trigger_pipeline_data",
-          "line": 431,
+          "line": 432,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2475,7 +2570,7 @@
           "route": "/pipeline/metrics",
           "method": "POST",
           "function": "trigger_pipeline_metrics",
-          "line": 437,
+          "line": 438,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2492,7 +2587,7 @@
           "route": "/interval",
           "method": "PUT",
           "function": "set_interval",
-          "line": 494,
+          "line": 495,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2509,7 +2604,7 @@
           "route": "/daemon/restart",
           "method": "POST",
           "function": "restart_daemon",
-          "line": 522,
+          "line": 523,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2526,7 +2621,7 @@
           "route": "/jobs",
           "method": "POST",
           "function": "create_job",
-          "line": 590,
+          "line": 591,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2543,7 +2638,7 @@
           "route": "/jobs/{job_id}/cancel",
           "method": "POST",
           "function": "cancel_job",
-          "line": 669,
+          "line": 670,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3170,12 +3265,12 @@
         },
         {
           "file": "api/pilots_api.py",
-          "line": 3887,
+          "line": 3897,
           "expr": "getattr(settings, key, None)"
         },
         {
           "file": "api/pilots_api.py",
-          "line": 3985,
+          "line": 4002,
           "expr": "getattr(settings, key, None)"
         },
         {
@@ -3526,7 +3621,7 @@
       {
         "field": "EDGAR_FULLTEXT_CHUNK_TOKENS",
         "name_literal_sites": [
-          "api/pilots_api.py:4358"
+          "api/pilots_api.py:4375"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -3534,7 +3629,7 @@
       {
         "field": "EDGAR_FULLTEXT_FORMS",
         "name_literal_sites": [
-          "api/pilots_api.py:4357"
+          "api/pilots_api.py:4374"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -3542,7 +3637,7 @@
       {
         "field": "ETF_HOLDINGS_TICKERS",
         "name_literal_sites": [
-          "api/pilots_api.py:4482",
+          "api/pilots_api.py:4499",
           "gui/panels/settings_manager.py:122"
         ],
         "name_literal_site_count": 2,
@@ -3551,7 +3646,7 @@
       {
         "field": "FMP_ECON_INDICATORS",
         "name_literal_sites": [
-          "api/pilots_api.py:4462",
+          "api/pilots_api.py:4479",
           "gui/panels/settings_manager.py:158"
         ],
         "name_literal_site_count": 2,

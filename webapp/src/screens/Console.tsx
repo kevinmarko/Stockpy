@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useToast } from "../components/ToastContext";
+import toast from "react-hot-toast";
 import { TabGuide } from "../components/TabGuide";
 import { LogStream } from "../components/LogStream";
 import { DataTable, type Column } from "../components/DataTable";
@@ -131,7 +131,6 @@ const JOB_COLUMNS: Column<JobRecord>[] = [
 ];
 
 export function Console() {
-  const { addToast } = useToast();
   const [activeTab, setActiveTab] = useState<"logs" | "resources">("logs");
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
   const [jobHistory, setJobHistory] = useState<JobRecord[]>([]);
@@ -191,9 +190,23 @@ export function Console() {
       const res = await api.createJob(jobType, params);
       setActiveJob(res);
       recordJob(res);
-      addToast({ type: "info", title: `Job ${jobType} started`, description: `ID: ${res.job_id}` });
+      toast.success(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Job {jobType} started</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            ID: {res.job_id}
+          </span>
+        </div>
+      );
     } catch (err: any) {
-      addToast({ type: "error", title: `Job ${jobType} failed to launch`, description: err?.message ?? String(err) });
+      toast.error(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Job {jobType} failed to launch</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            {err?.message ?? String(err)}
+          </span>
+        </div>
+      );
     } finally {
       setLoading(false);
     }
@@ -202,11 +215,19 @@ export function Console() {
   const handleRunBacktest = async () => {
     const strategies = backtestStrategies.split(",").map((s) => s.trim()).filter(Boolean);
     if (strategies.length === 0) {
-      addToast({ type: "warning", title: "Enter at least one strategy id (comma-separated)." });
+      toast.error(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Enter at least one strategy id (comma-separated).</span>
+        </div>
+      );
       return;
     }
     if (!backtestStart || !backtestEnd) {
-      addToast({ type: "warning", title: "Start and end dates are required." });
+      toast.error(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Start and end dates are required.</span>
+        </div>
+      );
       return;
     }
     await handleLaunch("validation", { strategies, start: backtestStart, end: backtestEnd });
@@ -221,12 +242,35 @@ export function Console() {
         const latest = await api.getJobStatus(activeJob.job_id);
         setActiveJob(latest);
         recordJob(latest);
-        addToast({ type: "warning", title: "Job cancelled", description: `${activeJob.job_id} cancelled.` });
+        toast(
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Job cancelled</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+              {activeJob.job_id} cancelled.
+            </span>
+          </div>,
+          { icon: '⚠️' }
+        );
       } else {
-        addToast({ type: "warning", title: "Cancel requested", description: "Could not be confirmed — the job may still be running." });
+        toast(
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Cancel requested</span>
+            <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+              Could not be confirmed — the job may still be running.
+            </span>
+          </div>,
+          { icon: '⚠️' }
+        );
       }
     } catch (err: any) {
-      addToast({ type: "error", title: "Cancel failed", description: err?.message ?? String(err) });
+      toast.error(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Cancel failed</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            {err?.message ?? String(err)}
+          </span>
+        </div>
+      );
     }
   };
 

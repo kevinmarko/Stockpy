@@ -29,6 +29,7 @@ import type {
   BrokerageStatus,
   CalibrationSummary,
   ControlStatus,
+  CronStatus,
   DecisionCreateRequest,
   DecisionCreateResult,
   DecisionEntry,
@@ -522,6 +523,7 @@ const liveApi = {
   // (`{ ADVISORY_ONLY: "ADVISORY_ONLY" }`). Omitting it for such a key rejects
   // that key with `confirmation_required` — per key, so the rest of the batch
   // still writes.
+  getCronStatus: () => http<CronStatus>("/system/cron-status"),
   getTunables: () => http<TunablesResponse>("/settings/tunables"),
   updateTunables: (
     values: Record<string, number | boolean | string>,

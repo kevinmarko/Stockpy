@@ -1,4 +1,5 @@
-import { useId } from "react";
+import { useId, useState, useEffect, type ReactNode } from "react";
+import toast from "react-hot-toast";
 
 /**
  * Toggle — an on/off action control, built as `<button role="switch">`, NOT a
@@ -25,29 +26,62 @@ export function Toggle({
   dataTestId,
 }: {
   checked: boolean;
-  onChange: (next: boolean) => void;
-  label: string;
+  onChange: (next: boolean) => Promise<void> | void;
+  label: ReactNode;
   disabled?: boolean;
   pending?: boolean;
   describedBy?: string;
   dataTestId?: string;
 }) {
   const labelId = useId();
+  const [optimisticChecked, setOptimisticChecked] = useState(checked);
+  const [isMutating, setIsMutating] = useState(false);
+
+  // Sync with prop when not mutating
+  useEffect(() => {
+    if (!isMutating) setOptimisticChecked(checked);
+  }, [checked, isMutating]);
+
+  const handleChange = async () => {
+    const next = !optimisticChecked;
+    setOptimisticChecked(next);
+    setIsMutating(true);
+    try {
+      const result = onChange(next);
+      if (result instanceof Promise) {
+        await result;
+      }
+    } catch (err: any) {
+      setOptimisticChecked(!next);
+      toast.error(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Update failed</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            {err.message || "Could not save toggle state."}
+          </span>
+        </div>
+      );
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  const busy = pending || isMutating;
 
   return (
     <button
       type="button"
       role="switch"
-      aria-checked={checked}
+      aria-checked={optimisticChecked}
       aria-labelledby={labelId}
       aria-describedby={describedBy}
-      aria-busy={pending}
-      disabled={disabled || pending}
+      aria-busy={busy}
+      disabled={disabled || busy}
       className="switch-wrap"
-      onClick={() => onChange(!checked)}
+      onClick={handleChange}
       data-testid={dataTestId}
     >
-      <span className={`switch-track${checked ? " on" : ""}`}>
+      <span className={`switch-track${optimisticChecked ? " on" : ""}`}>
         <span className="switch-thumb" />
       </span>
       <span id={labelId} className="switch-label">

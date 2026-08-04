@@ -21,7 +21,12 @@ import { Observability } from "./screens/Observability";
 import { StrategyHealth } from "./screens/StrategyHealth";
 import { Calibration } from "./screens/Calibration";
 import { PipelineDashboard } from "./screens/PipelineDashboard";
-import { Settings } from "./screens/Settings";
+import { SettingsLayout } from "./screens/SettingsLayout";
+import { SettingsGeneral } from "./screens/SettingsGeneral";
+import { SettingsData } from "./screens/SettingsData";
+import { SettingsUniverse } from "./screens/SettingsUniverse";
+import { SettingsBrokers } from "./screens/SettingsBrokers";
+import { SettingsModules } from "./screens/SettingsModules";
 import { StrategyMatrix } from "./screens/StrategyMatrix";
 import { SettingsManager } from "./screens/SettingsManager";
 import { SentimentSettings } from "./screens/SentimentSettings";
@@ -52,7 +57,7 @@ import { CommandPaletteModal } from "./components/CommandPaletteModal";
 import { ReportPreviewModal } from "./components/ReportPreviewModal";
 import { TickerDrawer } from "./components/TickerDrawer";
 import { TopStatusBar } from "./components/TopStatusBar";
-import { ToastProvider } from "./components/ToastContext";
+import { ToastProvider } from "./components/ToastProvider";
 import { DensityProvider } from "./components/DensityContext";
 import { AutoRefreshProvider } from "./components/AutoRefreshContext";
 import { ExecutionModeProvider } from "./components/ExecutionModeContext";
@@ -246,15 +251,22 @@ export default function App() {
                   <Route path="/operations" element={<OperationsHub />} />
                   <Route path="/portfolio" element={<Portfolio />} />
                   <Route path="/help" element={<Help />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/settings/strategy" element={<StrategyMatrix />} />
-                  <Route path="/settings/tunables" element={<SettingsManager />} />
-                  <Route path="/settings/sentiment" element={<SentimentSettings />} />
-                  <Route path="/settings/sector-selection" element={<SectorSelectionSettings />} />
-                  <Route path="/settings/fmp" element={<FmpSettings />} />
-                  <Route path="/settings/etf-transmission" element={<EtfTransmissionSettings />} />
-                  <Route path="/settings/ai" element={<AIControlCenter />} />
-                  <Route path="/settings/prompts" element={<PromptRegistry />} />
+                  <Route path="/settings" element={<SettingsLayout />}>
+                    <Route index element={<SettingsGeneral />} />
+                    <Route path="data" element={<SettingsData />} />
+                    <Route path="universe" element={<SettingsUniverse />} />
+                    <Route path="brokers" element={<SettingsBrokers />} />
+                    <Route path="modules" element={<SettingsModules />} />
+                    
+                    <Route path="strategy" element={<StrategyMatrix />} />
+                    <Route path="tunables" element={<SettingsManager />} />
+                    <Route path="sentiment" element={<SentimentSettings />} />
+                    <Route path="sector-selection" element={<SectorSelectionSettings />} />
+                    <Route path="fmp" element={<FmpSettings />} />
+                    <Route path="etf-transmission" element={<EtfTransmissionSettings />} />
+                    <Route path="ai" element={<AIControlCenter />} />
+                    <Route path="prompts" element={<PromptRegistry />} />
+                  </Route>
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </ErrorBoundary>

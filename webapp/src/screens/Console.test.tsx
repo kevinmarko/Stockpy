@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Console } from "./Console";
 import { api } from "../api/client";
 import { DensityProvider } from "../components/DensityContext";
-import { ToastProvider } from "../components/ToastContext";
+import { ToastProvider } from "../components/ToastProvider";
 
 function renderConsole() {
   return render(

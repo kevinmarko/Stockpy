@@ -18,6 +18,18 @@ export type JobType =
   | "train_meta"
   | "train_lgbm";
 
+export interface CronJob {
+  title: string;
+  description: string;
+  schedule: string;
+  command: string;
+}
+
+export interface CronStatus {
+  jobs: CronJob[];
+  error?: string;
+}
+
 export interface JobRecord {
   job_id: string;
   job_type: JobType;

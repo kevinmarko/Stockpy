@@ -26,14 +26,14 @@ function baseEtfTransmissionTunables(): TunablesResponse {
         name: "Measurement & Residualization",
         fields: [
           {
-            key: "ETF_TRANSMISSION_ENABLED",
+            key: "Etf Transmission Enabled",
             value: false,
             type: "boolean",
             default: false,
             description: "Transmission measurement switch.",
           },
           {
-            key: "ETF_TRANSMISSION_WRAPPERS",
+            key: "Etf Transmission Wrappers",
             value: '["SPY","QQQ"]',
             type: "string",
             default: '["SPY","QQQ"]',
@@ -69,7 +69,7 @@ describe("EtfTransmissionSettings screen", () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getEtfTransmissionSettings").mockResolvedValue(baseEtfTransmissionTunables());
     const updateSpy = vi.spyOn(api, "updateEtfTransmissionSettings").mockResolvedValueOnce({
-      written: { ETF_TRANSMISSION_ENABLED: true },
+      written: { "Etf Transmission Enabled": true },
       rejected: {},
       applies: "next_daemon_restart",
       note: "Accepted values written to .env.",
@@ -78,7 +78,7 @@ describe("EtfTransmissionSettings screen", () => {
     renderScreen();
     await screen.findByRole("heading", { name: "ETF Volatility Transmission" });
 
-    const toggle = screen.getByLabelText("ETF_TRANSMISSION_ENABLED");
+    const toggle = screen.getByLabelText("Etf Transmission Enabled");
     await user.click(toggle);
 
     const saveBtn = screen.getByRole("button", { name: /Save 1 change/i });
@@ -87,8 +87,8 @@ describe("EtfTransmissionSettings screen", () => {
 
     await waitFor(() => {
       // Second arg is the dangerous-key confirmation map — empty here because
-      // ETF_TRANSMISSION_ENABLED is not a DANGEROUS_KEYS member.
-      expect(updateSpy).toHaveBeenCalledWith({ ETF_TRANSMISSION_ENABLED: true }, {});
+      // this fixture's field carries no `liveness.dangerous` flag.
+      expect(updateSpy).toHaveBeenCalledWith({ "Etf Transmission Enabled": true }, {});
     });
   });
 
@@ -102,7 +102,7 @@ describe("EtfTransmissionSettings screen", () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getEtfTransmissionSettings").mockResolvedValue(baseEtfTransmissionTunables());
     const etfSpy = vi.spyOn(api, "updateEtfTransmissionSettings").mockResolvedValue({
-      written: { ETF_TRANSMISSION_ENABLED: true },
+      written: { "Etf Transmission Enabled": true },
       rejected: {},
       applies: "next_daemon_restart",
     });
@@ -110,33 +110,33 @@ describe("EtfTransmissionSettings screen", () => {
     const generalSpy = vi.spyOn(api, "updateTunables");
 
     renderScreen();
-    const toggle = await screen.findByLabelText("ETF_TRANSMISSION_ENABLED");
+    const toggle = await screen.findByLabelText("Etf Transmission Enabled");
     await user.click(toggle);
     await user.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() => expect(etfSpy).toHaveBeenCalledTimes(1));
-    expect(etfSpy.mock.calls[0][0]).toEqual({ ETF_TRANSMISSION_ENABLED: true });
+    expect(etfSpy.mock.calls[0][0]).toEqual({ "Etf Transmission Enabled": true });
     expect(sentimentSpy).not.toHaveBeenCalled();
     expect(generalSpy).not.toHaveBeenCalled();
   });
 
-  it("renders a JSON-array field (ETF_TRANSMISSION_WRAPPERS) as an editable textarea and saves the edited JSON string as-is", async () => {
+  it("renders a JSON-array field (Etf Transmission Wrappers) as an editable textarea and saves the edited JSON string as-is", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getEtfTransmissionSettings").mockResolvedValue(baseEtfTransmissionTunables());
     const etfSpy = vi.spyOn(api, "updateEtfTransmissionSettings").mockResolvedValue({
-      written: { ETF_TRANSMISSION_WRAPPERS: '["SPY","QQQ","IWM"]' },
+      written: { "Etf Transmission Wrappers": '["SPY","QQQ","IWM"]' },
       rejected: {},
       applies: "next_daemon_restart",
     });
 
     renderScreen();
-    const textarea = (await screen.findByLabelText("ETF_TRANSMISSION_WRAPPERS")) as HTMLTextAreaElement;
+    const textarea = (await screen.findByLabelText("Etf Transmission Wrappers")) as HTMLTextAreaElement;
     expect(textarea.value).toBe('["SPY","QQQ"]');
 
     fireEvent.change(textarea, { target: { value: '["SPY","QQQ","IWM"]' } });
     await user.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() => expect(etfSpy).toHaveBeenCalledTimes(1));
-    expect(etfSpy.mock.calls[0][0]).toEqual({ ETF_TRANSMISSION_WRAPPERS: '["SPY","QQQ","IWM"]' });
+    expect(etfSpy.mock.calls[0][0]).toEqual({ "Etf Transmission Wrappers": '["SPY","QQQ","IWM"]' });
   });
 });

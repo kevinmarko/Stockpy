@@ -303,3 +303,70 @@ def parse_crontab(path: Optional[Path] = None) -> list:
         )
         comment_buf = []
     return entries
+
+
+def parse_crontab_status(path: Optional[Path] = None) -> dict:
+    """Parse ``deploy/crontab.txt`` into ``{"jobs": [{"title", "description",
+    "schedule", "command"}, ...]}`` for ``GET /system/cron-status``.
+
+    A DIFFERENT shape from ``parse_crontab()`` above (which serves
+    ``GET /automation/status`` and joins every comment line into one
+    ``comment`` string) -- this splits a ``# ── Section Title`` box-drawing
+    header line from the free-text description lines that follow it, since
+    the Commands screen renders title and description separately.
+
+    Extracted from two near-verbatim, independently-drifted copies that used
+    to live in ``api/control_api.py`` and ``api/pilots_api.py`` (the latter
+    was the correct one -- see the ``current_title`` reset bug below). Both
+    modules now call this single implementation.
+
+    ``current_title`` is intentionally NOT reset after a cron line is
+    emitted -- only ``current_desc`` is. Several cron entries commonly share
+    one ``# ── Section Title`` header with per-entry description lines below
+    it; resetting the title after the first entry would silently fall every
+    later entry in that section back to the generic ``"Cron Job"`` label.
+
+    Never raises (CONSTRAINT #6) -- a missing file, a permission error, or any
+    other read failure returns ``{"jobs": [], "error": "<reason>"}``."""
+    target = path or (Path(__file__).resolve().parent.parent / "deploy" / "crontab.txt")
+    if not target.exists():
+        return {"jobs": [], "error": "crontab.txt not found"}
+
+    jobs: list = []
+    current_title = ""
+    current_desc: list = []
+
+    try:
+        text = target.read_text(encoding="utf-8")
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("# ──"):
+                current_title = line.strip("# ─").strip()
+                current_desc = []
+            elif (
+                line.startswith("# ==")
+                or line.startswith("# Install:")
+                or line.startswith("# All times")
+                or line.startswith("# US Eastern")
+            ):
+                continue
+            elif line.startswith("#"):
+                current_desc.append(line.lstrip("#").strip())
+            else:
+                parts = line.split(maxsplit=5)
+                if len(parts) >= 6:
+                    jobs.append(
+                        {
+                            "title": current_title or "Cron Job",
+                            "description": " ".join(current_desc),
+                            "schedule": " ".join(parts[:5]),
+                            "command": parts[5],
+                        }
+                    )
+                    current_desc = []
+        return {"jobs": jobs}
+    except OSError as exc:  # noqa: BLE001 - dead-letter (CONSTRAINT #6)
+        logger.warning("run_status.parse_crontab_status: could not read %s: %s", target, exc)
+        return {"jobs": [], "error": str(exc)}

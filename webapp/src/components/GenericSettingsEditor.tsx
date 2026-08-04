@@ -24,6 +24,7 @@ import { Toggle } from "./Toggle";
 import { TunableGroupCard } from "./TunableGroupCard";
 import { Modal } from "./Modal";
 import { theme } from "../theme";
+import { TagInput } from "./TagInput";
 import {
   buildConfirmMap,
   dangerousKeysIn,
@@ -101,6 +102,8 @@ export interface GenericSettingsEditorProps {
     values: Record<string, number | boolean | string>,
     confirm?: SettingsConfirmMap,
   ) => Promise<TunablesUpdateResult>;
+  /** Optional key -> human label override; falls back to `humanizeKey(key)`. */
+  labelMap?: Record<string, string>;
   /**
    * Empty-state copy for when the backend exposes zero fields. Defaults to the
    * scoped-editor wording; the general tunables screen overrides it with its
@@ -124,6 +127,7 @@ export function GenericSettingsEditor({
   backTo = "/settings",
   fetchSettings,
   updateSettings,
+  labelMap,
   emptyTitle = "No settings exposed",
   emptyHint = "The backend returned no editable settings for this section.",
   dangerZone,
@@ -219,6 +223,7 @@ export function GenericSettingsEditor({
           data={data}
           onReload={reload}
           updateSettings={updateSettings}
+          labelMap={labelMap}
           dangerZone={dangerZone}
           lastResult={lastResult}
           onResult={setLastResult}
@@ -232,6 +237,7 @@ function SettingsForm({
   data,
   onReload,
   updateSettings,
+  labelMap,
   dangerZone,
   lastResult,
   onResult,
@@ -242,6 +248,7 @@ function SettingsForm({
     values: Record<string, number | boolean | string>,
     confirm?: SettingsConfirmMap,
   ) => Promise<TunablesUpdateResult>;
+  labelMap?: Record<string, string>;
   dangerZone?: ReactNode;
   /** The last write's result, owned by the parent so it survives a reload. */
   lastResult: TunablesUpdateResult | null;
@@ -407,6 +414,7 @@ function SettingsForm({
                   onChange={(v) => setVal(f.key, v)}
                   invalid={invalidKeys.has(f.key)}
                   rejectedReason={rejected[f.key] ?? null}
+                  labelMap={labelMap}
                 />
               ))}
             </div>
@@ -563,6 +571,19 @@ function isJsonBlob(f: TunableField): boolean {
   }
 }
 
+function humanizeKey(key: string): string {
+  if (!key.includes("_") && key.includes(" ")) return key;
+  return key
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function isTagList(f: TunableField): boolean {
+  if (f.type !== "string") return false;
+  return f.key.endsWith("_SOURCES") || f.key.endsWith("_TICKERS") || f.key.endsWith("_LIST");
+}
+
 /**
  * One editable field. This is the single place per-field UI is decided for all
  * five editors, so the liveness/safety treatment (the applies badge, the
@@ -575,18 +596,25 @@ function FieldRow({
   onChange,
   invalid,
   rejectedReason,
+  labelMap,
 }: {
   field: TunableField;
   value: EditVal;
   onChange: (v: EditVal) => void;
   invalid: boolean;
   rejectedReason: string | null;
+  labelMap?: Record<string, string>;
 }) {
   const rangeMsg =
     f.min !== undefined || f.max !== undefined
       ? `Must be a number in [${f.min ?? "−∞"}, ${f.max ?? "∞"}].`
       : "Must be a number.";
 
+  // Only humanize when a screen opts in via `labelMap` (currently just
+  // FmpSettings) -- every other editor's tests assert on the raw backend key
+  // as the visible label, matching this component's pre-existing contract.
+  const textLabel = labelMap ? labelMap[f.key] ?? humanizeKey(f.key) : f.key;
+  const inputId = `field-${f.key}`;
   const lv = resolveLiveness(f);
   const badge = fieldBadge(f);
   const editable = isFieldEditable(f);
@@ -635,7 +663,7 @@ function FieldRow({
           <Toggle
             checked={value === true}
             onChange={(v) => onChange(v)}
-            label={f.key}
+            label={textLabel}
             disabled={!editable}
           />
           <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", margin: "var(--s-1-5) 0 0" }}>
@@ -644,7 +672,8 @@ function FieldRow({
         </>
       ) : f.type === "enum" ? (
         <Select
-          label={f.key}
+          id={inputId}
+          label={textLabel}
           value={String(value)}
           onChange={(e) => onChange(e.target.value)}
           options={(f.options ?? []).map((o) => ({ value: o, label: o }))}
@@ -653,7 +682,8 @@ function FieldRow({
         />
       ) : isJsonBlob(f) ? (
         <Textarea
-          label={f.key}
+          id={inputId}
+          label={textLabel}
           value={value as string}
           onChange={(e) => onChange(e.target.value)}
           rows={4}
@@ -663,9 +693,20 @@ function FieldRow({
           disabled={!editable}
           hint={hint}
         />
+      ) : isTagList(f) ? (
+        <TagInput
+          id={inputId}
+          label={textLabel}
+          value={typeof value === "string" && value.length > 0 ? value.split(",").map((s) => s.trim()) : []}
+          onChange={(arr) => onChange(arr.join(","))}
+          invalid={invalid}
+          disabled={!editable}
+          hint={hint}
+        />
       ) : (
         <Input
-          label={f.key}
+          id={inputId}
+          label={textLabel}
           type={f.type === "number" ? "number" : "text"}
           inputMode={f.type === "number" ? "decimal" : undefined}
           min={f.min}
