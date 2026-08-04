@@ -558,10 +558,9 @@ function ForecastTooltip({ active, payload, label }: any) {
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--s-4)", alignItems: "center" }}>
                     <span style={{ color: theme.textSecondary }}>Interval</span>
                     <span className="num" style={{ color: theme.caution }}>
-                      ${(data.coneUpper - data.coneLower).toFixed(2)} ({(
-                        ((data.coneUpper - data.coneLower) / data.mid) *
-                        100
-                      ).toFixed(1)}%)
+                      ${(data.coneUpper - data.coneLower).toFixed(2)} (
+                      {data.mid ? `${(((data.coneUpper - data.coneLower) / data.mid) * 100).toFixed(1)}%` : "—"}
+                      )
                     </span>
                   </div>
                 </>

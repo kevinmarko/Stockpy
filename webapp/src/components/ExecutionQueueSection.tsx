@@ -310,6 +310,7 @@ function IntentRow({ intent, mode, queueGeneratedAt }: { intent: ExecutionQueueI
           to={`/symbol/${encodeURIComponent(intent.symbol)}`}
           style={{ fontWeight: 700, color: theme.textPrimary, textDecoration: "none" }}
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
         >
           {intent.symbol}
         </Link>

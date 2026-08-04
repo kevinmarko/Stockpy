@@ -365,6 +365,31 @@ describe("Agentic Trading screen (real mock API)", () => {
     expect(await screen.findByRole("link", { name: /Manage Pilot follows/ })).toBeInTheDocument();
   });
 
+  it("debounces the Ladder Ticker input instead of firing a lookup per keystroke", async () => {
+    const user = userEvent.setup();
+    const ladderSpy = vi.spyOn(api, "getOrderBookLadder");
+    renderScreen();
+
+    // Initial mount fetches the default symbol exactly once.
+    await waitFor(() => expect(ladderSpy).toHaveBeenCalledWith("SPY"));
+    const callsAfterMount = ladderSpy.mock.calls.length;
+
+    const input = await screen.findByTestId("ladder-ticker-input");
+    await user.clear(input);
+    await user.type(input, "AAPL");
+
+    // Right after typing, the debounced value hasn't caught up yet -- no new
+    // lookup should have fired per character (the bug this test guards
+    // against: 4 keystrokes -> 4 REST calls / WS reconnects).
+    expect(ladderSpy.mock.calls.length).toBe(callsAfterMount);
+
+    await waitFor(() => expect(ladderSpy).toHaveBeenCalledWith("AAPL"));
+    // Exactly one call for the final, settled value -- not one per keystroke.
+    expect(ladderSpy.mock.calls.filter((c) => c[0] === "AAPL")).toHaveLength(1);
+
+    localStorage.removeItem("agentic-trading:ladder-symbol");
+  });
+
   it("Watch on a candidate calls watchCandidate and confirms it's now tracked", async () => {
     const user = userEvent.setup();
     const watchSpy = vi.spyOn(api, "watchCandidate").mockResolvedValueOnce({

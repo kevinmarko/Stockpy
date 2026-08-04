@@ -13,9 +13,12 @@ import type { AutomationStatus } from "../api/types";
 //   - ExecutionQueueSection: disable/enable review actions
 //   - TopStatusBar: unified badge display
 //
-// Previously each consumer fetched /automation/status independently; this
-// context eliminates redundant requests and ensures consistent state across
-// every component in the same render cycle.
+// De-duplicates /automation/status for the consumers above -- previously
+// each fetched it independently. NOTE: this is not (yet) a full
+// de-duplication across the whole app: Settings.tsx still runs its own
+// independent GET /automation/status fetch via a local useApi call, so that
+// screen and this context can briefly disagree between polls. Migrate
+// Settings.tsx onto useExecutionMode() to close that gap.
 // ---------------------------------------------------------------------------
 
 export interface ExecutionMode {

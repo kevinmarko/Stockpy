@@ -5,6 +5,8 @@ import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useBrokerageLoginJob } from "../hooks/useBrokerageLoginJob";
+import { useDebounce } from "../hooks/useDebounce";
+import { usePersistedState } from "../hooks/usePersistedState";
 import { useExecutionMode } from "../components/ExecutionModeContext";
 import type {
   AgenticDiscovery,
@@ -62,7 +64,16 @@ export function AgenticTrading() {
 
   const [refreshToken, setRefreshToken] = useState(0);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [ladderSymbol, setLadderSymbol] = useState("SPY");
+  // Persisted (not just component state) so the operator's last-viewed
+  // ladder ticker survives a reload -- a non-sensitive UI preference, the
+  // exact case usePersistedState documents itself for.
+  const [ladderSymbol, setLadderSymbol] = usePersistedState("agentic-trading:ladder-symbol", "SPY");
+  // Debounced before it reaches ActiveTraderLadder -- that component's
+  // useApi/useLiveTick both re-fire (REST call + WebSocket reconnect) on
+  // every `symbol` change, so an un-debounced per-keystroke value would fire
+  // one of each per character typed. Matches the pattern SymbolInput.tsx
+  // already uses for the same reason.
+  const debouncedLadderSymbol = useDebounce(ladderSymbol, 250);
 
   // Drives the header's "Refresh Data" button through the same async
   // device-approval-push job flow as the auth modal's RobinhoodConnectForm
@@ -180,10 +191,12 @@ export function AgenticTrading() {
       >
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
-            <label style={{ fontSize: "var(--t-caption)", fontWeight: 600, color: theme.textSecondary }}>
+            <label htmlFor="ladder-ticker-input" style={{ fontSize: "var(--t-caption)", fontWeight: 600, color: theme.textSecondary }}>
               Ladder Ticker:
             </label>
             <input
+              id="ladder-ticker-input"
+              data-testid="ladder-ticker-input"
               type="text"
               value={ladderSymbol}
               onChange={(e) => setLadderSymbol(e.target.value.toUpperCase())}
@@ -199,7 +212,7 @@ export function AgenticTrading() {
               }}
             />
           </div>
-          <ActiveTraderLadder symbol={ladderSymbol} />
+          <ActiveTraderLadder symbol={debouncedLadderSymbol} />
         </div>
         <ModelHealthPanel />
       </div>

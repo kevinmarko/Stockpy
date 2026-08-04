@@ -10,7 +10,7 @@
  * hardcoded guess at pilot names (CONSTRAINT #4). This file pins that
  * contract against regressing back to a fixed, fictional dropdown.
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExecutionQueueSection } from "./ExecutionQueueSection";
@@ -103,5 +103,23 @@ describe("ExecutionQueueSection (real mock API)", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0].textContent).toContain("AAPL");
     });
+  });
+
+  it("Enter on the symbol Link doesn't also toggle the ancestor row's expand state", async () => {
+    renderSection();
+    const rows = await screen.findAllByTestId("execution-intent-row");
+    const row = rows[0];
+    const toggle = within(row).getByRole("button", { name: /Toggle details/i });
+    const link = within(row).getByRole("link");
+
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    link.focus();
+    fireEvent.keyDown(link, { key: "Enter", code: "Enter" });
+
+    // The Link's own onKeyDown stops the event from bubbling to the row's
+    // onKeyDown -- pressing Enter to follow the link must not also expand
+    // the row underneath it.
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 });
