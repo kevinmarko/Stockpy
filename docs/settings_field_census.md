@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `bf95b3a92eaf9709db108b97ba42baa32e0f86a8`
+- Measured at commit: `eb668fac67cde97ba9d0771e760969958548dfbd`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -161,7 +161,7 @@ Three *distinct* mutation mechanisms exist — a liveness model that only consid
 | in-process `setattr(settings, ...)` | 0 | patches THIS process's singleton only |
 | push to the daemon via `daemon_client.set_*` | 1 | HTTP call into a **separately running** daemon process |
 
-Routes declaring an `applies` value in their response: **11** of 11.
+Routes declaring an `applies` value in their response: **6** of 11.
 
 Resolution is AST-based and follows one level of indirection: a handler that only calls a
 module-level helper which itself calls `env_io.write_*` (or builds the response carrying
@@ -171,17 +171,17 @@ module-level helper which itself calls `env_io.write_*` (or builds the response 
 
 | Route | Method | Handler | Line | `.env` | `setattr` | daemon push | `applies` claims |
 |---|---|---|---|---|---|---|---|
-| `/observability/macro-gate` | PUT | `put_macro_gate` | 1667 | yes | no | no | `next_daemon_restart` |
-| `/llm/setting` | PUT | `set_llm_setting` | 2863 | yes | no | no | `immediately`, `next_daemon_restart` |
-| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3479 | yes | no | yes | `immediately`, `next_daemon_restart` |
-| `/strategy/modules` | PUT | `set_strategy_modules` | 3562 | yes | no | no | `next_daemon_restart` |
-| `/automation/execution-mode` | PUT | `update_execution_mode` | 3603 | yes | no | no | `next_daemon_restart` |
-| `/settings/tunables` | PUT | `put_settings_tunables` | 3938 | yes | no | no | `next_daemon_restart` |
-| `/settings/sentiment` | PUT | `put_settings_sentiment` | 4314 | yes | no | no | `next_daemon_restart` |
-| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 4336 | yes | no | no | `next_daemon_restart` |
-| `/settings/fmp` | PUT | `put_settings_fmp` | 4358 | yes | no | no | `next_daemon_restart` |
-| `/settings/etf-transmission` | PUT | `put_settings_etf_transmission` | 4380 | yes | no | no | `next_daemon_restart` |
-| `/prompts/pin` | PUT | `put_prompts_pin` | 4651 | yes | no | no | `next_daemon_restart` |
+| `/observability/macro-gate` | PUT | `put_macro_gate` | 1673 | yes | no | no | `next_daemon_restart` |
+| `/llm/setting` | PUT | `set_llm_setting` | 2869 | yes | no | no | `immediately`, `next_daemon_restart` |
+| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3485 | yes | no | yes | `immediately`, `next_daemon_restart` |
+| `/strategy/modules` | PUT | `set_strategy_modules` | 3568 | yes | no | no | `next_daemon_restart` |
+| `/automation/execution-mode` | PUT | `update_execution_mode` | 3609 | yes | no | no | `next_daemon_restart` |
+| `/settings/tunables` | PUT | `put_settings_tunables` | 3943 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PUT | `put_settings_sentiment` | 4539 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 4557 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PUT | `put_settings_fmp` | 4575 | yes | no | no | _(none)_ |
+| `/settings/etf-transmission` | PUT | `put_settings_etf_transmission` | 4593 | yes | no | no | _(none)_ |
+| `/prompts/pin` | PUT | `put_prompts_pin` | 4864 | yes | no | no | `next_daemon_restart` |
 
 ### Existing in-process hot-reload beachhead — `gui/ai_control_center.py::LIVE_PATCHABLE_KEYS`
 
@@ -213,7 +213,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **339** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **340** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -243,10 +243,10 @@ referenced by name somewhere and is probably read dynamically.
 | Field | Name-literal sites | Verdict |
 |---|---|---|
 | `AI_GENERATION_API_ENABLED` | `api/data_api.py:173`, `settings_keysets.py:250` | likely read dynamically |
-| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4129` | likely read dynamically |
-| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4128` | likely read dynamically |
-| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4253`, `gui/panels/settings_manager.py:122` | likely read dynamically |
-| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4233`, `gui/panels/settings_manager.py:158` | likely read dynamically |
+| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4358` | likely read dynamically |
+| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4357` | likely read dynamically |
+| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4482`, `gui/panels/settings_manager.py:122` | likely read dynamically |
+| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4462`, `gui/panels/settings_manager.py:158` | likely read dynamically |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10999` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
@@ -389,9 +389,9 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:140` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:160` | `getattr(settings, flag_name, False)` |
-| `api/pilots_api.py:2932` | `getattr(settings, body.key)` |
-| `api/pilots_api.py:3878` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:3963` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:2938` | `getattr(settings, body.key)` |
+| `api/pilots_api.py:3887` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:3985` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:83` | `getattr(_settings, name, None)` |
 | `gui/panels/ai_control_center.py:164` | `getattr(settings, tkey, False)` |

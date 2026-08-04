@@ -29,7 +29,7 @@ export function SettingsManager() {
       subtitle="General platform settings (sizing, forecasting, data). Advisory only — tuning changes what the platform computes and recommends, never places an order."
       backTo="/settings"
       fetchSettings={() => api.getTunables()}
-      updateSettings={(values) => api.updateTunables(values)}
+      updateSettings={(values, confirm) => api.updateTunables(values, confirm)}
       emptyTitle="No tunables exposed"
       emptyHint="The backend returned no editable settings. Nothing here is fabricated when a value is unavailable."
       dangerZone={<DangerZone />}

@@ -8,7 +8,7 @@ export function SectorSelectionSettings() {
       subtitle="Configure sector selection parameters (top N, weights, lookbacks, momentum/value/volatility thresholds)."
       backTo="/settings"
       fetchSettings={() => api.getSectorSelectionSettings()}
-      updateSettings={(values) => api.updateSectorSelectionSettings(values)}
+      updateSettings={(values, confirm) => api.updateSectorSelectionSettings(values, confirm)}
     />
   );
 }
