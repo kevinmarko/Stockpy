@@ -1,11 +1,14 @@
 """Parent-side launcher for the isolated Robinhood device-approval login
 worker (:mod:`data.robinhood_login_worker`).
 
-Why a fresh subprocess per attempt rather than a persistent process pool
-(contrast :mod:`cnn_lstm_process_pool`): that module's ``ProcessPoolExecutor``
-pattern *abandons* a timed-out future without killing the worker, which here
-would leave an authenticated Robinhood session alive indefinitely with no way
-to stop it. A login attempt needs a genuine kill on timeout, so this follows
+Why a fresh subprocess per attempt rather than a persistent worker pool
+(contrast :mod:`cnn_lstm_process_pool`, which *does* now kill and replace a
+timed-out worker -- see that module's docstring): even a pool that kills on
+timeout is still the wrong shape here. A login attempt is a one-shot,
+side-effecting operation (it may leave a real Robinhood session
+authenticated) that needs its own dedicated, immediately-killable process
+and a SIGTERM-then-SIGKILL grace period around that one specific attempt --
+not a warm process reused across many calls. This follows
 ``gui.orchestrator_runner``'s detached-``Popen`` + SIGTERM-then-SIGKILL
 pattern instead, one fresh process per attempt.
 

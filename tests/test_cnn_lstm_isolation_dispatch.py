@@ -100,7 +100,7 @@ class TestFreshFitIsolationDispatch:
         assert "ISOTEST" in str(save_path) or "cnn_lstm" in str(save_path)
 
     def test_subprocess_failure_degrades_to_zero_result(self, engine):
-        """Timeout / BrokenProcessPool / a real training exception inside the
+        """Timeout / BrokenWorkerPool / a real training exception inside the
         worker must never crash the pipeline -- CONSTRAINT #6. The existing
         outer try/except in run_cnn_lstm_forecast already covers this; this
         test proves the isolation dispatch doesn't bypass it."""
