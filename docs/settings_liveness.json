@@ -394,7 +394,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 662,
+    "attr": 666,
     "factory_param": 4,
     "getattr_const": 244,
     "os_environ": 16
@@ -579,7 +579,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:166",
+        "site": "api/control_api.py:167",
         "via": []
       },
       {
@@ -1711,7 +1711,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:204",
+        "site": "api/control_api.py:237",
         "via": []
       }
     ],
@@ -1823,7 +1823,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:115",
+        "site": "gui/orchestrator_runner.py:116",
         "via": []
       },
       {
@@ -1832,7 +1832,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:124",
+        "site": "gui/orchestrator_runner.py:122",
         "via": []
       },
       {
@@ -1841,7 +1841,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:130",
+        "site": "gui/orchestrator_runner.py:127",
         "via": []
       },
       {
@@ -1850,7 +1850,25 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:907",
+        "site": "gui/orchestrator_runner.py:136",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "gui/orchestrator_runner.py:142",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "gui/orchestrator_runner.py:1041",
         "via": []
       },
       {
@@ -2077,7 +2095,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:199",
+        "site": "api/control_api.py:232",
         "via": []
       },
       {
@@ -2122,7 +2140,7 @@
     "init_body": 6,
     "init_self_assign": 40,
     "method_self_assign": 4,
-    "module_level": 47,
+    "module_level": 49,
     "os_environ": 16
   },
   "restart_required_via_name_literal_only": [
