@@ -6,14 +6,31 @@
  * (idle -> running -> connected | timeout | failed | cancelled) in
  * isolation so the three screen tests don't each have to re-derive it.
  *
- * Real timers by default: the first `connectBrokerage()` response resolves
- * via a plain microtask, so `screen.findByText` works normally. Only the
- * tests that need to observe a SECOND/THIRD poll (2s apart) switch to fake
- * timers locally -- and once fake timers are active, they use synchronous
- * `getByText`/`queryByText` rather than `findByText`, since Testing
- * Library's `findBy*`/`waitFor` retry loop is itself `setTimeout`-based and
- * hangs forever against a frozen fake clock nothing else is advancing (the
- * same trap documented in TopStatusBar.test.tsx's fake-timer describe block).
+ * Fake timers from before the FIRST submit in every test here, not just the
+ * ones observing a second/third poll: `usePoll`'s `setInterval` is created
+ * the instant a job response's `state` is `"running"` (which `job()`
+ * defaults to), and that's true of the very first `connectBrokerage()`
+ * response too. A real timer created here lives on the REAL system clock
+ * until this component unmounts -- normally cleared well within
+ * milliseconds by RTL's `cleanup()` (registered globally in
+ * src/test-setup.ts), but under a genuinely loaded test run (many vitest
+ * `pool: "forks"` worker processes competing for the same CPU cores -- see
+ * this suite's CI flakiness postmortem) a test can take long enough for
+ * that real 2s interval to actually fire before its own component unmounts,
+ * calling the UNMOCKED `api.getBrokerageLoginStatus("job-1")` for real. That
+ * ID was never registered with the mock backend (this test's
+ * `connectBrokerage` mock bypasses the mock API's own bookkeeping), so the
+ * unmocked call throws `ApiError(404)` into a hook with no unmount guard --
+ * confirmed by direct `setInterval`/`clearInterval` instrumentation during
+ * that investigation (see useBrokerageLoginJob.ts's `alive` ref, added at
+ * the same time, for the other half of the fix). Switching every test to
+ * fake timers from before the click removes the real timer entirely rather
+ * than relying on `cleanup()` always winning the race. Once fake timers are
+ * active, tests use synchronous `getByText`/`queryByText` rather than
+ * `findByText`, since Testing Library's `findBy*`/`waitFor` retry loop is
+ * itself `setTimeout`-based and hangs forever against a frozen fake clock
+ * nothing else is advancing (the same trap documented in
+ * TopStatusBar.test.tsx's fake-timer describe block).
  */
 import { act, render, screen } from "@testing-library/react";
 import { fireEvent } from "@testing-library/react";
@@ -79,6 +96,11 @@ describe("RobinhoodConnectForm", () => {
   });
 
   it("idle -> submit -> running: calls connectBrokerage with no mfa_code and shows the approval prompt", async () => {
+    // Fake timers BEFORE the click -- see the file-level doc comment above
+    // for why this matters even for a job whose FIRST response is already
+    // "running" (usePoll's setInterval is created immediately, not just on
+    // a second/third poll).
+    vi.useFakeTimers();
     const connectSpy = vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce(job());
     render(<RobinhoodConnectForm />);
 
@@ -89,7 +111,7 @@ describe("RobinhoodConnectForm", () => {
       password: "hunter2",
     });
     expect(
-      await screen.findByText(/open the robinhood app and approve this login/i)
+      screen.getByText(/open the robinhood app and approve this login/i)
     ).toBeInTheDocument();
     // The fields (and the submitted password) are gone while running.
     expect(screen.queryByLabelText(/^password$/i)).not.toBeInTheDocument();
@@ -157,6 +179,8 @@ describe("RobinhoodConnectForm", () => {
   });
 
   it("Cancel calls cancelBrokerageLogin and returns to the idle form with an honest notice", async () => {
+    // Fake timers BEFORE the click -- see the file-level doc comment above.
+    vi.useFakeTimers();
     vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce(job());
     const cancelSpy = vi.spyOn(api, "cancelBrokerageLogin").mockResolvedValueOnce({
       ...job({ state: "cancelled", error_code: "cancelled" }),
@@ -164,14 +188,14 @@ describe("RobinhoodConnectForm", () => {
     });
     render(<RobinhoodConnectForm />);
     await fillAndSubmit();
-    expect(await screen.findByText(/open the robinhood app and approve this login/i)).toBeInTheDocument();
+    expect(screen.getByText(/open the robinhood app and approve this login/i)).toBeInTheDocument();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     });
 
     expect(cancelSpy).toHaveBeenCalledWith("job-1");
-    expect(await screen.findByText(/login cancelled\. nothing was saved\./i)).toBeInTheDocument();
+    expect(screen.getByText(/login cancelled\. nothing was saved\./i)).toBeInTheDocument();
     // Back to the editable form, ready to retry.
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();

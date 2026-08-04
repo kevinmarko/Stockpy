@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "../api/client";
 
 export interface AsyncState<T> {
@@ -28,24 +28,34 @@ export function useApi<T>(
   const [stale, setStale] = useState(false);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  const alive = useRef(true);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
-    alive.current = true;
+    // A per-invocation flag, NOT a shared ref: this effect re-runs on every
+    // `reload()` (tick changes), and a shared `useRef` reset to `true` at
+    // the top of EACH invocation would let an OLDER, still-in-flight fetch's
+    // `.then` pass its "still alive" check just because a NEWER invocation
+    // already flipped the shared ref back to true -- letting a stale
+    // response overwrite state a newer, already-resolved reload() correctly
+    // set. Capturing `cancelled` fresh in this closure means only THIS
+    // invocation's own cleanup can ever flip it, so an old response from a
+    // superseded reload() is reliably ignored regardless of resolution
+    // order between overlapping calls (e.g. two reload()s fired back to
+    // back before the first's response lands).
+    let cancelled = false;
     setLoading(true);
     setError(null);
     setStatus(null);
     fn()
       .then((d) => {
-        if (!alive.current) return;
+        if (cancelled) return;
         setData(d);
         setStale(false);
         setCachedAt(null);
       })
       .catch((e: unknown) => {
-        if (!alive.current) return;
+        if (cancelled) return;
         if (e instanceof ApiError && e.cachedData !== undefined) {
           // Offline fallback: render the cached response as real data (not an
           // error screen) and flag it `stale` so a screen can note it's cached.
@@ -68,10 +78,10 @@ export function useApi<T>(
         }
       })
       .finally(() => {
-        if (alive.current) setLoading(false);
+        if (!cancelled) setLoading(false);
       });
     return () => {
-      alive.current = false;
+      cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, tick]);
