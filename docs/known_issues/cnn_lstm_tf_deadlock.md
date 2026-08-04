@@ -1,5 +1,20 @@
 # Known issue (fixed): CNN-LSTM forecaster deadlocks on TensorFlow eager execution
 
+**Status (Round 8, 2026-08-04): a second, distinct deadlock found and fixed
+inside the Round 5-7 isolation mechanism itself.** Unrelated to the Abseil
+ODR collision below (reproduces with pandas/pyarrow never imported in the
+worker at all) — `multiprocessing`-based worker processes
+(`ProcessPoolExecutor`, with or without an `initializer=`, or a bare
+`multiprocessing.Process`) reliably deadlock the first real TensorFlow op
+they run whenever TensorFlow is resolved via a separate module rather than
+code running directly as that process's own `__main__`. `cnn_lstm_process_pool.py`
+now launches workers with `subprocess.Popen` instead of `multiprocessing` —
+the one pattern verified safe across repeated trials of the real training
+shape. See "Round 8" below for the full ablation matrix and fix. Discovered
+via `tests/test_phase5_models.py::test_sf_garch_lstm_smoke` hanging; no
+existing test exercised a real TensorFlow op through the real persistent
+pool before this round, which is why it shipped undetected.
+
 **Status (Round 7, 2026-07-31): fixed by default.** `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED`
 now defaults **`True`** (was `False`) — Round 6 (2026-07-27) verified subprocess
 isolation end-to-end against the real native deadlock, on real production data,
@@ -896,6 +911,207 @@ does, for any caller. An operator who explicitly disables isolation
 Round 6 risk profile in full, including for entry points the Fix-2 guard and
 AST test don't cover.
 
+## Round 8 (2026-08-04): a SECOND, distinct deadlock inside the isolated worker itself — Round 5-7's `multiprocessing` isolation replaced with `subprocess.Popen`
+
+Discovered via `tests/test_phase5_models.py::test_sf_garch_lstm_smoke` hanging
+in CI/local runs — `ml.models.sf_garch_lstm.SFGarchLSTMModel` (a Phase-5
+model, not yet wired into any production caller) reuses
+`cnn_lstm_process_pool.run_in_subprocess`/`cnn_lstm_worker.fit_predict_or_infer_lstm`,
+the exact Round 5-7 isolation machinery, for its own LSTM backbone. The hang
+looked, at first, like a simple gap: maybe this call site just needed the
+same protection the CNN-LSTM forecaster already had. It was not that simple —
+this round found that the Round 5-7 isolation mechanism itself has a second,
+independent deadlock, unrelated to the Round 1 Abseil ODR collision, that
+had gone undetected because **no existing test exercises a real TensorFlow
+op through the real persistent pool** (`tests/test_cnn_lstm_worker.py` mocks
+TensorFlow entirely; `tests/test_cnn_lstm_isolation_dispatch.py` mocks
+`run_in_subprocess` itself; `tests/test_cnn_lstm_process_pool.py`, before this
+round, only ran trivial non-TF functions through the real pool).
+
+### First reproduction, and why it isn't the Round 1 collision
+
+A minimal, `if __name__ == "__main__":`-guarded standalone script calling
+`cnn_lstm_process_pool.run_in_subprocess(cnn_lstm_worker.fit_predict_cnn_lstm, ...)`
+directly — the exact machinery Round 6/7 called "verified against the real
+native deadlock" — reproduced the identical 0%-CPU-forever signature within
+seconds, reliably, across repeated trials. Critically, **the reproducing
+child process never imports pandas or pyarrow at all** — `cnn_lstm_worker.py`
+is deliberately pandas-free (see its own docstring), so the Round 1 `nm`-
+confirmed Abseil ODR collision (`AbslInternalPerThreadSemWait_lts_20250814`
+defined in both `libtensorflow_framework.2.dylib` and `libarrow.2400.dylib`)
+cannot be the mechanism here — that collision requires both libraries
+loaded into the same process, and only one (`libtensorflow_framework`) ever
+is in this reproduction. Something else, specific to `multiprocessing`
+itself, was the cause.
+
+Two working theories were tested and rejected before the real one:
+
+1. **"TF needs a real warm-up op, not just an import, before real work"** —
+   plausible by analogy to the already-documented faiss/libomp thread-pool
+   fix elsewhere in this codebase (`data/rag_index.py::_cap_faiss_threads`).
+   Adding a real `tf.linalg.matmul` call to the pool's `initializer=`
+   callback fixed a small synthetic repro (epochs=3, hidden_dim=8) 3/3
+   times — but failed against the real production parameters (epochs=50,
+   hidden_dim=32): the worker hung again, this time even on the warm-up
+   op's *own* tiny training call once it was placed inside `initializer=`.
+2. **"It's specific to `ProcessPoolExecutor`"** — a bare `multiprocessing.Process`
+   doing import+fit in one call, and a `ProcessPoolExecutor` with no
+   `initializer=` at all (import+fit inside the submitted task itself),
+   both completed the real training shape in seconds. This looked like the
+   answer — until the SAME "no initializer, lazy import inside the task"
+   pattern was retested with the target function living in a genuinely
+   separate, real module (mirroring `cnn_lstm_worker.py`'s actual
+   structure) instead of being defined directly in the test script's own
+   `__main__`. It hung. So did a bare `multiprocessing.Process` under the
+   same separate-module condition. `ProcessPoolExecutor` was never the
+   variable — every test that "worked" had, by construction, defined its
+   TF-touching function directly in the driver script being run as
+   `__main__`.
+
+### The actual dividing line: ablation matrix
+
+Ten configurations, each launching the real training shape (epochs=50,
+hidden_dim=32, ~91 supervised windows) through a fresh spawned/launched
+process, in the exact macOS arm64 + Framework-Python + TF 2.21.0 + pyarrow
+24.0.0 environment Round 6 used:
+
+| # | Mechanism | Where TF import/warm-up runs | Result |
+|---|---|---|---|
+| 1 | `multiprocessing.Process` | function defined in driver's own `__main__` | **Clean, 5.2s** |
+| 2 | `ProcessPoolExecutor`, no `initializer=` | function defined in driver's own `__main__` | **Clean, 4.1s** |
+| 3 | `ProcessPoolExecutor`, `initializer=` (import-only) | separate `initializer=` callback | Hung (100% repro, original bug) |
+| 4 | `ProcessPoolExecutor`, `initializer=` (import + real matmul op) | separate `initializer=` callback | Hung on the SUBMITTED task's real fit |
+| 5 | `ProcessPoolExecutor`, `initializer=` (import + real matmul + tiny real `.fit()`) | separate `initializer=` callback | Hung on the initializer's OWN tiny fit |
+| 6 | `ProcessPoolExecutor`, no `initializer=`, lazy warm-up inside task | task defined in driver's own `__main__` | **Clean, 4.2s cold / 0.7s warm (2nd call)** |
+| 7 | `ProcessPoolExecutor`, no `initializer=`, lazy warm-up inside task | task lazily imported from a **separate real module** | Hung |
+| 8 | `ml.models.sf_garch_lstm.SFGarchLSTMModel` (the real, unmodified production call chain) | `cnn_lstm_worker.py` (separate real module) | Hung |
+| 9 | bare `multiprocessing.Process`, target lazily imports a **separate real module** | separate real module | Hung |
+| 10 | `subprocess.Popen([sys.executable, worker_script.py])` — the worker script itself is `__main__` | worker script's own top-level `import tensorflow` | **Clean, 3.8s, repeatable** |
+
+The single variable that separates every "clean" row from every "hung" row:
+**whether TensorFlow gets imported by code that is genuinely running as the
+process's own `__main__`/entry script, versus code resolved as a separate
+module** — whether that resolution happens via `ProcessPoolExecutor`'s
+`initializer=`, via implicit unpickling of a function reference, or via an
+explicit lazy `import` statement inside a task. This holds regardless of
+`ProcessPoolExecutor` vs. bare `Process`, regardless of whether a warm-up op
+runs and regardless of when. Row 10 — a genuine, separate OS process
+launched with `subprocess.Popen`, with no `multiprocessing`/pickle machinery
+involved at all, and the worker file itself as `__main__` — is the only
+configuration verified safe under the real training shape across repeated
+trials, including two sequential calls reusing the same warm process (row 6,
+second call).
+
+**Honest bottom line on mechanism:** the evidence pins down the *what*
+precisely and reproducibly; it does not fully explain the *why*. A plausible
+but unverified hypothesis: `multiprocessing.spawn`'s `prepare()` re-executes
+the parent's `__main__` module via `runpy.run_path(..., run_name="__mp_main__")`
+— a different code path than a normal `import` statement processed by
+`importlib`'s own per-module locking machinery — and TensorFlow's native
+initialization may depend on state that differs between the two (e.g.
+whether Python's import machinery considers itself "inside an import" at
+the moment TF's C++ layer spins up its own threads). This was not verified
+at the CPython-internals level; it is offered as a plausible mechanism, not
+a confirmed one. The fix below does not depend on the mechanism being
+correctly understood — it is derived entirely from the empirical dividing
+line in the table above.
+
+### The fix
+
+`cnn_lstm_process_pool.py` no longer uses `multiprocessing`/`ProcessPoolExecutor`
+at all. Workers are launched with `subprocess.Popen([sys.executable, "cnn_lstm_worker.py"])`
+— a genuine OS process where `cnn_lstm_worker.py` itself is `__main__`,
+matching row 10 exactly. `cnn_lstm_worker.py` gained a persistent job loop
+(`_run_worker_loop`, guarded by `if __name__ == "__main__":`) that reads
+`(func_name, args)` jobs from stdin and writes `(ok, result_or_exception)`
+responses to stdout, both pickle-framed (`pickle.dump`/`pickle.load` on a
+shared stream naturally delimit a sequence of objects — no extra
+length-prefixing needed); dispatch is a fixed table (`_DISPATCHABLE`) of
+functions already defined directly in that file, resolved via a plain dict
+lookup — the worker never performs a fresh cross-module import to resolve a
+job, closing off row 7/9's failure mode structurally, not just empirically.
+
+`cnn_lstm_process_pool.py`'s `_WorkerPool`/`_PopenWorker` classes replace
+`ProcessPoolExecutor` end to end: a bounded `queue.Queue` of persistent
+workers (preserving the "pay TensorFlow's import cost once per worker, not
+once per ticker" property Round 5 introduced), a background reader thread
+per call for timeout support (`Future.result(timeout=)`'s replacement, since
+raw pipes have no built-in deadline), and an explicit healthy-vs-broken
+split: a normal exception raised BY the submitted function (e.g. a bad
+input) leaves the worker in the pool for reuse, while a timeout or a
+pipe/process failure kills the worker outright and replaces it — a timed-out
+job may still be running and could write a stale response later, which
+would otherwise be misattributed to the next job sent to that same worker.
+`get_pool`/`reset_pool`/`run_in_subprocess`'s public signatures are
+unchanged, so `forecasting_engine.py` and `ml/models/sf_garch_lstm.py`
+needed zero changes at their call sites — only what runs underneath moved.
+
+### Test suite changes
+
+- `tests/test_cnn_lstm_process_pool.py` rewritten for the new mechanics:
+  pool/worker-lifecycle tests now assert against `_WorkerPool`/`_PopenWorker`
+  (real `subprocess.Popen` objects, real PIDs) instead of
+  `ProcessPoolExecutor` internals (`_mp_context`, `_initializer`). New tests
+  cover the healthy-vs-broken worker split directly (a normal exception
+  keeps the same worker PID across calls; a timeout replaces it with a new
+  PID and the pool stays usable afterward) and persistent-worker reuse (PID
+  unchanged across repeated calls).
+  Three trivial, TensorFlow-free helper functions
+  (`cnn_lstm_worker._test_add`/`_test_sleep_and_return`/`_test_raise_value_error`)
+  were added to `cnn_lstm_worker.py` itself — not the test file — specifically
+  because the worker's dispatch table can only safely resolve functions
+  already defined in its own `__main__` namespace; a cross-module import
+  inside the worker, even for a harmless test helper, would reintroduce this
+  round's own failure mode as a standing footgun for any future test author.
+- **New**: `TestRealTensorFlowThroughThePool` in that same file — the
+  regression coverage this whole round exists to add. Two tests run a real
+  `fit_predict_cnn_lstm`/`fit_predict_or_infer_lstm` call through the real
+  persistent pool with real TensorFlow, bounded to a 60s timeout, so a
+  regression here fails fast in CI instead of silently eating a 5-minute
+  `CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS` window per occurrence (or hanging
+  the suite outright, as originally reported).
+- `tests/test_cnn_lstm_worker.py`'s TensorFlow mock setup needed no
+  structural changes — it already exercises the three public functions
+  in-process against a mocked `tensorflow`, which the worker's job-loop
+  wrapper sits entirely outside of.
+
+### Verification
+
+- `tests/test_phase5_models.py::test_sf_garch_lstm_smoke` — the originally
+  hanging test — now completes in ~6s, confirmed clean across 4 repeated
+  runs (no hang, no flakiness observed).
+- `tests/test_cnn_lstm_process_pool.py` (14 tests, including the two new
+  real-TensorFlow-through-the-real-pool tests) — all passing.
+- `tests/test_cnn_lstm_worker.py`, `tests/test_cnn_lstm_isolation_dispatch.py`,
+  `tests/test_cnn_lstm_import_order.py`, `tests/test_forecast_model_persistence.py`,
+  `tests/test_forecasting_engine.py`, `tests/test_forecasting_improvements.py`,
+  `tests/test_forecasting_lookahead.py`, `tests/test_gui_env_io_cnn_lstm_keys.py`,
+  `tests/test_quantitative_models.py`, `tests/test_forecast_tracker.py`,
+  `tests/test_bert_lla_lookahead.py`, `tests/test_scripts_bootstrap.py` — all
+  passing (271 passed, 1 skipped).
+- Full repo-wide `pytest -q -p no:randomly -m "not network"` re-run — see the
+  introducing PR for the final pass count.
+
+### What this doesn't change
+
+The Round 1 Abseil ODR collision (pyarrow/pandas vs. TensorFlow) is
+unaffected by this round either way — it was never the mechanism here, and
+Round 7's fix for it (subprocess isolation being the default) is preserved,
+just re-implemented on top of `subprocess.Popen` instead of
+`multiprocessing`. `CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS` remains the backstop
+for any *other*, still-undiscovered failure mode: a hung worker under the
+new implementation still degrades to the zero-result sentinel (CONSTRAINT #6)
+after the configured timeout rather than hanging forever, exactly as before.
+This round was not able to verify the CNN-LSTM forecaster's *production*
+entry points (`main.py`/`main_orchestrator.py`/`pipeline/production_steps.py`)
+against real market data end-to-end the way Round 6 did — this sandboxed
+dev/CI environment has no live-market network access — so that re-verification,
+while expected to pass given the mechanism-agnostic nature of the fix
+(the worker script itself did not change its TF-facing API or architecture,
+only how it is launched and communicated with), is an honest gap left to a
+live-environment operator to confirm, matching this doc's existing
+convention of not claiming a verification that wasn't actually performed.
+
 ## What was ruled out
 
 - SQLite/WAL lock contention with the concurrently-running orchestrator daemon (WAL
@@ -955,10 +1171,16 @@ AST test don't cover.
   entry points that import `pandas` before `forecasting_engine`; Round 5 added a
   guarded `import tensorflow` before each one's own `pandas` import (Fix 2, defense
   in depth) on top of the process-isolation fix (Fix 1).
-- `cnn_lstm_worker.py`, `cnn_lstm_process_pool.py` (Round 5) — the isolated
-  fit/predict worker and its persistent `multiprocessing` "spawn" pool manager.
+- `cnn_lstm_worker.py`, `cnn_lstm_process_pool.py` (Round 5, rewritten Round 8)
+  — the isolated fit/predict worker and its persistent pool manager.
   Deliberately repo-root modules, not inside `forecasting/` (see Round 5, Fix 1,
-  for why `forecasting/__init__.py` makes that package unsafe for this).
+  for why `forecasting/__init__.py` makes that package unsafe for this). As of
+  Round 8, workers are launched with `subprocess.Popen` (worker script itself
+  as `__main__`) rather than `multiprocessing`'s "spawn" — see Round 8 for why.
+- `ml/models/sf_garch_lstm.py::SFGarchLSTMModel` (Phase 5, not yet wired into
+  any production caller) — the second consumer of `cnn_lstm_process_pool.py`
+  whose test (`tests/test_phase5_models.py::test_sf_garch_lstm_smoke`)
+  surfaced Round 8's deadlock.
 - `settings.CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` (default `True` as of Round
   7, 2026-07-31) / `CNN_LSTM_PROCESS_POOL_WORKERS` / `CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS`
   (Round 5) — the flags controlling the process-isolation fix.
@@ -983,3 +1205,11 @@ AST test don't cover.
   default-behavior tests and `tests/test_forecasting_lookahead.py` /
   `tests/test_forecast_model_persistence.py` for the pinned-legacy-path fixture
   this required.
+- Round 8 (2026-08-04) — finds and fixes a second, distinct deadlock inside
+  the Round 5-7 isolation mechanism itself (unrelated to the Abseil ODR
+  collision), replacing `multiprocessing` with `subprocess.Popen` as the
+  worker-launch mechanism. See `tests/test_cnn_lstm_process_pool.py`'s
+  `TestRealTensorFlowThroughThePool` for the regression coverage this round
+  added (no prior test exercised a real TensorFlow op through the real
+  persistent pool) and `cnn_lstm_worker.py`'s `_run_worker_loop`/
+  `_DISPATCHABLE` for the new job protocol.
