@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `5cca7b5992c311a9c514793f29086b0b40ff4afa`
+- Measured at commit: `2b84675858d619fc9b1c0dfcf849645ceae48a3c`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -14,12 +14,12 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 
 ## 1. Field-type breakdown
 
-`len(Settings.model_fields)` = **326**
+`len(Settings.model_fields)` = **328**
 
 | Annotation | Count |
 |---|---|
-| `int` | 92 |
-| `bool` | 88 |
+| `int` | 93 |
+| `bool` | 89 |
 | `float` | 57 |
 | `Optional[str]` | 42 |
 | `str` | 34 |
@@ -31,7 +31,7 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 | `dict[str, str]` | 1 |
 | `list[int]` | 1 |
 
-Fields whose name ends in `_ENABLED`: **78**
+Fields whose name ends in `_ENABLED`: **79**
 
 Distinct `dict[...]` shapes: **4**
 
@@ -49,7 +49,7 @@ kind-derivation switch over the categories above is currently total.
 
 | Name | len() | len(set()) | Note |
 |---|---|---|---|
-| `ALLOWED_KEYS` | 271 | 271 | 0 duplicate entries (clean) |
+| `ALLOWED_KEYS` | 273 | 273 | 0 duplicate entries (clean) |
 | `SECRET_KEYS` | 39 | 39 | 0 duplicate entries |
 | `_JSON_KEYS` | 12 | 12 | frozenset |
 | `EXCLUDED_FROM_GUI` | 18 | 18 | frozenset; third classification bucket |
@@ -63,7 +63,7 @@ Every `Settings.model_fields` name classified into exactly one bucket.
 | Bucket | Count | Definition |
 |---|---|---|
 | `SECRET` | 37 | in `env_io.SECRET_KEYS` |
-| `IN_ALLOWED_KEYS` | 271 | in `env_io.ALLOWED_KEYS` |
+| `IN_ALLOWED_KEYS` | 273 | in `env_io.ALLOWED_KEYS` |
 | `UNCLASSIFIED` | 18 | in neither |
 
 Of the 18 `UNCLASSIFIED` fields, **18** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
@@ -72,24 +72,24 @@ Of the 18 `UNCLASSIFIED` fields, **18** are accounted for by the third `EXCLUDED
 
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
-| `AI_GENERATION_API_ENABLED` | L3051 | yes | Enables POST /data/ai/{commentary,chart,research}/{symbol} on the Data API. Off by default -- exposing paid Claude/Gemini/Opal calls over a fail-open HTTP API is its own risk/cost class, separate f... |
+| `AI_GENERATION_API_ENABLED` | L3088 | yes | Enables POST /data/ai/{commentary,chart,research}/{symbol} on the Data API. Off by default -- exposing paid Claude/Gemini/Opal calls over a fail-open HTTP API is its own risk/cost class, separate f... |
 | `ALERT_FILE_PATH` | L1132 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `AUTOMATION_WRITES_ENABLED` | L2884 | yes | Enables PUT /automation/schedule/interval and POST /automation/resume on the Pilots API. Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable. POST /automation/run and /automation/pau... |
-| `BROKERAGE_REFRESH_ENABLED` | L3132 | yes | Enables POST /brokerage/refresh on the Pilots API (forces a live Robinhood re-login + account-snapshot fetch, bypassing the daily cache). Off by default; also requires FOLLOW_API_TOKEN and a loopba... |
+| `AUTOMATION_WRITES_ENABLED` | L2921 | yes | Enables PUT /automation/schedule/interval and POST /automation/resume on the Pilots API. Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable. POST /automation/run and /automation/pau... |
+| `BROKERAGE_REFRESH_ENABLED` | L3169 | yes | Enables POST /brokerage/refresh on the Pilots API (forces a live Robinhood re-login + account-snapshot fetch, bypassing the daily cache). Off by default; also requires FOLLOW_API_TOKEN and a loopba... |
 | `COMMAND_EXECUTION_ENABLED` | L246 | yes | Enable the 'command' job type on the orchestrator Control API's POST /jobs (api/_jobs.py) — lets the webapp's Commands screen actually run a manifest-listed CLI target (not just compose/copy it), g... |
-| `DEAD_LETTER_RETRY_ENABLED` | L3874 | yes | Enables POST /dead-letter/retry on the Pilots API (re-runs main.py for one dead-lettered symbol, advisory-only -- no orders). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable -- h... |
-| `GENERAL_SETTINGS_WRITES_ENABLED` | L2973 | yes | Enables PUT /settings/tunables on the Pilots API (general runtime tunables -- Kelly sizing, risk gate, forecasting, market data, runtime/ops -> .env). Off by default; also requires FOLLOW_API_TOKEN... |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L3490 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L3375 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
-| `LLM_WRITES_ENABLED` | L2926 | yes | Enables PUT /llm/setting on the Pilots API (LLM capability toggles + provider selection -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so AI-c... |
-| `MACRO_GATE_WRITES_ENABLED` | L3103 | yes | Enables PUT /observability/macro-gate on the Pilots API (flips MACRO_REGIME_GATE_ENABLED -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so thi... |
+| `DEAD_LETTER_RETRY_ENABLED` | L3911 | yes | Enables POST /dead-letter/retry on the Pilots API (re-runs main.py for one dead-lettered symbol, advisory-only -- no orders). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable -- h... |
+| `GENERAL_SETTINGS_WRITES_ENABLED` | L3010 | yes | Enables PUT /settings/tunables on the Pilots API (general runtime tunables -- Kelly sizing, risk gate, forecasting, market data, runtime/ops -> .env). Off by default; also requires FOLLOW_API_TOKEN... |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L3527 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L3412 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `LLM_WRITES_ENABLED` | L2963 | yes | Enables PUT /llm/setting on the Pilots API (LLM capability toggles + provider selection -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so AI-c... |
+| `MACRO_GATE_WRITES_ENABLED` | L3140 | yes | Enables PUT /observability/macro-gate on the Pilots API (flips MACRO_REGIME_GATE_ENABLED -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so thi... |
 | `OUTPUT_DIR` | L1355 | yes | Directory for generated reports. |
-| `PROMPT_CACHE_DIR` | L3642 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
-| `PROMPT_REGISTRY_WRITES_ENABLED` | L3896 | yes | FAIL-CLOSED master switch for api/pilots_api.py's `PUT /prompts/pin` (pins/clears a prompt ID's PROMPT_REGISTRY_PINS entry -- changes WHICH PROMPT TEXT THE PLATFORM ACTUALLY RUNS, a real behavioral... |
-| `RAG_QUERY_API_ENABLED` | L3073 | yes | Enables POST /rag/query on the Pilots API (agents/rag_orchestrator.py's run_rag_query, calling a paid LLM provider). Off by default -- see AI_GENERATION_API_ENABLED for the same risk-class reasonin... |
-| `STRATEGY_WRITES_ENABLED` | L2904 | yes | Enables PUT /strategy/modules on the Pilots API (signal weights + disabled-module set -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so signal... |
+| `PROMPT_CACHE_DIR` | L3679 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `PROMPT_REGISTRY_WRITES_ENABLED` | L3933 | yes | FAIL-CLOSED master switch for api/pilots_api.py's `PUT /prompts/pin` (pins/clears a prompt ID's PROMPT_REGISTRY_PINS entry -- changes WHICH PROMPT TEXT THE PLATFORM ACTUALLY RUNS, a real behavioral... |
+| `RAG_QUERY_API_ENABLED` | L3110 | yes | Enables POST /rag/query on the Pilots API (agents/rag_orchestrator.py's run_rag_query, calling a paid LLM provider). Off by default -- see AI_GENERATION_API_ENABLED for the same risk-class reasonin... |
+| `STRATEGY_WRITES_ENABLED` | L2941 | yes | Enables PUT /strategy/modules on the Pilots API (signal weights + disabled-module set -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so signal... |
 | `SYNC_WATCHLIST_FILES` | L1357 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L3260 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `WATCH_RULES_FILE` | L3297 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -127,25 +127,25 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 | Field | Marker site(s) | In `ALLOWED_KEYS` now | In `SECRET_KEYS` | Claim holds |
 |---|---|---|---|---|
-| `AI_GENERATION_API_ENABLED` | `settings.py:3032`, `settings.py:3051` | no | no | yes |
-| `AUTOMATION_WRITES_ENABLED` | `settings.py:2872`, `settings.py:2884` | no | no | yes |
-| `BROKERAGE_REFRESH_ENABLED` | `settings.py:3113`, `settings.py:3132` | no | no | yes |
+| `AI_GENERATION_API_ENABLED` | `settings.py:3069`, `settings.py:3088` | no | no | yes |
+| `AUTOMATION_WRITES_ENABLED` | `settings.py:2909`, `settings.py:2921` | no | no | yes |
+| `BROKERAGE_REFRESH_ENABLED` | `settings.py:3150`, `settings.py:3169` | no | no | yes |
 | `COMMAND_EXECUTION_ENABLED` | `settings.py:246` | no | no | yes |
-| `DEAD_LETTER_RETRY_ENABLED` | `settings.py:3860`, `settings.py:3874` | no | no | yes |
+| `DEAD_LETTER_RETRY_ENABLED` | `settings.py:3897`, `settings.py:3911` | no | no | yes |
 | `FMP_API_KEY` | `settings.py:435` | no | yes | yes |
 | `FOLLOW_API_TOKEN` | `settings.py:200` | no | yes | yes |
-| `GENERAL_SETTINGS_WRITES_ENABLED` | `settings.py:2955`, `settings.py:2973` | no | no | yes |
-| `LLM_WRITES_ENABLED` | `settings.py:2913`, `settings.py:2926` | no | no | yes |
-| `MACRO_GATE_WRITES_ENABLED` | `settings.py:3082`, `settings.py:3103` | no | no | yes |
+| `GENERAL_SETTINGS_WRITES_ENABLED` | `settings.py:2992`, `settings.py:3010` | no | no | yes |
+| `LLM_WRITES_ENABLED` | `settings.py:2950`, `settings.py:2963` | no | no | yes |
+| `MACRO_GATE_WRITES_ENABLED` | `settings.py:3119`, `settings.py:3140` | no | no | yes |
 | `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:181` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:3607` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:3615` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:3599` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:3591` | no | yes | yes |
-| `PROMPT_REGISTRY_WRITES_ENABLED` | `settings.py:3885` | no | no | yes |
-| `RAG_QUERY_API_ENABLED` | `settings.py:3061`, `settings.py:3073` | no | no | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:3644` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:3652` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:3636` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:3628` | no | yes | yes |
+| `PROMPT_REGISTRY_WRITES_ENABLED` | `settings.py:3922` | no | no | yes |
+| `RAG_QUERY_API_ENABLED` | `settings.py:3098`, `settings.py:3110` | no | no | yes |
 | `STATE_API_TOKEN` | `settings.py:173` | no | yes | yes |
-| `STRATEGY_WRITES_ENABLED` | `settings.py:2894`, `settings.py:2904` | no | no | yes |
+| `STRATEGY_WRITES_ENABLED` | `settings.py:2931`, `settings.py:2941` | no | no | yes |
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
@@ -161,7 +161,7 @@ Three *distinct* mutation mechanisms exist — a liveness model that only consid
 | in-process `setattr(settings, ...)` | 0 | patches THIS process's singleton only |
 | push to the daemon via `daemon_client.set_*` | 1 | HTTP call into a **separately running** daemon process |
 
-Routes declaring an `applies` value in their response: **11** of 11.
+Routes declaring an `applies` value in their response: **6** of 11.
 
 Resolution is AST-based and follows one level of indirection: a handler that only calls a
 module-level helper which itself calls `env_io.write_*` (or builds the response carrying
@@ -171,17 +171,17 @@ module-level helper which itself calls `env_io.write_*` (or builds the response 
 
 | Route | Method | Handler | Line | `.env` | `setattr` | daemon push | `applies` claims |
 |---|---|---|---|---|---|---|---|
-| `/observability/macro-gate` | PUT | `put_macro_gate` | 1667 | yes | no | no | `next_daemon_restart` |
-| `/llm/setting` | PUT | `set_llm_setting` | 2863 | yes | no | no | `immediately`, `next_daemon_restart` |
-| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3479 | yes | no | yes | `immediately`, `next_daemon_restart` |
-| `/strategy/modules` | PUT | `set_strategy_modules` | 3562 | yes | no | no | `next_daemon_restart` |
-| `/automation/execution-mode` | PUT | `update_execution_mode` | 3603 | yes | no | no | `next_daemon_restart` |
-| `/settings/tunables` | PUT | `put_settings_tunables` | 3938 | yes | no | no | `next_daemon_restart` |
-| `/settings/sentiment` | PUT | `put_settings_sentiment` | 4314 | yes | no | no | `next_daemon_restart` |
-| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 4336 | yes | no | no | `next_daemon_restart` |
-| `/settings/fmp` | PUT | `put_settings_fmp` | 4358 | yes | no | no | `next_daemon_restart` |
-| `/settings/etf-transmission` | PUT | `put_settings_etf_transmission` | 4380 | yes | no | no | `next_daemon_restart` |
-| `/prompts/pin` | PUT | `put_prompts_pin` | 4651 | yes | no | no | `next_daemon_restart` |
+| `/observability/macro-gate` | PUT | `put_macro_gate` | 1673 | yes | no | no | `next_daemon_restart` |
+| `/llm/setting` | PUT | `set_llm_setting` | 2869 | yes | no | no | `immediately`, `next_daemon_restart` |
+| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3485 | yes | no | yes | `immediately`, `next_daemon_restart` |
+| `/strategy/modules` | PUT | `set_strategy_modules` | 3568 | yes | no | no | `next_daemon_restart` |
+| `/automation/execution-mode` | PUT | `update_execution_mode` | 3609 | yes | no | no | `next_daemon_restart` |
+| `/settings/tunables` | PUT | `put_settings_tunables` | 3943 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PUT | `put_settings_sentiment` | 4539 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 4557 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PUT | `put_settings_fmp` | 4575 | yes | no | no | _(none)_ |
+| `/settings/etf-transmission` | PUT | `put_settings_etf_transmission` | 4593 | yes | no | no | _(none)_ |
+| `/prompts/pin` | PUT | `put_prompts_pin` | 4864 | yes | no | no | `next_daemon_restart` |
 
 ### Existing in-process hot-reload beachhead — `gui/ai_control_center.py::LIVE_PATCHABLE_KEYS`
 
@@ -213,7 +213,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **339** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **340** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -226,12 +226,12 @@ _S.settings, _bl_settings, _live_settings, _oos_gate_settings, _rh_settings, _s,
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 624 | 197 |
+| (a) `settings.KEY` | 627 | 199 |
 | (b) `getattr(settings, "KEY", default)` | 244 | 149 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 16 | 13 |
 
-Fields reached by at least one form: **317** of 326.
+Fields reached by at least one form: **319** of 328.
 
 ### Fields with NO statically-attributable read — **9**
 
@@ -243,10 +243,10 @@ referenced by name somewhere and is probably read dynamically.
 | Field | Name-literal sites | Verdict |
 |---|---|---|
 | `AI_GENERATION_API_ENABLED` | `api/data_api.py:173`, `settings_keysets.py:250` | likely read dynamically |
-| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4129` | likely read dynamically |
-| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4128` | likely read dynamically |
-| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4253`, `gui/panels/settings_manager.py:122` | likely read dynamically |
-| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4233`, `gui/panels/settings_manager.py:158` | likely read dynamically |
+| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4358` | likely read dynamically |
+| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4357` | likely read dynamically |
+| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4482`, `gui/panels/settings_manager.py:122` | likely read dynamically |
+| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4462`, `gui/panels/settings_manager.py:158` | likely read dynamically |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10999` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
@@ -389,9 +389,9 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:140` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:160` | `getattr(settings, flag_name, False)` |
-| `api/pilots_api.py:2932` | `getattr(settings, body.key)` |
-| `api/pilots_api.py:3878` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:3963` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:2938` | `getattr(settings, body.key)` |
+| `api/pilots_api.py:3887` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:3985` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:83` | `getattr(_settings, name, None)` |
 | `gui/panels/ai_control_center.py:164` | `getattr(settings, tkey, False)` |
