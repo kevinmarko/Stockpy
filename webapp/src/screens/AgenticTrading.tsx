@@ -5,6 +5,9 @@ import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useBrokerageLoginJob } from "../hooks/useBrokerageLoginJob";
+import { useDebounce } from "../hooks/useDebounce";
+import { usePersistedState } from "../hooks/usePersistedState";
+import { useExecutionMode } from "../components/ExecutionModeContext";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -31,6 +34,8 @@ import { RobinhoodConnectForm } from "../components/RobinhoodConnectForm";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
 import { timeAgo } from "../format";
+import ActiveTraderLadder from "../components/ActiveTraderLadder";
+import { ModelHealthPanel } from "../components/ModelHealthPanel";
 
 /**
  * Agentic Trading — the consolidated command center for the platform's
@@ -59,6 +64,16 @@ export function AgenticTrading() {
 
   const [refreshToken, setRefreshToken] = useState(0);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  // Persisted (not just component state) so the operator's last-viewed
+  // ladder ticker survives a reload -- a non-sensitive UI preference, the
+  // exact case usePersistedState documents itself for.
+  const [ladderSymbol, setLadderSymbol] = usePersistedState("agentic-trading:ladder-symbol", "SPY");
+  // Debounced before it reaches ActiveTraderLadder -- that component's
+  // useApi/useLiveTick both re-fire (REST call + WebSocket reconnect) on
+  // every `symbol` change, so an un-debounced per-keystroke value would fire
+  // one of each per character typed. Matches the pattern SymbolInput.tsx
+  // already uses for the same reason.
+  const debouncedLadderSymbol = useDebounce(ladderSymbol, 250);
 
   // Drives the header's "Refresh Data" button through the same async
   // device-approval-push job flow as the auth modal's RobinhoodConnectForm
@@ -101,6 +116,9 @@ export function AgenticTrading() {
 
   return (
     <div className="screen">
+      {/* ---- Prominent Execution Mode Badge ---- */}
+      <ExecutionModeBanner />
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
@@ -160,6 +178,44 @@ export function AgenticTrading() {
       <DiscoverySection refreshToken={refreshToken} />
 
       <ExecutionQueueSection />
+
+      {/* Advanced Quantitative Visualizations Section */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+          gap: "var(--s-4)",
+          marginTop: "var(--s-4)",
+          marginBottom: "var(--s-4)",
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
+            <label htmlFor="ladder-ticker-input" style={{ fontSize: "var(--t-caption)", fontWeight: 600, color: theme.textSecondary }}>
+              Ladder Ticker:
+            </label>
+            <input
+              id="ladder-ticker-input"
+              data-testid="ladder-ticker-input"
+              type="text"
+              value={ladderSymbol}
+              onChange={(e) => setLadderSymbol(e.target.value.toUpperCase())}
+              style={{
+                background: theme.surface2,
+                color: theme.textPrimary,
+                border: `1px solid ${theme.border}`,
+                borderRadius: "var(--r-sm)",
+                padding: "4px 8px",
+                width: "80px",
+                fontSize: "var(--t-caption)",
+                fontWeight: 600,
+              }}
+            />
+          </div>
+          <ActiveTraderLadder symbol={debouncedLadderSymbol} />
+        </div>
+        <ModelHealthPanel />
+      </div>
 
       <RlhfReviewQueue refreshToken={refreshToken} />
 
@@ -800,5 +856,44 @@ function ControlsSection({
         </Link>
       </div>
     </SectionCard>
+  );
+}
+
+/**
+ * Prominent execution mode banner — always visible at the top of the /agentic
+ * page. Reads from the global ExecutionModeContext (no extra API calls).
+ */
+function ExecutionModeBanner() {
+  const { advisoryOnly, killSwitchActive, killSwitchReason, dryRun, loading } = useExecutionMode();
+
+  if (loading) return null;
+
+  const isLive = !advisoryOnly && !dryRun;
+
+  return (
+    <div style={{ marginBottom: "var(--s-3)", display: "flex", flexWrap: "wrap", gap: "var(--s-2)", alignItems: "center" }}>
+      <span
+        className={`execution-mode-badge ${isLive ? "execution-mode-badge--live" : "execution-mode-badge--advisory"}`}
+      >
+        <span style={{ fontSize: 10 }}>{isLive ? "🟢" : "🟠"}</span>
+        {isLive ? "Live Trading" : "Advisory Only / Paper"}
+      </span>
+      {killSwitchActive && (
+        <span
+          className="execution-mode-badge"
+          style={{ background: "rgba(239, 68, 68, 0.12)", border: "1px solid var(--decline)", color: "var(--decline)" }}
+          title={killSwitchReason ?? undefined}
+        >
+          🛑 Kill Switch Active
+        </span>
+      )}
+      {!advisoryOnly && dryRun && (
+        <span
+          className="execution-mode-badge execution-mode-badge--advisory"
+        >
+          Dry Run
+        </span>
+      )}
+    </div>
   );
 }

@@ -17,9 +17,11 @@ export function useMutation<TArgs extends unknown[], TResult>(
   const [result, setResult] = useState<TResult | null>(null);
   const alive = useRef(true);
 
-  // Mirrors useApi.ts's alive-ref pattern -- a mutation whose response
-  // arrives after the component unmounted (e.g. the user navigated away
-  // mid-request) must not call setState on an unmounted component.
+  // Mirrors useBrokerageLoginJob.ts's alive-ref pattern (useApi.ts used to
+  // follow this same pattern, but switched to a per-invocation `cancelled`
+  // closure flag instead -- see that file for why) -- a mutation whose
+  // response arrives after the component unmounted (e.g. the user navigated
+  // away mid-request) must not call setState on an unmounted component.
   useEffect(() => {
     alive.current = true;
     return () => {
