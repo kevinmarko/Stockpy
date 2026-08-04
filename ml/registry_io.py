@@ -60,6 +60,11 @@ _REGISTRY_HEADER = """\
 # hyperparameters: the model's training hyperparameters (dict)
 # train_window:    the data-split window {start, end, n_dates} (dates as YYYY-MM-DD strings)
 # features:        the ordered feature-column list the model trained with (list)
+# cpcv_mean_oos_sharpe:  mean out-of-sample Sharpe across CPCV held-out paths for the
+#                  SAME DSR-selected strategy that produced cpcv_dsr/pbo (never read by the
+#                  deployable gate)
+# cpcv_mean_oos_max_dd:  mean out-of-sample max drawdown across CPCV held-out paths for the
+#                  SAME DSR-selected strategy (never read by the deployable gate)
 """
 
 
@@ -100,6 +105,8 @@ def update_model_metrics(
     hyperparameters: Optional[dict] = None,
     train_window: Optional[dict] = None,
     features: Optional[list] = None,
+    cpcv_mean_oos_sharpe: Optional[float] = None,
+    cpcv_mean_oos_max_dd: Optional[float] = None,
 ) -> dict:
     """Update ``models.<model_key>.{trained_date,cpcv_dsr,pbo,n_train,deployable}``.
 
@@ -110,9 +117,14 @@ def update_model_metrics(
     Provenance (all optional, backward-compatible, and independent of the gate):
     ``artifact_file`` (the exact dated pickle filename written this run),
     ``hyperparameters`` (the model's training params dict), ``train_window``
-    (the data-split window ``{start, end, n_dates}``), and ``features`` (the
-    ordered feature-column list). Each is written into the entry verbatim; a
-    ``None`` value is stored as-is and never influences ``deployable``.
+    (the data-split window ``{start, end, n_dates}``), ``features`` (the
+    ordered feature-column list), ``cpcv_mean_oos_sharpe``/``cpcv_mean_oos_max_dd``
+    (the mean out-of-sample Sharpe / max drawdown across CPCV held-out paths for
+    the SAME DSR-selected strategy that produced ``cpcv_dsr``/``pbo`` — see
+    ``validation.metrics.run_cpcv_evaluation``). Each is written into the entry
+    verbatim; a ``None`` value is stored as-is and never influences ``deployable``.
+    These two fields are NEVER read by :func:`compute_deployable` or any other
+    deployability decision — that gate is DSR/PBO only, exactly as before.
 
     Returns the resulting model sub-dict.  Raises ``KeyError`` if the model key
     does not already exist in the registry (we update in place, never invent
@@ -140,6 +152,11 @@ def update_model_metrics(
     entry["hyperparameters"] = dict(hyperparameters) if hyperparameters is not None else None
     entry["train_window"] = dict(train_window) if train_window is not None else None
     entry["features"] = list(features) if features is not None else None
+    # CPCV out-of-sample Sharpe / max drawdown for the DSR-selected strategy —
+    # written verbatim (never derived/rounded/clamped) and NEVER consulted by
+    # compute_deployable() or any other deployability decision (DSR/PBO only).
+    entry["cpcv_mean_oos_sharpe"] = cpcv_mean_oos_sharpe
+    entry["cpcv_mean_oos_max_dd"] = cpcv_mean_oos_max_dd
 
     _dump_registry(data, reg_path)
     logger.info(

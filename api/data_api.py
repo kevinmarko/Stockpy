@@ -121,12 +121,16 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-# Mount WebSocket tick router
+# Mount WebSocket tick router only -- NOT training_router. The training-status
+# broadcast singletons (training_status_manager/_MAIN_LOOP) are only ever
+# populated by api/control_api.py's own startup hook and create_job/
+# stream_job_logs call sites, so a /ws/training/status route mounted here
+# could never broadcast anything; see api/ws_api.py's module docstring.
 try:
-    from api.ws_api import ws_router
-    app.include_router(ws_router)
+    from api.ws_api import tick_router
+    app.include_router(tick_router)
 except Exception as _ws_e:
-    logger.warning("ws_router mount skipped: %s", _ws_e)
+    logger.warning("tick_router mount skipped: %s", _ws_e)
 
 
 def require_ai_capability_enabled(flag_name: str, capability_label: str):

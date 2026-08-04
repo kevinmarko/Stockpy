@@ -468,7 +468,8 @@ def compute_cpcv_metrics(
     n_test_splits: int = 2,
     min_events: int = 60,
 ) -> dict:
-    """Run CPCV over the meta-labeler's event set → {'dsr','pbo','mean_oos_sharpe'}.
+    """Run CPCV over the meta-labeler's event set →
+    {'dsr','pbo','mean_oos_sharpe','mean_oos_max_dd'}.
 
     Mirrors ``scripts/train_lgbm.py::compute_cpcv_metrics``: each CPCV fold fits
     a fresh ``MetaLabeler`` on the train slice under EACH of several candidate
@@ -477,12 +478,15 @@ def compute_cpcv_metrics(
     collapses to 1.0), then produces the meta-gated returns proxy
     (``_meta_gated_returns``) on both the train and test slices. The runner
     derives DSR / PBO from the resulting IS/OOS Sharpe matrix.
+    ``mean_oos_max_dd`` is pulled straight from ``run_cpcv_evaluation``'s own
+    return dict (its already-computed mean per-path out-of-sample max
+    drawdown for the DSR-selected strategy) -- never recomputed here.
 
     Returns metrics as ``None`` (honest — CONSTRAINT #4) when the event set is
     too small to yield any CPCV path. Never raises: any internal failure
     degrades to all-``None`` (dead-letter — the model simply stays non-deployable).
     """
-    empty = {"dsr": None, "pbo": None, "mean_oos_sharpe": None}
+    empty = {"dsr": None, "pbo": None, "mean_oos_sharpe": None, "mean_oos_max_dd": None}
     try:
         if X is None or X.empty or len(X) < min_events:
             logger.warning(
@@ -567,6 +571,7 @@ def compute_cpcv_metrics(
             "dsr": float(result["dsr"]),
             "pbo": float(result["pbo"]),
             "mean_oos_sharpe": float(result["mean_oos_sharpe"]),
+            "mean_oos_max_dd": float(result["mean_oos_max_dd"]),
         }
     except Exception as exc:  # dead-letter: never crash training over validation
         logger.warning("CPCV evaluation failed (%s) — metrics stay null (honest).", exc)
@@ -589,6 +594,8 @@ def _update_registry_row(
     hyperparameters: Optional[dict] = None,
     train_window: Optional[dict] = None,
     features: Optional[list] = None,
+    cpcv_mean_oos_sharpe: Optional[float] = None,
+    cpcv_mean_oos_max_dd: Optional[float] = None,
 ) -> bool:
     """Update the ``meta_labeler_<signal_id>`` row in ml/registry.yaml.
 
@@ -596,7 +603,8 @@ def _update_registry_row(
     same writer ``scripts/train_lgbm.py`` uses) — ``deployable`` is derived
     there from ``cpcv_dsr``/``pbo``, never passed in (no spoofing the gate).
     Optional provenance (``artifact_file``, ``hyperparameters``, ``train_window``,
-    ``features``) is forwarded verbatim and never affects the gate.
+    ``features``, ``cpcv_mean_oos_sharpe``, ``cpcv_mean_oos_max_dd``) is
+    forwarded verbatim and never affects the gate.
     ``registry_path`` defaults to the module-level ``_REGISTRY_PATH`` resolved
     at call time (so tests can monkeypatch it). Returns True on success, False
     (and a logged warning) on any failure — never raises (dead-letter).
@@ -616,6 +624,8 @@ def _update_registry_row(
             hyperparameters=hyperparameters,
             train_window=train_window,
             features=features,
+            cpcv_mean_oos_sharpe=cpcv_mean_oos_sharpe,
+            cpcv_mean_oos_max_dd=cpcv_mean_oos_max_dd,
         )
         logger.info("Updated registry row %r (n_train=%d).", model_key, n_train)
         return True
@@ -718,6 +728,8 @@ def train_signal(
             hyperparameters=labeler.lgbm_params,
             train_window=train_window,
             features=list(labeler._feature_names),
+            cpcv_mean_oos_sharpe=cpcv.get("mean_oos_sharpe"),
+            cpcv_mean_oos_max_dd=cpcv.get("mean_oos_max_dd"),
         )
 
     logger.info(

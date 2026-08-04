@@ -24,6 +24,11 @@
 # hyperparameters: the model's training hyperparameters (dict)
 # train_window:    the data-split window {start, end, n_dates} (dates as YYYY-MM-DD strings)
 # features:        the ordered feature-column list the model trained with (list)
+# cpcv_mean_oos_sharpe:  mean out-of-sample Sharpe across CPCV held-out paths for the
+#                  SAME DSR-selected strategy that produced cpcv_dsr/pbo (never read by the
+#                  deployable gate)
+# cpcv_mean_oos_max_dd:  mean out-of-sample max drawdown across CPCV held-out paths for the
+#                  SAME DSR-selected strategy (never read by the deployable gate)
 
 models:
   lgbm_ranker:

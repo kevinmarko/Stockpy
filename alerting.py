@@ -235,6 +235,50 @@ def notify(
 
 
 # ---------------------------------------------------------------------------
+# send_model_staleness_alert
+# ---------------------------------------------------------------------------
+
+def send_model_staleness_alert(model_key: str, days_old: int) -> None:
+    """Warn when a model has crossed the retrain-staleness window.
+
+    The threshold is live-imported from ``gui.help_content.MODEL_RETRAIN_WINDOW_DAYS``
+    (never re-typed as a literal here) -- mirrors ``pilots/models.py``'s own
+    lazy-import convention for the same constant, so the staleness window
+    stays in sync with the live config without a separate update step.
+
+    Dispatches via ``observability.alerts.send_alert`` (the general multi-
+    channel alert dispatcher -- see this module's own docstring for why this
+    is NOT routed through ``notify()`` above) with a per-model ``dedup_key``
+    so a model that stays stale doesn't re-alert every time this is called.
+
+    No-op (never raises) when ``days_old`` is within the retrain window, or
+    when the threshold constant can't be imported (dead-letter — a staleness
+    check must never crash the caller).
+    """
+    try:
+        from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+    except Exception:  # noqa: BLE001 - dead-letter, mirrors pilots/models.py's own guard
+        logger.debug("MODEL_RETRAIN_WINDOW_DAYS unavailable; skipping staleness check")
+        return
+
+    if days_old <= MODEL_RETRAIN_WINDOW_DAYS:
+        return
+
+    from observability.alerts import send_alert
+
+    send_alert(
+        level="WARNING",
+        message=(
+            f"Model '{model_key}' is {days_old} days old "
+            f"(exceeds the {MODEL_RETRAIN_WINDOW_DAYS}-day retrain window). "
+            "Consider retraining."
+        ),
+        extra={"model": model_key, "age_days": days_old},
+        dedup_key=f"model_stale_{model_key}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # summarize_run
 # ---------------------------------------------------------------------------
 

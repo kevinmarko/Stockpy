@@ -700,3 +700,36 @@ class TestProviderStatus:
                 "/data/provider-status", headers={"Authorization": "Bearer wrong"}
             )
         assert resp.status_code == 401
+
+
+def _all_route_paths(app) -> set:
+    """Recursively collect every route path served by *app* -- see the
+    identically-named helper's docstring in test_control_api.py for why a
+    plain top-level scan of ``app.routes`` is not sufficient in the FastAPI/
+    Starlette version this repo pins."""
+    paths: set = set()
+    stack = list(app.routes)
+    while stack:
+        route = stack.pop()
+        path = getattr(route, "path", None)
+        if path:
+            paths.add(path)
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            stack.extend(original_router.routes)
+    return paths
+
+
+def test_mounts_tick_ws_route_but_not_the_unrelated_training_status_route():
+    """Route-bleed regression guard, mirroring
+    test_control_api.py::test_mounts_training_status_ws_route_but_not_the_unrelated_tick_route.
+    This app correctly serves /ws/ticks/{symbol} (its own live-market-tick
+    capability) but must NOT also serve /ws/training/status -- that route's
+    broadcast singletons (training_status_manager/_MAIN_LOOP) are only ever
+    populated by api/control_api.py's own startup hook and create_job/
+    stream_job_logs call sites, so a copy mounted here could never broadcast
+    anything. Both routers used to be one shared ``ws_router`` that any
+    mounting process pulled in whole; see api/ws_api.py's docstring."""
+    paths = _all_route_paths(data_api.app)
+    assert "/ws/ticks/{symbol}" in paths
+    assert "/ws/training/status" not in paths

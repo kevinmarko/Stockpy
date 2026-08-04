@@ -964,6 +964,52 @@ class TestJobsApi:
             second = client.post("/jobs", json={"job_type": "preflight"}, headers=headers)
         assert second.status_code == 409
 
+    def test_cross_type_single_flight_train_jobs_conflict(self, monkeypatch):
+        """TRAIN_LGBM and TRAIN_META share a single-flight group ("train")
+        since both write to the same ML registry -- starting a TRAIN_META job
+        while a TRAIN_LGBM job is still running must 409, even though they
+        are different job_type values (unlike the plain same-type-only check
+        every other job type still gets)."""
+        monkeypatch.setattr(jobs_module, "launch_train_lgbm", lambda: _FakeHandle(running=True))
+        monkeypatch.setattr(jobs_module, "launch_train_meta_labelers", lambda **kw: _FakeHandle(running=True))
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            first = client.post("/jobs", json={"job_type": "train_lgbm"}, headers=headers)
+            assert first.status_code == 200
+            second = client.post(
+                "/jobs", json={"job_type": "train_meta", "params": {"signal": "timeseries_momentum"}},
+                headers=headers,
+            )
+        assert second.status_code == 409
+
+    def test_cross_type_single_flight_reverse_order_also_conflicts(self, monkeypatch):
+        """Same as above with TRAIN_META launched first, TRAIN_LGBM second --
+        the conflict must not be order-dependent."""
+        monkeypatch.setattr(jobs_module, "launch_train_lgbm", lambda: _FakeHandle(running=True))
+        monkeypatch.setattr(jobs_module, "launch_train_meta_labelers", lambda **kw: _FakeHandle(running=True))
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            first = client.post("/jobs", json={"job_type": "train_meta"}, headers=headers)
+            assert first.status_code == 200
+            second = client.post("/jobs", json={"job_type": "train_lgbm"}, headers=headers)
+        assert second.status_code == 409
+
+    def test_train_job_does_not_conflict_with_unrelated_job_type(self, monkeypatch):
+        """A running TRAIN_LGBM job must not block an unrelated job type
+        (e.g. preflight) -- the widened single-flight check is scoped to the
+        "train" group only, not job launches in general."""
+        monkeypatch.setattr(jobs_module, "launch_train_lgbm", lambda: _FakeHandle(running=True))
+        monkeypatch.setattr(jobs_module, "launch_preflight", lambda: _FakeHandle(running=True))
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"):
+            headers = {"Authorization": "Bearer cmd-tok"}
+            first = client.post("/jobs", json={"job_type": "train_lgbm"}, headers=headers)
+            assert first.status_code == 200
+            second = client.post("/jobs", json={"job_type": "preflight"}, headers=headers)
+        assert second.status_code == 200
+
     def test_status_reflects_completion(self, monkeypatch):
         handle = _FakeHandle(running=True)
         monkeypatch.setattr(jobs_module, "launch_pytest", lambda: handle)
@@ -1123,6 +1169,82 @@ def test_control_api_never_imports_pipeline_engines_directly():
     }
     overlap = imported_modules & forbidden_modules
     assert not overlap, f"api/control_api.py must not import {overlap}"
+
+
+# ---------------------------------------------------------------------------
+# Training-status broadcast wiring (POST /jobs -> /ws/training/status)
+# ---------------------------------------------------------------------------
+
+
+def test_no_duplicate_ws_jobs_route_exists():
+    """This app must have exactly one job-log-streaming mechanism -- the
+    pre-existing SSE ``GET /jobs/{job_id}/stream`` -- never a duplicate WS
+    variant living under a ``/ws/jobs/`` path."""
+    ws_jobs_paths = [
+        route.path for route in control_api.app.routes
+        if getattr(route, "path", "").startswith("/ws/jobs/")
+    ]
+    assert ws_jobs_paths == []
+
+
+def _all_route_paths(app) -> set:
+    """Recursively collect every route path served by *app*, unwrapping
+    FastAPI's lazy ``_IncludedRouter`` mount wrapper (``app.include_router``
+    no longer eagerly flattens a sub-router's routes into ``app.routes`` in
+    the FastAPI/Starlette version this repo pins -- a top-level, un-recursed
+    scan of ``app.routes`` silently sees a mounted sub-router's own routes
+    as absent, which would make a route-bleed guard test pass for the wrong
+    reason)."""
+    paths: set = set()
+    stack = list(app.routes)
+    while stack:
+        route = stack.pop()
+        path = getattr(route, "path", None)
+        if path:
+            paths.add(path)
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            stack.extend(original_router.routes)
+    return paths
+
+
+def test_mounts_training_status_ws_route_but_not_the_unrelated_tick_route():
+    """Route-bleed regression guard: this app is the ONE process that
+    actually runs POST /jobs and the train_lgbm/train_meta job types, so it
+    correctly serves /ws/training/status -- but must NOT also serve
+    /ws/ticks/{symbol} (api/data_api.py's own live-market-tick-streaming
+    capability, unrelated to this daemon process and with no test coverage
+    in this context). Both routers used to be one shared ``ws_router`` that
+    any mounting process pulled in whole; see api/ws_api.py's docstring."""
+    paths = _all_route_paths(control_api.app)
+    assert "/ws/training/status" in paths
+    assert "/ws/ticks/{symbol}" not in paths
+
+
+def test_create_job_exception_mapping_never_references_broadcast():
+    """Pins that a training-status broadcast failure can never be
+    misreported as an HTTP 400/409/403 about the job itself -- the
+    broadcast call must live strictly AFTER the
+    ``RuntimeError/ValueError/PermissionError`` exception-mapping block,
+    never inside it."""
+    import inspect
+    import re
+
+    source = inspect.getsource(control_api.create_job)
+
+    # Isolate just the exception-mapping try/except block: from the first
+    # `try:` immediately preceding `job_manager.start_job` through the last
+    # `except PermissionError` clause's body.
+    match = re.search(
+        r"try:\s*\n\s*rec = job_manager\.start_job.*?except PermissionError as err:\s*\n\s*raise HTTPException\(status_code=403.*?\n",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None, "could not locate the exception-mapping block in create_job's source"
+    exception_mapping_block = match.group(0)
+
+    assert "ws_api" not in exception_mapping_block
+    assert "broadcast" not in exception_mapping_block
 
 
 def test_daemon_properties_are_never_called_as_methods():

@@ -796,9 +796,15 @@ describe("Settings screen — Brokerage", () => {
    *  cumulative wall-clock cost of these chained hops occasionally
    *  exceeding 1000ms under real CI CPU contention even once they resolve
    *  correctly -- a different problem from the two races above, and one
-   *  a longer budget legitimately does fix.
+   *  a longer budget legitimately does fix. Raised from 5000ms to 15000ms
+   *  after a "Disconnect brokerage" dialog lookup (one of the two raw
+   *  `screen.findByRole("dialog", ..., ASYNC_JOB_CHAIN_TIMEOUT)` call
+   *  sites this constant also feeds -- not just `waitForPresence`'s
+   *  consumers) still missed 5000ms on a real CI run; the outer Vitest
+   *  `testTimeout` (vite.config.ts) is 30000ms, so this has room to grow
+   *  without becoming the thing that gets capped.
    */
-  const ASYNC_JOB_CHAIN_TIMEOUT = { timeout: 5000 };
+  const ASYNC_JOB_CHAIN_TIMEOUT = { timeout: 15000 };
 
   /** Re-queries `getElement` on every retry instead of resolving once with
    *  a reference that can go stale a microtask later -- see the comment

@@ -244,6 +244,76 @@ class TestNotify:
 
 
 # ---------------------------------------------------------------------------
+# send_model_staleness_alert
+# ---------------------------------------------------------------------------
+
+class TestSendModelStalenessAlert:
+    def test_noop_when_exactly_at_retrain_window(self, monkeypatch):
+        """days_old <= MODEL_RETRAIN_WINDOW_DAYS (live-imported, never a
+        re-typed literal here — mirrors pilots/models.py's own convention)."""
+        from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+
+        recorded = []
+        monkeypatch.setattr(
+            "observability.alerts.send_alert",
+            lambda *a, **k: recorded.append((a, k)),
+        )
+        alerting.send_model_staleness_alert("lgbm_ranker", MODEL_RETRAIN_WINDOW_DAYS)
+        assert recorded == []
+
+    def test_noop_well_within_window(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(
+            "observability.alerts.send_alert",
+            lambda *a, **k: recorded.append((a, k)),
+        )
+        alerting.send_model_staleness_alert("lgbm_ranker", 1)
+        assert recorded == []
+
+    def test_fires_over_threshold_with_dedup_key_and_extra(self, monkeypatch):
+        from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
+
+        recorded = []
+
+        def _fake_send_alert(**kwargs):
+            recorded.append(kwargs)
+
+        monkeypatch.setattr("observability.alerts.send_alert", _fake_send_alert)
+        days_old = MODEL_RETRAIN_WINDOW_DAYS + 15
+        alerting.send_model_staleness_alert("lgbm_ranker", days_old)
+
+        assert len(recorded) == 1
+        call = recorded[0]
+        assert call["level"] == "WARNING"
+        assert "lgbm_ranker" in call["message"]
+        assert str(days_old) in call["message"]
+        assert str(MODEL_RETRAIN_WINDOW_DAYS) in call["message"]
+        assert call["dedup_key"] == "model_stale_lgbm_ranker"
+        assert call["extra"] == {"model": "lgbm_ranker", "age_days": days_old}
+
+    def test_missing_threshold_constant_degrades_to_noop(self, monkeypatch):
+        """MODEL_RETRAIN_WINDOW_DAYS unavailable (import failure) -> dead-letter
+        no-op, never raises, never fires an alert with a fabricated threshold."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _raising_import(name, *args, **kwargs):
+            if name == "gui.help_content":
+                raise ImportError("simulated import failure")
+            return real_import(name, *args, **kwargs)
+
+        recorded = []
+        monkeypatch.setattr(builtins, "__import__", _raising_import)
+        monkeypatch.setattr(
+            "observability.alerts.send_alert",
+            lambda *a, **k: recorded.append((a, k)),
+        )
+        alerting.send_model_staleness_alert("lgbm_ranker", 9999)  # must not raise
+        assert recorded == []
+
+
+# ---------------------------------------------------------------------------
 # summarize_run
 # ---------------------------------------------------------------------------
 

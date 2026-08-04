@@ -114,6 +114,7 @@ needs POST for ``/run`` and PUT for ``/interval``).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -169,6 +170,45 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# Mount the training-status WebSocket router (/ws/training/status) only --
+# NOT tick_router. This is the process that actually runs POST /jobs and the
+# train_lgbm/train_meta job types, so it's the only process with anything
+# real to broadcast; tick_router (/ws/ticks/{symbol}, live market-tick
+# streaming) is data_api.py's own capability and mounting it here too would
+# make the daemon process unintentionally also serve it, an unrelated
+# surface with no test coverage in this context -- see api/ws_api.py's
+# module docstring. Broad `except Exception`, not `except ImportError` --
+# api/ws_api.py imports data.websocket_streamer at its own module top, and a
+# narrower catch would let ANY non-ImportError failure in that import chain
+# crash this entire file's import (killing every Control API route, not
+# just the WS ones).
+try:
+    from api.ws_api import training_router
+    app.include_router(training_router)
+except Exception as _ws_e:  # noqa: BLE001 - a WS mount must never break the rest of this API
+    logger.warning("training_router mount skipped in control_api: %s", _ws_e)
+
+# Guarded import of the training-status broadcast helpers -- mirrors the
+# try/except above so a broken api.ws_api import degrades this module to
+# "no training-status broadcasts", never a crash on import.
+try:
+    from api.ws_api import broadcast_training_status_threadsafe as _broadcast_training_status
+    from api.ws_api import training_status_manager as _training_status_manager
+except Exception:  # noqa: BLE001 - see the training_router mount comment above
+    _broadcast_training_status = None
+    _training_status_manager = None
+
+
+@app.on_event("startup")
+async def _capture_main_loop() -> None:
+    """Capture the real running event loop so that SYNCHRONOUS routes (which
+    FastAPI runs in a threadpool with no event loop of their own -- e.g.
+    ``create_job`` below) can still schedule a training-status broadcast
+    coroutine onto it via ``broadcast_training_status_threadsafe``."""
+    from api import ws_api
+    ws_api.set_main_loop(asyncio.get_running_loop())
+
 
 # ---------------------------------------------------------------------------
 # Daemon registry — set once by the process entrypoint after daemon.start()
@@ -565,6 +605,29 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
     except PermissionError as err:
         raise HTTPException(status_code=403, detail=str(err)) from err
 
+    # Broadcast a training-status "started" event over /ws/training/status
+    # for the two model-retraining job types. Deliberately placed AFTER the
+    # exception-mapping try/except above (rec is bound, job creation already
+    # succeeded) so a broadcast failure can never be misreported to the
+    # client as a 400/409/403 about the job itself. getattr-guarded (not a
+    # direct JobType.TRAIN_META/TRAIN_LGBM attribute reference) so this
+    # never AttributeErrors against a JobType enum build that hasn't landed
+    # those members yet -- every other job type simply never broadcasts.
+    _training_job_types = (
+        getattr(JobType, "TRAIN_META", None),
+        getattr(JobType, "TRAIN_LGBM", None),
+    )
+    if jtype in _training_job_types and _broadcast_training_status is not None:
+        try:
+            msg = json.dumps({
+                "job_id": rec.job_id,
+                "status": "started",
+                "message": f"{rec.job_type.value} started",
+            })
+            _broadcast_training_status(msg)
+        except Exception as exc:  # noqa: BLE001 - a broadcast must never break job creation
+            logger.warning("training-status broadcast failed for job %s: %s", rec.job_id, exc)
+
     return {
         "job_id": rec.job_id,
         "job_type": rec.job_type.value,
@@ -646,7 +709,7 @@ def stream_job_logs(
     """
     import time as _time
     from fastapi.responses import StreamingResponse
-    from api._jobs import job_manager
+    from api._jobs import JobType, job_manager
     from api._redact import redact_line
 
     rec = job_manager.get_job(job_id)
@@ -681,6 +744,22 @@ def stream_job_logs(
             if not rec.handle.is_running():
                 # Stream final lines if any and stop
                 yield f"event: end\ndata: Job completed with exit code {rec.exit_code()}\n\n"
+                # getattr-guarded for the same reason as create_job's
+                # broadcast above -- never AttributeError against a JobType
+                # enum build predating TRAIN_META/TRAIN_LGBM.
+                _training_job_types = (
+                    getattr(JobType, "TRAIN_META", None),
+                    getattr(JobType, "TRAIN_LGBM", None),
+                )
+                if rec.job_type in _training_job_types and _training_status_manager is not None:
+                    try:
+                        await _training_status_manager.broadcast(json.dumps({
+                            "job_id": job_id,
+                            "status": "finished",
+                            "exit_code": rec.exit_code(),
+                        }))
+                    except Exception:
+                        pass
                 break
 
             now = _time.monotonic()

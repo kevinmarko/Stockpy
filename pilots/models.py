@@ -120,6 +120,8 @@ def _parse_registry_rows(text: str) -> List[Dict[str, Any]]:
                 "trained_date": _as_str_or_none(meta.get("trained_date")),
                 "cpcv_dsr": meta.get("cpcv_dsr"),
                 "pbo": meta.get("pbo"),
+                "cpcv_mean_oos_sharpe": meta.get("cpcv_mean_oos_sharpe"),
+                "cpcv_mean_oos_max_dd": meta.get("cpcv_mean_oos_max_dd"),
                 "n_train": meta.get("n_train"),
                 "deployable": meta.get("deployable"),
                 "notes": meta.get("notes"),

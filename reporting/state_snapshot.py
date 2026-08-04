@@ -192,6 +192,17 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
         if macro_dto is not None:
             regime = getattr(macro_dto, "market_regime", "UNKNOWN") or "UNKNOWN"
             vix = float(getattr(macro_dto, "vix_value", 0.0) or 0.0)
+            # Kill-switch verdict is the DTO's OWN already-computed answer
+            # (dto_models.MacroEconomicDTO.killSwitch -- includes the
+            # HMM-agreement lowered-threshold branch, not just a raw
+            # sahm>=0.5-or-vix>30 check) -- never re-derived from raw
+            # threshold comparisons here, which would silently miss that
+            # branch. getattr-guarded (never a bare attribute access) so a
+            # fake/stub macro_dto lacking the property (e.g. a test
+            # SimpleNamespace) degrades to an honest None rather than raising
+            # inside this function's outer try/except and silently dropping
+            # the ENTIRE snapshot write (CONSTRAINT #4/#6).
+            _kill_switch_raw = getattr(macro_dto, "killSwitch", None)
             macro_fields = {
                 "yield_curve": float(getattr(macro_dto, "yield_curve", 0.0) or 0.0),
                 "sahm_rule": float(getattr(macro_dto, "sahm_rule_indicator", 0.0) or 0.0),
@@ -200,6 +211,9 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 # emit null, not 0.0, so the GUI can tell "didn't run" from "0%".
                 "hmm_risk_on_probability": _safe_float_or_none(
                     getattr(macro_dto, "hmm_risk_on_probability", None)
+                ),
+                "macro_kill_switch": (
+                    bool(_kill_switch_raw) if _kill_switch_raw is not None else None
                 ),
             }
 

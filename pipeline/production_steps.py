@@ -2451,7 +2451,10 @@ class StateSnapshotStep(PipelineStep):
                 except Exception as plot_err:
                     telemetry.warning(f"Failed to generate interactive Plotly chart: {plot_err}")
 
-        _write_state_snapshot(ctx.macro_raw, ctx.dashboard_df, ctx.symbols)
+        _write_state_snapshot(
+            ctx.macro_raw, ctx.dashboard_df, ctx.symbols,
+            macro_kill_switch=getattr(ctx.macro_dto, "killSwitch", None),
+        )
 
         # Persist the optional Pilots-PWA analytics artifacts (options premium
         # matrix + pairs radar). Both are opt-in (settings.*_ENABLED, default

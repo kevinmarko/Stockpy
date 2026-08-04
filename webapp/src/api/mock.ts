@@ -3030,6 +3030,11 @@ const MODELS: ModelRow[] = [
     notes: "LightGBM LambdaRank — modest weight until validated at >200 OOS dates.",
     age_days: daysSinceTrained("2026-07-06"),
     needs_retrain: daysSinceTrained("2026-07-06") >= MODEL_RETRAIN_WINDOW_DAYS,
+    // Real cpcv_dsr/pbo above -> a real (if unimpressive) CPCV OOS Sharpe/
+    // MaxDD too. max_dd is a POSITIVE magnitude fraction (0.28 = 28%),
+    // matching compute_max_drawdown's convention -- see ModelRow's doc.
+    cpcv_mean_oos_sharpe: 0.31,
+    cpcv_mean_oos_max_dd: 0.28,
   },
   {
     name: "meta_labeler_timeseries_momentum",
@@ -3042,6 +3047,10 @@ const MODELS: ModelRow[] = [
     notes: "Binary classifier predicting P(timeseries_momentum correct).",
     age_days: daysSinceTrained("2026-07-06"),
     needs_retrain: daysSinceTrained("2026-07-06") >= MODEL_RETRAIN_WINDOW_DAYS,
+    // Un-validated (cpcv_dsr/pbo null above) -> both new fields stay null
+    // too, matching this fixture's existing honesty pattern.
+    cpcv_mean_oos_sharpe: null,
+    cpcv_mean_oos_max_dd: null,
   },
   {
     // Deliberately trained well outside the 30-day window (unlike its two
@@ -3057,6 +3066,8 @@ const MODELS: ModelRow[] = [
     notes: "Binary classifier predicting P(cross_sectional_momentum correct).",
     age_days: daysSinceTrained("2026-05-20"),
     needs_retrain: daysSinceTrained("2026-05-20") >= MODEL_RETRAIN_WINDOW_DAYS,
+    cpcv_mean_oos_sharpe: null,
+    cpcv_mean_oos_max_dd: null,
   },
   {
     // A newly-registered model with no training run yet -- trained_date null
@@ -3072,6 +3083,8 @@ const MODELS: ModelRow[] = [
     notes: "Registered but not yet trained -- no dated run to compute an age from.",
     age_days: null,
     needs_retrain: null,
+    cpcv_mean_oos_sharpe: null,
+    cpcv_mean_oos_max_dd: null,
   },
 ];
 
@@ -3976,6 +3989,11 @@ function mockRegimeOverlay(): RegimeOverlay {
     hmm_risk_on_probability: 0.78,
     kill_switch_active: ks.active,
     macro_regime_gate_enabled: readMacroGateEnabled(),
+    // Quiet by default (no live macro kill event in the demo) -- the
+    // Models screen's macro-gate banner only lights up when this AND
+    // macro_regime_gate_enabled above are both true, exactly like the real
+    // gate/kill-switch combination check.
+    macro_kill_switch: false,
     reason: null,
     // Always writable in the mock (matches mockLlmStatus's convention above)
     // so the demo can exercise the write flow with zero config.
@@ -6616,16 +6634,47 @@ export const mockApi = {
       // never a fabricated 0, and never silently absent from the list.
       "news_catalyst",
     ];
+    // Believable static settings.SIGNAL_WEIGHTS stand-ins -- not fetched
+    // from the real config (the mock has no live Python process to import
+    // from), but a plausible per-module weight so the tooltip's "Absolute
+    // Config Weight" line has something real-looking to show.
+    const CONFIG_WEIGHTS: Record<string, number> = {
+      timeseries_momentum: 0.12,
+      cross_sectional_momentum: 0.1,
+      multifactor: 0.15,
+      macd_momentum: 0.08,
+      rsi2_mean_reversion: 0.06,
+      news_catalyst: 0.05,
+    };
     const rows: SignalImportanceRow[] = names.map((name) => {
       if (name === "news_catalyst") {
-        return { name, mean_abs_contribution: null, n_symbols_scored: 0 };
+        return {
+          name,
+          mean_abs_contribution: null,
+          n_symbols_scored: 0,
+          normalized_contribution: null,
+          config_weight: CONFIG_WEIGHTS[name] ?? null,
+        };
       }
       return {
         name,
         mean_abs_contribution: +(rng() * 8).toFixed(2),
         n_symbols_scored: Math.max(1, requested.length - Math.floor(rng() * 2)),
+        config_weight: CONFIG_WEIGHTS[name] ?? null,
       };
     });
+    // normalized_contribution = each row's mean_abs_contribution divided by
+    // the sum of all non-null mean_abs_contribution values, so the non-null
+    // rows sum to ~1.0 -- computed AFTER the raw values above are fixed, not
+    // interleaved with them, so the denominator is stable regardless of
+    // rounding order.
+    const totalContribution = rows.reduce((sum, r) => sum + (r.mean_abs_contribution ?? 0), 0);
+    for (const r of rows) {
+      r.normalized_contribution =
+        r.mean_abs_contribution == null || totalContribution <= 0
+          ? null
+          : +(r.mean_abs_contribution / totalContribution).toFixed(4);
+    }
     rows.sort((a, b) => (b.mean_abs_contribution ?? -1) - (a.mean_abs_contribution ?? -1));
     return delay<SignalImportance>({
       rows,

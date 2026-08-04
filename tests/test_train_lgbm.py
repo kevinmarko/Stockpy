@@ -173,6 +173,78 @@ def test_update_unknown_key_raises(tmp_registry):
         registry_io.update_model_metrics("does_not_exist", path=tmp_registry)
 
 
+def test_update_model_metrics_cpcv_oos_fields_round_trip(tmp_registry):
+    """cpcv_mean_oos_sharpe / cpcv_mean_oos_max_dd persist verbatim into the
+    written YAML — the new provenance fields this PR adds."""
+    entry = registry_io.update_model_metrics(
+        "lgbm_ranker",
+        trained_date="2026-08-03",
+        cpcv_dsr=0.98,
+        pbo=0.20,
+        n_train=123,
+        path=tmp_registry,
+        cpcv_mean_oos_sharpe=1.23,
+        cpcv_mean_oos_max_dd=-0.08,
+    )
+    assert entry["cpcv_mean_oos_sharpe"] == pytest.approx(1.23)
+    assert entry["cpcv_mean_oos_max_dd"] == pytest.approx(-0.08)
+
+    data = yaml.safe_load(tmp_registry.read_text())
+    row = data["models"]["lgbm_ranker"]
+    assert row["cpcv_mean_oos_sharpe"] == pytest.approx(1.23)
+    assert row["cpcv_mean_oos_max_dd"] == pytest.approx(-0.08)
+
+
+def test_update_model_metrics_cpcv_oos_fields_default_none(tmp_registry):
+    """Omitting the two new kwargs stores None (backward-compatible default)."""
+    entry = registry_io.update_model_metrics(
+        "lgbm_ranker",
+        trained_date="2026-08-03",
+        cpcv_dsr=0.98,
+        pbo=0.20,
+        n_train=123,
+        path=tmp_registry,
+    )
+    assert entry["cpcv_mean_oos_sharpe"] is None
+    assert entry["cpcv_mean_oos_max_dd"] is None
+
+
+def test_update_model_metrics_cpcv_oos_fields_never_spoof_deployable(tmp_registry):
+    """Anti-spoofing guard (mirrors the existing provenance round-trip test):
+    a high cpcv_mean_oos_sharpe / a shallow cpcv_mean_oos_max_dd -- values
+    that would look 'good' -- must NOT rescue a failing DSR/PBO gate. The
+    deployable flag is derived from cpcv_dsr/pbo alone, exactly as before
+    this PR."""
+    entry = registry_io.update_model_metrics(
+        "lgbm_ranker",
+        trained_date="2026-08-03",
+        cpcv_dsr=0.10,   # fails the >0.95 gate
+        pbo=0.60,        # fails the <0.5 gate
+        n_train=123,
+        path=tmp_registry,
+        cpcv_mean_oos_sharpe=5.0,     # deliberately "great looking"
+        cpcv_mean_oos_max_dd=-0.001,  # deliberately "great looking"
+    )
+    assert entry["deployable"] is False
+    assert entry["deployable"] == registry_io.compute_deployable(0.10, 0.60)
+
+    # Conversely: a genuinely passing gate stays deployable regardless of what
+    # the two new fields are set to (including deliberately "bad-looking"
+    # values) -- proves the gate is never coupled to these fields either way.
+    entry2 = registry_io.update_model_metrics(
+        "lgbm_ranker",
+        trained_date="2026-08-03",
+        cpcv_dsr=0.99,
+        pbo=0.10,
+        n_train=123,
+        path=tmp_registry,
+        cpcv_mean_oos_sharpe=-3.0,
+        cpcv_mean_oos_max_dd=-0.90,
+    )
+    assert entry2["deployable"] is True
+    assert entry2["deployable"] == registry_io.compute_deployable(0.99, 0.10)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Training-job end-to-end tests
 # ──────────────────────────────────────────────────────────────────────────────
@@ -205,6 +277,12 @@ def test_training_produces_model_and_real_metrics(tmp_path, tmp_registry):
     assert row["cpcv_dsr"] is not None
     assert row["pbo"] is not None
     assert row["n_train"] == summary["n_train"]
+    # The real CPCV out-of-sample Sharpe / max drawdown flow all the way
+    # through compute_cpcv_metrics -> update_model_metrics -> the YAML row
+    # (previously silently discarded before reaching the registry).
+    assert row["cpcv_mean_oos_sharpe"] is not None
+    assert row["cpcv_mean_oos_max_dd"] is not None
+    assert row["cpcv_mean_oos_sharpe"] == pytest.approx(summary["mean_oos_sharpe"])
 
 
 def test_default_save_path_is_dated_not_mutable_latest(tmp_path, tmp_registry, monkeypatch):

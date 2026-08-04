@@ -165,7 +165,8 @@ function baseFor(path: string): string {
     path.startsWith("/run") ||
     path.startsWith("/pipeline/") ||
     path.startsWith("/jobs") ||
-    path.startsWith("/daemon/")
+    path.startsWith("/daemon/") ||
+    path.startsWith("/ws/training/")
   ) {
     return CONTROL_BASE_URL;
   }
@@ -214,6 +215,23 @@ export function jobStreamUrl(jobId: string, offset = 0): string {
   const params = new URLSearchParams({ offset: String(offset) });
   if (TOKEN) params.set("token", TOKEN);
   return `${baseFor("/jobs")}/jobs/${encodeURIComponent(jobId)}/stream?${params.toString()}`;
+}
+
+/**
+ * Full ws:// (or wss:// on an https origin) URL for the training-status
+ * broadcast endpoint on the Control API (orchestrator daemon) -- a
+ * DIFFERENT origin from the Data API's own /ws/ticks/* used by
+ * liveTickWsUrl (see baseFor's routing). Same auth convention as
+ * liveTickWsUrl/jobStreamUrl: the token travels as a `?token=` query param
+ * since the browser WebSocket API can't set an Authorization header.
+ */
+export function trainingStatusWsUrl(): string {
+  const httpBase = baseFor("/ws/training/status");
+  const wsBase = httpBase.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+  const params = new URLSearchParams();
+  if (TOKEN) params.set("token", TOKEN);
+  const qs = params.toString();
+  return `${wsBase}/ws/training/status${qs ? `?${qs}` : ""}`;
 }
 
 // Default to MOCK unless explicitly told to go live. This means a fresh checkout
