@@ -171,16 +171,23 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-# Mount the training-status WebSocket router (/ws/training/status). Broad
-# `except Exception`, not `except ImportError` -- api/ws_api.py imports
-# data.websocket_streamer at its own module top, and a narrower catch would
-# let ANY non-ImportError failure in that import chain crash this entire
-# file's import (killing every Control API route, not just the WS ones).
+# Mount the training-status WebSocket router (/ws/training/status) only --
+# NOT tick_router. This is the process that actually runs POST /jobs and the
+# train_lgbm/train_meta job types, so it's the only process with anything
+# real to broadcast; tick_router (/ws/ticks/{symbol}, live market-tick
+# streaming) is data_api.py's own capability and mounting it here too would
+# make the daemon process unintentionally also serve it, an unrelated
+# surface with no test coverage in this context -- see api/ws_api.py's
+# module docstring. Broad `except Exception`, not `except ImportError` --
+# api/ws_api.py imports data.websocket_streamer at its own module top, and a
+# narrower catch would let ANY non-ImportError failure in that import chain
+# crash this entire file's import (killing every Control API route, not
+# just the WS ones).
 try:
-    from api.ws_api import ws_router
-    app.include_router(ws_router)
+    from api.ws_api import training_router
+    app.include_router(training_router)
 except Exception as _ws_e:  # noqa: BLE001 - a WS mount must never break the rest of this API
-    logger.warning("ws_router mount skipped in control_api: %s", _ws_e)
+    logger.warning("training_router mount skipped in control_api: %s", _ws_e)
 
 # Guarded import of the training-status broadcast helpers -- mirrors the
 # try/except above so a broken api.ws_api import degrades this module to
@@ -188,7 +195,7 @@ except Exception as _ws_e:  # noqa: BLE001 - a WS mount must never break the res
 try:
     from api.ws_api import broadcast_training_status_threadsafe as _broadcast_training_status
     from api.ws_api import training_status_manager as _training_status_manager
-except Exception:  # noqa: BLE001 - see the ws_router mount comment above
+except Exception:  # noqa: BLE001 - see the training_router mount comment above
     _broadcast_training_status = None
     _training_status_manager = None
 

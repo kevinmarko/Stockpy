@@ -1187,6 +1187,40 @@ def test_no_duplicate_ws_jobs_route_exists():
     assert ws_jobs_paths == []
 
 
+def _all_route_paths(app) -> set:
+    """Recursively collect every route path served by *app*, unwrapping
+    FastAPI's lazy ``_IncludedRouter`` mount wrapper (``app.include_router``
+    no longer eagerly flattens a sub-router's routes into ``app.routes`` in
+    the FastAPI/Starlette version this repo pins -- a top-level, un-recursed
+    scan of ``app.routes`` silently sees a mounted sub-router's own routes
+    as absent, which would make a route-bleed guard test pass for the wrong
+    reason)."""
+    paths: set = set()
+    stack = list(app.routes)
+    while stack:
+        route = stack.pop()
+        path = getattr(route, "path", None)
+        if path:
+            paths.add(path)
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            stack.extend(original_router.routes)
+    return paths
+
+
+def test_mounts_training_status_ws_route_but_not_the_unrelated_tick_route():
+    """Route-bleed regression guard: this app is the ONE process that
+    actually runs POST /jobs and the train_lgbm/train_meta job types, so it
+    correctly serves /ws/training/status -- but must NOT also serve
+    /ws/ticks/{symbol} (api/data_api.py's own live-market-tick-streaming
+    capability, unrelated to this daemon process and with no test coverage
+    in this context). Both routers used to be one shared ``ws_router`` that
+    any mounting process pulled in whole; see api/ws_api.py's docstring."""
+    paths = _all_route_paths(control_api.app)
+    assert "/ws/training/status" in paths
+    assert "/ws/ticks/{symbol}" not in paths
+
+
 def test_create_job_exception_mapping_never_references_broadcast():
     """Pins that a training-status broadcast failure can never be
     misreported as an HTTP 400/409/403 about the job itself -- the

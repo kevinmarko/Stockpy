@@ -252,3 +252,29 @@ class TestBroadcastTrainingStatusThreadsafe:
 
         sent = asyncio.run(_runner())
         assert sent == ["scheduled"]
+
+
+class TestRouterSplit:
+    """Pins the tick_router / training_router split (route-bleed fix):
+    api/data_api.py must mount tick_router only, api/control_api.py must
+    mount training_router only. A previous version of this module exposed a
+    single shared ``ws_router`` carrying both routes, which any importer had
+    to mount in full -- silently giving the Control API's daemon process
+    live tick-streaming and giving the Data API a permanently-dead copy of
+    /ws/training/status (its broadcast singletons are only ever populated by
+    control_api.py). See api/ws_api.py's module docstring."""
+
+    def _paths(self, router) -> set[str]:
+        return {route.path for route in router.routes}
+
+    def test_tick_router_carries_only_the_ticks_route(self):
+        assert self._paths(ws_api.tick_router) == {"/ws/ticks/{symbol}"}
+
+    def test_training_router_carries_only_the_training_status_route(self):
+        assert self._paths(ws_api.training_router) == {"/ws/training/status"}
+
+    def test_the_two_routers_are_distinct_objects_with_no_overlap(self):
+        assert ws_api.tick_router is not ws_api.training_router
+        assert self._paths(ws_api.tick_router).isdisjoint(
+            self._paths(ws_api.training_router)
+        )

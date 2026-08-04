@@ -1,18 +1,35 @@
 """
 api/ws_api.py
 =============
-FastAPI WebSocket endpoint for live tick streaming.
+FastAPI WebSocket endpoints, split into two independent routers so that
+mounting one in a given process's app never drags the other's route along
+with it:
 
-``GET /ws/ticks/{symbol}``  — upgrades to a WebSocket and pushes tick
-updates from the ``WebSocketStreamer`` singleton every 500 ms while the
-client is connected.  Falls back gracefully to polling the REST quote if
-the streamer has no fresh tick.
+``tick_router`` -- ``GET /ws/ticks/{symbol}``, live tick streaming from the
+``WebSocketStreamer`` singleton every 500 ms while the client is connected
+(falls back gracefully to polling the REST quote if the streamer has no
+fresh tick). Mounted by ``api/data_api.py`` only.
 
-Mount: ``app.include_router(ws_router)`` in data_api.py (already done for
-the main FastAPI app).
+``training_router`` -- ``GET /ws/training/status``, training-job
+started/finished broadcasts (``TrainingStatusManager``). Mounted by
+``api/control_api.py`` only -- that process is the one that actually runs
+``POST /jobs`` and the ``train_lgbm``/``train_meta`` job types, so it's the
+only process with anything real to broadcast. Mounting ``tick_router`` there
+too would make the daemon process also unintentionally serve live
+market-tick streaming, an unrelated capability with no test coverage in
+that context; mounting ``training_router`` in ``data_api.py`` would expose a
+route that can never broadcast anything there, since the
+``training_status_manager``/``_MAIN_LOOP`` singletons this module owns are
+only ever populated by ``control_api.py``'s own startup hook and
+``create_job``/``stream_job_logs`` call sites.
 
-Auth: The endpoint accepts either a ``?token=<STATE_API_TOKEN>`` query
-parameter or an ``Authorization: Bearer <token>`` header, matching the
+Both routers share this module's helpers (``_check_ws_token``,
+``_sanitize``) and the ``/ws/training/status``-adjacent broadcast plumbing
+(``training_status_manager``, ``set_main_loop``,
+``broadcast_training_status_threadsafe``) below.
+
+Auth: every endpoint here accepts either a ``?token=<STATE_API_TOKEN>``
+query parameter or an ``Authorization: Bearer <token>`` header, matching the
 same gate used on HTTP endpoints, but adapted for the WS upgrade
 handshake (headers are read from the initial HTTP upgrade request).
 """
@@ -31,7 +48,8 @@ from settings import settings
 
 logger = logging.getLogger(__name__)
 
-ws_router = APIRouter()
+tick_router = APIRouter()
+training_router = APIRouter()
 
 _TOKEN: Optional[str] = getattr(settings, "STATE_API_TOKEN", None)
 
@@ -120,7 +138,7 @@ async def _build_tick_payload(sym_upper: str) -> dict:
         return {"symbol": sym_upper, "error": "quote unavailable"}
 
 
-@ws_router.websocket("/ws/ticks/{symbol}")
+@tick_router.websocket("/ws/ticks/{symbol}")
 async def ws_tick_endpoint(
     websocket: WebSocket,
     symbol: str,
@@ -200,7 +218,7 @@ class TrainingStatusManager:
 training_status_manager = TrainingStatusManager()
 
 
-@ws_router.websocket("/ws/training/status")
+@training_router.websocket("/ws/training/status")
 async def ws_training_status_endpoint(
     websocket: WebSocket,
     token: Optional[str] = Query(default=None),
