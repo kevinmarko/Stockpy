@@ -13,6 +13,7 @@ import { TopStatusBar } from "./TopStatusBar";
 import { AutoRefreshProvider } from "./AutoRefreshContext";
 import { ToastProvider } from "./ToastProvider";
 import { DensityProvider } from "./DensityContext";
+import { ExecutionModeProvider } from "./ExecutionModeContext";
 import { api } from "../api/client";
 import {
   mockEtfTransmissionDisabled,
@@ -27,7 +28,9 @@ function renderBar() {
   return render(
     <ToastProvider>
       <DensityProvider>
-        <TopStatusBar />
+        <ExecutionModeProvider>
+          <TopStatusBar />
+        </ExecutionModeProvider>
       </DensityProvider>
     </ToastProvider>
   );
@@ -41,7 +44,9 @@ function renderBarWithAutoRefresh() {
     <ToastProvider>
       <DensityProvider>
         <AutoRefreshProvider>
-          <TopStatusBar />
+          <ExecutionModeProvider>
+            <TopStatusBar />
+          </ExecutionModeProvider>
         </AutoRefreshProvider>
       </DensityProvider>
     </ToastProvider>

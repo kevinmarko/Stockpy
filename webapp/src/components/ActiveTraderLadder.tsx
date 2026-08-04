@@ -27,6 +27,9 @@ export default function ActiveTraderLadder({
 
   // Prefer the live tick price (updates in real time); fall back to the
   // ladder response's own quote, then the caller-supplied snapshot price.
+  const bestAsk = ladder?.asks?.[0]?.price ?? null;
+  const bestBid = ladder?.bids?.[0]?.price ?? null;
+  const spread = bestAsk !== null && bestBid !== null ? bestAsk - bestBid : null;
   const effectivePrice = tick.price ?? ladder?.current_price ?? currentPrice ?? null;
 
   return (
@@ -110,8 +113,16 @@ export default function ActiveTraderLadder({
                   <div className="ladder-cell">
                     <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{ask.size}</span>
                     <div
-                      className="ladder-size-bar ladder-size-bar-ask"
-                      style={{ width: `${Math.min(100, (ask.size / 2000) * 100)}%` }}
+                      className="ladder-size-bar"
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        bottom: 0,
+                        right: 0,
+                        background: "rgba(239, 68, 68, 0.15)",
+                        borderRadius: "var(--r-2xs)",
+                        width: `${Math.min(100, (ask.size / 2000) * 100)}%`
+                      }}
                     />
                   </div>
                 </div>
@@ -132,8 +143,15 @@ export default function ActiveTraderLadder({
                 }}
               >
                 <div />
-                <div style={{ textAlign: "center", fontWeight: 700, fontSize: "var(--t-subhead)", color: "var(--text-primary)" }}>
-                  ${effectivePrice.toFixed(2)}
+                <div style={{ textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                  <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", color: "var(--text-primary)" }}>
+                    ${effectivePrice.toFixed(2)}
+                  </div>
+                  {spread !== null && (
+                    <div style={{ fontSize: "var(--t-micro)", color: "var(--text-muted)", marginTop: 2 }}>
+                      Spread: ${spread.toFixed(2)}
+                    </div>
+                  )}
                 </div>
                 <div />
               </div>

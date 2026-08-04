@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Button } from "./ui";
 import { api } from "../api/client";
+import { useDebounce } from "../hooks/useDebounce";
 import type { UniverseSymbol } from "../api/types";
 
 /**
@@ -96,7 +97,8 @@ export function SymbolInput({
     };
   }, []);
 
-  const q = value.trim().toUpperCase();
+  const debouncedValue = useDebounce(value, 200);
+  const q = debouncedValue.trim().toUpperCase();
   const suggestions = useMemo(() => {
     if (!q) return [];
     const starts: UniverseSymbol[] = [];

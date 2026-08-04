@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { ApiError } from "../api/types";
 import type { BrokerageLoginJob, BrokerageLoginMode } from "../api/types";
@@ -57,15 +57,34 @@ export function useBrokerageLoginJob(): UseBrokerageLoginJobResult {
   const [error, setError] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
+  // Mirrors useApi.ts's/useMutation.ts's alive-ref pattern -- a poll tick,
+  // start(), or cancel() response that arrives after the component
+  // unmounted (e.g. the user navigated away mid-login, or a real interval
+  // tick lands just after `usePoll`'s own cleanup fired) must not call
+  // setState on an unmounted component. Unlike those two hooks this one
+  // owns a REAL setInterval (via usePoll) whenever a job is "running", so
+  // an in-flight `reloadStatus()` call can genuinely still be awaiting a
+  // response at the exact moment of unmount -- this guard is what makes
+  // that safe rather than merely unlikely.
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
   const reloadStatus = useCallback(async () => {
     if (!activeJobId) return;
     try {
       const status = await api.getBrokerageLoginStatus(activeJobId);
+      if (!alive.current) return;
       setJob(status);
       if (status.state !== "running") {
         setActiveJobId(null);
       }
     } catch (e) {
+      if (!alive.current) return;
       setError(
         e instanceof ApiError
           ? e.message
@@ -95,16 +114,18 @@ export function useBrokerageLoginJob(): UseBrokerageLoginJobResult {
                 password: creds?.password ?? "",
               })
             : await api.refreshBrokerage();
+        if (!alive.current) return;
         setJob(initial);
         setActiveJobId(initial.state === "running" ? initial.job_id : null);
       } catch (e) {
+        if (!alive.current) return;
         setError(
           e instanceof ApiError
             ? e.message
             : "Could not reach the backend to start the login."
         );
       } finally {
-        setStarting(false);
+        if (alive.current) setStarting(false);
       }
     },
     []
@@ -119,8 +140,10 @@ export function useBrokerageLoginJob(): UseBrokerageLoginJobResult {
     setActiveJobId(null);
     try {
       const result = await api.cancelBrokerageLogin(jobId);
+      if (!alive.current) return;
       setJob(result);
     } catch (e) {
+      if (!alive.current) return;
       setError(
         e instanceof ApiError ? e.message : "Could not cancel the login."
       );

@@ -60,6 +60,7 @@ import { TopStatusBar } from "./components/TopStatusBar";
 import { ToastProvider } from "./components/ToastProvider";
 import { DensityProvider } from "./components/DensityContext";
 import { AutoRefreshProvider } from "./components/AutoRefreshContext";
+import { ExecutionModeProvider } from "./components/ExecutionModeContext";
 import { needsTokenEntry } from "./auth/apiToken";
 import { usePwaStatus } from "./hooks/usePwaStatus";
 import { useApi } from "./hooks/useApi";
@@ -214,6 +215,7 @@ export default function App() {
     <ToastProvider>
       <DensityProvider>
         <AutoRefreshProvider>
+          <ExecutionModeProvider>
           <div className="app app-shell">
             <Sidebar />
             <div className="app-main">
@@ -307,6 +309,7 @@ export default function App() {
               />
             )}
           </div>
+          </ExecutionModeProvider>
         </AutoRefreshProvider>
       </DensityProvider>
     </ToastProvider>

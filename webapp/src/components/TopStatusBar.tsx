@@ -9,7 +9,8 @@ import { usePoll } from "../hooks/usePoll";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useAutoRefresh } from "./AutoRefreshContext";
 import { computeMarketSession } from "../marketSession";
-import type { AutomationStatus, ObservabilitySummary } from "../api/types";
+import { useExecutionMode } from "./ExecutionModeContext";
+import type { ObservabilitySummary } from "../api/types";
 
 const AUTOMATION_POLL_MS = 30_000;
 // Regime is a slow-moving macro read (recomputed once per pipeline cycle,
@@ -26,14 +27,14 @@ export function TopStatusBar() {
 
   const { safetyTelemetryEnabled, autoRefreshIntervalMs } = useAutoRefresh();
 
-  const automation = useApi<AutomationStatus>(() => api.getAutomationStatus(), []);
+  const { data: automationData, reload: reloadAutomation, error: automationError } = useExecutionMode();
   // Kill-switch/heartbeat telemetry -- deliberately outside the
   // market-session/visibility/category auto-refresh gates (a plain usePoll,
   // not useAutoPoll). A stale kill-switch reading is a safety issue, not a
   // battery optimization, so it gets its own independent toggle
   // (safetyTelemetryEnabled) rather than folding under the data auto-refresh
   // master switch.
-  usePoll(automation.reload, AUTOMATION_POLL_MS, safetyTelemetryEnabled);
+  usePoll(reloadAutomation, AUTOMATION_POLL_MS, safetyTelemetryEnabled);
 
   const regime = useApi<ObservabilitySummary>(() => api.getObservabilitySummary("1M", 30), []);
   // Heavy composite read -- the Math.max is a FLOOR, not an override: this
@@ -52,10 +53,10 @@ export function TopStatusBar() {
   const pauseMutation = useMutation((r: string) => api.pauseAutomation(r));
   const resumeMutation = useMutation((r: string) => api.resumeAutomation(r));
 
-  const killSwitchActive = automation.data?.kill_switch.active ?? null;
-  const advisoryOnly = automation.data?.advisory_only ?? true;
-  const daemonAlive = automation.data?.daemon.alive ?? null;
-  const snapshotAgeSeconds = automation.data?.pipeline.snapshot_age_seconds ?? null;
+  const killSwitchActive = automationData?.kill_switch.active ?? null;
+  const advisoryOnly = automationData?.advisory_only ?? true;
+  const daemonAlive = automationData?.daemon.alive ?? null;
+  const snapshotAgeSeconds = automationData?.pipeline.snapshot_age_seconds ?? null;
   const resumeBlocked = killSwitchActive === false ? false : !advisoryOnly;
   const busy = pauseMutation.pending || resumeMutation.pending;
 
@@ -73,7 +74,7 @@ export function TopStatusBar() {
       : await pauseMutation.run(reason);
     if (!result) return; // mutation error -- Notice below stays visible via the toast fallback
     setShowKillSwitchModal(false);
-    automation.reload();
+    reloadAutomation();
     if (killSwitchActive) {
       toast.success(
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -127,7 +128,7 @@ export function TopStatusBar() {
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-4)" }}>
           {/* Heartbeat — real daemon liveness + snapshot age, GET /automation/status */}
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }} title={automation.error ?? undefined}>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }} title={automationError ?? undefined}>
             <span style={{ color: heartbeatColor }}>{heartbeatIcon}</span>
             <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{heartbeatLabel}</span>
             <span style={{ color: "var(--text-muted)", fontSize: "var(--t-micro)" }}>({snapshotAgeLabel})</span>
