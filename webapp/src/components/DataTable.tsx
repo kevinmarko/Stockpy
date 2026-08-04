@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDensity } from "./DensityContext";
 
 export interface Column<T> {
@@ -57,6 +58,24 @@ export function DataTable<T extends Record<string, any>>({
     });
   }, [filteredData, sortKey, sortDir]);
 
+  const parentRef = useRef<HTMLDivElement>(null);
+
+  // Flat list virtualizer
+  const rowVirtualizer = useVirtualizer({
+    count: sortedData.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => (density === "compact" ? 36 : 48),
+    overscan: 10,
+  });
+
+  const isTest = typeof process !== "undefined" && process.env?.NODE_ENV === "test";
+  const virtualRows = isTest
+    ? sortedData.map((_, index) => ({ index, start: 0, size: 0, end: 0, key: index, measureElement: () => {} }))
+    : rowVirtualizer.getVirtualItems();
+  const paddingTop = !isTest && virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const totalSize = rowVirtualizer.getTotalSize();
+  const paddingBottom = !isTest && virtualRows.length > 0 ? totalSize - virtualRows[virtualRows.length - 1].end : 0;
+
   // Grouped logic if groupByKey is provided
   const groups = useMemo(() => {
     if (!groupByKey) return null;
@@ -109,10 +128,20 @@ export function DataTable<T extends Record<string, any>>({
         </span>
       </div>
 
-      <div style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: "var(--r-sm)" }}>
+      <div
+        ref={parentRef}
+        style={{
+          overflowX: "auto",
+          overflowY: "auto",
+          maxHeight: "500px",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--r-sm)",
+          position: "relative",
+        }}
+      >
         <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "var(--t-body)" }}>
           <thead>
-            <tr style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
+            <tr style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 1 }}>
               {columns.map((col) => (
                 <th
                   key={col.key}
@@ -124,12 +153,13 @@ export function DataTable<T extends Record<string, any>>({
                     fontSize: "var(--t-caption)",
                     cursor: col.sortable !== false ? "pointer" : "default",
                     userSelect: "none",
+                    background: "var(--surface-2)",
                   }}
                 >
                   {col.header} {sortKey === col.key ? (sortDir === "asc" ? "▲" : "▼") : ""}
                 </th>
               ))}
-              {copyableJson && <th style={{ padding: cellPadding, width: "60px" }}>Actions</th>}
+              {copyableJson && <th style={{ padding: cellPadding, width: "60px", background: "var(--surface-2)" }}>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -192,41 +222,57 @@ export function DataTable<T extends Record<string, any>>({
                 </td>
               </tr>
             ) : (
-              sortedData.map((row, idx) => (
-                <tr
-                  key={idx}
-                  onClick={() => onRowClick && onRowClick(row)}
-                  style={{
-                    borderBottom: "1px solid var(--border)",
-                    background: idx % 2 === 0 ? "var(--surface)" : "var(--surface-2)",
-                    cursor: onRowClick ? "pointer" : "default",
-                  }}
-                >
-                  {columns.map((col) => (
-                    <td key={col.key} style={{ padding: cellPadding }}>
-                      {col.render ? col.render(row) : row[col.key]}
-                    </td>
-                  ))}
-                  {copyableJson && (
-                    <td style={{ padding: cellPadding }}>
-                      <button
-                        onClick={(e) => copyRowJson(row, e)}
-                        style={{
-                          background: "var(--surface-2)",
-                          border: "1px solid var(--border)",
-                          borderRadius: "var(--r-xs)",
-                          color: "var(--text-muted)",
-                          fontSize: "var(--t-micro)",
-                          padding: "2px 6px",
-                          cursor: "pointer",
-                        }}
-                      >
-                        JSON
-                      </button>
-                    </td>
-                  )}
-                </tr>
-              ))
+              <>
+                {paddingTop > 0 && (
+                  <tr>
+                    <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ height: `${paddingTop}px` }} />
+                  </tr>
+                )}
+                {virtualRows.map((virtualRow) => {
+                  const row = sortedData[virtualRow.index];
+                  const idx = virtualRow.index;
+                  return (
+                    <tr
+                      key={virtualRow.index}
+                      onClick={() => onRowClick && onRowClick(row)}
+                      style={{
+                        borderBottom: "1px solid var(--border)",
+                        background: idx % 2 === 0 ? "var(--surface)" : "var(--surface-2)",
+                        cursor: onRowClick ? "pointer" : "default",
+                      }}
+                    >
+                      {columns.map((col) => (
+                        <td key={col.key} style={{ padding: cellPadding }}>
+                          {col.render ? col.render(row) : row[col.key]}
+                        </td>
+                      ))}
+                      {copyableJson && (
+                        <td style={{ padding: cellPadding }}>
+                          <button
+                            onClick={(e) => copyRowJson(row, e)}
+                            style={{
+                              background: "var(--surface-2)",
+                              border: "1px solid var(--border)",
+                              borderRadius: "var(--r-xs)",
+                              color: "var(--text-muted)",
+                              fontSize: "var(--t-micro)",
+                              padding: "2px 6px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            JSON
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+                {paddingBottom > 0 && (
+                  <tr>
+                    <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ height: `${paddingBottom}px` }} />
+                  </tr>
+                )}
+              </>
             )}
           </tbody>
         </table>

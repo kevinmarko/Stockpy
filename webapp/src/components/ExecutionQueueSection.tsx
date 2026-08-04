@@ -2,10 +2,14 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
-import type { ExecutionQueue, ExecutionQueueIntent } from "../api/types";
-import { EmptyState, ErrorState, Loading, StaleDataNotice } from "./ui";
+import { useMutation } from "../hooks/useMutation";
+import { useExecutionMode } from "./ExecutionModeContext";
+import type { ExecutionQueue, ExecutionQueueIntent, DecisionCreateRequest } from "../api/types";
+import { EmptyState, ErrorState, Loading, StaleDataNotice, Notice } from "./ui";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
+import { ChevronDown, ChevronRight, Check, X } from "lucide-react";
+import { SignalContributionPanel } from "./SignalContributionPanel";
 
 /**
  * Read-only view of the gated Robinhood execution queue
@@ -196,7 +200,7 @@ export function ExecutionQueueSection() {
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
                   {data.intents.map((intent) => (
-                    <IntentRow key={intent.client_order_id || `${intent.symbol}-${intent.side}`} intent={intent} mode={data.mode} />
+                    <IntentRow key={intent.client_order_id || `${intent.symbol}-${intent.side}`} intent={intent} mode={data.mode} queueGeneratedAt={data.generated_at} />
                   ))}
                 </div>
               </div>
@@ -247,27 +251,66 @@ export function Chip({
   );
 }
 
-function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: string }) {
+function IntentRow({ intent, mode, queueGeneratedAt }: { intent: ExecutionQueueIntent; mode: string; queueGeneratedAt: string | null }) {
+  const [expanded, setExpanded] = useState(false);
+  const [reviewed, setReviewed] = useState<"acted" | "passed" | null>(null);
+  const { advisoryOnly } = useExecutionMode();
+  const logDecision = useMutation(
+    (body: DecisionCreateRequest) => api.logDecision(body)
+  );
+
   const size =
     intent.qty !== null
       ? `${intent.qty} sh`
       : intent.target_notional !== null
       ? `$${intent.target_notional.toLocaleString()}`
       : "—";
+
+  const handleReview = (actionTaken: "acted" | "passed") => {
+    logDecision.run({
+      symbol: intent.symbol,
+      action_taken: actionTaken,
+      signal_action: intent.action,
+      conviction: intent.conviction,
+      notes: actionTaken === "acted"
+        ? `Reviewed and marked for execution via queue (mode: ${mode})`
+        : `Passed on queued ${intent.action} intent`,
+      signal_ts: queueGeneratedAt ?? new Date().toISOString(),
+    });
+    setReviewed(actionTaken);
+  };
+
   return (
     <div
       data-testid="execution-intent-row"
+      className="intent-card-mobile"
       style={{
         padding: "var(--s-2-5) var(--s-3)",
-        background: theme.surface,
-        border: `1px solid ${theme.border}`,
+        background: reviewed ? `${theme.surface}88` : theme.surface,
+        border: `1px solid ${reviewed ? theme.borderStrong : theme.border}`,
         borderRadius: "var(--r-sm)",
+        opacity: reviewed ? 0.7 : 1,
+        transition: "opacity 0.2s ease, background 0.2s ease",
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)", flexWrap: "wrap" }}>
+      {/* Summary row — always visible */}
+      <div
+        style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)", flexWrap: "wrap", cursor: "pointer" }}
+        onClick={() => setExpanded((v) => !v)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-label={`Toggle details for ${intent.symbol}`}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded((v) => !v); } }}
+      >
+        <span style={{ color: theme.textMuted, display: "flex", alignItems: "center" }}>
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
         <Link
           to={`/symbol/${encodeURIComponent(intent.symbol)}`}
           style={{ fontWeight: 700, color: theme.textPrimary, textDecoration: "none" }}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
         >
           {intent.symbol}
         </Link>
@@ -283,7 +326,10 @@ function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: strin
         {intent.follow_type && (
           <Chip label={formatFollowType(intent.follow_type)} tone="muted" />
         )}
-        <span style={{ marginLeft: "auto" }}>
+        <span style={{ marginLeft: "auto", display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
+          {reviewed && (
+            <Chip label={reviewed === "acted" ? "✓ Reviewed" : "✗ Passed"} tone={reviewed === "acted" ? "growth" : "muted"} />
+          )}
           {intent.allow_place ? (
             <Chip label="Ready to place" tone="growth" />
           ) : (
@@ -291,67 +337,123 @@ function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: strin
           )}
         </span>
       </div>
-      {intent.rationale && (
-        <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>{intent.rationale}</div>
-      )}
+
+      {/* Gate reasons — always shown for blocked intents */}
       {!intent.allow_place && intent.gate_reasons.length > 0 && (
-        <div style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
+        <div style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-1)", paddingLeft: 22 }}>
           {intent.gate_reasons.join(", ")}
         </div>
       )}
-      {intent.allow_place && mode === "review" && (
+
+      {/* Expanded rationale drawer */}
+      {expanded && (
         <div
           style={{
             marginTop: "var(--s-3)",
-            padding: "var(--s-3)",
-            borderRadius: "var(--r-sm)",
-            background: "rgba(220, 38, 38, 0.05)",
-            border: `1px solid ${theme.decline}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: "var(--s-3)",
+            paddingTop: "var(--s-3)",
+            borderTop: `1px solid ${theme.border}`,
           }}
         >
-          <div>
-            <div style={{ color: theme.textPrimary, fontWeight: 700, fontSize: "var(--t-caption)", marginBottom: 4 }}>
-              Risk Approval Required
+          {/* Rationale */}
+          {intent.rationale && (
+            <div style={{ marginBottom: "var(--s-3)" }}>
+              <div style={{ fontSize: "var(--t-micro)", fontWeight: 600, color: theme.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "var(--s-1)" }}>
+                AI Rationale
+              </div>
+              <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                {intent.rationale}
+              </div>
             </div>
-            <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)" }}>
-              This order requires explicit operator approval before execution.
-            </div>
+          )}
+
+          {/* Metadata row */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", fontSize: "var(--t-micro)", color: theme.textMuted, marginBottom: "var(--s-3)" }}>
+            {intent.follow_type && <span><strong>Strategy:</strong> {formatFollowType(intent.follow_type)}</span>}
+            {intent.client_order_id && <span><strong>Order ID:</strong> {intent.client_order_id}</span>}
+            {queueGeneratedAt && <span><strong>Generated:</strong> {timeAgo(queueGeneratedAt)}</span>}
           </div>
-          <div style={{ display: "flex", gap: "var(--s-2)" }}>
-            <button
+
+          {/* Signal Contribution Panel */}
+          <div style={{ marginBottom: "var(--s-4)" }}>
+            <SignalContributionPanel symbol={intent.symbol} compact />
+          </div>
+
+          {/* Action buttons — gated by execution mode */}
+          {!reviewed && (
+            <div
               style={{
-                padding: "8px 16px",
+                padding: "var(--s-3)",
                 borderRadius: "var(--r-sm)",
-                background: theme.decline,
-                color: "#ffffff",
-                fontWeight: 700,
-                border: "none",
-                cursor: "pointer",
-                fontSize: "var(--t-caption)",
+                background: advisoryOnly ? "rgba(245, 158, 11, 0.06)" : "rgba(220, 38, 38, 0.05)",
+                border: `1px solid ${advisoryOnly ? theme.caution : theme.decline}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                flexWrap: "wrap",
+                gap: "var(--s-3)",
               }}
             >
-              REJECT
-            </button>
-            <button
-              style={{
-                padding: "8px 16px",
-                borderRadius: "var(--r-sm)",
-                background: "transparent",
-                color: theme.growth,
-                fontWeight: 700,
-                border: `1px solid ${theme.growth}`,
-                cursor: "pointer",
-                fontSize: "var(--t-caption)",
-              }}
-            >
-              APPROVE
-            </button>
-          </div>
+              <div>
+                <div style={{ color: theme.textPrimary, fontWeight: 700, fontSize: "var(--t-caption)", marginBottom: 4 }}>
+                  {advisoryOnly ? "Paper Review" : "Operator Review Required"}
+                </div>
+                <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)" }}>
+                  {advisoryOnly
+                    ? "Advisory mode — reviewing logs your intent. No orders are placed."
+                    : "To execute, run the robinhood-execution skill in Claude Code after marking as reviewed."}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "var(--s-2)" }}>
+                <button
+                  className="btn"
+                  disabled={logDecision.pending}
+                  onClick={() => handleReview("passed")}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: "var(--r-sm)",
+                    background: "transparent",
+                    color: theme.textSecondary,
+                    fontWeight: 600,
+                    border: `1px solid ${theme.border}`,
+                    cursor: "pointer",
+                    fontSize: "var(--t-caption)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    minHeight: 44,
+                  }}
+                >
+                  <X size={14} /> Pass
+                </button>
+                <button
+                  className="btn"
+                  disabled={logDecision.pending}
+                  onClick={() => handleReview("acted")}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: "var(--r-sm)",
+                    background: "transparent",
+                    color: theme.growth,
+                    fontWeight: 700,
+                    border: `1px solid ${theme.growth}`,
+                    cursor: "pointer",
+                    fontSize: "var(--t-caption)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    minHeight: 44,
+                  }}
+                >
+                  <Check size={14} /> Mark as Reviewed
+                </button>
+              </div>
+            </div>
+          )}
+          {logDecision.error && (
+            <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
+              Failed to log decision: {String(logDecision.error)}
+            </Notice>
+          )}
         </div>
       )}
     </div>
