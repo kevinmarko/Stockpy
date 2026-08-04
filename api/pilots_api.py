@@ -195,6 +195,12 @@ from rlhf_calibration_store import (
     RlhfCalibrationStore,
 )
 
+# Per-field liveness/safety metadata for the five /settings/* editors below
+# (what actually happens when this field is written: applies now, needs a
+# restart, does nothing, or is pinned by a real shell export). Stdlib +
+# runtime_flags + settings_keysets only — see its module docstring.
+import pilots.settings_meta as settings_meta
+
 # Execution / persistence — explicitly ALLOWED here (unlike state_api.py),
 # forbidden only for the heavy calculation engines (see this module's AST guard
 # test). ``data.historical_store`` and ``execution.kill_switch`` are imported at
@@ -3823,9 +3829,19 @@ class TunablesUpdateRequest(BaseModel):
     ``{key: value}`` to write. Typed as ``Any`` values (not a pydantic Union) so
     THIS module does the type/range validation and can return a precise per-key
     ``rejected`` reason rather than a generic 422 — the frontend branches on the
-    reason tag."""
+    reason tag.
+
+    ``confirm`` is the dangerous-key acknowledgement. Any key in
+    ``settings_keysets.DANGEROUS_KEYS`` must appear here mapped to ITS OWN NAME
+    (``{"ADVISORY_ONLY": "ADVISORY_ONLY"}``) or it is rejected — see
+    :func:`_validate_and_write_payload`. Echoing the field's own name (rather
+    than a bare ``true``) is deliberate: it cannot be satisfied by a blanket
+    ``confirm_all`` flag, so a client that confirms one dangerous field has not
+    accidentally confirmed a second one it did not intend to touch. Absent for
+    an ordinary write, which is the overwhelmingly common case."""
 
     values: Dict[str, Any] = Field(..., max_length=64)
+    confirm: Dict[str, str] = Field(default_factory=dict, max_length=64)
 
 
 def _tunable_default(fi: Any) -> Any:
@@ -3843,13 +3859,6 @@ def _tunable_default(fi: Any) -> Any:
         except Exception:  # noqa: BLE001 - dead-letter, never fabricate/crash
             return None
     return fi.default
-
-
-def _build_tunables_groups() -> List[Dict[str, Any]]:
-    """Assemble ``/settings/tunables``'s grouped payload. Thin wrapper over
-    ``_build_groups_payload`` (the shared builder every ``/settings/*`` editor
-    uses) scoped to ``_TUNABLE_GROUPS``."""
-    return _build_groups_payload(_TUNABLE_GROUPS)
 
 
 def _tunables_env_drift(index_spec: Dict[str, tuple]) -> Dict[str, Any]:
@@ -3916,16 +3925,12 @@ def get_settings_tunables() -> Dict[str, Any]:
     Fail-open read (``require_read_token``), mirroring every other GET here. The
     ``value`` reflects the RUNNING process config (the live ``settings``
     singleton) — a pending ``.env`` write only takes effect on the next daemon
-    restart, which ``applies`` states explicitly (matching ``GET /strategy/matrix``
-    / ``GET /llm/status`` which likewise read live settings). ``env_drift``
-    reports whether the on-disk ``.env`` currently differs from these live values
-    (mirrors ``GET /strategy/matrix``'s ``env_drift``). Never 500s
-    (CONSTRAINT #6)."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_tunables_groups(),
-        "env_drift": _tunables_env_drift(_TUNABLE_INDEX),
-    }
+    restart, which each field's ``liveness.applies`` states explicitly (matching
+    ``GET /strategy/matrix`` / ``GET /llm/status`` which likewise read live
+    settings). ``env_drift`` reports whether the on-disk ``.env`` currently
+    differs from these live values (mirrors ``GET /strategy/matrix``'s
+    ``env_drift``). Never 500s (CONSTRAINT #6)."""
+    return _settings_editor_payload(_TUNABLE_GROUPS, _TUNABLE_INDEX)
 
 
 @app.put(
@@ -3937,7 +3942,7 @@ def get_settings_tunables() -> Dict[str, Any]:
 )
 def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Write a partial map of non-secret tunables to ``.env``."""
-    return _validate_and_write_payload(body.values, _TUNABLE_INDEX)
+    return _validate_and_write_payload(body.values, _TUNABLE_INDEX, confirm=body.confirm)
 
 
 def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
@@ -3951,8 +3956,25 @@ def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
     "json"`` fields carry a native dict/list ``value``/``default`` in
     ``settings`` — both are JSON-stringified here so the wire contract's
     ``string`` type holds (a failed ``json.dumps`` dead-letters to ``None``
-    rather than 500ing — CONSTRAINT #6)."""
+    rather than 500ing — CONSTRAINT #6).
+
+    Every field additionally carries a ``liveness`` sub-object
+    (``pilots.settings_meta.field_metadata``) answering "what happens when I
+    save this?" — ``applies`` / ``restart_reason`` / ``capture_sites`` /
+    ``env_pinned`` / ``dangerous`` / ``source``. The two per-moment inputs
+    (which names a real shell export pins, and which have a runtime-store
+    override) are resolved ONCE here for the whole payload but resolved FRESH
+    on every request: both can change between two requests, so neither may be
+    cached or precomputed."""
     model_fields = type(settings).model_fields
+    liveness = settings_meta.load_liveness()
+    pinned = settings_meta.env_pinned_keys()
+    stored = settings_meta.runtime_store_keys()
+    # Whether a live apply is possible AT ALL in this build. Without it a
+    # ``live_safe`` field is still only a .env write, so GET must not advertise
+    # ``immediately`` for a change the PUT will honestly report as needing a
+    # restart — the two must agree.
+    live_apply = settings_meta.live_apply_available()
     groups: List[Dict[str, Any]] = []
     for group_name, specs in groups_spec:
         fields: List[Dict[str, Any]] = []
@@ -3976,6 +3998,13 @@ def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
                 "type": _KIND_TO_TYPE[kind],
                 "default": default,
                 "description": description,
+                "liveness": settings_meta.field_metadata(
+                    key,
+                    pinned=pinned,
+                    stored=stored,
+                    data=liveness,
+                    live_apply=live_apply,
+                ),
             }
             for meta in ("min", "max", "step"):
                 if meta in extras:
@@ -3987,7 +4016,41 @@ def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
     return groups
 
 
-def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tuple]) -> Dict[str, Any]:
+def _settings_editor_payload(
+    groups_spec: List[tuple], index_spec: Dict[str, tuple]
+) -> Dict[str, Any]:
+    """The complete ``GET /settings/*`` body for one editor — shared by all five.
+
+    ``applies`` is no longer the hardcoded ``"next_daemon_restart"`` every
+    editor used to return unconditionally. That string was true of a pure
+    ``.env`` write and became a false blanket claim once ``runtime_flags`` could
+    apply a change to the running process; it is now ROLLED UP from the fields
+    this editor actually serves (``"immediately"`` / ``"next_daemon_restart"`` /
+    ``"no_effect"`` / ``"env_pinned"`` when they all agree, else ``"mixed"``),
+    with ``applies_counts`` giving the breakdown so a screen can say something
+    honest about its own particular mix instead of one global sentence.
+    """
+    groups = _build_groups_payload(groups_spec)
+    states = [
+        f["liveness"]["applies"]
+        for g in groups
+        for f in g["fields"]
+        if isinstance(f.get("liveness"), dict)
+    ]
+    return {
+        **settings_meta.summarize_applies(states),
+        "groups": groups,
+        "env_drift": _tunables_env_drift(index_spec),
+    }
+
+
+def _validate_and_write_payload(
+    values: Dict[str, Any],
+    index_spec: Dict[str, tuple],
+    *,
+    confirm: Optional[Dict[str, str]] = None,
+    actor: str = "pilots_api",
+) -> Dict[str, Any]:
     """Validate ``values`` against ``index_spec`` (one editor's ``{key: (kind,
     extras)}`` scope — ``_TUNABLE_INDEX`` / ``_SENTIMENT_INDEX`` /
     ``_SECTOR_SELECTION_INDEX``) and write the accepted subset to ``.env``.
@@ -3998,7 +4061,8 @@ def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tu
     (defensive: not an env_io writable non-secret, CONSTRAINT #3),
     ``expected_boolean`` / ``expected_number`` / ``expected_integer`` /
     ``expected_string`` / ``invalid_option`` / ``out_of_range`` /
-    ``invalid_json`` (``kind == "json"`` only).
+    ``invalid_json`` (``kind == "json"`` only), plus the two confirmation tags
+    below.
 
     For ``kind == "json"`` the accepted value kept in ``accepted`` (and echoed
     in ``written`` below) is the ORIGINAL STRING the caller submitted (only
@@ -4007,7 +4071,47 @@ def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tu
     ``env_io.write_many_atomic``, which — matching ``env_io._JSON_KEYS``'s own
     ``json.dumps(value)`` convention for ``SIGNAL_WEIGHTS``/
     ``CORS_ALLOWED_ORIGINS`` etc. — expects a native dict/list, not an
-    already-encoded string (handing it a string would double-encode)."""
+    already-encoded string (handing it a string would double-encode).
+
+    ------------------------------------------------------------------
+    Two behaviours this function gained, both load-bearing
+    ------------------------------------------------------------------
+    **1. Dangerous-key confirmation, scoped to writes through THIS function.**
+    ``settings_keysets.DANGEROUS_KEYS`` fields accepted here (``ADVISORY_ONLY``,
+    ``DRY_RUN``, ``ROBINHOOD_EXECUTION_MODE``, ``MACRO_REGIME_GATE_ENABLED``,
+    ``FMP_BARS_ENABLED``, ``FMP_BARS_ADJUSTMENT``, ``CORS_ALLOWED_ORIGINS`` —
+    the other 11 ``DANGEROUS_KEYS`` members are hand-set-only master switches
+    never in ``env_io.ALLOWED_KEYS``, so they are already rejected as
+    ``forbidden_key`` above and never reach this gate) now require the caller
+    to echo the field's own name back in ``confirm``: ``{"values":
+    {"ADVISORY_ONLY": false}, "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY"}}``.
+    Missing -> ``confirmation_required``; present but not an exact match ->
+    ``confirmation_mismatch``. Before this, five of those fields — including
+    ``ADVISORY_ONLY``, the execution quarantine AGENTS.md §2 calls
+    load-bearing safety infrastructure — were one ordinary ``PUT`` *through
+    this function* away from ``false`` with no confirmation of any kind.
+    Rejection is strictly PER KEY: a batch mixing an unconfirmed dangerous key
+    with ordinary tunables still writes the ordinary ones (this repo's existing
+    partial-success convention), so the gate cannot be worked around by
+    bundling and cannot punish an unrelated edit.
+
+    **This gate does NOT cover every write path for these fields.**
+    ``PUT /automation/execution-mode`` writes ``ADVISORY_ONLY`` (and, via
+    ``gui.strategy_registry.set_active_mode``, ``DRY_RUN``/``ALPACA_PAPER``)
+    directly and predates this function — it has its own confirm-button UX in
+    the webapp's Execution Mode control, but not this typed-name echo. Do not
+    read the framing above as "ADVISORY_ONLY now always requires typed
+    confirmation" — it means that within the five ``/settings/*`` editors.
+
+    **2. Live apply.** Every accepted key is still written to ``.env`` exactly
+    as before (durable across restarts, unchanged). Additionally, a key the
+    liveness classifier reports ``live_safe`` and that is NOT env-pinned is
+    pushed onto THIS process's ``settings`` singleton via
+    ``runtime_flags_writer.write_override``. The per-key ``applies`` reported
+    back is the ACTUAL outcome of that attempt (``WriteResult.applies``), never
+    the a-priori classification — if the writer refuses, or reports the field
+    env-pinned, or is not installed at all, the response says so.
+    """
     accepted: Dict[str, Any] = {}
     rejected: Dict[str, str] = {}
     for key, value in values.items():
@@ -4068,24 +4172,149 @@ def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tu
                 continue
             accepted[key] = value
 
+    # ---- dangerous-key confirmation gate (per key, never whole-request) ----
+    # Runs AFTER type validation so a malformed dangerous value reports the
+    # type problem rather than being masked by a confirmation complaint.
+    for key in list(accepted):
+        if not settings_meta.is_dangerous(key):
+            continue
+        echoed = (confirm or {}).get(key)
+        if echoed is None:
+            rejected[key] = "confirmation_required"
+            accepted.pop(key)
+        elif echoed != key:
+            rejected[key] = "confirmation_mismatch"
+            accepted.pop(key)
+
     if accepted:
         to_write: Dict[str, Any] = {}
         for key, value in accepted.items():
             kind, _extras = index_spec[key]
             to_write[key] = json.loads(value) if kind == "json" else value
         env_io.write_many_atomic(to_write)
+        per_key_applies = _apply_live_overrides(to_write, actor=actor)
+    else:
+        per_key_applies = {}
 
+    applied_now = sorted(
+        k for k, v in per_key_applies.items() if v == settings_meta.APPLIES_IMMEDIATELY
+    )
     return {
         "written": accepted,
         "rejected": rejected,
-        "applies": "next_daemon_restart",
-        "restart_required": True,
-        "restart_endpoint": "POST /daemon/restart",
-        "note": (
-            "Accepted values written to .env. settings is not patched "
-            "in-process — restart the daemon via POST /daemon/restart to apply."
+        "per_key_applies": per_key_applies,
+        **settings_meta.summarize_applies(list(per_key_applies.values())),
+        # A restart is only genuinely required for the keys that did NOT apply
+        # live. Reporting True unconditionally (as this endpoint used to) told
+        # an operator to restart for a change that was already in force.
+        "restart_required": any(
+            v != settings_meta.APPLIES_IMMEDIATELY for v in per_key_applies.values()
         ),
+        "restart_endpoint": "POST /daemon/restart",
+        "note": _write_note(per_key_applies, applied_now),
     }
+
+
+def _write_note(per_key_applies: Dict[str, str], applied_now: List[str]) -> str:
+    """One honest sentence about what a PUT actually did.
+
+    Deliberately NOT the old unconditional "settings is not patched in-process
+    — restart the daemon to apply", which is now false for every ``live_safe``
+    key. Says what happened to each half of the write.
+    """
+    if not per_key_applies:
+        return "Nothing was written."
+    pending = sorted(set(per_key_applies) - set(applied_now))
+    if applied_now and not pending:
+        return (
+            "Saved to .env and applied to the running process — no restart "
+            "needed."
+        )
+    if pending and not applied_now:
+        return (
+            "Saved to .env. The running process keeps the previous values until "
+            "it restarts (POST /daemon/restart)."
+        )
+    return (
+        f"Saved to .env. {len(applied_now)} applied to the running process "
+        f"immediately; {len(pending)} take effect on the next restart "
+        f"({', '.join(pending)})."
+    )
+
+
+def _apply_live_overrides(to_write: Dict[str, Any], *, actor: str) -> Dict[str, str]:
+    """Push every ``live_safe``, non-env-pinned key onto the RUNNING process.
+
+    Returns ``{key: applies}`` for every key in ``to_write`` — the ACTUAL
+    outcome, not the a-priori classification. The ``.env`` write has already
+    happened and is independent of everything here: this only decides whether
+    the operator also has to restart to see the change.
+
+    ``runtime_flags_writer`` is imported lazily and defensively. It is a
+    separate, newer module and may legitimately be absent from a given
+    checkout; when it is, every key honestly reports ``next_daemon_restart``,
+    which is exactly what a ``.env``-only write means. That is the same
+    fail-closed direction the rest of this feature takes: a key that is not
+    live-applied is never REPORTED as live-applied.
+
+    Never raises (CONSTRAINT #6) — a writer failure degrades one key to
+    ``next_daemon_restart`` and leaves the durable ``.env`` write intact.
+    """
+    liveness = settings_meta.load_liveness()
+    pinned = settings_meta.env_pinned_keys()
+    out: Dict[str, str] = {}
+
+    try:
+        from runtime_flags_writer import write_override  # noqa: PLC0415 - lazy
+    except Exception:  # noqa: BLE001 - module not installed in this checkout
+        logger.info(
+            "settings write: runtime_flags_writer unavailable; %d key(s) written "
+            "to .env only and reported as taking effect on the next restart.",
+            len(to_write),
+        )
+        return {key: settings_meta.APPLIES_NEXT_RESTART for key in to_write}
+
+    for key, value in to_write.items():
+        # live_apply=True is not an assumption here: the import above succeeded,
+        # which is exactly the condition live_apply_available() reports on.
+        applies = settings_meta.applies_for(
+            key, pinned=pinned, data=liveness, live_apply=True
+        )
+        if applies != settings_meta.APPLIES_IMMEDIATELY:
+            # Not live-safe, env-pinned, or no-op: nothing to apply. The static
+            # answer IS the real one here, because we make it so by not writing.
+            out[key] = applies
+            continue
+        try:
+            result = write_override(key, value, actor=actor)
+        except Exception as exc:  # noqa: BLE001 - dead-letter, per key
+            logger.warning(
+                "settings write: live apply of %s failed (%s); the .env write "
+                "stands and the change takes effect on the next restart.",
+                key,
+                type(exc).__name__,
+            )
+            out[key] = settings_meta.APPLIES_NEXT_RESTART
+            continue
+        # Trust the writer's own verdict over our prediction. It knows things
+        # the static classifier cannot (a refusal, a validation failure, an
+        # env pin it observed at a different moment).
+        reported = getattr(result, "applies", None)
+        ok = getattr(result, "ok", False)
+        if ok and reported in settings_meta.APPLIES_STATES:
+            out[key] = reported
+        elif reported == "refused" or not ok:
+            reason = getattr(result, "reason", None)
+            logger.warning(
+                "settings write: live apply of %s was refused by "
+                "runtime_flags_writer (%s); the .env write stands.",
+                key,
+                reason or "no reason given",
+            )
+            out[key] = settings_meta.APPLIES_NEXT_RESTART
+        else:
+            out[key] = settings_meta.APPLIES_NEXT_RESTART
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -4297,11 +4526,7 @@ _ETF_TRANSMISSION_INDEX = {
 @app.get("/settings/sentiment", dependencies=[Depends(require_read_token)])
 def get_settings_sentiment() -> Dict[str, Any]:
     """Get sentiment & news ingestion configuration."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_groups_payload(_SENTIMENT_GROUPS),
-        "env_drift": _tunables_env_drift(_SENTIMENT_INDEX),
-    }
+    return _settings_editor_payload(_SENTIMENT_GROUPS, _SENTIMENT_INDEX)
 
 
 @app.put(
@@ -4313,17 +4538,13 @@ def get_settings_sentiment() -> Dict[str, Any]:
 )
 def put_settings_sentiment(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update sentiment & news ingestion configuration in .env."""
-    return _validate_and_write_payload(body.values, _SENTIMENT_INDEX)
+    return _validate_and_write_payload(body.values, _SENTIMENT_INDEX, confirm=body.confirm)
 
 
 @app.get("/settings/sector-selection", dependencies=[Depends(require_read_token)])
 def get_settings_sector_selection() -> Dict[str, Any]:
     """Get sector selection configuration."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_groups_payload(_SECTOR_SELECTION_GROUPS),
-        "env_drift": _tunables_env_drift(_SECTOR_SELECTION_INDEX),
-    }
+    return _settings_editor_payload(_SECTOR_SELECTION_GROUPS, _SECTOR_SELECTION_INDEX)
 
 
 @app.put(
@@ -4335,17 +4556,13 @@ def get_settings_sector_selection() -> Dict[str, Any]:
 )
 def put_settings_sector_selection(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update sector selection configuration in .env."""
-    return _validate_and_write_payload(body.values, _SECTOR_SELECTION_INDEX)
+    return _validate_and_write_payload(body.values, _SECTOR_SELECTION_INDEX, confirm=body.confirm)
 
 
 @app.get("/settings/fmp", dependencies=[Depends(require_read_token)])
 def get_settings_fmp() -> Dict[str, Any]:
     """Get Financial Modeling Prep (FMP) configuration."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_groups_payload(_FMP_GROUPS),
-        "env_drift": _tunables_env_drift(_FMP_INDEX),
-    }
+    return _settings_editor_payload(_FMP_GROUPS, _FMP_INDEX)
 
 
 @app.put(
@@ -4357,17 +4574,13 @@ def get_settings_fmp() -> Dict[str, Any]:
 )
 def put_settings_fmp(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update Financial Modeling Prep (FMP) configuration in .env."""
-    return _validate_and_write_payload(body.values, _FMP_INDEX)
+    return _validate_and_write_payload(body.values, _FMP_INDEX, confirm=body.confirm)
 
 
 @app.get("/settings/etf-transmission", dependencies=[Depends(require_read_token)])
 def get_settings_etf_transmission() -> Dict[str, Any]:
     """Get ETF volatility transmission & holdings configuration."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_groups_payload(_ETF_TRANSMISSION_GROUPS),
-        "env_drift": _tunables_env_drift(_ETF_TRANSMISSION_INDEX),
-    }
+    return _settings_editor_payload(_ETF_TRANSMISSION_GROUPS, _ETF_TRANSMISSION_INDEX)
 
 
 @app.put(
@@ -4379,7 +4592,7 @@ def get_settings_etf_transmission() -> Dict[str, Any]:
 )
 def put_settings_etf_transmission(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update ETF volatility transmission & holdings configuration in .env."""
-    return _validate_and_write_payload(body.values, _ETF_TRANSMISSION_INDEX)
+    return _validate_and_write_payload(body.values, _ETF_TRANSMISSION_INDEX, confirm=body.confirm)
 
 
 # ---------------------------------------------------------------------------

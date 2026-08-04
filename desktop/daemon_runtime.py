@@ -45,11 +45,17 @@ from enum import Enum
 from typing import Any, Optional
 
 import main_orchestrator
+import runtime_flags
 from settings import settings, validate_interval_seconds
 from data_engine import DataEngine, MockDataEngine
 from reporting.progress import read_progress
 
 logger = logging.getLogger("OrchestratorDaemon")
+
+#: Sentinel for "maybe_refresh_settings() has never checked the store yet" --
+#: see OrchestratorDaemon.__init__'s _last_seen_store_stat for why this must
+#: be distinct from `None`.
+_STORE_UNCHECKED = object()
 
 
 class RunState(str, Enum):
@@ -148,6 +154,14 @@ class OrchestratorDaemon:
         self._wake_event = threading.Event()
         self._timer_thread: Optional[threading.Thread] = None
         self._worker_threads: dict[str, threading.Thread] = {}
+
+        # Sentinel distinct from both `None` (file confirmed absent on the
+        # last check) and any real `(mtime_ns, size)` tuple, so the very
+        # first maybe_refresh_settings() call always treats the store as
+        # "possibly changed" -- whether it turns out to exist or not -- and
+        # never has to special-case "no prior check happened yet" against
+        # "the file wasn't there last time either" (see that method).
+        self._last_seen_store_stat: Any = _STORE_UNCHECKED
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -458,6 +472,121 @@ class OrchestratorDaemon:
         # anyway).
         self._wake_event.set()
         logger.info("OrchestratorDaemon interval changed to %s seconds.", interval_seconds)
+
+    # ------------------------------------------------------------------
+    # Cross-process settings hot-reload
+    # ------------------------------------------------------------------
+
+    def maybe_refresh_settings(
+        self, *, path: Optional[Any] = None
+    ) -> Optional[runtime_flags.ApplyReport]:
+        """Re-apply ``output/runtime_flags.json`` onto this process's live
+        ``settings`` singleton if the store has changed since the last check.
+
+        The honest scope of what this buys: a settings-store write served by
+        THIS SAME process (e.g. ``PILOTS_API_ENABLED=True`` hosting
+        ``api/pilots_api.py`` inside the daemon) already applies immediately
+        via ``runtime_flags_writer.write_override()``'s own in-process
+        re-apply — this method exists for the write served by a DIFFERENT
+        process (the far more common topology, where ``pilots_api.py`` runs
+        standalone). Called periodically, on a poll interval, by the
+        standalone entrypoint (``desktop/orchestrator_daemon.py``); never
+        invoked automatically by this class itself, which stays free of any
+        opinion about polling cadence or whether cross-process refresh is
+        wanted at all (``settings.RUNTIME_FLAGS_REFRESH_ENABLED`` is the
+        caller's concern, not this method's).
+
+        Deferred (returns ``None``, no-op) while a pipeline cycle is in
+        flight — a value changing mid-cycle must not partially apply and
+        leave the cycle reading a mix of old and new settings; the next poll
+        tick picks it up once idle. This is a best-effort deferral, not a
+        hard guarantee (a cycle could start in the narrow window between the
+        ``is_running`` check and the apply below) — acceptable, since the
+        thing being guarded against is a long JSON-file read racing a run's
+        *start*, not a run reading a genuinely torn value.
+
+        One ``os.stat()`` per call; the ``(mtime_ns, size)`` pair is compared
+        against the last-seen value under ``self._lock`` so two overlapping
+        calls (there is only ever one caller today, but this method makes no
+        assumption about that) can never both decide the file "changed" and
+        both pay the cost of re-validating and re-applying the same content.
+        A change triggers exactly one ``runtime_flags.apply_overrides()``
+        call, done OUTSIDE the lock (file I/O and pydantic validation have no
+        business holding a lock this class's run-triggering methods also
+        need).
+
+        ``ON_CHANGE_HOOKS``: a bare ``setattr`` is not enough for
+        ``ORCHESTRATOR_INTERVAL_SECONDS`` specifically — ``_timer_loop``
+        reads ``self._interval_seconds``, captured at thread-start time, and
+        never re-reads ``settings`` on its own — so when that key is among
+        the ones ``apply_overrides()`` actually applied, this method also
+        calls ``self.set_interval()`` with the new value so the running
+        timer thread picks up the change instead of the write silently
+        becoming a permanent no-op until the daemon restarts.
+
+        Never raises (CONSTRAINT #6) — a stat failure, a corrupt store, or a
+        hook error all degrade to "try again next tick," logged, never
+        propagated into the caller's polling loop.
+        """
+        try:
+            if self.is_running:
+                return None
+
+            resolved = runtime_flags.store_path(path)
+            try:
+                stat_result = resolved.stat()
+                current = (stat_result.st_mtime_ns, stat_result.st_size)
+            except FileNotFoundError:
+                current = None
+
+            with self._lock:
+                if current == self._last_seen_store_stat:
+                    return None
+                self._last_seen_store_stat = current
+
+            if current is None:
+                # The store doesn't exist (never did, or was removed) --
+                # nothing to apply. Still worth recording the transition
+                # above so a file that later appears is correctly detected
+                # as "changed" on some future tick.
+                return None
+
+            report = runtime_flags.apply_overrides(settings, path=path)
+
+            if "ORCHESTRATOR_INTERVAL_SECONDS" in report.applied:
+                new_interval = report.applied["ORCHESTRATOR_INTERVAL_SECONDS"]
+                try:
+                    self.set_interval(new_interval)
+                except ValueError as exc:
+                    # Genuinely reachable, not a defensive-only guard: the
+                    # field itself carries no @field_validator (it's a plain
+                    # `int` -- see settings.py), so apply_overrides() accepts
+                    # any integer, while set_interval() enforces the
+                    # stricter "0 or [60, 86400]" business rule via
+                    # validate_interval_seconds(). The same gap exists on
+                    # the established write path for this field
+                    # (api/pilots_api.py's set_automation_interval writes to
+                    # .env unconditionally and only degrades its OWN
+                    # `applies` to "next_daemon_restart" when the live-apply
+                    # rejects the value) -- this hook matches that existing,
+                    # honest behavior rather than inventing a new one: the
+                    # setting is durably applied, the running timer keeps
+                    # its old cadence, and both facts are logged rather than
+                    # one silently winning.
+                    logger.warning(
+                        "maybe_refresh_settings: ORCHESTRATOR_INTERVAL_SECONDS "
+                        "changed to %r but the live timer rejected it (%s); "
+                        "the setting is applied, the running timer is not.",
+                        new_interval, exc,
+                    )
+
+            return report
+        except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, never break the poller
+            logger.warning(
+                "maybe_refresh_settings: unexpected failure (%s); will retry "
+                "next tick.", type(exc).__name__, exc_info=True,
+            )
+            return None
 
     def _timer_loop(self) -> None:
         while not self._stop_event.is_set():

@@ -1,13 +1,38 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
-import type { TunableField, TunablesResponse, TunablesUpdateResult } from "../api/types";
+import type {
+  SettingsConfirmMap,
+  TunableField,
+  TunablesResponse,
+  TunablesUpdateResult,
+} from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Input, Loading, Notice, Select, Textarea } from "./ui";
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  InfoTip,
+  Input,
+  Loading,
+  Notice,
+  Select,
+  Textarea,
+} from "./ui";
 import { Toggle } from "./Toggle";
 import { TunableGroupCard } from "./TunableGroupCard";
+import { Modal } from "./Modal";
 import { theme } from "../theme";
+import {
+  buildConfirmMap,
+  dangerousKeysIn,
+  fieldBadge,
+  isFieldEditable,
+  resolveLiveness,
+  saveOutcomeMessage,
+  screenAppliesNotice,
+} from "../settingsLiveness";
 
 /**
  * GenericSettingsEditor — THE settings-editor implementation for this PWA.
@@ -27,13 +52,29 @@ import { theme } from "../theme";
  * small ways. Keep it one implementation: a per-field UI change made here must
  * not need making twice.
  *
- * Honesty: an `.env` write does NOT reach the running process (settings is a
- * process-lifetime singleton) — hence the persistent "applies on next restart"
- * notice and the `applies: "next_daemon_restart"` contract. After Save the
- * screen surfaces exactly which keys the server `written`, surfaces every
- * per-key `rejected` reason (never swallowed), and resets the dirty baseline
- * for written keys only. A field whose `value` is null renders an empty input,
- * never a fabricated 0 (CONSTRAINT #4).
+ * Honesty: whether a write reaches the RUNNING process is now decided PER
+ * FIELD, from the backend's `liveness` metadata, not asserted screen-wide. This
+ * component used to show one blanket "changes apply on the next pipeline /
+ * daemon restart (no hot-reload)" notice on every screen; that was true when a
+ * write could only land in `.env`, and became a false blanket claim once the
+ * backend could apply some fields live. It is now replaced by a per-field badge
+ * plus a summary notice derived from what this screen's fields actually report.
+ *
+ * Three further liveness-driven behaviours, all decided here once for all five
+ * editors rather than per screen:
+ *   - an `env_pinned` field's input is genuinely disabled (a shell export wins,
+ *     so letting it be edited would invite a save that silently cannot work);
+ *   - a `dangerous` field (`settings_keysets.DANGEROUS_KEYS`) requires the
+ *     operator to type its name before Save will submit it — the UI half of a
+ *     gate that is ALSO enforced server-side, which is what actually makes it
+ *     safe;
+ *   - post-save feedback distinguishes "applied now" from "saved, needs
+ *     restart" instead of asserting the latter for everything.
+ *
+ * After Save the screen surfaces exactly which keys the server `written`,
+ * surfaces every per-key `rejected` reason (never swallowed), and resets the
+ * dirty baseline for written keys only. A field whose `value` is null renders
+ * an empty input, never a fabricated 0 (CONSTRAINT #4).
  */
 
 // String-backed for number/enum/string inputs; boolean for toggles.
@@ -58,6 +99,7 @@ export interface GenericSettingsEditorProps {
   fetchSettings: () => Promise<TunablesResponse>;
   updateSettings: (
     values: Record<string, number | boolean | string>,
+    confirm?: SettingsConfirmMap,
   ) => Promise<TunablesUpdateResult>;
   /**
    * Empty-state copy for when the backend exposes zero fields. Defaults to the
@@ -90,7 +132,23 @@ export function GenericSettingsEditor({
   const { data, loading, error, status, reload } = useApi<TunablesResponse>(fetchSettings, []);
   const back = () => (window.history.length > 1 ? nav(-1) : nav(backTo));
 
+  // The last write's result is held HERE, in the parent, rather than inside
+  // SettingsForm's own `useMutation`. A successful save calls `reload()`, and
+  // `useApi.reload()` sets `loading` — which unmounts SettingsForm and would
+  // take the mutation result down with it, making the post-save message (and
+  // every per-key rejection reason) flash and vanish before it could be read.
+  // This component does not unmount on reload, so the feedback survives it.
+  const [lastResult, setLastResult] = useState<TunablesUpdateResult | null>(null);
+  const outcome = lastResult ? saveOutcomeMessage(lastResult) : null;
+  const rejectedCount = Object.keys(lastResult?.rejected ?? {}).length;
+
   const hasFields = Boolean(data?.groups.some((g) => g.fields.length > 0));
+
+  // Replaces the old unconditional restart notice. Derived from what THIS
+  // screen's fields actually report, and `null` (rendered as nothing) when
+  // every field applies immediately — where a restart notice would be wrong.
+  // While loading there is no data to summarise, so nothing is claimed.
+  const appliesNotice = data ? screenAppliesNotice(data.applies, data.applies_counts) : null;
 
   return (
     <div className="screen">
@@ -111,10 +169,45 @@ export function GenericSettingsEditor({
       <h1 className="screen-title">{title}</h1>
       <p className="screen-sub">{subtitle}</p>
 
-      <Notice variant="info" style={{ marginBottom: "var(--s-3)" }} data-testid="applies-notice">
-        <span>ℹ️</span>
-        <span>Changes apply on the next pipeline / daemon restart (no hot-reload).</span>
-      </Notice>
+      {appliesNotice && (
+        <Notice
+          variant={appliesNotice.variant}
+          style={{ marginBottom: "var(--s-3)" }}
+          data-testid="applies-notice"
+        >
+          <span>{appliesNotice.variant === "warn" ? "⚠️" : "ℹ️"}</span>
+          <span>{appliesNotice.text}</span>
+        </Notice>
+      )}
+
+      {/*
+        The post-save notices render HERE, in the parent, not inside
+        SettingsForm — SettingsForm unmounts while `reload()` is in flight, so
+        anything rendered there would disappear at exactly the moment the
+        operator wants to read it. The per-FIELD rejection reasons stay with
+        their fields (they have nowhere else to be) and come back with them,
+        because `lastResult` outlives the remount.
+      */}
+      {outcome && (
+        <Notice
+          variant={outcome.variant === "success" ? "success" : "info"}
+          style={{ marginBottom: "var(--s-3)" }}
+          data-testid="written-notice"
+        >
+          <span>{outcome.variant === "success" ? "✅" : "💾"}</span>
+          <span>{outcome.text}</span>
+        </Notice>
+      )}
+
+      {rejectedCount > 0 && (
+        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }} data-testid="rejected-notice">
+          <span>⚠️</span>
+          <span>
+            {rejectedCount} change{rejectedCount === 1 ? "" : "s"} rejected — see the
+            highlighted fields below.
+          </span>
+        </Notice>
+      )}
 
       {loading && <Loading lines={4} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
@@ -127,6 +220,8 @@ export function GenericSettingsEditor({
           onReload={reload}
           updateSettings={updateSettings}
           dangerZone={dangerZone}
+          lastResult={lastResult}
+          onResult={setLastResult}
         />
       )}
     </div>
@@ -138,13 +233,19 @@ function SettingsForm({
   onReload,
   updateSettings,
   dangerZone,
+  lastResult,
+  onResult,
 }: {
   data: TunablesResponse;
   onReload: () => void;
   updateSettings: (
     values: Record<string, number | boolean | string>,
+    confirm?: SettingsConfirmMap,
   ) => Promise<TunablesUpdateResult>;
   dangerZone?: ReactNode;
+  /** The last write's result, owned by the parent so it survives a reload. */
+  lastResult: TunablesUpdateResult | null;
+  onResult: (r: TunablesUpdateResult) => void;
 }) {
   const flatFields = useMemo(() => data.groups.flatMap((g) => g.fields), [data]);
   const baselineInit = useMemo(() => buildBaseline(data.groups), [data]);
@@ -181,27 +282,45 @@ function SettingsForm({
     return bad;
   }, [flatFields, edited, baseline]);
 
+  // An env-pinned field is not editable, so it can never become dirty and must
+  // never be submitted. Filtering here (not only in the input's `disabled`)
+  // keeps a stale edited-value from a previous render out of the payload.
   const dirtyKeys = useMemo(
-    () => flatFields.filter((f) => edited[f.key] !== baseline[f.key]).map((f) => f.key),
+    () =>
+      flatFields
+        .filter((f) => isFieldEditable(f) && edited[f.key] !== baseline[f.key])
+        .map((f) => f.key),
     [flatFields, edited, baseline],
   );
   const dirty = dirtyKeys.length > 0;
   const canSave = dirty && invalidKeys.size === 0 && !mutation.pending;
 
-  const rejected = mutation.result?.rejected ?? {};
-  const writtenKeys = mutation.result ? Object.keys(mutation.result.written) : [];
+  const rejected = lastResult?.rejected ?? {};
 
-  const doSave = async () => {
+  // The dangerous subset of what is about to be written. Non-empty means Save
+  // must route through the confirmation dialog first.
+  const pendingDangerous = useMemo(
+    () => dangerousKeysIn(flatFields, dirtyKeys),
+    [flatFields, dirtyKeys],
+  );
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const buildPayload = () => {
     const payload: Record<string, number | boolean | string> = {};
     for (const f of flatFields) {
-      if (edited[f.key] === baseline[f.key]) continue;
+      if (!dirtyKeys.includes(f.key)) continue;
       const cur = edited[f.key];
       if (f.type === "boolean") payload[f.key] = cur as boolean;
       else if (f.type === "number") payload[f.key] = Number(cur);
       else payload[f.key] = String(cur);
     }
-    const res = await mutation.run(payload);
+    return payload;
+  };
+
+  const submit = async (confirm: SettingsConfirmMap) => {
+    const res = await mutation.run(buildPayload(), confirm);
     if (res) {
+      onResult(res);
       // Reset the dirty baseline for accepted keys only; rejected keys stay
       // dirty so the operator can fix and re-submit them.
       setBaseline((b) => {
@@ -213,6 +332,23 @@ function SettingsForm({
       });
       onReload(); // refresh so env_drift.detected surfaces the pending write
     }
+  };
+
+  const doSave = async () => {
+    // A batch touching a DANGEROUS_KEYS field never goes straight through: the
+    // dialog is what produces the `confirm` map. Sending no confirmation would
+    // simply be rejected server-side (`confirmation_required`), so this is the
+    // affordance for a gate that is enforced regardless.
+    if (pendingDangerous.length > 0) {
+      setConfirmOpen(true);
+      return;
+    }
+    await submit({});
+  };
+
+  const onConfirmed = async () => {
+    setConfirmOpen(false);
+    await submit(buildConfirmMap(pendingDangerous));
   };
 
   return (
@@ -239,27 +375,6 @@ function SettingsForm({
           >
             Restart Daemon
           </Button>
-        </Notice>
-      )}
-
-      {writtenKeys.length > 0 && (
-        <Notice variant="success" style={{ marginBottom: "var(--s-3)" }} data-testid="written-notice">
-          <span>✅</span>
-          <span>
-            Saved to .env: {writtenKeys.join(", ")}. The running engine keeps the
-            previous values until its next restart.
-          </span>
-        </Notice>
-      )}
-
-      {Object.keys(rejected).length > 0 && (
-        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }} data-testid="rejected-notice">
-          <span>⚠️</span>
-          <span>
-            {Object.keys(rejected).length} change
-            {Object.keys(rejected).length === 1 ? "" : "s"} rejected — see the
-            highlighted fields below.
-          </span>
         </Notice>
       )}
 
@@ -306,7 +421,117 @@ function SettingsForm({
           {dirty ? `Save ${dirtyKeys.length} change${dirtyKeys.length === 1 ? "" : "s"}` : "Save changes"}
         </Button>
       </div>
+
+      {confirmOpen && (
+        <DangerousConfirmDialog
+          keys={pendingDangerous}
+          fields={flatFields}
+          edited={edited}
+          pending={mutation.pending}
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={onConfirmed}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * Confirmation for a save touching one or more `DANGEROUS_KEYS` fields.
+ *
+ * Requires the operator to TYPE each field's name, following this codebase's
+ * established type-the-magic-word pattern (`Settings.tsx`'s
+ * `RestartDaemonControl`, which types "RESTART"). Typing the name rather than
+ * clicking one "yes" is deliberate and mirrors the backend's own contract: the
+ * server wants each key echoed by name precisely so confirming one dangerous
+ * field can never implicitly confirm a second one in the same batch.
+ *
+ * This dialog is an affordance, not the safety boundary — the identical gate is
+ * enforced in `api/pilots_api.py`, so bypassing the UI gains nothing.
+ */
+function DangerousConfirmDialog({
+  keys,
+  fields,
+  edited,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  keys: string[];
+  fields: TunableField[];
+  edited: Record<string, EditVal>;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [typed, setTyped] = useState<Record<string, string>>({});
+  const allConfirmed = keys.every((k) => (typed[k] ?? "").trim() === k);
+  const byKey = new Map(fields.map((f) => [f.key, f]));
+
+  return (
+    <Modal ariaLabel="Confirm safety-critical settings change" onClose={onCancel}>
+      <div data-testid="dangerous-confirm">
+        <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
+          {keys.length === 1
+            ? "Change a safety-critical setting?"
+            : `Change ${keys.length} safety-critical settings?`}
+        </h2>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
+          {keys.length === 1 ? "This field is" : "These fields are"} part of this
+          platform&apos;s safety and execution controls. Confirm each one by typing its
+          name exactly.
+        </p>
+
+        {keys.map((k) => {
+          const f = byKey.get(k);
+          const next = edited[k];
+          return (
+            <div key={k} style={{ marginTop: "var(--s-3)" }}>
+              <p
+                style={{
+                  color: theme.textSecondary,
+                  fontSize: "var(--t-label)",
+                  margin: "0 0 var(--s-1)",
+                }}
+                data-testid={`dangerous-summary-${k}`}
+              >
+                <strong>{k}</strong>
+                {" → "}
+                <code>{String(next)}</code>
+                {f?.description ? ` — ${f.description}` : ""}
+              </p>
+              <Input
+                label={`Type "${k}" to confirm`}
+                value={typed[k] ?? ""}
+                onChange={(e) => setTyped((s) => ({ ...s, [k]: e.target.value }))}
+                hint="Required."
+              />
+            </div>
+          );
+        })}
+
+        <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
+          <Button
+            variant="neutral"
+            onClick={onCancel}
+            style={{ flex: 1 }}
+            data-testid="dangerous-confirm-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={onConfirm}
+            disabled={!allConfirmed}
+            pending={pending}
+            style={{ flex: 2 }}
+            data-testid="dangerous-confirm-yes"
+          >
+            Save {keys.length === 1 ? "this change" : "these changes"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -340,11 +565,9 @@ function isJsonBlob(f: TunableField): boolean {
 
 /**
  * One editable field. This is the single place per-field UI is decided for all
- * five editors — the planned per-key liveness/safety metadata (an
- * applies-immediately vs. needs-restart badge, a disabled input for an
- * env-pinned value, a type-the-key confirmation for a `DANGEROUS_KEYS` field —
- * see `settings_keysets.py`) hooks in HERE, once, off new `TunableField`
- * fields, rather than being added per screen.
+ * five editors, so the liveness/safety treatment (the applies badge, the
+ * disabled env-pinned input, the dangerous marker) is added HERE, once, off the
+ * backend's `liveness` metadata, rather than per screen.
  */
 function FieldRow({
   field: f,
@@ -364,17 +587,59 @@ function FieldRow({
       ? `Must be a number in [${f.min ?? "−∞"}, ${f.max ?? "∞"}].`
       : "Must be a number.";
 
+  const lv = resolveLiveness(f);
+  const badge = fieldBadge(f);
+  const editable = isFieldEditable(f);
+
+  // An env-pinned field's own explanation is the most useful thing to say in
+  // the input's caption slot, so it replaces the description there. Everything
+  // else keeps the description; a restart reason is surfaced separately below
+  // so it never displaces the field's own documentation.
+  const pinnedCaption = `A shell environment variable is set for ${f.key}, which overrides both .env and the runtime store. Unset it and restart to edit this here.`;
+  const hint = !editable ? pinnedCaption : invalid ? rangeMsg : f.description ?? undefined;
+
   return (
     <div>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--s-1-5)",
+          flexWrap: "wrap",
+          marginBottom: "var(--s-1)",
+        }}
+      >
+        <InfoTip content={badge.title} ariaLabel={`What "${badge.label}" means`}>
+          <span
+            className={`badge badge-${badge.tone}`}
+            data-testid={`applies-badge-${f.key}`}
+            data-applies={lv.applies}
+          >
+            {badge.label}
+          </span>
+        </InfoTip>
+        {lv.dangerous && (
+          <InfoTip
+            content="A safety-critical setting. Saving a change to this field requires typing its name to confirm."
+            ariaLabel="What “Safety-critical” means"
+          >
+            <span className="badge badge-bad" data-testid={`dangerous-badge-${f.key}`}>
+              Safety-critical
+            </span>
+          </InfoTip>
+        )}
+      </div>
+
       {f.type === "boolean" ? (
         <>
           <Toggle
             checked={value === true}
             onChange={(v) => onChange(v)}
             label={f.key}
+            disabled={!editable}
           />
           <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", margin: "var(--s-1-5) 0 0" }}>
-            {f.description}
+            {!editable ? pinnedCaption : f.description}
           </p>
         </>
       ) : f.type === "enum" ? (
@@ -383,7 +648,8 @@ function FieldRow({
           value={String(value)}
           onChange={(e) => onChange(e.target.value)}
           options={(f.options ?? []).map((o) => ({ value: o, label: o }))}
-          hint={f.description ?? undefined}
+          disabled={!editable}
+          hint={hint}
         />
       ) : isJsonBlob(f) ? (
         <Textarea
@@ -394,7 +660,8 @@ function FieldRow({
           spellCheck={false}
           monospace
           invalid={invalid}
-          hint={f.description ?? undefined}
+          disabled={!editable}
+          hint={hint}
         />
       ) : (
         <Input
@@ -407,13 +674,28 @@ function FieldRow({
           value={value as string}
           onChange={(e) => onChange(e.target.value)}
           invalid={invalid}
-          hint={invalid ? rangeMsg : f.description ?? undefined}
+          disabled={!editable}
+          hint={hint}
         />
       )}
 
       <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1-5) 0 0" }}>
         Default: {defaultLabel(f)}
       </p>
+
+      {/*
+        Why a restart is needed, with the capture sites that prove it. Shown for
+        a field that needs one and is not already explained by an env pin, so
+        the claim is checkable by the operator instead of taken on trust.
+      */}
+      {lv.applies === "next_daemon_restart" && lv.restart_reason && (
+        <p
+          style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-1) 0 0" }}
+          data-testid={`restart-reason-${f.key}`}
+        >
+          {lv.restart_reason}
+        </p>
+      )}
 
       {rejectedReason && (
         <Notice variant="warn" style={{ marginTop: "var(--s-2)" }} data-testid={`rejected-${f.key}`}>

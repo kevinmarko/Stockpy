@@ -8,7 +8,7 @@ export function SentimentSettings() {
       subtitle="Configure ingestion pipelines, sources (StockTwits, Reddit, Google News, EDGAR, GDELT), FinBERT scoring, and attention proxies."
       backTo="/settings"
       fetchSettings={() => api.getSentimentSettings()}
-      updateSettings={(values) => api.updateSentimentSettings(values)}
+      updateSettings={(values, confirm) => api.updateSentimentSettings(values, confirm)}
     />
   );
 }

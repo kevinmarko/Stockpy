@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 246,
+    "live_safe": 248,
     "no_op": 2,
     "restart_required": 78,
-    "total": 326
+    "total": 328
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 2932,
+      "line": 2938,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3878,
+      "line": 3887,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3963,
+      "line": 3985,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 339,
+  "files_scanned": 340,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -340,6 +340,8 @@
     "ROBINHOOD_EXECUTION_MODE",
     "ROBINHOOD_LIMIT_BUFFER_BPS",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
+    "RUNTIME_FLAGS_REFRESH_ENABLED",
+    "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS",
     "SECTOR_HEAT_ENABLED",
     "SECTOR_HEAT_LOOKBACK_DAYS",
     "SECTOR_HEAT_SMOOTHING_SIGMA",
@@ -394,13 +396,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 666,
+    "attr": 665,
     "factory_param": 4,
     "getattr_const": 244,
     "os_environ": 16
   },
   "read_forms_distinct_fields": {
-    "attr": 200,
+    "attr": 202,
     "factory_param": 4,
     "getattr_const": 149,
     "os_environ": 13
@@ -579,7 +581,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:167",
+        "site": "api/control_api.py:166",
         "via": []
       },
       {
@@ -606,7 +608,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:299",
+        "site": "api/pilots_api.py:305",
         "via": []
       },
       {
@@ -1114,7 +1116,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4129",
+        "site": "api/pilots_api.py:4358",
         "via": []
       }
     ],
@@ -1125,7 +1127,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4128",
+        "site": "api/pilots_api.py:4357",
         "via": []
       }
     ],
@@ -1136,7 +1138,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4253",
+        "site": "api/pilots_api.py:4482",
         "via": []
       },
       {
@@ -1211,7 +1213,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4233",
+        "site": "api/pilots_api.py:4462",
         "via": []
       },
       {
@@ -1242,7 +1244,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:552",
+        "site": "api/pilots_api.py:558",
         "via": []
       }
     ],
@@ -1711,7 +1713,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:237",
+        "site": "api/control_api.py:204",
         "via": []
       }
     ],
@@ -1722,7 +1724,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "desktop/orchestrator_daemon.py:529",
+        "site": "desktop/orchestrator_daemon.py:607",
         "via": []
       }
     ],
@@ -1823,7 +1825,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:116",
+        "site": "gui/orchestrator_runner.py:115",
         "via": []
       },
       {
@@ -1832,7 +1834,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:122",
+        "site": "gui/orchestrator_runner.py:124",
         "via": []
       },
       {
@@ -1841,7 +1843,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:127",
+        "site": "gui/orchestrator_runner.py:130",
         "via": []
       },
       {
@@ -1850,25 +1852,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "gui/orchestrator_runner.py:136",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:142",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "gui/orchestrator_runner.py:1041",
+        "site": "gui/orchestrator_runner.py:907",
         "via": []
       },
       {
@@ -2095,7 +2079,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:232",
+        "site": "api/control_api.py:199",
         "via": []
       },
       {
@@ -2104,7 +2088,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:547",
+        "site": "api/pilots_api.py:553",
         "via": []
       },
       {
@@ -2140,7 +2124,7 @@
     "init_body": 6,
     "init_self_assign": 40,
     "method_self_assign": 4,
-    "module_level": 49,
+    "module_level": 47,
     "os_environ": 16
   },
   "restart_required_via_name_literal_only": [

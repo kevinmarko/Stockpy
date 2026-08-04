@@ -818,8 +818,10 @@ describe("Settings screen — Brokerage", () => {
       await screen.findByRole("button", { name: /connect using \.env credentials/i })
     );
 
+    // See the timeout comment on the identically-shaped assertion in
+    // "Force fresh login refreshes and shows a success notice" below.
     expect(
-      await screen.findByText(/no robinhood credentials were available to try/i)
+      await screen.findByText(/no robinhood credentials were available to try/i, {}, { timeout: 5000 })
     ).toBeInTheDocument();
     // Still disconnected -- the typed form remains available as a fallback.
     expect(screen.getByLabelText(/robinhood email/i)).toBeInTheDocument();
