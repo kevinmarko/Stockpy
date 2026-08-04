@@ -1,21 +1,41 @@
-"""Standalone CNN-LSTM fit/predict worker -- safe to run in a fresh subprocess.
+"""Standalone CNN-LSTM fit/predict worker -- runs as its own ``__main__``
+process (see cnn_lstm_process_pool.py), never imported as a library module by
+the isolated code path.
 
-Import order is the entire reason this module exists -- see
-docs/known_issues/cnn_lstm_tf_deadlock.md. TensorFlow and pyarrow each ship an
-independently-compiled copy of the same Abseil sync primitive; whichever
-library's Python-level init runs first in a given PROCESS wins that symbol,
-and if pandas/pyarrow initialize first, the first real multi-threaded TF
-eager op (a Conv1D/LSTM ``.fit()``, not a trivial op) deadlocks forever.
-``forecasting_engine.py``'s own import reorder (tensorflow before pandas)
-only protects a process where that module is the first thing to touch
-pandas -- true in an isolated test script, false in this codebase's real
-entry points (main.py / main_orchestrator.py / pipeline/production_steps.py
-all import pandas well before forecasting_engine is ever reached).
+Import order is the original reason this module exists -- see
+docs/known_issues/cnn_lstm_tf_deadlock.md's Rounds 1-7. TensorFlow and
+pyarrow each ship an independently-compiled copy of the same Abseil sync
+primitive; whichever library's Python-level init runs first in a given
+PROCESS wins that symbol, and if pandas/pyarrow initialize first, the first
+real multi-threaded TF eager op (a Conv1D/LSTM ``.fit()``, not a trivial op)
+deadlocks forever. ``forecasting_engine.py``'s own import reorder
+(tensorflow before pandas) only protects a process where that module is the
+first thing to touch pandas -- true in an isolated test script, false in
+this codebase's real entry points (main.py / main_orchestrator.py /
+pipeline/production_steps.py all import pandas well before
+forecasting_engine is ever reached).
 
-This module is the payload run inside a genuinely fresh ``multiprocessing``
-"spawn" worker process (see cnn_lstm_process_pool.py), where import order is
-scoped per-process and therefore fully controllable regardless of what the
-parent process already imported. To keep that guarantee:
+Round 8 (2026-08, see docs/known_issues/cnn_lstm_tf_deadlock.md) found a
+SECOND, distinct deadlock that survives even genuine process isolation:
+merely running this module's TF-touching code from inside a
+``multiprocessing`` (``ProcessPoolExecutor`` OR a bare ``Process``) worker
+process -- whether via a separate ``initializer=`` callback, implicit
+unpickling of a function reference, or an explicit lazy ``import`` inside a
+task -- reliably deadlocks the next real TF op that process runs, even with
+pandas/pyarrow never imported in that process at all (ruling out the
+Abseil ODR collision as the cause of THIS deadlock). The one pattern that
+worked reliably across every repeated trial, including the real training
+shape (epochs=50, hidden_dim=32): TensorFlow imported as top-level code of
+the process's own ``__main__`` script -- i.e. a genuine, separate OS process
+launched via ``subprocess.Popen`` running THIS FILE directly, not
+``multiprocessing``'s spawn+pickle machinery. That is why
+cnn_lstm_process_pool.py launches this module with
+``subprocess.Popen([sys.executable, __file__])`` and this file's own
+``if __name__ == "__main__":`` block (bottom of file) is the actual
+long-lived worker entry point, communicating over its own stdin/stdout via a
+small pickle-framed job protocol -- not ``multiprocessing`` at all.
+
+To keep the (still load-bearing, Round 1-7) import-order guarantee:
 
 * This is the module's OWN first import, before anything else (including
   stdlib modules that are safe on their own merits, kept this way anyway so
@@ -220,3 +240,99 @@ def fit_predict_or_infer_lstm(
         "predictions": [float(x) for x in preds],
         "weights": [w.tolist() for w in model.get_weights()],
     }
+
+
+def _test_add(a: float, b: float) -> float:
+    """TensorFlow-free helper dispatchable by name, for exercising the real
+    subprocess/pipe mechanics in tests/test_cnn_lstm_process_pool.py without
+    needing TensorFlow installed. Lives here (not in the test file) because
+    the worker only ever resolves dispatchable functions from its own
+    ``__main__`` namespace -- see this module's docstring (Round 8) for why
+    a cross-module import inside the worker is unsafe for TF-touching code;
+    it is unnecessary for this trivial one, but keeping every dispatchable
+    name in one place avoids a second, inconsistent resolution path."""
+    return a + b
+
+
+def _test_sleep_and_return(seconds: float, value: Any) -> Any:
+    """See ``_test_add``. Used to exercise ``_PopenWorker.call``'s timeout."""
+    import time
+    time.sleep(seconds)
+    return value
+
+
+def _test_raise_value_error(message: str) -> None:
+    """See ``_test_add``. Used to exercise exception propagation from a
+    still-healthy worker (as opposed to a broken/killed one)."""
+    raise ValueError(message)
+
+
+_DISPATCHABLE = {
+    "fit_predict_cnn_lstm": fit_predict_cnn_lstm,
+    "load_predict_cnn_lstm": load_predict_cnn_lstm,
+    "fit_predict_or_infer_lstm": fit_predict_or_infer_lstm,
+    "_test_add": _test_add,
+    "_test_sleep_and_return": _test_sleep_and_return,
+    "_test_raise_value_error": _test_raise_value_error,
+}
+
+
+def _run_worker_loop() -> None:
+    """Persistent job loop for this module's ``subprocess.Popen``-launched
+    worker process (see cnn_lstm_process_pool.py and this module's own
+    docstring for why -- Round 8's real-op-in-``__main__`` requirement).
+
+    Protocol: one ``(func_name, args)`` job in via stdin, one
+    ``(ok, result_or_exception)`` response out via stdout, both pickle-framed
+    (``pickle.dump``/``pickle.load`` on a shared stream naturally delimit a
+    sequence of objects -- no extra length-prefixing needed). Loops until
+    stdin hits EOF (the parent closed its write end -- pool shutdown) or a
+    malformed job is received (also treated as EOF: a pickle stream can't be
+    resynchronized after a framing error, so continuing risks silently
+    misattributing a later response to the wrong job -- better to exit and
+    let the parent detect the dead worker and spawn a fresh one).
+
+    Never writes anything else to stdout -- that would corrupt the pickle
+    framing. TensorFlow's own native/absl logging goes to stderr by default
+    and is left untouched.
+    """
+    import pickle
+    import sys
+
+    stdin = sys.stdin.buffer
+    stdout = sys.stdout.buffer
+    while True:
+        try:
+            job = pickle.load(stdin)
+        except EOFError:
+            break
+        except Exception:  # noqa: BLE001 -- unrecoverable framing error, stop
+            break
+
+        func_name, args = job
+        func = _DISPATCHABLE.get(func_name)
+        try:
+            if func is None:
+                raise ValueError(f"unknown function {func_name!r} requested of cnn_lstm_worker")
+            result = func(*args)
+            response = (True, result)
+        except Exception as exc:  # noqa: BLE001 -- report the failure back, never crash the loop
+            response = (False, exc)
+
+        try:
+            pickle.dump(response, stdout)
+        except Exception:  # noqa: BLE001 -- response itself failed to pickle (rare, exotic
+            # exception state); fall back to a definitely-picklable substitute so the
+            # parent still gets a timely answer instead of a silent timeout.
+            import traceback
+            ok, payload = response
+            fallback_exc = RuntimeError(
+                f"{type(payload).__name__ if not ok else 'result'} failed to pickle: "
+                f"{traceback.format_exc()}"
+            )
+            pickle.dump((False, fallback_exc), stdout)
+        stdout.flush()
+
+
+if __name__ == "__main__":
+    _run_worker_loop()

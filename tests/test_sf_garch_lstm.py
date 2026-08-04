@@ -5,10 +5,12 @@ Tests for ml/models/sf_garch_lstm.py's real GJR-GARCH + optional sentiment
 + LSTM (ridge-fallback) implementation -- see that module's docstring for
 the full architecture. Covers: real GARCH parameter fitting, the rolling-std
 fallback when ``arch`` is unavailable/fails, the optional sentiment channel,
-graceful ridge-only degradation when TensorFlow is unavailable (true in
-this sandbox -- no live TF install), and zero-lookahead perturbation tests
-for the two causal building blocks (AGENTS.md: "write a perturbation test"
-for anything time-series-shaped).
+graceful ridge-only degradation when the isolated-subprocess LSTM path is
+unavailable (forced deterministically via a monkeypatched
+run_in_subprocess -- TensorFlow itself IS installed in this repo's own
+.venv/CI, see requirements-optional.txt), and zero-lookahead perturbation
+tests for the two causal building blocks (AGENTS.md: "write a perturbation
+test" for anything time-series-shaped).
 """
 import numpy as np
 import pandas as pd
@@ -110,14 +112,27 @@ class TestSFGarchLSTMModelReal:
             assert key in model.garch_params
             assert np.isfinite(model.garch_params[key])
 
-    def test_predict_degrades_to_ridge_without_tensorflow(self):
-        """No live TensorFlow install in this sandbox -- fit()/predict()
-        must degrade to the documented ridge fallback, never raise
-        (CONSTRAINT #6), and never return NaN/fabricated values."""
+    def test_predict_degrades_to_ridge_without_tensorflow(self, monkeypatch):
+        """When the isolated-subprocess LSTM path is unavailable for any
+        reason (TensorFlow not installed, the worker pool broken, a
+        timeout), fit()/predict() must degrade to the documented ridge
+        fallback, never raise (CONSTRAINT #6), and never return
+        NaN/fabricated values. Forces that condition deterministically via
+        a monkeypatched run_in_subprocess -- TensorFlow IS installed in
+        this repo's own .venv/CI, so asserting on ambient environment state
+        would make this test's outcome depend on what happens to be
+        installed rather than on the fallback logic under test."""
+        import cnn_lstm_process_pool
+
+        def _raise(*args, **kwargs):
+            raise RuntimeError("tensorflow is not importable in this worker process")
+
+        monkeypatch.setattr(cnn_lstm_process_pool, "run_in_subprocess", _raise)
+
         model = SFGarchLSTMModel(sequence_length=5)
         df = _returns_df(n=150)
         model.fit(df, df["returns"])
-        assert model.lstm_weights is None  # TF genuinely unavailable here
+        assert model.lstm_weights is None
         preds = model.predict(df)
         assert isinstance(preds, np.ndarray)
         assert len(preds) == len(df)

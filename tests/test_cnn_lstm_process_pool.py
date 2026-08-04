@@ -1,38 +1,43 @@
 """
 tests/test_cnn_lstm_process_pool.py
 ====================================
-Exercises the actual multiprocessing plumbing in cnn_lstm_process_pool.py
-(spawn context, persistent pool reuse, timeout handling, BrokenProcessPool
-recovery) against a plain, TensorFlow-free picklable function. TensorFlow is
-an optional heavy dependency (requirements-optional.txt) that may not be
-installed in every dev/CI environment -- these tests validate the REAL
-subprocess mechanics without needing it, since the pool machinery itself has
-nothing to do with what function it runs. cnn_lstm_worker.py's own
+Exercises the actual subprocess.Popen plumbing in cnn_lstm_process_pool.py
+(persistent worker reuse across calls, timeout handling, dead-worker
+recovery) against plain, TensorFlow-free dispatchable helpers
+(cnn_lstm_worker._test_add and friends). TensorFlow is an optional heavy
+dependency (requirements-optional.txt) that may not be installed in every
+dev/CI environment -- these tests validate the REAL subprocess mechanics
+without needing it, since the pool machinery itself has nothing to do with
+what function it runs. The helpers live in cnn_lstm_worker.py itself (not
+here) because the worker only ever resolves dispatchable functions from its
+own __main__ namespace -- see that module's docstring (Round 8 of
+docs/known_issues/cnn_lstm_tf_deadlock.md) for why a cross-module import
+inside the worker is unsafe for TF-touching code. cnn_lstm_worker.py's own
 TF-dependent behavior is covered separately in tests/test_cnn_lstm_worker.py
 (mocked TF, matching this repo's existing tests/test_forecasting_lookahead.py
 convention).
+
+Round 8 background: an earlier version of this module used
+multiprocessing.ProcessPoolExecutor. That was replaced entirely after
+discovering it reliably deadlocks the first real TensorFlow op a worker
+process runs, regardless of import order or warm-up -- see
+cnn_lstm_process_pool.py's own module docstring for the full writeup. These
+tests exercise the subprocess.Popen-based replacement.
 """
 
 from __future__ import annotations
 
-import time
-
+import numpy as np
 import pytest
 
 import cnn_lstm_process_pool as pool_mod
-
-
-def _add(a: int, b: int) -> int:
-    return a + b
-
-
-def _sleep_and_return(seconds: float, value: int) -> int:
-    time.sleep(seconds)
-    return value
-
-
-def _raise_value_error(message: str) -> None:
-    raise ValueError(message)
+from cnn_lstm_worker import (
+    _test_add,
+    _test_raise_value_error,
+    _test_sleep_and_return,
+    fit_predict_cnn_lstm,
+    fit_predict_or_infer_lstm,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -44,27 +49,72 @@ def _reset_pool_before_and_after():
 
 class TestRunInSubprocess:
     def test_runs_real_function_in_a_separate_process(self):
-        result = pool_mod.run_in_subprocess(_add, (2, 3), timeout_seconds=30, max_workers=1)
+        result = pool_mod.run_in_subprocess(_test_add, (2, 3), timeout_seconds=30, max_workers=1)
         assert result == 5
 
     def test_propagates_exceptions_raised_inside_the_worker(self):
         with pytest.raises(ValueError, match="boom"):
             pool_mod.run_in_subprocess(
-                _raise_value_error, ("boom",), timeout_seconds=30, max_workers=1
+                _test_raise_value_error, ("boom",), timeout_seconds=30, max_workers=1
             )
 
     def test_timeout_raises_and_does_not_hang_forever(self):
         with pytest.raises(TimeoutError):
             pool_mod.run_in_subprocess(
-                _sleep_and_return, (5.0, 1), timeout_seconds=0.2, max_workers=1
+                _test_sleep_and_return, (5.0, 1), timeout_seconds=0.2, max_workers=1
             )
+
+    def test_worker_survives_a_normal_exception_and_is_reused(self):
+        """A ValueError raised BY the submitted function must not be treated
+        as a broken worker -- the same underlying worker process should
+        still answer the next call (see _WorkerPool.call's except-clause
+        split between BrokenWorkerPool/TimeoutError and any other
+        exception)."""
+        pool = pool_mod.get_pool(max_workers=1)
+        worker = pool._available.get()
+        pool._available.put(worker)
+        pid_before = worker.proc.pid
+
+        with pytest.raises(ValueError):
+            pool_mod.run_in_subprocess(
+                _test_raise_value_error, ("boom",), timeout_seconds=30, max_workers=1
+            )
+
+        worker_after = pool._available.get()
+        pool._available.put(worker_after)
+        assert worker_after.proc.pid == pid_before
+
+    def test_worker_is_replaced_after_a_timeout(self):
+        """The opposite of the case above: a timeout means the worker may
+        still be mid-job with a response that could land later and corrupt
+        the next call's framing -- it must be killed and replaced, not
+        reused."""
+        pool = pool_mod.get_pool(max_workers=1)
+        worker = pool._available.get()
+        pool._available.put(worker)
+        pid_before = worker.proc.pid
+
+        with pytest.raises(TimeoutError):
+            pool_mod.run_in_subprocess(
+                _test_sleep_and_return, (5.0, 1), timeout_seconds=0.2, max_workers=1
+            )
+
+        worker_after = pool._available.get()
+        pool._available.put(worker_after)
+        assert worker_after.proc.pid != pid_before
+        # The pool must still be usable after the replacement.
+        result = pool_mod.run_in_subprocess(_test_add, (1, 1), timeout_seconds=30, max_workers=1)
+        assert result == 2
 
 
 class TestPoolLifecycle:
-    def test_get_pool_uses_spawn_context_and_warm_initializer(self):
+    def test_get_pool_launches_real_subprocess_workers(self):
         pool = pool_mod.get_pool(max_workers=1)
-        assert pool._mp_context.get_start_method() == "spawn"
-        assert pool._initializer is pool_mod._warm_worker
+        assert isinstance(pool, pool_mod._WorkerPool)
+        worker = pool._available.get()
+        pool._available.put(worker)
+        assert isinstance(worker, pool_mod._PopenWorker)
+        assert worker.is_alive()
 
     def test_get_pool_reuses_the_same_pool_for_the_same_worker_count(self):
         pool_a = pool_mod.get_pool(max_workers=2)
@@ -82,9 +132,109 @@ class TestPoolLifecycle:
         pool_b = pool_mod.get_pool(max_workers=1)
         assert pool_a is not pool_b
 
+    def test_reset_pool_kills_the_underlying_worker_process(self):
+        pool = pool_mod.get_pool(max_workers=1)
+        worker = pool._available.get()
+        pool._available.put(worker)
+        pool_mod.reset_pool()
+        assert not worker.is_alive()
+
     def test_multiple_calls_reuse_the_pool_across_submissions(self):
         results = [
-            pool_mod.run_in_subprocess(_add, (i, 1), timeout_seconds=30, max_workers=1)
+            pool_mod.run_in_subprocess(_test_add, (i, 1), timeout_seconds=30, max_workers=1)
             for i in range(3)
         ]
         assert results == [1, 2, 3]
+
+    def test_persistent_worker_is_not_respawned_between_calls(self):
+        """The whole point of a persistent pool: the same OS process answers
+        repeated calls, rather than paying a fresh-interpreter-plus-import
+        cost every time."""
+        pool = pool_mod.get_pool(max_workers=1)
+        worker = pool._available.get()
+        pool._available.put(worker)
+        pid_before = worker.proc.pid
+
+        pool_mod.run_in_subprocess(_test_add, (1, 1), timeout_seconds=30, max_workers=1)
+        pool_mod.run_in_subprocess(_test_add, (2, 2), timeout_seconds=30, max_workers=1)
+
+        worker_after = pool._available.get()
+        pool._available.put(worker_after)
+        assert worker_after.proc.pid == pid_before
+
+
+class TestRealTensorFlowThroughThePool:
+    """Regression coverage for the actual gap that let Round 8's deadlock
+    ship undetected: every other test touching cnn_lstm_worker.py's TF
+    functions either mocks TensorFlow entirely (tests/test_cnn_lstm_worker.py)
+    or mocks run_in_subprocess itself (tests/test_cnn_lstm_isolation_dispatch.py)
+    -- nothing exercised a REAL TensorFlow op through the REAL persistent
+    pool. These tests do exactly that, with a bounded timeout so a
+    regression here fails fast instead of hanging the suite. TensorFlow is
+    an optional heavy dependency (requirements-optional.txt) NOT installed
+    by CI or the base ./setup.sh -- unlike the rest of this file these tests
+    are not TensorFlow-free by design, so each one skips when it genuinely
+    isn't usable, rather than failing.
+
+    Skip detection deliberately does NOT rely on a plain
+    ``pytest.importorskip("tensorflow")`` in this (parent) process: that's
+    an imperfect proxy for whether cnn_lstm_worker.py's own more specific
+    ``from tensorflow.keras... import ...`` chain succeeds in a FRESH,
+    separately-launched subprocess -- observed in CI to disagree (bare
+    ``import tensorflow`` succeeded here while the worker's own import
+    still failed, plausibly a partial/minimal TF install without the keras
+    submodules cnn_lstm_worker.py needs). Instead, each test calls the real
+    pool and skips on the worker's own authoritative
+    "tensorflow is not importable" RuntimeError, whatever the underlying
+    reason -- the direct, ground-truth signal, not a prediction of it."""
+
+    def test_fit_predict_cnn_lstm_completes_through_the_real_pool(self):
+        rng = np.random.RandomState(0)
+        n_samples, lookback, n_features, n_horizons = 40, 10, 3, 4
+        X_seq = rng.rand(n_samples, lookback, n_features)
+        Y_seq = rng.rand(n_samples, n_horizons)
+        last_window = rng.rand(1, lookback, n_features)
+
+        try:
+            result = pool_mod.run_in_subprocess(
+                fit_predict_cnn_lstm,
+                (X_seq, Y_seq, last_window, n_horizons),
+                timeout_seconds=60,
+                max_workers=1,
+            )
+        except RuntimeError as exc:
+            if "tensorflow is not importable" in str(exc):
+                pytest.skip(f"TensorFlow unusable in the worker subprocess: {exc}")
+            raise
+
+        assert len(result["pred_scaled"]) == n_horizons
+        assert all(np.isfinite(x) for x in result["pred_scaled"])
+        assert result["saved"] is False
+
+    def test_fit_predict_or_infer_lstm_completes_through_the_real_pool(self):
+        """Backbone for ml.models.sf_garch_lstm.SFGarchLSTMModel -- also
+        covered end-to-end by tests/test_phase5_models.py::
+        test_sf_garch_lstm_smoke, but that test wasn't written as pool-
+        mechanism regression coverage; this one is, and isolates the pool
+        call from SFGarchLSTMModel's own GARCH-fitting logic."""
+        rng = np.random.RandomState(0)
+        n_samples, seq_len, n_features = 40, 10, 2
+        X_seq = rng.rand(n_samples, seq_len, n_features)
+        Y_seq = rng.rand(n_samples)
+        predict_X_seq = rng.rand(5, seq_len, n_features)
+
+        try:
+            result = pool_mod.run_in_subprocess(
+                fit_predict_or_infer_lstm,
+                (X_seq, Y_seq, predict_X_seq, 8, None),
+                timeout_seconds=60,
+                max_workers=1,
+            )
+        except RuntimeError as exc:
+            if "tensorflow is not importable" in str(exc):
+                pytest.skip(f"TensorFlow unusable in the worker subprocess: {exc}")
+            raise
+
+        assert len(result["predictions"]) == 5
+        assert all(np.isfinite(x) for x in result["predictions"])
+        assert len(result["weights"]) > 0
