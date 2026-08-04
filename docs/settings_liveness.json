@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 246,
+    "live_safe": 248,
     "no_op": 2,
     "restart_required": 78,
-    "total": 326
+    "total": 328
   },
   "dynamic_sites": [
     {
@@ -340,6 +340,8 @@
     "ROBINHOOD_EXECUTION_MODE",
     "ROBINHOOD_LIMIT_BUFFER_BPS",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
+    "RUNTIME_FLAGS_REFRESH_ENABLED",
+    "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS",
     "SECTOR_HEAT_ENABLED",
     "SECTOR_HEAT_LOOKBACK_DAYS",
     "SECTOR_HEAT_SMOOTHING_SIGMA",
@@ -394,13 +396,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 662,
+    "attr": 665,
     "factory_param": 4,
     "getattr_const": 244,
     "os_environ": 16
   },
   "read_forms_distinct_fields": {
-    "attr": 200,
+    "attr": 202,
     "factory_param": 4,
     "getattr_const": 149,
     "os_environ": 13
@@ -1722,7 +1724,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "desktop/orchestrator_daemon.py:529",
+        "site": "desktop/orchestrator_daemon.py:607",
         "via": []
       }
     ],

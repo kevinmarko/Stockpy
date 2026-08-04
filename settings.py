@@ -1762,6 +1762,43 @@ class Settings(BaseSettings):
             "behavior everywhere."
         ),
     )
+    # Cross-process settings hot-reload: whether the persistent orchestrator
+    # daemon (desktop/orchestrator_daemon.py) periodically re-checks
+    # output/runtime_flags.json for changes written by ANOTHER process (e.g.
+    # a Pilots-PWA settings PUT served by a separate `api/pilots_api.py`
+    # process) and applies them onto its own long-lived `settings` singleton.
+    # A store write served by the daemon's OWN process (PILOTS_API_ENABLED=True,
+    # hosting pilots_api inside the daemon) already applies immediately via
+    # the settings-store write path's own in-process apply -- this
+    # flag only matters for a store write from a DIFFERENT process. False
+    # (the default) preserves today's exact behavior: a daemon never
+    # re-reads the store after startup, so a cross-process write only takes
+    # effect on that daemon's next restart, exactly as before this setting
+    # existed.
+    RUNTIME_FLAGS_REFRESH_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Periodically re-check output/runtime_flags.json for changes "
+            "written by another process and apply them onto this daemon's "
+            "live settings. False (default) preserves today's exact "
+            "behavior -- a cross-process write only takes effect on next "
+            "restart."
+        ),
+    )
+    # Poll cadence for the refresher above. Irrelevant when the flag is off.
+    # Deliberately independent of ORCHESTRATOR_INTERVAL_SECONDS (the pipeline
+    # cycle cadence) -- a settings check is a single os.stat() plus, only on
+    # a real change, one validated re-apply, cheap enough to poll far more
+    # often than a full pipeline cycle without meaningful cost.
+    RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS: int = Field(
+        default=30,
+        gt=0,
+        description=(
+            "Seconds between the orchestrator daemon's checks of "
+            "output/runtime_flags.json for cross-process changes. Only "
+            "consulted when RUNTIME_FLAGS_REFRESH_ENABLED is True."
+        ),
+    )
     # Total wall-clock budget (2026-07 fix) for desktop/orchestrator_daemon.py's
     # _teardown() -- ONE explicit, published number every parent supervisor
     # sizes its own kill timeout against, replacing what used to be an
