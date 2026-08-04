@@ -1008,8 +1008,11 @@ describe("Settings screen — Brokerage", () => {
 
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
 
+    // See the timeout comment on the identically-shaped assertions above --
+    // same async job-status chain, same rare CI-only flake under full-suite
+    // CPU contention.
     expect(
-      await screen.findByText(/no approval came through in time\. nothing was saved\./i)
+      await screen.findByText(/no approval came through in time\. nothing was saved\./i, {}, { timeout: 5000 })
     ).toBeInTheDocument();
     expect(screen.queryByText(/denied/i)).not.toBeInTheDocument();
   });
@@ -1029,7 +1032,7 @@ describe("Settings screen — Brokerage", () => {
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
 
     expect(
-      await screen.findByText("Could not refresh the Robinhood account snapshot.")
+      await screen.findByText("Could not refresh the Robinhood account snapshot.", {}, { timeout: 5000 })
     ).toBeInTheDocument();
   });
 });
