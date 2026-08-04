@@ -97,5 +97,13 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["./src/test-setup.ts"],
+    // Vitest's own default (5000ms) was the same ceiling as the explicit
+    // `findByText(..., {timeout: 5000})` bumps already applied to a few
+    // async-job-status Settings.test.tsx assertions -- so under real CI
+    // load the whole test was killed by THIS timeout at the same moment,
+    // making those inner bumps a no-op. Raised well above any single
+    // findBy* timeout in the suite so the outer boundary is never the
+    // thing that fires first.
+    testTimeout: 15000,
   },
 });

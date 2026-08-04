@@ -905,9 +905,13 @@ describe("Settings screen — Brokerage", () => {
     // findBy* timeout has been observed to occasionally undershoot on CI's
     // Linux runners (never reproduced locally on macOS across many repeat
     // runs) -- a generous explicit timeout costs nothing on the happy path
-    // and removes the flake without changing what's being asserted.
+    // and removes the flake without changing what's being asserted. Raised
+    // from 5000ms to 12000ms (still under vite.config.ts's testTimeout)
+    // after the 5000ms bump alone kept failing -- it was capped by
+    // Vitest's own default 5000ms per-test timeout the whole time, so the
+    // outer boundary killed the test before this inner one ever mattered.
     expect(
-      await screen.findByText(/refreshed — robinhood account snapshot updated/i, {}, { timeout: 5000 })
+      await screen.findByText(/refreshed — robinhood account snapshot updated/i, {}, { timeout: 12000 })
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
@@ -944,7 +948,7 @@ describe("Settings screen — Brokerage", () => {
     // See the timeout comment on the "Force fresh login" success-notice
     // assertion above -- same async job-status chain, same CI-only flake.
     expect(
-      await screen.findByText(/no robinhood credentials were available to try/i, {}, { timeout: 5000 })
+      await screen.findByText(/no robinhood credentials were available to try/i, {}, { timeout: 12000 })
     ).toBeInTheDocument();
 
     await user.type(screen.getByLabelText(/robinhood email/i), "user@example.com");
@@ -982,7 +986,7 @@ describe("Settings screen — Brokerage", () => {
     // See the timeout comment on the identically-shaped assertion in
     // "Disconnect clears a stale 'Force fresh login' success notice" above.
     expect(
-      await screen.findByText(/refreshed — robinhood account snapshot updated/i, {}, { timeout: 5000 })
+      await screen.findByText(/refreshed — robinhood account snapshot updated/i, {}, { timeout: 12000 })
     ).toBeInTheDocument();
   });
 
