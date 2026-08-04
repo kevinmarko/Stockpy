@@ -200,8 +200,17 @@ export function Models() {
     obsData?.regime?.macro_kill_switch === true;
 
   // ---- Retrain Now: dispatch by role, track the returned job_id, and
-  // reflect its live status via the /ws/training/status broadcast rather
-  // than a boolean that flips back the instant the POST resolves. ----
+  // detect completion two ways. `/ws/training/status` gives an instant
+  // "finished" push IF something else in this session happens to have the
+  // job's SSE log stream open (Console.tsx does, via GET /jobs/{id}/stream
+  // -- the broadcast is emitted from inside that generator, server-side).
+  // Retrain Now itself never opens that stream, so in the common case where
+  // it doesn't, the WS effect below never fires -- POLL_INTERVAL_MS below
+  // is the actual, reliable completion signal, matching the same
+  // GET /jobs/{id} polling pattern already used by Console.tsx/
+  // Commands.tsx/ReportLibrary.tsx. Both paths funnel through the same
+  // "drop this model's tracked job_id + reload()" step, so whichever fires
+  // first wins and the other is a no-op.
   const trainingStatuses = useTrainingStatus();
   const [trainingJobs, setTrainingJobs] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
@@ -215,24 +224,63 @@ export function Models() {
     };
   }, []);
 
-  // Free a model's tracked job the instant the WS reports it finished
-  // (rather than waiting out the 10-minute fallback timeout below), and
-  // refresh the registry so the card picks up its new trained_date/metrics.
-  useEffect(() => {
+  function clearTrainingJob(name: string, jobId: string) {
     setTrainingJobs((prev) => {
-      let changed = false;
+      if (prev[name] !== jobId) return prev;
       const next = { ...prev };
-      for (const [name, jobId] of Object.entries(prev)) {
-        if (trainingStatuses[jobId]?.status === "finished") {
-          delete next[name];
-          changed = true;
-        }
-      }
-      if (changed) reload();
-      return changed ? next : prev;
+      delete next[name];
+      return next;
     });
+    if (timeoutsRef.current[name]) {
+      clearTimeout(timeoutsRef.current[name]);
+      delete timeoutsRef.current[name];
+    }
+  }
+
+  // Free a model's tracked job the instant the WS reports it finished
+  // (rather than waiting out the poll below), and refresh the registry so
+  // the card picks up its new trained_date/metrics.
+  useEffect(() => {
+    let changed = false;
+    for (const [name, jobId] of Object.entries(trainingJobs)) {
+      if (trainingStatuses[jobId]?.status === "finished") {
+        clearTrainingJob(name, jobId);
+        changed = true;
+      }
+    }
+    if (changed) reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trainingStatuses]);
+
+  const POLL_INTERVAL_MS = 3000;
+
+  // The authoritative completion signal (see the comment above) -- polls
+  // every in-flight training job's own GET /jobs/{id} status directly
+  // rather than depending on a WS broadcast that real usage never triggers.
+  useEffect(() => {
+    const jobIds = Object.entries(trainingJobs);
+    if (jobIds.length === 0) return;
+    const interval = setInterval(() => {
+      void (async () => {
+        let changed = false;
+        for (const [name, jobId] of jobIds) {
+          try {
+            const rec = await api.getJobStatus(jobId);
+            if (rec.status !== "running") {
+              clearTrainingJob(name, jobId);
+              changed = true;
+            }
+          } catch {
+            // Transient poll failure -- try again next tick, matching
+            // Console.tsx's convention.
+          }
+        }
+        if (changed) reload();
+      })();
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trainingJobs]);
 
   async function handleRetrain(m: ModelRow) {
     setRetrainErrors((prev) => ({ ...prev, [m.name]: undefined }));
@@ -244,16 +292,12 @@ export function Models() {
           : await api.createJob("train_meta", { signal: metaLabelerSignal(m.name) });
       setTrainingJobs((prev) => ({ ...prev, [m.name]: job.job_id }));
       if (timeoutsRef.current[m.name]) clearTimeout(timeoutsRef.current[m.name]);
-      // Safety net: if the WS never delivers a "finished" frame for this
-      // job (dropped connection, server restart mid-job, ...), the button
-      // must not stay disabled forever.
+      // Last-resort safety net on top of the WS push and the GET /jobs/{id}
+      // poll above: if BOTH somehow never observe a terminal status (every
+      // poll request itself failing, a dropped connection, a server
+      // restart mid-job, ...), the button must not stay disabled forever.
       timeoutsRef.current[m.name] = setTimeout(() => {
-        setTrainingJobs((prev) => {
-          if (prev[m.name] !== job.job_id) return prev;
-          const next = { ...prev };
-          delete next[m.name];
-          return next;
-        });
+        clearTrainingJob(m.name, job.job_id);
       }, 10 * 60 * 1000);
     } catch (e) {
       const msg =

@@ -2,7 +2,7 @@
  * Models.test.tsx — the ML registry sub-page renders model cards with honest
  * deployable badges and renders "—" (never a fabricated 0) for null metrics.
  */
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Models } from "./Models";
@@ -20,7 +20,10 @@ function renderModels() {
 
 describe("Models screen (real mock API)", () => {
   beforeEach(() => __resetThresholdsCache());
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   it("renders model rows with an honest not-deployable badge", async () => {
     renderModels();
@@ -223,6 +226,67 @@ describe("Models screen (real mock API)", () => {
     expect(
       await within(card).findByText("Another training job is already running.")
     ).toBeInTheDocument();
+  });
+
+  it("Retrain Now clears back to enabled once GET /jobs/{id} reports terminal, even when the WS 'finished' event never fires (the real Retrain-Now-flow path -- it never opens the SSE log stream that broadcast depends on)", async () => {
+    vi.spyOn(api, "createJob").mockResolvedValueOnce({
+      job_id: "mock-job-lgbm",
+      job_type: "train_lgbm",
+      status: "running",
+      cancellable: true,
+    } as JobRecord);
+    const getJobStatusSpy = vi
+      .spyOn(api, "getJobStatus")
+      .mockResolvedValue({
+        job_id: "mock-job-lgbm",
+        job_type: "train_lgbm",
+        status: "success",
+        exit_code: 0,
+        cancellable: true,
+      } as JobRecord);
+    renderModels();
+    const card = (await screen.findByText("lgbm_ranker")).closest("section")!;
+
+    // The reload() the poll below triggers on completion re-invokes
+    // api.getModels() -- swap it (AFTER the real initial render above) for a
+    // same-data mock that resolves on a plain microtask instead of the real
+    // mock API's own ~260ms delay(), so the fake-timer advance below only
+    // has to account for POLL_INTERVAL_MS itself, not a second, independently
+    // -timed hop.
+    const modelsFixture = await api.getModels();
+    vi.spyOn(api, "getModels").mockResolvedValue(modelsFixture);
+
+    // Fake timers from HERE, before the click -- the poll interval this test
+    // exercises is created (via setInterval) the instant the click flips the
+    // model into trainingJobs, and vi.useFakeTimers() only intercepts
+    // setInterval calls made AFTER it's installed. Everything from this
+    // point on uses synchronous getBy/queryBy, matching
+    // AgenticTrading.test.tsx's identical convention for the same reason.
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(within(card).getByText("Retrain Now"));
+    });
+
+    expect(within(card).getByText("Training…")).toBeInTheDocument();
+
+    // Advance past one POLL_INTERVAL_MS tick -- useTrainingStatus' WS never
+    // connects in jsdom (no real server), so trainingStatuses stays {}
+    // throughout and the WS-based clear effect never fires. If the poll were
+    // absent (the actual bug), the button would still read "Training…" here.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(getJobStatusSpy).toHaveBeenCalledWith("mock-job-lgbm");
+    // Re-query fresh from the document rather than reusing `card` -- reload()
+    // flips `loading` true then false, which unmounts and remounts the
+    // ENTIRE model list (Models.tsx gates it behind `!loading && ...`), so
+    // the original `card` reference is a genuinely detached node by now,
+    // exactly the stale-DOM-reference class of race documented at length in
+    // Settings.test.tsx's Brokerage describe block.
+    const newCard = screen.getByText("lgbm_ranker").closest("section")!;
+    expect(within(newCard).getByText("Retrain Now")).toBeInTheDocument();
+    expect(within(newCard).queryByText("Training…")).not.toBeInTheDocument();
   });
 
   it("does not render a Retrain Now button for a model with no backend job (forecast_overlay role)", async () => {
