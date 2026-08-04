@@ -499,6 +499,7 @@ def _empty_regime(reason: str) -> Dict[str, Any]:
         "hmm_risk_on_probability": None,
         "kill_switch_active": None,
         "macro_regime_gate_enabled": None,
+        "macro_kill_switch": None,
         "reason": reason,
     }
 
@@ -509,8 +510,11 @@ def regime_overlay(snapshot: Optional[dict]) -> Dict[str, Any]:
     Fields mirror exactly what ``reporting/state_snapshot.py::write_state_snapshot``
     writes: ``market_regime``, ``vix``, ``sahm_rule``, ``high_yield_oas``,
     ``yield_curve``, ``hmm_risk_on_probability``, ``kill_switch_active``,
-    ``macro_regime_gate_enabled``. ``None``/``null`` for any field the writer
-    omitted (e.g. no macro DTO that cycle) — never fabricated (CONSTRAINT #4).
+    ``macro_regime_gate_enabled``, ``macro_kill_switch``. ``None``/``null`` for
+    any field the writer omitted (e.g. no macro DTO that cycle) — never
+    fabricated (CONSTRAINT #4). ``macro_kill_switch`` is a pure passthrough of
+    the snapshot's own already-computed ``MacroEconomicDTO.killSwitch`` verdict
+    -- never re-derived from raw thresholds here.
     Returns the honest empty shape + ``reason`` when no snapshot exists yet.
     Never raises (CONSTRAINT #6)."""
     if not snapshot:
@@ -526,6 +530,7 @@ def regime_overlay(snapshot: Optional[dict]) -> Dict[str, Any]:
             "hmm_risk_on_probability": _finite_or_none(snapshot.get("hmm_risk_on_probability")),
             "kill_switch_active": snapshot.get("kill_switch_active"),
             "macro_regime_gate_enabled": snapshot.get("macro_regime_gate_enabled"),
+            "macro_kill_switch": snapshot.get("macro_kill_switch"),
             "reason": None,
         }
     except Exception as exc:  # noqa: BLE001 — dead-letter: malformed snapshot

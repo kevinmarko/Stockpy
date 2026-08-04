@@ -632,7 +632,12 @@ def _safe_bool_or_none(value: Any) -> Optional[bool]:
     return text.lower() == "yes"
 
 
-def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: list) -> None:
+def _write_state_snapshot(
+    macro_raw: dict,
+    final_df: "pd.DataFrame",
+    tickers: list,
+    macro_kill_switch: Optional[bool] = None,
+) -> None:
     """Persist a JSON state snapshot to OUTPUT_DIR/state_snapshot.json.
 
     Also writes a timestamped rotated copy under OUTPUT_DIR/history/ via
@@ -640,6 +645,13 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
     can render a "Δ Since Last Run" band. Errors in the live-snapshot
     write OR the rotation are swallowed so a snapshot failure never
     crashes the pipeline.
+
+    ``macro_kill_switch`` is the live ``MacroEconomicDTO.killSwitch`` verdict
+    (already computed by the caller -- including its HMM-agreement lowered-
+    threshold branch), threaded through verbatim rather than re-derived from
+    ``macro_raw``'s raw fields (which don't carry the HMM-agreement branch's
+    inputs and would silently under-report the kill switch). ``None`` (never
+    a fabricated ``False``) when the caller had no live DTO in scope.
     """
     import json
     try:
@@ -814,6 +826,11 @@ def _write_state_snapshot(macro_raw: dict, final_df: "pd.DataFrame", tickers: li
             # display live recession-indicator telemetry without a live FRED call.
             "sahm_rule": float(macro_raw.get("SAHMREALTIME", 0.0) or 0.0),
             "high_yield_oas": float(macro_raw.get("BAMLH0A0HYM2", 0.0) or 0.0),
+            # Live MacroEconomicDTO.killSwitch verdict, passed in by the caller
+            # -- never reconstructed from macro_raw here (see this function's
+            # docstring). None (never a fabricated False) when the caller had
+            # no live DTO in scope.
+            "macro_kill_switch": macro_kill_switch,
             "kill_switch_active": (settings.OUTPUT_DIR / "KILL_SWITCH").exists(),
             # Persist the current gate state so the dashboard reflects the
             # operator's choice without re-importing settings at read time.

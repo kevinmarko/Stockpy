@@ -91,14 +91,14 @@ def tmp_registry(tmp_path, monkeypatch):
 # resolves deployable=False — matching the pre-existing "unvalidated" assertion
 # while still exercising the real metric-wiring path (values flow through into
 # the registry row instead of being hardcoded null).
-_STUB_CPCV = {"dsr": 0.30, "pbo": 0.70, "mean_oos_sharpe": 0.42}
+_STUB_CPCV = {"dsr": 0.30, "pbo": 0.70, "mean_oos_sharpe": 0.42, "mean_oos_max_dd": -0.15}
 
 # A deployable stub (DSR > 0.95 AND PBO < 0.5) for tests that need
 # bootstrap_meta_registry() to actually register the model -- since it now
 # refuses to register anything that fails the gate (see ml/meta_bootstrap.py),
 # testing the "wiring works" path needs a genuinely-deployable registry row,
 # not the (deliberately failing) default stub above.
-_DEPLOYABLE_STUB_CPCV = {"dsr": 0.99, "pbo": 0.10, "mean_oos_sharpe": 1.2}
+_DEPLOYABLE_STUB_CPCV = {"dsr": 0.99, "pbo": 0.10, "mean_oos_sharpe": 1.2, "mean_oos_max_dd": -0.05}
 
 
 @pytest.fixture
@@ -154,6 +154,12 @@ def test_train_signal_persists_and_updates_registry(signal_id, tmp_models_dir, t
     assert isinstance(row["n_train"], int) and row["n_train"] >= 30
     assert row["cpcv_dsr"] == fast_cpcv["dsr"], "CPCV DSR must be wired into the row"
     assert row["pbo"] == fast_cpcv["pbo"], "CPCV PBO must be wired into the row"
+    assert row["cpcv_mean_oos_sharpe"] == fast_cpcv["mean_oos_sharpe"], (
+        "CPCV mean OOS Sharpe must be wired into the row"
+    )
+    assert row["cpcv_mean_oos_max_dd"] == fast_cpcv["mean_oos_max_dd"], (
+        "CPCV mean OOS max drawdown must be wired into the row"
+    )
     assert row["deployable"] is compute_deployable(fast_cpcv["dsr"], fast_cpcv["pbo"])
     assert row["deployable"] is False, "dsr 0.30 fails the >0.95 gate → not deployable"
 
@@ -406,6 +412,12 @@ def test_real_cpcv_populates_metrics_and_gate(tmp_models_dir, tmp_registry):
     assert isinstance(row["cpcv_dsr"], float)
     assert isinstance(row["pbo"], float)
     assert 0.0 <= row["pbo"] <= 1.0, "PBO is a probability in [0, 1]"
+    # The real CPCV mean OOS Sharpe / max drawdown also reach the row now
+    # (previously silently discarded before reaching update_model_metrics).
+    assert row["cpcv_mean_oos_sharpe"] is not None
+    assert row["cpcv_mean_oos_max_dd"] is not None
+    assert isinstance(row["cpcv_mean_oos_sharpe"], float)
+    assert isinstance(row["cpcv_mean_oos_max_dd"], float)
 
     # deployable is the HONEST gate applied to the real metrics — never spoofed.
     assert row["deployable"] is compute_deployable(row["cpcv_dsr"], row["pbo"])

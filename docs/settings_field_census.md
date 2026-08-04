@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `31b53b2d9581c43b9ad6470aa7b6d984d6679e85`
+- Measured at commit: `c29dd79672d3bd456d1db6d65308bb4cf7661e33`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -231,7 +231,7 @@ _S.settings, _bl_settings, _live_settings, _oos_gate_settings, _rh_settings, _s,
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 627 | 199 |
+| (a) `settings.KEY` | 631 | 199 |
 | (b) `getattr(settings, "KEY", default)` | 244 | 149 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 16 | 13 |
@@ -247,7 +247,7 @@ referenced by name somewhere and is probably read dynamically.
 
 | Field | Name-literal sites | Verdict |
 |---|---|---|
-| `AI_GENERATION_API_ENABLED` | `api/data_api.py:173`, `settings_keysets.py:250` | likely read dynamically |
+| `AI_GENERATION_API_ENABLED` | `api/data_api.py:177`, `settings_keysets.py:250` | likely read dynamically |
 | `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4375` | likely read dynamically |
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4374` | likely read dynamically |
 | `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4499`, `gui/panels/settings_manager.py:122` | likely read dynamically |
@@ -255,7 +255,7 @@ referenced by name somewhere and is probably read dynamically.
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10999` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
-| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1051` | likely read dynamically |
+| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1055` | likely read dynamically |
 
 ### Fields reachable ONLY via form (b) or (d), never via (a) — **120**
 
@@ -393,7 +393,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `Gravity AI Review Suite.py:2714` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:140` | `getattr(settings, token_setting_name, None)` |
-| `api/data_api.py:160` | `getattr(settings, flag_name, False)` |
+| `api/data_api.py:164` | `getattr(settings, flag_name, False)` |
 | `api/pilots_api.py:2938` | `getattr(settings, body.key)` |
 | `api/pilots_api.py:3897` | `getattr(settings, key, None)` |
 | `api/pilots_api.py:4002` | `getattr(settings, key, None)` |

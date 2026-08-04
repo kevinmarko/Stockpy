@@ -15,6 +15,11 @@ Coverage:
     polite idle hint when the file does not yet exist.
 *   :func:`launch_advisory_main` and :func:`launch_orchestrator` route to
     distinct log paths and tag the handle with the correct mode.
+*   :func:`launch_train_lgbm` and :func:`launch_train_meta_labelers` (the
+    Models tab "Retrain Now" launchers) route to their own log paths, tag the
+    handle with the correct mode, build the expected argv (including the
+    optional ``--signal`` flag), and construct ``RunHandle`` with keyword
+    arguments only.
 
 All subprocess calls are monkeypatched so no real ``main.py`` /
 ``main_orchestrator.py`` child process is spawned (CONSTRAINT #6).
@@ -41,6 +46,8 @@ def runner(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "PYTEST_LOG_PATH", tmp_path / "gui_pytest.log")
     monkeypatch.setattr(runner, "VERIFY_LOG_PATH", tmp_path / "gui_verify.log")
     monkeypatch.setattr(runner, "TELEMETRY_LOG_PATH", tmp_path / "investyo.log")
+    monkeypatch.setattr(runner, "TRAIN_LGBM_LOG_PATH", tmp_path / "gui_train_lgbm.log")
+    monkeypatch.setattr(runner, "TRAIN_META_LOG_PATH", tmp_path / "gui_train_meta.log")
     monkeypatch.setattr(runner.settings, "OUTPUT_DIR", tmp_path)
     return runner
 
@@ -242,6 +249,79 @@ def test_launch_verify_routes_to_verify_log(monkeypatch, runner):
     assert captured["cmd"] == ["make", "verify"]
     # Log file must exist (truncated header line written).
     assert runner.VERIFY_LOG_PATH.exists()
+
+
+# ---------------------------------------------------------------------------
+# launch_train_lgbm / launch_train_meta_labelers — Models tab "Retrain Now"
+# ---------------------------------------------------------------------------
+
+def test_launch_train_lgbm_returns_well_formed_handle(monkeypatch, runner):
+    captured: dict = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["stdout"] = kwargs.get("stdout")
+        return _FakePopen(cmd, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    handle = runner.launch_train_lgbm()
+
+    # Pins RunHandle being constructed with keyword args only (a positional
+    # mistake would silently scramble which field gets which value, since
+    # RunHandle's field order does not match this call's argument order).
+    assert handle.log_path == runner.TRAIN_LGBM_LOG_PATH
+    assert handle.mode == "train_lgbm"
+    assert isinstance(handle.pid, int)
+    assert isinstance(handle.started_at, float)
+    assert handle.dry_run is False
+    assert handle.refresh_account is False
+    assert isinstance(handle._popen, _FakePopen)
+
+    # Command must invoke scripts.train_lgbm via the current interpreter with
+    # no extra CLI args.
+    assert captured["cmd"] == [sys.executable, "-m", "scripts.train_lgbm"]
+    assert runner.TRAIN_LGBM_LOG_PATH.exists()
+
+
+def test_launch_train_meta_labelers_with_signal_builds_flag(monkeypatch, runner):
+    captured: dict = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakePopen(cmd, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    handle = runner.launch_train_meta_labelers(signal="timeseries_momentum")
+
+    assert handle.log_path == runner.TRAIN_META_LOG_PATH
+    assert handle.mode == "train_meta"
+    assert isinstance(handle.pid, int)
+    assert isinstance(handle.started_at, float)
+    assert handle.dry_run is False
+    assert handle.refresh_account is False
+    assert isinstance(handle._popen, _FakePopen)
+
+    cmd = captured["cmd"]
+    assert cmd[:3] == [sys.executable, "-m", "scripts.train_meta_labelers"]
+    assert "--signal" in cmd
+    assert cmd[cmd.index("--signal") + 1] == "timeseries_momentum"
+    assert runner.TRAIN_META_LOG_PATH.exists()
+
+
+def test_launch_train_meta_labelers_without_signal_omits_flag(monkeypatch, runner):
+    captured: dict = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakePopen(cmd, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    handle = runner.launch_train_meta_labelers()
+
+    assert handle.mode == "train_meta"
+    cmd = captured["cmd"]
+    assert cmd == [sys.executable, "-m", "scripts.train_meta_labelers"]
+    assert "--signal" not in cmd
 
 
 def test_compute_stage_status_handles_advisory_log(monkeypatch, runner):

@@ -109,6 +109,18 @@ PYTEST_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_pytest.log"
 # a concurrent orchestrator/advisory/pytest refresh log.
 VALIDATION_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_validation.log"
 
+# Log written by ``launch_train_lgbm`` — the Pilots PWA Models tab's
+# "Retrain Now" button for the LGBM cross-sectional ranker (spawns
+# ``python -m scripts.train_lgbm``). Distinct file so a retrain run's tail
+# never collides with a concurrent orchestrator/advisory/validation log.
+TRAIN_LGBM_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_train_lgbm.log"
+
+# Log written by ``launch_train_meta_labelers`` — the Pilots PWA Models tab's
+# "Retrain Now" button for a primary-signal meta-labeler (spawns
+# ``python -m scripts.train_meta_labelers``, optionally scoped to one
+# ``--signal``). Distinct file, same rationale as TRAIN_LGBM_LOG_PATH above.
+TRAIN_META_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_train_meta.log"
+
 # Log written by ``launch_verify`` — the Maintenance tab's "Run make verify"
 # button (env-var check → pytest → one live run_once + summary).  Distinct file
 # so the operator can tail the full readiness gate independently of a refresh.
@@ -789,6 +801,128 @@ def launch_validation_run(strategies: List[str], start: str, end: str) -> RunHan
         refresh_account=False,
         log_path=VALIDATION_LOG_PATH,
         mode="validation",
+        _popen=popen,
+    )
+
+
+def launch_train_lgbm() -> RunHandle:
+    """Spawn `scripts.train_lgbm` as a non-blocking subprocess.
+
+    This backs the Pilots PWA Models tab's "Retrain Now" button for the LGBM
+    cross-sectional ranker.  Training is long-running, so — like every other
+    launcher in this module — it is spawned via a detached
+    :class:`subprocess.Popen` rather than run inline, keeping callers
+    responsive while the operator tails the streamed log.
+
+    The child runs ``[sys.executable, "-m", "scripts.train_lgbm"]`` from the
+    repo root, inheriting the current environment (so ``.env`` is available).
+    stdout+stderr are redirected to :data:`TRAIN_LGBM_LOG_PATH`, truncated at
+    launch so the UI tails only the current run.  Using ``sys.executable``
+    guarantees the ``.venv`` interpreter is used rather than a stray system
+    Python.
+
+    Returns
+    -------
+    RunHandle
+        Handle (``mode="train_lgbm"``, ``log_path=TRAIN_LGBM_LOG_PATH``) for
+        polling status, tailing the log via :func:`read_log_tail`, and
+        stopping via :func:`stop_run`.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "-m", "scripts.train_lgbm"]
+
+    log_file = open(TRAIN_LGBM_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo train_lgbm launch @ {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched train_lgbm pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=False,
+        log_path=TRAIN_LGBM_LOG_PATH,
+        mode="train_lgbm",
+        _popen=popen,
+    )
+
+
+def launch_train_meta_labelers(signal: Optional[str] = None) -> RunHandle:
+    """Spawn `scripts.train_meta_labelers` as a non-blocking subprocess.
+
+    This backs the Pilots PWA Models tab's "Retrain Now" button for a
+    primary-signal meta-labeler.  Mirrors :func:`launch_train_lgbm`'s shape;
+    like every other launcher in this module it is spawned via a detached
+    :class:`subprocess.Popen` rather than run inline.
+
+    The child runs ``[sys.executable, "-m", "scripts.train_meta_labelers"]``
+    from the repo root, inheriting the current environment.  When ``signal``
+    is truthy, ``["--signal", signal]`` is appended so only that one
+    meta-labeled signal is retrained; when ``signal`` is ``None``/falsy the
+    flag is omitted entirely, and ``scripts/train_meta_labelers.py``'s own
+    ``--signal`` argparse default (``None`` → train every meta-labeled
+    signal) applies.  stdout+stderr are redirected to
+    :data:`TRAIN_META_LOG_PATH`, truncated at launch so the UI tails only the
+    current run.
+
+    Parameters
+    ----------
+    signal:
+        Optional ``signal_id`` to train in isolation (one of
+        ``ml.meta_bootstrap.META_LABELED_SIGNAL_IDS``). ``None`` (the
+        default) trains every meta-labeled signal.
+
+    Returns
+    -------
+    RunHandle
+        Handle (``mode="train_meta"``, ``log_path=TRAIN_META_LOG_PATH``) for
+        polling status, tailing the log via :func:`read_log_tail`, and
+        stopping via :func:`stop_run`.
+    """
+    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd: List[str] = [sys.executable, "-m", "scripts.train_meta_labelers"]
+    if signal:
+        cmd.extend(["--signal", signal])
+
+    log_file = open(TRAIN_META_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
+    log_file.write(
+        f"# InvestYo train_meta_labelers launch @ {time.strftime('%Y-%m-%d %H:%M:%S')} "
+        f"(signal={signal})\n"
+    )
+    log_file.flush()
+
+    popen = subprocess.Popen(
+        cmd,
+        cwd=str(_REPO_ROOT),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+        bufsize=1,
+        text=True,
+    )
+    logger.info("Launched train_meta_labelers pid=%s cmd=%s", popen.pid, " ".join(cmd))
+
+    return RunHandle(
+        pid=popen.pid,
+        started_at=time.time(),
+        dry_run=False,
+        refresh_account=False,
+        log_path=TRAIN_META_LOG_PATH,
+        mode="train_meta",
         _popen=popen,
     )
 

@@ -30,6 +30,8 @@ from gui.orchestrator_runner import (
     launch_orchestrator,
     launch_preflight,
     launch_pytest,
+    launch_train_lgbm,
+    launch_train_meta_labelers,
     launch_validation_run,
     launch_verify,
     stop_run,
@@ -48,6 +50,8 @@ class JobType(str, enum.Enum):
     ADVISORY = "advisory"
     ORCHESTRATOR = "orchestrator"
     COMMAND = "command"
+    TRAIN_META = "train_meta"
+    TRAIN_LGBM = "train_lgbm"
 
 
 def job_status(handle: RunHandle, *, cancelled: bool) -> str:
@@ -72,6 +76,7 @@ class JobRecord:
     handle: RunHandle
     cancelled: bool = False
     command_name: Optional[str] = None
+    single_flight_key: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -100,9 +105,20 @@ class JobManager:
     def start_job(self, job_type: JobType, params: Optional[Dict[str, Any]] = None) -> JobRecord:
         """Launch a new job of the specified type. Raises ValueError on bad
         params or an unsupported type; the caller maps that to an HTTP 400.
-        Raises RuntimeError when a job of the same type is already running;
-        the caller maps that to an HTTP 409 (single-flight per job type)."""
+        Raises RuntimeError when a job of the same type (or, for the training
+        job types, the same single-flight group) is already running; the
+        caller maps that to an HTTP 409 (single-flight per job type, widened
+        to per-``single_flight_key`` group for TRAIN_LGBM/TRAIN_META so the
+        two training job types can't run concurrently against the same
+        model-registry write path)."""
         params = params or {}
+
+        # TRAIN_LGBM and TRAIN_META both write to the same ML registry, so
+        # they share one single-flight group ("train") rather than each
+        # having its own independent slot -- two different job TYPES must
+        # still conflict with each other. Every other job type keeps its
+        # existing type-scoped single-flight behavior (key=None).
+        single_flight_key = "train" if job_type in (JobType.TRAIN_META, JobType.TRAIN_LGBM) else None
 
         with self._lock:
             job_id = f"job-{uuid.uuid4().hex[:8]}"
@@ -116,9 +132,10 @@ class JobManager:
                         raise RuntimeError(
                             f"Command '{command_name}' is already running (ID: {rec.job_id})"
                         )
-                elif rec.job_type == job_type:
+                elif (rec.single_flight_key or rec.job_type.value) == (single_flight_key or job_type.value):
                     raise RuntimeError(
-                        f"Job of type '{job_type.value}' is already running (ID: {rec.job_id})"
+                        f"Job of type '{job_type.value}' conflicts with already-running "
+                        f"job '{rec.job_type.value}' (ID: {rec.job_id})"
                     )
 
             if job_type == JobType.PREFLIGHT:
@@ -161,10 +178,21 @@ class JobManager:
                 if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
                     raise ValueError("COMMAND job requires params: args (list[str])")
                 handle = launch_manifest_command(job_id, command_name, subcommand_name, args, confirm=confirm)
+            elif job_type == JobType.TRAIN_LGBM:
+                handle = launch_train_lgbm()
+            elif job_type == JobType.TRAIN_META:
+                signal = params.get("signal")
+                handle = launch_train_meta_labelers(signal=signal)
             else:
                 raise ValueError(f"Unsupported job type: {job_type}")
 
-            rec = JobRecord(job_id=job_id, job_type=job_type, handle=handle, command_name=command_name)
+            rec = JobRecord(
+                job_id=job_id,
+                job_type=job_type,
+                handle=handle,
+                command_name=command_name,
+                single_flight_key=single_flight_key,
+            )
             self._jobs[job_id] = rec
             return rec
 
