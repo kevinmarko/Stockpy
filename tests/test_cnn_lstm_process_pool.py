@@ -170,12 +170,17 @@ class TestRealTensorFlowThroughThePool:
     or mocks run_in_subprocess itself (tests/test_cnn_lstm_isolation_dispatch.py)
     -- nothing exercised a REAL TensorFlow op through the REAL persistent
     pool. These tests do exactly that, with a bounded timeout so a
-    regression here fails fast instead of hanging the suite. Needs
-    TensorFlow actually installed (this repo's own .venv/CI does -- see
-    requirements-optional.txt); unlike the rest of this file these are not
-    TensorFlow-free by design."""
+    regression here fails fast instead of hanging the suite. TensorFlow is
+    an optional heavy dependency (requirements-optional.txt) NOT installed
+    by CI or the base ./setup.sh -- unlike the rest of this file these tests
+    are not TensorFlow-free by design, so each one skips via
+    pytest.importorskip when it genuinely isn't available, rather than
+    failing (the worker subprocess uses the same sys.executable as this
+    test process, so that's an accurate proxy for whether it'll have
+    TensorFlow too)."""
 
     def test_fit_predict_cnn_lstm_completes_through_the_real_pool(self):
+        pytest.importorskip("tensorflow")
         rng = np.random.RandomState(0)
         n_samples, lookback, n_features, n_horizons = 40, 10, 3, 4
         X_seq = rng.rand(n_samples, lookback, n_features)
@@ -199,6 +204,7 @@ class TestRealTensorFlowThroughThePool:
         test_sf_garch_lstm_smoke, but that test wasn't written as pool-
         mechanism regression coverage; this one is, and isolates the pool
         call from SFGarchLSTMModel's own GARCH-fitting logic."""
+        pytest.importorskip("tensorflow")
         rng = np.random.RandomState(0)
         n_samples, seq_len, n_features = 40, 10, 2
         X_seq = rng.rand(n_samples, seq_len, n_features)
