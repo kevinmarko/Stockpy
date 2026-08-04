@@ -11,6 +11,7 @@ import { PwaStatusSection } from "../components/PwaStatusSection";
 import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
 import { SectionCard } from "../components/SectionCard";
+import { TabGuide } from "../components/TabGuide";
 
 export function SettingsGeneral() {
   const {
@@ -33,6 +34,8 @@ export function SettingsGeneral() {
           Control global orchestrator behavior, including the kill switch and live trading authorization.
         </p>
       </div>
+
+      <TabGuide tabKey="settings-general" />
 
       <SignalGenerationSection
         active={status.kill_switch.active}

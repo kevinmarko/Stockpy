@@ -65,6 +65,8 @@ from typing import Optional
 
 import uvicorn
 
+import runtime_flags
+
 # ---------------------------------------------------------------------------
 # .env loading convention (mirrors main_orchestrator.py's async main() /
 # app_shell.py's main() — invoked inside run_forever(), NOT at module top, so
@@ -90,6 +92,16 @@ logger = logging.getLogger("InvestYo.orchestrator_daemon")
 # table for how every OUTER supervisor (launch_app.command, launchd
 # ExitTimeOut, systemd TimeoutStopSec) is sized to exceed this total.
 _SHUTDOWN_API_JOIN_SECONDS = 5.0
+
+# Ceiling for the settings-refresher thread's join, drawn from the SAME
+# shared deadline as the API joins above -- see _teardown() for why this
+# stage runs FIRST, ahead of both API servers. Small on purpose: the
+# thread's only blocking call is a threading.Event.wait(timeout=...), so
+# setting the stop event wakes it immediately; this only needs to cover the
+# rare case where a maybe_refresh_settings() tick (one os.stat() plus, at
+# most, one validated re-apply -- no network I/O) is still in flight the
+# instant shutdown begins.
+_SHUTDOWN_REFRESHER_JOIN_SECONDS = 2.0
 
 
 def _write_daemon_file(
@@ -342,6 +354,59 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
         started_at=_daemon_started_at,
     )
 
+    # Optional fourth service: cross-process settings hot-reload
+    # (settings.RUNTIME_FLAGS_REFRESH_ENABLED, default False -- a store
+    # write from THIS process's own in-process Pilots API, if hosted here
+    # via PILOTS_API_ENABLED, already applies immediately via
+    # runtime_flags_writer's own re-apply; this thread exists for a write
+    # served by a DIFFERENT process, e.g. the far more common standalone
+    # pilots_api.py deployment). Started here -- after daemon.start() and
+    # after the discovery file write, same as the API server threads above
+    # -- and, like them, inherits the SIGTERM/SIGINT-blocked mask already
+    # set at the top of this function; it does no signal handling of its
+    # own, but a thread spawned before the mask was set would still be a
+    # thread the kernel could deliver a raw signal to.
+    _refresher_thread: Optional[threading.Thread] = None
+    _refresher_stop_event = threading.Event()
+    if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
+        def _refresh_loop() -> None:
+            # Re-read the interval INSIDE the loop, every iteration, rather
+            # than hoisting it into a local before the `while` -- so a
+            # change to RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS ITSELF (via
+            # this same refresher, on some earlier tick) actually changes
+            # this loop's own cadence starting next tick, rather than being
+            # silently inert until a restart the same way a captured-at-
+            # thread-start value would be. wait() returns True only when the
+            # event was set (shutdown requested) -- False on a plain
+            # timeout, which is the normal "time for another tick" case.
+            # Using the event as the sleep primitive (rather than
+            # time.sleep()) means _teardown() gets an immediate, responsive
+            # stop instead of waiting out up to one full interval.
+            while not _refresher_stop_event.wait(timeout=settings.RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS):
+                try:
+                    daemon.maybe_refresh_settings()  # never raises -- see its own docstring
+                except Exception as exc:  # noqa: BLE001 - belt-and-suspenders
+                    # maybe_refresh_settings() already guarantees it never
+                    # raises (CONSTRAINT #6) -- this catch exists so that
+                    # guarantee changing out from under this loop in the
+                    # future degrades to "one skipped tick, logged," not "the
+                    # refresher thread silently dies for the rest of the
+                    # process's life," matching how the OPTIONAL Pilots API
+                    # startup above is guarded against its own dependency.
+                    logger.warning(
+                        "Settings refresher tick failed unexpectedly (%s); "
+                        "will retry next interval.", exc, exc_info=True,
+                    )
+
+        _refresher_thread = threading.Thread(
+            target=_refresh_loop, daemon=True, name="OrchestratorDaemon-settings-refresher",
+        )
+        _refresher_thread.start()
+        logger.info(
+            "Cross-process settings refresh enabled: checking %s every %ds.",
+            runtime_flags.store_path(), settings.RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS,
+        )
+
     _torn_down = False
 
     def _teardown() -> None:
@@ -373,6 +438,19 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
 
         def _remaining() -> float:
             return max(0.0, deadline - time.monotonic())
+
+        # Torn down FIRST, ahead of both API servers: the refresher only
+        # ever reads output/runtime_flags.json and mutates the live
+        # `settings` singleton in THIS process, so nothing downstream
+        # depends on it staying up during the rest of teardown, and
+        # stopping it early frees the whole remaining budget for the two
+        # stages that actually need it.
+        if _refresher_thread is not None:
+            try:
+                _refresher_stop_event.set()
+                _refresher_thread.join(timeout=min(_SHUTDOWN_REFRESHER_JOIN_SECONDS, _remaining()))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Error shutting down settings refresher: %s", exc)
 
         try:
             api_server.should_exit = True

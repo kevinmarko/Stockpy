@@ -3,8 +3,15 @@ tests/test_brokerage_connect.py
 =================================
 Tests for the brokerage-connect credential-intake surface:
   - data/brokerage_credentials.py (the dedicated, hard-scoped .env writer)
-  - data/robinhood_portfolio.py::verify_credentials (read-only login check)
   - api/pilots_api.py's /brokerage/status, /brokerage/connect, /brokerage/disconnect
+
+Robinhood login is device-approval push (the operator taps "approve" in the
+Robinhood app), not a typed TOTP/SMS code — there is no more synchronous,
+in-request credential-verification function to unit-test here. Verification
+now happens via the async, killable-subprocess login-job flow
+(data/robinhood_login.py, api/_rh_login.py) wired into /brokerage/connect and
+/brokerage/refresh; that flow gets its own test coverage where it's wired up,
+not in this file.
 
 All Robinhood network calls (``r.login`` / ``r.logout``) are monkeypatched —
 nothing in this file touches the real Robinhood API. Credential values used in
@@ -51,7 +58,6 @@ class TestBrokerageCredentialsWriter:
         monkeypatch.setattr(brokerage_credentials, "ENV_PATH", env_path)
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
         # write_rh_credentials also assigns the live settings singleton (the
         # value that actually matters for in-process reads — see that
         # function's docstring) — register both attrs with monkeypatch BEFORE
@@ -66,49 +72,53 @@ class TestBrokerageCredentialsWriter:
         contents = env_path.read_text(encoding="utf-8")
         assert "RH_USERNAME" in contents
         assert "RH_PASSWORD" in contents
-        assert "RH_MFA_SECRET" not in contents
         assert "UNRELATED_KEY=untouched" in contents
         # Mirrored into the live process environment.
         assert os.environ["RH_USERNAME"] == "someone@example.com"
         assert os.environ["RH_PASSWORD"] == "hunter2"
-        assert "RH_MFA_SECRET" not in os.environ
         # Mirrored into the live settings singleton — the one that actually
-        # controls data.robinhood_portfolio._login() (fixed 2026-08).
+        # controls data.robinhood_portfolio._fetch_live_snapshot()'s
+        # in-worker login path (fixed 2026-08).
         assert brokerage_credentials._settings.RH_USERNAME == "someone@example.com"
         assert brokerage_credentials._settings.RH_PASSWORD == "hunter2"
 
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
 
-    def test_write_rh_credentials_never_touches_existing_mfa_secret(self, tmp_path, monkeypatch):
-        """A webapp (re)connect must never clobber an operator-set RH_MFA_SECRET
-        used by the main pipeline's own unattended login — this module doesn't
-        manage that key at all, write or clear."""
+    def test_write_rh_credentials_never_touches_a_third_key(self, tmp_path, monkeypatch):
+        """This module's allowlist is hard-coded to exactly {RH_USERNAME,
+        RH_PASSWORD} and must never grow a third key, whatever that key
+        might be — a webapp (re)connect must never clobber some other
+        operator-set `.env` value it has no business touching. (This test
+        previously exercised this same invariant against a real third
+        settings key tied to the old TOTP login flow; that key was retired
+        entirely when Robinhood login moved to device-approval push. The
+        allowlist logic under test is unchanged, so a plain hypothetical
+        key name is used here instead.)"""
         env_path = tmp_path / ".env"
-        env_path.write_text("RH_MFA_SECRET=OPERATORSECRET\n", encoding="utf-8")
+        env_path.write_text("SOME_OTHER_KEY=untouched-value\n", encoding="utf-8")
         monkeypatch.setattr(brokerage_credentials, "ENV_PATH", env_path)
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
-        monkeypatch.setenv("RH_MFA_SECRET", "OPERATORSECRET")
+        monkeypatch.setenv("SOME_OTHER_KEY", "untouched-value")
         monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
         monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
 
         brokerage_credentials.write_rh_credentials("user@example.com", "pw")
 
-        assert os.environ["RH_MFA_SECRET"] == "OPERATORSECRET"
+        assert os.environ["SOME_OTHER_KEY"] == "untouched-value"
         contents = env_path.read_text(encoding="utf-8")
-        assert "RH_MFA_SECRET=OPERATORSECRET" in contents
+        assert "SOME_OTHER_KEY=untouched-value" in contents
 
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+        monkeypatch.delenv("SOME_OTHER_KEY", raising=False)
 
     def test_write_rh_credentials_never_logs_values(self, tmp_path, monkeypatch, caplog):
         env_path = tmp_path / ".env"
         monkeypatch.setattr(brokerage_credentials, "ENV_PATH", env_path)
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
         monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
         monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
 
@@ -122,11 +132,16 @@ class TestBrokerageCredentialsWriter:
         monkeypatch.delenv("RH_PASSWORD", raising=False)
 
     def test_clear_rh_credentials_removes_username_and_password_only(self, tmp_path, monkeypatch):
+        """clear_rh_credentials() must never touch a third key it doesn't
+        manage — a plain hypothetical key stands in for whatever unrelated
+        `.env` value an operator might have set (see
+        test_write_rh_credentials_never_touches_a_third_key above for why
+        this no longer uses a real retired settings key as the example)."""
         env_path = tmp_path / ".env"
         monkeypatch.setattr(brokerage_credentials, "ENV_PATH", env_path)
         monkeypatch.setenv("RH_USERNAME", "user@example.com")
         monkeypatch.setenv("RH_PASSWORD", "pw")
-        monkeypatch.setenv("RH_MFA_SECRET", "OPERATORSECRET")
+        monkeypatch.setenv("SOME_OTHER_KEY", "untouched-value")
         monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
         monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
         brokerage_credentials.write_rh_credentials("user@example.com", "pw")
@@ -135,19 +150,18 @@ class TestBrokerageCredentialsWriter:
 
         assert "RH_USERNAME" not in os.environ
         assert "RH_PASSWORD" not in os.environ
-        # RH_MFA_SECRET is out of scope for this module — never cleared by it.
-        assert os.environ["RH_MFA_SECRET"] == "OPERATORSECRET"
+        # Out of scope for this module — never cleared by it.
+        assert os.environ["SOME_OTHER_KEY"] == "untouched-value"
         contents = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
         assert "RH_PASSWORD=pw" not in contents
 
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
+        monkeypatch.delenv("SOME_OTHER_KEY", raising=False)
 
     def test_clear_rh_credentials_idempotent_when_nothing_set(self, tmp_path, monkeypatch):
         env_path = tmp_path / ".env"
         monkeypatch.setattr(brokerage_credentials, "ENV_PATH", env_path)
         monkeypatch.delenv("RH_USERNAME", raising=False)
         monkeypatch.delenv("RH_PASSWORD", raising=False)
-        monkeypatch.delenv("RH_MFA_SECRET", raising=False)
         monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", None, raising=False)
         monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", None, raising=False)
         # Should not raise even though nothing exists yet.
@@ -164,162 +178,6 @@ class TestBrokerageCredentialsWriter:
         monkeypatch.setattr(brokerage_credentials._settings, "RH_USERNAME", "user@example.com")
         monkeypatch.setattr(brokerage_credentials._settings, "RH_PASSWORD", "pw")
         assert brokerage_credentials.rh_credentials_present() is True
-
-
-# ---------------------------------------------------------------------------
-# data/robinhood_portfolio.py::verify_credentials
-# ---------------------------------------------------------------------------
-
-
-class TestVerifyCredentials:
-    def test_success_logs_out_and_returns_true(self, monkeypatch):
-        calls = {"login": None, "logout": False}
-
-        def mock_login(username, password, store_session=True, mfa_code=None):
-            calls["login"] = (username, password, mfa_code)
-            return {"access_token": "tok"}
-
-        def mock_logout():
-            calls["logout"] = True
-
-        monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
-        monkeypatch.setattr(robinhood_portfolio.r, "logout", mock_logout)
-
-        result = robinhood_portfolio.verify_credentials(
-            "user@example.com", "pw", "123456"
-        )
-        assert result is True
-        assert calls["login"][0] == "user@example.com"
-        assert calls["login"][1] == "pw"
-        assert calls["login"][2] == "123456"  # the code is passed through unchanged, no derivation
-        assert calls["logout"] is True
-
-    def test_missing_mfa_code_fails_without_interactive_prompt(self, monkeypatch):
-        def boom_login(*args, **kwargs):
-            raise AssertionError("r.login must not be called without an MFA secret")
-
-        monkeypatch.setattr(robinhood_portfolio.r, "login", boom_login)
-
-        result = robinhood_portfolio.verify_credentials("user@example.com", "pw", "")
-        assert result is False
-
-    def test_missing_username_or_password_fails_fast(self):
-        assert robinhood_portfolio.verify_credentials("", "pw", "SECRET") is False
-        assert robinhood_portfolio.verify_credentials("user@example.com", "", "SECRET") is False
-
-    def test_bad_credentials_returns_false_never_raises(self, monkeypatch):
-        def mock_login(username, password, store_session=True, mfa_code=None):
-            return {"detail": "invalid credentials"}  # no access_token
-
-        monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
-
-        result = robinhood_portfolio.verify_credentials(
-            "user@example.com", "wrongpw", "123456"
-        )
-        assert result is False
-
-    def test_network_error_returns_false_never_raises(self, monkeypatch):
-        def mock_login(*args, **kwargs):
-            raise ConnectionError("network down")
-
-        monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
-
-        result = robinhood_portfolio.verify_credentials(
-            "user@example.com", "pw", "123456"
-        )
-        assert result is False
-
-    def test_never_logs_credential_values(self, monkeypatch, caplog):
-        secret_password = "sUp3rS3cr3tPassw0rd!!"
-
-        def mock_login(username, password, store_session=True, mfa_code=None):
-            raise RuntimeError(f"login failed for password={password}")
-
-        monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
-
-        with caplog.at_level(logging.DEBUG):
-            result = robinhood_portfolio.verify_credentials(
-                "user@example.com", secret_password, "123456"
-            )
-        assert result is False
-        # The exception message embeds the password, but verify_credentials
-        # must only log the exception TYPE, never str(exc).
-        assert secret_password not in caplog.text
-
-    def test_logout_failure_does_not_flip_result_to_false(self, monkeypatch):
-        def mock_login(username, password, store_session=True, mfa_code=None):
-            return {"access_token": "tok"}
-
-        def boom_logout():
-            raise RuntimeError("logout network error")
-
-        monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
-        monkeypatch.setattr(robinhood_portfolio.r, "logout", boom_logout)
-
-        result = robinhood_portfolio.verify_credentials(
-            "user@example.com", "pw", "123456"
-        )
-        assert result is True
-
-    def test_login_with_mfa_secret_ignores_interactivity(self, monkeypatch):
-        """With RH_MFA_SECRET set, _login() derives mfa_code via pyotp and
-        takes the direct r.login(..., mfa_code=...) path regardless of
-        whether stdin happens to be a TTY -- the interactive-vs-headless
-        distinction only matters on the missing-secret fallback path."""
-        calls = {}
-
-        def mock_login(username, password, store_session=True, mfa_code=None):
-            calls["mfa_code"] = mfa_code
-            return {"access_token": "tok"}
-
-        monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
-        monkeypatch.setattr(robinhood_portfolio.sys.stdin, "isatty", lambda: False)
-        # _login() reads credentials via the `settings` singleton, not
-        # os.environ (fixed 2026-08) -- see data.robinhood_portfolio's
-        # _require_setting docstring.
-        monkeypatch.setattr(robinhood_portfolio._settings, "RH_USERNAME", "user@example.com")
-        monkeypatch.setattr(robinhood_portfolio._settings, "RH_PASSWORD", "pw")
-        monkeypatch.setattr(robinhood_portfolio._settings, "RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
-
-        robinhood_portfolio._login()
-        assert calls["mfa_code"]  # a real 6-digit TOTP code, not None/empty
-
-    def test_login_falls_back_to_interactive_only_at_a_real_terminal(self, monkeypatch):
-        """Missing RH_MFA_SECRET + a genuine TTY (a human running python3
-        main.py by hand) still falls through to robin_stocks' interactive
-        prompt, exactly as before -- this narrow case is preserved on purpose."""
-        calls = {}
-
-        def mock_login(username, password, store_session=True, mfa_code=None):
-            calls["mfa_code"] = mfa_code
-            return {"access_token": "tok"}
-
-        monkeypatch.setattr(robinhood_portfolio.r, "login", mock_login)
-        monkeypatch.setattr(robinhood_portfolio.sys.stdin, "isatty", lambda: True)
-        monkeypatch.setattr(robinhood_portfolio._settings, "RH_USERNAME", "user@example.com")
-        monkeypatch.setattr(robinhood_portfolio._settings, "RH_PASSWORD", "pw")
-        monkeypatch.setattr(robinhood_portfolio._settings, "RH_MFA_SECRET", None, raising=False)
-
-        robinhood_portfolio._login()  # falls back to interactive path, no raise
-        assert calls["mfa_code"] is None
-
-    def test_login_raises_immediately_when_headless_and_no_mfa_secret(self, monkeypatch):
-        """The actual bug fix: missing RH_MFA_SECRET in a headless context
-        (no TTY -- the Pilots API server, main.py under cron/systemd, any app
-        bundle launched without a terminal) must raise immediately, never
-        fall through to a blocking input() call that hangs forever with zero
-        feedback (this is exactly what a real operator hit)."""
-        def boom_login(*args, **kwargs):
-            raise AssertionError("r.login must not be called at all on this path")
-
-        monkeypatch.setattr(robinhood_portfolio.r, "login", boom_login)
-        monkeypatch.setattr(robinhood_portfolio.sys.stdin, "isatty", lambda: False)
-        monkeypatch.setattr(robinhood_portfolio._settings, "RH_USERNAME", "user@example.com")
-        monkeypatch.setattr(robinhood_portfolio._settings, "RH_PASSWORD", "pw")
-        monkeypatch.setattr(robinhood_portfolio._settings, "RH_MFA_SECRET", None, raising=False)
-
-        with pytest.raises(ValueError, match="MFA code is required"):
-            robinhood_portfolio._login()
 
 
 # ---------------------------------------------------------------------------
@@ -472,107 +330,109 @@ class TestBrokerageConnectGating:
 
 
 class TestBrokerageConnectHappyPath:
-    def test_connect_success_persists_credentials(self, monkeypatch):
-        verify_args = {}
-        written = {}
+    """POST /brokerage/connect no longer blocks on a synchronous verify+
+    persist — it starts an async device-approval login job
+    (data.robinhood_login, glued in via api._rh_login) and returns that
+    job's initial status immediately. These tests mock at the
+    pilots_api.rh_login layer (start_connect_job / serialize_job) to verify
+    the ENDPOINT's own wiring and gating in isolation, fast and
+    deterministically. The real behavior underneath —
+    api._rh_login.start_connect_job's background watcher thread persisting
+    RH_USERNAME/RH_PASSWORD to .env if and only if the job actually
+    succeeds, and never before/on failure — is covered end-to-end in
+    tests/test_rh_login_api_glue.py, not here."""
 
-        def fake_verify(username, password, mfa_code=""):
-            verify_args["username"] = username
-            verify_args["password"] = password
-            verify_args["mfa_code"] = mfa_code
-            return True
+    def test_connect_starts_a_job_and_returns_its_status(self, monkeypatch):
+        captured = {}
 
-        def fake_write(username, password):
-            written["username"] = username
-            written["password"] = password
+        def fake_start_connect_job(username, password):
+            captured["username"] = username
+            captured["password"] = password
+            return "the-job-object"
 
-        monkeypatch.setattr(pilots_api.robinhood_portfolio, "verify_credentials", fake_verify)
-        monkeypatch.setattr(pilots_api.brokerage_credentials, "write_rh_credentials", fake_write)
-
-        class _EmptyStore:
-            def latest_account_snapshot(self):
-                return None
-
-        with mock.patch.object(settings, "BROKERAGE_CONNECT_ENABLED", True):
-            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-                with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
-                    resp = loopback_client.post(
-                        "/brokerage/connect",
-                        json={
-                            "username": "user@example.com",
-                            "password": "hunter2",
-                            "mfa_code": "123456",
-                        },
-                        headers=_auth(),
-                    )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body == {"connected": True, "verified": True, "has_account_snapshot": False}
-        # The one-time code reaches verify_credentials but is NOT part of what
-        # gets persisted — write_rh_credentials only ever receives username/password.
-        assert verify_args == {
-            "username": "user@example.com",
-            "password": "hunter2",
-            "mfa_code": "123456",
-        }
-        assert written == {
-            "username": "user@example.com",
-            "password": "hunter2",
-        }
-
-    def test_connect_failure_never_persists_credentials(self, monkeypatch):
-        write_called = {"count": 0}
-
-        def fake_verify(username, password, mfa_code=""):
-            return False
-
-        def fake_write(username, password):
-            write_called["count"] += 1
-
-        monkeypatch.setattr(pilots_api.robinhood_portfolio, "verify_credentials", fake_verify)
-        monkeypatch.setattr(pilots_api.brokerage_credentials, "write_rh_credentials", fake_write)
+        monkeypatch.setattr(pilots_api.rh_login, "start_connect_job", fake_start_connect_job)
+        monkeypatch.setattr(
+            pilots_api.rh_login,
+            "serialize_job",
+            lambda job: {
+                "job_id": "job-abc123",
+                "mode": "connect",
+                "state": "running",
+                "phase": "starting",
+                "error_code": None,
+                "seconds_remaining": 180.0,
+                "connected": False,
+                "has_account_snapshot": False,
+            },
+        )
 
         with mock.patch.object(settings, "BROKERAGE_CONNECT_ENABLED", True):
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                 resp = loopback_client.post(
                     "/brokerage/connect",
-                    json={"username": "user@example.com", "password": "wrong", "mfa_code": "654321"},
+                    json={"username": "user@example.com", "password": "hunter2"},
                     headers=_auth(),
                 )
-        assert resp.status_code == 401
-        assert write_called["count"] == 0
-        # No leakage of which field was wrong.
-        assert "username" not in resp.json()["detail"].lower()
-        assert "password" not in resp.json()["detail"].lower()
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["job_id"] == "job-abc123"
+        assert body["mode"] == "connect"
+        assert body["state"] == "running"
+        # Credentials reach start_connect_job (which is responsible for
+        # verifying + eventually persisting them) exactly as submitted.
+        assert captured == {"username": "user@example.com", "password": "hunter2"}
+
+    def test_connect_request_body_no_longer_accepts_mfa_code(self):
+        """Device-approval login needs no code from the user — mfa_code was
+        removed from BrokerageConnectRequest entirely. An extra field is
+        silently ignored by Pydantic (not rejected), so this just documents
+        that it does nothing / is not required, rather than asserting a 422."""
+        with mock.patch.object(settings, "BROKERAGE_CONNECT_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch.object(
+                    pilots_api.rh_login, "start_connect_job", lambda u, p: "job"
+                ):
+                    with mock.patch.object(
+                        pilots_api.rh_login,
+                        "serialize_job",
+                        lambda job: {"job_id": "x", "mode": "connect", "state": "running"},
+                    ):
+                        resp = loopback_client.post(
+                            "/brokerage/connect",
+                            json={"username": "user@example.com", "password": "hunter2"},
+                            headers=_auth(),
+                        )
+        assert resp.status_code == 202
 
     def test_connect_response_never_echoes_credentials(self, monkeypatch):
         monkeypatch.setattr(
-            pilots_api.robinhood_portfolio, "verify_credentials", lambda *a, **k: True
+            pilots_api.rh_login, "start_connect_job", lambda username, password: "job"
         )
         monkeypatch.setattr(
-            pilots_api.brokerage_credentials, "write_rh_credentials", lambda *a, **k: None
+            pilots_api.rh_login,
+            "serialize_job",
+            lambda job: {
+                "job_id": "job-abc123",
+                "mode": "connect",
+                "state": "running",
+                "phase": "starting",
+                "error_code": None,
+                "seconds_remaining": 180.0,
+                "connected": False,
+                "has_account_snapshot": False,
+            },
         )
-
-        class _EmptyStore:
-            def latest_account_snapshot(self):
-                return None
 
         secret_password = "sUp3rS3cr3tPassw0rd!!"
         with mock.patch.object(settings, "BROKERAGE_CONNECT_ENABLED", True):
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-                with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
-                    resp = loopback_client.post(
-                        "/brokerage/connect",
-                        json={
-                            "username": "user@example.com",
-                            "password": secret_password,
-                            "mfa_code": "123456",
-                        },
-                        headers=_auth(),
-                    )
-        assert resp.status_code == 200
+                resp = loopback_client.post(
+                    "/brokerage/connect",
+                    json={"username": "user@example.com", "password": secret_password},
+                    headers=_auth(),
+                )
+        assert resp.status_code == 202
         assert secret_password not in resp.text
-        assert "123456" not in resp.text
 
 
 # ---------------------------------------------------------------------------
@@ -634,32 +494,6 @@ class TestBrokerageDisconnect:
 # ---------------------------------------------------------------------------
 
 
-class _FakeRefreshSnap:
-    """Minimal AccountSnapshot double: to_dict()/is_stale()/age_hours() is
-    everything _serialize_portfolio touches (mirrors test_pilots_api.py's
-    test_portfolio_serializes_snapshot _FakeSnap)."""
-
-    def __init__(self, *, stale: bool = False, age_hours: float = 0.02, total_equity: float = 1000.0):
-        self._stale = stale
-        self._age_hours = age_hours
-        self._total_equity = total_equity
-
-    def to_dict(self):
-        return {
-            "positions": {},
-            "buying_power": 250.0,
-            "total_equity": self._total_equity,
-            "total_dividends": 3.0,
-            "fetched_at": "2026-07-31T00:00:00+00:00",
-        }
-
-    def is_stale(self):
-        return self._stale
-
-    def age_hours(self):
-        return self._age_hours
-
-
 class TestBrokerageRefreshGating:
     def test_403_when_flag_disabled(self):
         with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", False):
@@ -694,16 +528,17 @@ class TestBrokerageRefreshGating:
     def test_refresh_not_gated_by_brokerage_connect_enabled(self, monkeypatch):
         """A DEDICATED flag: connect intake being disabled must not block an
         on-demand refresh of already-configured credentials."""
+        monkeypatch.setattr(pilots_api.rh_login, "start_refresh_job", lambda: "job")
         monkeypatch.setattr(
-            pilots_api.robinhood_portfolio,
-            "fetch_account_snapshot",
-            lambda force=False: _FakeRefreshSnap(),
+            pilots_api.rh_login,
+            "serialize_job",
+            lambda job: {"job_id": "job-x", "mode": "refresh", "state": "running"},
         )
         with mock.patch.object(settings, "BROKERAGE_CONNECT_ENABLED", False):
             with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
                 with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                     resp = loopback_client.post("/brokerage/refresh", headers=_auth())
-        assert resp.status_code == 200
+        assert resp.status_code == 202
 
     def test_brokerage_refresh_enabled_is_not_gui_writable(self):
         """Mirrors test_automation_writes_enabled_is_not_gui_writable in
@@ -723,58 +558,65 @@ class TestBrokerageRefreshGating:
 
 
 class TestBrokerageRefreshHappyPath:
-    def test_refresh_calls_fetch_with_force_true(self, monkeypatch):
-        calls = {}
+    """POST /brokerage/refresh, like /connect, now starts an async job
+    instead of blocking on fetch_account_snapshot directly. The
+    `force=True` guarantee (a refresh must always bypass the cache) moved
+    into the worker itself — data/robinhood_login_worker.py hardcodes
+    `rp.fetch_account_snapshot(force=True)` for mode="refresh" — and is
+    covered by the worker's own tests, not here. Likewise, the stale/live
+    snapshot DATA a successful refresh produces is read back via
+    `GET /portfolio` (already covered in tests/test_pilots_api.py), not
+    returned by this endpoint, which only ever reports job status."""
 
-        def fake_fetch(force=False):
-            calls["force"] = force
-            return _FakeRefreshSnap()
+    def test_refresh_starts_a_job_and_returns_its_status(self, monkeypatch):
+        calls = {"count": 0}
 
-        monkeypatch.setattr(pilots_api.robinhood_portfolio, "fetch_account_snapshot", fake_fetch)
+        def fake_start_refresh_job():
+            calls["count"] += 1
+            return "the-job-object"
 
-        with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
-            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-                resp = loopback_client.post("/brokerage/refresh", headers=_auth())
-
-        assert resp.status_code == 200
-        assert calls["force"] is True
-        body = resp.json()
-        assert body["total_equity"] == 1000.0
-        assert body["is_stale"] is False
-        # Honestly relabeled from _serialize_portfolio's hardcoded "db" (that
-        # value is correct for GET /portfolio, which reads HistoricalStore
-        # directly -- this endpoint triggered a live fetch instead).
-        assert body["source"] == "live"
-
-    def test_refresh_surfaces_stale_degraded_snapshot_as_200(self, monkeypatch):
-        """fetch_account_snapshot itself already degrades a live-fetch
-        failure to the last cached snapshot when one exists -- that's still a
-        real (if stale) snapshot, not an endpoint-level failure."""
+        monkeypatch.setattr(pilots_api.rh_login, "start_refresh_job", fake_start_refresh_job)
         monkeypatch.setattr(
-            pilots_api.robinhood_portfolio,
-            "fetch_account_snapshot",
-            lambda force=False: _FakeRefreshSnap(stale=True, age_hours=48.0),
+            pilots_api.rh_login,
+            "serialize_job",
+            lambda job: {
+                "job_id": "job-refresh1",
+                "mode": "refresh",
+                "state": "running",
+                "phase": "starting",
+                "error_code": None,
+                "seconds_remaining": 180.0,
+                "connected": True,
+                "has_account_snapshot": True,
+            },
         )
 
         with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                 resp = loopback_client.post("/brokerage/refresh", headers=_auth())
 
-        assert resp.status_code == 200
+        assert resp.status_code == 202
+        assert calls["count"] == 1
         body = resp.json()
-        assert body["is_stale"] is True
-        assert body["age_hours"] == 48.0
-        assert body["source"] == "live"
+        assert body["job_id"] == "job-refresh1"
+        assert body["mode"] == "refresh"
+        assert body["state"] == "running"
 
-    def test_refresh_failure_returns_clean_502(self, monkeypatch):
-        """Plain-string detail (mirrors /brokerage/connect's plain-401 posture):
-        no request body / form field exists here for a frontend to highlight,
-        so a structured {error, message} dict would only round-trip through
-        client.ts's `String(body.detail)` as "[object Object]"."""
-        def boom(force=False):
-            raise RuntimeError("no cache and Robinhood login failed: bad password xyz")
+    def test_refresh_job_start_failure_returns_clean_502(self, monkeypatch):
+        """The only thing that can still 502 here is start_refresh_job()
+        itself raising (e.g. OSError from subprocess.Popen if process
+        creation fails) — an actual login/fetch failure now surfaces later
+        via the job's state="failed"/error_code, not a 502 from this
+        endpoint. Plain-string detail (mirrors /brokerage/connect's posture):
+        no request body / form field exists here for a frontend to
+        highlight, so a structured {error, message} dict would only
+        round-trip through client.ts's `String(body.detail)` as
+        "[object Object]"."""
 
-        monkeypatch.setattr(pilots_api.robinhood_portfolio, "fetch_account_snapshot", boom)
+        def boom():
+            raise OSError("fork failed: resource temporarily unavailable, password xyz")
+
+        monkeypatch.setattr(pilots_api.rh_login, "start_refresh_job", boom)
 
         with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
             with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
@@ -783,19 +625,120 @@ class TestBrokerageRefreshHappyPath:
         assert resp.status_code == 502
         detail = resp.json()["detail"]
         assert isinstance(detail, str)
-        # Never leaks the underlying exception text (which could embed
-        # credential-adjacent detail) — logged server-side only.
-        assert "bad password" not in detail
+        # Never leaks the underlying exception text — logged server-side only.
+        assert "password" not in detail
         assert "xyz" not in detail
 
     def test_refresh_never_logs_token(self, monkeypatch, caplog):
+        monkeypatch.setattr(pilots_api.rh_login, "start_refresh_job", lambda: "job")
         monkeypatch.setattr(
-            pilots_api.robinhood_portfolio,
-            "fetch_account_snapshot",
-            lambda force=False: _FakeRefreshSnap(),
+            pilots_api.rh_login,
+            "serialize_job",
+            lambda job: {"job_id": "job-x", "mode": "refresh", "state": "running"},
         )
         with caplog.at_level(logging.DEBUG):
             with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
                 with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
                     loopback_client.post("/brokerage/refresh", headers=_auth())
         assert _CMD_TOKEN not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# api/pilots_api.py — GET /brokerage/login/status/{job_id},
+# POST /brokerage/login/cancel/{job_id}
+# ---------------------------------------------------------------------------
+
+
+class TestBrokerageLoginStatus:
+    def test_status_unknown_job_returns_404(self, monkeypatch):
+        monkeypatch.setattr(pilots_api.rh_login, "get_login_state", lambda job_id: None)
+        resp = loopback_client.get("/brokerage/login/status/nope", headers=_auth())
+        assert resp.status_code == 404
+
+    def test_status_known_job_returns_serialized_shape(self, monkeypatch):
+        monkeypatch.setattr(pilots_api.rh_login, "get_login_state", lambda job_id: "job-obj")
+        monkeypatch.setattr(
+            pilots_api.rh_login,
+            "serialize_job",
+            lambda job: {
+                "job_id": "job-abc",
+                "mode": "connect",
+                "state": "running",
+                "phase": "awaiting_approval",
+                "error_code": None,
+                "seconds_remaining": 142.3,
+                "connected": False,
+                "has_account_snapshot": False,
+            },
+        )
+        resp = loopback_client.get("/brokerage/login/status/job-abc", headers=_auth())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["phase"] == "awaiting_approval"
+        assert body["seconds_remaining"] == 142.3
+
+    def test_status_requires_loopback(self, monkeypatch):
+        """require_read_token only checks loopback-ness when STATE_API_TOKEN
+        is UNSET (fail-open on loopback, 503 fail-closed otherwise) -- with a
+        token configured and presented correctly it passes regardless of
+        loopback, so this test sets one to isolate require_loopback's own
+        check (mirrors TestBrokerageConnectGating.test_403_when_not_loopback,
+        which does the same for require_command_token + require_loopback)."""
+        monkeypatch.setattr(pilots_api.rh_login, "get_login_state", lambda job_id: "job-obj")
+        monkeypatch.setattr(pilots_api.rh_login, "serialize_job", lambda job: {})
+        with mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
+            resp = client.get("/brokerage/login/status/job-abc", headers=_auth())
+        assert resp.status_code == 403
+
+
+class TestBrokerageLoginCancel:
+    def test_cancel_unknown_job_returns_404(self, monkeypatch):
+        def boom(job_id):
+            raise KeyError(job_id)
+
+        monkeypatch.setattr(pilots_api.rh_login, "cancel_login", boom)
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = loopback_client.post("/brokerage/login/cancel/nope", headers=_auth())
+        assert resp.status_code == 404
+
+    def test_cancel_known_job_reports_confirmed_stop(self, monkeypatch):
+        monkeypatch.setattr(pilots_api.rh_login, "cancel_login", lambda job_id: True)
+        monkeypatch.setattr(pilots_api.rh_login, "get_login_state", lambda job_id: "job-obj")
+        monkeypatch.setattr(
+            pilots_api.rh_login,
+            "serialize_job",
+            lambda job: {"job_id": "job-abc", "mode": "connect", "state": "cancelled"},
+        )
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = loopback_client.post("/brokerage/login/cancel/job-abc", headers=_auth())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cancelled"] is True
+        assert body["state"] == "cancelled"
+
+    def test_cancel_reports_unconfirmed_stop_honestly(self, monkeypatch):
+        """Mirrors api/_jobs.py's cancel_job posture: a confirmed-stop
+        failure surfaces as cancelled=False rather than a fabricated success."""
+        monkeypatch.setattr(pilots_api.rh_login, "cancel_login", lambda job_id: False)
+        monkeypatch.setattr(pilots_api.rh_login, "get_login_state", lambda job_id: "job-obj")
+        monkeypatch.setattr(
+            pilots_api.rh_login,
+            "serialize_job",
+            lambda job: {"job_id": "job-abc", "mode": "connect", "state": "running"},
+        )
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = loopback_client.post("/brokerage/login/cancel/job-abc", headers=_auth())
+        assert resp.status_code == 200
+        assert resp.json()["cancelled"] is False
+
+    def test_cancel_401_missing_token(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = loopback_client.post("/brokerage/login/cancel/job-abc")
+        assert resp.status_code == 401
+
+    def test_cancel_403_when_not_loopback(self):
+        """Valid command token, but from a non-loopback client (mirrors
+        TestBrokerageConnectGating.test_403_when_not_loopback)."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post("/brokerage/login/cancel/job-abc", headers=_auth())
+        assert resp.status_code == 403

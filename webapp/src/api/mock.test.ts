@@ -13,7 +13,7 @@
  * Mock layer only — no network, no live API.
  */
 
-import { afterEach, beforeEach, describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { mockApi } from "./mock";
 import { ApiError } from "./types";
 import type {
@@ -23,6 +23,7 @@ import type {
   PerfRange,
   PilotSummary,
   PortfolioPositionView,
+  TunablesResponse,
 } from "./types";
 
 const CATEGORIES = [
@@ -241,6 +242,143 @@ describe("mock API — settings sub-routes serve their OWN field set (not the ge
   });
 });
 
+describe("mock API — per-field liveness metadata parity", () => {
+  const EDITORS = [
+    "getTunables",
+    "getSentimentSettings",
+    "getSectorSelectionSettings",
+    "getFmpSettings",
+    "getEtfTransmissionSettings",
+  ] as const;
+
+  async function allFields(method: string) {
+    const resp = await (mockApi as unknown as Record<string, () => Promise<TunablesResponse>>)[
+      method
+    ]();
+    return { resp, fields: resp.groups.flatMap((g) => g.fields) };
+  }
+
+  it("every field on every editor carries a complete liveness object", async () => {
+    for (const method of EDITORS) {
+      const { fields } = await allFields(method);
+      expect(fields.length).toBeGreaterThan(0);
+      for (const f of fields) {
+        expect(f.liveness, `${method}:${f.key}`).toBeDefined();
+        expect(Object.keys(f.liveness!).sort()).toEqual([
+          "applies",
+          "capture_sites",
+          "dangerous",
+          "env_pinned",
+          "restart_reason",
+          "source",
+        ]);
+        expect(Array.isArray(f.liveness!.capture_sites)).toBe(true);
+      }
+    }
+  });
+
+  it("covers all four applies states across the fixtures, not just one", async () => {
+    const seen = new Set<string>();
+    for (const method of EDITORS) {
+      const { fields } = await allFields(method);
+      for (const f of fields) seen.add(f.liveness!.applies);
+    }
+    expect(seen).toEqual(
+      new Set(["immediately", "next_daemon_restart", "no_effect", "env_pinned"]),
+    );
+  });
+
+  it("flags exactly the five dangerous keys these editors expose", async () => {
+    const dangerous = new Set<string>();
+    for (const method of EDITORS) {
+      const { fields } = await allFields(method);
+      for (const f of fields) if (f.liveness!.dangerous) dangerous.add(f.key);
+    }
+    expect(dangerous).toEqual(
+      new Set([
+        "ADVISORY_ONLY",
+        "DRY_RUN",
+        "CORS_ALLOWED_ORIGINS",
+        "FMP_BARS_ENABLED",
+        "FMP_BARS_ADJUSTMENT",
+      ]),
+    );
+  });
+
+  it("a live-safe field reports [] capture sites — the measured answer, never null", async () => {
+    const { fields } = await allFields("getTunables");
+    const live = fields.filter((f) => f.liveness!.applies === "immediately");
+    expect(live.length).toBeGreaterThan(0);
+    for (const f of live) expect(f.liveness!.capture_sites).toEqual([]);
+  });
+
+  it("a restart-required field names the capture sites that justify the claim", async () => {
+    const { fields } = await allFields("getTunables");
+    const needsRestart = fields.filter((f) => f.liveness!.applies === "next_daemon_restart");
+    expect(needsRestart.length).toBeGreaterThan(0);
+    for (const f of needsRestart) {
+      expect(f.liveness!.capture_sites.length).toBeGreaterThan(0);
+      expect(f.liveness!.restart_reason).toBeTruthy();
+    }
+  });
+
+  it("rolls the per-field states up into a summary plus honest counts", async () => {
+    const { resp, fields } = await allFields("getTunables");
+    expect(resp.applies).toBe("mixed");
+    const total = Object.values(resp.applies_counts!).reduce((a, b) => a + b, 0);
+    expect(total).toBe(fields.length);
+  });
+});
+
+describe("mock API — dangerous-key confirmation gate parity", () => {
+  // The mock must gate exactly as the real backend does. A mock that let
+  // ADVISORY_ONLY through unconfirmed would make demo mode disagree with
+  // production about the single most safety-relevant write in this app.
+
+  it("refuses ADVISORY_ONLY with no confirmation", async () => {
+    const result = await mockApi.updateTunables({ ADVISORY_ONLY: false });
+    expect(result.written).toEqual({});
+    expect(result.rejected).toEqual({ ADVISORY_ONLY: "confirmation_required" });
+  });
+
+  it("refuses ADVISORY_ONLY with a wrong confirmation", async () => {
+    const result = await mockApi.updateTunables(
+      { ADVISORY_ONLY: false },
+      { ADVISORY_ONLY: "yes" },
+    );
+    expect(result.written).toEqual({});
+    expect(result.rejected).toEqual({ ADVISORY_ONLY: "confirmation_mismatch" });
+  });
+
+  it("accepts ADVISORY_ONLY with the correct echo-the-name confirmation", async () => {
+    const result = await mockApi.updateTunables(
+      { ADVISORY_ONLY: false },
+      { ADVISORY_ONLY: "ADVISORY_ONLY" },
+    );
+    expect(result.rejected).toEqual({});
+    expect(result.written).toEqual({ ADVISORY_ONLY: false });
+  });
+
+  it("writes ordinary keys even when a dangerous key in the same batch is refused", async () => {
+    const result = await mockApi.updateTunables({
+      ADVISORY_ONLY: false,
+      KELLY_FRACTION: 0.6,
+    });
+    expect(result.written).toEqual({ KELLY_FRACTION: 0.6 });
+    expect(result.rejected).toEqual({ ADVISORY_ONLY: "confirmation_required" });
+  });
+
+  it("reports a value error on a key rather than masking it", async () => {
+    const result = await mockApi.updateTunables({ KELLY_FRACTION: 99 });
+    expect(result.rejected.KELLY_FRACTION).toMatch(/out_of_range/);
+  });
+
+  it("reports per-key applies covering exactly the written keys", async () => {
+    const result = await mockApi.updateTunables({ KELLY_FRACTION: 0.6 });
+    expect(Object.keys(result.per_key_applies!)).toEqual(Object.keys(result.written));
+  });
+});
+
 describe("mock API — /portfolio contract", () => {
   it("returns a Portfolio with source and PortfolioPositionView positions", async () => {
     const pf = await mockApi.getPortfolio();
@@ -354,81 +492,172 @@ describe("mock API — /symbols/{ticker} contract", () => {
   });
 });
 
-describe("mock API — brokerage-connect contract", () => {
+describe("mock API — async device-approval-push brokerage login contract", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.useFakeTimers();
   });
   afterEach(() => {
     localStorage.clear();
+    vi.useRealTimers();
   });
 
   it("getBrokerageStatus() starts disconnected", async () => {
-    const status = await mockApi.getBrokerageStatus();
-    expect(status).toEqual({
+    const statusPromise = mockApi.getBrokerageStatus();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await statusPromise).toEqual({
       connected: false,
       has_account_snapshot: false,
       auto_refresh_enabled: true,
     });
   });
 
-  it("connectBrokerage() with all three fields succeeds and flips status", async () => {
-    const result = await mockApi.connectBrokerage({
+  it("connectBrokerage() immediately returns a running job (202-equivalent), never a synchronous verify result", async () => {
+    const jobPromise = mockApi.connectBrokerage({
       username: "user@example.com",
       password: "hunter2",
-      mfa_code: "123456",
     });
-    expect(result).toEqual({ connected: true, verified: true, has_account_snapshot: false });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
 
-    const status = await mockApi.getBrokerageStatus();
-    expect(status.connected).toBe(true);
+    expect(job.mode).toBe("connect");
+    expect(job.state).toBe("running");
+    expect(typeof job.job_id).toBe("string");
+    expect(job.connected).toBe(false);
   });
 
   it("connectBrokerage() never echoes the submitted credential values", async () => {
-    const result = await mockApi.connectBrokerage({
+    const jobPromise = mockApi.connectBrokerage({
       username: "user@example.com",
       password: "sUp3rS3cr3t!!",
-      mfa_code: "123456",
     });
-    expect(JSON.stringify(result)).not.toContain("sUp3rS3cr3t");
-    expect(JSON.stringify(result)).not.toContain("123456");
-  });
-
-  it("connectBrokerage() rejects with ApiError(401) when a field is blank", async () => {
-    await expect(
-      mockApi.connectBrokerage({ username: "", password: "pw", mfa_code: "123456" })
-    ).rejects.toBeInstanceOf(ApiError);
-    await expect(
-      mockApi.connectBrokerage({ username: "u", password: "pw", mfa_code: "" })
-    ).rejects.toMatchObject({ status: 401 });
-  });
-
-  it("disconnectBrokerage() clears the connected state", async () => {
-    await mockApi.connectBrokerage({
-      username: "user@example.com",
-      password: "hunter2",
-      mfa_code: "123456",
-    });
-    expect((await mockApi.getBrokerageStatus()).connected).toBe(true);
-
-    const result = await mockApi.disconnectBrokerage();
-    expect(result).toEqual({ connected: false });
-    expect((await mockApi.getBrokerageStatus()).connected).toBe(false);
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+    expect(JSON.stringify(job)).not.toContain("sUp3rS3cr3t");
   });
 
   it("never persists the raw credential strings to localStorage", async () => {
-    await mockApi.connectBrokerage({
+    const jobPromise = mockApi.connectBrokerage({
       username: "user@example.com",
       password: "sUp3rS3cr3t!!",
-      mfa_code: "123456",
     });
+    await vi.advanceTimersByTimeAsync(150);
+    await jobPromise;
+
     const dump: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)!;
       dump.push(`${key}=${localStorage.getItem(key)}`);
     }
-    const joined = dump.join("\n");
-    expect(joined).not.toContain("sUp3rS3cr3t");
-    expect(joined).not.toContain("123456");
+    expect(dump.join("\n")).not.toContain("sUp3rS3cr3t");
+  });
+
+  it("getBrokerageLoginStatus() eventually reports success, flipping getBrokerageStatus().connected", async () => {
+    const jobPromise = mockApi.connectBrokerage({
+      username: "user@example.com",
+      password: "hunter2",
+    });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+
+    // Past the happy-path lifecycle's "done" threshold (see mock.ts's
+    // _mockLoginJobStatus phase timeline).
+    await vi.advanceTimersByTimeAsync(8000);
+    const statusPromise = mockApi.getBrokerageLoginStatus(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    const finalStatus = await statusPromise;
+
+    expect(finalStatus.state).toBe("succeeded");
+    expect(finalStatus.connected).toBe(true);
+    expect(finalStatus.has_account_snapshot).toBe(true);
+
+    const brokerageStatusPromise = mockApi.getBrokerageStatus();
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await brokerageStatusPromise).connected).toBe(true);
+  });
+
+  it("getBrokerageLoginStatus() for an unknown job_id throws ApiError(404)", async () => {
+    // The guard throws synchronously (before the delay()/timer), so no
+    // timer advance is needed for the rejection itself to be observed.
+    await expect(mockApi.getBrokerageLoginStatus("no-such-job")).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("cancelBrokerageLogin() reports state: cancelled and cancelled: true", async () => {
+    const jobPromise = mockApi.connectBrokerage({ username: "u@example.com", password: "pw" });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+
+    const cancelPromise = mockApi.cancelBrokerageLogin(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    const cancelled = await cancelPromise;
+
+    expect(cancelled.state).toBe("cancelled");
+    expect(cancelled.cancelled).toBe(true);
+  });
+
+  it("cancelBrokerageLogin() for an unknown job_id throws ApiError(404)", async () => {
+    // Guarded synchronously (before any job mutation), so no timer advance needed.
+    await expect(mockApi.cancelBrokerageLogin("no-such-job")).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+
+  it("refreshBrokerage() with nothing ever connected eventually fails with error_code: no_credentials", async () => {
+    const jobPromise = mockApi.refreshBrokerage();
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+    expect(job.mode).toBe("refresh");
+
+    await vi.advanceTimersByTimeAsync(2000);
+    const statusPromise = mockApi.getBrokerageLoginStatus(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    const finalStatus = await statusPromise;
+
+    expect(finalStatus.state).toBe("failed");
+    expect(finalStatus.error_code).toBe("no_credentials");
+  });
+
+  it("the stockpy.mock.brokerage_login_timeout marker makes a job time out instead of succeeding", async () => {
+    localStorage.setItem("stockpy.mock.brokerage_login_timeout", "1");
+    const jobPromise = mockApi.connectBrokerage({ username: "u@example.com", password: "pw" });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+
+    await vi.advanceTimersByTimeAsync(180_000);
+    const statusPromise = mockApi.getBrokerageLoginStatus(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    const finalStatus = await statusPromise;
+
+    expect(finalStatus.state).toBe("timeout");
+    expect(finalStatus.error_code).toBe("timeout");
+    expect(finalStatus.seconds_remaining).toBe(0);
+  });
+
+  it("disconnectBrokerage() clears the connected state", async () => {
+    const jobPromise = mockApi.connectBrokerage({
+      username: "user@example.com",
+      password: "hunter2",
+    });
+    await vi.advanceTimersByTimeAsync(150);
+    const job = await jobPromise;
+    await vi.advanceTimersByTimeAsync(8000);
+    const successStatusPromise = mockApi.getBrokerageLoginStatus(job.job_id);
+    await vi.advanceTimersByTimeAsync(100);
+    await successStatusPromise;
+
+    const statusPromise = mockApi.getBrokerageStatus();
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await statusPromise).connected).toBe(true);
+
+    const disconnectPromise = mockApi.disconnectBrokerage();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(await disconnectPromise).toEqual({ connected: false });
+
+    const afterPromise = mockApi.getBrokerageStatus();
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await afterPromise).connected).toBe(false);
   });
 });
 

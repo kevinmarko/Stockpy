@@ -32,11 +32,18 @@ for the full rationale. Gated behind THREE independent controls, all of which
 must pass: (1) ``settings.BROKERAGE_CONNECT_ENABLED`` (default ``False``,
 GUI-writable), (2) the same fail-closed ``FOLLOW_API_TOKEN`` command
 token as the follow write-path, (3) ``require_loopback`` — the request must
-originate from ``127.0.0.1``/``::1``. Credentials are verified with a
-read-only login (``data.robinhood_portfolio.verify_credentials``) BEFORE they
-are ever persisted, and are never logged, cached, or echoed back
-(CONSTRAINT #3). This remains a single-operator, single-machine model — not a
-multi-user credential vault.
+originate from ``127.0.0.1``/``::1``. ``POST /brokerage/connect`` and
+``POST /brokerage/refresh`` are asynchronous, job-based endpoints (202 +
+``job_id``, polled via ``GET /brokerage/login/status/{job_id}``) — Robinhood
+device-approval login needs a human to tap "approve" in the Robinhood app,
+which can take up to ``RH_LOGIN_DEADLINE_SECONDS``, too long to hold an HTTP
+request open. Login itself runs in an isolated, killable subprocess
+(``data.robinhood_login_worker``, launched via ``data.robinhood_login`` and
+glued to this API by ``api._rh_login``) — never in this process. Credentials
+are persisted to ``.env`` by a background watcher thread ONLY once a
+"connect" job's login actually succeeds, and are never logged, cached, or
+echoed back (CONSTRAINT #3). This remains a single-operator, single-machine
+model — not a multi-user credential vault.
 
 Run standalone:
     uvicorn api.pilots_api:app --port 8602
@@ -92,15 +99,15 @@ figure.
 from __future__ import annotations
 
 import json
-import uuid
 import logging
 import math
 import re
 import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -160,6 +167,7 @@ from pilots import (
     pairs,
     performance,
     realized,
+    rlhf_review_queue,
     rolling_beta,
     run_status,
     scoring,
@@ -173,11 +181,35 @@ from pilots.follows_store import FollowsStore
 from pilots.mirror import plan_follow
 from pilots.scan_config_store import ScanConfigStore
 
+# RLHF Calibration Review Queue write path (POST /rlhf/proposals,
+# POST /rlhf/proposals/{id}/review, POST /rlhf/export-sft) — a dedicated,
+# non-``pilots``-package store (see its own module docstring for why it is
+# NOT a TransactionsStore extension). Imported at module top, mirroring
+# FollowsStore/ScanConfigStore above, so tests can
+# ``mock.patch.object(pilots_api, "RlhfCalibrationStore", ...)``. Not on the
+# AST guard's heavy-engine deny-list — its own imports are db_config/settings/
+# stdlib only.
+from rlhf_calibration_store import (
+    ProposalAlreadyReviewedError,
+    ProposalNotFoundError,
+    RlhfCalibrationStore,
+)
+
+# Per-field liveness/safety metadata for the five /settings/* editors below
+# (what actually happens when this field is written: applies now, needs a
+# restart, does nothing, or is pinned by a real shell export). Stdlib +
+# runtime_flags + settings_keysets only — see its module docstring.
+import pilots.settings_meta as settings_meta
+
 # Execution / persistence — explicitly ALLOWED here (unlike state_api.py),
 # forbidden only for the heavy calculation engines (see this module's AST guard
 # test). ``data.historical_store`` and ``execution.kill_switch`` are imported at
 # module top so tests can ``mock.patch.object(pilots_api, "HistoricalStore", ...)``.
 from data.historical_store import HistoricalStore
+# Best-effort live-quote enrichment for POST /rlhf/proposals when the caller
+# doesn't supply a price — same provider every other market-data read in this
+# codebase goes through (see settings.py's "Market-data layer" convention).
+from data.market_data import MarketDataError, get_provider
 from execution.kill_switch import GlobalKillSwitch
 
 # The Data & Automation surface (GET/POST/PUT /automation/*) reaches the
@@ -202,6 +234,16 @@ from reporting.progress import read_progress
 # module top (not lazily) so tests can `mock.patch.object(pilots_api, ...)`.
 import data.robinhood_portfolio as robinhood_portfolio
 import data.brokerage_credentials as brokerage_credentials
+
+# Device-approval login job primitive (start/poll/cancel a killable, isolated
+# login-worker subprocess) — see data/robinhood_login.py and
+# data/robinhood_login_worker.py. api._rh_login is the thin Pilots-API-specific
+# glue that also arranges for RH_USERNAME/RH_PASSWORD to be persisted on a
+# successful "connect" job (see its own module docstring). Neither
+# data.robinhood_login nor data.robinhood_login_worker is on this module's
+# AST-guard deny-list. Imported at module top so tests can
+# `mock.patch.object(pilots_api, "rh_login", ...)`.
+import api._rh_login as rh_login
 
 # LLM configuration status (GET /llm/status). `gui.ai_control_center` is
 # stdlib-only + Streamlit-free (the headless status logic); `llm.status_store`
@@ -243,11 +285,8 @@ import gui.robinhood_execution_panel as execution_panel
 # rather than raising. Not on the AST-guard deny-list (agents/, langgraph,
 # qdrant_client are none of the seven forbidden heavy-engine names).
 from agents.rag_orchestrator import run_rag_query
-from agents.supervisor import run_two_agent_analysis
 
 logger = logging.getLogger(__name__)
-
-_LOGIN_TASKS: Dict[str, Dict[str, Any]] = {}
 
 app = FastAPI(
     title="InvestYo Pilots API",
@@ -480,6 +519,37 @@ def require_rag_query_enabled() -> None:
         )
 
 
+def require_rlhf_calibration_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for the RLHF Calibration Review Queue's
+    write endpoints (``POST /rlhf/proposals``, ``POST
+    /rlhf/proposals/{id}/review``, ``POST /rlhf/export-sft``).
+
+    ``settings.RLHF_CALIBRATION_ENABLED`` defaults ``True`` — every proposal
+    here is hypothetical and paper-only (no capital, no broker, no
+    ``TransactionsStore``/``OrderManager`` involvement, see
+    ``rlhf_calibration_store.py``'s module docstring), so per this repo's
+    2026-08-03 convention a new admin/write capability with no capital or
+    execution risk ships active by default rather than behind a fresh opt-in
+    flag. GUI-writable in ``gui/env_io.py``'s ``ALLOWED_KEYS`` (created there
+    directly, not reclassified — mirrors ``AGENTIC_DISCOVERY_ENABLED``'s
+    precedent: this endpoint remains independently gated by
+    ``FOLLOW_API_TOKEN`` regardless of the flag's own GUI-writability, so a
+    GUI toggle alone can never bypass the command-token check).
+
+    ``POST /rlhf/proposals`` exists even though the webapp itself never calls
+    it — a sibling MCP tool creates real proposals by calling
+    ``RlhfCalibrationStore`` directly, not through this HTTP API — it is kept
+    for API completeness and so this feature's own tests can create fixture
+    data through the real API rather than reaching into the store directly.
+    ``GET /rlhf/summary`` is read-only and NOT gated by this flag
+    (``require_read_token`` alone, matching every other GET here)."""
+    if not settings.RLHF_CALIBRATION_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="RLHF calibration writes are disabled (RLHF_CALIBRATION_ENABLED=false).",
+        )
+
+
 if not settings.STATE_API_TOKEN:
     logger.warning(
         "STATE_API_TOKEN not set — Pilots read endpoints are UNAUTHENTICATED. "
@@ -627,20 +697,15 @@ class DecisionCreateRequest(BaseModel):
 
 class BrokerageConnectRequest(BaseModel):
     """Body for ``POST /brokerage/connect``. Never logged (CONSTRAINT #3) —
-    Pydantic's default repr is not invoked anywhere in this module's logging."""
+    Pydantic's default repr is not invoked anywhere in this module's logging.
+
+    No ``mfa_code`` field: Robinhood login here uses device-approval push
+    login (``data.robinhood_login_worker``) — the operator taps "approve" in
+    the Robinhood app itself, so no authenticator code is ever collected or
+    submitted over HTTP."""
 
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
-    mfa_code: str = Field(
-        default="",
-        description=(
-            "Current 6-digit code from the user's authenticator app. "
-            "Required — interactive MFA prompting is not available over "
-            "HTTP, so a login attempt with no MFA code is treated as a "
-            "verification failure. Used once to verify the login, then "
-            "discarded — never persisted to .env or anywhere else."
-        ),
-    )
 
 
 class ForecastBackfillRunRequest(BaseModel):
@@ -775,6 +840,41 @@ class WatchRequest(BaseModel):
     The symbol shape is validated in the writer (rejected, never sanitized)."""
 
     symbol: str = Field(..., min_length=1, max_length=16)
+
+
+class RlhfProposalCreateRequest(BaseModel):
+    """Body for ``POST /rlhf/proposals`` — records one hypothetical, paper-only
+    AI trade proposal (``rlhf_calibration_store.RlhfCalibrationStore
+    .create_proposal``). ``action``/``confidence`` are intentionally NOT
+    Pydantic-bounded here (no ``Literal``, no ``ge``/``le``) — the store is the
+    single source of truth for those two validations and raises ``ValueError``
+    with a message this endpoint maps to a stable ``invalid_action`` /
+    ``invalid_confidence`` 422 tag; duplicating the bound at this layer would
+    just produce a second, differently-shaped error response for the same
+    failure. ``price`` is optional — omitted, the handler best-effort resolves
+    a live quote (see ``create_rlhf_proposal``)."""
+
+    symbol: str = Field(..., min_length=1, max_length=20)
+    action: str = Field(..., min_length=1)
+    rationale: str = Field(..., min_length=1)
+    confidence: float
+    quantity: Optional[float] = None
+    price: Optional[float] = None
+    rsi: Optional[float] = None
+    sentiment_score: Optional[float] = None
+    extra_context: Optional[Dict[str, Any]] = None
+
+
+class RlhfProposalReviewRequest(BaseModel):
+    """Body for ``POST /rlhf/proposals/{id}/review`` — a human's 1-5 star
+    rating (+ optional corrective comment) for one proposal. ``human_rating``
+    is deliberately NOT Pydantic-bounded (see ``RlhfProposalCreateRequest``'s
+    docstring for why) — ``RlhfCalibrationStore.submit_review`` raises
+    ``ValueError`` for an out-of-range rating, mapped to a stable
+    ``invalid_rating`` 422 tag."""
+
+    human_rating: int
+    human_correction: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -2473,6 +2573,220 @@ def post_agentic_watch(body: WatchRequest) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# RLHF Calibration Review Queue (rlhf_calibration_store.py) — an AI trading
+# agent proposes a hypothetical PAPER trade and a human rates it 1-5 stars.
+# No capital, no broker, no TransactionsStore involvement (see that module's
+# docstring). Gated by require_rlhf_calibration_enabled — see that function's
+# docstring for why POST /rlhf/proposals exists despite the webapp never
+# calling it directly.
+# ---------------------------------------------------------------------------
+
+
+def _rlhf_sft_dataset_path() -> Path:
+    return settings.OUTPUT_DIR / "rlhf_sft_dataset.jsonl"
+
+
+def _append_sft_rows(proposals: List[Dict[str, Any]]) -> int:
+    """Appends one JSONL line per proposal to the SFT training-data export
+    (``settings.OUTPUT_DIR / "rlhf_sft_dataset.jsonl"``). Shared by ``POST
+    /rlhf/proposals/{id}/review``'s auto-export path and ``POST
+    /rlhf/export-sft``'s explicit batch path so the record shape can never
+    drift between the two.
+
+    A human's ``human_correction`` is the gold assistant label when present
+    (a human explicitly rewrote what the agent should have said); the
+    proposal's own ``rationale`` is the fallback otherwise. Raises on any I/O
+    failure — deliberately NOT try/except'd here, unlike ``_append_block_log``
+    — the two call sites need different degraded responses on failure (the
+    review endpoint must still return 200; the export endpoint must report
+    zero exported), so each wraps this call with its own recovery rather than
+    this helper picking one for both (CONSTRAINT #6 is satisfied at the
+    endpoint layer here, not this shared helper)."""
+    path = _rlhf_sft_dataset_path()
+    with open(path, "a", encoding="utf-8") as fh:
+        for row in proposals:
+            correction = (row.get("human_correction") or "").strip()
+            assistant_content = correction if correction else row.get("rationale", "")
+            record = {
+                "messages": [
+                    {"role": "system", "content": "You are a quantitative trading agent."},
+                    {
+                        "role": "user",
+                        "content": f"Evaluate {row['symbol']} — proposed action: {row['action']}.",
+                    },
+                    {"role": "assistant", "content": assistant_content},
+                ]
+            }
+            fh.write(json.dumps(record) + "\n")
+    return len(proposals)
+
+
+@app.get("/rlhf/summary", dependencies=[Depends(require_read_token)])
+def get_rlhf_summary(limit: int = Query(50, ge=1, le=200)) -> Dict[str, Any]:
+    """Pending review queue + aggregate KPIs for the RLHF Calibration Review
+    Queue screen. Composes the two read-only ``pilots.rlhf_review_queue``
+    views (each already dead-letter-safe — see that module's docstring) so
+    this never 500s, including on a cold start (no proposals table yet) or a
+    genuinely unreachable DB (CONSTRAINT #6). ``writable`` tracks
+    ``RLHF_CALIBRATION_ENABLED`` so the PWA knows whether to render the
+    review-submission form before the operator hits a 403."""
+    queue = rlhf_review_queue.pending_queue_view(limit=limit)
+    return {
+        "proposals": queue["proposals"],
+        "kpis": rlhf_review_queue.summary_stats_view(),
+        "writable": bool(settings.RLHF_CALIBRATION_ENABLED),
+        "reason": queue["reason"],
+    }
+
+
+@app.post(
+    "/rlhf/proposals",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_rlhf_calibration_enabled),
+    ],
+)
+def create_rlhf_proposal(body: RlhfProposalCreateRequest) -> Dict[str, Any]:
+    """Record one hypothetical, paper-only AI trade proposal.
+
+    When the caller omits ``price`` for a non-``HOLD`` action, best-effort
+    enriches with a live quote (``data.market_data.get_provider``) — a
+    ``MarketDataError`` here is advisory-only and never blocks proposal
+    creation, it just leaves ``price`` unset. ``quote_source`` in the response
+    tells the caller which of the three paths was taken: ``caller_supplied``
+    (a price was given), ``live`` (fetched here), or ``unavailable`` (a HOLD
+    needs no price, or the live fetch failed).
+
+    ``action``/``confidence`` validation lives entirely in
+    ``RlhfCalibrationStore.create_proposal`` (see ``RlhfProposalCreateRequest``'s
+    docstring) — its ``ValueError`` message is inspected once here to produce
+    a stable ``invalid_action`` / ``invalid_confidence`` 422 tag, since the
+    store itself raises a plain ``ValueError`` rather than two distinct
+    exception types."""
+    price = body.price
+    if price is not None:
+        quote_source = "caller_supplied"
+    elif body.action.strip().upper() == "HOLD":
+        quote_source = "unavailable"
+    else:
+        try:
+            quote = get_provider().get_latest_quote(body.symbol)
+            price = quote.price
+            quote_source = "live"
+        except MarketDataError as exc:
+            logger.debug(
+                "create_rlhf_proposal: live quote unavailable for %s: %s", body.symbol, exc
+            )
+            quote_source = "unavailable"
+
+    store = RlhfCalibrationStore()
+    try:
+        proposal_id = store.create_proposal(
+            symbol=body.symbol,
+            action=body.action,
+            rationale=body.rationale,
+            confidence=body.confidence,
+            quantity=body.quantity,
+            price=price,
+            rsi=body.rsi,
+            sentiment_score=body.sentiment_score,
+            extra_context=body.extra_context,
+        )
+    except ValueError as exc:
+        tag = "invalid_confidence" if "confidence" in str(exc) else "invalid_action"
+        raise HTTPException(status_code=422, detail=tag)
+
+    row = store.get_by_id(proposal_id)
+    if row is None:  # pragma: no cover - a successful write immediately unreadable
+        logger.error("create_rlhf_proposal: id=%s created but not readable back", proposal_id)
+        raise HTTPException(status_code=500, detail="proposal_created_but_unreadable")
+
+    row["quote_source"] = quote_source
+    return row
+
+
+@app.post(
+    "/rlhf/proposals/{proposal_id}/review",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_rlhf_calibration_enabled),
+    ],
+)
+def review_rlhf_proposal(proposal_id: int, body: RlhfProposalReviewRequest) -> Dict[str, Any]:
+    """Record a human's 1-5 star rating (+ optional corrective comment) for
+    one proposal. 404 ``not_found`` for an unknown id, 409
+    ``already_reviewed`` for a proposal that already has a review (including
+    an auto-approved one — a human can't "re-review" one), 422
+    ``invalid_rating`` for a rating outside 1-5.
+
+    On a 5-star rating with ``RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED``, the
+    row is best-effort appended to the SFT export via the SAME
+    ``_append_sft_rows`` helper ``POST /rlhf/export-sft`` uses, so the two
+    paths can never disagree on record shape — wrapped in try/except so an
+    export failure never fails the review response itself (the review was
+    already durably persisted by ``submit_review`` above this point)."""
+    store = RlhfCalibrationStore()
+    try:
+        row = store.submit_review(proposal_id, body.human_rating, body.human_correction)
+    except ProposalNotFoundError:
+        raise HTTPException(status_code=404, detail="not_found")
+    except ProposalAlreadyReviewedError:
+        raise HTTPException(status_code=409, detail="already_reviewed")
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_rating")
+
+    sft_exported = bool(row.get("sft_exported"))
+    if (
+        row.get("human_rating") == 5
+        and settings.RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED
+        and not sft_exported
+    ):
+        try:
+            _append_sft_rows([row])
+            store.mark_sft_exported([row["id"]])
+            sft_exported = True
+        except Exception as exc:  # noqa: BLE001 - best-effort: never fail the review response
+            logger.warning(
+                "review_rlhf_proposal: auto SFT export failed for id=%s: %s", proposal_id, exc
+            )
+
+    row["sft_exported"] = sft_exported
+    return row
+
+
+@app.post(
+    "/rlhf/export-sft",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_rlhf_calibration_enabled),
+    ],
+)
+def export_rlhf_sft() -> Dict[str, Any]:
+    """Batch-export every 5-star, not-yet-exported proposal to the SFT JSONL
+    dataset (``settings.OUTPUT_DIR / "rlhf_sft_dataset.jsonl"``).
+
+    Best-effort (CONSTRAINT #6): a file-append failure logs a warning and
+    returns a zeroed result rather than raising — ``mark_sft_exported`` is
+    only called on a successful append, so a failure never marks a row
+    exported when it wasn't actually written to the file."""
+    path = _rlhf_sft_dataset_path()
+    store = RlhfCalibrationStore()
+    rows = store.get_unexported_five_star()
+    if not rows:
+        return {"exported_count": 0, "file": str(path), "proposal_ids": []}
+
+    try:
+        _append_sft_rows(rows)
+    except Exception as exc:  # noqa: BLE001 - best-effort export, never fatal
+        logger.warning("export_rlhf_sft: file append failed: %s", exc)
+        return {"exported_count": 0, "file": str(path), "proposal_ids": []}
+
+    ids = [row["id"] for row in rows]
+    store.mark_sft_exported(ids)
+    return {"exported_count": len(rows), "file": str(path), "proposal_ids": ids}
+
+
+# ---------------------------------------------------------------------------
 # LLM configuration status + writes (AI Control Center — see module docstring)
 # ---------------------------------------------------------------------------
 
@@ -2672,74 +2986,38 @@ def get_brokerage_status() -> Dict[str, Any]:
 
 @app.post(
     "/brokerage/connect",
+    status_code=202,
     dependencies=[
         Depends(require_brokerage_connect_enabled),
         Depends(require_command_token),
         Depends(require_loopback),
     ],
 )
-def connect_brokerage(body: BrokerageConnectRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
-    """Verify Robinhood credentials with a read-only login, then persist them
-    to the local ``.env`` (and the live process environment) ONLY on success.
+def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
+    """Start an asynchronous device-approval login job that verifies
+    candidate Robinhood credentials, returning immediately (202) with the
+    job's initial status rather than blocking on the login itself.
 
     Gated by three independent controls (see the dependencies above):
     ``BROKERAGE_CONNECT_ENABLED``, the fail-closed follow command token, and a
-    loopback-only request check. Credential values are never logged, cached,
-    or echoed back in the response (CONSTRAINT #3) — on failure this returns a
-    plain 401 with no detail about which field was wrong (username vs.
-    password vs. MFA), since that distinction itself would leak information
-    about a candidate credential.
+    loopback-only request check.
 
-    ``body.mfa_code`` (a one-time 6-digit authenticator code) is used only to
-    verify the login and is never persisted — only username/password are
-    written to ``.env`` on success. Ongoing unattended re-fetches rely on
-    ``robin_stocks``' own device-session pickle established by this verify
-    call, not a stored MFA secret."""
-    
-    task_id = str(uuid.uuid4())
-    _LOGIN_TASKS[task_id] = {"status": "pending"}
-    
-    def _do_connect(tid: str, req_body: BrokerageConnectRequest):
-        try:
-            verified = robinhood_portfolio.verify_credentials(
-                req_body.username, req_body.password, req_body.mfa_code
-            )
-            if not verified:
-                _LOGIN_TASKS[tid] = {"status": "error", "error": "Could not verify Robinhood credentials."}
-                return
-            brokerage_credentials.write_rh_credentials(req_body.username, req_body.password)
-            account_present = False
-            try:
-                account_present = HistoricalStore(readonly=True).latest_account_snapshot() is not None
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("pilots_api: connect account-snapshot check failed: %s", exc)
-            _LOGIN_TASKS[tid] = {
-                "status": "success",
-                "result": {"connected": True, "verified": True, "has_account_snapshot": account_present}
-            }
-        except Exception as exc:
-            _LOGIN_TASKS[tid] = {"status": "error", "error": str(exc)}
-            
-    background_tasks.add_task(_do_connect, task_id, body)
-    return {"task_id": task_id, "status": "pending"}
-
-
-@app.get("/brokerage/connect/{task_id}", dependencies=[Depends(require_read_token)])
-def get_connect_status(task_id: str) -> Dict[str, Any]:
-    if task_id not in _LOGIN_TASKS:
-        raise HTTPException(status_code=404, detail="Login task not found")
-    
-    task_state = _LOGIN_TASKS[task_id]
-    if task_state["status"] == "pending":
-        return {"task_id": task_id, "status": "pending"}
-    elif task_state["status"] == "error":
-        return {"task_id": task_id, "status": "error", "error": task_state.get("error")}
-    else:
-        # Success
-        result = task_state.get("result", {})
-        result["task_id"] = task_id
-        result["status"] = "success"
-        return result
+    Robinhood's device-approval flow requires a human to tap "approve" in the
+    Robinhood app — that can take anywhere from a few seconds up to the full
+    ``RH_LOGIN_DEADLINE_SECONDS`` window, far too long to hold an HTTP request
+    open. Instead this launches an isolated, killable login-worker subprocess
+    (``data.robinhood_login_worker``, via ``api._rh_login.start_connect_job``)
+    and hands back its ``job_id`` immediately; the caller polls
+    ``GET /brokerage/login/status/{job_id}`` for ``phase``/``state`` until it
+    reaches a terminal state (``succeeded``/``failed``/``timeout``/
+    ``cancelled``). ``RH_USERNAME``/``RH_PASSWORD`` are persisted to ``.env``
+    by a background watcher thread (``api._rh_login``) the moment — and only
+    if — the job's state becomes ``"succeeded"``; never before, never on
+    failure/timeout/cancellation, and never inside this handler itself.
+    Credential values are never logged, cached, or echoed back in any
+    response (CONSTRAINT #3)."""
+    job = rh_login.start_connect_job(body.username, body.password)
+    return rh_login.serialize_job(job)
 
 
 @app.post(
@@ -2766,64 +3044,79 @@ def disconnect_brokerage() -> Dict[str, Any]:
 
 @app.post(
     "/brokerage/refresh",
+    status_code=202,
     dependencies=[
         Depends(require_brokerage_refresh_enabled),
         Depends(require_command_token),
         Depends(require_loopback),
     ],
 )
-def refresh_brokerage() -> Any:
-    """Force an on-demand Robinhood re-login + account-snapshot refresh,
-    bypassing the daily cache — the webapp/API equivalent of
+def refresh_brokerage() -> Dict[str, Any]:
+    """Start an asynchronous on-demand Robinhood re-login + account-snapshot
+    refresh job, bypassing the daily cache — the webapp/API equivalent of
     ``python3 main.py --refresh-account`` and the Streamlit GUI's "Force fresh
     login (bypass cache)" checkbox on the Live Inventory / Paper Monitor tabs.
 
-    Calls ``data.robinhood_portfolio.fetch_account_snapshot(force=True)``,
-    which unconditionally re-authenticates against Robinhood and overrides
-    ``ROBINHOOD_AUTO_REFRESH_ENABLED`` for this one fetch (see that function's
-    own docstring), then writes both the JSON cache and the DB. Gated by three
-    independent controls (see the dependencies above): a DEDICATED
-    ``BROKERAGE_REFRESH_ENABLED`` flag (not ``BROKERAGE_CONNECT_ENABLED`` — see
-    ``require_brokerage_refresh_enabled``), the fail-closed follow command
-    token, and the same loopback-only check as ``/brokerage/connect`` and
-    ``/brokerage/disconnect``.
+    Gated by three independent controls (see the dependencies above): a
+    DEDICATED ``BROKERAGE_REFRESH_ENABLED`` flag (not
+    ``BROKERAGE_CONNECT_ENABLED`` — see ``require_brokerage_refresh_enabled``),
+    the fail-closed follow command token, and the same loopback-only check as
+    ``/brokerage/connect`` and ``/brokerage/disconnect``.
 
-    ``fetch_account_snapshot`` itself already degrades a live-fetch failure to
-    the last cached snapshot when one exists (never a crash) — that case
-    returns here as a normal 200 (a real, if stale, snapshot), same as
-    ``GET /portfolio``'s ``is_stale``/``age_hours`` fields already surface.
-    This endpoint only raises when NO snapshot — fresh or cached — is
-    available at all (e.g. missing/invalid credentials on a first-ever
-    refresh): a plain-string 502, same posture as ``/brokerage/connect``'s
-    plain-401 (no structured ``{error, message}`` tag — there is no request
-    body / form field for a frontend to highlight here, just a pass/fail
-    live call, so a dict detail would only round-trip through client.ts's
-    ``String(body.detail)`` as ``"[object Object]"``). The underlying
-    exception is logged server-side only, never echoed to the client
-    (CONSTRAINT #3: never leak which credential was wrong)."""
+    Returns immediately (202) with the started job's initial status — the
+    same isolated device-approval worker flow as ``/brokerage/connect``, via
+    ``api._rh_login.start_refresh_job``. Poll
+    ``GET /brokerage/login/status/{job_id}`` for progress; the job's eventual
+    ``"succeeded"``/``"failed"``/``"timeout"``/``"cancelled"`` state is now the
+    only place a login-level failure can surface. The old
+    try/except-around-a-blocking-call translated to a 502 is gone for exactly
+    that reason — starting a job launches a subprocess and returns
+    immediately, it does not itself perform any Robinhood network call, so
+    there is no longer a blocking login result here to translate.
+    ``start_refresh_job`` (via ``data.robinhood_login.start_login``) does call
+    ``subprocess.Popen``, which can in principle raise ``OSError`` if process
+    creation itself fails (e.g. resource exhaustion) — the try/except below
+    exists solely to translate that unlikely case to a clean 502 rather than a
+    raw 500, matching this endpoint's pre-existing error-translation posture."""
     try:
-        snapshot = robinhood_portfolio.fetch_account_snapshot(force=True)
-    except Exception as exc:  # noqa: BLE001 - translate to a clean 502
-        logger.error("pilots_api: brokerage refresh failed: %s", exc)
+        job = rh_login.start_refresh_job()
+    except Exception as exc:  # noqa: BLE001 - OSError etc. from subprocess.Popen -> clean 502
+        logger.error("pilots_api: brokerage refresh job could not be started: %s", exc)
         raise HTTPException(
             status_code=502,
-            detail="Could not refresh the Robinhood account snapshot.",
+            detail="Could not start the Robinhood account refresh.",
         ) from exc
+    return rh_login.serialize_job(job)
+
+
+@app.get(
+    "/brokerage/login/status/{job_id}",
+    dependencies=[Depends(require_read_token), Depends(require_loopback)],
+)
+def get_brokerage_login_status(job_id: str) -> Dict[str, Any]:
+    """Poll the state of a login job started by ``POST /brokerage/connect`` or
+    ``POST /brokerage/refresh``. 404 if the job_id is unknown."""
+    job = rh_login.get_login_state(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown login job.")
+    return rh_login.serialize_job(job)
+
+
+@app.post(
+    "/brokerage/login/cancel/{job_id}",
+    dependencies=[Depends(require_command_token), Depends(require_loopback)],
+)
+def cancel_brokerage_login(job_id: str) -> Dict[str, Any]:
+    """Cancel an in-flight login job (SIGTERM -> SIGKILL the isolated worker
+    process). 404 if the job_id is unknown. Reports honestly if the kill
+    could not be confirmed rather than claiming success it didn't achieve."""
     try:
-        payload = _serialize_portfolio(snapshot)
-    except Exception as exc:  # noqa: BLE001 - defensive: malformed snapshot
-        logger.warning("pilots_api: refresh serialization failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail="Snapshot refreshed but could not be read back.",
-        ) from exc
-    # _serialize_portfolio hardcodes "db" (correct for GET /portfolio, which
-    # reads HistoricalStore directly) — this endpoint triggered a live fetch,
-    # so relabel honestly. Still "live" even on the internal stale-cache
-    # fallback inside fetch_account_snapshot: `is_stale`/`age_hours` above
-    # already surface that degradation; the DATA didn't come from this
-    # request reading the DB, it came from what the live-fetch call returned.
-    payload["source"] = "live"
+        stopped = rh_login.cancel_login(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown login job.")
+    job = rh_login.get_login_state(job_id)
+    payload = rh_login.serialize_job(job) if job else {"job_id": job_id}
+    payload["cancelled"] = stopped
     return payload
 
 
@@ -3061,47 +3354,12 @@ def get_automation_schedule() -> Dict[str, Any]:
 
 @app.get("/system/cron-status", dependencies=[Depends(require_read_token)])
 def get_system_cron_status() -> Dict[str, Any]:
-    """Parse deploy/crontab.txt and return the schedule."""
-    import pathlib
-    crontab_path = pathlib.Path(__file__).parent.parent / "deploy" / "crontab.txt"
-    jobs = []
-    
-    if not crontab_path.exists():
-        return {"jobs": [], "error": "crontab.txt not found"}
-        
-    current_title = ""
-    current_desc: list = []
-    
-    try:
-        with open(crontab_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                if line.startswith("# ──"):
-                    current_title = line.strip("# ─").strip()
-                    current_desc = []
-                elif line.startswith("# ==") or line.startswith("# Install:") or line.startswith("# All times") or line.startswith("# US Eastern"):
-                    continue
-                elif line.startswith("#"):
-                    current_desc.append(line.lstrip("#").strip())
-                else:
-                    parts = line.split(maxsplit=5)
-                    if len(parts) >= 6:
-                        schedule = " ".join(parts[:5])
-                        command = parts[5]
-                        jobs.append({
-                            "title": current_title or "Cron Job",
-                            "description": " ".join(current_desc),
-                            "schedule": schedule,
-                            "command": command,
-                        })
-                        current_desc = []
-        return {"jobs": jobs}
-    except Exception as exc:  # noqa: BLE001 - dead-letter
-        logger.warning("pilots_api: get_system_cron_status failed: %s", exc)
-        return {"jobs": [], "error": str(exc)}
+    """Parse deploy/crontab.txt and return the schedule.
 
+    Delegates to ``pilots.run_status.parse_crontab_status`` -- shared with
+    ``api/control_api.py``'s identical endpoint so the two can't drift again
+    (this handler used to carry its own, independently-maintained copy)."""
+    return run_status.parse_crontab_status()
 
 
 # ---------------------------------------------------------------------------
@@ -3544,6 +3802,14 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("CORS_ALLOWED_ORIGINS", "json", {}),
         ],
     ),
+    (
+        "RLHF Calibration",
+        [
+            ("RLHF_CALIBRATION_AUTO_APPROVE_ENABLED", "bool", {}),
+            ("RLHF_CALIBRATION_CONFIDENCE_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", "bool", {}),
+        ],
+    ),
 ]
 
 # Flat {key: (kind, extras)} index built once — its keyset IS the editor scope.
@@ -3573,9 +3839,19 @@ class TunablesUpdateRequest(BaseModel):
     ``{key: value}`` to write. Typed as ``Any`` values (not a pydantic Union) so
     THIS module does the type/range validation and can return a precise per-key
     ``rejected`` reason rather than a generic 422 — the frontend branches on the
-    reason tag."""
+    reason tag.
+
+    ``confirm`` is the dangerous-key acknowledgement. Any key in
+    ``settings_keysets.DANGEROUS_KEYS`` must appear here mapped to ITS OWN NAME
+    (``{"ADVISORY_ONLY": "ADVISORY_ONLY"}``) or it is rejected — see
+    :func:`_validate_and_write_payload`. Echoing the field's own name (rather
+    than a bare ``true``) is deliberate: it cannot be satisfied by a blanket
+    ``confirm_all`` flag, so a client that confirms one dangerous field has not
+    accidentally confirmed a second one it did not intend to touch. Absent for
+    an ordinary write, which is the overwhelmingly common case."""
 
     values: Dict[str, Any] = Field(..., max_length=64)
+    confirm: Dict[str, str] = Field(default_factory=dict, max_length=64)
 
 
 def _tunable_default(fi: Any) -> Any:
@@ -3593,13 +3869,6 @@ def _tunable_default(fi: Any) -> Any:
         except Exception:  # noqa: BLE001 - dead-letter, never fabricate/crash
             return None
     return fi.default
-
-
-def _build_tunables_groups() -> List[Dict[str, Any]]:
-    """Assemble ``/settings/tunables``'s grouped payload. Thin wrapper over
-    ``_build_groups_payload`` (the shared builder every ``/settings/*`` editor
-    uses) scoped to ``_TUNABLE_GROUPS``."""
-    return _build_groups_payload(_TUNABLE_GROUPS)
 
 
 def _tunables_env_drift(index_spec: Dict[str, tuple]) -> Dict[str, Any]:
@@ -3666,16 +3935,12 @@ def get_settings_tunables() -> Dict[str, Any]:
     Fail-open read (``require_read_token``), mirroring every other GET here. The
     ``value`` reflects the RUNNING process config (the live ``settings``
     singleton) — a pending ``.env`` write only takes effect on the next daemon
-    restart, which ``applies`` states explicitly (matching ``GET /strategy/matrix``
-    / ``GET /llm/status`` which likewise read live settings). ``env_drift``
-    reports whether the on-disk ``.env`` currently differs from these live values
-    (mirrors ``GET /strategy/matrix``'s ``env_drift``). Never 500s
-    (CONSTRAINT #6)."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_tunables_groups(),
-        "env_drift": _tunables_env_drift(_TUNABLE_INDEX),
-    }
+    restart, which each field's ``liveness.applies`` states explicitly (matching
+    ``GET /strategy/matrix`` / ``GET /llm/status`` which likewise read live
+    settings). ``env_drift`` reports whether the on-disk ``.env`` currently
+    differs from these live values (mirrors ``GET /strategy/matrix``'s
+    ``env_drift``). Never 500s (CONSTRAINT #6)."""
+    return _settings_editor_payload(_TUNABLE_GROUPS, _TUNABLE_INDEX)
 
 
 @app.put(
@@ -3694,7 +3959,7 @@ def get_settings_tunables() -> Dict[str, Any]:
 )
 def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Write a partial map of non-secret tunables to ``.env``."""
-    return _validate_and_write_payload(body.values, _TUNABLE_INDEX)
+    return _validate_and_write_payload(body.values, _TUNABLE_INDEX, confirm=body.confirm)
 
 
 def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
@@ -3708,8 +3973,25 @@ def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
     "json"`` fields carry a native dict/list ``value``/``default`` in
     ``settings`` — both are JSON-stringified here so the wire contract's
     ``string`` type holds (a failed ``json.dumps`` dead-letters to ``None``
-    rather than 500ing — CONSTRAINT #6)."""
+    rather than 500ing — CONSTRAINT #6).
+
+    Every field additionally carries a ``liveness`` sub-object
+    (``pilots.settings_meta.field_metadata``) answering "what happens when I
+    save this?" — ``applies`` / ``restart_reason`` / ``capture_sites`` /
+    ``env_pinned`` / ``dangerous`` / ``source``. The two per-moment inputs
+    (which names a real shell export pins, and which have a runtime-store
+    override) are resolved ONCE here for the whole payload but resolved FRESH
+    on every request: both can change between two requests, so neither may be
+    cached or precomputed."""
     model_fields = type(settings).model_fields
+    liveness = settings_meta.load_liveness()
+    pinned = settings_meta.env_pinned_keys()
+    stored = settings_meta.runtime_store_keys()
+    # Whether a live apply is possible AT ALL in this build. Without it a
+    # ``live_safe`` field is still only a .env write, so GET must not advertise
+    # ``immediately`` for a change the PUT will honestly report as needing a
+    # restart — the two must agree.
+    live_apply = settings_meta.live_apply_available()
     groups: List[Dict[str, Any]] = []
     for group_name, specs in groups_spec:
         fields: List[Dict[str, Any]] = []
@@ -3733,6 +4015,13 @@ def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
                 "type": _KIND_TO_TYPE[kind],
                 "default": default,
                 "description": description,
+                "liveness": settings_meta.field_metadata(
+                    key,
+                    pinned=pinned,
+                    stored=stored,
+                    data=liveness,
+                    live_apply=live_apply,
+                ),
             }
             for meta in ("min", "max", "step"):
                 if meta in extras:
@@ -3744,7 +4033,41 @@ def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
     return groups
 
 
-def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tuple]) -> Dict[str, Any]:
+def _settings_editor_payload(
+    groups_spec: List[tuple], index_spec: Dict[str, tuple]
+) -> Dict[str, Any]:
+    """The complete ``GET /settings/*`` body for one editor — shared by all five.
+
+    ``applies`` is no longer the hardcoded ``"next_daemon_restart"`` every
+    editor used to return unconditionally. That string was true of a pure
+    ``.env`` write and became a false blanket claim once ``runtime_flags`` could
+    apply a change to the running process; it is now ROLLED UP from the fields
+    this editor actually serves (``"immediately"`` / ``"next_daemon_restart"`` /
+    ``"no_effect"`` / ``"env_pinned"`` when they all agree, else ``"mixed"``),
+    with ``applies_counts`` giving the breakdown so a screen can say something
+    honest about its own particular mix instead of one global sentence.
+    """
+    groups = _build_groups_payload(groups_spec)
+    states = [
+        f["liveness"]["applies"]
+        for g in groups
+        for f in g["fields"]
+        if isinstance(f.get("liveness"), dict)
+    ]
+    return {
+        **settings_meta.summarize_applies(states),
+        "groups": groups,
+        "env_drift": _tunables_env_drift(index_spec),
+    }
+
+
+def _validate_and_write_payload(
+    values: Dict[str, Any],
+    index_spec: Dict[str, tuple],
+    *,
+    confirm: Optional[Dict[str, str]] = None,
+    actor: str = "pilots_api",
+) -> Dict[str, Any]:
     """Validate ``values`` against ``index_spec`` (one editor's ``{key: (kind,
     extras)}`` scope — ``_TUNABLE_INDEX`` / ``_SENTIMENT_INDEX`` /
     ``_SECTOR_SELECTION_INDEX``) and write the accepted subset to ``.env``.
@@ -3755,7 +4078,8 @@ def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tu
     (defensive: not an env_io writable non-secret, CONSTRAINT #3),
     ``expected_boolean`` / ``expected_number`` / ``expected_integer`` /
     ``expected_string`` / ``invalid_option`` / ``out_of_range`` /
-    ``invalid_json`` (``kind == "json"`` only).
+    ``invalid_json`` (``kind == "json"`` only), plus the two confirmation tags
+    below.
 
     For ``kind == "json"`` the accepted value kept in ``accepted`` (and echoed
     in ``written`` below) is the ORIGINAL STRING the caller submitted (only
@@ -3764,7 +4088,47 @@ def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tu
     ``env_io.write_many_atomic``, which — matching ``env_io._JSON_KEYS``'s own
     ``json.dumps(value)`` convention for ``SIGNAL_WEIGHTS``/
     ``CORS_ALLOWED_ORIGINS`` etc. — expects a native dict/list, not an
-    already-encoded string (handing it a string would double-encode)."""
+    already-encoded string (handing it a string would double-encode).
+
+    ------------------------------------------------------------------
+    Two behaviours this function gained, both load-bearing
+    ------------------------------------------------------------------
+    **1. Dangerous-key confirmation, scoped to writes through THIS function.**
+    ``settings_keysets.DANGEROUS_KEYS`` fields accepted here (``ADVISORY_ONLY``,
+    ``DRY_RUN``, ``ROBINHOOD_EXECUTION_MODE``, ``MACRO_REGIME_GATE_ENABLED``,
+    ``FMP_BARS_ENABLED``, ``FMP_BARS_ADJUSTMENT``, ``CORS_ALLOWED_ORIGINS`` —
+    the other 11 ``DANGEROUS_KEYS`` members are hand-set-only master switches
+    never in ``env_io.ALLOWED_KEYS``, so they are already rejected as
+    ``forbidden_key`` above and never reach this gate) now require the caller
+    to echo the field's own name back in ``confirm``: ``{"values":
+    {"ADVISORY_ONLY": false}, "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY"}}``.
+    Missing -> ``confirmation_required``; present but not an exact match ->
+    ``confirmation_mismatch``. Before this, five of those fields — including
+    ``ADVISORY_ONLY``, the execution quarantine AGENTS.md §2 calls
+    load-bearing safety infrastructure — were one ordinary ``PUT`` *through
+    this function* away from ``false`` with no confirmation of any kind.
+    Rejection is strictly PER KEY: a batch mixing an unconfirmed dangerous key
+    with ordinary tunables still writes the ordinary ones (this repo's existing
+    partial-success convention), so the gate cannot be worked around by
+    bundling and cannot punish an unrelated edit.
+
+    **This gate does NOT cover every write path for these fields.**
+    ``PUT /automation/execution-mode`` writes ``ADVISORY_ONLY`` (and, via
+    ``gui.strategy_registry.set_active_mode``, ``DRY_RUN``/``ALPACA_PAPER``)
+    directly and predates this function — it has its own confirm-button UX in
+    the webapp's Execution Mode control, but not this typed-name echo. Do not
+    read the framing above as "ADVISORY_ONLY now always requires typed
+    confirmation" — it means that within the five ``/settings/*`` editors.
+
+    **2. Live apply.** Every accepted key is still written to ``.env`` exactly
+    as before (durable across restarts, unchanged). Additionally, a key the
+    liveness classifier reports ``live_safe`` and that is NOT env-pinned is
+    pushed onto THIS process's ``settings`` singleton via
+    ``runtime_flags_writer.write_override``. The per-key ``applies`` reported
+    back is the ACTUAL outcome of that attempt (``WriteResult.applies``), never
+    the a-priori classification — if the writer refuses, or reports the field
+    env-pinned, or is not installed at all, the response says so.
+    """
     accepted: Dict[str, Any] = {}
     rejected: Dict[str, str] = {}
     for key, value in values.items():
@@ -3825,24 +4189,149 @@ def _validate_and_write_payload(values: Dict[str, Any], index_spec: Dict[str, tu
                 continue
             accepted[key] = value
 
+    # ---- dangerous-key confirmation gate (per key, never whole-request) ----
+    # Runs AFTER type validation so a malformed dangerous value reports the
+    # type problem rather than being masked by a confirmation complaint.
+    for key in list(accepted):
+        if not settings_meta.is_dangerous(key):
+            continue
+        echoed = (confirm or {}).get(key)
+        if echoed is None:
+            rejected[key] = "confirmation_required"
+            accepted.pop(key)
+        elif echoed != key:
+            rejected[key] = "confirmation_mismatch"
+            accepted.pop(key)
+
     if accepted:
         to_write: Dict[str, Any] = {}
         for key, value in accepted.items():
             kind, _extras = index_spec[key]
             to_write[key] = json.loads(value) if kind == "json" else value
         env_io.write_many_atomic(to_write)
+        per_key_applies = _apply_live_overrides(to_write, actor=actor)
+    else:
+        per_key_applies = {}
 
+    applied_now = sorted(
+        k for k, v in per_key_applies.items() if v == settings_meta.APPLIES_IMMEDIATELY
+    )
     return {
         "written": accepted,
         "rejected": rejected,
-        "applies": "next_daemon_restart",
-        "restart_required": True,
-        "restart_endpoint": "POST /daemon/restart",
-        "note": (
-            "Accepted values written to .env. settings is not patched "
-            "in-process — restart the daemon via POST /daemon/restart to apply."
+        "per_key_applies": per_key_applies,
+        **settings_meta.summarize_applies(list(per_key_applies.values())),
+        # A restart is only genuinely required for the keys that did NOT apply
+        # live. Reporting True unconditionally (as this endpoint used to) told
+        # an operator to restart for a change that was already in force.
+        "restart_required": any(
+            v != settings_meta.APPLIES_IMMEDIATELY for v in per_key_applies.values()
         ),
+        "restart_endpoint": "POST /daemon/restart",
+        "note": _write_note(per_key_applies, applied_now),
     }
+
+
+def _write_note(per_key_applies: Dict[str, str], applied_now: List[str]) -> str:
+    """One honest sentence about what a PUT actually did.
+
+    Deliberately NOT the old unconditional "settings is not patched in-process
+    — restart the daemon to apply", which is now false for every ``live_safe``
+    key. Says what happened to each half of the write.
+    """
+    if not per_key_applies:
+        return "Nothing was written."
+    pending = sorted(set(per_key_applies) - set(applied_now))
+    if applied_now and not pending:
+        return (
+            "Saved to .env and applied to the running process — no restart "
+            "needed."
+        )
+    if pending and not applied_now:
+        return (
+            "Saved to .env. The running process keeps the previous values until "
+            "it restarts (POST /daemon/restart)."
+        )
+    return (
+        f"Saved to .env. {len(applied_now)} applied to the running process "
+        f"immediately; {len(pending)} take effect on the next restart "
+        f"({', '.join(pending)})."
+    )
+
+
+def _apply_live_overrides(to_write: Dict[str, Any], *, actor: str) -> Dict[str, str]:
+    """Push every ``live_safe``, non-env-pinned key onto the RUNNING process.
+
+    Returns ``{key: applies}`` for every key in ``to_write`` — the ACTUAL
+    outcome, not the a-priori classification. The ``.env`` write has already
+    happened and is independent of everything here: this only decides whether
+    the operator also has to restart to see the change.
+
+    ``runtime_flags_writer`` is imported lazily and defensively. It is a
+    separate, newer module and may legitimately be absent from a given
+    checkout; when it is, every key honestly reports ``next_daemon_restart``,
+    which is exactly what a ``.env``-only write means. That is the same
+    fail-closed direction the rest of this feature takes: a key that is not
+    live-applied is never REPORTED as live-applied.
+
+    Never raises (CONSTRAINT #6) — a writer failure degrades one key to
+    ``next_daemon_restart`` and leaves the durable ``.env`` write intact.
+    """
+    liveness = settings_meta.load_liveness()
+    pinned = settings_meta.env_pinned_keys()
+    out: Dict[str, str] = {}
+
+    try:
+        from runtime_flags_writer import write_override  # noqa: PLC0415 - lazy
+    except Exception:  # noqa: BLE001 - module not installed in this checkout
+        logger.info(
+            "settings write: runtime_flags_writer unavailable; %d key(s) written "
+            "to .env only and reported as taking effect on the next restart.",
+            len(to_write),
+        )
+        return {key: settings_meta.APPLIES_NEXT_RESTART for key in to_write}
+
+    for key, value in to_write.items():
+        # live_apply=True is not an assumption here: the import above succeeded,
+        # which is exactly the condition live_apply_available() reports on.
+        applies = settings_meta.applies_for(
+            key, pinned=pinned, data=liveness, live_apply=True
+        )
+        if applies != settings_meta.APPLIES_IMMEDIATELY:
+            # Not live-safe, env-pinned, or no-op: nothing to apply. The static
+            # answer IS the real one here, because we make it so by not writing.
+            out[key] = applies
+            continue
+        try:
+            result = write_override(key, value, actor=actor)
+        except Exception as exc:  # noqa: BLE001 - dead-letter, per key
+            logger.warning(
+                "settings write: live apply of %s failed (%s); the .env write "
+                "stands and the change takes effect on the next restart.",
+                key,
+                type(exc).__name__,
+            )
+            out[key] = settings_meta.APPLIES_NEXT_RESTART
+            continue
+        # Trust the writer's own verdict over our prediction. It knows things
+        # the static classifier cannot (a refusal, a validation failure, an
+        # env pin it observed at a different moment).
+        reported = getattr(result, "applies", None)
+        ok = getattr(result, "ok", False)
+        if ok and reported in settings_meta.APPLIES_STATES:
+            out[key] = reported
+        elif reported == "refused" or not ok:
+            reason = getattr(result, "reason", None)
+            logger.warning(
+                "settings write: live apply of %s was refused by "
+                "runtime_flags_writer (%s); the .env write stands.",
+                key,
+                reason or "no reason given",
+            )
+            out[key] = settings_meta.APPLIES_NEXT_RESTART
+        else:
+            out[key] = settings_meta.APPLIES_NEXT_RESTART
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -4054,11 +4543,7 @@ _ETF_TRANSMISSION_INDEX = {
 @app.get("/settings/sentiment", dependencies=[Depends(require_read_token)])
 def get_settings_sentiment() -> Dict[str, Any]:
     """Get sentiment & news ingestion configuration."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_groups_payload(_SENTIMENT_GROUPS),
-        "env_drift": _tunables_env_drift(_SENTIMENT_INDEX),
-    }
+    return _settings_editor_payload(_SENTIMENT_GROUPS, _SENTIMENT_INDEX)
 
 
 @app.put(
@@ -4077,17 +4562,13 @@ def get_settings_sentiment() -> Dict[str, Any]:
 )
 def put_settings_sentiment(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update sentiment & news ingestion configuration in .env."""
-    return _validate_and_write_payload(body.values, _SENTIMENT_INDEX)
+    return _validate_and_write_payload(body.values, _SENTIMENT_INDEX, confirm=body.confirm)
 
 
 @app.get("/settings/sector-selection", dependencies=[Depends(require_read_token)])
 def get_settings_sector_selection() -> Dict[str, Any]:
     """Get sector selection configuration."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_groups_payload(_SECTOR_SELECTION_GROUPS),
-        "env_drift": _tunables_env_drift(_SECTOR_SELECTION_INDEX),
-    }
+    return _settings_editor_payload(_SECTOR_SELECTION_GROUPS, _SECTOR_SELECTION_INDEX)
 
 
 @app.put(
@@ -4106,17 +4587,13 @@ def get_settings_sector_selection() -> Dict[str, Any]:
 )
 def put_settings_sector_selection(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update sector selection configuration in .env."""
-    return _validate_and_write_payload(body.values, _SECTOR_SELECTION_INDEX)
+    return _validate_and_write_payload(body.values, _SECTOR_SELECTION_INDEX, confirm=body.confirm)
 
 
 @app.get("/settings/fmp", dependencies=[Depends(require_read_token)])
 def get_settings_fmp() -> Dict[str, Any]:
     """Get Financial Modeling Prep (FMP) configuration."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_groups_payload(_FMP_GROUPS),
-        "env_drift": _tunables_env_drift(_FMP_INDEX),
-    }
+    return _settings_editor_payload(_FMP_GROUPS, _FMP_INDEX)
 
 
 @app.put(
@@ -4135,17 +4612,13 @@ def get_settings_fmp() -> Dict[str, Any]:
 )
 def put_settings_fmp(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update Financial Modeling Prep (FMP) configuration in .env."""
-    return _validate_and_write_payload(body.values, _FMP_INDEX)
+    return _validate_and_write_payload(body.values, _FMP_INDEX, confirm=body.confirm)
 
 
 @app.get("/settings/etf-transmission", dependencies=[Depends(require_read_token)])
 def get_settings_etf_transmission() -> Dict[str, Any]:
     """Get ETF volatility transmission & holdings configuration."""
-    return {
-        "applies": "next_daemon_restart",
-        "groups": _build_groups_payload(_ETF_TRANSMISSION_GROUPS),
-        "env_drift": _tunables_env_drift(_ETF_TRANSMISSION_INDEX),
-    }
+    return _settings_editor_payload(_ETF_TRANSMISSION_GROUPS, _ETF_TRANSMISSION_INDEX)
 
 
 @app.put(
@@ -4164,7 +4637,7 @@ def get_settings_etf_transmission() -> Dict[str, Any]:
 )
 def put_settings_etf_transmission(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update ETF volatility transmission & holdings configuration in .env."""
-    return _validate_and_write_payload(body.values, _ETF_TRANSMISSION_INDEX)
+    return _validate_and_write_payload(body.values, _ETF_TRANSMISSION_INDEX, confirm=body.confirm)
 
 
 # ---------------------------------------------------------------------------
@@ -4546,50 +5019,3 @@ def post_rag_query(body: RagQueryRequest) -> Dict[str, Any]:
         "analysis": analysis if analysis else None,
         "available": bool(analysis),
     }
-
-
-class MultiAgentAnalysisRequest(BaseModel):
-    tickers: List[str]
-    query: str
-    context: Optional[Dict[str, Any]] = None
-
-
-@app.post(
-    "/analysis/multi-agent",
-    dependencies=[
-        Depends(require_read_token),
-    ],
-)
-def post_multi_agent_analysis(body: MultiAgentAnalysisRequest) -> Dict[str, Any]:
-    """
-    On-demand multi-agent analysis workflow using LangGraph.
-    
-    Protected by the read token since the execution agent's ADVISORY_ONLY 
-    mode is hardcoded and orders are only hypothetical recommendations evaluated
-    through the PreTradeRiskGate, not submitted.
-    """
-    if not body.tickers:
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "empty_tickers", "message": "At least one ticker must be provided."},
-        )
-        
-    if not body.query:
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "empty_query", "message": "Query must not be empty."},
-        )
-
-    try:
-        final_state = run_two_agent_analysis(
-            tickers=body.tickers,
-            query=body.query,
-            context=body.context
-        )
-        return final_state
-    except Exception as e:
-        logger.error(f"Failed to run multi-agent analysis: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "analysis_failed", "message": str(e)}
-        )

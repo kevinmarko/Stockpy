@@ -20,6 +20,14 @@ JSON-encode); PUT is gated on BOTH the fail-closed command token AND the
 dedicated ``GENERAL_SETTINGS_WRITES_ENABLED`` flag; and that the token is never
 logged (CONSTRAINT #3). ``env_io.write_many_atomic`` is patched so no test ever
 touches a real ``.env``.
+
+Several PUT tests below exercise a live-safe field (e.g. ``KELLY_FRACTION``)
+through the real endpoint with ``write_many_atomic`` mocked but
+``runtime_flags_writer.write_override`` left genuinely live — proving the
+field really does apply immediately, not just that the code claims it does.
+``_isolated_runtime_flags_store`` (autouse) redirects that real writer's
+target file to a throwaway path so those writes never touch this checkout's
+own ``output/runtime_flags.json``.
 """
 
 from __future__ import annotations
@@ -31,10 +39,14 @@ import json
 import pathlib
 from unittest import mock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from settings import settings
+from settings_keysets import DANGEROUS_KEYS
 import api.pilots_api as pilots_api
+import pilots.settings_meta as settings_meta
+import runtime_flags
 
 # Starlette's TestClient defaults request.client.host to the literal
 # string "testclient" -- NOT loopback -- which would trip
@@ -42,6 +54,22 @@ import api.pilots_api as pilots_api
 # on every one of this file's existing zero-config-behavior assertions.
 # An explicit loopback host here is what these tests have always meant.
 client = TestClient(pilots_api.app, client=("127.0.0.1", 54123))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime_flags_store(tmp_path, monkeypatch):
+    """Redirect the real runtime-flags store for every test in this file.
+
+    PUT handlers call ``runtime_flags_writer.write_override`` with no
+    ``path=`` override, exactly like production — so without this, a test
+    that PUTs a live-safe field through the real endpoint writes to this
+    checkout's actual ``output/runtime_flags.json`` instead of an isolated
+    file. ``INVESTYO_RUNTIME_FLAGS_PATH`` is the one override both the
+    writer and the reader (``runtime_flags.load_store``) already respect.
+    """
+    monkeypatch.setenv(
+        runtime_flags.PATH_OVERRIDE_ENV_VAR, str(tmp_path / "runtime_flags.json")
+    )
 
 _CMD_TOKEN = "cmd-tok"
 _READ_TOKEN = "read-tok"
@@ -54,6 +82,7 @@ _EXPECTED_GROUPS = [
     "Market Data",
     "Runtime & Ops",
     "Advanced / Config",
+    "RLHF Calibration",
 ]
 _VALID_TYPES = {"number", "boolean", "enum", "string"}
 
@@ -68,6 +97,15 @@ _NEW_ADVANCED_KEYS = {
 }
 _JSON_KIND_KEYS = {"SECTOR_FORECAST_CONFIGS", "CORS_ALLOWED_ORIGINS"}
 
+# RLHF Calibration Review Queue operator tunables (rlhf_calibration_store.py) —
+# RLHF_CALIBRATION_ENABLED itself is deliberately NOT here (hand-set-only
+# master switch, see require_rlhf_calibration_enabled's docstring).
+_NEW_RLHF_KEYS = {
+    "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
+    "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
+    "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
+}
+
 
 @contextlib.contextmanager
 def _writes_enabled(token: "str | None" = _CMD_TOKEN, enabled: bool = True):
@@ -78,11 +116,30 @@ def _writes_enabled(token: "str | None" = _CMD_TOKEN, enabled: bool = True):
             yield
 
 
-def _put(values: dict, token: "str | None" = _CMD_TOKEN, enabled: bool = True):
+def _confirm_all(values: dict) -> dict:
+    """A ``confirm`` map echoing every ``DANGEROUS_KEYS`` name present in
+    ``values``.
+
+    Test convenience for the many cases whose subject is NOT the confirmation
+    gate. The tests that exercise the gate itself build their maps by hand — the
+    whole point of the gate is that each dangerous key must be named
+    deliberately, so a helper must never be the only thing proving it works."""
+    return {k: k for k in values if k in DANGEROUS_KEYS}
+
+
+def _put(
+    values: dict,
+    token: "str | None" = _CMD_TOKEN,
+    enabled: bool = True,
+    confirm: "dict | None" = None,
+):
+    body: dict = {"values": values}
+    if confirm is not None:
+        body["confirm"] = confirm
     with _writes_enabled(token=token, enabled=enabled):
         return client.put(
             "/settings/tunables",
-            json={"values": values},
+            json=body,
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -90,19 +147,28 @@ def _put(values: dict, token: "str | None" = _CMD_TOKEN, enabled: bool = True):
 def _put_and_get_rejected(values: dict) -> dict:
     with _writes_enabled():
         with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
-            resp = _put(values)
+            resp = _put(values, confirm=_confirm_all(values))
     assert resp.status_code == 200
     return resp.json()["rejected"]
 
 
-def _put_scoped(url: str, values: dict, token: "str | None" = _CMD_TOKEN, enabled: bool = True):
+def _put_scoped(
+    url: str,
+    values: dict,
+    token: "str | None" = _CMD_TOKEN,
+    enabled: bool = True,
+    confirm: "dict | None" = None,
+):
     """Same shape as ``_put`` but for the dedicated sub-route editors
     (``/settings/sentiment``, ``/settings/sector-selection``), which share
     ``PUT /settings/tunables``'s two-tier auth stack."""
+    body: dict = {"values": values}
+    if confirm is not None:
+        body["confirm"] = confirm
     with _writes_enabled(token=token, enabled=enabled):
         return client.put(
             url,
-            json={"values": values},
+            json=body,
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -118,7 +184,9 @@ class TestGetTunables:
             resp = client.get("/settings/tunables")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["applies"] == "next_daemon_restart"
+        # `applies` is now a ROLLUP of the served fields' own states (or
+        # "mixed"), not the hardcoded screen-wide string it used to be.
+        assert body["applies"] in set(settings_meta.APPLIES_STATES) | {"mixed"}
         groups = body["groups"]
         assert [g["name"] for g in groups] == _EXPECTED_GROUPS
         # Every field carries the base contract keys + a valid type.
@@ -213,7 +281,13 @@ class TestJsonKindFields:
 
     def test_put_json_valid_accepted_written_as_original_string_env_io_gets_native_object(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put({"CORS_ALLOWED_ORIGINS": '["https://example.com"]'})
+            # CORS_ALLOWED_ORIGINS is a DANGEROUS_KEYS member, so this write
+            # needs its confirmation echo — the subject of THIS test is the
+            # JSON round-trip, not the gate (TestDangerousKeyConfirmation).
+            resp = _put(
+                {"CORS_ALLOWED_ORIGINS": '["https://example.com"]'},
+                confirm={"CORS_ALLOWED_ORIGINS": "CORS_ALLOWED_ORIGINS"},
+            )
         assert resp.status_code == 200
         body = resp.json()
         assert body["rejected"] == {}
@@ -271,7 +345,7 @@ class TestTunablesScopeInvariants:
             "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
             "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
             "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
-        } | _NEW_ADVANCED_KEYS
+        } | _NEW_ADVANCED_KEYS | _NEW_RLHF_KEYS
         assert set(pilots_api._TUNABLE_INDEX) == expected
 
     def test_excludes_other_screens_keys(self):
@@ -394,10 +468,19 @@ class TestPutTunables:
             pilots_api.env_io, "write_many_atomic",
             return_value=["KELLY_FRACTION", "LOG_LEVEL", "DRY_RUN"],
         ) as w:
-            resp = _put({"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True})
+            # DRY_RUN is a DANGEROUS_KEYS member and needs its confirmation
+            # echo; KELLY_FRACTION/LOG_LEVEL are ordinary and need none.
+            resp = _put(
+                {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True},
+                confirm={"DRY_RUN": "DRY_RUN"},
+            )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["applies"] == "next_daemon_restart"
+        # KELLY_FRACTION is live_safe (applies immediately via the real
+        # writer, genuinely invoked here); LOG_LEVEL/DRY_RUN are
+        # restart_required — an honest rollup of a mixed batch is "mixed",
+        # not a blanket "next_daemon_restart" (see _settings_editor_payload).
+        assert body["applies"] == "mixed"
         assert body["rejected"] == {}
         # Echoes the REQUEST/coerced values, not the (stale) settings singleton.
         assert body["written"] == {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True}
@@ -598,7 +681,14 @@ class TestSettingsSubroutesGetShape:
                 resp = client.get(url)
             assert resp.status_code == 200
             body = resp.json()
-            assert body["applies"] == "next_daemon_restart"
+            # The four subroutes genuinely differ (sector-selection is all
+            # live_safe; the others mix live_safe and restart_required
+            # fields) -- assert self-consistency against the real rollup
+            # helper rather than one hardcoded value across all of them.
+            states = [
+                f["liveness"]["applies"] for g in body["groups"] for f in g["fields"]
+            ]
+            assert body["applies"] == settings_meta.summarize_applies(states)["applies"]
             index = getattr(pilots_api, index_name)
             served_keys = {f["key"] for g in body["groups"] for f in g["fields"]}
             assert served_keys == set(index), f"{url}: served keys != {index_name}"
@@ -766,6 +856,410 @@ class TestSettingsSubroutesPut:
 # ---------------------------------------------------------------------------
 # AST guard still green (no heavy-engine import introduced by this feature)
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Per-field liveness metadata (GET) — all five editors
+# ---------------------------------------------------------------------------
+
+#: (url, index attribute) for each of the five settings editors.
+_EDITORS = [
+    ("/settings/tunables", "_TUNABLE_INDEX"),
+    ("/settings/sentiment", "_SENTIMENT_INDEX"),
+    ("/settings/sector-selection", "_SECTOR_SELECTION_INDEX"),
+    ("/settings/fmp", "_FMP_INDEX"),
+    ("/settings/etf-transmission", "_ETF_TRANSMISSION_INDEX"),
+]
+
+_LIVENESS_KEYS = {
+    "applies",
+    "restart_reason",
+    "capture_sites",
+    "env_pinned",
+    "dangerous",
+    "source",
+}
+
+
+def _all_fields(body: dict) -> list:
+    return [f for g in body["groups"] for f in g["fields"]]
+
+
+def _get(url: str) -> dict:
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get(url)
+    assert resp.status_code == 200
+    return resp.json()
+
+
+class TestLivenessMetadataOnGet:
+    """Every field on every editor carries honest liveness metadata.
+
+    Parameterised across all five editors deliberately: the metadata is built by
+    ONE shared helper, and a regression that wired only some editors to it is
+    exactly the failure this suite has to catch."""
+
+    def test_every_field_on_every_editor_carries_liveness(self):
+        for url, _index in _EDITORS:
+            body = _get(url)
+            fields = _all_fields(body)
+            assert fields, f"{url} served no fields"
+            for f in fields:
+                lv = f.get("liveness")
+                assert isinstance(lv, dict), f"{url}:{f['key']} has no liveness"
+                assert set(lv) == _LIVENESS_KEYS, f"{url}:{f['key']} -> {sorted(lv)}"
+                assert lv["applies"] in settings_meta.APPLIES_STATES
+                assert lv["source"] in ("runtime_store", "env_file")
+                assert isinstance(lv["env_pinned"], bool)
+                assert isinstance(lv["dangerous"], bool)
+
+    def test_capture_sites_is_a_list_never_null(self):
+        """`[]` is the MEASURED answer for a field with no capture site — the
+        classifier looked and found none. It must be distinguishable from the
+        artifact being unreadable, so it is never `null` and never omitted."""
+        for url, _index in _EDITORS:
+            for f in _all_fields(_get(url)):
+                sites = f["liveness"]["capture_sites"]
+                assert isinstance(sites, list), f"{url}:{f['key']} capture_sites={sites!r}"
+                assert all(isinstance(s, str) for s in sites)
+
+    def test_live_safe_field_has_empty_capture_sites_and_no_restart_reason(self):
+        """A field the classifier calls `live_safe` must report zero capture
+        sites — that is the whole basis of the claim that it can be applied
+        live."""
+        data = settings_meta.load_liveness()
+        checked = 0
+        for url, _index in _EDITORS:
+            for f in _all_fields(_get(url)):
+                if settings_meta.classification(f["key"], data=data) != "live_safe":
+                    continue
+                checked += 1
+                assert f["liveness"]["capture_sites"] == []
+        assert checked > 0, "no live_safe field served — fixture assumption broken"
+
+    def test_restart_required_field_names_its_capture_sites(self):
+        """The restart claim is checkable, not merely asserted: a field that
+        needs one names the `file:line` sites that cause it."""
+        data = settings_meta.load_liveness()
+        checked = 0
+        for url, _index in _EDITORS:
+            for f in _all_fields(_get(url)):
+                if settings_meta.classification(f["key"], data=data) != "restart_required":
+                    continue
+                checked += 1
+                lv = f["liveness"]
+                assert lv["capture_sites"], f"{f['key']} claims a restart with no evidence"
+                assert lv["restart_reason"]
+                # The prose cites at least one of the real sites.
+                assert any(site in lv["restart_reason"] for site in lv["capture_sites"])
+        assert checked > 0, "no restart_required field served — fixture assumption broken"
+
+    def test_dangerous_flag_matches_the_real_keyset(self):
+        for url, _index in _EDITORS:
+            for f in _all_fields(_get(url)):
+                assert f["liveness"]["dangerous"] == (f["key"] in DANGEROUS_KEYS)
+
+    def test_the_five_known_dangerous_keys_are_flagged(self):
+        """Regression pin on the exact gap this feature closed: these five were
+        live-writable through these editors with no confirmation at all."""
+        found = {}
+        for url, _index in _EDITORS:
+            for f in _all_fields(_get(url)):
+                if f["liveness"]["dangerous"]:
+                    found[f["key"]] = url
+        assert set(found) == {
+            "ADVISORY_ONLY",
+            "DRY_RUN",
+            "CORS_ALLOWED_ORIGINS",
+            "FMP_BARS_ENABLED",
+            "FMP_BARS_ADJUSTMENT",
+        }, found
+
+    def test_screen_rollup_matches_its_own_fields(self):
+        for url, _index in _EDITORS:
+            body = _get(url)
+            states = [f["liveness"]["applies"] for f in _all_fields(body)]
+            assert body["applies"] == settings_meta.summarize_applies(states)["applies"]
+            assert body["applies_counts"] == settings_meta.summarize_applies(states)["applies_counts"]
+            assert sum(body["applies_counts"].values()) == len(states)
+
+
+class TestEnvPinningComputedFresh:
+    """Env-pinning is a per-moment fact about the operator's shell, so it must be
+    resolved on EVERY request — never cached into a module-level constant and
+    never baked into a static artifact."""
+
+    def test_a_newly_pinned_key_is_reported_without_a_restart(self):
+        key = "KELLY_FRACTION"
+        before = _get("/settings/tunables")
+        assert _find_field(before, key)["liveness"]["env_pinned"] is False
+
+        with mock.patch.object(
+            settings_meta, "env_pinned_keys", return_value=frozenset({key})
+        ):
+            during = _get("/settings/tunables")
+        f = _find_field(during, key)
+        assert f["liveness"]["env_pinned"] is True
+        # An env pin OVERRIDES the static classification entirely — it wins over
+        # both the runtime store and .env, whatever the classifier says.
+        assert f["liveness"]["applies"] == "env_pinned"
+
+        # ...and it is gone again the moment the pin is, with no restart.
+        after = _get("/settings/tunables")
+        assert _find_field(after, key)["liveness"]["env_pinned"] is False
+
+    def test_pin_does_not_leak_across_editors_or_fields(self):
+        with mock.patch.object(
+            settings_meta, "env_pinned_keys", return_value=frozenset({"KELLY_FRACTION"})
+        ):
+            body = _get("/settings/tunables")
+        pinned = [f["key"] for f in _all_fields(body) if f["liveness"]["env_pinned"]]
+        assert pinned == ["KELLY_FRACTION"]
+
+    def test_source_reports_runtime_store_only_for_an_overridden_key(self):
+        key = "KELLY_FRACTION"
+        assert _find_field(_get("/settings/tunables"), key)["liveness"]["source"] == "env_file"
+        with mock.patch.object(
+            settings_meta, "runtime_store_keys", return_value=frozenset({key})
+        ):
+            body = _get("/settings/tunables")
+        assert _find_field(body, key)["liveness"]["source"] == "runtime_store"
+        others = [
+            f["key"]
+            for f in _all_fields(body)
+            if f["liveness"]["source"] == "runtime_store"
+        ]
+        assert others == [key]
+
+    def test_a_pinned_key_never_reports_runtime_store_even_if_also_stored(self):
+        """A real shell export always wins over the store (see applies_for's
+        own ordering) -- so a key that is BOTH pinned AND has a stale/leftover
+        store entry must not claim "source": "runtime_store". That combo would
+        contradict this same payload's own "env_pinned": true on the same
+        field."""
+        key = "KELLY_FRACTION"
+        with mock.patch.object(
+            settings_meta, "runtime_store_keys", return_value=frozenset({key})
+        ):
+            with mock.patch.object(
+                settings_meta, "env_pinned_keys", return_value=frozenset({key})
+            ):
+                body = _get("/settings/tunables")
+        f = _find_field(body, key)
+        assert f["liveness"]["env_pinned"] is True
+        assert f["liveness"]["source"] == "env_file"
+
+
+class TestGetDegradesWhenLivenessArtifactUnreadable:
+    """CONSTRAINT #6: an unreadable classification artifact must degrade the
+    GET, never 500 it — and must degrade toward "needs a restart", never toward
+    a false "applies immediately"."""
+
+    def test_missing_artifact_still_serves_200_and_claims_no_liveness(self):
+        settings_meta.reset_cache()
+        try:
+            with mock.patch.object(settings_meta, "load_liveness", return_value={
+                "live_safe": frozenset(),
+                "restart_required": {},
+                "no_op": frozenset(),
+                "loaded": False,
+            }):
+                body = _get("/settings/tunables")
+            fields = _all_fields(body)
+            assert fields
+            for f in fields:
+                lv = f["liveness"]
+                # Never "immediately" on the strength of an artifact we could
+                # not read.
+                assert lv["applies"] in ("next_daemon_restart", "env_pinned")
+                assert lv["capture_sites"] == []
+        finally:
+            settings_meta.reset_cache()
+
+
+# ---------------------------------------------------------------------------
+# Dangerous-key confirmation gate (PUT) — all five editors
+# ---------------------------------------------------------------------------
+
+
+class TestAdvisoryOnlyConfirmationGate:
+    """THE test this whole feature exists for.
+
+    ``ADVISORY_ONLY`` is the execution quarantine AGENTS.md §2 calls load-bearing
+    safety infrastructure. Before this gate it was one ordinary, unconfirmed
+    ``PUT /settings/tunables`` away from ``false``."""
+
+    def test_advisory_only_cannot_be_flipped_without_confirmation(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"ADVISORY_ONLY": False})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rejected"] == {"ADVISORY_ONLY": "confirmation_required"}
+        assert body["written"] == {}
+        # The critical assertion: the gate runs BEFORE the write, so nothing
+        # reached `.env` at all. A rejection after a partial write would be
+        # worse than no gate, because it would read as a refusal while having
+        # already disarmed the quarantine.
+        assert not w.called
+
+    def test_advisory_only_rejects_a_wrong_confirmation_string(self):
+        for bad in ("advisory_only", "ADVISORY_ONLY ", "true", "yes", "", "DRY_RUN"):
+            with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+                resp = _put({"ADVISORY_ONLY": False}, confirm={"ADVISORY_ONLY": bad})
+            body = resp.json()
+            assert body["rejected"] == {
+                "ADVISORY_ONLY": "confirmation_mismatch"
+            }, f"accepted bad confirmation {bad!r}"
+            assert body["written"] == {}
+            assert not w.called
+
+    def test_confirming_a_different_key_does_not_confirm_advisory_only(self):
+        """Echo-the-name exists precisely so one field's confirmation can never
+        be spent on another."""
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"ADVISORY_ONLY": False}, confirm={"DRY_RUN": "DRY_RUN"})
+        body = resp.json()
+        assert body["rejected"] == {"ADVISORY_ONLY": "confirmation_required"}
+        assert not w.called
+
+    def test_advisory_only_is_written_with_a_correct_confirmation(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put(
+                {"ADVISORY_ONLY": False},
+                confirm={"ADVISORY_ONLY": "ADVISORY_ONLY"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["rejected"] == {}
+        assert body["written"] == {"ADVISORY_ONLY": False}
+        assert w.called
+        assert w.call_args[0][0] == {"ADVISORY_ONLY": False}
+
+    def test_confirmation_is_not_satisfied_by_a_blanket_flag(self):
+        """A truthy/blanket value must not work — only the exact field name."""
+        for shape in ({"ADVISORY_ONLY": "true"}, {"confirm_all": "true"}, {"*": "*"}):
+            with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+                resp = _put({"ADVISORY_ONLY": False}, confirm=shape)
+            assert resp.json()["written"] == {}, f"blanket shape {shape!r} let it through"
+            assert not w.called
+
+
+class TestDangerousKeyConfirmation:
+    def test_every_dangerous_key_in_every_editor_requires_confirmation(self):
+        """Not just ADVISORY_ONLY: the gate covers each editor's own dangerous
+        keys, via the shared write helper."""
+        probes = {
+            "/settings/tunables": {"DRY_RUN": True, "CORS_ALLOWED_ORIGINS": '["https://x.test"]'},
+            "/settings/fmp": {"FMP_BARS_ENABLED": True},
+        }
+        for url, values in probes.items():
+            for key, value in values.items():
+                with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+                    resp = _put_scoped(url, {key: value})
+                body = resp.json()
+                assert body["rejected"].get(key) == "confirmation_required", (url, key)
+                assert not w.called
+
+    def test_ordinary_keys_need_no_confirmation(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"KELLY_FRACTION": 0.6})
+        assert resp.json()["written"] == {"KELLY_FRACTION": 0.6}
+        assert w.called
+
+    def test_type_error_on_a_dangerous_key_reports_the_type_not_the_gate(self):
+        """Ordering matters: validation runs first, so a malformed dangerous
+        value gets the actionable message rather than a confirmation complaint
+        that would send the operator chasing the wrong problem."""
+        rejected = _put_and_get_rejected({"DRY_RUN": "yes"})
+        assert rejected["DRY_RUN"] == "expected_boolean"
+
+
+class TestPartialSuccessWithOneRejectedKey:
+    """This repo's write endpoints report per-key outcomes. The gate must not
+    turn one unconfirmed dangerous key into a whole-batch failure — otherwise it
+    could be worked around by bundling, and it would punish unrelated edits."""
+
+    def test_ordinary_keys_still_write_when_a_dangerous_key_is_unconfirmed(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"ADVISORY_ONLY": False, "KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["written"] == {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG"}
+        assert body["rejected"] == {"ADVISORY_ONLY": "confirmation_required"}
+        # The dangerous key is absent from what actually hit `.env`.
+        assert w.call_args[0][0] == {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG"}
+        assert "ADVISORY_ONLY" not in w.call_args[0][0]
+
+    def test_one_confirmed_and_one_unconfirmed_dangerous_key(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put(
+                {"ADVISORY_ONLY": False, "DRY_RUN": True},
+                confirm={"DRY_RUN": "DRY_RUN"},
+            )
+        body = resp.json()
+        assert body["written"] == {"DRY_RUN": True}
+        assert body["rejected"] == {"ADVISORY_ONLY": "confirmation_required"}
+        assert w.call_args[0][0] == {"DRY_RUN": True}
+
+    def test_a_rejected_key_never_appears_in_per_key_applies(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
+            resp = _put({"ADVISORY_ONLY": False, "KELLY_FRACTION": 0.6})
+        body = resp.json()
+        assert set(body["per_key_applies"]) == {"KELLY_FRACTION"}
+
+
+class TestPutReportsRealAppliesOutcome:
+    def test_per_key_applies_covers_exactly_the_written_keys(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
+            resp = _put({"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG"})
+        body = resp.json()
+        assert set(body["per_key_applies"]) == set(body["written"])
+        for state in body["per_key_applies"].values():
+            assert state in settings_meta.APPLIES_STATES
+
+    def test_restart_required_is_false_only_when_everything_applied_live(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
+            resp = _put({"KELLY_FRACTION": 0.6})
+        body = resp.json()
+        applied_live = all(
+            v == settings_meta.APPLIES_IMMEDIATELY for v in body["per_key_applies"].values()
+        )
+        assert body["restart_required"] is not applied_live
+
+    def test_a_write_with_nothing_accepted_says_so(self):
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
+            resp = _put({"NOT_A_REAL_SETTING": 1})
+        body = resp.json()
+        assert body["written"] == {}
+        assert body["per_key_applies"] == {}
+        assert body["note"] == "Nothing was written."
+        assert not w.called
+
+    def test_no_live_apply_is_ever_claimed_without_a_writer(self):
+        """Honesty pin. `runtime_flags_writer` may be absent from a checkout;
+        where it is, a `.env` write is all that happened and NO key may be
+        reported as having applied immediately."""
+        if settings_meta.live_apply_available():
+            import pytest
+
+            pytest.skip("runtime_flags_writer is installed in this checkout")
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
+            resp = _put({"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG"})
+        body = resp.json()
+        assert settings_meta.APPLIES_IMMEDIATELY not in body["per_key_applies"].values()
+        assert body["restart_required"] is True
+
+    def test_get_and_put_agree_about_whether_a_field_applies_live(self):
+        """The GET's prediction and the PUT's reported outcome must not
+        contradict each other — a screen that promises "applies now" and then a
+        save that says "needs a restart" is the same class of false claim this
+        feature removes, just relocated."""
+        body_get = _get("/settings/tunables")
+        predicted = _find_field(body_get, "KELLY_FRACTION")["liveness"]["applies"]
+        with mock.patch.object(pilots_api.env_io, "write_many_atomic"):
+            resp = _put({"KELLY_FRACTION": 0.6})
+        actual = resp.json()["per_key_applies"]["KELLY_FRACTION"]
+        assert actual == predicted
 
 
 def test_pilots_api_still_off_heavy_engines():

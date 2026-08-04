@@ -81,7 +81,6 @@ def _settings(tmp_path: Path, **overrides) -> MagicMock:
     m.ROBINHOOD_MAX_NOTIONAL_PER_ORDER = overrides.get(
         "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0
     )
-    m.RH_MFA_SECRET = overrides.get("RH_MFA_SECRET", "TESTMFASECRET")
     return m
 
 
@@ -1178,37 +1177,69 @@ class TestRobinhoodQueueFresh:
         assert "generated_at" in r.reason
 
 
-class TestRobinhoodMfaConfigured:
-    """check_robinhood_mfa_configured — WARNING-only reminder about headless MFA."""
+class TestRobinhoodSessionPresent:
+    """check_robinhood_session_present — WARNING-only reminder about a
+    cached Robinhood device-approval session. Unlike the retired TOTP-secret
+    check this replaced, this check reads no `settings` field at all -- it
+    inspects data.robinhood_session's cached-pickle helpers directly, so
+    tests patch that module's _PICKLE_PATH rather than the
+    scripts.preflight_check.settings singleton."""
 
-    def test_empty_mfa_warns(self, tmp_path):
-        """Unset RH_MFA_SECRET → warning-level PASS (never blocking)."""
-        from scripts.preflight_check import check_robinhood_mfa_configured
-        s = _settings(tmp_path, RH_MFA_SECRET=None)
-        with patch("scripts.preflight_check.settings", s):
-            r = check_robinhood_mfa_configured()
+    def test_missing_session_warns(self, tmp_path):
+        """No cached session file → warning-level PASS (never blocking)."""
+        import data.robinhood_session as robinhood_session
+        from scripts.preflight_check import check_robinhood_session_present
+
+        with patch.object(robinhood_session, "_PICKLE_PATH", tmp_path / "robinhood.pickle"):
+            r = check_robinhood_session_present()
         assert r.passed  # warning-only — NEVER False
         assert r.warning
-        assert r.name == "robinhood_mfa_configured"
-        assert "RH_MFA_SECRET" in r.reason
+        assert r.name == "robinhood_session_present"
 
-    def test_empty_string_mfa_warns(self, tmp_path):
-        """Empty-string RH_MFA_SECRET → warning-level PASS."""
-        from scripts.preflight_check import check_robinhood_mfa_configured
-        s = _settings(tmp_path, RH_MFA_SECRET="")
-        with patch("scripts.preflight_check.settings", s):
-            r = check_robinhood_mfa_configured()
+    def test_empty_session_file_warns(self, tmp_path):
+        """A 0-byte session file → warning-level PASS."""
+        import data.robinhood_session as robinhood_session
+        from scripts.preflight_check import check_robinhood_session_present
+
+        pickle_path = tmp_path / "robinhood.pickle"
+        pickle_path.write_bytes(b"")
+        with patch.object(robinhood_session, "_PICKLE_PATH", pickle_path):
+            r = check_robinhood_session_present()
         assert r.passed
         assert r.warning
 
-    def test_configured_mfa_passes_clean(self, tmp_path):
-        """A non-empty RH_MFA_SECRET → clean PASS, no warning."""
-        from scripts.preflight_check import check_robinhood_mfa_configured
-        s = _settings(tmp_path, RH_MFA_SECRET="ABCDEF123456")
-        with patch("scripts.preflight_check.settings", s):
-            r = check_robinhood_mfa_configured()
+    def test_valid_session_passes_clean(self, tmp_path):
+        """A loadable session pickle → clean PASS, no warning."""
+        import pickle
+
+        import data.robinhood_session as robinhood_session
+        from scripts.preflight_check import check_robinhood_session_present
+
+        pickle_path = tmp_path / "robinhood.pickle"
+        with pickle_path.open("wb") as fh:
+            pickle.dump(
+                {"access_token": "tok", "device_token": "dev", "token_type": "Bearer"}, fh
+            )
+        with patch.object(robinhood_session, "_PICKLE_PATH", pickle_path):
+            r = check_robinhood_session_present()
         assert r.passed
         assert not r.warning
+
+    def test_check_error_degrades_to_warning_pass(self, monkeypatch):
+        """An unexpected error while checking must never FAIL the gate --
+        it degrades to a warning-level PASS, matching this check's own
+        fail-safe (never-blocking) contract."""
+        import data.robinhood_session as robinhood_session
+        from scripts.preflight_check import check_robinhood_session_present
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated failure")
+
+        monkeypatch.setattr(robinhood_session, "_is_loadable_session", boom)
+
+        r = check_robinhood_session_present()
+        assert r.passed
+        assert r.warning
 
 
 class TestRobinhoodChecksNotAutoSkipped:
@@ -1220,7 +1251,7 @@ class TestRobinhoodChecksNotAutoSkipped:
             "robinhood_execution_mode",
             "robinhood_kill_switch_clear",
             "robinhood_queue_fresh",
-            "robinhood_mfa_configured",
+            "robinhood_session_present",
         ):
             assert name not in _ADVISORY_AUTO_SKIP
 

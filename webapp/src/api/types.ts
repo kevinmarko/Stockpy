@@ -534,22 +534,14 @@ export interface BrokerageStatus {
  * operator's own local backend — see api/pilots_api.py's module docstring for
  * the three independent server-side gates (BROKERAGE_CONNECT_ENABLED,
  * FOLLOW_API_TOKEN, loopback-only). Never persisted client-side.
+ *
+ * No `mfa_code` — Robinhood login is device-approval PUSH now (the operator
+ * taps "approve" in the Robinhood mobile app), not a typed 6-digit TOTP code.
+ * The backend confirms/denies this asynchronously; see `BrokerageLoginJob`.
  */
 export interface BrokerageConnectRequest {
   username: string;
   password: string;
-  /** Current 6-digit authenticator-app code. Verified once, never persisted. */
-  mfa_code: string;
-}
-
-/** POST /brokerage/connect response. Never echoes credential values. */
-export interface BrokerageConnectResult {
-  connected?: boolean;
-  verified?: boolean;
-  has_account_snapshot?: boolean;
-  task_id?: string;
-  status?: "pending" | "success" | "error";
-  error?: string;
 }
 
 /** POST /brokerage/disconnect response. */
@@ -557,18 +549,84 @@ export interface BrokerageDisconnectResult {
   connected: boolean;
 }
 
+/** `POST /brokerage/{connect,refresh}` and `GET
+ * /brokerage/login/status/{job_id}` all report the SAME job shape. */
+export type BrokerageLoginMode = "connect" | "refresh";
+
 /**
- * POST /brokerage/refresh response — forces a live Robinhood re-login +
- * account-snapshot fetch bypassing the daily cache (the webapp equivalent of
- * `python3 main.py --refresh-account` / the Streamlit GUI's "Force fresh
- * login" checkbox). Shape-identical to GET /portfolio's `Portfolio` — the
- * backend reuses the same serializer — except `source` is always `"live"`
- * here rather than `"db"`, since this request triggered a live fetch rather
- * than reading HistoricalStore directly. A degraded-to-stale-cache result
- * (fetch_account_snapshot's own internal fallback) still returns 200 here —
- * check `is_stale`/`age_hours`, don't assume success means fully fresh.
+ * "running" is the only state where `phase` is meaningful; only "failed" |
+ * "timeout" | "cancelled" ever carry a non-null `error_code`.
  */
-export type BrokerageRefreshResult = Portfolio;
+export type BrokerageLoginState = "running" | "succeeded" | "failed" | "timeout" | "cancelled";
+
+/** Only meaningful while `state === "running"`. */
+export type BrokerageLoginPhase =
+  | "starting"
+  | "authenticating"
+  | "awaiting_approval"
+  | "verifying"
+  | "fetching_snapshot"
+  | "done";
+
+export type BrokerageLoginErrorCode =
+  | null
+  | "no_credentials"
+  | "challenge_unsupported"
+  | "auth_failed"
+  | "child_start_failed"
+  | "timeout"
+  | "cancelled";
+
+/**
+ * `POST /brokerage/connect` / `POST /brokerage/refresh` (202) and `GET
+ * /brokerage/login/status/{job_id}` all return this shape — an async
+ * device-approval-push login job, polled to completion rather than verified
+ * synchronously (the operator approves in the Robinhood mobile app; there is
+ * no 6-digit code to submit). `seconds_remaining` counts down from the
+ * server's own login deadline and is RE-SYNCED on every poll — never a
+ * free-running client-side timer, so a wedged backend can't show a
+ * plausible-looking countdown for a job that isn't actually progressing.
+ *
+ * `connected` is true only once RH_USERNAME/RH_PASSWORD have actually been
+ * persisted server-side (only ever happens after a "connect" job reaches
+ * `state: "succeeded"`); `has_account_snapshot` is independent of this job
+ * (whether an account snapshot already exists in the DB at all).
+ *
+ * Honesty note: a "timeout" is NEVER presented as "you denied the login" —
+ * the backend's login library has no separate code path for a denied push
+ * vs. one simply never seen, so this type (and every UI reading it) must not
+ * invent that distinction either.
+ */
+export interface BrokerageLoginJob {
+  job_id: string;
+  mode: BrokerageLoginMode;
+  state: BrokerageLoginState;
+  phase: BrokerageLoginPhase;
+  error_code: BrokerageLoginErrorCode;
+  seconds_remaining: number;
+  connected: boolean;
+  has_account_snapshot: boolean;
+}
+
+/**
+ * POST /brokerage/login/cancel/{job_id} response — the job shape plus an
+ * honest `cancelled` flag (`false` if the kill could not be confirmed
+ * server-side, NOT assumed true just because the request itself succeeded).
+ */
+export interface BrokerageLoginCancelResult extends BrokerageLoginJob {
+  cancelled: boolean;
+}
+
+/**
+ * POST /brokerage/refresh response — starts an async live Robinhood
+ * re-login + account-snapshot fetch bypassing the daily cache (the webapp
+ * equivalent of `python3 main.py --refresh-account` / the Streamlit GUI's
+ * "Force fresh login" checkbox), polled the same way `connectBrokerage`'s
+ * job is (see `BrokerageLoginJob`) — no separate synchronous `Portfolio`
+ * result anymore; re-fetch `GET /portfolio` once the job succeeds if the
+ * refreshed figures themselves are needed.
+ */
+export type BrokerageRefreshResult = BrokerageLoginJob;
 
 // ---------------------------------------------------------------------------
 // GET /llm/status — LLM provider configuration + last-real-call telemetry.
@@ -1507,13 +1565,85 @@ export interface StrategyModulesUpdateResult {
 // ---------------------------------------------------------------------------
 // GET/PUT /settings/tunables — the general runtime-settings editor. Reads the
 // platform's allowlisted, non-secret tunables grouped for display, and writes
-// only the changed keys back. Like every other .env-write surface in this PWA
-// the write does NOT reach the running process (settings is a process-lifetime
-// singleton) — hence `applies: "next_daemon_restart"`.
+// only the changed keys back.
+//
+// `applies` used to be the single literal "next_daemon_restart" for every
+// field on every screen. That was true when a write could only ever land in
+// `.env`, and stopped being true once the backend gained a runtime override
+// store — so it is now resolved PER FIELD (`TunableField.liveness`) and merely
+// SUMMARISED at the top level, where it can also be "mixed".
 // ---------------------------------------------------------------------------
 
 /** Widget kind for one tunable field. Enum fields additionally carry `options`. */
 export type TunableFieldType = "number" | "boolean" | "enum" | "string";
+
+/**
+ * What actually happens to the RUNNING process when one field is saved.
+ * Mirrors `pilots/settings_meta.py`'s four states exactly.
+ *
+ * - `immediately`         — pushed onto the live process; no restart needed.
+ * - `next_daemon_restart` — written to `.env`; the process keeps the old value.
+ * - `no_effect`           — nothing reads this field; writing it does nothing.
+ * - `env_pinned`          — a real shell export wins over both `.env` and the
+ *                           runtime store, so a write cannot take effect at all
+ *                           until that export is removed.
+ */
+export type AppliesState =
+  | "immediately"
+  | "next_daemon_restart"
+  | "no_effect"
+  | "env_pinned";
+
+/**
+ * A screen-level or request-level rollup of many fields' {@link AppliesState}.
+ * `"mixed"` when the fields disagree — deliberately NOT collapsed to the
+ * most-alarming or most-optimistic member, because either would misdescribe
+ * most of the set.
+ */
+export type AppliesSummary = AppliesState | "mixed";
+
+/** Where the currently-active value came from. */
+export type SettingSource = "runtime_store" | "env_file";
+
+/**
+ * Per-field liveness/safety metadata — the honest answer to "if I change this
+ * and press Save, what happens?" (`pilots/settings_meta.py::field_metadata`).
+ */
+export interface TunableLiveness {
+  applies: AppliesState;
+  /**
+   * Operator-readable sentence explaining WHY a restart is needed, or `null`
+   * for a field that needs none. Never a filler string (CONSTRAINT #4).
+   */
+  restart_reason: string | null;
+  /**
+   * `file:line` sites where the running process captured this value, so the
+   * restart claim is checkable rather than trusted. `[]` — not omitted — for a
+   * field with none; that empty list is the MEASURED answer, not "unknown".
+   */
+  capture_sites: string[];
+  /** A real shell export currently pins this field. */
+  env_pinned: boolean;
+  /**
+   * Writing this field requires an explicit confirmation
+   * (`settings_keysets.DANGEROUS_KEYS`). The UI raises a confirm dialog, but
+   * the gate itself is enforced SERVER-SIDE — this flag drives affordance, not
+   * safety.
+   */
+  dangerous: boolean;
+  source: SettingSource;
+}
+
+/**
+ * The confirmation map sent alongside a PUT. Each dangerous key must map to
+ * its OWN NAME (`{ ADVISORY_ONLY: "ADVISORY_ONLY" }`); anything else is
+ * rejected `confirmation_mismatch`, and omission is `confirmation_required`.
+ *
+ * Echoing the name (rather than a blanket boolean) is deliberate: confirming
+ * one dangerous field can never implicitly confirm a second one in the same
+ * batch.
+ */
+export type SettingsConfirmMap = Record<string, string>;
 
 /** One editable runtime setting (GET /settings/tunables). */
 export interface TunableField {
@@ -1535,6 +1665,16 @@ export interface TunableField {
   step?: number;
   /** enum fields only — the allowed values. */
   options?: string[];
+  /**
+   * Per-field liveness/safety metadata. The backend always sends this; it is
+   * optional here only so that a response from an OLDER backend still parses.
+   * Consumers must go through `resolveLiveness()` rather than reading it
+   * directly, which supplies the same conservative fallback the backend itself
+   * uses for a field it cannot classify (`next_daemon_restart`, no capture
+   * sites, not dangerous) instead of leaving `undefined` to be handled ad hoc
+   * at each use site.
+   */
+  liveness?: TunableLiveness;
 }
 
 /** A named cluster of related tunables (GET /settings/tunables). */
@@ -1545,7 +1685,14 @@ export interface TunableGroup {
 
 /** GET /settings/tunables — every editable runtime setting, grouped. */
 export interface TunablesResponse {
-  applies: "next_daemon_restart";
+  /**
+   * Rollup of every served field's `liveness.applies` — `"mixed"` when they
+   * disagree, which is the common case. Not a per-field claim: read
+   * `field.liveness.applies` for that.
+   */
+  applies: AppliesSummary;
+  /** How many fields sit in each state. Absent from an older backend. */
+  applies_counts?: Record<AppliesState, number>;
   groups: TunableGroup[];
   /**
    * Whether an `.env` write is pending against the running (in-process)
@@ -1560,12 +1707,30 @@ export interface TunablesResponse {
 /**
  * PUT /settings/tunables result. `written` echoes accepted key→value; `rejected`
  * maps a key to the reason it was refused (out of range, unknown, type
- * mismatch). Rejections are surfaced, never swallowed.
+ * mismatch, or a missing/mismatched dangerous-key confirmation). Rejections are
+ * surfaced, never swallowed.
+ *
+ * Reason tags the UI branches on: `unknown_key`, `forbidden_key`,
+ * `expected_boolean`, `expected_number`, `expected_integer`, `expected_string`,
+ * `invalid_option`, `out_of_range`, `invalid_json`, `confirmation_required`,
+ * `confirmation_mismatch`.
  */
 export interface TunablesUpdateResult {
   written: Record<string, number | boolean | string>;
   rejected: Record<string, string>;
-  applies: "next_daemon_restart";
+  /** Rollup of `per_key_applies` — `"mixed"` when the written keys disagree. */
+  applies: AppliesSummary;
+  /**
+   * The ACTUAL outcome per written key, not the a-priori prediction the GET
+   * made: whether each one reached the running process or only `.env`.
+   * Absent from an older backend.
+   */
+  per_key_applies?: Record<string, AppliesState>;
+  applies_counts?: Record<AppliesState, number>;
+  /** True only if at least one written key did NOT apply live. */
+  restart_required?: boolean;
+  restart_endpoint?: string;
+  /** One honest sentence about what this write actually did. */
   note?: string;
 }
 
@@ -2788,6 +2953,100 @@ export interface WatchResult {
   watchlist_file: string;
   applies: "next_pipeline_run";
   note: string;
+}
+
+// ---------------------------------------------------------------------------
+// RLHF Calibration Review Queue — nests INSIDE the Agentic Trading screen
+// (RlhfReviewQueue.tsx), NOT a standalone route and NOT the unrelated
+// `/calibration` statistical-reliability screen. An AI trading agent
+// proposes a hypothetical paper trade via an MCP tool + the API; a human
+// operator reviews it here and submits a 1-5 star rating plus an optional
+// corrective comment, feeding an eventual SFT (supervised fine-tuning)
+// export. There is deliberately no webapp-side "create proposal" form.
+// ---------------------------------------------------------------------------
+
+/**
+ * One AI-proposed hypothetical paper trade awaiting (or having received) a
+ * human rating. Every field the backend can legitimately omit is `| null`
+ * (CONSTRAINT #4 — never a fabricated default): `price`/`quantity` when the
+ * agent couldn't resolve a live quote, `rsi`/`sentiment_score` when that
+ * technical/sentiment input wasn't available, `extra_context` when the agent
+ * attached no additional structured context. `auto_approved` proposals are
+ * already `status: "reviewed"` with `human_rating: null` — they never appear
+ * in a pending queue and were never rated by a human.
+ */
+export interface RlhfProposal {
+  id: number;
+  created_at: string; // ISO timestamp
+  symbol: string;
+  action: "BUY" | "SELL" | "HOLD";
+  quantity: number | null;
+  price: number | null;
+  rationale: string;
+  confidence: number; // [0,1] fraction, NOT a percent
+  rsi: number | null;
+  sentiment_score: number | null;
+  extra_context: Record<string, unknown> | null;
+  status: "pending" | "reviewed";
+  human_rating: 1 | 2 | 3 | 4 | 5 | null;
+  human_correction: string | null;
+  reviewed_at: string | null;
+  auto_approved: boolean;
+  sft_exported: boolean;
+}
+
+/**
+ * GET /rlhf/summary -> kpis. `average_human_rating` is `null` (never a
+ * fabricated 0) until at least one proposal has actually been rated by a
+ * human. `rating_distribution` is keyed "1".."5".
+ */
+export interface RlhfKpis {
+  pending_count: number;
+  reviewed_count: number;
+  average_human_rating: number | null;
+  rating_distribution: Record<string, number>;
+  auto_approved_count: number;
+  sft_exported_count: number;
+}
+
+/**
+ * GET /rlhf/summary?limit=50 — the RLHF Review Queue's composite. `proposals`
+ * is the PENDING queue only (already-reviewed proposals still count toward
+ * `kpis`, just not this list). `writable` tracks
+ * `settings.RLHF_CALIBRATION_ENABLED` server-side (mirrors AgenticDiscovery's
+ * `writable`); `reason` is set when `proposals` is empty and there's a reason
+ * worth surfacing (e.g. "no proposals yet").
+ */
+export interface RlhfSummary {
+  proposals: RlhfProposal[];
+  kpis: RlhfKpis;
+  writable: boolean;
+  reason: string | null;
+}
+
+/** Body for POST /rlhf/proposals/{id}/review. */
+export interface RlhfReviewSubmitRequest {
+  human_rating: 1 | 2 | 3 | 4 | 5;
+  human_correction?: string;
+}
+
+/**
+ * POST /rlhf/proposals/{id}/review response — the updated proposal plus
+ * whether it triggered an SFT export as a side effect (`sft_exported` is
+ * already one of RlhfProposal's own fields; it's called out again here since
+ * that's the specific thing this response is confirming). A 404
+ * (`not_found`) or 409 (`already_reviewed`) surfaces as an `ApiError` with
+ * the stable tag in its message, per this endpoint's documented failure
+ * contract (a 422 `invalid_rating` is prevented client-side by the star
+ * control never submitting anything outside 1-5).
+ */
+export type RlhfReviewSubmitResult = RlhfProposal & { sft_exported: boolean };
+
+/** POST /rlhf/export-sft response. No request body. */
+export interface RlhfSftExportResult {
+  exported_count: number;
+  file: string;
+  proposal_ids: number[];
 }
 
 // ---------------------------------------------------------------------------

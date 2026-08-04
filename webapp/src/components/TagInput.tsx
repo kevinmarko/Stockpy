@@ -8,6 +8,7 @@ export function TagInput({
   hint,
   invalid,
   id,
+  disabled,
 }: {
   label?: ReactNode;
   value: string[];
@@ -15,6 +16,7 @@ export function TagInput({
   hint?: string;
   invalid?: boolean;
   id?: string;
+  disabled?: boolean;
 }) {
   const autoId = useId();
   const inputId = id ?? autoId;
@@ -36,6 +38,7 @@ export function TagInput({
       <CreatableSelect
         inputId={inputId}
         isMulti
+        isDisabled={disabled}
         value={selectValue}
         onChange={(newValue: any) => {
           onChange((newValue || []).map((v: any) => v.value));

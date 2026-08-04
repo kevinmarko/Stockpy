@@ -1,4 +1,4 @@
-"""ADVISORY ONLY — NO ORDER CODE. Read-only Robinhood account-snapshot provider using TOTP MFA. Follows a three-tier read order (HistoricalStore DB -> JSON cache -> live fetch), exposes fetch_account_snapshot / logout / verify_credentials, and never writes secrets into any cache payload."""
+"""ADVISORY ONLY — NO ORDER CODE. Read-only Robinhood account-snapshot provider using device-approval push login. Follows a three-tier read order (HistoricalStore DB -> JSON cache -> live fetch), exposes fetch_account_snapshot / logout, and never writes secrets into any cache payload."""
 
 # =============================================================================
 # MODULE: ROBINHOOD PORTFOLIO SNAPSHOT  (READ-ONLY, ADVISORY ONLY)
@@ -10,7 +10,8 @@
 # any execution function here under any circumstances.
 #
 # Description:
-#   Authenticates to Robinhood via TOTP (RFC 6238) and returns a clean,
+#   Authenticates to Robinhood via its device-approval push workflow (the
+#   operator taps "approve" in the Robinhood app) and returns a clean,
 #   typed AccountSnapshot that includes:
 #     - Per-symbol PortfolioPosition (qty, avg cost, current price, P/L,
 #       dividends received per symbol)
@@ -21,13 +22,17 @@
 #   on the same day.  The cache is an advisory fallback — stale data is
 #   surfaced (age_hours / is_stale) rather than hidden or errored.
 #
+#   A real login can ONLY happen inside the isolated, killable subprocess
+#   in data/robinhood_login_worker.py — robin_stocks' own device-approval
+#   prompt loop has no timeout of its own, so calling it directly from this
+#   (or any other) in-process request handler risks hanging forever. See
+#   _fetch_live_snapshot() and data/robinhood_login.py.
+#
 # Authentication env vars (loaded from .env via python-dotenv / pydantic-settings):
 #   RH_USERNAME   — Robinhood account email
 #   RH_PASSWORD   — Robinhood account password
-#   RH_MFA_SECRET — Base32 TOTP secret from the Robinhood MFA setup page
 #
 # Dependencies:
-#   pyotp>=2.9.0   (generates the 6-digit TOTP code)
 #   robin_stocks>=3.1.0  (already in requirements.txt)
 # =============================================================================
 
@@ -36,13 +41,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
-import pyotp
 import robin_stocks.robinhood as r
 
 from dto_models import RobinhoodPositionDTO
@@ -199,163 +202,61 @@ class AccountSnapshot:
         )
 
 
-def _login_with(
-    username: str,
-    password: str,
-    mfa_code: str,
-    *,
-    allow_interactive: bool = False,
-) -> dict:
+class RobinhoodApprovalRequired(RuntimeError):
+    """Raised when a Robinhood login is needed but this call is not permitted
+    to attempt one directly — either because no human is available to
+    approve the device-approval push notification, or because this call
+    happened outside the isolated login worker that alone is allowed to
+    reach robin_stocks' login flow. Subclasses ``RuntimeError`` so every
+    existing ``except Exception`` dead-letter handler in this codebase keeps
+    working unchanged."""
+
+
+LoginMode = Literal["reject", "device_approval"]
+
+
+def _login_with(username: str, password: str, *, mode: LoginMode = "reject") -> dict:
     """Perform the actual ``r.login()`` call with explicit credentials.
 
-    Shared by ``_login()`` (env-var path, used by every read pipeline call)
-    and ``verify_credentials()`` (explicit-args path used only by the
-    brokerage-connect intake flow). Never logs credential values.
+    No ``mfa_code`` parameter — passing one to ``robin_stocks`` short-
+    circuits its device-approval push workflow entirely (Robinhood returns
+    an access token directly and never issues the ``verification_workflow``
+    this codebase's login flow depends on), so nothing here can offer a
+    TOTP/SMS code path any more. See data/robinhood_login_worker.py.
 
-    ``mfa_code`` is an already-generated 6-digit MFA code (the caller is
-    responsible for producing it — ``_login()`` derives it from
-    ``RH_MFA_SECRET`` via ``pyotp``; ``verify_credentials()`` takes it
-    verbatim from its caller). This function has no TOTP/pyotp knowledge of
-    its own. When ``mfa_code`` is absent and ``allow_interactive=True``,
-    falls through to ``robin_stocks``' interactive terminal MFA prompt (a
-    blocking ``input()`` call) — the caller is responsible for only passing
-    ``True`` when a human is actually watching a real terminal (``_login()``
-    gates this on ``sys.stdin.isatty()``); never for an HTTP request or any
-    other headless context, which must not block on stdin that will never
-    arrive. When absent and ``allow_interactive=False``, raises immediately
-    rather than risking a hang.
+    ``mode="device_approval"`` is the only mode that actually calls
+    ``r.login()``, and it is guarded by the ``RH_LOGIN_WORKER`` environment
+    marker set ONLY by :mod:`data.robinhood_login_worker` — a structural
+    guard so a future caller can't accidentally reach this from an
+    unprotected context. The reason: robin_stocks' own device-approval
+    prompt loop (``authentication.py``'s ``_validate_sherrif_id``) has no
+    timeout of its own, and its SMS/email fallback calls a blocking
+    ``input()`` — both are only safe behind a killable subprocess with
+    ``stdin`` redirected to ``/dev/null`` (see :mod:`data.robinhood_login`).
+
+    ``mode="reject"`` (the default) raises ``RobinhoodApprovalRequired``
+    immediately without ever calling ``r.login()``.
     """
-    if mfa_code:
-        result = r.login(
-            username,
-            password,
-            store_session=True,  # persist ~/.tokens pickle for same-device reuse
-            mfa_code=mfa_code,
+    if mode != "device_approval":
+        raise RobinhoodApprovalRequired(
+            "Robinhood login requires device approval, which needs a human "
+            "watching their phone. This call did not delegate to the "
+            "isolated login worker."
         )
-    elif allow_interactive:
-        result = r.login(
-            username,
-            password,
-            store_session=True,  # persist ~/.tokens pickle for same-device reuse
+    if os.environ.get("RH_LOGIN_WORKER") != "1":
+        raise RuntimeError(
+            "mode='device_approval' is only permitted inside the isolated "
+            "login worker (data.robinhood_login_worker) — see that "
+            "module's docstring for why an unprotected call here is unsafe."
         )
-    else:
-        raise ValueError(
-            "An MFA code is required (interactive MFA prompting is not "
-            "available in this context)."
-        )
+    result = r.login(username, password, store_session=True)
 
     if not isinstance(result, dict) or "access_token" not in result:
         raise RuntimeError(
             "Robinhood login failed — no access_token in login response. "
-            "Check the username, password, and MFA code."
+            "Check the username and password."
         )
     return result
-
-
-# ---------------------------------------------------------------------------
-# Authentication (private)
-# ---------------------------------------------------------------------------
-
-def _login() -> None:
-    """Authenticate to Robinhood using TOTP or SMS MFA.
-
-    Reads RH_USERNAME, RH_PASSWORD, and optional RH_MFA_SECRET via the
-    ``settings`` singleton (populated from .env by pydantic-settings).
-    Raises RuntimeError if any required credential is missing or if login fails.
-
-    ``store_session=True`` persists the session pickle in ~/.tokens so that
-    subsequent logins on the same device reuse the stored OAuth token,
-    minimising MFA prompts and avoiding spurious "new device" notifications.
-    Passing ``mfa_code=`` selects the TOTP path; ``robin-stocks`` >= 3.4
-    removed the legacy ``by_sms=`` kwarg and infers the path from whether
-    ``mfa_code`` is supplied.
-
-    All THREE of RH_USERNAME/RH_PASSWORD/RH_MFA_SECRET are meant to be set
-    together for any automated caller (see .env.example) -- this function is
-    reached from every context that calls fetch_account_snapshot(), including
-    the Pilots API's POST /brokerage/refresh and main.py's own unattended
-    daily cache refresh, neither of which has anyone watching a terminal.
-    If RH_MFA_SECRET is missing, this ONLY falls back to robin_stocks'
-    interactive terminal MFA prompt (a blocking ``input()`` call) when
-    ``sys.stdin`` is a real TTY -- a human actually at a terminal running
-    ``python3 main.py`` by hand. In every headless context (a TTY-less
-    server process, a cron/systemd-launched run, an app bundle launched
-    without a terminal) it raises immediately instead of hanging forever on
-    stdin that will never receive input -- see _login_with's own docstring
-    for why that distinction matters.
-    """
-    username = _require_setting("RH_USERNAME")
-    password = _require_setting("RH_PASSWORD")
-    mfa_secret = (_settings.RH_MFA_SECRET or "").strip()
-
-    if mfa_secret:
-        # pyotp.TOTP.now() honours the RFC 6238 30-second window automatically.
-        mfa_code = pyotp.TOTP(mfa_secret).now()
-    else:
-        mfa_code = ""
-        logger.info("RH_MFA_SECRET is missing or empty. Falling back to interactive MFA login.")
-
-    _login_with(username, password, mfa_code, allow_interactive=sys.stdin.isatty())
-    logger.info("Robinhood login succeeded.")
-
-
-# ---------------------------------------------------------------------------
-# Credential verification (public — brokerage-connect intake)
-# ---------------------------------------------------------------------------
-
-def verify_credentials(username: str, password: str, mfa_code: str = "") -> bool:
-    """Attempt a read-only Robinhood login with EXPLICIT credentials, then log out.
-
-    Used ONLY by the brokerage-connect intake flow
-    (``api/pilots_api.py::POST /brokerage/connect``) to verify a candidate
-    username/password/one-time-authenticator-code BEFORE they are ever
-    persisted to ``.env`` — never after. ``mfa_code`` is the CURRENT 6-digit
-    code shown by the user's authenticator app, passed straight through to
-    ``robin_stocks`` — this function has no TOTP/pyotp knowledge and never
-    receives (or persists) the underlying secret. A successful verification
-    relies on ``robin_stocks``' own ``store_session=True`` device-pickle
-    (``~/.tokens``) to carry ongoing unattended re-fetches forward without
-    needing another code. Unlike ``_login()``, this never falls back to
-    interactive MFA prompting: a headless HTTP request must not block on
-    stdin, so a missing or empty ``mfa_code`` is treated as a verification
-    failure, not an invitation to prompt.
-
-    This function establishes no lasting session beyond whatever
-    ``robin_stocks``' own ``store_session=True`` pickle does, and immediately
-    logs out on success. It NEVER raises — any failure (bad credentials,
-    missing MFA code, network error) returns ``False`` — and NEVER logs the
-    username/password/mfa_code values themselves, only exception *types*
-    (CONSTRAINT #3).
-
-    Returns
-    -------
-    bool
-        True if the login succeeded (credentials verified), False otherwise.
-    """
-    username = (username or "").strip()
-    password = (password or "").strip()
-    mfa_code = (mfa_code or "").strip()
-
-    if not username or not password:
-        logger.info("Brokerage credential verification failed: username/password missing.")
-        return False
-
-    try:
-        _login_with(username, password, mfa_code, allow_interactive=False)
-    except Exception as exc:
-        logger.info(
-            "Brokerage credential verification failed: %s", type(exc).__name__
-        )
-        return False
-
-    try:
-        r.logout()
-    except Exception as exc:
-        logger.warning(
-            "Robinhood logout after credential verification failed (ignored): %s",
-            type(exc).__name__,
-        )
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -366,19 +267,53 @@ def _fetch_live_snapshot() -> AccountSnapshot:
     """Authenticate and pull a fresh snapshot from Robinhood.  READ ONLY.
 
     Workflow:
-      1. TOTP login via _login().
-      2. robin_stocks.build_holdings() → per-symbol price + quantity + cost.
-      3. robin_stocks.get_dividends() → correlate paid/reinvested totals
+      0. Login (see below — differs depending on whether this process IS
+         the isolated login worker).
+      1. robin_stocks.build_holdings() → per-symbol price + quantity + cost.
+      2. robin_stocks.get_dividends() → correlate paid/reinvested totals
          to symbols via instrument UUID extracted from the dividend URL.
-      4. robin_stocks.load_portfolio_profile() → total equity.
-      5. robin_stocks.load_account_profile()   → buying power.
-      6. Build PortfolioPosition objects; isolate per-symbol failures.
-      7. Return a fully populated AccountSnapshot.
+      3. robin_stocks.load_portfolio_profile() → total equity.
+      4. robin_stocks.load_account_profile()   → buying power.
+      5. Build PortfolioPosition objects; isolate per-symbol failures.
+      6. Return a fully populated AccountSnapshot.
+
+    Login step: robin_stocks' auth state lives only in the process that
+    successfully called ``r.login()``, so a real login can ONLY happen
+    inside data.robinhood_login_worker's isolated, killable subprocess —
+    never directly in this process, since a device-approval prompt can hang
+    indefinitely with no timeout of its own. When this function is running
+    INSIDE that worker (``RH_LOGIN_WORKER=1``), it performs the real login
+    here and proceeds with steps 1-6 in this SAME process. Otherwise, it
+    delegates the entire login+fetch to the worker via
+    ``data.robinhood_login.login_blocking()`` (bounded by a deadline and
+    killable — see that module) and reads back whatever the worker
+    persisted, since the worker's own call into
+    ``fetch_account_snapshot(force=True)`` already writes both the JSON
+    cache and the DB — there is no need to serialize a snapshot across the
+    process boundary.
 
     Per-symbol failures are logged as warnings and the symbol is skipped;
     they never abort the whole snapshot.
     """
-    _login()
+    if os.environ.get("RH_LOGIN_WORKER") == "1":
+        username = _require_setting("RH_USERNAME")
+        password = _require_setting("RH_PASSWORD")
+        from data import robinhood_session
+
+        robinhood_session.ensure_session_pickle()
+        _login_with(username, password, mode="device_approval")
+        robinhood_session.backup_session_pickle()
+        logger.info("Robinhood login succeeded.")
+    else:
+        from data.robinhood_login import login_blocking
+
+        login_blocking(mode="refresh")
+        cached = _read_cache()
+        if cached is not None:
+            return cached
+        raise RuntimeError(
+            "Robinhood login succeeded but no account snapshot was persisted."
+        )
 
     # ------------------------------------------------------------------ #
     # Holdings — dict[symbol, {quantity, average_buy_price, price, ...}]
@@ -563,11 +498,11 @@ def fetch_account_snapshot(
         ``ROBINHOOD_AUTO_REFRESH_ENABLED`` (an operator-wide setting
         affecting every caller — GUI panels, main.py's daily refresh, the
         Pilots API), this is a per-call opt-out for callers that should
-        never attempt an interactive/TOTP login regardless of the global
+        never attempt a device-approval login regardless of the global
         setting — e.g. a headless backfill script resolving the universe
         via :func:`data.portfolio_sync.resolve_universe`, which only needs
-        *a* universe, not a fresh one, and must never risk hanging on a
-        missing ``RH_MFA_SECRET``'s interactive MFA fallback.  Has no
+        *a* universe, not a fresh one, and must never spawn a login worker
+        nobody is watching to approve.  Has no
         effect when ``force=True`` (an explicit "I want it now" request
         always takes precedence, exactly like ``ROBINHOOD_AUTO_REFRESH_ENABLED``).
 

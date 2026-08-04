@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
@@ -104,7 +105,21 @@ class RobinhoodClient:
         self.is_authenticated: bool = False
 
     def login(self) -> bool:
-        """Authenticate with Robinhood. Prompts for MFA in the terminal if needed."""
+        """Authenticate with Robinhood. Refuses outside the isolated device-
+        approval login worker (data.robinhood_login_worker) -- calling
+        r.login() directly in this (or any other) unprotected process risks
+        hanging forever on robin_stocks' own no-timeout device-approval prompt
+        loop. Only data.robinhood_login_worker ever sets RH_LOGIN_WORKER=1, and
+        nothing currently routes THIS class's login through that worker, so in
+        practice this always returns False now -- watchlist discovery in
+        gui/panels/live_inventory.py already treats that as best-effort."""
+        if os.environ.get("RH_LOGIN_WORKER") != "1":
+            logger.info(
+                "RobinhoodClient.login() skipped: only safe inside the isolated "
+                "device-approval login worker. Robinhood watchlist discovery "
+                "will be unavailable this run."
+            )
+            return False
         if not self.username or not self.password:
             logger.info("Robinhood credentials missing. Skipping Robinhood integration.")
             return False

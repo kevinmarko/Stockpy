@@ -80,7 +80,7 @@ class UniverseStep(PipelineStep):
             # without spelunking through the source.
             logger.warning(
                 "Empty symbol universe — nothing to evaluate. "
-                "Fix one of: (1) set RH_USERNAME / RH_PASSWORD / RH_MFA_SECRET (optional) in "
+                "Fix one of: (1) set RH_USERNAME / RH_PASSWORD in "
                 ".env so Robinhood positions populate the universe, (2) set the "
                 "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), (3) "
                 "create %s with one ticker per line, or (4) add tickers to "

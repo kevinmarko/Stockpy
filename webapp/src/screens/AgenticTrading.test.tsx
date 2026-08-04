@@ -5,7 +5,7 @@
  * couldn't score it — never a fabricated action/conviction), the shared
  * execution queue, the decision journal, and the gated pause/resume control.
  */
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -76,6 +76,7 @@ const BASE_STATUS: AgenticStatus = {
 describe("Agentic Trading screen (real mock API)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
     restoreClipboard();
   });
 
@@ -309,6 +310,22 @@ describe("Agentic Trading screen (real mock API)", () => {
     const statusSpy = vi.spyOn(api, "getAgenticStatus");
     const discoverySpy = vi.spyOn(api, "getAgenticDiscovery");
     const decisionsSpy = vi.spyOn(api, "getDecisions");
+    // "Refresh all" now starts an async device-approval-push refresh job
+    // (POST /brokerage/refresh); the three reads above only re-fetch once
+    // that job reaches a TERMINAL state (see AgenticTrading.tsx's
+    // useEffect watching brokerageRefresh.job). Resolve it as already
+    // succeeded so the reload fires immediately rather than needing to
+    // wait out the mock's multi-second happy-path lifecycle.
+    vi.spyOn(api, "refreshBrokerage").mockResolvedValue({
+      job_id: "refresh-job-1",
+      mode: "refresh",
+      state: "succeeded",
+      phase: "done",
+      error_code: null,
+      seconds_remaining: 170,
+      connected: true,
+      has_account_snapshot: true,
+    });
     renderScreen();
 
     // Initial mount loads each section once.
@@ -502,45 +519,84 @@ describe("Agentic Trading screen (real mock API)", () => {
       expect(screen.queryByText(/nothing on this screen runs it for you/)).not.toBeInTheDocument();
     });
 
-    it("opens Robinhood auth modal and requires a 6-digit MFA code before connecting", async () => {
-      // POST /brokerage/connect -> verify_credentials never falls through to an
-      // interactive MFA prompt over HTTP (a headless request must not risk
-      // blocking on stdin), so a missing/empty mfa_code is ALWAYS treated as a
-      // verification failure server-side -- this modal must not offer a
-      // "connect with no MFA code" path that can only ever fail.
+    it("opens the Robinhood auth modal and connects via the async device-approval login (no MFA code)", async () => {
+      // POST /brokerage/connect is now async (device-approval PUSH, no
+      // 6-digit code) -- the modal renders the shared RobinhoodConnectForm,
+      // which polls GET /brokerage/login/status/{job_id} to completion.
+      // Real timers for everything up through the initial render/click/type
+      // (findBy*'s own retry loop is setTimeout-based and would hang against
+      // an already-frozen fake clock); fake timers only for the 2s poll tick.
       const connectSpy = vi.spyOn(api, "connectBrokerage").mockResolvedValueOnce({
+        job_id: "job-1",
+        mode: "connect",
+        state: "running",
+        phase: "starting",
+        error_code: null,
+        seconds_remaining: 180,
+        connected: false,
+        has_account_snapshot: false,
+      });
+      vi.spyOn(api, "getBrokerageLoginStatus").mockResolvedValueOnce({
+        job_id: "job-1",
+        mode: "connect",
+        state: "succeeded",
+        phase: "done",
+        error_code: null,
+        seconds_remaining: 170,
         connected: true,
-        verified: true,
         has_account_snapshot: true,
       });
       renderScreen();
 
       const loginBtn = await screen.findByRole("button", { name: /Login to Robinhood/i });
-      fireEvent.click(loginBtn);
+      await act(async () => {
+        fireEvent.click(loginBtn);
+      });
 
-      expect(await screen.findByRole("heading", { name: /Robinhood On-Demand Authentication/i })).toBeInTheDocument();
+      expect(
+        await screen.findByRole("heading", { name: /Robinhood On-Demand Authentication/i })
+      ).toBeInTheDocument();
+      // No 6-digit code field anymore.
+      expect(screen.queryByLabelText(/authenticator/i)).not.toBeInTheDocument();
 
-      const usernameInput = screen.getByLabelText(/Email \/ Username/i);
-      const passwordInput = screen.getByLabelText(/Password/i);
-      const mfaInput = screen.getByLabelText(/Authenticator app code/i);
+      const usernameInput = screen.getByLabelText(/robinhood email/i);
+      const passwordInput = screen.getByLabelText(/^password$/i);
       fireEvent.change(usernameInput, { target: { value: "trader@example.com" } });
       fireEvent.change(passwordInput, { target: { value: "secretpass" } });
 
-      const submitBtn = screen.getByRole("button", { name: /Connect Robinhood/i });
-      expect(submitBtn).toBeDisabled();
-
-      fireEvent.change(mfaInput, { target: { value: "123456" } });
-      expect(submitBtn).not.toBeDisabled();
-
-      fireEvent.click(submitBtn);
-
-      await waitFor(() => {
-        expect(connectSpy).toHaveBeenCalledWith({
-          username: "trader@example.com",
-          password: "secretpass",
-          mfa_code: "123456",
-        });
+      // Fake timers from HERE, before the submit click -- useBrokerageLoginJob's
+      // poll interval is created (via usePoll's setInterval) the instant this
+      // click flips the job to "running", and vi.useFakeTimers() only
+      // intercepts setInterval calls made AFTER it's installed. Everything
+      // from this point on uses synchronous getBy/queryBy, never findBy*,
+      // since Testing Library's own retry loop is setTimeout-based and would
+      // hang against a frozen fake clock nothing else is advancing.
+      vi.useFakeTimers();
+      const submitBtn = screen.getByRole("button", { name: /^connect$/i });
+      await act(async () => {
+        fireEvent.click(submitBtn);
       });
+
+      expect(connectSpy).toHaveBeenCalledWith({
+        username: "trader@example.com",
+        password: "secretpass",
+      });
+      expect(
+        screen.getByText(/open the robinhood app and approve this login/i)
+      ).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      // The successful job fires RobinhoodConnectForm's onConnected, which
+      // AgenticTrading wires to close the modal and reload -- so the modal
+      // (and its transient "Connected --" notice) is gone by the time this
+      // settles, unlike the standalone RobinhoodConnectForm.test.tsx case
+      // where nothing auto-closes the form.
+      expect(
+        screen.queryByRole("heading", { name: /Robinhood On-Demand Authentication/i })
+      ).not.toBeInTheDocument();
     });
 
     it("toggles execution queue minimization state when Minimize/Expand button is clicked", async () => {

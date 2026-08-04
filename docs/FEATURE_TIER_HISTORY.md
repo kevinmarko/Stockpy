@@ -40,6 +40,7 @@ Sections in this file (search for the `##` heading):
   Insights tab (Gemini Vision), Opal Research Agent (OpenAI)
 - AI Control Center tab
 - Prompt Registry
+- Robinhood login: TOTP MFA → device-approval push (`data/robinhood_login.py`, `data/robinhood_login_worker.py`, `data/robinhood_session.py`, `api/_rh_login.py`) (2026-08)
 
 **Critical invariants that must never regress are still summarized in `CLAUDE.md`
 where they're load-bearing for every session** (e.g. ADVISORY_ONLY quarantine,
@@ -2030,3 +2031,89 @@ Three non-secret tunables (`PROMPT_REGISTRY_ENABLED`, `PROMPT_REGISTRY_BACKEND`,
 - Publishing v1.1.0 and moving the "latest" pointer is the "update over the internet" mechanism.
 - See `docs/HOW_TO_GUIDE.md §16` for the full operator workflow.
 - See `docs/RUNBOOK.md §7` for the publish/rollback incident playbooks.
+
+---
+
+## Robinhood login: TOTP MFA → device-approval push (2026-08)
+
+**Why.** Robinhood retired TOTP/SMS-code MFA in favor of a device-approval push
+notification — the operator taps "approve" in the Robinhood app instead of typing a
+6-digit code. `RH_MFA_SECRET`/`pyotp` no longer work as a login mechanism at all:
+passing an `mfa_code` to `robin_stocks.login()` short-circuits Robinhood into issuing a
+token directly and skipping the device-approval `verification_workflow` entirely, so
+TOTP and real device approval are mutually exclusive, not two options to keep side by
+side.
+
+**The hard constraint this forced.** `robin_stocks`' own device-approval implementation
+has no timeout on its approval-poll loop and falls back to a blocking `input()` call for
+accounts offering an SMS/email code — both unsafe to call directly from a FastAPI
+request handler, `main.py`'s unattended daily refresh, or the orchestrator daemon. See
+`docs/known_issues/robinhood_device_approval_login_hang_risk.md` for the full hazard
+writeup, including what is and isn't verified against a real Robinhood account.
+
+**What shipped.**
+- `data/robinhood_login_worker.py` — a fresh, killable subprocess per login attempt
+  (`stdin=/dev/null`, its own process group), never a persistent pool (a pool's
+  abandon-on-timeout semantics would leave an authenticated session alive indefinitely).
+  Reports structured NDJSON progress events over a pipe by scanning `robin_stocks`'
+  `print()` output for known phrase literals — pinned against the installed library
+  source so an upgrade that changes them fails CI loudly rather than silently freezing
+  the UI's progress display.
+- `data/robinhood_login.py` — the parent-side launcher (`start_login`/`get_login_state`/
+  `cancel_login`/`login_blocking`), enforcing `RH_LOGIN_DEADLINE_SECONDS` (180s default)
+  via SIGTERM→`RH_LOGIN_GRACE_SECONDS`(5s)→SIGKILL on the child's whole process group,
+  plus a separate `RH_LOGIN_STARTUP_SECONDS` (30s) failed-launch detector.
+- `data/robinhood_session.py` — restores/backs-up `~/.tokens/robinhood.pickle` around
+  each login attempt, fixing a real 0-byte/unloadable pickle found in production (the
+  library's own write is non-atomic) that was forcing a fresh device-approval challenge
+  on every single login.
+- `data/robinhood_portfolio.py` — `verify_credentials()` deleted; `_login_with(...,
+  mode="reject"|"device_approval")` replaces the old TOTP-driven `_login()`, structurally
+  guarded so `mode="device_approval"` can only run inside the isolated worker
+  (`RH_LOGIN_WORKER=1` env marker). `_fetch_live_snapshot()` is now dual-mode: the real
+  login+fetch runs inside the worker; every other caller delegates to
+  `data.robinhood_login.login_blocking(mode="refresh")` and reads the result back from
+  cache, keeping every existing synchronous call site's shape unchanged while removing
+  its ability to hang.
+- `api/_rh_login.py` + `api/pilots_api.py` — `POST /brokerage/connect`/`POST
+  /brokerage/refresh` now return **202** with a job's initial status immediately instead
+  of blocking; two new endpoints, `GET /brokerage/login/status/{job_id}` (poll) and
+  `POST /brokerage/login/cancel/{job_id}`. Credential persistence
+  (`data.brokerage_credentials.write_rh_credentials`) happens in a background watcher
+  thread the moment — and only if — a "connect" job reaches `state="succeeded"`, never
+  in the request handler itself.
+- `data/robinhood_client.py::RobinhoodClient.login()` (the separate legacy
+  `ROBINHOOD_USERNAME`/`ROBINHOOD_PASSWORD` client used only by the frozen
+  `gui/panels/live_inventory.py`) is gated behind the same `RH_LOGIN_WORKER` marker and
+  now always returns `False` outside it, degrading watchlist discovery to unavailable
+  rather than risking the same hang.
+- **`ROBINHOOD_AUTO_REFRESH_ENABLED`'s default flipped `True → False`** — an unattended
+  Tier-3 login attempt can never succeed once approval requires a human with a phone, so
+  leaving automatic re-attempts on by default just spawns a doomed subprocess every cycle
+  once the cache goes stale.
+- `webapp/`: `RobinhoodConnectForm.tsx` lost its 6-digit code field and gained a
+  job-polling state machine (`starting → awaiting_approval → connected|timeout|failed|
+  cancelled`) with a server-driven countdown; `AgenticTrading.tsx`'s near-duplicate inline
+  auth modal was deleted in favor of the shared form. A sixth, default-off `"robinhood"`
+  auto-refresh category (15 min floor) gates `UniverseCoverage`'s mount-time fetch, since
+  opening Settings could otherwise trigger a live login — see the Data Auto-Refresh entry
+  above for the rest of that feature.
+
+**New env vars:** `RH_LOGIN_DEADLINE_SECONDS` (180), `RH_LOGIN_GRACE_SECONDS` (5),
+`RH_LOGIN_STARTUP_SECONDS` (30). **Removed:** `RH_MFA_SECRET`, the `pyotp` dependency.
+
+**Tests:** `tests/test_robinhood_login.py` (launcher primitives against a stub worker
+script — success, timeout-kill, child-start-failure, cancellation, credential round-trip),
+`tests/test_robinhood_login_worker.py` (phrase-literal pinning against the installed
+`robin_stocks` source), `tests/test_robinhood_session.py`, `tests/test_rh_login_api_glue.py`
+(the credential-persistence-on-success watcher thread), `tests/test_robinhood_portfolio.py`
+and `tests/test_brokerage_connect.py` (rewritten for the new login primitives and the async
+job contract), `scripts/preflight_check.py::check_robinhood_session_present` (replaces the
+retired `check_robinhood_mfa_configured`).
+
+**Honestly out of scope / not verified (see the known-issues doc for the full list):** a
+real Robinhood account and phone in hand are required to confirm the push actually arrives,
+that approving it completes within the deadline, whether a denied approval is
+distinguishable from an ignored one (reading the library's source, it appears not to be),
+and whether the session-pickle fix measurably reduces how often a real account is
+re-challenged.

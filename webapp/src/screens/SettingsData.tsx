@@ -28,6 +28,7 @@ import {
 import { fmtAge, fmtDate, timeAgo } from "../format";
 import { theme } from "../theme";
 import { SectionCard } from "../components/SectionCard";
+import { TabGuide } from "../components/TabGuide";
 
 export function SettingsData() {
   const {
@@ -58,6 +59,8 @@ export function SettingsData() {
           Pipeline run status and the automated schedule, without SSHing into the host.
         </p>
       </div>
+
+      <TabGuide tabKey="settings-data" />
 
       <PipelineStatusSection
         status={status}

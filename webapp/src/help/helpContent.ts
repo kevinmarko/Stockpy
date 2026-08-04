@@ -331,18 +331,35 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "Version control for every AI-facing instruction: the resolved version, source, and pin state for each registered prompt, plus a per-prompt diff viewer. Pinning only changes what the AI is told, never what the platform is permitted to do — order submission, the advisory quarantine, the risk gate, and the kill switch stay enforced in Python regardless of registry content.",
     keyConcepts: ["prompt registry", "advisory only"],
   },
-  settings: {
+  "settings-general": {
+    title: "General & Execution Mode",
+    description:
+      "Global orchestrator behavior in one place: the kill switch, live-trading execution mode (advisory-only / dry-run / paper / live), app & update status, and a reset for the first-run onboarding flow.",
+    keyConcepts: ["kill switch", "execution mode", "advisory only"],
+  },
+  "settings-data": {
     title: "Data & Automation",
     description:
-      "Operate the platform without SSHing into the host: pipeline status and manual triggers, the automated run schedule, the kill switch and execution mode, which tickers are tracked, your brokerage connection, active Pilot follows, and app/update status — all in one place.",
-    keyConcepts: [
-      "kill switch",
-      "execution mode",
-      "advisory only",
-      "auto-refresh",
-      "safety telemetry",
-      "market session",
-    ],
+      "Operate the pipeline without SSHing into the host: the orchestrator daemon's live run status and manual triggers, the automated run schedule, and how fresh your brokerage snapshot is.",
+    keyConcepts: ["orchestrator daemon", "auto-refresh"],
+  },
+  "settings-universe": {
+    title: "Tracked Universe",
+    description:
+      "Add or remove the symbols the pipeline processes on every run, and see per-symbol data coverage. A change here takes effect on the next pipeline run — raw data for any symbol is explorable immediately in Data Explorer regardless.",
+    keyConcepts: [],
+  },
+  "settings-brokers": {
+    title: "Brokerage Connections",
+    description:
+      "Connect, disconnect, or force-refresh your Robinhood link. Login now uses a device-approval push (tap 'approve' in the Robinhood app) instead of a typed authenticator code — credential values are never echoed back by the API.",
+    keyConcepts: [],
+  },
+  "settings-modules": {
+    title: "Modules & Integrations",
+    description:
+      "Entry points to every `.env`-write surface and sub-system: the Strategy Matrix (per-module signal weights), general runtime tunables, the scoped sentiment/sector-selection/FMP/ETF-transmission editors, the Prompt Registry, the AI Control Center, and your active Pilot follows.",
+    keyConcepts: ["signal weight", "prompt registry"],
   },
   "symbol-detail": {
     title: "Symbol Detail",

@@ -86,7 +86,9 @@ describe("EtfTransmissionSettings screen", () => {
     await user.click(saveBtn);
 
     await waitFor(() => {
-      expect(updateSpy).toHaveBeenCalledWith({ "Etf Transmission Enabled": true });
+      // Second arg is the dangerous-key confirmation map — empty here because
+      // this fixture's field carries no `liveness.dangerous` flag.
+      expect(updateSpy).toHaveBeenCalledWith({ "Etf Transmission Enabled": true }, {});
     });
   });
 

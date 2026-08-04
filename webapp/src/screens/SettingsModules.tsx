@@ -7,6 +7,7 @@ import { theme } from "../theme";
 import { SectionCard } from "../components/SectionCard";
 import { Button, Loading, ErrorState, EmptyState } from "../components/ui";
 import { fmtUsd } from "../format";
+import { TabGuide } from "../components/TabGuide";
 
 export function SettingsModules() {
   return (
@@ -17,6 +18,8 @@ export function SettingsModules() {
           Manage tunables, AI providers, and sub-systems.
         </p>
       </div>
+
+      <TabGuide tabKey="settings-modules" />
 
       <SignalModulesLink />
       <TunablesLink />

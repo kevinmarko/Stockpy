@@ -24,12 +24,7 @@ fall back to deterministic template" (CONSTRAINT #6).
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any, Optional
-
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
+from typing import Optional
 
 from llm.providers import ClaudeProvider, GeminiProvider, LLMProvider, OpenAIProvider
 from settings import settings
@@ -299,71 +294,3 @@ def get_sector_embedding_provider():
     except Exception as exc:
         logger.warning("Failed to construct OpenAIProvider for sector embeddings: %s", exc)
         return None
-
-def get_model(route_type: str, use_langchain_native: bool = False) -> Any:
-    """
-    Routes the LLM request to the appropriate model based on the required capability.
-    
-    Args:
-        route_type (str): The requirement for the model ("high_context", "high_reasoning", "standard").
-        use_langchain_native (bool): If True, returns a standard LangChain BaseChatModel 
-                                     native to LangGraph. If False, returns the internal wrapper.
-                                     
-    Returns:
-        Union[BaseChatModel, LLMProvider]: The configured LLM instance.
-    """
-    
-    # Define standard model mappings based on capabilities
-    model_mappings = {
-        "high_context": {
-            "provider": "anthropic",
-            "model_name": "claude-3-5-sonnet-20240620",
-            "temperature": 0.2
-        },
-        "high_reasoning": {
-            "provider": "openai",
-            "model_name": "gpt-4o",
-            "temperature": 0.0
-        },
-        "standard": {
-            "provider": "openai",
-            "model_name": "gpt-4o-mini",
-            "temperature": 0.5
-        }
-    }
-    
-    config = model_mappings.get(route_type, model_mappings["standard"])
-    
-    if use_langchain_native:
-        if config["provider"] == "openai":
-            return ChatOpenAI(
-                model=config["model_name"],
-                temperature=config["temperature"],
-                api_key=getattr(settings, "OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
-            )
-        elif config["provider"] == "anthropic":
-            return ChatAnthropic(
-                model=config["model_name"],
-                temperature=config["temperature"],
-                api_key=getattr(settings, "ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY"))
-            )
-        else:
-            raise ValueError(f"Unsupported LangChain provider: {config['provider']}")
-            
-    else:
-        # Legacy fallback for the rest of the application using your internal wrappers
-        timeout = 30.0
-        
-        if route_type == "high_context":
-            provider = _construct_provider("gemini", timeout)
-            if provider is None:
-                provider = _construct_provider("claude", timeout)
-            return provider
-            
-        elif route_type == "high_reasoning":
-            provider = _construct_provider("claude", timeout)
-            if provider is None:
-                provider = _construct_provider("gemini", timeout)
-            return provider
-            
-        return _construct_provider("gemini", timeout)

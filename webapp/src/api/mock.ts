@@ -31,8 +31,10 @@ import type {
   ScanConfigResult,
   WatchResult,
   BrokerageConnectRequest,
-  BrokerageConnectResult,
   BrokerageDisconnectResult,
+  BrokerageLoginCancelResult,
+  BrokerageLoginJob,
+  BrokerageLoginPhase,
   BrokerageRefreshResult,
   BrokerageStatus,
   CalibrationSummary,
@@ -92,6 +94,12 @@ import type {
   RestartDaemonResult,
   RiskGateBlockEntry,
   RiskGateBlockLog,
+  RlhfProposal,
+  RlhfKpis,
+  RlhfSummary,
+  RlhfReviewSubmitRequest,
+  RlhfReviewSubmitResult,
+  RlhfSftExportResult,
   RealizedTrade,
   MetaLabelBin,
   MetaLabelDistribution,
@@ -111,8 +119,12 @@ import type {
   ValidationTrendSnapshot,
   TunableField,
   TunableFieldType,
+  TunableLiveness,
   TunablesResponse,
   TunablesUpdateResult,
+  AppliesState,
+  AppliesSummary,
+  SettingsConfirmMap,
   SymbolDetail,
   SymbolCompareRow,
   SymbolCompareResponse,
@@ -883,24 +895,159 @@ function writeBrokerageConnected(connected: boolean) {
   }
 }
 
-// ---- Local brokerage-refresh degraded-fetch simulation (localStorage) so
-// the "live login failed, falling back to the last cached snapshot" honest
-// branch (fetch_account_snapshot's own internal stale-cache fallback -- see
-// api/pilots_api.py's refresh_brokerage docstring) is reachable by actually
-// running the app with USE_MOCK=true, not only through a hand-crafted test
-// spy override. No dedicated UI control, same reasoning as
-// OBSERVABILITY_COLD_START_KEY below -- flip it from the browser devtools
-// console instead:
-//   localStorage.setItem("stockpy.mock.brokerage_refresh_degraded", "1")  // next refresh is stale
-//   localStorage.removeItem("stockpy.mock.brokerage_refresh_degraded")    // back to a fresh refresh
-const BROKERAGE_REFRESH_DEGRADED_KEY = "stockpy.mock.brokerage_refresh_degraded";
+// ---- Local login-job simulation (async device-approval push login) --
+// mirrors the POST /brokerage/{connect,refresh} -> poll GET
+// /brokerage/login/status/{job_id} contract: no synchronous verify, no
+// mfa_code, a believable "running through a few phases, then done" lifecycle
+// driven purely off elapsed wall-clock time since the job started (works
+// the same whether that's real time or vi.useFakeTimers()' fake clock). No
+// dedicated UI control for forcing the timeout branch, same "flip it from
+// devtools" convention as the other markers in this file:
+//   localStorage.setItem("stockpy.mock.brokerage_login_timeout", "1")  // next login job times out instead of succeeding
+//   localStorage.removeItem("stockpy.mock.brokerage_login_timeout")   // back to the happy path
+const BROKERAGE_LOGIN_TIMEOUT_KEY = "stockpy.mock.brokerage_login_timeout";
 
-function readBrokerageRefreshDegraded(): boolean {
+function readBrokerageLoginTimeout(): boolean {
   try {
-    return localStorage.getItem(BROKERAGE_REFRESH_DEGRADED_KEY) === "1";
+    return localStorage.getItem(BROKERAGE_LOGIN_TIMEOUT_KEY) === "1";
   } catch {
     return false;
   }
+}
+
+// Matches the real backend's default login deadline (see the API contract).
+const BROKERAGE_LOGIN_DEADLINE_SECONDS = 180;
+
+interface _MockLoginJob {
+  mode: "connect" | "refresh";
+  startedAt: number; // Date.now() at creation -- elapsed time drives phase/state below
+  cancelled: boolean;
+  simulateTimeout: boolean;
+  // Refresh-only: true when the job started with nothing to refresh (mirrors
+  // the honest "no usable .env credentials" failure the old synchronous
+  // refreshBrokerage() used to throw for). Connect always has typed
+  // credentials by the time the form's submit button is enabled, so this is
+  // never set for a "connect" job.
+  noCredentials: boolean;
+}
+let _mockLoginJobSeq = 0;
+const _mockLoginJobs: Record<string, _MockLoginJob> = {};
+
+/** Derives the CURRENT `BrokerageLoginJob` status for a tracked job purely
+ *  from elapsed time -- no separate "advance the mock forward" call needed,
+ *  so a real 2s-interval poll and a test's `vi.advanceTimersByTime` both
+ *  just work. */
+function _mockLoginJobStatus(jobId: string, job: _MockLoginJob): BrokerageLoginJob {
+  const elapsedSeconds = (Date.now() - job.startedAt) / 1000;
+  const secondsRemaining = Math.max(
+    0,
+    Math.round(BROKERAGE_LOGIN_DEADLINE_SECONDS - elapsedSeconds)
+  );
+  const connected = readBrokerageConnected();
+
+  if (job.cancelled) {
+    return {
+      job_id: jobId,
+      mode: job.mode,
+      state: "cancelled",
+      phase: "awaiting_approval",
+      error_code: "cancelled",
+      seconds_remaining: secondsRemaining,
+      connected,
+      has_account_snapshot: connected,
+    };
+  }
+
+  if (job.noCredentials) {
+    // A believable brief "starting" beat before the honest failure, rather
+    // than a same-tick reject -- matches the real async shape (a job that
+    // fails is still a job, discovered through a status poll).
+    if (elapsedSeconds < 1) {
+      return {
+        job_id: jobId,
+        mode: job.mode,
+        state: "running",
+        phase: "starting",
+        error_code: null,
+        seconds_remaining: secondsRemaining,
+        connected,
+        has_account_snapshot: connected,
+      };
+    }
+    return {
+      job_id: jobId,
+      mode: job.mode,
+      state: "failed",
+      phase: "starting",
+      error_code: "no_credentials",
+      seconds_remaining: secondsRemaining,
+      connected,
+      has_account_snapshot: connected,
+    };
+  }
+
+  if (job.simulateTimeout) {
+    if (elapsedSeconds >= BROKERAGE_LOGIN_DEADLINE_SECONDS) {
+      return {
+        job_id: jobId,
+        mode: job.mode,
+        state: "timeout",
+        phase: "awaiting_approval",
+        error_code: "timeout",
+        seconds_remaining: 0,
+        connected,
+        has_account_snapshot: connected,
+      };
+    }
+    return {
+      job_id: jobId,
+      mode: job.mode,
+      state: "running",
+      phase: "awaiting_approval",
+      error_code: null,
+      seconds_remaining: secondsRemaining,
+      connected,
+      has_account_snapshot: connected,
+    };
+  }
+
+  // Happy path: starting -> authenticating -> awaiting_approval -> verifying
+  // -> fetching_snapshot -> succeeded. Timed so a 2s-interval poller sees a
+  // couple of "running" polls (awaiting_approval) before success, rather
+  // than resolving on the very first poll.
+  let phase: BrokerageLoginPhase;
+  if (elapsedSeconds < 1) phase = "starting";
+  else if (elapsedSeconds < 2) phase = "authenticating";
+  else if (elapsedSeconds < 5) phase = "awaiting_approval";
+  else if (elapsedSeconds < 6) phase = "verifying";
+  else if (elapsedSeconds < 7) phase = "fetching_snapshot";
+  else phase = "done";
+
+  if (phase !== "done") {
+    return {
+      job_id: jobId,
+      mode: job.mode,
+      state: "running",
+      phase,
+      error_code: null,
+      seconds_remaining: secondsRemaining,
+      connected,
+      has_account_snapshot: connected,
+    };
+  }
+
+  if (job.mode === "connect") writeBrokerageConnected(true);
+  const nowConnected = readBrokerageConnected();
+  return {
+    job_id: jobId,
+    mode: job.mode,
+    state: "succeeded",
+    phase: "done",
+    error_code: null,
+    seconds_remaining: secondsRemaining,
+    connected: nowConnected,
+    has_account_snapshot: true,
+  };
 }
 
 // ---- Local ROBINHOOD_AUTO_REFRESH_ENABLED server-gate simulation
@@ -1382,6 +1529,136 @@ interface MockTunableDef {
   options?: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Per-field liveness for the mock editors.
+//
+// These are NOT invented: `MOCK_CAPTURE_SITES` is copied verbatim from the real
+// `docs/settings_liveness.json` artifact (generated by
+// `scripts/settings_liveness.py`) for exactly the keys these fixtures serve, so
+// demo mode shows the same "needs restart" set, with the same checkable
+// `file:line` evidence, that the live backend reports. Every key absent from
+// this map is `live_safe` in that same artifact and therefore applies
+// immediately.
+//
+// `MOCK_DEMO_ONLY_STATES` below is the one deliberate exception -- see its own
+// comment.
+// ---------------------------------------------------------------------------
+const MOCK_CAPTURE_SITES: Record<string, string[]> = {
+  RISK_FREE_RATE: ["processing_engine.py:36", "technical_options_engine.py:22"],
+  MARKET_RISK_PREMIUM: ["processing_engine.py:37"],
+  REQUIRED_RETURN_RATE: ["processing_engine.py:38"],
+  MAX_PORTFOLIO_HEAT: ["execution/risk_gate.py:136"],
+  MAX_POSITION_WEIGHT: ["execution/risk_gate.py:133"],
+  MAX_CORRELATION: ["execution/risk_gate.py:139"],
+  DAILY_LOSS_LIMIT_PCT: ["execution/risk_gate.py:144"],
+  MAX_ORDER_RATE_PER_MIN: ["execution/risk_gate.py:149"],
+  HMM_RISK_OFF_BLOCK_THRESHOLD: ["execution/risk_gate.py:154"],
+  RISK_GATE_ENFORCE_MARKET_HOURS: ["execution/risk_gate.py:159"],
+  DRY_RUN: ["gui/app.py:145"],
+  MARKET_DATA_PROVIDER: ["data/market_data.py:1834"],
+  MARKET_DATA_QUOTE_TTL_SECONDS: ["data/market_data.py:1771"],
+  MARKET_DATA_BARS_TTL_SECONDS: ["data/market_data.py:1776", "data/market_data.py:2094"],
+  FUNDAMENTALS_SOURCE: ["data/market_data.py:1809"],
+  DASHBOARD_REFRESH_SECONDS: ["gui/app.py:146", "gui/panels/__init__.py:87"],
+  LOG_LEVEL: ["alerting.py:118", "gui/app.py:83"],
+  ADVISORY_ONLY: ["gui/app.py:249"],
+  SECTOR_FORECAST_CONFIG_PATH: ["forecasting_engine.py:144"],
+  SECTOR_FORECAST_CONFIGS: ["forecasting_engine.py:146"],
+  CORS_ALLOWED_ORIGINS: ["api/control_api.py:166", "api/data_api.py:117"],
+  SENTIMENT_SOURCES: ["data/sentiment_sources.py:1865"],
+  SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1895"],
+  EDGAR_FULLTEXT_FORMS: ["api/pilots_api.py:4128"],
+  EDGAR_FULLTEXT_CHUNK_TOKENS: ["api/pilots_api.py:4129"],
+  FINNHUB_RATE_LIMIT_PER_MIN: ["data/market_data.py:1470", "data/market_data.py:1504"],
+  FMP_QUOTES_REALTIME: ["data/market_data.py:979"],
+  FMP_BARS_ADJUSTMENT: ["data/market_data.py:1850"],
+  FMP_ECON_INDICATORS: ["api/pilots_api.py:4233"],
+  ETF_HOLDINGS_TICKERS: ["api/pilots_api.py:4253"],
+};
+
+// `settings_keysets.DANGEROUS_KEYS` ∩ the keys these five editors serve. Copied
+// from the real set -- these are precisely the fields that were live-writable
+// with no confirmation before this feature existed.
+const MOCK_DANGEROUS_KEYS = new Set([
+  "ADVISORY_ONLY",
+  "DRY_RUN",
+  "CORS_ALLOWED_ORIGINS",
+  "FMP_BARS_ENABLED",
+  "FMP_BARS_ADJUSTMENT",
+]);
+
+// ---------------------------------------------------------------------------
+// SYNTHESIZED demo states -- the ONE place this mock deviates from the real
+// classifier, and it is deliberate and bounded.
+//
+// The real artifact classifies every key these five editors serve as either
+// `live_safe` or `restart_required`; NEITHER `no_effect` NOR `env_pinned`
+// occurs naturally here (`env_pinned` cannot, by construction -- it depends on
+// the operator's live shell, which a browser fixture has no access to). Without
+// these two entries, two of the UI's four badge states would be unreachable in
+// demo mode and effectively unreviewable.
+//
+// So: these two fields are labelled here for DEMO COVERAGE and do not describe
+// the real platform's behaviour for them. Everything else above does.
+//   - LOG_LEVEL is shown env-pinned because `LOG_LEVEL=DEBUG python3 main.py`
+//     is the single most plausible real shell export in this repo.
+//   - REQUIRED_RETURN_RATE is shown no-effect purely to exercise that badge.
+// ---------------------------------------------------------------------------
+const MOCK_DEMO_ONLY_STATES: Record<string, "env_pinned" | "no_effect"> = {
+  LOG_LEVEL: "env_pinned",
+  REQUIRED_RETURN_RATE: "no_effect",
+};
+
+function mockLiveness(key: string): TunableLiveness {
+  const demo = MOCK_DEMO_ONLY_STATES[key];
+  const sites = MOCK_CAPTURE_SITES[key] ?? [];
+  const dangerous = MOCK_DANGEROUS_KEYS.has(key);
+
+  if (demo === "env_pinned") {
+    return {
+      applies: "env_pinned",
+      restart_reason:
+        sites.length > 0
+          ? `This value was read once, when its module was first imported (${sites[0]}).`
+          : null,
+      capture_sites: sites,
+      env_pinned: true,
+      dangerous,
+      source: "env_file",
+    };
+  }
+  if (demo === "no_effect") {
+    return {
+      applies: "no_effect",
+      restart_reason: null,
+      capture_sites: [],
+      env_pinned: false,
+      dangerous,
+      source: "env_file",
+    };
+  }
+  if (sites.length > 0) {
+    return {
+      applies: "next_daemon_restart",
+      restart_reason: `This value was read once, when its module was first imported (${sites[0]}).`,
+      capture_sites: sites,
+      env_pinned: false,
+      dangerous,
+      source: "env_file",
+    };
+  }
+  return {
+    applies: "immediately",
+    restart_reason: null,
+    // `[]` is the MEASURED answer for a live-safe field -- the classifier
+    // looked and found nothing capturing it -- never "we didn't check".
+    capture_sites: [],
+    env_pinned: false,
+    dangerous,
+    source: "runtime_store",
+  };
+}
+
 const TUNABLE_DEFS: MockTunableDef[] = [
   // ---- Financial Constants ----
   {
@@ -1675,11 +1952,29 @@ function buildTunablesResponse(
     if (def.max !== undefined) field.max = def.max;
     if (def.step !== undefined) field.step = def.step;
     if (def.options !== undefined) field.options = def.options;
+    field.liveness = mockLiveness(def.key);
     group.fields.push(field);
   }
   const driftKeys = readDrift(driftKey);
+  // Roll the per-field states up exactly as `settings_meta.summarize_applies`
+  // does: the shared state when they all agree, "mixed" when they don't.
+  const counts: Record<AppliesState, number> = {
+    immediately: 0,
+    next_daemon_restart: 0,
+    no_effect: 0,
+    env_pinned: 0,
+  };
+  for (const g of groups) {
+    for (const f of g.fields) {
+      if (f.liveness) counts[f.liveness.applies] += 1;
+    }
+  }
+  const present = (Object.keys(counts) as AppliesState[]).filter((s) => counts[s] > 0);
+  const summary: AppliesSummary =
+    present.length === 1 ? present[0] : present.length === 0 ? "next_daemon_restart" : "mixed";
   return {
-    applies: "next_daemon_restart",
+    applies: summary,
+    applies_counts: counts,
     groups,
     env_drift: driftKeys.length
       ? {
@@ -1697,7 +1992,8 @@ function applyTunablesGeneric(
   values: Record<string, number | boolean | string>,
   defs: MockTunableDef[],
   overridesKey: string,
-  driftKey: string
+  driftKey: string,
+  confirm: Record<string, string> = {}
 ): TunablesUpdateResult {
   const written: Record<string, number | boolean | string> = {};
   const rejected: Record<string, string> = {};
@@ -1737,18 +2033,87 @@ function applyTunablesGeneric(
       written[key] = String(val);
     }
   }
+  // ---- dangerous-key confirmation gate ----
+  // Mirrors the real backend exactly, INCLUDING its ordering: this runs AFTER
+  // type validation, so a malformed dangerous value reports its type problem
+  // rather than having it masked by a confirmation complaint. It also runs
+  // BEFORE anything is persisted below, so a refused key is never half-written.
+  // Rejection is strictly per key -- an unconfirmed dangerous key must not stop
+  // the ordinary keys in the same batch from being written.
+  for (const key of Object.keys(written)) {
+    if (!MOCK_DANGEROUS_KEYS.has(key)) continue;
+    const echoed = confirm[key];
+    if (echoed === undefined) {
+      rejected[key] = "confirmation_required";
+      delete written[key];
+    } else if (echoed !== key) {
+      rejected[key] = "confirmation_mismatch";
+      delete written[key];
+    }
+  }
+
+  // What actually happened to each written key. A field the classifier calls
+  // live-safe is applied to the "running process"; everything else is a .env
+  // write the running process won't see until it restarts.
+  const perKeyApplies: Record<string, AppliesState> = {};
+  for (const key of Object.keys(written)) {
+    perKeyApplies[key] = mockLiveness(key).applies;
+  }
+  const appliedNow = Object.keys(perKeyApplies).filter(
+    (k) => perKeyApplies[k] === "immediately"
+  );
+  const pending = Object.keys(perKeyApplies).filter(
+    (k) => perKeyApplies[k] !== "immediately"
+  );
+
   if (Object.keys(written).length > 0) {
     try {
       localStorage.setItem(overridesKey, JSON.stringify({ ...readOverrides(overridesKey), ...written }));
-      // A .env write does NOT reach the running process until restart --
-      // mark every written key as drifted (mirrors STRATEGY_DRIFT_KEY above).
-      const drift = new Set([...readDrift(driftKey), ...Object.keys(written)]);
+      // Only a key that did NOT apply live is drifted: a live-applied key is
+      // already in force in the running process, so reporting it as pending a
+      // restart would be exactly the false claim this feature removes.
+      const drift = new Set([...readDrift(driftKey), ...pending]);
       localStorage.setItem(driftKey, JSON.stringify([...drift]));
     } catch {
       /* ignore quota */
     }
   }
-  return { written, rejected, applies: "next_daemon_restart" };
+
+  const counts: Record<AppliesState, number> = {
+    immediately: 0,
+    next_daemon_restart: 0,
+    no_effect: 0,
+    env_pinned: 0,
+  };
+  for (const s of Object.values(perKeyApplies)) counts[s] += 1;
+  const present = (Object.keys(counts) as AppliesState[]).filter((s) => counts[s] > 0);
+  const summary: AppliesSummary =
+    present.length === 1 ? present[0] : present.length === 0 ? "next_daemon_restart" : "mixed";
+
+  let note: string;
+  if (Object.keys(written).length === 0) {
+    note = "Nothing was written.";
+  } else if (appliedNow.length && !pending.length) {
+    note = "Saved to .env and applied to the running process — no restart needed.";
+  } else if (pending.length && !appliedNow.length) {
+    note =
+      "Saved to .env. The running process keeps the previous values until it restarts (POST /daemon/restart).";
+  } else {
+    note =
+      `Saved to .env. ${appliedNow.length} applied to the running process immediately; ` +
+      `${pending.length} take effect on the next restart (${pending.join(", ")}).`;
+  }
+
+  return {
+    written,
+    rejected,
+    applies: summary,
+    applies_counts: counts,
+    per_key_applies: perKeyApplies,
+    restart_required: pending.length > 0,
+    restart_endpoint: "POST /daemon/restart",
+    note,
+  };
 }
 
 function mockTunables(): TunablesResponse {
@@ -1756,9 +2121,10 @@ function mockTunables(): TunablesResponse {
 }
 
 function applyTunables(
-  values: Record<string, number | boolean | string>
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
 ): TunablesUpdateResult {
-  return applyTunablesGeneric(values, TUNABLE_DEFS, TUNABLES_KEY, TUNABLES_DRIFT_KEY);
+  return applyTunablesGeneric(values, TUNABLE_DEFS, TUNABLES_KEY, TUNABLES_DRIFT_KEY, confirm);
 }
 
 // ---------------------------------------------------------------------------
@@ -2245,9 +2611,10 @@ function mockSentimentTunables(): TunablesResponse {
 }
 
 function applySentimentTunables(
-  values: Record<string, number | boolean | string>
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
 ): TunablesUpdateResult {
-  return applyTunablesGeneric(values, SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY);
+  return applyTunablesGeneric(values, SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY, confirm);
 }
 
 function mockSectorSelectionTunables(): TunablesResponse {
@@ -2259,13 +2626,15 @@ function mockSectorSelectionTunables(): TunablesResponse {
 }
 
 function applySectorSelectionTunables(
-  values: Record<string, number | boolean | string>
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
 ): TunablesUpdateResult {
   return applyTunablesGeneric(
     values,
     SECTOR_SELECTION_TUNABLE_DEFS,
     SECTOR_SELECTION_TUNABLES_KEY,
-    SECTOR_SELECTION_TUNABLES_DRIFT_KEY
+    SECTOR_SELECTION_TUNABLES_DRIFT_KEY,
+    confirm
   );
 }
 
@@ -2274,9 +2643,10 @@ function mockFmpTunables(): TunablesResponse {
 }
 
 function applyFmpTunables(
-  values: Record<string, number | boolean | string>
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
 ): TunablesUpdateResult {
-  return applyTunablesGeneric(values, FMP_TUNABLE_DEFS, FMP_TUNABLES_KEY, FMP_TUNABLES_DRIFT_KEY);
+  return applyTunablesGeneric(values, FMP_TUNABLE_DEFS, FMP_TUNABLES_KEY, FMP_TUNABLES_DRIFT_KEY, confirm);
 }
 
 function mockEtfTransmissionTunables(): TunablesResponse {
@@ -2288,13 +2658,15 @@ function mockEtfTransmissionTunables(): TunablesResponse {
 }
 
 function applyEtfTransmissionTunables(
-  values: Record<string, number | boolean | string>
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
 ): TunablesUpdateResult {
   return applyTunablesGeneric(
     values,
     ETF_TRANSMISSION_TUNABLE_DEFS,
     ETF_TRANSMISSION_TUNABLES_KEY,
-    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY
+    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
+    confirm
   );
 }
 
@@ -4173,6 +4545,130 @@ const MOCK_DECISION_LOG: DecisionEntry[] = [
 ];
 
 /**
+ * In-memory RLHF proposal store backing the Agentic Trading screen's "RLHF
+ * Review Queue" section (RlhfReviewQueue.tsx) -- NOT the unrelated
+ * `/calibration` statistical-reliability screen. Proposals originate only
+ * from an AI agent via an MCP tool + the API; submitRlhfReview/exportRlhfSft
+ * mutate this array in place (mirrors MOCK_DECISION_LOG's logDecision
+ * pattern above) so a review genuinely disappears from the pending queue on
+ * refetch within the mock session, not persisted across a page reload.
+ *
+ * Deliberately exercises every honesty branch: id 1 is pending with a null
+ * `price`/`extra_context`/`rsi`/`sentiment_score` (agent couldn't resolve a
+ * live quote, attach context, or source either technical input); id 2 is
+ * `auto_approved: true` / already `status: "reviewed"` /
+ * `human_rating: null` (never appears in the pending list, never shows a
+ * rating control -- see getRlhfSummary's pending-only filter below); id 3 is
+ * a normal human-reviewed row with both a rating and a corrective comment,
+ * already exported to the SFT dataset; id 4 is a second pending row so the
+ * KPI counts aren't trivially 0/1; id 5 is reviewed, 5-starred, with no
+ * correction needed, and NOT yet exported -- the row exportRlhfSft acts on.
+ */
+const MOCK_RLHF_PROPOSALS: RlhfProposal[] = [
+  {
+    id: 1,
+    created_at: new Date(Date.now() - 45 * 60_000).toISOString(),
+    symbol: "NVDA",
+    action: "BUY",
+    quantity: 10,
+    price: null,
+    rationale:
+      "RSI(2) deeply oversold with price still above SMA_200 -- a classic Larry Connors mean-reversion setup, no earnings inside the expected holding window.",
+    confidence: 0.68,
+    rsi: null,
+    sentiment_score: null,
+    extra_context: null,
+    status: "pending",
+    human_rating: null,
+    human_correction: null,
+    reviewed_at: null,
+    auto_approved: false,
+    sft_exported: false,
+  },
+  {
+    id: 2,
+    created_at: new Date(Date.now() - 3 * 3600_000).toISOString(),
+    symbol: "TSLA",
+    action: "SELL",
+    quantity: 5,
+    price: 248.31,
+    rationale:
+      "HMM regime flipped risk-off and momentum decayed below the strong-uptrend filter -- sizing down ahead of a possible macro kill-switch trip.",
+    confidence: 0.91,
+    rsi: 71.4,
+    sentiment_score: -0.34,
+    extra_context: { hmm_risk_on_probability: 0.22, vix: 24.8 },
+    status: "reviewed",
+    human_rating: null,
+    human_correction: null,
+    reviewed_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    auto_approved: true,
+    sft_exported: false,
+  },
+  {
+    id: 3,
+    created_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
+    symbol: "AAPL",
+    action: "HOLD",
+    quantity: null,
+    price: 227.55,
+    rationale:
+      "Multifactor composite is neutral and there's no confirming catalyst -- staying flat rather than chasing a marginal signal.",
+    confidence: 0.54,
+    rsi: 49.1,
+    sentiment_score: 0.05,
+    extra_context: { multifactor_composite: 0.11 },
+    status: "reviewed",
+    human_rating: 4,
+    human_correction:
+      "Agreed with the hold, but the rationale undersells earnings-date risk -- should flag Days_To_Earnings explicitly next time.",
+    reviewed_at: new Date(Date.now() - 25 * 3600_000).toISOString(),
+    auto_approved: false,
+    sft_exported: true,
+  },
+  {
+    id: 4,
+    created_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+    symbol: "MSFT",
+    action: "BUY",
+    quantity: 8,
+    price: 412.02,
+    rationale:
+      "Cross-sectional 12-1M momentum rank in the top decile, low realized vol, quality factor z-score strongly positive.",
+    confidence: 0.77,
+    rsi: 58.9,
+    sentiment_score: 0.21,
+    extra_context: { xsec_momentum_rank: 0.94 },
+    status: "pending",
+    human_rating: null,
+    human_correction: null,
+    reviewed_at: null,
+    auto_approved: false,
+    sft_exported: false,
+  },
+  {
+    id: 5,
+    created_at: new Date(Date.now() - 30 * 3600_000).toISOString(),
+    symbol: "GOOGL",
+    action: "BUY",
+    quantity: 4,
+    price: 178.4,
+    rationale:
+      "Value + quality composite both strongly positive, sector rotation into Communication Services confirmed by Sector Heat Factor.",
+    confidence: 0.83,
+    rsi: 55.3,
+    sentiment_score: 0.28,
+    extra_context: null,
+    status: "reviewed",
+    human_rating: 5,
+    human_correction: null,
+    reviewed_at: new Date(Date.now() - 29 * 3600_000).toISOString(),
+    auto_approved: false,
+    sft_exported: false,
+  },
+];
+
+/**
  * Honest fixture for the CLI command manifest (GET /commands). Deliberately
  * exercises every branch the command bar must handle: a required option
  * (`validation.harness --strategy`), a variadic option (`preflight --skip`), a
@@ -5178,28 +5674,27 @@ export const mockApi = {
     );
   },
 
-  async connectBrokerage(
-    creds: BrokerageConnectRequest
-  ): Promise<BrokerageConnectResult> {
-    // Simulated verification only — the mock never contacts a real broker and
-    // never persists the credential strings themselves, only a boolean marker.
-    const verified = Boolean(
-      creds.username.trim() && creds.password.trim() && creds.mfa_code.trim()
-    );
-    if (!verified) {
-      throw new ApiError("Could not verify Robinhood credentials.", 401);
-    }
-    writeBrokerageConnected(true);
-    return delay({ connected: true, verified: true, has_account_snapshot: false }, 500);
-  },
-
-  async getConnectBrokerageStatus(_taskId: string): Promise<BrokerageConnectResult> {
-    return delay({
-      connected: true,
-      verified: true,
-      has_account_snapshot: false,
-      status: "success",
-    });
+  async connectBrokerage(creds: BrokerageConnectRequest): Promise<BrokerageLoginJob> {
+    // Never contacts a real broker and never persists the credential strings
+    // themselves -- only a boolean "connected" marker (writeBrokerageConnected,
+    // flipped once the job actually SUCCEEDS -- see _mockLoginJobStatus).
+    // No synchronous verify anymore: the real POST /brokerage/connect always
+    // 202s with a running job; username/password are trusted here purely to
+    // seed the mock account, mirroring the real backend never rejecting the
+    // POST itself for a bad password (that surfaces later, through a poll,
+    // as state: "failed" / error_code: "auth_failed" -- not modeled here
+    // since the submit button already requires both fields non-empty).
+    void creds;
+    const jobId = `mock-login-job-${++_mockLoginJobSeq}`;
+    const job: _MockLoginJob = {
+      mode: "connect",
+      startedAt: Date.now(),
+      cancelled: false,
+      simulateTimeout: readBrokerageLoginTimeout(),
+      noCredentials: false,
+    };
+    _mockLoginJobs[jobId] = job;
+    return delay(_mockLoginJobStatus(jobId, job), 150);
   },
 
   async disconnectBrokerage(): Promise<BrokerageDisconnectResult> {
@@ -5208,31 +5703,35 @@ export const mockApi = {
   },
 
   async refreshBrokerage(): Promise<BrokerageRefreshResult> {
-    // Honesty branch: nothing is configured to log back into — mirrors the
-    // real backend's 502 when fetch_account_snapshot has neither a fresh
-    // live fetch nor any cached snapshot to fall back on (e.g. never
-    // connected). A longer delay than the other brokerage calls simulates a
-    // real login round-trip rather than a local cache read.
-    if (!readBrokerageConnected()) {
-      throw new ApiError("Could not refresh the Robinhood account snapshot.", 502);
-    }
-    if (readBrokerageRefreshDegraded()) {
-      // Honesty branch: fetch_account_snapshot's own internal fallback —
-      // the live login failed, so a real (if stale) PREVIOUSLY cached
-      // snapshot was returned instead of a fresh one. fetched_at/age_hours
-      // are deliberately NOT reset to "now", unlike the healthy branch below.
-      return delay({ ...PORTFOLIO, is_stale: true, source: "live" }, 900);
-    }
-    return delay(
-      {
-        ...PORTFOLIO,
-        fetched_at: new Date().toISOString(),
-        is_stale: false,
-        age_hours: 0,
-        source: "live",
-      },
-      900
-    );
+    // Honesty branch, ported from the old synchronous refreshBrokerage():
+    // nothing is configured to log back into (never connected) -- mirrors
+    // the real backend discovering it has no usable credentials, surfaced
+    // through the FIRST status poll as state: "failed" / error_code:
+    // "no_credentials" rather than rejecting this call itself (the real
+    // POST /brokerage/refresh always 202s with a running job).
+    const jobId = `mock-login-job-${++_mockLoginJobSeq}`;
+    const job: _MockLoginJob = {
+      mode: "refresh",
+      startedAt: Date.now(),
+      cancelled: false,
+      simulateTimeout: readBrokerageLoginTimeout(),
+      noCredentials: !readBrokerageConnected(),
+    };
+    _mockLoginJobs[jobId] = job;
+    return delay(_mockLoginJobStatus(jobId, job), 150);
+  },
+
+  async getBrokerageLoginStatus(jobId: string): Promise<BrokerageLoginJob> {
+    const job = _mockLoginJobs[jobId];
+    if (!job) throw new ApiError("Unknown login job.", 404);
+    return delay(_mockLoginJobStatus(jobId, job), 80);
+  },
+
+  async cancelBrokerageLogin(jobId: string): Promise<BrokerageLoginCancelResult> {
+    const job = _mockLoginJobs[jobId];
+    if (!job) throw new ApiError("Unknown login job.", 404);
+    job.cancelled = true;
+    return delay({ ..._mockLoginJobStatus(jobId, job), cancelled: true }, 100);
   },
 
   async getRealized(): Promise<RealizedPerformance> {
@@ -5867,9 +6366,10 @@ export const mockApi = {
   },
 
   async updateTunables(
-    values: Record<string, number | boolean | string>
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {}
   ): Promise<TunablesUpdateResult> {
-    return delay(applyTunables(values));
+    return delay(applyTunables(values, confirm));
   },
 
   async getSentimentSettings(): Promise<TunablesResponse> {
@@ -5877,9 +6377,10 @@ export const mockApi = {
   },
 
   async updateSentimentSettings(
-    values: Record<string, number | boolean | string>
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {}
   ): Promise<TunablesUpdateResult> {
-    return delay(applySentimentTunables(values));
+    return delay(applySentimentTunables(values, confirm));
   },
 
   async getSectorSelectionSettings(): Promise<TunablesResponse> {
@@ -5887,9 +6388,10 @@ export const mockApi = {
   },
 
   async updateSectorSelectionSettings(
-    values: Record<string, number | boolean | string>
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {}
   ): Promise<TunablesUpdateResult> {
-    return delay(applySectorSelectionTunables(values));
+    return delay(applySectorSelectionTunables(values, confirm));
   },
 
   async getFmpSettings(): Promise<TunablesResponse> {
@@ -5897,9 +6399,10 @@ export const mockApi = {
   },
 
   async updateFmpSettings(
-    values: Record<string, number | boolean | string>
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {}
   ): Promise<TunablesUpdateResult> {
-    return delay(applyFmpTunables(values));
+    return delay(applyFmpTunables(values, confirm));
   },
 
   async getEtfTransmissionSettings(): Promise<TunablesResponse> {
@@ -5907,9 +6410,10 @@ export const mockApi = {
   },
 
   async updateEtfTransmissionSettings(
-    values: Record<string, number | boolean | string>
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {}
   ): Promise<TunablesUpdateResult> {
-    return delay(applyEtfTransmissionTunables(values));
+    return delay(applyEtfTransmissionTunables(values, confirm));
   },
 
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----
@@ -6328,6 +6832,82 @@ export const mockApi = {
           : "Added to watchlist.txt — the pipeline will evaluate it on the next run. No order was placed.",
       },
       150
+    );
+  },
+
+  // ---- RLHF Calibration Review Queue ----
+  async getRlhfSummary(limit = 50): Promise<RlhfSummary> {
+    const cap = Math.max(1, Math.min(limit, 200));
+    // Newest first -- matches rlhf_calibration_store.get_pending's real
+    // `ORDER BY created_at DESC`, not fixture declaration order.
+    const pending = MOCK_RLHF_PROPOSALS.filter((p) => p.status === "pending")
+      .slice()
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, cap);
+    const reviewed = MOCK_RLHF_PROPOSALS.filter((p) => p.status === "reviewed");
+    const rated = reviewed.filter((p): p is RlhfProposal & { human_rating: 1 | 2 | 3 | 4 | 5 } => p.human_rating != null);
+
+    const distribution: Record<string, number> = { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 };
+    for (const p of rated) {
+      distribution[String(p.human_rating)] = (distribution[String(p.human_rating)] ?? 0) + 1;
+    }
+
+    const kpis: RlhfKpis = {
+      pending_count: MOCK_RLHF_PROPOSALS.filter((p) => p.status === "pending").length,
+      reviewed_count: reviewed.length,
+      average_human_rating: rated.length
+        ? rated.reduce((sum, p) => sum + p.human_rating, 0) / rated.length
+        : null,
+      rating_distribution: distribution,
+      auto_approved_count: MOCK_RLHF_PROPOSALS.filter((p) => p.auto_approved).length,
+      sft_exported_count: MOCK_RLHF_PROPOSALS.filter((p) => p.sft_exported).length,
+    };
+
+    return delay({
+      proposals: pending,
+      kpis,
+      writable: true,
+      reason:
+        pending.length === 0
+          ? "No pending proposals -- the agent hasn't proposed a paper trade yet."
+          : null,
+    });
+  },
+
+  async submitRlhfReview(id: number, body: RlhfReviewSubmitRequest): Promise<RlhfReviewSubmitResult> {
+    const proposal = MOCK_RLHF_PROPOSALS.find((p) => p.id === id);
+    if (!proposal) {
+      throw new ApiError(`not_found: no RLHF proposal with id ${id}.`, 404);
+    }
+    if (proposal.status === "reviewed") {
+      throw new ApiError(`already_reviewed: proposal ${id} was already reviewed.`, 409);
+    }
+    if (body.human_rating < 1 || body.human_rating > 5) {
+      throw new ApiError("invalid_rating: human_rating must be between 1 and 5.", 422);
+    }
+
+    proposal.status = "reviewed";
+    proposal.human_rating = body.human_rating;
+    proposal.human_correction = body.human_correction?.trim() || null;
+    proposal.reviewed_at = new Date().toISOString();
+    // Export happens only via the explicit exportRlhfSft call below -- a
+    // freshly reviewed proposal is never silently exported as a side effect
+    // of the review itself.
+    return delay({ ...proposal, sft_exported: proposal.sft_exported }, 150);
+  },
+
+  async exportRlhfSft(): Promise<RlhfSftExportResult> {
+    const eligible = MOCK_RLHF_PROPOSALS.filter(
+      (p) => p.status === "reviewed" && p.human_rating === 5 && !p.sft_exported
+    );
+    for (const p of eligible) p.sft_exported = true;
+    return delay(
+      {
+        exported_count: eligible.length,
+        file: "output/rlhf_sft_export.jsonl",
+        proposal_ids: eligible.map((p) => p.id),
+      },
+      200
     );
   },
 

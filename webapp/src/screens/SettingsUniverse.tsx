@@ -1,6 +1,7 @@
 import { UniverseManager } from "../components/UniverseManager";
 import { UniverseCoverage } from "../components/UniverseCoverage";
 import { SectionCard } from "../components/SectionCard";
+import { TabGuide } from "../components/TabGuide";
 
 export function SettingsUniverse() {
   return (
@@ -11,6 +12,8 @@ export function SettingsUniverse() {
           Manage the active symbols that the pipeline processes on each run.
         </p>
       </div>
+
+      <TabGuide tabKey="settings-universe" />
 
       <SectionCard
         title="Tracked universe"

@@ -22,8 +22,9 @@ import type {
   BrinsonFachlerResult,
   BrinsonFachlerRow,
   BrokerageConnectRequest,
-  BrokerageConnectResult,
   BrokerageDisconnectResult,
+  BrokerageLoginCancelResult,
+  BrokerageLoginJob,
   BrokerageRefreshResult,
   BrokerageStatus,
   CalibrationSummary,
@@ -77,12 +78,17 @@ import type {
   SentimentHistory,
   TunablesResponse,
   TunablesUpdateResult,
+  SettingsConfirmMap,
   SymbolDetail,
   SymbolCompareResponse,
   UniverseResponse,
   SyncReportResponse,
   RecommendationsResponse,
   RestartDaemonResult,
+  RlhfSummary,
+  RlhfReviewSubmitRequest,
+  RlhfReviewSubmitResult,
+  RlhfSftExportResult,
   UniverseListResponse,
   Thresholds,
   SymbolOptions,
@@ -489,39 +495,61 @@ const liveApi = {
     }),
   // ---- General runtime tunables editor (pilots base, :8602) ----
   // Read the allowlisted, non-secret settings grouped for display; write only
-  // the changed keys back. The PUT does NOT reach the running process — see
-  // TunablesResponse.applies ("next_daemon_restart").
-  // Tunables & settings
+  // the changed keys back.
+  //
+  // Whether a PUT reaches the RUNNING process is now per key, not a blanket
+  // "no": see each field's `liveness.applies` on the GET, and the write's own
+  // `per_key_applies` for what actually happened.
+  //
+  // `confirm` echoes each DANGEROUS_KEYS field's own name back
+  // (`{ ADVISORY_ONLY: "ADVISORY_ONLY" }`). Omitting it for such a key rejects
+  // that key with `confirmation_required` — per key, so the rest of the batch
+  // still writes.
   getCronStatus: () => http<CronStatus>("/system/cron-status"),
   getTunables: () => http<TunablesResponse>("/settings/tunables"),
-  updateTunables: (values: Record<string, number | boolean | string>) =>
+  updateTunables: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/tunables", {
-      method: "PATCH",
-      body: JSON.stringify({ values }),
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
     }),
   getSentimentSettings: () => http<TunablesResponse>("/settings/sentiment"),
-  updateSentimentSettings: (values: Record<string, number | boolean | string>) =>
+  updateSentimentSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/sentiment", {
-      method: "PATCH",
-      body: JSON.stringify({ values }),
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
     }),
   getSectorSelectionSettings: () => http<TunablesResponse>("/settings/sector-selection"),
-  updateSectorSelectionSettings: (values: Record<string, number | boolean | string>) =>
+  updateSectorSelectionSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/sector-selection", {
-      method: "PATCH",
-      body: JSON.stringify({ values }),
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
     }),
   getFmpSettings: () => http<TunablesResponse>("/settings/fmp"),
-  updateFmpSettings: (values: Record<string, number | boolean | string>) =>
+  updateFmpSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/fmp", {
-      method: "PATCH",
-      body: JSON.stringify({ values }),
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
     }),
   getEtfTransmissionSettings: () => http<TunablesResponse>("/settings/etf-transmission"),
-  updateEtfTransmissionSettings: (values: Record<string, number | boolean | string>) =>
+  updateEtfTransmissionSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
     http<TunablesUpdateResult>("/settings/etf-transmission", {
-      method: "PATCH",
-      body: JSON.stringify({ values }),
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
     }),
   getFollows: () => http<Follow[]>("/follows"),
   follow: (id: string, amount: number) =>
@@ -647,20 +675,24 @@ const liveApi = {
       body: JSON.stringify({ key, value }),
     }),
   connectBrokerage: (creds: BrokerageConnectRequest) =>
-    http<BrokerageConnectResult>("/brokerage/connect", {
+    http<BrokerageLoginJob>("/brokerage/connect", {
       method: "POST",
       body: JSON.stringify(creds),
     }),
-  getConnectBrokerageStatus: (taskId: string) => http<BrokerageConnectResult>(`/brokerage/connect/${taskId}`),
   disconnectBrokerage: () =>
     http<BrokerageDisconnectResult>("/brokerage/disconnect", {
       method: "POST",
       body: JSON.stringify({}),
     }),
+  // No body -- the backend re-authenticates with whatever RH_USERNAME/
+  // RH_PASSWORD is already configured server-side.
   refreshBrokerage: () =>
-    http<BrokerageRefreshResult>("/brokerage/refresh", {
+    http<BrokerageRefreshResult>("/brokerage/refresh", { method: "POST" }),
+  getBrokerageLoginStatus: (jobId: string) =>
+    http<BrokerageLoginJob>(`/brokerage/login/status/${encodeURIComponent(jobId)}`),
+  cancelBrokerageLogin: (jobId: string) =>
+    http<BrokerageLoginCancelResult>(`/brokerage/login/cancel/${encodeURIComponent(jobId)}`, {
       method: "POST",
-      body: JSON.stringify({}),
     }),
   // ---- Agentic Trading tab ----
   getAgenticStatus: () => http<AgenticStatus>("/agentic/status"),
@@ -675,6 +707,16 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify({ symbol }),
     }),
+  // ---- RLHF Calibration Review Queue (nested inside Agentic Trading; pilots
+  // base, :8602) — rating an AI-proposed hypothetical paper trade, never a
+  // live order. See types.ts's RlhfProposal/RlhfSummary doc comments.
+  getRlhfSummary: (limit = 50) => http<RlhfSummary>(`/rlhf/summary?limit=${limit}`),
+  submitRlhfReview: (id: number, body: RlhfReviewSubmitRequest) =>
+    http<RlhfReviewSubmitResult>(`/rlhf/proposals/${id}/review`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  exportRlhfSft: () => http<RlhfSftExportResult>("/rlhf/export-sft", { method: "POST" }),
   // ---- Job Execution & Streaming ----
   createJob: (job_type: string, params?: Record<string, unknown>) =>
     http<JobRecord>("/jobs", {

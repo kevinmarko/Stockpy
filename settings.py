@@ -132,7 +132,7 @@ class Settings(BaseSettings):
     #   1.  Secrets / credentials .............. FRED, Alpaca, State API token
     #   2.  Market-data layer .................. provider, Finnhub, cache TTLs
     #   3.  Robinhood — legacy SMS login ....... ROBINHOOD_USERNAME/PASSWORD
-    #   4.  Robinhood — portfolio TOTP ......... RH_USERNAME/PASSWORD/MFA_SECRET
+    #   4.  Robinhood — portfolio login ........ RH_USERNAME/PASSWORD, device-approval login timeouts
     #   5.  Order management / broker .......... DRY_RUN, ADVISORY_ONLY, webhook
     #   6.  Pre-trade risk gate ................ correlation, loss limit, HMM
     #   7.  Kill switch ........................ FLATTEN_ON_KILL
@@ -889,29 +889,65 @@ class Settings(BaseSettings):
         default=None,
         description="Robinhood account password for TOTP-authenticated read-only portfolio snapshot.",
     )
-    RH_MFA_SECRET: Optional[str] = Field(
-        default=None,
-        description=(
-            "Base32 TOTP secret from the Robinhood MFA setup page. Used to generate "
-            "the 6-digit code via pyotp.TOTP(RH_MFA_SECRET).now() — never logged or cached."
-        ),
-    )
+    # RH_MFA_SECRET (Base32 TOTP secret) was removed when Robinhood login moved
+    # to device-approval push (data.robinhood_login_worker) — passing an
+    # mfa_code short-circuits the push workflow entirely, so a TOTP secret is
+    # no longer usable here. See docs/settings_liveness.json history / the PR
+    # that retired it for the full rationale.
+    #
     # data.robinhood_portfolio.fetch_account_snapshot()'s Tier 3 (live fetch) runs
     # automatically whenever the cached snapshot is older than max_age_hours (default
     # 20h) — every one of its ~8 call sites (GUI panels, the MCP server, the Pilots/
-    # data APIs, portfolio_sync, llm_commentary) inherits this, so once credentials
-    # start failing, every poll from every surface re-attempts a Robinhood login with
-    # no shared cooldown. Default True preserves that exact behavior. Set False to
-    # make the live fetch strictly opt-in: only `force=True` (i.e. `python3 main.py
-    # --refresh-account`) ever logs in; every other caller gets the best available
-    # cached snapshot regardless of staleness.
+    # data APIs, portfolio_sync, llm_commentary) inherits this. Under device-approval
+    # login, an unattended Tier-3 attempt can never succeed (it needs a human to tap
+    # approve on their phone) — it only ever raises RobinhoodApprovalRequired and
+    # dead-letters. Default False reflects that: live login only happens when
+    # explicitly forced (--refresh-account, or the webapp's Connect/Refresh flows,
+    # both of which run the login in a supervised, killable worker a human is
+    # expected to be watching); every other caller gets the best available cached
+    # snapshot regardless of staleness rather than spawning a doomed login attempt
+    # every cycle. Set True to restore the old always-attempt behavior (meaningful
+    # only if a future login mode restores unattended capability).
     ROBINHOOD_AUTO_REFRESH_ENABLED: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "When True (default), fetch_account_snapshot() automatically re-logs-in "
-            "to Robinhood whenever the cached snapshot exceeds max_age_hours. When "
-            "False, live login only happens when explicitly forced (--refresh-account) "
-            "— all other callers get the cached snapshot regardless of staleness."
+            "When True, fetch_account_snapshot() automatically re-logs-in to "
+            "Robinhood whenever the cached snapshot exceeds max_age_hours. Default "
+            "False: device-approval login needs a human to tap approve, so an "
+            "unattended background attempt can never succeed — live login only "
+            "happens when explicitly forced (--refresh-account, or the webapp's "
+            "Connect/Refresh flows); all other callers get the cached snapshot "
+            "regardless of staleness."
+        ),
+    )
+    # data/robinhood_login.py's killable-subprocess login worker. All three
+    # default to values measured/estimated against robin_stocks' own device-
+    # approval wait windows (authentication.py's two 120s walls back-to-back)
+    # plus interpreter startup and network round-trips -- see
+    # docs/known_issues or the introducing PR for the full derivation.
+    RH_LOGIN_DEADLINE_SECONDS: int = Field(
+        default=180,
+        description=(
+            "Hard wall-clock deadline for one device-approval login attempt, from "
+            "worker start to a terminal result. The worker is SIGKILLed if it "
+            "hasn't produced a result by then -- about the longest a human will "
+            "hold their phone waiting for a push notification."
+        ),
+    )
+    RH_LOGIN_GRACE_SECONDS: int = Field(
+        default=5,
+        description=(
+            "SIGTERM-to-SIGKILL grace period when a login worker is cancelled or "
+            "hits its deadline."
+        ),
+    )
+    RH_LOGIN_STARTUP_SECONDS: int = Field(
+        default=30,
+        description=(
+            "If the login worker process hasn't emitted its first 'started' event "
+            "within this many seconds, it's treated as a failed launch (bad "
+            "interpreter, import error) and killed rather than waited out for the "
+            "full RH_LOGIN_DEADLINE_SECONDS."
         ),
     )
     # --- Order management (execution/order_manager.py) ---
@@ -1724,6 +1760,43 @@ class Settings(BaseSettings):
             "orchestrator daemon instead of spawning a fresh subprocess per "
             "cycle. False (default) preserves today's exact subprocess "
             "behavior everywhere."
+        ),
+    )
+    # Cross-process settings hot-reload: whether the persistent orchestrator
+    # daemon (desktop/orchestrator_daemon.py) periodically re-checks
+    # output/runtime_flags.json for changes written by ANOTHER process (e.g.
+    # a Pilots-PWA settings PUT served by a separate `api/pilots_api.py`
+    # process) and applies them onto its own long-lived `settings` singleton.
+    # A store write served by the daemon's OWN process (PILOTS_API_ENABLED=True,
+    # hosting pilots_api inside the daemon) already applies immediately via
+    # the settings-store write path's own in-process apply -- this
+    # flag only matters for a store write from a DIFFERENT process. False
+    # (the default) preserves today's exact behavior: a daemon never
+    # re-reads the store after startup, so a cross-process write only takes
+    # effect on that daemon's next restart, exactly as before this setting
+    # existed.
+    RUNTIME_FLAGS_REFRESH_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Periodically re-check output/runtime_flags.json for changes "
+            "written by another process and apply them onto this daemon's "
+            "live settings. False (default) preserves today's exact "
+            "behavior -- a cross-process write only takes effect on next "
+            "restart."
+        ),
+    )
+    # Poll cadence for the refresher above. Irrelevant when the flag is off.
+    # Deliberately independent of ORCHESTRATOR_INTERVAL_SECONDS (the pipeline
+    # cycle cadence) -- a settings check is a single os.stat() plus, only on
+    # a real change, one validated re-apply, cheap enough to poll far more
+    # often than a full pipeline cycle without meaningful cost.
+    RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS: int = Field(
+        default=30,
+        gt=0,
+        description=(
+            "Seconds between the orchestrator daemon's checks of "
+            "output/runtime_flags.json for cross-process changes. Only "
+            "consulted when RUNTIME_FLAGS_REFRESH_ENABLED is True."
         ),
     )
     # Total wall-clock budget (2026-07 fix) for desktop/orchestrator_daemon.py's
@@ -2940,6 +3013,54 @@ class Settings(BaseSettings):
             "flag."
         ),
     )
+    # RLHF Calibration Review Queue (rlhf_calibration_store.py) -- an AI trading
+    # agent proposes a hypothetical PAPER trade (symbol/action/rationale/
+    # confidence/technical-context) and a human operator rates it 1-5 stars
+    # with an optional corrective comment. Entirely separate from real
+    # trading: no capital, no broker, no TransactionsStore/BrokerBase/
+    # OrderManager involvement (see that module's docstring for why mixing
+    # hypothetical proposals into TransactionsStore would be dangerous).
+    RLHF_CALIBRATION_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master switch for the RLHF Calibration Review Queue's write "
+            "endpoints (POST /rlhf/proposals, POST /rlhf/proposals/{id}/review, "
+            "POST /rlhf/export-sft). Paper-only -- no capital, broker, or "
+            "execution risk -- so this ships active by default per this "
+            "repo's 2026-08-03 convention that new admin/write capabilities "
+            "default ON. Also requires FOLLOW_API_TOKEN at the endpoint "
+            "level regardless of this flag's value."
+        ),
+    )
+    RLHF_CALIBRATION_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.8,
+        description=(
+            "Confidence [0,1] at or above which a new proposal is "
+            "auto-approved (skips mandatory human review) when "
+            "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED is True."
+        ),
+    )
+    RLHF_CALIBRATION_AUTO_APPROVE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, a proposal whose confidence clears "
+            "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD is marked reviewed "
+            "automatically (auto_approved=True, human_rating stays null -- "
+            "never a fabricated rating) instead of waiting for a human. "
+            "Default False: this changes what counts as 'reviewed' without a "
+            "human in the loop, so it stays opt-in rather than defaulting on "
+            "like RLHF_CALIBRATION_ENABLED."
+        ),
+    )
+    RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, a proposal that receives a 5-star human_rating is "
+            "automatically appended to the SFT JSONL export the moment the "
+            "review is submitted, instead of requiring a separate "
+            "POST /rlhf/export-sft call. Default False (opt-in)."
+        ),
+    )
     # Master switch for api/data_api.py's three on-demand AI generation endpoints
     # (POST /data/ai/commentary|chart|research/{symbol} -- Claude analyst note,
     # Gemini chart-vision read, Opal research brief). A DEDICATED flag, distinct
@@ -3999,3 +4120,43 @@ class Settings(BaseSettings):
 
 # Module-level singleton imported across the platform.
 settings = Settings()
+
+
+# =============================================================================
+# Runtime settings store (read path) — layered ON TOP of the singleton above.
+# =============================================================================
+# `runtime_flags.apply_overrides` lets a field value come from
+# `output/runtime_flags.json` in addition to real env vars and `.env`. It is a
+# NO-OP unless that file exists, which it does not on any install today (the
+# writer that creates it is a separate, later change). See runtime_flags.py's
+# module docstring for the JSON shape, the precedence rule
+# (real shell env > store > .env > default), and why this is a post-construction
+# `setattr` layer rather than a pydantic settings source.
+#
+# Placement: this MUST run after `settings = Settings()` — it mutates the
+# already-constructed singleton, because 146+ modules do
+# `from settings import settings` and bind the OBJECT, so the singleton can
+# never be reconstructed or reassigned once this module finishes importing.
+#
+# The import is deferred to here (rather than the module header) and wrapped so
+# that ANY failure — a missing/corrupt runtime_flags.py, an unanticipated bug
+# inside it, a broken python-dotenv install — degrades to "no overrides
+# applied" instead of breaking `import settings` for the ENTIRE application.
+# Every entry point in this platform imports this module; a raise here is a
+# total outage. runtime_flags.py is independently defensive per CONSTRAINT #6;
+# this is the outermost belt-and-suspenders net, not a substitute for that.
+#
+# RUNTIME_FLAGS_REPORT is descriptive only — nothing reads it to make a
+# decision. A later task surfaces it to an operator (notably
+# `.skipped_env_pinned`, which explains why a store edit did not take effect).
+try:
+    import runtime_flags as _runtime_flags
+
+    RUNTIME_FLAGS_REPORT = _runtime_flags.apply_overrides(settings)
+except Exception:  # pragma: no cover - defensive; must never break the import
+    logger.warning(
+        "runtime_flags override layer failed to load; continuing with "
+        "environment/.env-sourced settings only.",
+        exc_info=True,
+    )
+    RUNTIME_FLAGS_REPORT = None

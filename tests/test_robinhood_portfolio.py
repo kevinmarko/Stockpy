@@ -3,7 +3,10 @@
 # File: tests/test_robinhood_portfolio.py
 #
 # All tests are fully offline — no Robinhood network calls are made.
-# robin_stocks functions and _login() are monkeypatched.
+# robin_stocks functions and _login_with() are monkeypatched. Robinhood login
+# is device-approval push (the operator taps "approve" in the Robinhood app),
+# not TOTP/SMS — there is no mfa_code path any more (see
+# data/robinhood_portfolio.py's _login_with() docstring).
 #
 # Coverage:
 #   PortfolioPosition   — round-trip serialisation, frozen immutability
@@ -33,21 +36,23 @@ import pytest
 # ---------------------------------------------------------------------------
 # Stub env vars BEFORE importing the module under test.
 # (The module reads credentials via the `settings` singleton, not os.environ,
-# at function-call time inside _login() -- not at import time. These
-# os.environ.setdefault calls are a defensive belt-and-suspenders for
-# whatever real .env this test session's settings.Settings() singleton was
-# constructed against; individual tests below patch
+# at function-call time inside _login_with()/_fetch_live_snapshot() -- not at
+# import time. These os.environ.setdefault calls are a defensive belt-and-
+# suspenders for whatever real .env this test session's settings.Settings()
+# singleton was constructed against; individual tests below patch
 # data.robinhood_portfolio._settings.RH_X directly, which is what actually
-# controls _login()'s behavior.)
+# controls the login path's behavior.)
 # ---------------------------------------------------------------------------
 os.environ.setdefault("RH_USERNAME", "test@example.com")
 os.environ.setdefault("RH_PASSWORD", "testpassword123")
-os.environ.setdefault("RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")  # RFC 6238 test vector
 
+import data.robinhood_portfolio as robinhood_portfolio  # noqa: E402
 from data.robinhood_portfolio import (  # noqa: E402
     AccountSnapshot,
     PortfolioPosition,
+    RobinhoodApprovalRequired,
     _fetch_live_snapshot,
+    _login_with,
     _read_cache,
     _write_cache,
     account_snapshot_to_robinhood_positions,
@@ -247,6 +252,19 @@ class TestFetchAccountSnapshot:
         mock_store.latest_account_snapshot.return_value = None
         mock_store.save_account_snapshot.return_value = 1
         monkeypatch.setattr("data.historical_store.HistoricalStore", lambda **kw: mock_store)
+
+    @pytest.fixture(autouse=True)
+    def _auto_refresh_enabled_by_default(self, monkeypatch):
+        """Restore the pre-device-approval default (True) for tests in this
+        class that don't care about this flag one way or the other --
+        settings.ROBINHOOD_AUTO_REFRESH_ENABLED's default flipped to False
+        when Robinhood login moved to device-approval push (an unattended
+        Tier-3 login can never complete without a human tapping approve).
+        Tests that specifically exercise the False behavior
+        (TestAutoRefreshDisabled* below) override this within their own body
+        -- a later monkeypatch.setattr call in the same test wins over this
+        fixture's earlier one."""
+        monkeypatch.setattr("settings.settings.ROBINHOOD_AUTO_REFRESH_ENABLED", True)
 
     def _setup(self, monkeypatch, tmp_path, live_snap=None):
         """Redirect cache path and wire in a fake live-fetch function."""
@@ -466,9 +484,26 @@ _MOCK_DIVIDENDS = [
 
 
 def _patch_robinhood(monkeypatch, holdings=None, dividends=None,
-                     portfolio=None, account=None):
-    """Apply monkeypatches for all robin_stocks calls used by _fetch_live_snapshot."""
-    monkeypatch.setattr("data.robinhood_portfolio._login", lambda: None)
+                     portfolio=None, account=None, login_result=None):
+    """Apply monkeypatches for all robin_stocks calls used by _fetch_live_snapshot.
+
+    Forces the RH_LOGIN_WORKER=1 in-process login branch (mode='device_approval')
+    so these tests exercise the real holdings/dividends/P&L-math code path
+    without spawning the isolated login subprocess (data/robinhood_login.py) --
+    that subprocess boundary is covered separately by tests/test_robinhood_login.py.
+    """
+    monkeypatch.setenv("RH_LOGIN_WORKER", "1")
+    monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "user@example.com")
+    monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "pw")
+    monkeypatch.setattr(
+        "data.robinhood_portfolio.r.login",
+        lambda username, password, **kwargs: (login_result or {"access_token": "mock-token"}),
+    )
+    # robin_stocks' session-pickle guard touches the real filesystem
+    # (~/.tokens) -- no-op it out for these offline unit tests. See
+    # tests/test_robinhood_session.py for dedicated coverage of that module.
+    monkeypatch.setattr("data.robinhood_session.ensure_session_pickle", lambda: None)
+    monkeypatch.setattr("data.robinhood_session.backup_session_pickle", lambda: None)
     monkeypatch.setattr(
         "data.robinhood_portfolio.r.build_holdings",
         lambda: holdings if holdings is not None else _MOCK_HOLDINGS,
@@ -733,112 +768,171 @@ def test_no_order_functions_in_module_source() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Login Flow Tests
+# Login Flow Tests -- device-approval push (no TOTP/SMS/mfa_code path exists
+# any more; passing an mfa_code to robin_stocks short-circuits its
+# device-approval workflow entirely -- see _login_with()'s docstring).
 # ---------------------------------------------------------------------------
 
-class TestLoginFlow:
-    def test_login_with_mfa_secret(self, monkeypatch) -> None:
-        """When RH_MFA_SECRET is set, login should use TOTP and by_sms=False."""
-        login_calls = []
+class TestLoginWith:
+    """_login_with() -- the low-level r.login() wrapper used by both
+    data.robinhood_login_worker (mode='connect') and _fetch_live_snapshot's
+    in-worker branch (mode='refresh')."""
 
-        def mock_login(username, password, store_session=True, mfa_code=None, by_sms=False):
-            login_calls.append({
-                "username": username,
-                "password": password,
-                "store_session": store_session,
-                "mfa_code": mfa_code,
-                "by_sms": by_sms
-            })
-            return {"access_token": "mock-totp-token"}
-
-        monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
-        # _login() reads credentials via the `settings` singleton, NOT
-        # os.environ (fixed 2026-08 -- pydantic-settings loads .env into
-        # Settings only, never into the real process environment, so an
-        # os.environ.setenv here would be silently ignored by _login()).
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "totp_user@example.com")
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "totp_pass")
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
-
-        from data.robinhood_portfolio import _login
-        _login()
-
-        assert len(login_calls) == 1
-        assert login_calls[0]["username"] == "totp_user@example.com"
-        assert login_calls[0]["password"] == "totp_pass"
-        assert login_calls[0]["mfa_code"] is not None
-        assert login_calls[0]["by_sms"] is False
-
-    def test_login_without_mfa_secret_at_a_real_terminal_falls_back_interactive(self, monkeypatch) -> None:
-        """When RH_MFA_SECRET is empty/missing AND a human is actually at a
-        real terminal (sys.stdin.isatty() is True), login falls back to
-        robin_stocks' own interactive MFA prompt (mfa_code=None passed
-        through -- robin-stocks >= 3.4 infers the interactive path from the
-        absence of mfa_code, no separate by_sms kwarg exists)."""
-        login_calls = []
-
-        def mock_login(username, password, store_session=True, mfa_code=None):
-            login_calls.append({
-                "username": username,
-                "password": password,
-                "store_session": store_session,
-                "mfa_code": mfa_code,
-            })
-            return {"access_token": "mock-interactive-token"}
-
-        monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
-        monkeypatch.setattr("data.robinhood_portfolio.sys.stdin.isatty", lambda: True)
-        # See test_login_with_mfa_secret above: credentials come from the
-        # `settings` singleton, not os.environ.
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "sms_user@example.com")
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "sms_pass")
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_MFA_SECRET", None)
-
-        from data.robinhood_portfolio import _login
-        _login()
-
-        assert len(login_calls) == 1
-        assert login_calls[0]["username"] == "sms_user@example.com"
-        assert login_calls[0]["password"] == "sms_pass"
-        assert login_calls[0]["mfa_code"] is None
-
-    def test_login_without_mfa_secret_headless_raises_immediately(self, monkeypatch) -> None:
-        """When RH_MFA_SECRET is empty/missing AND there is no real terminal
-        (the Pilots API server, main.py under cron/systemd, an app bundle
-        launched without a TTY), login must raise immediately rather than
-        falling through to robin_stocks' interactive prompt -- a blocking
-        input() call with no TTY behind it would hang the caller forever
-        with zero feedback. This is the real-world bug this test guards."""
+    def test_reject_mode_raises_approval_required(self, monkeypatch) -> None:
+        """Default mode='reject' raises immediately, without ever calling r.login."""
         def boom_login(*args, **kwargs):
-            raise AssertionError("r.login must not be called at all on this path")
+            raise AssertionError("r.login must not be called in reject mode")
 
         monkeypatch.setattr("data.robinhood_portfolio.r.login", boom_login)
-        monkeypatch.setattr("data.robinhood_portfolio.sys.stdin.isatty", lambda: False)
-        # See test_login_with_mfa_secret above: credentials come from the
-        # `settings` singleton, not os.environ.
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "sms_user@example.com")
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "sms_pass")
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_MFA_SECRET", None)
 
-        from data.robinhood_portfolio import _login
-        with pytest.raises(ValueError, match="MFA code is required"):
-            _login()
+        with pytest.raises(RobinhoodApprovalRequired):
+            _login_with("user@example.com", "pw")
 
-    def test_login_failures(self, monkeypatch) -> None:
-        """If login fails (does not return dict with access_token), raise RuntimeError."""
+    def test_reject_mode_is_the_default(self, monkeypatch) -> None:
+        """mode is optional and defaults to 'reject' -- callers cannot
+        accidentally fall into the real login path by omission."""
+        def boom_login(*args, **kwargs):
+            raise AssertionError("r.login must not be called in reject mode")
+
+        monkeypatch.setattr("data.robinhood_portfolio.r.login", boom_login)
+
+        with pytest.raises(RobinhoodApprovalRequired):
+            _login_with("user@example.com", "pw", mode="reject")
+
+    def test_device_approval_without_worker_marker_raises_runtime_error(self, monkeypatch) -> None:
+        """mode='device_approval' outside the isolated login worker
+        (RH_LOGIN_WORKER unset) is a structural guard violation -- a plain
+        RuntimeError, distinct from RobinhoodApprovalRequired."""
+        def boom_login(*args, **kwargs):
+            raise AssertionError("r.login must not be called without the worker marker")
+
+        monkeypatch.setattr("data.robinhood_portfolio.r.login", boom_login)
+        monkeypatch.delenv("RH_LOGIN_WORKER", raising=False)
+
+        with pytest.raises(RuntimeError):
+            _login_with("user@example.com", "pw", mode="device_approval")
+
+    def test_device_approval_with_worker_marker_calls_login_with_no_mfa_kwarg(self, monkeypatch) -> None:
+        """The one path that actually calls r.login() -- store_session=True
+        and nothing else. No mfa_code kwarg at all: passing one would
+        short-circuit robin_stocks' device-approval push workflow entirely."""
+        calls = []
+
         def mock_login(username, password, **kwargs):
-            return None
+            calls.append((username, password, kwargs))
+            return {"access_token": "tok"}
 
         monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
-        # See test_login_with_mfa_secret above: credentials come from the
-        # `settings` singleton, not os.environ.
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "user@example.com")
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "pass")
-        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_MFA_SECRET", "JBSWY3DPEHPK3PXP")
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
 
-        from data.robinhood_portfolio import _login
+        result = _login_with("user@example.com", "pw", mode="device_approval")
+
+        assert result == {"access_token": "tok"}
+        assert len(calls) == 1
+        username, password, kwargs = calls[0]
+        assert username == "user@example.com"
+        assert password == "pw"
+        assert kwargs == {"store_session": True}
+        assert "mfa_code" not in kwargs
+
+    def test_login_failure_no_access_token_raises_runtime_error(self, monkeypatch) -> None:
+        """If login fails (does not return a dict with an access_token), raise RuntimeError."""
+        monkeypatch.setattr(
+            "data.robinhood_portfolio.r.login", lambda *a, **k: {"detail": "bad credentials"}
+        )
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
+
         with pytest.raises(RuntimeError, match="Robinhood login failed"):
-            _login()
+            _login_with("user@example.com", "pw", mode="device_approval")
+
+    def test_login_returns_none_raises_runtime_error(self, monkeypatch) -> None:
+        monkeypatch.setattr("data.robinhood_portfolio.r.login", lambda *a, **k: None)
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
+
+        with pytest.raises(RuntimeError, match="Robinhood login failed"):
+            _login_with("user@example.com", "pw", mode="device_approval")
+
+
+class TestFetchLiveSnapshotLoginDelegation:
+    """_fetch_live_snapshot()'s branch on RH_LOGIN_WORKER: inside the isolated
+    worker it logs in directly in-process (mode='device_approval') and
+    proceeds with the holdings/dividends/profile fetch in the SAME process;
+    everywhere else it delegates the entire login+fetch to
+    data.robinhood_login.login_blocking() (bounded, killable -- see
+    tests/test_robinhood_login.py) and reads back whatever that worker
+    persisted, rather than attempting a login in this process at all."""
+
+    def test_delegates_to_login_blocking_when_worker_marker_unset(self, monkeypatch) -> None:
+        monkeypatch.delenv("RH_LOGIN_WORKER", raising=False)
+        calls = []
+
+        def fake_login_blocking(mode, **kwargs):
+            calls.append(mode)
+
+        monkeypatch.setattr("data.robinhood_login.login_blocking", fake_login_blocking)
+        cached = _make_snapshot(age_hours=0.0)
+        monkeypatch.setattr("data.robinhood_portfolio._read_cache", lambda: cached)
+
+        result = _fetch_live_snapshot()
+
+        assert calls == ["refresh"], "must delegate via mode='refresh', never 'connect'"
+        assert result is cached
+
+    def test_raises_when_worker_persisted_no_snapshot(self, monkeypatch) -> None:
+        """login_blocking() succeeding (no exception) but leaving nothing in
+        the cache is an honest, distinguishable failure -- never silently
+        returns None or fabricates an empty snapshot."""
+        monkeypatch.delenv("RH_LOGIN_WORKER", raising=False)
+        monkeypatch.setattr("data.robinhood_login.login_blocking", lambda mode, **kw: None)
+        monkeypatch.setattr("data.robinhood_portfolio._read_cache", lambda: None)
+
+        with pytest.raises(RuntimeError, match="no account snapshot was persisted"):
+            _fetch_live_snapshot()
+
+    def test_propagates_login_blocking_exception(self, monkeypatch) -> None:
+        """A RobinhoodLoginTimeout/RobinhoodLoginFailed (or anything else)
+        raised by login_blocking() must propagate unchanged -- the caller
+        (fetch_account_snapshot) is what decides whether a cached snapshot
+        can paper over it."""
+        monkeypatch.delenv("RH_LOGIN_WORKER", raising=False)
+
+        def boom(mode, **kwargs):
+            raise RuntimeError("Robinhood login failed: timeout")
+
+        monkeypatch.setattr("data.robinhood_login.login_blocking", boom)
+
+        with pytest.raises(RuntimeError, match="timeout"):
+            _fetch_live_snapshot()
+
+    def test_worker_marker_set_calls_login_with_device_approval_mode(self, monkeypatch) -> None:
+        """RH_LOGIN_WORKER=1: _fetch_live_snapshot logs in directly, in THIS
+        process, via _login_with(mode='device_approval') -- never delegating
+        to data.robinhood_login (that would be the worker re-entering its own
+        launcher)."""
+        calls = []
+
+        def mock_login(username, password, **kwargs):
+            calls.append((username, password, kwargs))
+            return {"access_token": "tok"}
+
+        monkeypatch.setenv("RH_LOGIN_WORKER", "1")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_USERNAME", "user@example.com")
+        monkeypatch.setattr("data.robinhood_portfolio._settings.RH_PASSWORD", "pw")
+        monkeypatch.setattr("data.robinhood_portfolio.r.login", mock_login)
+        monkeypatch.setattr("data.robinhood_session.ensure_session_pickle", lambda: None)
+        monkeypatch.setattr("data.robinhood_session.backup_session_pickle", lambda: None)
+        monkeypatch.setattr("data.robinhood_portfolio.r.build_holdings", lambda: {})
+        monkeypatch.setattr("data.robinhood_portfolio.r.get_dividends", lambda: [])
+        monkeypatch.setattr("data.robinhood_portfolio.r.load_portfolio_profile", lambda: {})
+        monkeypatch.setattr("data.robinhood_portfolio.r.load_account_profile", lambda: {})
+
+        _fetch_live_snapshot()
+
+        assert len(calls) == 1
+        username, password, kwargs = calls[0]
+        assert username == "user@example.com"
+        assert password == "pw"
+        assert kwargs == {"store_session": True}
 
 
 # ---------------------------------------------------------------------------
