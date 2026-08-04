@@ -156,11 +156,11 @@ class TestQuoteCache:
 
     def test_ttl_expiry(self):
         from data.market_data import _QuoteCache
-        cache = _QuoteCache(ttl_seconds=1)
+        cache = _QuoteCache(ttl_seconds=0.1)
         q = self._make_quote()
         cache.put(q)
         # Advance time past TTL
-        time.sleep(1.1)
+        time.sleep(0.15)
         assert cache.get("AAPL") is None
 
     def test_invalidate(self):

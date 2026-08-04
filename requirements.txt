@@ -78,6 +78,7 @@ pyparsing==3.3.2
 pytest==9.1.0
 pytest-cov>=6.0  # coverage plugin (pytest 9.x compatible); enables --cov flags in CI
 pytest-xdist>=3.6  # parallel workers via `-n auto`; pytest-cov auto-combines coverage across workers
+pytest-timeout>=2.4  # per-test wall-clock ceiling (--timeout=180 --timeout-method=thread in CI); converts a hang into a fast failure instead of burning the full CI job budget
 python-dateutil==2.9.0.post0
 pytz==2026.2
 regex==2026.5.9

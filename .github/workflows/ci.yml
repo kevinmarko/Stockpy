@@ -6,6 +6,14 @@ name: CI
 # deterministic and offline. Python is pinned to 3.12 — the only version the
 # project supports (setup.sh / launch*.command hard-abort on anything else).
 #
+# `test` (the main offline suite) additionally deselects `@pytest.mark.slow`
+# (long-running tests — heavy real ARIMA/GARCH/LightGBM fits) so PRs stay
+# fast; `test-slow` runs those same tests in a SEPARATE job that starts
+# concurrently with `test`, so slow-marked coverage still runs on every PR at
+# no extra wall-clock cost — this is a speed reorganization, not a coverage
+# cut. Network tests are covered separately by the scheduled `nightly.yml`
+# workflow, which runs the FULL suite (network + slow) against real upstreams.
+#
 # The `webapp` job separately gates the Pilots PWA (webapp/) — typecheck,
 # vitest, and a production build — so a break there is caught the same way as
 # a Python test failure. It runs offline against the mock API layer
@@ -78,11 +86,31 @@ jobs:
           # -n auto (pytest-xdist) fans the suite out across the runner's CPUs.
           # pytest-cov auto-detects xdist and combines each worker's coverage
           # data before writing the reports below, so --cov-report output is
-          # unaffected; no .coveragerc changes are needed. --durations=25
-          # (pytest.ini) still prints the 25 slowest tests, aggregated across
+          # unaffected; no .coveragerc changes are needed. --durations=50
+          # (pytest.ini) still prints the 50 slowest tests, aggregated across
           # workers, at the end of the run.
-          python -m pytest -m "not network" -v --tb=short \
-            --cov --cov-report=term-missing --cov-report=json -n auto
+          #
+          # --dist loadgroup keeps every @pytest.mark.xdist_group("...")-tagged
+          # test together on one worker (currently: test_settings_liveness.py,
+          # test_train_lgbm.py, test_backtest_sector_configs_cli.py's
+          # TestOfflineCLIRun) so their module/class-scoped fixtures build
+          # once, not once per worker that happens to get a split share of the
+          # group. Every other (unmarked) test still balances freely across
+          # workers exactly as under the default `load` distribution.
+          #
+          # --timeout=180 --timeout-method=thread (pytest-timeout) turns a
+          # hang into a fast failure instead of burning the full 6h job
+          # budget. `thread` (not `signal`) is required to interrupt blocking
+          # C extensions (statsmodels/lightgbm/arch) — `signal` cannot. 180s
+          # is a wide margin over the slowest test on this job (`not slow`
+          # deselects the real ARIMA/GARCH/LightGBM-fit-heavy tests below).
+          #
+          # -m "not network and not slow": network tests need live upstreams
+          # (see nightly.yml); slow tests run in the parallel `test-slow` job
+          # below instead of serially in this one.
+          python -m pytest -m "not network and not slow" -v --tb=short \
+            --cov --cov-report=term-missing --cov-report=json \
+            -n auto --dist loadgroup --timeout=180 --timeout-method=thread
 
       - name: Coverage summary
         if: always()
@@ -92,6 +120,36 @@ jobs:
           else
             echo "coverage.json not found; skipping coverage summary" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  test-slow:
+    name: test (slow suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run slow-marked test suite
+        run: |
+          # The counterpart to `test`'s `-m "not slow"` deselection above --
+          # runs @pytest.mark.slow tests (real ARIMA/Holt-Winters/GARCH/
+          # LightGBM fits) concurrently with the main job so PR coverage is
+          # unchanged, just reorganized for wall-clock. No --cov here: this
+          # job doesn't gate the coverage floor (that stays on `test`, which
+          # covers the overwhelming majority of the suite); adding a second
+          # coverage measurement here would need `coverage combine` plumbing
+          # for no real benefit given how few tests carry this marker today.
+          python -m pytest -m "slow and not network" -v --tb=short \
+            -n auto --timeout=600 --timeout-method=thread
 
   webapp:
     name: webapp (Pilots PWA)

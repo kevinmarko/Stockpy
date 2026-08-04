@@ -72,13 +72,41 @@ def _run_offline(tmp_path, ticker_sectors_csv, output_name="out.json", seed="7",
 
 
 class TestOfflineCLIRun:
-    def test_offline_run_exits_zero_and_writes_valid_json(self, tmp_path, tiny_ticker_sectors_csv):
-        rc, out_path = _run_offline(tmp_path, tiny_ticker_sectors_csv)
-        assert rc == 0
-        assert out_path.exists()
+    # xdist_group pins every test in this class to the same worker under
+    # `--dist loadgroup` (CI/Makefile) -- without it, the default `--dist
+    # load` distribution can split these tests across workers, silently
+    # rebuilding the class-scoped `offline_run` fixture per worker and
+    # eating the whole consolidation win below.
+    pytestmark = pytest.mark.xdist_group("backtest_sector_configs_offline_cli")
 
+    # Class-scoped -- instantiates before the function-scoped autouse GDELT/FMP
+    # throttle resets in conftest.py; safe here because this fixture does not
+    # touch either. All three tests below independently assert on the SAME
+    # seed="7" offline CLI invocation (see _run_offline's default), so they
+    # share one run instead of each paying for their own full ARIMA/HW MLE fit.
+    @staticmethod
+    @pytest.fixture(scope="class")
+    def offline_run(tmp_path_factory):
+        tmp_path = tmp_path_factory.mktemp("offline_cli_run")
+        ticker_sectors_csv = tmp_path / "tiny_ticker_sectors.csv"
+        ticker_sectors_csv.write_text(
+            "symbol,sector\n"
+            "AAPL,Technology\n"
+            "MSFT,Technology\n"
+            "XOM,Energy\n"
+            "CVX,Energy\n"
+        )
+        rc, out_path = _run_offline(tmp_path, ticker_sectors_csv)
         with out_path.open() as f:
             artifact = json.load(f)
+        return {"rc": rc, "out_path": out_path, "artifact": artifact}
+
+    def test_offline_run_exits_zero_and_writes_valid_json(self, offline_run):
+        rc = offline_run["rc"]
+        out_path = offline_run["out_path"]
+        artifact = offline_run["artifact"]
+        assert rc == 0
+        assert out_path.exists()
 
         assert "schema_version" in artifact
         assert "sector_configs" in artifact
@@ -88,16 +116,14 @@ class TestOfflineCLIRun:
         assert isinstance(artifact["grid"], list)
         assert len(artifact["sector_configs"]) > 0
 
-    def test_every_sector_key_is_a_real_yfinance_sector_name(self, tmp_path, tiny_ticker_sectors_csv):
+    def test_every_sector_key_is_a_real_yfinance_sector_name(self, offline_run):
         """Regression guard: a Wikipedia-GICS-vs-yfinance sector-name mismatch
         was explicitly called out as a risk in the design -- every derived
         sector key must be a member of the canonical yfinance sector-name set
         (``_DEFAULT_SECTOR_CONFIGS``'s keys, the well-known heuristic)."""
-        rc, out_path = _run_offline(tmp_path, tiny_ticker_sectors_csv)
+        rc = offline_run["rc"]
+        artifact = offline_run["artifact"]
         assert rc == 0
-
-        with out_path.open() as f:
-            artifact = json.load(f)
 
         known_sectors = set(bsc._DEFAULT_SECTOR_CONFIGS.keys())
         for sector in artifact["sector_configs"]:
@@ -106,12 +132,10 @@ class TestOfflineCLIRun:
                 f"sector name (known: {sorted(known_sectors)})"
             )
 
-    def test_grid_entries_have_valid_models_and_horizons(self, tmp_path, tiny_ticker_sectors_csv):
-        rc, out_path = _run_offline(tmp_path, tiny_ticker_sectors_csv)
+    def test_grid_entries_have_valid_models_and_horizons(self, offline_run):
+        rc = offline_run["rc"]
+        artifact = offline_run["artifact"]
         assert rc == 0
-
-        with out_path.open() as f:
-            artifact = json.load(f)
 
         for cell in artifact["grid"]:
             assert cell["model"] in ("MC", "ARIMA", "HW")

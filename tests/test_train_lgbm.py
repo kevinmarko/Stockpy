@@ -34,6 +34,13 @@ from ml import registry_io
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _TICKERS = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
 
+# xdist_group pins every test in this module to the same worker under
+# `--dist loadgroup` (CI/Makefile) -- without it, the default `--dist load`
+# distribution can split these tests across workers, silently rebuilding the
+# module-scoped `trained_model_fixture`/`tmp_registry_module` fixtures per
+# worker and eating the whole consolidation win below.
+pytestmark = pytest.mark.xdist_group("train_lgbm")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -250,15 +257,47 @@ def test_update_model_metrics_cpcv_oos_fields_never_spoof_deployable(tmp_registr
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def test_training_produces_model_and_real_metrics(tmp_path, tmp_registry):
+@pytest.fixture(scope="module")
+def tmp_registry_module(tmp_path_factory) -> Path:
+    """Module-scoped -- instantiates before the function-scoped autouse
+    GDELT/FMP throttle resets in conftest.py; safe here because this fixture
+    does not touch either. A writable copy of the real registry.yaml, shared
+    by ``trained_model_fixture`` below."""
+    tmp_path = tmp_path_factory.mktemp("tmp_registry_module")
+    src = _REPO_ROOT / "ml" / "registry.yaml"
+    dst = tmp_path / "registry.yaml"
+    shutil.copyfile(src, dst)
+    return dst
+
+
+@pytest.fixture(scope="module")
+def trained_model_fixture(tmp_path_factory, tmp_registry_module):
+    """Module-scoped -- see tmp_registry_module's note above; same rationale.
+
+    Runs ONE run_training() call against the shared _DistinctEngine() panel,
+    consumed by the three tests below that each assert on a different
+    property of the result -- avoids each one paying for its own full
+    training run."""
+    tmp_path = tmp_path_factory.mktemp("trained_model")
     save_path = tmp_path / "lgbm_latest.pkl"
     summary = train_lgbm.run_training(
         _TICKERS,
         data_engine=_DistinctEngine(),
         save_path=save_path,
-        registry_path=tmp_registry,
+        registry_path=tmp_registry_module,
         historical_store=False,
     )
+    return {
+        "summary": summary,
+        "save_path": save_path,
+        "registry_path": tmp_registry_module,
+    }
+
+
+def test_training_produces_model_and_real_metrics(trained_model_fixture):
+    summary = trained_model_fixture["summary"]
+    save_path = trained_model_fixture["save_path"]
+    registry_path = trained_model_fixture["registry_path"]
 
     # Model artifact exists.
     assert save_path.exists(), "model pickle was not written"
@@ -271,7 +310,7 @@ def test_training_produces_model_and_real_metrics(tmp_path, tmp_registry):
     assert 0.0 <= summary["pbo"] <= 1.0
 
     # Registry row got the real metrics.
-    data = yaml.safe_load(tmp_registry.read_text())
+    data = yaml.safe_load(registry_path.read_text())
     row = data["models"]["lgbm_ranker"]
     assert row["trained_date"] is not None
     assert row["cpcv_dsr"] is not None
@@ -328,19 +367,13 @@ def test_default_save_path_is_dated_not_mutable_latest(tmp_path, tmp_registry, m
     assert "latest" not in row["artifact_file"]
 
 
-def test_deployable_flag_matches_gate_exactly(tmp_path, tmp_registry):
-    save_path = tmp_path / "lgbm_latest.pkl"
-    summary = train_lgbm.run_training(
-        _TICKERS,
-        data_engine=_DistinctEngine(),
-        save_path=save_path,
-        registry_path=tmp_registry,
-        historical_store=False,
-    )
+def test_deployable_flag_matches_gate_exactly(trained_model_fixture):
+    summary = trained_model_fixture["summary"]
+    registry_path = trained_model_fixture["registry_path"]
     expected = registry_io.compute_deployable(summary["dsr"], summary["pbo"])
     assert summary["deployable"] == expected
 
-    data = yaml.safe_load(tmp_registry.read_text())
+    data = yaml.safe_load(registry_path.read_text())
     assert data["models"]["lgbm_ranker"]["deployable"] == expected
 
 
@@ -367,20 +400,13 @@ def test_empty_panel_no_crash_and_not_deployable(tmp_path, tmp_registry):
     assert row["cpcv_dsr"] is None
 
 
-def test_trained_model_is_loadable_and_non_neutral(tmp_path, tmp_registry):
+def test_trained_model_is_loadable_and_non_neutral(trained_model_fixture):
     """A freshly trained+saved model round-trips through LGBMCrossSectionalRanker.load
     and produces non-neutral (not all 0.5) cross-sectional ranks."""
     from ml.lgbm_ranker import LGBMCrossSectionalRanker
     from ml.feature_engineering import build_pit_feature_matrix
 
-    save_path = tmp_path / "lgbm_latest.pkl"
-    train_lgbm.run_training(
-        _TICKERS,
-        data_engine=_DistinctEngine(),
-        save_path=save_path,
-        registry_path=tmp_registry,
-        historical_store=False,
-    )
+    save_path = trained_model_fixture["save_path"]
     ranker = LGBMCrossSectionalRanker.load(save_path)
     assert ranker._model is not None
 

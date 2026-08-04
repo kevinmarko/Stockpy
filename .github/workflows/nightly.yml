@@ -1,0 +1,47 @@
+name: Nightly (full suite)
+
+# Runs the COMPLETE pytest suite — no `-m` marker filter at all, so both
+# `@pytest.mark.network` (real Yahoo Finance / Wikipedia calls; verified
+# keyless — no secrets required) and `@pytest.mark.slow` (heavy real
+# ARIMA/Holt-Winters/GARCH/LightGBM fits, including the full
+# STRATEGY_REGISTRY sweep in test_refresh_validations.py) run here, unlike
+# ci.yml's `test`/`test-slow` jobs which each deselect one or the other for
+# PR-speed reasons.
+#
+# This hits live upstreams (Yahoo Finance, Wikipedia), so a red run here can
+# be genuine upstream flake rather than a real regression — treat it as a
+# signal to investigate, not a required PR check (it isn't wired to any PR
+# or branch-protection gate). No --cov: the coverage-floor ratchet
+# (.coveragerc's fail_under=58) stays enforced on ci.yml's `test` job, which
+# already covers the overwhelming majority of the suite offline.
+
+on:
+  schedule:
+    # 09:00 UTC daily -- outside US/EU market hours, arbitrary but stable.
+    - cron: '0 9 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test-full:
+    name: test (full suite -- network + slow)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run full test suite (network + slow, no marker filter)
+        run: |
+          python -m pytest -v --tb=short -n auto --timeout=600 --timeout-method=thread
