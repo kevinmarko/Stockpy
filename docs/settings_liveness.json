@@ -42,7 +42,7 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 160,
+      "line": 164,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
@@ -1713,7 +1713,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:237",
+        "site": "api/control_api.py:244",
         "via": []
       }
     ],
@@ -2097,7 +2097,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:232",
+        "site": "api/control_api.py:239",
         "via": []
       },
       {
@@ -2124,7 +2124,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/ws_api.py:36",
+        "site": "api/ws_api.py:54",
         "via": []
       }
     ]

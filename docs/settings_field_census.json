@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "a2eecb03c90c8086dfab6972e63330cda593688a",
+    "git_commit": "3653b9ebba8f067525fbb6b588215fbd281f9937",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2441,7 +2441,7 @@
           "route": "/run",
           "method": "POST",
           "function": "trigger_run",
-          "line": 345,
+          "line": 352,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2458,7 +2458,7 @@
           "route": "/pipeline/data",
           "method": "POST",
           "function": "trigger_pipeline_data",
-          "line": 424,
+          "line": 431,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2475,7 +2475,7 @@
           "route": "/pipeline/metrics",
           "method": "POST",
           "function": "trigger_pipeline_metrics",
-          "line": 430,
+          "line": 437,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2492,7 +2492,7 @@
           "route": "/interval",
           "method": "PUT",
           "function": "set_interval",
-          "line": 487,
+          "line": 494,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2509,7 +2509,7 @@
           "route": "/daemon/restart",
           "method": "POST",
           "function": "restart_daemon",
-          "line": 515,
+          "line": 522,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2526,7 +2526,7 @@
           "route": "/jobs",
           "method": "POST",
           "function": "create_job",
-          "line": 583,
+          "line": 590,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2543,7 +2543,7 @@
           "route": "/jobs/{job_id}/cancel",
           "method": "POST",
           "function": "cancel_job",
-          "line": 662,
+          "line": 669,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2585,7 +2585,7 @@
           "route": "/data/universe",
           "method": "PUT",
           "function": "update_universe",
-          "line": 422,
+          "line": 426,
           "writes_env": true,
           "env_write_calls_direct": [
             "write_setting"
@@ -2604,7 +2604,7 @@
           "route": "/data/pairs/analyze",
           "method": "POST",
           "function": "analyze_pairs_ondemand",
-          "line": 576,
+          "line": 580,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2621,7 +2621,7 @@
           "route": "/data/pairs/scan",
           "method": "POST",
           "function": "scan_pairs_ondemand",
-          "line": 613,
+          "line": 617,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2638,7 +2638,7 @@
           "route": "/data/options/recompute",
           "method": "POST",
           "function": "recompute_options_ondemand",
-          "line": 652,
+          "line": 656,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2655,7 +2655,7 @@
           "route": "/data/ai/commentary/{symbol}",
           "method": "POST",
           "function": "generate_commentary",
-          "line": 768,
+          "line": 772,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2672,7 +2672,7 @@
           "route": "/data/ai/chart/{symbol}",
           "method": "POST",
           "function": "generate_chart_insight",
-          "line": 811,
+          "line": 815,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2689,7 +2689,7 @@
           "route": "/data/ai/research/{symbol}",
           "method": "POST",
           "function": "generate_research",
-          "line": 913,
+          "line": 917,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2706,7 +2706,7 @@
           "route": "/data/sync",
           "method": "POST",
           "function": "post_data_sync",
-          "line": 1062,
+          "line": 1066,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2727,7 +2727,7 @@
           "route": "/api/chat",
           "method": "POST",
           "function": "chat_endpoint",
-          "line": 1384,
+          "line": 1388,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3160,7 +3160,7 @@
         },
         {
           "file": "api/data_api.py",
-          "line": 160,
+          "line": 164,
           "expr": "getattr(settings, flag_name, False)"
         },
         {
@@ -3517,7 +3517,7 @@
       {
         "field": "AI_GENERATION_API_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:173",
+          "api/data_api.py:177",
           "settings_keysets.py:250"
         ],
         "name_literal_site_count": 2,
@@ -3580,7 +3580,7 @@
       {
         "field": "UNIVERSE_SYNC_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:1051"
+          "api/data_api.py:1055"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
