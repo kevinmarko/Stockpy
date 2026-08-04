@@ -1090,9 +1090,14 @@ describe("Settings screen — Brokerage", () => {
 
     await user.click(await screen.findByRole("button", { name: /force fresh login/i }));
 
-    expect(
-      await screen.findByText("Could not refresh the Robinhood account snapshot.", {}, { timeout: 5000 })
-    ).toBeInTheDocument();
+    // This path never touches refresh.job (the catch in start() sets `error`
+    // directly, so the reload-triggering effect never fires) -- no stale-
+    // reference race here, just a render that can genuinely take longer than
+    // 1000ms under full-suite CI CPU contention. Same generous budget for the
+    // same reason as the dialog-lookup comment above.
+    await waitForPresence(() =>
+      screen.getByText("Could not refresh the Robinhood account snapshot.")
+    );
   });
 });
 
