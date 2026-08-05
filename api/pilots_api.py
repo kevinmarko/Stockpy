@@ -676,9 +676,20 @@ class IntervalUpdateRequest(BaseModel):
 
 
 class ExecutionModeUpdateRequest(BaseModel):
-    """Body for ``PUT /automation/execution-mode``."""
+    """Body for ``PUT /automation/execution-mode``.
+
+    ``confirm`` is the dangerous-key acknowledgement, matching the contract
+    ``PUT /settings/tunables`` uses for the same ``settings_keysets.
+    DANGEROUS_KEYS`` fields: every dangerous key this call is about to write
+    (``ADVISORY_ONLY`` always; ``DRY_RUN`` too when ``mode != "advisory"``)
+    must appear here mapped to ITS OWN NAME, e.g. ``{"ADVISORY_ONLY":
+    "ADVISORY_ONLY"}`` — see ``_require_dangerous_confirmation``. Absent or
+    wrong -> 422, and nothing is written. ``ALPACA_PAPER`` (also written when
+    ``mode != "advisory"``) is NOT a ``DANGEROUS_KEYS`` member and needs no
+    confirmation."""
     mode: Literal["live", "paper", "simulation", "advisory"]
     advisory_only: bool
+    confirm: Dict[str, str] = Field(default_factory=dict, max_length=8)
 
 
 class DecisionCreateRequest(BaseModel):
@@ -3379,7 +3390,14 @@ def get_system_cron_status() -> Dict[str, Any]:
 #                                (persists to .env)
 #   PUT  /automation/execution-mode    -> + require_automation_writes_enabled
 #                                (same risk tier as resume -- can flip
-#                                ADVISORY_ONLY/ALPACA_PAPER toward live)
+#                                ADVISORY_ONLY/ALPACA_PAPER toward live),
+#                                AND a typed field-name confirmation for every
+#                                settings_keysets.DANGEROUS_KEYS field it is
+#                                about to write (see
+#                                _require_dangerous_confirmation) -- the SAME
+#                                requirement PUT /settings/tunables enforces
+#                                for ADVISORY_ONLY/DRY_RUN, so there is no
+#                                weaker unconfirmed path to the same fields
 # ---------------------------------------------------------------------------
 
 
@@ -3609,6 +3627,52 @@ def set_strategy_modules(body: StrategyModulesUpdateRequest) -> Dict[str, Any]:
     }
 
 
+def _require_dangerous_confirmation(dangerous_keys: List[str], confirm: Dict[str, str]) -> None:
+    """Fail-closed gate for any write path touching ``settings_keysets.
+    DANGEROUS_KEYS`` fields: every key in ``dangerous_keys`` must appear in
+    ``confirm`` mapped to ITS OWN NAME (``{"ADVISORY_ONLY": "ADVISORY_ONLY"}``),
+    matching the echo-the-name contract ``PUT /settings/tunables`` (via
+    ``pilots.settings_meta.is_dangerous`` / ``_validate_and_write_payload``)
+    uses for the same key set. Missing -> ``confirmation_required``; present
+    but not an exact match -> ``confirmation_mismatch``.
+
+    Deliberately ALL-OR-NOTHING (raises before any write happens) rather than
+    the per-key partial-success convention the batch settings editors use —
+    this is the one shared choke point every DANGEROUS_KEYS write path outside
+    the five ``/settings/*`` editors should route through, but a
+    single-purpose endpoint like ``PUT /automation/execution-mode`` represents
+    one atomic operator action (a mode change), not a bag of independent
+    tunables, so there is no such thing as "half-confirmed" here: either every
+    dangerous key this call is about to write is confirmed, or nothing is
+    written at all.
+
+    Never silently no-ops: called with an empty ``dangerous_keys`` list this
+    is a no-op by construction (nothing to confirm), which is correct only
+    because every call site computes ``dangerous_keys`` from the fields it is
+    ACTUALLY about to write, never a fixed superset."""
+    if not dangerous_keys:
+        return
+    missing = [k for k in dangerous_keys if k not in confirm]
+    mismatched = [k for k in dangerous_keys if k in confirm and confirm[k] != k]
+    if not missing and not mismatched:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "error": "confirmation_required" if missing else "confirmation_mismatch",
+            "message": (
+                "This change touches safety-critical setting(s) "
+                f"({', '.join(dangerous_keys)}) and requires typed "
+                "confirmation before it can be written -- echo each field's "
+                'own name in `confirm`, e.g. {"ADVISORY_ONLY": "ADVISORY_ONLY"}.'
+            ),
+            "required": dangerous_keys,
+            "missing": missing,
+            "mismatched": mismatched,
+        },
+    )
+
+
 @app.put(
     "/automation/execution-mode",
     dependencies=[
@@ -3623,8 +3687,28 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
     ``gui.strategy_registry.set_active_mode`` (see its docstring for the
     mode -> env-var mapping). ``written`` always reflects exactly which keys
     this call touched -- never a fixed list -- so the response can't claim a
-    write that didn't happen (CONSTRAINT #4)."""
+    write that didn't happen (CONSTRAINT #4).
+
+    Every field this call is about to write that is a ``settings_keysets.
+    DANGEROUS_KEYS`` member (``ADVISORY_ONLY`` always; ``DRY_RUN`` too when
+    ``mode != "advisory"``) requires the caller to echo that field's own name
+    in ``body.confirm`` -- see ``_require_dangerous_confirmation``. This
+    closes the gap where this endpoint could flip the execution quarantine
+    with zero confirmation of any kind while ``PUT /settings/tunables``
+    required one for the very same fields. The check runs, and raises 422,
+    BEFORE any write -- a rejected call writes nothing, not even the
+    confirmed subset. ``ALPACA_PAPER`` is written (see ``written`` below) but
+    NOT in ``settings_keysets.DANGEROUS_KEYS`` and so requires no
+    confirmation -- an Alpaca-specific paper/live account selector, not a
+    broker-agnostic quarantine like ``ADVISORY_ONLY``/``DRY_RUN``, and
+    deliberately not hardened further here (operator decision, 2026-08-04)."""
     from gui import strategy_registry
+
+    dangerous_keys = ["ADVISORY_ONLY"]
+    if body.mode != "advisory":
+        dangerous_keys += ["DRY_RUN"]
+    dangerous_keys = [k for k in dangerous_keys if settings_meta.is_dangerous(k)]
+    _require_dangerous_confirmation(dangerous_keys, body.confirm)
 
     env_io.write_setting("ADVISORY_ONLY", body.advisory_only)
     written = ["ADVISORY_ONLY"]
@@ -4112,13 +4196,17 @@ def _validate_and_write_payload(
     partial-success convention), so the gate cannot be worked around by
     bundling and cannot punish an unrelated edit.
 
-    **This gate does NOT cover every write path for these fields.**
-    ``PUT /automation/execution-mode`` writes ``ADVISORY_ONLY`` (and, via
+    **This gate is scoped to writes through THIS function, but is no longer
+    the only DANGEROUS_KEYS-confirming write path.** ``PUT
+    /automation/execution-mode`` writes ``ADVISORY_ONLY`` (and, via
     ``gui.strategy_registry.set_active_mode``, ``DRY_RUN``/``ALPACA_PAPER``)
-    directly and predates this function — it has its own confirm-button UX in
-    the webapp's Execution Mode control, but not this typed-name echo. Do not
-    read the framing above as "ADVISORY_ONLY now always requires typed
-    confirmation" — it means that within the five ``/settings/*`` editors.
+    directly and predates this function; it now enforces the SAME echo-the-
+    name contract independently, via its own ``_require_dangerous_
+    confirmation`` (below) rather than routing through this one — a
+    single-purpose atomic action doesn't fit this function's per-key,
+    partial-success ``values``/``rejected`` shape. ``ALPACA_PAPER`` is
+    written there but is NOT a ``DANGEROUS_KEYS`` member and needs no
+    confirmation on either path.
 
     **2. Live apply.** Every accepted key is still written to ``.env`` exactly
     as before (durable across restarts, unchanged). Additionally, a key the

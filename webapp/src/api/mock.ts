@@ -5649,6 +5649,25 @@ export const mockApi = {
   },
 
   async setExecutionMode(req: ExecutionModeUpdateRequest): Promise<ExecutionModeUpdateResult> {
+    // Mirrors api/pilots_api.py's _require_dangerous_confirmation: every
+    // settings_keysets.DANGEROUS_KEYS field this write is about to touch
+    // (ADVISORY_ONLY always; DRY_RUN too when mode != "advisory" -- ALPACA_PAPER
+    // is written but is NOT a DANGEROUS_KEYS member, so it needs no confirmation)
+    // must be echoed in `confirm` mapped to its own name, or nothing is written
+    // -- same all-or-nothing, same 422. Hardcoded rather than derived (this file
+    // has no settings_keysets.py port) -- assumes these stay in DANGEROUS_KEYS,
+    // which MOCK_DANGEROUS_KEYS above (copied from the same real set) also does.
+    const dangerousKeys = req.mode === "advisory" ? ["ADVISORY_ONLY"] : ["ADVISORY_ONLY", "DRY_RUN"];
+    const confirm = req.confirm ?? {};
+    const missing = dangerousKeys.filter((k) => !(k in confirm));
+    const mismatched = dangerousKeys.filter((k) => k in confirm && confirm[k] !== k);
+    if (missing.length || mismatched.length) {
+      throw new ApiError(
+        `${missing.length ? "confirmation_required" : "confirmation_mismatch"}: this change touches ` +
+          `safety-critical setting(s) (${dangerousKeys.join(", ")}) and requires typed confirmation.`,
+        422
+      );
+    }
     return delay(
       {
         written:

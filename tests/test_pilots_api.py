@@ -2835,7 +2835,12 @@ class TestExecutionModeWrite:
     ``gui.strategy_registry.set_active_mode`` (its own DRY_RUN/ALPACA_PAPER
     writes are covered by that module's own tests) and redirect
     ``env_io.ENV_PATH`` at a scratch file for the ADVISORY_ONLY write, mirroring
-    ``TestAutomationIntervalWrite``."""
+    ``TestAutomationIntervalWrite``.
+
+    Every request below carries the ``confirm`` dict a real caller now must
+    send -- see ``TestExecutionModeConfirmation`` for the gate itself (missing
+    confirmation, mismatched confirmation, advisory-only-touches-only-one-key,
+    and the "cannot flip ADVISORY_ONLY without confirmation" proof)."""
 
     def test_happy_path_writes_advisory_only_and_delegates_mode(self, tmp_path):
         env_file = tmp_path / ".env"
@@ -2848,7 +2853,14 @@ class TestExecutionModeWrite:
                     ) as mock_set_mode:
                         resp = client.put(
                             "/automation/execution-mode",
-                            json={"mode": "paper", "advisory_only": False},
+                            json={
+                                "mode": "paper",
+                                "advisory_only": False,
+                                "confirm": {
+                                    "ADVISORY_ONLY": "ADVISORY_ONLY",
+                                    "DRY_RUN": "DRY_RUN",
+                                },
+                            },
                             headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
                         )
         assert resp.status_code == 200
@@ -2863,7 +2875,7 @@ class TestExecutionModeWrite:
     def test_advisory_mode_never_calls_set_active_mode(self, tmp_path):
         """``mode == "advisory"`` carries no DRY_RUN/ALPACA_PAPER pairing --
         ``written`` must say so rather than claiming a write that never
-        happened (CONSTRAINT #4)."""
+        happened (CONSTRAINT #4). Only ADVISORY_ONLY needs confirming here."""
         env_file = tmp_path / ".env"
         env_file.write_text("", encoding="utf-8")
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
@@ -2874,7 +2886,11 @@ class TestExecutionModeWrite:
                     ) as mock_set_mode:
                         resp = client.put(
                             "/automation/execution-mode",
-                            json={"mode": "advisory", "advisory_only": True},
+                            json={
+                                "mode": "advisory",
+                                "advisory_only": True,
+                                "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY"},
+                            },
                             headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
                         )
         assert resp.status_code == 200
@@ -2894,7 +2910,14 @@ class TestExecutionModeWrite:
                         with mock.patch("gui.strategy_registry.set_active_mode"):
                             resp = client.put(
                                 "/automation/execution-mode",
-                                json={"mode": "live", "advisory_only": False},
+                                json={
+                                    "mode": "live",
+                                    "advisory_only": False,
+                                    "confirm": {
+                                        "ADVISORY_ONLY": "ADVISORY_ONLY",
+                                        "DRY_RUN": "DRY_RUN",
+                                    },
+                                },
                                 headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
                             )
         assert resp.status_code == 200
@@ -2925,7 +2948,14 @@ class TestExecutionModeWrite:
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", False):
                 resp = client.put(
                     "/automation/execution-mode",
-                    json={"mode": "paper", "advisory_only": False},
+                    json={
+                        "mode": "paper",
+                        "advisory_only": False,
+                        "confirm": {
+                            "ADVISORY_ONLY": "ADVISORY_ONLY",
+                            "DRY_RUN": "DRY_RUN",
+                        },
+                    },
                     headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
                 )
         assert resp.status_code == 403
@@ -2945,7 +2975,14 @@ class TestExecutionModeWrite:
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 resp = client.put(
                     "/automation/execution-mode",
-                    json={"mode": "paper", "advisory_only": False},
+                    json={
+                        "mode": "paper",
+                        "advisory_only": False,
+                        "confirm": {
+                            "ADVISORY_ONLY": "ADVISORY_ONLY",
+                            "DRY_RUN": "DRY_RUN",
+                        },
+                    },
                 )
         assert resp.status_code == 401
 
@@ -2954,7 +2991,14 @@ class TestExecutionModeWrite:
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
                 resp = client.put(
                     "/automation/execution-mode",
-                    json={"mode": "paper", "advisory_only": False},
+                    json={
+                        "mode": "paper",
+                        "advisory_only": False,
+                        "confirm": {
+                            "ADVISORY_ONLY": "ADVISORY_ONLY",
+                            "DRY_RUN": "DRY_RUN",
+                        },
+                    },
                     headers={"Authorization": "Bearer wrong"},
                 )
         assert resp.status_code == 401
@@ -2969,10 +3013,168 @@ class TestExecutionModeWrite:
                         with mock.patch("gui.strategy_registry.set_active_mode"):
                             client.put(
                                 "/automation/execution-mode",
-                                json={"mode": "paper", "advisory_only": False},
+                                json={
+                                    "mode": "paper",
+                                    "advisory_only": False,
+                                    "confirm": {
+                                        "ADVISORY_ONLY": "ADVISORY_ONLY",
+                                        "DRY_RUN": "DRY_RUN",
+                                    },
+                                },
                                 headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
                             )
         assert _CMD_TOKEN not in caplog.text
+
+
+class TestExecutionModeConfirmation:
+    """The gate this PR adds: ``PUT /automation/execution-mode`` must require
+    the SAME typed field-name confirmation ``PUT /settings/tunables`` requires
+    for the same ``settings_keysets.DANGEROUS_KEYS`` fields (ADVISORY_ONLY,
+    DRY_RUN) -- see ``_require_dangerous_confirmation``. Before this gate
+    existed, this endpoint wrote both with zero confirmation of any kind,
+    even though the general settings editor already required one for the
+    same two fields. ``ALPACA_PAPER`` is also written by this endpoint but is
+    NOT a ``DANGEROUS_KEYS`` member (an Alpaca-specific paper/live selector,
+    not a broker-agnostic quarantine) and so needs no confirmation here
+    either -- see ``test_alpaca_paper_is_written_without_needing_confirmation``."""
+
+    def _put(self, payload, tmp_path=None, set_active_mode_mock=None):
+        env_file = (tmp_path or pathlib.Path("/tmp")) / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    with mock.patch("gui.strategy_registry.set_active_mode") as mocked:
+                        resp = client.put(
+                            "/automation/execution-mode",
+                            json=payload,
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+                        if set_active_mode_mock is not None:
+                            set_active_mode_mock.append(mocked)
+        return resp, env_file
+
+    def test_advisory_only_cannot_be_flipped_without_confirmation(self, tmp_path):
+        """The headline proof: no ``confirm`` at all -> 422, ADVISORY_ONLY is
+        NEVER written to .env."""
+        resp, env_file = self._put(
+            {"mode": "advisory", "advisory_only": False}, tmp_path=tmp_path
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "confirmation_required"
+        assert detail["missing"] == ["ADVISORY_ONLY"]
+        assert "ADVISORY_ONLY" not in env_file.read_text(encoding="utf-8")
+
+    def test_advisory_only_can_be_flipped_with_confirmation(self, tmp_path):
+        """The other half of the proof: the identical request, WITH the typed
+        confirmation, succeeds and writes it."""
+        resp, env_file = self._put(
+            {
+                "mode": "advisory",
+                "advisory_only": False,
+                "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY"},
+            },
+            tmp_path=tmp_path,
+        )
+        assert resp.status_code == 200
+        assert "ADVISORY_ONLY=false" in env_file.read_text(encoding="utf-8")
+
+    def test_missing_confirmation_for_mode_change_is_422_and_writes_nothing(self, tmp_path):
+        """mode="live" needs TWO confirmations (ADVISORY_ONLY, DRY_RUN);
+        sending zero must reject the whole request and call neither
+        env_io.write_setting nor set_active_mode."""
+        set_active_mode_calls: list = []
+        resp, env_file = self._put(
+            {"mode": "live", "advisory_only": False},
+            tmp_path=tmp_path,
+            set_active_mode_mock=set_active_mode_calls,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "confirmation_required"
+        assert sorted(detail["missing"]) == ["ADVISORY_ONLY", "DRY_RUN"]
+        assert detail["required"] == ["ADVISORY_ONLY", "DRY_RUN"]
+        assert env_file.read_text(encoding="utf-8") == ""
+        set_active_mode_calls[0].assert_not_called()
+
+    def test_partial_confirmation_still_rejects_the_whole_request(self, tmp_path):
+        """Confirming ADVISORY_ONLY alone for a mode="live" change (which also
+        needs DRY_RUN confirmed) must still 422 -- there is no partial-write
+        here, unlike the batch settings editors' per-key semantics. Nothing
+        is written, including the confirmed key."""
+        set_active_mode_calls: list = []
+        resp, env_file = self._put(
+            {
+                "mode": "live",
+                "advisory_only": False,
+                "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY"},
+            },
+            tmp_path=tmp_path,
+            set_active_mode_mock=set_active_mode_calls,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["missing"] == ["DRY_RUN"]
+        assert env_file.read_text(encoding="utf-8") == ""
+        set_active_mode_calls[0].assert_not_called()
+
+    def test_mismatched_confirmation_value_is_rejected(self, tmp_path):
+        """Confirming with the wrong string (not the field's own name) is
+        treated as unconfirmed, not accepted as a truthy flag."""
+        resp, env_file = self._put(
+            {
+                "mode": "advisory",
+                "advisory_only": False,
+                "confirm": {"ADVISORY_ONLY": "yes"},
+            },
+            tmp_path=tmp_path,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["error"] == "confirmation_mismatch"
+        assert detail["mismatched"] == ["ADVISORY_ONLY"]
+        assert "ADVISORY_ONLY" not in env_file.read_text(encoding="utf-8")
+
+    def test_confirming_one_dangerous_field_does_not_implicitly_confirm_another(self, tmp_path):
+        """Echoing a field's own name (rather than a blanket boolean) means a
+        caller who only meant to confirm DRY_RUN cannot accidentally also
+        confirm ADVISORY_ONLY -- each key must be named."""
+        set_active_mode_calls: list = []
+        resp, env_file = self._put(
+            {
+                "mode": "live",
+                "advisory_only": False,
+                "confirm": {"DRY_RUN": "DRY_RUN"},
+            },
+            tmp_path=tmp_path,
+            set_active_mode_mock=set_active_mode_calls,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["missing"] == ["ADVISORY_ONLY"]
+        assert env_file.read_text(encoding="utf-8") == ""
+        set_active_mode_calls[0].assert_not_called()
+
+    def test_alpaca_paper_is_written_without_needing_confirmation(self, tmp_path):
+        """ALPACA_PAPER is written by this same call (mode != "advisory") but
+        is NOT a settings_keysets.DANGEROUS_KEYS member -- an Alpaca-specific
+        paper/live account selector, not a broker-agnostic quarantine like
+        ADVISORY_ONLY/DRY_RUN -- so confirming only those two is sufficient
+        even though ALPACA_PAPER is among the keys `written`."""
+        set_active_mode_calls: list = []
+        resp, env_file = self._put(
+            {
+                "mode": "live",
+                "advisory_only": False,
+                "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY", "DRY_RUN": "DRY_RUN"},
+            },
+            tmp_path=tmp_path,
+            set_active_mode_mock=set_active_mode_calls,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["written"] == ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"]
+        set_active_mode_calls[0].assert_called_once_with("live")
 
 
 # ===========================================================================
