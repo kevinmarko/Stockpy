@@ -998,10 +998,13 @@ class StrategyValidationHarness:
         """
         template_dir = "reports"
         template_file = "validation_report_template.html.j2"
-        
-        # Load environment
+
+        # Load environment. autoescape=True (no template here uses `|safe`)
+        # HTML-escapes every interpolated value -- e.g. report.name (a
+        # STRATEGY_REGISTRY id) and stress-scenario error strings -- so a
+        # stray `<`/`&` in either can't break the rendered markup.
         loader = jinja2.FileSystemLoader(searchpath=template_dir)
-        env = jinja2.Environment(loader=loader)
+        env = jinja2.Environment(loader=loader, autoescape=True)
         template = env.get_template(template_file)
         
         # Render HTML
@@ -1066,8 +1069,9 @@ class StrategyValidationHarness:
         template_dir = "reports"
         template_file = "cpcv_report.html.j2"
 
+        # autoescape=True -- same rationale as _render_html_report above.
         loader = jinja2.FileSystemLoader(searchpath=template_dir)
-        env = jinja2.Environment(loader=loader)
+        env = jinja2.Environment(loader=loader, autoescape=True)
         template = env.get_template(template_file)
 
         html_out = template.render(

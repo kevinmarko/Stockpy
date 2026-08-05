@@ -125,6 +125,11 @@ pydantic-settings==2.14.2
 python-dotenv==1.2.2
 pyarrow>=15.0.0
 lxml==6.1.0
+# data/etf_holdings.py parses SEC N-PORT XML fetched over the network via
+# defusedxml (not stdlib xml.etree.ElementTree directly) to forbid DTD/
+# entity expansion -- hardening against a compromised/spoofed upstream
+# response, not something the app's own local data ever needs.
+defusedxml>=0.7.1
 pykalman==0.11.2
 alpaca-py>=0.40.0
 streamlit>=1.37.0
