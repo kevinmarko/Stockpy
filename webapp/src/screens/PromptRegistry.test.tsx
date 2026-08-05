@@ -65,7 +65,12 @@ describe("PromptRegistry screen", () => {
     vi.spyOn(api, "getPrompts").mockResolvedValue(listResponse());
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Prompt Registry" })).toBeInTheDocument();
-    expect(screen.getByTestId("prompt-row-gravity.system")).toBeInTheDocument();
+    // The static screen title above renders before the async getPrompts()
+    // fetch resolves (the same shared race documented in
+    // FmpSettings.test.tsx / EtfTransmissionSettings.test.tsx), so the FIRST
+    // post-load element must be awaited via findBy; everything queried
+    // afterward is safe once React has settled.
+    expect(await screen.findByTestId("prompt-row-gravity.system")).toBeInTheDocument();
     expect(screen.getByText("2.0.0")).toBeInTheDocument();
     expect(screen.getByText("🌐 remote")).toBeInTheDocument();
   });
