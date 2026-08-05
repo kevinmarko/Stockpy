@@ -51,6 +51,17 @@ export const theme = {
   surface2: "#1a212b", // raised surface (chips, inputs)
   surface3: "#232c38", // hover / pressed
 
+  // Mirrors index.css's --surface-glass (same value, same "why"): a
+  // translucent overlay surface for glassmorphic UI that needs backdrop
+  // blur over scrolling content beneath it -- e.g. the settings sticky-save
+  // footer (inline style) and the .glass-panel utility class -- available
+  // here for any future JS consumer (Recharts et al.) that needs the color
+  // as a value rather than a CSS var. NOT used by charts.tsx's chart
+  // tooltips: chartChrome.test.ts pins those to the opaque theme.surface3
+  // to stay byte-equal with index.css's `.recharts-default-tooltip`
+  // fallback rule (see that const's doc comment in charts.tsx).
+  surfaceGlass: "rgba(18, 22, 28, 0.7)",
+
   // Ink
   textPrimary: "#f2f5f8",
   textSecondary: "#9aa7b4",

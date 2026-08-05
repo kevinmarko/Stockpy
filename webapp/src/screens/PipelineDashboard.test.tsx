@@ -14,10 +14,30 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import toast from "react-hot-toast";
 import { PipelineDashboard } from "./PipelineDashboard";
 import { api, ApiError } from "../api/client";
 import type { ControlStatusOnline, DeadLetterQueue, RunRecord } from "../api/types";
+
+// react-hot-toast's `toast()` needs no <Toaster/> mounted to run safely in
+// jsdom (it just writes to an internal store nobody subscribes to), but
+// mocking it here lets the new trigger-point tests below assert a toast was
+// actually fired, matching this file's existing "assert on the real outcome"
+// style rather than only on the inline Notice.
+vi.mock("react-hot-toast", () => {
+  const mock = Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() });
+  return { default: mock };
+});
+
+// vi.restoreAllMocks() (used by every describe block's own afterEach below)
+// only restores spies created via vi.spyOn -- it has no original
+// implementation to restore a plain vi.fn() to, so it leaves the toast
+// mock's call history untouched between tests. Clear it explicitly here.
+beforeEach(() => {
+  vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.error).mockClear();
+});
 
 function renderScreen() {
   return render(
@@ -139,7 +159,7 @@ describe("PipelineDashboard (real mock API)", () => {
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
   });
 
-  it("clicking 'Run full advisory pipeline' calls POST /run and shows the result", async () => {
+  it("clicking 'Run full advisory pipeline' calls POST /run, shows the result, and toasts success", async () => {
     const spy = vi
       .spyOn(api, "postControlRun")
       .mockResolvedValue({ run_id: "orch-test-777", state: "queued" });
@@ -152,9 +172,11 @@ describe("PipelineDashboard (real mock API)", () => {
     expect(spy).toHaveBeenCalledTimes(1);
     // The screen renders whatever the server actually returned.
     expect(await screen.findByText(/orch-test-777/)).toBeInTheDocument();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("a kill-switch-active (423) trigger surfaces the paused notice", async () => {
+  it("a kill-switch-active (423) trigger surfaces the paused notice and toasts an error", async () => {
     vi.spyOn(api, "postControlPipelineData").mockRejectedValue(
       new ApiError("kill switch active", 423)
     );
@@ -163,6 +185,8 @@ describe("PipelineDashboard (real mock API)", () => {
 
     await user.click(await screen.findByTestId("trigger-data"));
     expect(await screen.findByText(/pipeline is paused/)).toBeInTheDocument();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });
 
@@ -278,7 +302,7 @@ describe("PipelineDashboard — dead-letter queue (G6)", () => {
     expect(screen.getByText(/DEAD_LETTER_RETRY_ENABLED=false/)).toBeInTheDocument();
   });
 
-  it("clicking Retry calls POST /dead-letter/retry and renders the server's real result", async () => {
+  it("clicking Retry calls POST /dead-letter/retry, renders the server's real result, and toasts success", async () => {
     vi.spyOn(api, "getDeadLetter").mockResolvedValue(deadLetterFixture());
     const spy = vi.spyOn(api, "retryDeadLetter").mockResolvedValue({
       symbol: "ZZZZ",
@@ -297,6 +321,26 @@ describe("PipelineDashboard — dead-letter queue (G6)", () => {
     const result = await screen.findByTestId("retry-result-ZZZZ");
     expect(result).toHaveTextContent(/PID 5150/);
     expect(result).toHaveTextContent(/output\/gui_retry\.log/);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a failed Retry surfaces the inline error and toasts a failure", async () => {
+    vi.spyOn(api, "getDeadLetter").mockResolvedValue(deadLetterFixture());
+    vi.spyOn(api, "retryDeadLetter").mockRejectedValue(
+      new ApiError("DEAD_LETTER_RETRY_ENABLED is False.", 403)
+    );
+    const user = userEvent.setup();
+    renderScreen();
+
+    const retryBtn = await screen.findByTestId("retry-ZZZZ");
+    await user.click(retryBtn);
+
+    expect(
+      await screen.findByText(/DEAD_LETTER_RETRY_ENABLED is False/)
+    ).toBeInTheDocument();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("a dead-letter read failure renders ErrorState, not a fabricated queue", async () => {

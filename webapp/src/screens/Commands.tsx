@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useSearchParams } from "react-router";
+import toast from "react-hot-toast";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { usePoll } from "../hooks/usePoll";
@@ -560,6 +561,13 @@ function RunCommandControl({
   );
 
   const runCommand = async () => {
+    // The compact "Job {id} — {status}" line below (plus LogStream/
+    // RecentRunsLog) is a persistent panel, but it only helps an operator
+    // who's still looking at this exact spot on the screen -- mirrors
+    // Console.tsx's own QUICK_ACTIONS launcher, which toasts launch
+    // success/failure in addition to its own always-visible job table for
+    // the same reason.
+    const label = subcommand ? `${command!.name} ${subcommand.name}` : command!.name;
     try {
       const params: CommandJobParams = {
         command: command!.name,
@@ -571,8 +579,25 @@ function RunCommandControl({
       setActiveJob(job);
       setRecentJobs((prev) => [job, ...prev]);
       setError(null);
+      toast.success(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Command launched</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            {label} — job {job.job_id}
+          </span>
+        </div>
+      );
     } catch (err: any) {
-      setError(err?.message ?? String(err));
+      const message = err?.message ?? String(err);
+      setError(message);
+      toast.error(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>{label} failed to launch</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            {message}
+          </span>
+        </div>
+      );
     }
   };
 

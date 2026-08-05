@@ -10,25 +10,39 @@
  *   - the per-field `applies` badge, replacing one blanket screen-wide claim;
  *   - an `env_pinned` field's input being genuinely disabled;
  *   - the `dangerous` confirmation flow actually BLOCKING a save and then
- *     allowing it — proven against ADVISORY_ONLY, the execution quarantine;
- *   - post-save feedback distinguishing "applied now" from "needs a restart".
+ *     allowing it — proven against ADVISORY_ONLY, the execution quarantine
+ *     (now wrapped in framer-motion; see "toast feedback on save" below for
+ *     the accompanying smoke test that the motion wrapper doesn't regress it);
+ *   - post-save feedback distinguishing "applied now" from "needs a restart";
+ *   - toast feedback on save (success and failure).
  *
  * It renders through the real SettingsManager screen (rather than mounting the
  * component directly) so the props wiring each screen supplies is exercised too
  * — a badge that only works when a test constructs the props by hand would not
  * be worth much.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "../screens/SettingsManager";
 import { api } from "../api/client";
+import toast from "react-hot-toast";
 import type {
   TunableLiveness,
   TunablesResponse,
   TunablesUpdateResult,
 } from "../api/types";
+
+// This file is the one place that exercises `GenericSettingsEditor.tsx`'s
+// post-save toast feedback, so `react-hot-toast` is mocked module-wide here
+// (nowhere else in the suite mocks it) -- `toast.success`/`toast.error`
+// become inspectable `vi.fn()`s instead of pushing into the real,
+// unrendered (no `<Toaster />` in this tree) internal store.
+vi.mock("react-hot-toast", () => ({
+  default: { success: vi.fn(), error: vi.fn() },
+}));
 
 function lv(over: Partial<TunableLiveness> = {}): TunableLiveness {
   return {
@@ -148,6 +162,8 @@ function renderScreen() {
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
+  vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.error).mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -521,5 +537,96 @@ describe("post-save feedback", () => {
     const notice = await screen.findByTestId("written-notice");
     expect(notice).toHaveTextContent(/applied to the running process immediately/i);
     expect(notice).toHaveTextContent(/MAX_POSITION_WEIGHT/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Toast feedback on save
+// ---------------------------------------------------------------------------
+
+describe("toast feedback on save", () => {
+  it("fires a success toast naming how many settings were saved", async () => {
+    vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
+    vi.spyOn(api, "updateTunables").mockResolvedValue({
+      written: { KELLY_FRACTION: 0.6 },
+      rejected: {},
+      applies: "immediately",
+      per_key_applies: { KELLY_FRACTION: "immediately" },
+      restart_required: false,
+      note: "Saved to .env and applied to the running process — no restart needed.",
+    });
+    const user = userEvent.setup();
+    renderScreen();
+
+    const input = (await screen.findByLabelText("KELLY_FRACTION")) as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "0.6");
+    await user.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining("1 setting"));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("fires an error toast surfacing the real error message on a failed save", async () => {
+    vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
+    vi.spyOn(api, "updateTunables").mockRejectedValue(
+      new Error("500 Internal Server Error"),
+    );
+    const user = userEvent.setup();
+    renderScreen();
+
+    const input = (await screen.findByLabelText("KELLY_FRACTION")) as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "0.6");
+    await user.click(screen.getByRole("button", { name: /Save/ }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    // The house style (Toggle.tsx's `handleChange` catch block): a JSX node
+    // with a bold title line + the real error text, not a bare string.
+    // Queried via `within(container)` (rather than `screen`, which still has
+    // the full SettingsManager tree mounted -- and that tree's own
+    // `mutation.error` Notice already shows this same message, and `render`'s
+    // own returned queries are bound to `document.body`, not the fresh
+    // container, so they wouldn't disambiguate either) so the query is
+    // scoped to the toast content alone.
+    const [toastNode] = vi.mocked(toast.error).mock.calls[0];
+    const { container } = render(toastNode as ReactElement);
+    expect(within(container).getByText("Save failed")).toBeInTheDocument();
+    expect(within(container).getByText("500 Internal Server Error")).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("smoke test: the dangerous-confirm dialog (now framer-motion wrapped) still renders and behaves correctly", async () => {
+    vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
+    vi.spyOn(api, "updateTunables").mockResolvedValue({
+      written: { ADVISORY_ONLY: false },
+      rejected: {},
+      applies: "next_daemon_restart",
+      per_key_applies: { ADVISORY_ONLY: "next_daemon_restart" },
+      restart_required: true,
+      note: "Saved to .env. The running process keeps the previous values until it restarts (POST /daemon/restart).",
+    });
+    const user = userEvent.setup();
+    renderScreen();
+
+    const toggle = await screen.findByRole("switch", { name: "ADVISORY_ONLY" });
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: /Save/ }));
+
+    expect(await screen.findByTestId("dangerous-confirm")).toBeInTheDocument();
+    expect(screen.getByTestId("dangerous-summary-ADVISORY_ONLY")).toBeInTheDocument();
+
+    await user.type(
+      screen.getByLabelText('Type "ADVISORY_ONLY" to confirm'),
+      "ADVISORY_ONLY",
+    );
+    await user.click(screen.getByTestId("dangerous-confirm-yes"));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    // The motion wrapper's exit transition delays actual DOM removal, so this
+    // (like the pre-existing "cancelling" test above) polls rather than
+    // asserting synchronously.
+    await waitFor(() => expect(screen.queryByTestId("dangerous-confirm")).toBeNull());
   });
 });

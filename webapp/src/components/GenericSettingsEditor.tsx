@@ -1,5 +1,7 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import toast from "react-hot-toast";
 import { api } from "../api/client";
 import type {
   SettingsConfirmMap,
@@ -261,6 +263,30 @@ function SettingsForm({
 
   const mutation = useMutation(updateSettings);
 
+  // Toast feedback for a failed save. `mutation.error` is React state set
+  // inside `mutation.run`'s catch block -- reading it synchronously right
+  // after `await mutation.run(...)` in `submit` below would see this render's
+  // STALE closed-over value, not the freshly-set one (the state update lands
+  // on the next render). An effect reacting to the state itself is what
+  // actually observes the fresh error, once per genuine failure ( `run` resets
+  // `error` to null at the start of every attempt, so this never double-fires
+  // for the same failure). Follows this codebase's house style for a failed-
+  // mutation toast (see Toggle.tsx's `handleChange` catch block): a bold title
+  // line plus the real error message, never a bare/generic string.
+  useEffect(() => {
+    if (!mutation.error) return;
+    toast.error(
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        <span style={{ fontWeight: 600, fontSize: "var(--t-callout)" }}>Save failed</span>
+        <span
+          style={{ color: "var(--text-secondary)", fontSize: "var(--t-caption)", marginTop: "4px" }}
+        >
+          {mutation.error}
+        </span>
+      </div>,
+    );
+  }, [mutation.error]);
+
   const setVal = (key: string, v: EditVal) =>
     setEdited((s) => ({ ...s, [key]: v }));
 
@@ -328,6 +354,14 @@ function SettingsForm({
     const res = await mutation.run(buildPayload(), confirm);
     if (res) {
       onResult(res);
+      // `res` is the mutation's own fresh return value (not React state), so
+      // it's safe to read directly here -- unlike `mutation.error` above.
+      // Reuse the actual written-key count rather than a generic "Saved" so
+      // a partially-rejected batch doesn't overclaim.
+      const writtenCount = Object.keys(res.written).length;
+      if (writtenCount > 0) {
+        toast.success(`Saved ${writtenCount} setting${writtenCount === 1 ? "" : "s"}`);
+      }
       // Reset the dirty baseline for accepted keys only; rejected keys stay
       // dirty so the operator can fix and re-submit them.
       setBaseline((b) => {
@@ -430,16 +464,18 @@ function SettingsForm({
         </Button>
       </div>
 
-      {confirmOpen && (
-        <DangerousConfirmDialog
-          keys={pendingDangerous}
-          fields={flatFields}
-          edited={edited}
-          pending={mutation.pending}
-          onCancel={() => setConfirmOpen(false)}
-          onConfirm={onConfirmed}
-        />
-      )}
+      <AnimatePresence>
+        {confirmOpen && (
+          <DangerousConfirmDialog
+            keys={pendingDangerous}
+            fields={flatFields}
+            edited={edited}
+            pending={mutation.pending}
+            onCancel={() => setConfirmOpen(false)}
+            onConfirm={onConfirmed}
+          />
+        )}
+      </AnimatePresence>
     </>
   );
 }
@@ -476,9 +512,31 @@ function DangerousConfirmDialog({
   const allConfirmed = keys.every((k) => (typed[k] ?? "").trim() === k);
   const byKey = new Map(fields.map((f) => [f.key, f]));
 
+  // This is a safety-critical confirmation gate -- the operator must see
+  // every field they need to confirm quickly, not wait on a slow reveal.
+  // `useReducedMotion` mirrors this codebase's existing `@media
+  // (prefers-reduced-motion: reduce)` CSS convention (index.css) for the one
+  // framer-motion consumer in this app so far: collapse to an instant,
+  // no-offset transition rather than skip animating (skipping outright would
+  // also skip the `initial` state's opacity/offset, but framer-motion resolves
+  // `animate` immediately when `transition.duration` is 0, which reads
+  // identically to "no motion" for a reduced-motion user).
+  const shouldReduceMotion = useReducedMotion();
+  const dialogTransition = { duration: shouldReduceMotion ? 0 : 0.2, ease: "easeOut" as const };
+  const rowOffsetY = shouldReduceMotion ? 0 : 6;
+  // A subtle stagger, not a slow reveal: ~50ms per row so a 2-3 field batch
+  // (the common case) finishes settling well under 250ms total.
+  const rowStaggerSeconds = shouldReduceMotion ? 0 : 0.05;
+
   return (
     <Modal ariaLabel="Confirm safety-critical settings change" onClose={onCancel}>
-      <div data-testid="dangerous-confirm">
+      <motion.div
+        data-testid="dangerous-confirm"
+        initial={{ opacity: 0, y: shouldReduceMotion ? 0 : 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: shouldReduceMotion ? 0 : 8 }}
+        transition={dialogTransition}
+      >
         <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>
           {keys.length === 1
             ? "Change a safety-critical setting?"
@@ -490,33 +548,46 @@ function DangerousConfirmDialog({
           name exactly.
         </p>
 
-        {keys.map((k) => {
-          const f = byKey.get(k);
-          const next = edited[k];
-          return (
-            <div key={k} style={{ marginTop: "var(--s-3)" }}>
-              <p
-                style={{
-                  color: theme.textSecondary,
-                  fontSize: "var(--t-label)",
-                  margin: "0 0 var(--s-1)",
+        <AnimatePresence>
+          {keys.map((k, i) => {
+            const f = byKey.get(k);
+            const next = edited[k];
+            return (
+              <motion.div
+                key={k}
+                initial={{ opacity: 0, y: rowOffsetY }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{
+                  duration: shouldReduceMotion ? 0 : 0.18,
+                  delay: i * rowStaggerSeconds,
+                  ease: "easeOut",
                 }}
-                data-testid={`dangerous-summary-${k}`}
+                style={{ marginTop: "var(--s-3)" }}
               >
-                <strong>{k}</strong>
-                {" → "}
-                <code>{String(next)}</code>
-                {f?.description ? ` — ${f.description}` : ""}
-              </p>
-              <Input
-                label={`Type "${k}" to confirm`}
-                value={typed[k] ?? ""}
-                onChange={(e) => setTyped((s) => ({ ...s, [k]: e.target.value }))}
-                hint="Required."
-              />
-            </div>
-          );
-        })}
+                <p
+                  style={{
+                    color: theme.textSecondary,
+                    fontSize: "var(--t-label)",
+                    margin: "0 0 var(--s-1)",
+                  }}
+                  data-testid={`dangerous-summary-${k}`}
+                >
+                  <strong>{k}</strong>
+                  {" → "}
+                  <code>{String(next)}</code>
+                  {f?.description ? ` — ${f.description}` : ""}
+                </p>
+                <Input
+                  label={`Type "${k}" to confirm`}
+                  value={typed[k] ?? ""}
+                  onChange={(e) => setTyped((s) => ({ ...s, [k]: e.target.value }))}
+                  hint="Required."
+                />
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
 
         <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
           <Button
@@ -538,7 +609,7 @@ function DangerousConfirmDialog({
             Save {keys.length === 1 ? "this change" : "these changes"}
           </Button>
         </div>
-      </div>
+      </motion.div>
     </Modal>
   );
 }

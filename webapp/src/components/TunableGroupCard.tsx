@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import type { TunableField } from "../api/types";
 import { theme } from "../theme";
 
@@ -20,8 +21,21 @@ export function TunableGroupCard({
   children,
 }: TunableGroupCardProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
+  // Hooks must run unconditionally on every render of this instance -- called
+  // ahead of the `fields.length === 0` early return below so the hook
+  // count/order never varies across renders.
+  const shouldReduceMotion = useReducedMotion();
 
   if (fields.length === 0) return null;
+
+  // Snappy by design: this is a UI density control the operator may toggle
+  // repeatedly while scanning a settings screen, not a slow reveal.
+  // Collapses to near-instant when the OS reports a reduced-motion
+  // preference (no local precedent for this elsewhere in webapp/src, so this
+  // follows framer-motion's own `useReducedMotion` recommendation directly).
+  const contentTransition = shouldReduceMotion
+    ? { duration: 0.01 }
+    : { duration: 0.2, ease: [0.4, 0, 0.2, 1] as const };
 
   return (
     <section
@@ -111,11 +125,20 @@ export function TunableGroupCard({
         </span>
       </button>
 
-      {isOpen && (
-        <div style={{ padding: "var(--s-4)" }}>
-          {children}
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            key="content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={contentTransition}
+            style={{ overflow: "hidden" }}
+          >
+            <div style={{ padding: "var(--s-4)" }}>{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </section>
   );
 }

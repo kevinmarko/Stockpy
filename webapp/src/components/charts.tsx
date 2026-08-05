@@ -78,11 +78,11 @@ export function CustomTooltip({
 }
 
 /**
- * Shared chart chrome — the grid/axis/tooltip config every Recharts chart in
- * this app should use, so a new chart never re-derives its own gridline
- * stroke or a subtly-different tooltip surface. Before these existed, 6
- * screens/components each hand-declared their own version of these four
- * things; 5 of them ended up disagreeing with what THIS file (and
+ * Shared chart chrome — the grid/axis/cursor/tooltip config every Recharts
+ * chart in this app should use, so a new chart never re-derives its own
+ * gridline stroke or a subtly-different tooltip surface. Before these
+ * existed, 6 screens/components each hand-declared their own version of
+ * these things; 5 of them ended up disagreeing with what THIS file (and
  * index.css's own `.recharts-default-tooltip` override) already used.
  * Spread these directly onto the corresponding Recharts prop — they're
  * plain prop-shaped objects, not components.
@@ -99,7 +99,35 @@ export const chartGridProps = {
   strokeDasharray: "0",
 } as const;
 
-/** Pass as <Tooltip contentStyle={chartTooltipStyle}>. */
+/**
+ * Spread onto <Tooltip cursor={...}> — the vertical dashed crosshair every
+ * XY chart's hover state uses, tracking the hovered X position. Pair with an
+ * `activeDot` on that chart's primary series for a precise anchor point at
+ * the exact hovered value, not just the line. Not applicable to SectorDonut
+ * (a pie/donut has no X axis for a crosshair line to track — Recharts'
+ * per-slice hover highlight is a different mechanism entirely).
+ */
+export const chartCursorProps = {
+  stroke: theme.borderStrong,
+  strokeWidth: 1,
+  strokeDasharray: "4 4",
+} as const;
+
+/**
+ * Pass as <Tooltip contentStyle={chartTooltipStyle}>. Deliberately kept on
+ * the OPAQUE theme.surface3 rather than the new theme.surfaceGlass: a glass
+ * background was tried here (GUI modernization glass-token pass) and read
+ * fine in isolation, but chartChrome.test.ts pins a stricter invariant --
+ * "one tooltip surface, not two" -- requiring this value to stay byte-equal
+ * to index.css's `.recharts-default-tooltip` CSS fallback rule (the
+ * `background: var(--surface-3) !important` Recharts falls back to for any
+ * tooltip that doesn't supply its own content/contentStyle), so the two
+ * representations of "the app's tooltip surface" never silently diverge.
+ * Moving this to the glass token would require moving that CSS rule too,
+ * which is out of scope here -- see the introducing PR/task notes. glass
+ * styling is still fully available via theme.surfaceGlass/.glass-panel for
+ * every other surface (panels, the settings sticky-save footer, badges).
+ */
 export const chartTooltipStyle = {
   background: theme.surface3,
   border: `1px solid ${theme.borderStrong}`,
@@ -233,7 +261,7 @@ export function PerfLine({
           )}
           <Tooltip
             content={<CustomTooltip valueFormat={valueFormat} valueLabel={valueLabel} macroLabel={macroLabel} yTickDecimals={yTickDecimals} />}
-            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
+            cursor={chartCursorProps}
           />
           {benchmark && benchmark.length > 0 && (
             <Line
@@ -269,6 +297,7 @@ export function PerfLine({
             strokeWidth={2}
             fill={`url(#${gradId})`}
             dot={false}
+            activeDot={{ r: 4, fill: theme.surface, stroke, strokeWidth: 2 }}
             isAnimationActive={false}
           />
         </AreaChart>
@@ -306,6 +335,11 @@ export function SectorDonut({ slices }: { slices: SectorSlice[] }) {
                 <Cell key={r.sector} fill={r.color} />
               ))}
             </Pie>
+            {/* No `cursor` here (unlike every other <Tooltip> in this file):
+                a donut has no X axis for a vertical crosshair line to track.
+                Recharts already highlights the hovered slice itself via the
+                Pie's own hover state, which is this chart type's equivalent
+                anchor point. */}
             <Tooltip
               contentStyle={chartTooltipStyle}
               formatter={(val, name) => [
@@ -411,7 +445,7 @@ export function DrawdownArea({ data }: { data: EquityDrawdownPoint[] }) {
             contentStyle={chartTooltipStyle}
             labelFormatter={(l) => fmtDateTime(String(l))}
             formatter={(val) => [fmtPct(Number(val), 1, { fromFraction: true }), "Drawdown"]}
-            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
+            cursor={chartCursorProps}
           />
           <Area
             type="monotone"
@@ -420,6 +454,7 @@ export function DrawdownArea({ data }: { data: EquityDrawdownPoint[] }) {
             strokeWidth={1.75}
             fill="url(#gradDrawdown)"
             dot={false}
+            activeDot={{ r: 4, fill: theme.surface, stroke: theme.decline, strokeWidth: 2 }}
             isAnimationActive={false}
           />
         </AreaChart>
@@ -709,7 +744,7 @@ export function ForecastCandleChart({
           />
           <Tooltip
             content={<ForecastTooltip />}
-            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
+            cursor={chartCursorProps}
           />
           {/* Confidence cone — stacked-area trick: an invisible baseline at
               `coneLower` plus a visible band of `coneBand = upper - lower`
@@ -751,6 +786,7 @@ export function ForecastCandleChart({
             stroke={theme.accent}
             strokeWidth={2}
             dot={{ r: 2.5, fill: theme.accent, stroke: "none" }}
+            activeDot={{ r: 4, fill: theme.surface, stroke: theme.accent, strokeWidth: 2 }}
             connectNulls
             isAnimationActive={false}
           />
@@ -841,7 +877,7 @@ export function Sparkline({
           <YAxis hide domain={["dataMin", "dataMax"]} />
           <Tooltip
             content={<CustomTooltip valueFormat={valueFormat} valueLabel={valueLabel} yTickDecimals={valueFormat === "number" ? 2 : 0} />}
-            cursor={{ stroke: theme.borderStrong, strokeWidth: 1, strokeDasharray: "4 4" }}
+            cursor={chartCursorProps}
           />
           <Area
             type="monotone"
@@ -850,6 +886,7 @@ export function Sparkline({
             strokeWidth={1.75}
             fill="url(#spark)"
             dot={false}
+            activeDot={{ r: 3, fill: theme.surface, stroke, strokeWidth: 1.5 }}
             isAnimationActive={false}
           />
         </AreaChart>
