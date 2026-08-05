@@ -7,6 +7,7 @@
   --surface: #12161c;
   --surface-2: #1a212b;
   --surface-3: #232c38;
+  --surface-glass: rgba(18, 22, 28, 0.7);
 
   /* Ink */
   --text-primary: #f2f5f8;
@@ -275,6 +276,37 @@ button {
   background: var(--surface-2);
   border: 1px solid var(--border);
 }
+
+.badge-glass {
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.pulse-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+  margin-right: 2px;
+  animation: pulse-dot-anim 2s infinite;
+}
+
+@keyframes pulse-dot-anim {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 0.5;
+  }
+}
+
 
 /* ---- Values ---- */
 .pos {

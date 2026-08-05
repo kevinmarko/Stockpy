@@ -424,7 +424,7 @@ function SettingsForm({
 
       {dangerZone}
 
-      <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
+      <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)", padding: "var(--s-3)", background: "var(--surface-glass)", backdropFilter: "blur(12px)", borderTop: "1px solid var(--border)", zIndex: 10, borderRadius: "var(--r-md)" }}>
         <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>
           {dirty ? `Save ${dirtyKeys.length} change${dirtyKeys.length === 1 ? "" : "s"}` : "Save changes"}
         </Button>
@@ -639,10 +639,11 @@ function FieldRow({
       >
         <InfoTip content={badge.title} ariaLabel={`What "${badge.label}" means`}>
           <span
-            className={`badge badge-${badge.tone}`}
+            className={`badge badge-${badge.tone} badge-glass`}
             data-testid={`applies-badge-${f.key}`}
             data-applies={lv.applies}
           >
+            {lv.applies === "next_daemon_restart" && <span className="pulse-dot" />}
             {badge.label}
           </span>
         </InfoTip>
