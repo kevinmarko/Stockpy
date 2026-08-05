@@ -44,6 +44,13 @@ import pytest
 
 from scripts import settings_liveness as sl
 
+# xdist_group pins every test in this module to the same worker under
+# `--dist loadgroup` (CI/Makefile) -- without it, the default `--dist load`
+# distribution can split these tests across workers, silently rebuilding the
+# module-scoped `model_fields`/`real_analysis`/`real_report` fixtures (each a
+# full-repo AST scan) per worker and eating the whole consolidation win below.
+pytestmark = pytest.mark.xdist_group("settings_liveness")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "settings_liveness"
 ARTIFACT = REPO_ROOT / sl.JSON_OUT_REL
@@ -328,8 +335,13 @@ class TestEveryCaptureRuleIsExercised:
 # Real-tree regressions — the five cases actually got wrong while prototyping
 # ===========================================================================
 @pytest.fixture(scope="module")
-def real_report(model_fields) -> dict:
-    return sl.build_report(str(REPO_ROOT), model_fields)
+def real_analysis(model_fields):
+    return sl.analyze(str(REPO_ROOT), model_fields)
+
+
+@pytest.fixture(scope="module")
+def real_report(model_fields, real_analysis) -> dict:
+    return sl.build_report(str(REPO_ROOT), model_fields, analysis=real_analysis)
 
 
 class TestRealTreeRegressions:
@@ -377,7 +389,7 @@ class TestRealTreeRegressions:
         )
 
     def test_command_token_guard_factories_resolve_to_real_fields(
-        self, real_report, model_fields
+        self, real_analysis
     ):
         """api/auth.py resolves the bearer token by NAME at request time. A
         classifier that concluded these fields are never read would be badly
@@ -387,8 +399,7 @@ class TestRealTreeRegressions:
         ``_factory_owning`` or the form-4 value extraction that attributed
         these reads to the wrong fields would leave any count unchanged.
         """
-        analysis = sl.analyze(str(REPO_ROOT), model_fields)
-        resolved = {r.key for r in analysis.reads if r.form == "factory_param"}
+        resolved = {r.key for r in real_analysis.reads if r.form == "factory_param"}
         assert resolved == {
             "ORCHESTRATOR_DAEMON_TOKEN",
             "FOLLOW_API_TOKEN",
@@ -397,14 +408,13 @@ class TestRealTreeRegressions:
         }, resolved
 
     def test_every_factory_call_site_passes_a_string_constant(
-        self, real_report, model_fields
+        self, real_analysis
     ):
         """Backs the caveat that claims it. A factory called with a NON-constant
         key would go unattributed AND (by design) no longer poison — so if that
         ever appears, the caveat is no longer true and this must be revisited."""
-        analysis = sl.analyze(str(REPO_ROOT), model_fields)
-        factory_sites = [d for d in analysis.dynamic if d.get("resolved_by_factory")]
-        resolved_count = sum(1 for r in analysis.reads if r.form == "factory_param")
+        factory_sites = [d for d in real_analysis.dynamic if d.get("resolved_by_factory")]
+        resolved_count = sum(1 for r in real_analysis.reads if r.form == "factory_param")
         assert factory_sites, "expected at least one factory-keyed dynamic read"
         assert resolved_count >= 2 * len(factory_sites), (
             "a guard factory exists whose call sites did not all resolve to a "

@@ -2,8 +2,9 @@
 #
 # Usage:
 #   make verify      env-var check → test suite → one live advisory cycle
-#   make test        pytest only
-#   make ci          offline pytest only (mirrors GitHub Actions: -m "not network")
+#   make test        pytest only (full suite -- no marker filter)
+#   make ci          offline pytest only (mirrors GitHub Actions `test` job:
+#                     -m "not network and not slow" --dist loadgroup)
 #   make smoke       smoke tests only
 #
 # All targets assume Python 3.12 lives in .venv; run ./setup.sh first.
@@ -34,12 +35,12 @@ exit(1 if missing_req else 0) \
 test:
 	@echo ""
 	@echo "=== Step 2 / 3  Test suite ==="
-	@$(PYTHON) -m pytest -v --tb=short -n auto
+	@$(PYTHON) -m pytest -v --tb=short -n auto --dist loadgroup
 
 ci:
 	@echo ""
-	@echo "=== Offline test suite (mirrors GitHub Actions CI) ==="
-	@$(PYTHON) -m pytest -m "not network" -v --tb=short -n auto
+	@echo "=== Offline test suite (mirrors GitHub Actions CI's \`test\` job) ==="
+	@$(PYTHON) -m pytest -m "not network and not slow" -v --tb=short -n auto --dist loadgroup
 
 smoke:
 	@echo ""

@@ -17,6 +17,7 @@ TestMainCLI             — argument parsing; all-pass exit-0, any-fail exit-1
 """
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -162,6 +163,25 @@ class TestRegistryStructure:
 
         _, _, universe = STRATEGY_REGISTRY["multifactor_lowvol_size"]
         assert len(universe) > 1, "cross-sectional strategy needs a multi-ticker universe"
+
+    def test_adapter_arity_matches_universe_size(self) -> None:
+        """Static signature check (no adapter execution): every adapter must
+        accept exactly the number of positional args ``run_validations``'s
+        dispatch loop actually calls it with — 1 (``fn(closes_series)``) for a
+        single-ticker universe, 2 (``fn(closes_df, shares_dict)``) for a
+        multi-ticker universe (see ``scripts/refresh_validations.py`` around
+        line 2510-2517). Catches a newly registered strategy whose adapter has
+        the wrong call signature without ever running it."""
+        from scripts.refresh_validations import STRATEGY_REGISTRY
+
+        for name, (fn, _turnover, universe) in STRATEGY_REGISTRY.items():
+            n_params = len(inspect.signature(fn).parameters)
+            expected = 1 if len(universe) == 1 else 2
+            assert n_params == expected, (
+                f"{name}: adapter has {n_params} parameter(s), expected "
+                f"{expected} positional parameter(s) for universe size "
+                f"{len(universe)}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -864,6 +884,34 @@ class TestRunValidations:
         )
 
     def test_returns_dict_for_each_strategy(self, tmp_path: Path) -> None:
+        """Scoped to two cheap ``["SPY"]`` single-name entries — this test's
+        assertions only need SOME real strategies to run end-to-end; it does
+        not need the full 17-entry registry (that's covered separately by
+        ``test_full_registry_dispatches_all_entries`` with stub adapters, and
+        by the slow-marked ``test_all_registered_adapters_run_end_to_end``)."""
+        from scripts.refresh_validations import run_validations
+
+        with self._patch_closes(), self._patch_shares(), self._patch_harness(), self._patch_cost():
+            results = run_validations(
+                strategies=["rsi2_mean_reversion", "timeseries_momentum"],
+                output_dir=tmp_path,
+            )
+
+        assert isinstance(results, dict)
+        assert set(results) == {"rsi2_mean_reversion", "timeseries_momentum"}
+
+    @pytest.mark.slow
+    def test_all_registered_adapters_run_end_to_end(self, tmp_path: Path) -> None:
+        """Full real-adapter sweep across the entire ``STRATEGY_REGISTRY``
+        (17 entries, ``strategies=None``). The harness class itself is
+        mocked, but every adapter's REAL computation runs — real ARIMA/
+        Holt-Winters MLE fits (10 tickers x weekly rebalances), a real
+        31-ticker signal replay, real 30-ticker macro-regime reconstruction,
+        and a real GARCH fit. This is the exact original body of
+        ``test_returns_dict_for_each_strategy`` before it was narrowed to two
+        cheap strategies above — kept here, ``slow``-marked, so a nightly job
+        can still exercise the full real-adapter sweep without paying its
+        ~320s cost on every CI run."""
         from scripts.refresh_validations import run_validations
 
         with self._patch_closes(), self._patch_shares(), self._patch_harness(), self._patch_cost():
@@ -872,6 +920,52 @@ class TestRunValidations:
         assert isinstance(results, dict)
         assert "rsi2_mean_reversion" in results
         assert "timeseries_momentum" in results
+
+    def test_full_registry_dispatches_all_entries(self, tmp_path: Path) -> None:
+        """Exercises the ``strategies=None`` -> full-registry expansion, the
+        ticker-union computation, and the multi-ticker ``_download_shares``
+        gate (``scripts/refresh_validations.py`` ~lines 2449-2458) — with
+        cheap stub adapters standing in for the real (slow) ones.
+
+        Deliberately NOT "patch STRATEGY_REGISTRY with stubs, then assert
+        results match STRATEGY_REGISTRY" — that would be tautological, since
+        it would compare the result against the very patch dict just
+        installed and would pass unchanged even if the real registry lost or
+        broke an entry. Instead the expected key set (``snapshot``) is
+        captured from the REAL, unpatched registry before any patching
+        happens, so the final assertion is a genuine check that dispatch
+        reaches every currently-registered strategy."""
+        import scripts.refresh_validations as rv
+
+        snapshot = dict(rv.STRATEGY_REGISTRY)
+
+        def _stub_adapter(*_args: Any) -> Any:
+            # Accepts both calling conventions the dispatch loop uses:
+            # fn(closes_series) for a single-ticker universe, or
+            # fn(closes_df, shares_dict) for a multi-ticker universe.
+            idx = pd.bdate_range(end="2024-12-31", periods=30)
+            X = pd.DataFrame({"feature": np.arange(30, dtype=float)}, index=idx)
+            y = pd.Series(np.full(30, 0.001), index=idx)
+            precomputed = {"stub": pd.Series(np.full(30, 0.001), index=idx)}
+            return X, y, precomputed
+
+        stub_registry = {
+            name: (_stub_adapter, turnover, universe)
+            for name, (_fn, turnover, universe) in snapshot.items()
+        }
+
+        with (
+            patch("scripts.refresh_validations.STRATEGY_REGISTRY", stub_registry),
+            self._patch_closes(),
+            self._patch_shares(),
+            self._patch_harness(),
+            self._patch_cost(),
+        ):
+            results = rv.run_validations(output_dir=tmp_path)
+
+        assert set(results) == set(snapshot)
+        for name, r in results.items():
+            assert "strategy_id" in r, f"{name}: result missing strategy_id ({r})"
 
     def test_unknown_strategy_is_dead_lettered(self, tmp_path: Path) -> None:
         from scripts.refresh_validations import run_validations

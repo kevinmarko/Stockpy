@@ -490,6 +490,14 @@ class TestAdvisoryTailoringRules:
 # TestNoOrderFunctions
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(scope="module")
+def _repo_py_files() -> list[Path]:
+    """Every ``.py`` file under the repo root, walked once per test session
+    (module-scoped) instead of once per test that needs the full file list."""
+    repo_root = Path(__file__).parent.parent
+    return sorted(repo_root.rglob("*.py"))
+
+
 class TestNoOrderFunctions:
     """
     Static source-code guard: walk the repository for Python modules that are
@@ -556,7 +564,7 @@ class TestNoOrderFunctions:
                     found.append(name)
         return found
 
-    def test_no_order_functions_outside_execution(self) -> None:
+    def test_no_order_functions_outside_execution(self, _repo_py_files) -> None:
         """
         Every .py file in the repository tree that is NOT under execution/ must
         define zero functions matching order-submission naming patterns.
@@ -569,7 +577,7 @@ class TestNoOrderFunctions:
         repo_root = Path(__file__).parent.parent
         violations: list[str] = []
 
-        for py_file in sorted(repo_root.rglob("*.py")):
+        for py_file in _repo_py_files:
             if self._is_excluded(py_file):
                 continue
             hits = self._order_function_names_in(py_file)

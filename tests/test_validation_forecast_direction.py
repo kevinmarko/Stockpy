@@ -72,6 +72,36 @@ class TestWeeklyRebalanceDates:
 # TestBuildForecastDirectionAdapter
 # ---------------------------------------------------------------------------
 
+class _TrendStubEngine:
+    """Cheap stand-in for ``forecasting_engine.ForecastingEngine`` that skips
+    the real statsmodels ARIMA/Holt-Winters MLE fits and instead returns a
+    deterministic trend extrapolation. Unlike ``_AlwaysFailEngine`` below
+    (used by ``test_failed_fits_are_skipped_not_fabricated``), this stub
+    always "succeeds" so ``_build_forecast_direction_adapter``'s
+    ``candidates`` filter stays non-empty at every rebalance date -- the
+    real ``ForecastAlignmentSignal.compute()`` call, the score ``.ffill()``,
+    and the score-weighted portfolio construction all still genuinely
+    execute; only the two MLE fit calls themselves are stubbed out.
+
+    ``run_arima_fit`` stashes ``history[-1]`` as its "fitted" sentinel
+    (mirroring the real adapter call site, which never passes ``history``
+    into ``forecast_from_arima_fit`` directly) so ``forecast_from_arima_fit``
+    can derive its +2% trend price from it.
+    """
+
+    def run_arima_fit(self, history, *a, **k):
+        return float(history[-1])
+
+    def forecast_from_arima_fit(self, fitted, days_forward):
+        return float(fitted) * 1.02
+
+    def run_holt_winters_fit(self, history, *a, **k):
+        return float(history[-1])
+
+    def forecast_from_hw_fit(self, fitted, days_forward, history):
+        return float(history[-1]) * 0.99
+
+
 class TestBuildForecastDirectionAdapter:
     def test_returns_three_items_and_variant(self) -> None:
         closes = _synthetic_closes(["AAPL", "JNJ"], n_days=90)
@@ -95,14 +125,38 @@ class TestBuildForecastDirectionAdapter:
 
     def test_window_is_bounded_to_five_years(self) -> None:
         """A closes frame spanning far more than 5 years must be trimmed --
-        the returned index's span must not exceed ~5 years + a small margin."""
+        the returned index's span must not exceed ~5 years + a small margin.
+
+        The 5yr window trim happens on the closes/date index BEFORE any
+        ARIMA/Holt-Winters fit runs (see _build_forecast_direction_adapter),
+        so the returned X.index reflects that trim independent of fit
+        outcomes -- what this test actually checks is fit-outcome-
+        irrelevant. The real statsmodels MLE fits are therefore stubbed out
+        via ``_TrendStubEngine`` (~260 weekly rebalances of real ARIMA +
+        Holt-Winters fits over a synthetic 10yr frame previously made this
+        the second-slowest test in CI, ~131s, purely to assert an index
+        span). Real historical fits (at 90-day scale) are still exercised
+        by the sibling tests in this class (test_returns_three_items_and_variant,
+        test_score_weighted_book_not_rank_based, test_no_lookahead_shift1,
+        test_real_forecast_alignment_signal_reused) and by
+        TestForecastDirectionIntegration's real yfinance end-to-end test.
+        """
         idx = pd.bdate_range("2005-01-01", periods=252 * 10)  # ~10 years
         rng = np.random.RandomState(1)
         closes = pd.DataFrame(
             {"AAPL": 100.0 * np.cumprod(1 + rng.normal(0.0003, 0.01, len(idx)))},
             index=idx,
         )
-        X, y, pre = _build_forecast_direction_adapter(closes)
+
+        import forecasting_engine
+
+        original_cls = forecasting_engine.ForecastingEngine
+        try:
+            forecasting_engine.ForecastingEngine = lambda: _TrendStubEngine()
+            X, y, pre = _build_forecast_direction_adapter(closes)
+        finally:
+            forecasting_engine.ForecastingEngine = original_cls
+
         span_years = (X.index[-1] - X.index[0]).days / 365.25
         assert span_years <= FORECAST_DIRECTION_WINDOW_YEARS + 0.5
 

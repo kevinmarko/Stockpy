@@ -1083,10 +1083,16 @@ CAVEATS = [
 ]
 
 
-def build_report(root: str, model_fields: Optional[frozenset[str]] = None) -> dict:
+def build_report(
+    root: str,
+    model_fields: Optional[frozenset[str]] = None,
+    *,
+    analysis: Optional[Analysis] = None,
+) -> dict:
     if model_fields is None:
         model_fields = load_model_fields()
-    analysis = analyze(root, model_fields)
+    if analysis is None:
+        analysis = analyze(root, model_fields)
     result = partition(analysis, model_fields)
     result["status"] = "ok"
     result["generator"] = "scripts/settings_liveness.py"
