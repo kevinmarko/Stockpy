@@ -47,11 +47,7 @@ as Branch Workflow above: no per-agent carve-out.
   releasing itself with a warning instead, so a genuinely stuck check can't deadlock the
   session. `/verify` and `/verify-webapp` (`.claude/commands/`) run the fuller gate and the
   browser check on demand.
-- **Antigravity has no equivalent automatic blocking gate yet.** Its documented `Stop`-event
-  hook doesn't expose the same "force continuation" semantics Claude Code's does, as far as
-  can be verified from `antigravity.google/docs/hooks` alone — so on that side this paragraph
-  is enforced *policy*, not a hook, until someone can confirm Antigravity's actual `Stop` hook
-  behavior against a live runtime. This is a real, open gap, not a claimed equivalence.
+- **Antigravity has no equivalent automatic blocking gate.** Live validation confirms that its `Stop` hook does not expose "force continuation" semantics, and its `PreToolUse`/`PostToolUse` shell hooks do not natively intercept file-editing tools in the IDE runtime. Therefore, on the Antigravity side, "don't mark a task done until tests pass" remains strictly **policy-only**, enforced by prompt adherence rather than system-level blocking. This is a real, open gap, not a claimed equivalence.
 - **Plan before building in the "Everything else" tier** (engines, signals, execution, sizing,
   validation, orchestrators — as scoped in the Start-of-session checklist above): produce an
   Implementation Plan and get it reviewed before writing code. Claude Code: `EnterPlanMode`.

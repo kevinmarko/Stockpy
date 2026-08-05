@@ -75,28 +75,15 @@ base with two names). It does not fix the stray `# CLAUDE.md` header line
 sitting inside `AGENTS.md`'s first line; that's pre-existing, not introduced
 by this PR, and is left as-is rather than quietly changed out of scope.
 
-## Open gap: Antigravity is unverified, stated plainly
+## Open gap: Antigravity hooks are policy-only
 
-**All 3 `.agents/hooks/*.sh` scripts are unverified against a live
-Antigravity runtime** — there was no Antigravity instance available in this
-environment to test against. Each one uses a defensive recursive
-`jq '.. | strings'` scan over `toolCall.args` instead of keying off a
-specific field name (e.g. `file_path`), because the exact Antigravity
-tool-call argument schema for `edit_file`/`create_file` could not be
-confirmed from documentation alone. This is a real, unverified assumption,
-not a tested behavior — if a hook doesn't fire the first time an Antigravity
-session actually edits a matching file, the arg-schema guess is the first
-thing to check.
+**All 3 `.agents/hooks/*.sh` scripts have been updated to use the exact Antigravity `toolCall.args.TargetFile` schema.** The tool names for file editing in Antigravity are `write_to_file`, `replace_file_content`, and `multi_replace_file_content`.
 
-Separately: **Antigravity has no proven `Stop`-equivalent blocking gate.**
-Its documented `Stop`-event hook doesn't expose the same "block turn-end,
-force continuation" semantics Claude Code's does, as far as is verifiable
-from `antigravity.google/docs/hooks` alone. So the mandatory-verification
-requirement is real, automatic, and enforced on the Claude Code side
-(`verify_before_stop.sh`) — and *policy-only* on the Antigravity side (the
-new `CLAUDE.md`/`AGENTS.md` section), until someone can confirm Antigravity's
-actual `Stop` hook behavior against a live runtime. Framing this as
-equivalent to the Claude Code gate would be dishonest; it isn't.
+However, in a live Antigravity IDE runtime, **these PreToolUse/PostToolUse shell hooks do not natively intercept these tools.** The hooks mechanism does not fire for the IDE's built-in file editor tools. 
+
+Separately: **Antigravity has no `Stop`-equivalent blocking gate.** Its `Stop` hook event does not expose semantics to force an agent to continue. 
+
+Because the hooks do not intercept file changes and `Stop` does not support hard-blocking in this environment, the mandatory-verification requirement is **policy-only** on the Antigravity side (via the `CLAUDE.md`/`AGENTS.md` rules), enforced by prompt adherence rather than system-level blocking. Framing this as equivalent to the Claude Code gate would be dishonest; it isn't.
 
 ## The `.gitignore` fix
 

@@ -25,7 +25,7 @@ set -uo pipefail
 
 input="$(cat)"
 
-candidates="$(printf '%s' "$input" | jq -r '.toolCall.args? // {} | .. | strings' 2>/dev/null)"
+candidates="$(printf '%s' "$input" | jq -r '.toolCall.args.TargetFile // empty' 2>/dev/null)"
 
 matched=0
 while IFS= read -r c; do

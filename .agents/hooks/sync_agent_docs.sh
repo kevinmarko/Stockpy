@@ -21,7 +21,7 @@ set -uo pipefail
 
 input="$(cat)"
 
-candidates="$(printf '%s' "$input" | jq -r '.toolCall.args? // {} | .. | strings' 2>/dev/null)"
+candidates="$(printf '%s' "$input" | jq -r '.toolCall.args.TargetFile // empty' 2>/dev/null)"
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)"
 [ -n "$root" ] || exit 0

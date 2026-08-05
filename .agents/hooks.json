@@ -1,19 +1,17 @@
 {
-  "stockpy-guardrails": {
+  "hooks": {
     "PreToolUse": [
       {
-        "matcher": "edit_file|create_file",
+        "matcher": "default_api:write_to_file|default_api:replace_file_content|default_api:multi_replace_file_content",
         "hooks": [
           { "type": "command", "command": "bash .agents/hooks/block_env_write.sh", "timeout": 10 }
         ]
       }
     ],
-    "PostToolUse": [
+    "Stop": [
       {
-        "matcher": "edit_file|create_file",
         "hooks": [
-          { "type": "command", "command": "bash .agents/hooks/webapp_typecheck.sh", "timeout": 60 },
-          { "type": "command", "command": "bash .agents/hooks/sync_agent_docs.sh", "timeout": 15 }
+          { "type": "command", "command": "bash .agents/hooks/stop_test.sh", "timeout": 10 }
         ]
       }
     ]
