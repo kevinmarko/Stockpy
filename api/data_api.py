@@ -1354,6 +1354,9 @@ class ChatMessageRequest(BaseModel):
     context: Optional[str] = None
 
 
+_ITER_BLOCKING_EXHAUSTED = object()
+
+
 async def _iter_blocking(sync_iterable):
     """Bridge a blocking/synchronous iterator into an async generator.
 
@@ -1363,13 +1366,28 @@ async def _iter_blocking(sync_iterable):
     text_stream) never blocks other coroutines sharing this loop — a chat
     stream in flight would otherwise serialize every other request the Data
     API is handling.
+
+    Deliberately calls ``next(it, _ITER_BLOCKING_EXHAUSTED)`` (a sentinel
+    default) rather than bare ``next(it)`` inside the executor. A bare
+    ``next()`` raises ``StopIteration`` when the iterator is exhausted, and
+    asyncio's ``Future`` machinery cannot propagate a ``StopIteration``
+    through ``run_in_executor`` (PEP 479 — see ``asyncio.futures``'s own
+    ``"StopIteration interacts badly with generators and cannot be raised
+    into a Future"`` guard): the executor's internal future-chaining callback
+    raises a ``TypeError`` trying to set it, which is swallowed by asyncio's
+    "exception was never retrieved" handling, and the ``await`` on that
+    future then hangs forever rather than completing with an error. This is
+    silent in real usage (a live Gemini/Anthropic stream essentially never
+    yields zero chunks before completing) but reproduces deterministically
+    whenever the wrapped iterable is empty or already exhausted — exactly
+    the case a unit test that only inspects call kwargs and returns
+    ``iter([])`` naturally hits. See tests/test_data_api_chat.py::TestContextField.
     """
     it = iter(sync_iterable)
     loop = asyncio.get_running_loop()
     while True:
-        try:
-            item = await loop.run_in_executor(None, next, it)
-        except StopIteration:
+        item = await loop.run_in_executor(None, next, it, _ITER_BLOCKING_EXHAUSTED)
+        if item is _ITER_BLOCKING_EXHAUSTED:
             return
         yield item
 
