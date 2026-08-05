@@ -41,6 +41,19 @@ Coverage (new surfaces):
 All network / broker / sheets I/O is offline (MockDataEngine + monkeypatch).
 Full-pipeline tests request the shared `disable_historical_store` fixture
 (tests/conftest.py) to avoid on-disk DB pollution.
+
+Tests that call run_pipeline() with a REAL data_engine (not None) additionally
+request `isolate_iv_history_store` (defined below): run_pipeline()'s Technical
+Options step hardcodes `IVHistoryStore()` with no injection point, so a real
+data_engine drives a genuine `record_iv()` write (30d ATM IV for the fixture's
+ticker/date) into the real, on-disk, git-committed quant_platform.db --
+`disable_historical_store` does NOT cover this (a separate store/table,
+`iv_history`, not gated by HISTORICAL_STORE_ENABLED at all). Left unguarded,
+two pytest-xdist workers (or two tests in the same run) racing to record_iv()
+the same (ticker, date) key against that shared on-disk file raise
+sqlite3.IntegrityError: UNIQUE constraint failed: iv_history.ticker,
+iv_history.date -- see tests/test_orchestrator_e2e.py's identical pitfall
+note, and the CI flake this fixture was added to close (PR #609, 2026-08-05).
 """
 from __future__ import annotations
 
@@ -67,6 +80,8 @@ from main_orchestrator import (
 )
 from data_engine import MockDataEngine
 from dto_models import MacroEconomicDTO
+from tests._db_isolation import make_memory_db_init
+from volatility.iv_engine import IVHistoryStore
 from macro_engine import MacroEngine
 
 
@@ -82,6 +97,18 @@ def _fixture_data(tickers=("AAPL",)):
     fund_raw = mock_de.fetch_fundamentals_raw(tk)
     tech_raw = mock_de.fetch_technical_raw(tk)
     return tk, macro_raw, fund_raw, tech_raw, mock_de
+
+
+@pytest.fixture
+def isolate_iv_history_store():
+    """Redirect IVHistoryStore onto an in-memory DB for the duration of a
+    test. Request this alongside `disable_historical_store` for any test that
+    calls run_pipeline() with a real (non-None) data_engine -- see the module
+    docstring for why `disable_historical_store` alone doesn't cover this."""
+    with mock.patch.object(
+        IVHistoryStore, "__init__", make_memory_db_init(IVHistoryStore.__init__)
+    ):
+        yield
 
 
 def _make_tech_df(prices, dates=None):
@@ -368,7 +395,9 @@ class TestEngineContextBuildWiring:
 # ===========================================================================
 
 class TestRunPipelineOutputContract:
-    def test_returns_three_tuple_with_documented_shape(self, disable_historical_store):
+    def test_returns_three_tuple_with_documented_shape(
+        self, disable_historical_store, isolate_iv_history_store
+    ):
         tickers, macro_raw, fund_raw, tech_raw, de = _fixture_data()
         result = run_pipeline(tickers, macro_raw, fund_raw, tech_raw, data_engine=de)
         assert isinstance(result, tuple) and len(result) == 3
@@ -379,7 +408,7 @@ class TestRunPipelineOutputContract:
         assert isinstance(shared_context.xsec_percentile_ranks, dict)
         assert isinstance(shared_context.multifactor_scores, dict)
 
-    def test_hmm_column_present(self, disable_historical_store):
+    def test_hmm_column_present(self, disable_historical_store, isolate_iv_history_store):
         # HMM_Risk_On_Probability is written for every row (NaN when the HMM
         # second opinion didn't run — as on the deterministic mock history).
         tickers, macro_raw, fund_raw, tech_raw, de = _fixture_data()
@@ -388,7 +417,9 @@ class TestRunPipelineOutputContract:
         )
         assert "HMM_Risk_On_Probability" in final_df.columns
 
-    def test_tactical_and_factor_columns_present(self, disable_historical_store):
+    def test_tactical_and_factor_columns_present(
+        self, disable_historical_store, isolate_iv_history_store
+    ):
         tickers, macro_raw, fund_raw, tech_raw, de = _fixture_data()
         final_df, _macro_dto, _ctx = run_pipeline(
             tickers, macro_raw, fund_raw, tech_raw, data_engine=de
@@ -414,7 +445,9 @@ class TestRunPipelineOutputContract:
 # ===========================================================================
 
 class TestRunPipelineStageOrdering:
-    def test_stages_execute_in_documented_order(self, disable_historical_store):
+    def test_stages_execute_in_documented_order(
+        self, disable_historical_store, isolate_iv_history_store
+    ):
         tickers, macro_raw, fund_raw, tech_raw, de = _fixture_data()
 
         fake_telemetry = mock.MagicMock()
