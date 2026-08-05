@@ -34,8 +34,9 @@ export default function ActiveTraderLadder({
 
   let command = "";
   if (tradeAction) {
-    const typeStr = orderType === "MARKET" ? "market" : `limit at $${limitPrice}`;
-    command = `Run robinhood-execution to place a ${typeStr} ${tradeAction.toLowerCase()} for ${quantity} shares of ${symbol}.`;
+    const actionStr = tradeAction.toLowerCase();
+    const typeStr = orderType === "MARKET" ? "market order" : `limit order at $${limitPrice}`;
+    command = `Run robinhood-execution to place a ${actionStr} ${typeStr} for ${quantity} shares of ${symbol}.`;
   }
 
   return (
