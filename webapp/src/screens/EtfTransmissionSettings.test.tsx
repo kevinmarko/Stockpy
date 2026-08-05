@@ -61,7 +61,9 @@ describe("EtfTransmissionSettings screen", () => {
     vi.spyOn(api, "getEtfTransmissionSettings").mockResolvedValue(baseEtfTransmissionTunables());
     renderScreen();
     expect(await screen.findByRole("heading", { name: "ETF Volatility Transmission" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Holdings Ingestion" })).toBeInTheDocument();
+    // Group headings only mount once the async fetch resolves (the title
+    // above renders immediately, unconditionally) -- wait for the first one.
+    expect(await screen.findByRole("heading", { name: "Holdings Ingestion" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Measurement & Residualization" })).toBeInTheDocument();
   });
 
@@ -78,7 +80,7 @@ describe("EtfTransmissionSettings screen", () => {
     renderScreen();
     await screen.findByRole("heading", { name: "ETF Volatility Transmission" });
 
-    const toggle = screen.getByLabelText("Etf Transmission Enabled");
+    const toggle = await screen.findByLabelText("Etf Transmission Enabled");
     await user.click(toggle);
 
     const saveBtn = screen.getByRole("button", { name: /Save 1 change/i });
