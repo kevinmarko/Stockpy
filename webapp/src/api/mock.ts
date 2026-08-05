@@ -3016,20 +3016,30 @@ function daysSinceTrained(trainedDate: string): number {
   return Math.floor((Date.now() - then) / 86_400_000);
 }
 
+// Fixture dates below are relative to "now" (not hard-coded literals) so the
+// fresh-vs-stale badge states this file's tests exercise stay correct
+// indefinitely, regardless of what day the suite actually runs on.
+function daysAgoString(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+}
+
 // ---- ML registry fixture (honest: two un-validated / not-deployable; one
 // stale -- exercises BOTH the fresh and "Needs Retrain" badge states) ----
+const MODEL_FRESH_TRAINED_DATE = daysAgoString(15); // well inside the 30-day window
+const MODEL_STALE_TRAINED_DATE = daysAgoString(45); // well outside the 30-day window
+
 const MODELS: ModelRow[] = [
   {
     name: "lgbm_ranker",
     role: "cross_sectional_ranker",
-    trained_date: "2026-07-06",
+    trained_date: MODEL_FRESH_TRAINED_DATE,
     cpcv_dsr: 0.0019,
     pbo: 0.267,
     n_train: 260,
     deployable: false,
     notes: "LightGBM LambdaRank — modest weight until validated at >200 OOS dates.",
-    age_days: daysSinceTrained("2026-07-06"),
-    needs_retrain: daysSinceTrained("2026-07-06") >= MODEL_RETRAIN_WINDOW_DAYS,
+    age_days: daysSinceTrained(MODEL_FRESH_TRAINED_DATE),
+    needs_retrain: daysSinceTrained(MODEL_FRESH_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
     // Real cpcv_dsr/pbo above -> a real (if unimpressive) CPCV OOS Sharpe/
     // MaxDD too. max_dd is a POSITIVE magnitude fraction (0.28 = 28%),
     // matching compute_max_drawdown's convention -- see ModelRow's doc.
@@ -3039,14 +3049,14 @@ const MODELS: ModelRow[] = [
   {
     name: "meta_labeler_timeseries_momentum",
     role: "meta_labeler",
-    trained_date: "2026-07-06",
+    trained_date: MODEL_FRESH_TRAINED_DATE,
     cpcv_dsr: null,
     pbo: null,
     n_train: 3499,
     deployable: false,
     notes: "Binary classifier predicting P(timeseries_momentum correct).",
-    age_days: daysSinceTrained("2026-07-06"),
-    needs_retrain: daysSinceTrained("2026-07-06") >= MODEL_RETRAIN_WINDOW_DAYS,
+    age_days: daysSinceTrained(MODEL_FRESH_TRAINED_DATE),
+    needs_retrain: daysSinceTrained(MODEL_FRESH_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
     // Un-validated (cpcv_dsr/pbo null above) -> both new fields stay null
     // too, matching this fixture's existing honesty pattern.
     cpcv_mean_oos_sharpe: null,
@@ -3058,14 +3068,14 @@ const MODELS: ModelRow[] = [
     // TRUE branch, not just the fresh/false one.
     name: "meta_labeler_cross_sectional_momentum",
     role: "meta_labeler",
-    trained_date: "2026-05-20",
+    trained_date: MODEL_STALE_TRAINED_DATE,
     cpcv_dsr: null,
     pbo: null,
     n_train: 3460,
     deployable: false,
     notes: "Binary classifier predicting P(cross_sectional_momentum correct).",
-    age_days: daysSinceTrained("2026-05-20"),
-    needs_retrain: daysSinceTrained("2026-05-20") >= MODEL_RETRAIN_WINDOW_DAYS,
+    age_days: daysSinceTrained(MODEL_STALE_TRAINED_DATE),
+    needs_retrain: daysSinceTrained(MODEL_STALE_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
     cpcv_mean_oos_sharpe: null,
     cpcv_mean_oos_max_dd: null,
   },
@@ -5638,6 +5648,25 @@ export const mockApi = {
   },
 
   async setExecutionMode(req: ExecutionModeUpdateRequest): Promise<ExecutionModeUpdateResult> {
+    // Mirrors api/pilots_api.py's _require_dangerous_confirmation: every
+    // settings_keysets.DANGEROUS_KEYS field this write is about to touch
+    // (ADVISORY_ONLY always; DRY_RUN too when mode != "advisory" -- ALPACA_PAPER
+    // is written but is NOT a DANGEROUS_KEYS member, so it needs no confirmation)
+    // must be echoed in `confirm` mapped to its own name, or nothing is written
+    // -- same all-or-nothing, same 422. Hardcoded rather than derived (this file
+    // has no settings_keysets.py port) -- assumes these stay in DANGEROUS_KEYS,
+    // which MOCK_DANGEROUS_KEYS above (copied from the same real set) also does.
+    const dangerousKeys = req.mode === "advisory" ? ["ADVISORY_ONLY"] : ["ADVISORY_ONLY", "DRY_RUN"];
+    const confirm = req.confirm ?? {};
+    const missing = dangerousKeys.filter((k) => !(k in confirm));
+    const mismatched = dangerousKeys.filter((k) => k in confirm && confirm[k] !== k);
+    if (missing.length || mismatched.length) {
+      throw new ApiError(
+        `${missing.length ? "confirmation_required" : "confirmation_mismatch"}: this change touches ` +
+          `safety-critical setting(s) (${dangerousKeys.join(", ")}) and requires typed confirmation.`,
+        422
+      );
+    }
     return delay(
       {
         written:

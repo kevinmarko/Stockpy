@@ -122,6 +122,19 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
+
+# defusedxml.ElementTree.fromstring is used (below) instead of ET.fromstring
+# to parse the two network-fetched XML documents in this module (SEC N-PORT
+# filings). stdlib ElementTree/expat doesn't resolve *external* entities, but
+# it does expand internal DTD entities, so a malicious or compromised
+# upstream response could still trigger a "billion laughs"-style memory/CPU
+# DoS; defusedxml forbids DTDs/entities outright and raises instead, which
+# the existing `except Exception` around both call sites already degrades to
+# `None`/`[]` for, matching this module's CONSTRAINT #6 (never raises).
+# `ET.Element`/`ET` itself stay imported for type hints and tree traversal —
+# defusedxml's fromstring returns ordinary `xml.etree.ElementTree.Element`
+# instances, so nothing downstream of parsing needs to change.
+import defusedxml.ElementTree as DefusedET
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
@@ -427,7 +440,7 @@ def extract_nport_series_id(xml_bytes: bytes) -> Optional[str]:
     index is actually the requested fund. Never raises.
     """
     try:
-        root = ET.fromstring(xml_bytes)
+        root = DefusedET.fromstring(xml_bytes)
     except Exception:
         return None
     return _first_local_text(root, "seriesId")
@@ -460,7 +473,7 @@ def parse_nport_holdings(xml_bytes: bytes, etf_symbol: str) -> List[ETFHolding]:
       as one.
     """
     try:
-        root = ET.fromstring(xml_bytes)
+        root = DefusedET.fromstring(xml_bytes)
     except Exception as exc:
         logger.warning(
             "etf_holdings: malformed N-PORT XML for %s: %s", etf_symbol, exc

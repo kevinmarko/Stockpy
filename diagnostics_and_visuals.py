@@ -1062,8 +1062,11 @@ def generate_html_report(
         account_summary.setdefault("n_sell", n_sell)
         account_summary.setdefault("n_total", len(cleaned_portfolio))
 
-    # 6. Render
-    template = Template(HTML_REPORT_TEMPLATE)
+    # 6. Render. autoescape=True (no `|safe` filter anywhere in
+    # HTML_REPORT_TEMPLATE) HTML-escapes every interpolated value -- ticker
+    # symbols, strategy names, notes -- so a stray `<`/`&` in operator-
+    # controlled data (watchlist.txt, WATCHLIST) can't break the markup.
+    template = Template(HTML_REPORT_TEMPLATE, autoescape=True)
     html_content = template.render(
         current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         portfolio_rows=cleaned_portfolio,

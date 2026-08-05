@@ -52,7 +52,9 @@ describe("SectorSelectionSettings screen", () => {
     const spy = vi.spyOn(api, "getSectorSelectionSettings").mockResolvedValue(baseSectorSelectionTunables());
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Sector Selection" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Related Sector Selection" })).toBeInTheDocument();
+    // The group heading and its fields only mount once the async fetch
+    // resolves (the title above renders immediately, unconditionally).
+    expect(await screen.findByRole("heading", { name: "Related Sector Selection" })).toBeInTheDocument();
     expect(screen.getByLabelText("Sector Selection Top N")).toBeInTheDocument();
     expect(spy).toHaveBeenCalledTimes(1);
   });
