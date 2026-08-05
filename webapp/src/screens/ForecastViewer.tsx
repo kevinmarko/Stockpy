@@ -7,7 +7,7 @@ import { ErrorState, Loading, Tile } from "../components/ui";
 import { AttentionHeatmapStrip, ForecastCandleChart } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 

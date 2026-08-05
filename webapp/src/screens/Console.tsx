@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { TabGuide } from "../components/TabGuide";
 import { LogStream } from "../components/LogStream";
 import { DataTable, type Column } from "../components/DataTable";

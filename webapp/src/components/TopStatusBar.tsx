@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { Modal } from "./Modal";
 import { DensityToggle } from "./DensityToggle";
 import { api } from "../api/client";

@@ -1,31 +1,10 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { Drawer } from "vaul";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-/**
- * Modal — the app's reusable dialog scaffold. Extracted to fix a real a11y
- * bug present in both prior copy-pasted dialog implementations (FollowModal,
- * the now-removed PwaStatusDrawer): `role="dialog"`/`aria-modal="true"` were
- * placed on the BACKDROP element, not the dialog itself. The backdrop is the
- * overlay; `.sheet` is the actual dialog — screen readers were getting the
- * wrong element's bounds. Fixed here, not ported. (The backdrop carries no
- * ARIA role at all: `aria-modal="true"` on the dialog is the standard way to
- * tell assistive tech that content outside is inert — you must NOT also
- * `aria-hidden` the backdrop, since `.sheet` is nested inside it and would be
- * hidden right along with it via attribute inheritance.)
- *
- * Adds what neither prior implementation had:
- * - a focus trap (Tab/Shift+Tab cycle within the dialog's focusable elements)
- * - Escape-to-close, handled on the dialog node itself (not `document`) so it
- *   doesn't fight a nested overlay's own Escape handler
- * - focus restore to whatever triggered the modal, on unmount — null-checked
- *   via `isConnected`, since the trigger element may itself have unmounted
- *   (e.g. a list row that re-rendered away while the modal was open)
- *
- * Reuses `.sheet-backdrop`/`.sheet`/`.sheet-grip` CSS verbatim — zero style
- * change, so the >=900px "becomes a centered modal" media query keeps working.
- */
 export function Modal({
   ariaLabel,
   onClose,
@@ -37,17 +16,24 @@ export function Modal({
   onClose: () => void;
   children: ReactNode;
   closeOnBackdropClick?: boolean;
-  /** "wide" raises the desktop max-width (see `.sheet--wide` in index.css)
-   *  for content-heavy dialogs. Below the 900px breakpoint both sizes are
-   *  identical -- `.sheet`'s own `width: 100%` already fits the viewport. */
   size?: "default" | "wide";
 }) {
+  const isMobile = useMediaQuery("(max-width: 768px)");
+
+  // Desktop implementation
   const sheetRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     previouslyFocused.current = document.activeElement as HTMLElement | null;
+    return () => {
+      const el = previouslyFocused.current;
+      if (el && el.isConnected) el.focus();
+    };
+  }, []);
 
+  useEffect(() => {
+    if (isMobile) return;
     const sheet = sheetRef.current;
     const focusable = sheet?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
     if (focusable && focusable.length > 0) {
@@ -55,12 +41,44 @@ export function Modal({
     } else {
       sheet?.focus();
     }
+  }, [isMobile]);
 
-    return () => {
-      const el = previouslyFocused.current;
-      if (el && el.isConnected) el.focus();
-    };
-  }, []);
+  if (isMobile) {
+    return (
+      <Drawer.Root
+        open={true}
+        onOpenChange={(open) => {
+          if (!open) onClose();
+        }}
+        dismissible={closeOnBackdropClick}
+      >
+        <Drawer.Portal>
+          <Drawer.Overlay
+            className="sheet-backdrop"
+            style={{ animation: "none" }}
+            onClick={closeOnBackdropClick ? onClose : undefined}
+          />
+          <Drawer.Content
+            className="sheet"
+            aria-label={ariaLabel}
+            style={{
+              position: "fixed",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              zIndex: 61,
+              animation: "none", // let vaul handle animations
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div className="sheet-grip" />
+            <div style={{ overflowY: "auto", flex: 1 }}>{children}</div>
+          </Drawer.Content>
+        </Drawer.Portal>
+      </Drawer.Root>
+    );
+  }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
