@@ -12,7 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@tanstack/react-table": "^9.0.0",
     "@tanstack/react-virtual": "^3.14.9",
+    "framer-motion": "^13.0.0",
     "lucide-react": "^1.28.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -21,7 +23,8 @@
     "react-router": "^8.3.0",
     "react-select": "^5.10.2",
     "recharts": "^3.10.1",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "vaul": "^1.1.2"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.5.0",

@@ -105,4 +105,61 @@ describe("DataTable", () => {
     });
     expect(screen.getByText("#3")).toBeInTheDocument();
   });
+
+  it("shows the leaf-row count, not inflated by group-header rows, when grouped", () => {
+    // 3 leaf rows across 2 groups (A x2, B x1). Before the fix this read
+    // "Showing 5 records" -- the 3 leaf rows plus the 2 group-header rows
+    // that TanStack's flattened, expanded row model also includes.
+    renderTable({ groupByKey: "group" });
+    expect(screen.getByText("Showing 3 records")).toBeInTheDocument();
+  });
+
+  describe("column pinning", () => {
+    const PINNABLE_COLUMNS: Column<Row>[] = [
+      { key: "name", header: "Name", pinnable: true },
+      { key: "group", header: "Group" },
+      { key: "value", header: "Value" },
+    ];
+
+    it("shows a pin control for a pinnable column and toggles pinned state on click", () => {
+      renderTable({ columns: PINNABLE_COLUMNS });
+
+      const pinButton = screen.getByRole("button", { name: "Pin column" });
+      expect(pinButton).toBeInTheDocument();
+
+      fireEvent.click(pinButton);
+      expect(screen.getByRole("button", { name: "Unpin column" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Pin column" })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Unpin column" }));
+      expect(screen.getByRole("button", { name: "Pin column" })).toBeInTheDocument();
+    });
+
+    it("shows no pin control for a column that isn't marked pinnable", () => {
+      renderTable();
+      expect(screen.queryByRole("button", { name: "Pin column" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Unpin column" })).not.toBeInTheDocument();
+    });
+
+    it("keeps sorting and filtering working correctly once a column is pinned", () => {
+      renderTable({ columns: PINNABLE_COLUMNS });
+
+      fireEvent.click(screen.getByRole("button", { name: "Pin column" }));
+
+      // Sorting by the now-pinned Name column still works.
+      fireEvent.click(screen.getByText(/^Name/));
+      let cells = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+      expect(cells).toEqual(["Apple", "Mango", "Zebra"]);
+
+      fireEvent.click(screen.getByText(/^Name/));
+      cells = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent);
+      expect(cells).toEqual(["Zebra", "Mango", "Apple"]);
+
+      // Filtering (on a different column's value) still works too.
+      fireEvent.change(screen.getByPlaceholderText("Filter data..."), { target: { value: "man" } });
+      expect(screen.getByText("Mango")).toBeInTheDocument();
+      expect(screen.queryByText("Zebra")).not.toBeInTheDocument();
+      expect(screen.queryByText("Apple")).not.toBeInTheDocument();
+    });
+  });
 });

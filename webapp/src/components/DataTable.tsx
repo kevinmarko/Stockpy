@@ -1,5 +1,26 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  columnFilteringFeature,
+  globalFilteringFeature,
+  createFilteredRowModel,
+  createSortedRowModel,
+  rowSortingFeature,
+  tableFeatures,
+  useTable,
+  createGroupedRowModel,
+  columnGroupingFeature,
+  rowExpandingFeature,
+  createExpandedRowModel,
+  flexRender,
+  SortingState,
+
+  ColumnDef,
+  filterFn_includesString,
+  columnVisibilityFeature,
+  columnPinningFeature,
+  columnSizingFeature,
+} from "@tanstack/react-table";
 import { useDensity } from "./DensityContext";
 
 export interface Column<T> {
@@ -7,6 +28,13 @@ export interface Column<T> {
   header: string;
   render?: (row: T) => React.ReactNode;
   sortable?: boolean;
+  /**
+   * Opt-in: renders a small pin/unpin affordance in this column's header so
+   * the operator can stick it to the left edge while the rest of the table
+   * scrolls horizontally underneath. Undefined/false (the default) renders
+   * no pinning UI for the column — pinning is never forced on a column.
+   */
+  pinnable?: boolean;
 }
 
 interface DataTableProps<T> {
@@ -17,6 +45,28 @@ interface DataTableProps<T> {
   copyableJson?: boolean;
 }
 
+const features = tableFeatures({
+  columnFilteringFeature,
+  globalFilteringFeature,
+  columnVisibilityFeature,
+  rowSortingFeature,
+  columnGroupingFeature,
+  rowExpandingFeature,
+  // columnSizingFeature is registered alongside columnPinningFeature purely
+  // so `column.getStart("start")` is available to compute the pixel offset
+  // for a sticky pinned column below — this table never reads `getSize()`
+  // to drive a column's rendered width, so registering it does not change
+  // any existing column's layout (auto-layout, driven by content, is
+  // untouched; only the new pinning affordance depends on this feature).
+  columnPinningFeature,
+  columnSizingFeature,
+  filteredRowModel: createFilteredRowModel(),
+  sortedRowModel: createSortedRowModel(),
+  groupedRowModel: createGroupedRowModel(),
+  expandedRowModel: createExpandedRowModel(),
+  filterFns: { includesString: filterFn_includesString }
+});
+
 export function DataTable<T extends Record<string, any>>({
   data,
   columns,
@@ -25,44 +75,88 @@ export function DataTable<T extends Record<string, any>>({
   copyableJson = true,
 }: DataTableProps<T>) {
   const { density } = useDensity();
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [search, setSearch] = useState("");
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [globalFilter, setGlobalFilter] = useState("");
 
-  const handleSort = (key: string) => {
-    if (sortKey === key) {
-      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDir("asc");
+  // Columns opted into the pin affordance, keyed by their TanStack column id
+  // (which is `col.key` — see the `id: col.key` mapping below). The `_actions`
+  // column is never in this set since it isn't part of the caller's `columns`.
+  const pinnableColumnKeys = useMemo(
+    () => new Set(columns.filter((col) => col.pinnable).map((col) => col.key)),
+    [columns]
+  );
+
+  // Convert custom columns to TanStack Table ColumnDefs
+  const tableColumns = useMemo<ColumnDef<typeof features, T>[]>(() => {
+    const cols: ColumnDef<typeof features, T>[] = columns.map((col) => ({
+      id: col.key,
+      accessorFn: (row) => row[col.key],
+      header: col.header,
+      enableSorting: col.sortable !== false,
+      cell: (info) =>
+        col.render ? col.render(info.row.original) : info.getValue() as React.ReactNode,
+    }));
+
+    if (copyableJson) {
+      cols.push({
+        id: "_actions",
+        header: "Actions",
+        enableSorting: false,
+        cell: (info) => (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              navigator.clipboard.writeText(JSON.stringify(info.row.original, null, 2));
+              alert("Copied event context as JSON to clipboard!");
+            }}
+            style={{
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--r-xs)",
+              color: "var(--text-muted)",
+              fontSize: "var(--t-micro)",
+              padding: "2px 6px",
+              cursor: "pointer",
+            }}
+          >
+            JSON
+          </button>
+        ),
+      });
     }
-  };
+    return cols;
+  }, [columns, copyableJson]);
 
-  const filteredData = useMemo(() => {
-    if (!search.trim()) return data;
-    const q = search.toLowerCase();
-    return data.filter((row) =>
-      Object.values(row).some((val) => String(val).toLowerCase().includes(q))
-    );
-  }, [data, search]);
+  const table = useTable({
+    features,
+    data,
+    columns: tableColumns,
+    state: {
+      sorting,
+      globalFilter,
+      grouping: groupByKey ? [String(groupByKey)] : [],
+    },
+    initialState: {
+      expanded: true,
+    },
+    onSortingChange: setSorting,
+    onGlobalFilterChange: setGlobalFilter,
+    globalFilterFn: "includesString",
+  });
 
-  const sortedData = useMemo(() => {
-    if (!sortKey) return filteredData;
-    return [...filteredData].sort((a, b) => {
-      const valA = a[sortKey];
-      const valB = b[sortKey];
-      if (valA < valB) return sortDir === "asc" ? -1 : 1;
-      if (valA > valB) return sortDir === "asc" ? 1 : -1;
-      return 0;
-    });
-  }, [filteredData, sortKey, sortDir]);
-
+  const { rows } = table.getRowModel();
+  // The displayed row model (above) is grouping+expansion-aware, so with
+  // `groupByKey` set it includes both group-header rows AND leaf rows —
+  // using its length for the "Showing N records" count over-reports by the
+  // number of distinct groups. `getFilteredRowModel()` is resolved earlier
+  // in the pipeline (core -> filtered -> grouped -> sorted -> expanded), so
+  // it always reflects the filtered LEAF rows only, independent of whether
+  // grouping/expansion is in play.
+  const filteredRowCount = table.getFilteredRowModel().rows.length;
   const parentRef = useRef<HTMLDivElement>(null);
 
-  // Flat list virtualizer
   const rowVirtualizer = useVirtualizer({
-    count: sortedData.length,
+    count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => (density === "compact" ? 36 : 48),
     overscan: 10,
@@ -70,49 +164,23 @@ export function DataTable<T extends Record<string, any>>({
 
   const isTest = typeof process !== "undefined" && process.env?.NODE_ENV === "test";
   const virtualRows = isTest
-    ? sortedData.map((_, index) => ({ index, start: 0, size: 0, end: 0, key: index, measureElement: () => {} }))
+    ? rows.map((_, index) => ({ index, start: 0, size: 0, end: 0, key: index, measureElement: () => {} }))
     : rowVirtualizer.getVirtualItems();
+
   const paddingTop = !isTest && virtualRows.length > 0 ? virtualRows[0].start : 0;
   const totalSize = rowVirtualizer.getTotalSize();
   const paddingBottom = !isTest && virtualRows.length > 0 ? totalSize - virtualRows[virtualRows.length - 1].end : 0;
-
-  // Grouped logic if groupByKey is provided
-  const groups = useMemo(() => {
-    if (!groupByKey) return null;
-    const map = new Map<string, T[]>();
-    sortedData.forEach((row) => {
-      const keyVal = String(row[groupByKey] || "Other");
-      if (!map.has(keyVal)) map.set(keyVal, []);
-      map.get(keyVal)!.push(row);
-    });
-    return map;
-  }, [sortedData, groupByKey]);
-
-  const toggleGroup = (key: string) => {
-    // A group with no entry yet is *effectively* expanded (the render below
-    // defaults `isExpanded` to `true` via `?? true`). Inverting the raw
-    // `prev[key]` (`undefined`) gives `true` again -- a no-op on the very
-    // first click of any group. Invert the same effective default instead.
-    setExpandedGroups((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));
-  };
-
-  const copyRowJson = (row: T, e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(JSON.stringify(row, null, 2));
-    alert("Copied event context as JSON to clipboard!");
-  };
 
   const cellPadding = density === "compact" ? "var(--s-1-5) var(--s-2-5)" : "var(--s-3) var(--s-4)";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
-      {/* Search Filter input */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <input
           type="text"
           placeholder="Filter data..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          value={globalFilter}
+          onChange={(e) => setGlobalFilter(e.target.value)}
           style={{
             background: "var(--surface)",
             color: "var(--text-primary)",
@@ -124,7 +192,7 @@ export function DataTable<T extends Record<string, any>>({
           }}
         />
         <span style={{ fontSize: "var(--t-micro)", color: "var(--text-muted)" }}>
-          Showing {sortedData.length} records
+          Showing {filteredRowCount} records
         </span>
       </div>
 
@@ -141,83 +209,81 @@ export function DataTable<T extends Record<string, any>>({
       >
         <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "var(--t-body)" }}>
           <thead>
-            <tr style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 1 }}>
-              {columns.map((col) => (
-                <th
-                  key={col.key}
-                  onClick={() => col.sortable !== false && handleSort(col.key)}
-                  style={{
-                    padding: cellPadding,
-                    fontWeight: 700,
-                    color: "var(--text-secondary)",
-                    fontSize: "var(--t-caption)",
-                    cursor: col.sortable !== false ? "pointer" : "default",
-                    userSelect: "none",
-                    background: "var(--surface-2)",
-                  }}
-                >
-                  {col.header} {sortKey === col.key ? (sortDir === "asc" ? "▲" : "▼") : ""}
-                </th>
-              ))}
-              {copyableJson && <th style={{ padding: cellPadding, width: "60px", background: "var(--surface-2)" }}>Actions</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {groups ? (
-              Array.from(groups.entries()).map(([groupName, groupRows]) => {
-                const isExpanded = expandedGroups[groupName] ?? true;
-                return (
-                  <React.Fragment key={groupName}>
-                    <tr
-                      onClick={() => toggleGroup(groupName)}
-                      style={{ background: "var(--surface-3)", cursor: "pointer", borderBottom: "1px solid var(--border)" }}
+            {table.getHeaderGroups().map((headerGroup) => (
+              <tr key={headerGroup.id} style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 1 }}>
+                {headerGroup.headers.map((header) => {
+                  const isPinned = header.column.getIsPinned();
+                  const isPinnable = pinnableColumnKeys.has(header.column.id);
+                  const isActionsColumn = header.column.id === "_actions";
+                  return (
+                    <th
+                      key={header.id}
+                      onClick={header.column.getToggleSortingHandler()}
+                      style={{
+                        padding: cellPadding,
+                        fontWeight: 700,
+                        color: "var(--text-secondary)",
+                        fontSize: "var(--t-caption)",
+                        cursor: header.column.getCanSort() ? "pointer" : "default",
+                        userSelect: "none",
+                        background: "var(--surface-2)",
+                        ...(isActionsColumn ? { width: "60px" } : {}),
+                        ...(isPinned
+                          ? {
+                              position: "sticky" as const,
+                              left: `${header.column.getStart("start")}px`,
+                              // zIndex 2 (vs. the header row's own zIndex: 1)
+                              // keeps a pinned header cell visible above its
+                              // unpinned sibling cells as they scroll
+                              // horizontally underneath it, without escaping
+                              // above the sticky header row itself (both live
+                              // inside the same local stacking context the
+                              // row's own `position: sticky` + `zIndex`
+                              // establishes).
+                              zIndex: 2,
+                            }
+                          : {}),
+                      }}
                     >
-                      <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ padding: cellPadding, fontWeight: 700 }}>
-                        {isExpanded ? "▼" : "▶"} {groupName} ({groupRows.length} events)
-                      </td>
-                    </tr>
-                    {isExpanded &&
-                      groupRows.map((row, idx) => (
-                        <tr
-                          key={idx}
-                          onClick={() => onRowClick && onRowClick(row)}
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {{
+                        asc: " ▲",
+                        desc: " ▼",
+                      }[header.column.getIsSorted() as string] ?? null}
+                      {isPinnable && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            header.column.pin(isPinned ? false : "start");
+                          }}
+                          aria-label={isPinned ? "Unpin column" : "Pin column"}
+                          title={isPinned ? "Unpin column" : "Pin column"}
                           style={{
-                            borderBottom: "1px solid var(--border)",
-                            background: "var(--surface)",
-                            cursor: onRowClick ? "pointer" : "default",
+                            marginLeft: "var(--s-1)",
+                            background: isPinned ? "var(--surface-3)" : "var(--surface-2)",
+                            border: "1px solid var(--border)",
+                            borderRadius: "var(--r-xs)",
+                            color: "var(--text-muted)",
+                            fontSize: "var(--t-micro)",
+                            padding: "1px 4px",
+                            cursor: "pointer",
+                            lineHeight: 1,
                           }}
                         >
-                          {columns.map((col) => (
-                            <td key={col.key} style={{ padding: cellPadding }}>
-                              {col.render ? col.render(row) : row[col.key]}
-                            </td>
-                          ))}
-                          {copyableJson && (
-                            <td style={{ padding: cellPadding }}>
-                              <button
-                                onClick={(e) => copyRowJson(row, e)}
-                                style={{
-                                  background: "var(--surface-2)",
-                                  border: "1px solid var(--border)",
-                                  borderRadius: "var(--r-xs)",
-                                  color: "var(--text-muted)",
-                                  fontSize: "var(--t-micro)",
-                                  padding: "2px 6px",
-                                  cursor: "pointer",
-                                }}
-                              >
-                                JSON
-                              </button>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                  </React.Fragment>
-                );
-              })
-            ) : sortedData.length === 0 ? (
+                          📌
+                        </button>
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            ))}
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ padding: "var(--s-4)", textAlign: "center", color: "var(--text-muted)" }}>
+                <td colSpan={tableColumns.length} style={{ padding: "var(--s-4)", textAlign: "center", color: "var(--text-muted)" }}>
                   No matching records found.
                 </td>
               </tr>
@@ -225,51 +291,77 @@ export function DataTable<T extends Record<string, any>>({
               <>
                 {paddingTop > 0 && (
                   <tr>
-                    <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ height: `${paddingTop}px` }} />
+                    <td colSpan={tableColumns.length} style={{ height: `${paddingTop}px` }} />
                   </tr>
                 )}
                 {virtualRows.map((virtualRow) => {
-                  const row = sortedData[virtualRow.index];
+                  const row = rows[virtualRow.index];
                   const idx = virtualRow.index;
+
+                  if (row.getIsGrouped()) {
+                    return (
+                      <tr
+                        key={row.id}
+                        onClick={() => row.toggleExpanded()}
+                        style={{ background: "var(--surface-3)", cursor: "pointer", borderBottom: "1px solid var(--border)" }}
+                      >
+                        <td colSpan={tableColumns.length} style={{ padding: cellPadding, fontWeight: 700 }}>
+                          {row.getIsExpanded() ? "▼" : "▶"} {String(row.getValue(row.groupingColumnId!))} ({row.subRows.length} events)
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  const rowBackground = idx % 2 === 0 ? "var(--surface)" : "var(--surface-2)";
+
                   return (
                     <tr
-                      key={virtualRow.index}
-                      onClick={() => onRowClick && onRowClick(row)}
+                      key={row.id}
+                      onClick={() => onRowClick && onRowClick(row.original)}
                       style={{
                         borderBottom: "1px solid var(--border)",
-                        background: idx % 2 === 0 ? "var(--surface)" : "var(--surface-2)",
+                        background: rowBackground,
                         cursor: onRowClick ? "pointer" : "default",
                       }}
                     >
-                      {columns.map((col) => (
-                        <td key={col.key} style={{ padding: cellPadding }}>
-                          {col.render ? col.render(row) : row[col.key]}
-                        </td>
-                      ))}
-                      {copyableJson && (
-                        <td style={{ padding: cellPadding }}>
-                          <button
-                            onClick={(e) => copyRowJson(row, e)}
+                      {row.getVisibleCells().map((cell) => {
+                        if (cell.getIsGrouped() || cell.getIsPlaceholder()) {
+                          return null;
+                        }
+                        const isPinned = cell.column.getIsPinned();
+                        const isActionsColumn = cell.column.id === "_actions";
+                        return (
+                          <td
+                            key={cell.id}
                             style={{
-                              background: "var(--surface-2)",
-                              border: "1px solid var(--border)",
-                              borderRadius: "var(--r-xs)",
-                              color: "var(--text-muted)",
-                              fontSize: "var(--t-micro)",
-                              padding: "2px 6px",
-                              cursor: "pointer",
+                              padding: cellPadding,
+                              ...(isActionsColumn ? { width: "60px" } : {}),
+                              ...(isPinned
+                                ? {
+                                    position: "sticky" as const,
+                                    left: `${cell.column.getStart("start")}px`,
+                                    // Match the row's own stripe so scrolled-
+                                    // under content doesn't show through.
+                                    background: rowBackground,
+                                    // Stays above other (unpinned) cells in
+                                    // this row as they scroll horizontally
+                                    // underneath, but never exceeds the
+                                    // sticky header row's own zIndex of 1.
+                                    zIndex: 1,
+                                  }
+                                : {}),
                             }}
                           >
-                            JSON
-                          </button>
-                        </td>
-                      )}
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </td>
+                        );
+                      })}
                     </tr>
                   );
                 })}
                 {paddingBottom > 0 && (
                   <tr>
-                    <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ height: `${paddingBottom}px` }} />
+                    <td colSpan={tableColumns.length} style={{ height: `${paddingBottom}px` }} />
                   </tr>
                 )}
               </>
