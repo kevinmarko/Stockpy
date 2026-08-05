@@ -6,11 +6,29 @@
  */
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import toast from "react-hot-toast";
 import { Commands } from "./Commands";
 import { api, ApiError } from "../api/client";
 import { theme } from "../theme";
 import type { CommandManifest, CommandSpec, JobRecord } from "../api/types";
+
+// react-hot-toast's `toast()` needs no <Toaster/> mounted to run safely in
+// jsdom; mocking it here lets the Run-button tests below assert a toast was
+// actually fired for the command-launch outcome, mirroring
+// PipelineDashboard.test.tsx's own convention.
+vi.mock("react-hot-toast", () => {
+  const mock = Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() });
+  return { default: mock };
+});
+
+// vi.restoreAllMocks() (used by every describe block's own afterEach below)
+// only restores spies created via vi.spyOn -- it leaves the toast mock's
+// call history untouched between tests, so clear it explicitly.
+beforeEach(() => {
+  vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.error).mockClear();
+});
 
 function renderCommands() {
   return render(
@@ -324,7 +342,7 @@ describe("Commands screen — Run button", () => {
     expect(runButton).toBeEnabled();
   });
 
-  it("clicking Run for a non-high-stakes command calls createJob directly, with no confirmation dialog", async () => {
+  it("clicking Run for a non-high-stakes command calls createJob directly, with no confirmation dialog, and toasts success", async () => {
     const createJobSpy = vi
       .spyOn(api, "createJob")
       .mockResolvedValueOnce(commandJobRecord("mock-job-1"));
@@ -347,6 +365,8 @@ describe("Commands screen — Run button", () => {
       )
     );
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("app_shell.py shows no Run button and shows the local/native-window note instead", async () => {
@@ -468,7 +488,7 @@ describe("Commands screen — Run button", () => {
     );
   });
 
-  it("a rejected createJob renders an inline error message and does not crash", async () => {
+  it("a rejected createJob renders an inline error message, toasts a failure, and does not crash", async () => {
     vi.spyOn(api, "createJob").mockRejectedValueOnce(
       new ApiError("COMMAND_EXECUTION_ENABLED is False.", 403)
     );
@@ -483,5 +503,7 @@ describe("Commands screen — Run button", () => {
     expect(await screen.findByText(/COMMAND_EXECUTION_ENABLED is False/)).toBeInTheDocument();
     // The screen is still up and interactive -- no crash / unmount.
     expect(screen.getByRole("heading", { name: "Commands" })).toBeInTheDocument();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

@@ -51,6 +51,7 @@ const KEY_TO_CSS_VAR: Record<keyof typeof theme, string> = {
   surface: "--surface",
   surface2: "--surface-2",
   surface3: "--surface-3",
+  surfaceGlass: "--surface-glass",
   textPrimary: "--text-primary",
   textSecondary: "--text-secondary",
   textMuted: "--text-muted",

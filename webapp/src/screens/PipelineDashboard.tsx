@@ -12,6 +12,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import toast from "react-hot-toast";
 import { api, ApiError } from "../api/client";
 import type {
   ControlStatus,
@@ -37,6 +38,12 @@ import { timeAgo } from "../format";
 import { theme } from "../theme";
 
 type TriggerKind = "full" | "data" | "metrics";
+
+const TRIGGER_LABELS: Record<TriggerKind, string> = {
+  full: "Full advisory pipeline",
+  data: "Data refresh",
+  metrics: "Metrics refresh",
+};
 
 /** Maps the daemon's documented non-2xx trigger responses to plain text. */
 async function triggerControl<T>(fn: () => Promise<T>): Promise<T> {
@@ -159,16 +166,52 @@ function Controls({
   onTriggered: () => void;
 }) {
   const [pendingKind, setPendingKind] = useState<TriggerKind | null>(null);
+  // useMutation's `run` swallows the thrown error into `error` state (see
+  // useMutation.ts) rather than rethrowing or returning it -- and reading
+  // `trigger.error` back inside this async `handle` closure would be stale
+  // (it's a snapshot from the render `handle` was created in, not the render
+  // the mutation's own setState calls produced). A ref sidesteps that: it's
+  // written synchronously in the same tick the underlying promise rejects,
+  // ahead of useMutation's own catch, so it's always fresh by the time
+  // `await trigger.run(kind)` resolves.
+  const lastErrorRef = useRef<string | null>(null);
   const trigger = useMutation((kind: TriggerKind) => {
-    if (kind === "data") return triggerControl(() => api.postControlPipelineData());
-    if (kind === "metrics") return triggerControl(() => api.postControlPipelineMetrics());
-    return triggerControl(() => api.postControlRun());
+    const call =
+      kind === "data"
+        ? triggerControl(() => api.postControlPipelineData())
+        : kind === "metrics"
+          ? triggerControl(() => api.postControlPipelineMetrics())
+          : triggerControl(() => api.postControlRun());
+    return call.catch((e) => {
+      lastErrorRef.current = e instanceof Error ? e.message : String(e);
+      throw e;
+    });
   });
 
   const handle = async (kind: TriggerKind) => {
     setPendingKind(kind);
-    await trigger.run(kind);
+    lastErrorRef.current = null;
+    const res = await trigger.run(kind);
     setPendingKind(null);
+    if (res) {
+      toast.success(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>{TRIGGER_LABELS[kind]} triggered</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            {res.state ?? "queued"}{res.run_id ? ` — ${res.run_id}` : ""}
+          </span>
+        </div>
+      );
+    } else {
+      toast.error(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>{TRIGGER_LABELS[kind]} failed to trigger</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            {lastErrorRef.current ?? "Request failed."}
+          </span>
+        </div>
+      );
+    }
     onTriggered();
   };
 
@@ -399,7 +442,39 @@ function DeadLetterRow({
   entry: DeadLetterQueueEntry;
   retryEnabled: boolean;
 }) {
-  const retry = useMutation(() => api.retryDeadLetter(entry.symbol));
+  // Same "ref captures the fresh error, ahead of useMutation's own catch"
+  // reasoning as Controls.handle above.
+  const lastErrorRef = useRef<string | null>(null);
+  const retry = useMutation(() =>
+    api.retryDeadLetter(entry.symbol).catch((e) => {
+      lastErrorRef.current = e instanceof Error ? e.message : String(e);
+      throw e;
+    })
+  );
+
+  const handleRetry = async () => {
+    lastErrorRef.current = null;
+    const res = await retry.run();
+    if (res) {
+      toast.success(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Retry queued for {entry.symbol}</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            {res.note} (PID {res.pid})
+          </span>
+        </div>
+      );
+    } else {
+      toast.error(
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Retry failed for {entry.symbol}</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
+            {lastErrorRef.current ?? "Request failed."}
+          </span>
+        </div>
+      );
+    }
+  };
 
   return (
     <div
@@ -418,7 +493,7 @@ function DeadLetterRow({
           variant="neutral"
           disabled={!retryEnabled}
           pending={retry.pending}
-          onClick={() => void retry.run()}
+          onClick={() => void handleRetry()}
           data-testid={`retry-${entry.symbol}`}
         >
           🔄 Retry
