@@ -25,9 +25,25 @@ Anthropic `system` parameter (chosen specifically because Anthropic's
 Messages API requires strictly alternating user/assistant turns, so a
 leading "user" context turn would collide with a from-scratch conversation
 whose first history entry is also role "user").
+
+Also covers a direct, isolated regression test for `_iter_blocking` (see
+`TestIterBlocking` below): it bridges a synchronous iterator into an async
+generator via `run_in_executor(None, next, it)`. A bare `next(it)` raises
+`StopIteration` when `it` is exhausted, and asyncio's `Future` machinery
+cannot propagate a `StopIteration` through `run_in_executor` (PEP 479 --
+`asyncio.Future.set_exception()` explicitly refuses one), so the `await`
+hangs forever instead of completing -- exactly the case an empty/exhausted
+iterator hits, exactly what `TestContextField`'s fake SDK modules return
+(they only need to inspect call kwargs, not emit real chunks). This was a
+real, confirmed, previously-shipped bug (see docs/test_coverage_analysis.md
+Phase 6) fixed by using `next(it, SENTINEL)` instead of bare `next(it)`.
+`TestIterBlocking` exercises the fixed function directly, in well under a
+second, rather than relying on `TestContextField`'s full HTTP-round-trip
+tests (which only catch a regression here via a 180s pytest-timeout hang).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -310,3 +326,39 @@ class TestContextField:
             b"".join(resp.iter_bytes())
 
         assert "system" not in captured["kwargs"]
+
+
+class TestIterBlocking:
+    """Direct, isolated regression coverage for `_iter_blocking` -- see the
+    module docstring for the full StopIteration/run_in_executor hazard this
+    guards against. Every test is wrapped in `asyncio.wait_for` with a short
+    deadline so a reintroduced hang fails fast (a real assertion failure)
+    instead of hanging the whole test run for pytest-timeout's much longer
+    deadline to eventually kill."""
+
+    @staticmethod
+    async def _collect(sync_iterable):
+        return [item async for item in data_api._iter_blocking(sync_iterable)]
+
+    def test_empty_iterator_completes_without_hanging(self):
+        result = asyncio.run(asyncio.wait_for(self._collect(iter([])), timeout=5))
+        assert result == []
+
+    def test_non_empty_iterator_yields_every_item_in_order(self):
+        result = asyncio.run(asyncio.wait_for(self._collect(iter([1, 2, 3])), timeout=5))
+        assert result == [1, 2, 3]
+
+    def test_single_item_iterator(self):
+        result = asyncio.run(asyncio.wait_for(self._collect(iter(["only"])), timeout=5))
+        assert result == ["only"]
+
+    def test_generator_input_not_just_list_iterator(self):
+        """The real callers pass an SDK stream object, not necessarily a
+        plain list -- confirms _iter_blocking works against any iterable,
+        not specifically `iter([...])`."""
+        def gen():
+            yield "a"
+            yield "b"
+
+        result = asyncio.run(asyncio.wait_for(self._collect(gen()), timeout=5))
+        assert result == ["a", "b"]

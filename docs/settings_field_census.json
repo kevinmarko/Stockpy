@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "3adb151b6ded31ade057ee1a75f12dc31433fc4d",
+    "git_commit": "3444d98d637a75c84bda4e338dd3c4f8c8e84a89",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2822,7 +2822,7 @@
           "route": "/api/chat",
           "method": "POST",
           "function": "chat_endpoint",
-          "line": 1388,
+          "line": 1406,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
