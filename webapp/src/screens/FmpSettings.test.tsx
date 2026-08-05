@@ -54,7 +54,9 @@ describe("FmpSettings screen", () => {
     vi.spyOn(api, "getFmpSettings").mockResolvedValue(baseFmpTunables());
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Financial Modeling Prep (FMP)" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Client & Resiliency" })).toBeInTheDocument();
+    // Group headings only mount once the async fetch resolves (the title
+    // above renders immediately, unconditionally) -- wait for the first one.
+    expect(await screen.findByRole("heading", { name: "Client & Resiliency" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Primary Feeds" })).toBeInTheDocument();
   });
 
@@ -71,7 +73,7 @@ describe("FmpSettings screen", () => {
     renderScreen();
     await screen.findByRole("heading", { name: "Financial Modeling Prep (FMP)" });
 
-    const toggle = screen.getByLabelText("Fmp Quotes Enabled");
+    const toggle = await screen.findByLabelText("Fmp Quotes Enabled");
     await user.click(toggle);
 
     const saveBtn = screen.getByRole("button", { name: /Save 1 change/i });

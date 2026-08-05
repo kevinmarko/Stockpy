@@ -84,7 +84,9 @@ describe("SentimentSettings screen", () => {
     const spy = vi.spyOn(api, "getSentimentSettings").mockResolvedValue(baseSentimentTunables());
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Sentiment & News Ingestion" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Sentiment Ingestion Core" })).toBeInTheDocument();
+    // Group headings only mount once the async fetch resolves (the title
+    // above renders immediately, unconditionally) -- wait for the first one.
+    expect(await screen.findByRole("heading", { name: "Sentiment Ingestion Core" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "AI Credibility Verification" })).toBeInTheDocument();
     expect(screen.getByLabelText("Sentiment Ingestion Enabled")).toBeInTheDocument();
     expect(spy).toHaveBeenCalledTimes(1);

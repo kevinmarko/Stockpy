@@ -89,8 +89,9 @@ describe("SettingsManager screen", () => {
     vi.spyOn(api, "getTunables").mockResolvedValue(baseTunables());
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Runtime tunables" })).toBeInTheDocument();
-    // group headings
-    expect(screen.getByRole("heading", { name: "Position Sizing" })).toBeInTheDocument();
+    // group headings -- only mount once the async fetch resolves (the title
+    // above renders immediately, unconditionally) -- wait for the first one.
+    expect(await screen.findByRole("heading", { name: "Position Sizing" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Forecasting" })).toBeInTheDocument();
     // number, boolean, enum, string widgets
     expect(screen.getByLabelText("Kelly Fraction")).toBeInTheDocument();
