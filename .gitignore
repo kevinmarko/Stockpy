@@ -151,3 +151,6 @@ webapp/.vite/
 
 # Claude Code transient agent worktrees (scratch, never commit)
 .claude/worktrees/
+
+# Antigravity (Gemini) transient agent worktrees (scratch, never commit)
+.gemini/worktrees/
