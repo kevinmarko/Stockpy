@@ -1,5 +1,5 @@
 import { useId, useState, useEffect, type ReactNode } from "react";
-import { toast } from "sonner";
+import toast from "react-hot-toast";
 
 /**
  * Toggle — an on/off action control, built as `<button role="switch">`, NOT a

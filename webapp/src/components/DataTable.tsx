@@ -14,10 +14,12 @@ import {
   createExpandedRowModel,
   flexRender,
   SortingState,
- 
+
   ColumnDef,
   filterFn_includesString,
   columnVisibilityFeature,
+  columnPinningFeature,
+  columnSizingFeature,
 } from "@tanstack/react-table";
 import { useDensity } from "./DensityContext";
 
@@ -26,6 +28,13 @@ export interface Column<T> {
   header: string;
   render?: (row: T) => React.ReactNode;
   sortable?: boolean;
+  /**
+   * Opt-in: renders a small pin/unpin affordance in this column's header so
+   * the operator can stick it to the left edge while the rest of the table
+   * scrolls horizontally underneath. Undefined/false (the default) renders
+   * no pinning UI for the column — pinning is never forced on a column.
+   */
+  pinnable?: boolean;
 }
 
 interface DataTableProps<T> {
@@ -43,6 +52,14 @@ const features = tableFeatures({
   rowSortingFeature,
   columnGroupingFeature,
   rowExpandingFeature,
+  // columnSizingFeature is registered alongside columnPinningFeature purely
+  // so `column.getStart("start")` is available to compute the pixel offset
+  // for a sticky pinned column below — this table never reads `getSize()`
+  // to drive a column's rendered width, so registering it does not change
+  // any existing column's layout (auto-layout, driven by content, is
+  // untouched; only the new pinning affordance depends on this feature).
+  columnPinningFeature,
+  columnSizingFeature,
   filteredRowModel: createFilteredRowModel(),
   sortedRowModel: createSortedRowModel(),
   groupedRowModel: createGroupedRowModel(),
@@ -60,7 +77,15 @@ export function DataTable<T extends Record<string, any>>({
   const { density } = useDensity();
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
-  
+
+  // Columns opted into the pin affordance, keyed by their TanStack column id
+  // (which is `col.key` — see the `id: col.key` mapping below). The `_actions`
+  // column is never in this set since it isn't part of the caller's `columns`.
+  const pinnableColumnKeys = useMemo(
+    () => new Set(columns.filter((col) => col.pinnable).map((col) => col.key)),
+    [columns]
+  );
+
   // Convert custom columns to TanStack Table ColumnDefs
   const tableColumns = useMemo<ColumnDef<typeof features, T>[]>(() => {
     const cols: ColumnDef<typeof features, T>[] = columns.map((col) => ({
@@ -71,7 +96,7 @@ export function DataTable<T extends Record<string, any>>({
       cell: (info) =>
         col.render ? col.render(info.row.original) : info.getValue() as React.ReactNode,
     }));
-    
+
     if (copyableJson) {
       cols.push({
         id: "_actions",
@@ -120,6 +145,14 @@ export function DataTable<T extends Record<string, any>>({
   });
 
   const { rows } = table.getRowModel();
+  // The displayed row model (above) is grouping+expansion-aware, so with
+  // `groupByKey` set it includes both group-header rows AND leaf rows —
+  // using its length for the "Showing N records" count over-reports by the
+  // number of distinct groups. `getFilteredRowModel()` is resolved earlier
+  // in the pipeline (core -> filtered -> grouped -> sorted -> expanded), so
+  // it always reflects the filtered LEAF rows only, independent of whether
+  // grouping/expansion is in play.
+  const filteredRowCount = table.getFilteredRowModel().rows.length;
   const parentRef = useRef<HTMLDivElement>(null);
 
   const rowVirtualizer = useVirtualizer({
@@ -137,7 +170,7 @@ export function DataTable<T extends Record<string, any>>({
   const paddingTop = !isTest && virtualRows.length > 0 ? virtualRows[0].start : 0;
   const totalSize = rowVirtualizer.getTotalSize();
   const paddingBottom = !isTest && virtualRows.length > 0 ? totalSize - virtualRows[virtualRows.length - 1].end : 0;
-  
+
   const cellPadding = density === "compact" ? "var(--s-1-5) var(--s-2-5)" : "var(--s-3) var(--s-4)";
 
   return (
@@ -159,7 +192,7 @@ export function DataTable<T extends Record<string, any>>({
           }}
         />
         <span style={{ fontSize: "var(--t-micro)", color: "var(--text-muted)" }}>
-          Showing {rows.length} records
+          Showing {filteredRowCount} records
         </span>
       </div>
 
@@ -178,27 +211,72 @@ export function DataTable<T extends Record<string, any>>({
           <thead>
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id} style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 1 }}>
-                {headerGroup.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    onClick={header.column.getToggleSortingHandler()}
-                    style={{
-                      padding: cellPadding,
-                      fontWeight: 700,
-                      color: "var(--text-secondary)",
-                      fontSize: "var(--t-caption)",
-                      cursor: header.column.getCanSort() ? "pointer" : "default",
-                      userSelect: "none",
-                      background: "var(--surface-2)",
-                    }}
-                  >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                    {{
-                      asc: " ▲",
-                      desc: " ▼",
-                    }[header.column.getIsSorted() as string] ?? null}
-                  </th>
-                ))}
+                {headerGroup.headers.map((header) => {
+                  const isPinned = header.column.getIsPinned();
+                  const isPinnable = pinnableColumnKeys.has(header.column.id);
+                  const isActionsColumn = header.column.id === "_actions";
+                  return (
+                    <th
+                      key={header.id}
+                      onClick={header.column.getToggleSortingHandler()}
+                      style={{
+                        padding: cellPadding,
+                        fontWeight: 700,
+                        color: "var(--text-secondary)",
+                        fontSize: "var(--t-caption)",
+                        cursor: header.column.getCanSort() ? "pointer" : "default",
+                        userSelect: "none",
+                        background: "var(--surface-2)",
+                        ...(isActionsColumn ? { width: "60px" } : {}),
+                        ...(isPinned
+                          ? {
+                              position: "sticky" as const,
+                              left: `${header.column.getStart("start")}px`,
+                              // zIndex 2 (vs. the header row's own zIndex: 1)
+                              // keeps a pinned header cell visible above its
+                              // unpinned sibling cells as they scroll
+                              // horizontally underneath it, without escaping
+                              // above the sticky header row itself (both live
+                              // inside the same local stacking context the
+                              // row's own `position: sticky` + `zIndex`
+                              // establishes).
+                              zIndex: 2,
+                            }
+                          : {}),
+                      }}
+                    >
+                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {{
+                        asc: " ▲",
+                        desc: " ▼",
+                      }[header.column.getIsSorted() as string] ?? null}
+                      {isPinnable && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            header.column.pin(isPinned ? false : "start");
+                          }}
+                          aria-label={isPinned ? "Unpin column" : "Pin column"}
+                          title={isPinned ? "Unpin column" : "Pin column"}
+                          style={{
+                            marginLeft: "var(--s-1)",
+                            background: isPinned ? "var(--surface-3)" : "var(--surface-2)",
+                            border: "1px solid var(--border)",
+                            borderRadius: "var(--r-xs)",
+                            color: "var(--text-muted)",
+                            fontSize: "var(--t-micro)",
+                            padding: "1px 4px",
+                            cursor: "pointer",
+                            lineHeight: 1,
+                          }}
+                        >
+                          📌
+                        </button>
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             ))}
           </thead>
@@ -219,7 +297,7 @@ export function DataTable<T extends Record<string, any>>({
                 {virtualRows.map((virtualRow) => {
                   const row = rows[virtualRow.index];
                   const idx = virtualRow.index;
-                  
+
                   if (row.getIsGrouped()) {
                     return (
                       <tr
@@ -233,14 +311,16 @@ export function DataTable<T extends Record<string, any>>({
                       </tr>
                     );
                   }
-                  
+
+                  const rowBackground = idx % 2 === 0 ? "var(--surface)" : "var(--surface-2)";
+
                   return (
                     <tr
                       key={row.id}
                       onClick={() => onRowClick && onRowClick(row.original)}
                       style={{
                         borderBottom: "1px solid var(--border)",
-                        background: idx % 2 === 0 ? "var(--surface)" : "var(--surface-2)",
+                        background: rowBackground,
                         cursor: onRowClick ? "pointer" : "default",
                       }}
                     >
@@ -248,8 +328,30 @@ export function DataTable<T extends Record<string, any>>({
                         if (cell.getIsGrouped() || cell.getIsPlaceholder()) {
                           return null;
                         }
+                        const isPinned = cell.column.getIsPinned();
+                        const isActionsColumn = cell.column.id === "_actions";
                         return (
-                          <td key={cell.id} style={{ padding: cellPadding }}>
+                          <td
+                            key={cell.id}
+                            style={{
+                              padding: cellPadding,
+                              ...(isActionsColumn ? { width: "60px" } : {}),
+                              ...(isPinned
+                                ? {
+                                    position: "sticky" as const,
+                                    left: `${cell.column.getStart("start")}px`,
+                                    // Match the row's own stripe so scrolled-
+                                    // under content doesn't show through.
+                                    background: rowBackground,
+                                    // Stays above other (unpinned) cells in
+                                    // this row as they scroll horizontally
+                                    // underneath, but never exceeds the
+                                    // sticky header row's own zIndex of 1.
+                                    zIndex: 1,
+                                  }
+                                : {}),
+                            }}
+                          >
                             {flexRender(cell.column.columnDef.cell, cell.getContext())}
                           </td>
                         );
