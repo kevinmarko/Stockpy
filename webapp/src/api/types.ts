@@ -1472,6 +1472,15 @@ export interface IntervalUpdateResult {
 export interface ExecutionModeUpdateRequest {
   mode: "live" | "paper" | "simulation" | "advisory";
   advisory_only: boolean;
+  /**
+   * Typed field-name confirmation for any `settings_keysets.DANGEROUS_KEYS`
+   * field this call is about to write (ADVISORY_ONLY always; DRY_RUN too
+   * when `mode !== "advisory"`) -- same `SettingsConfirmMap` contract
+   * `PUT /settings/tunables` uses for the same fields. Missing or
+   * mismatched -> the backend rejects the whole request with 422 and writes
+   * nothing.
+   */
+  confirm?: SettingsConfirmMap;
 }
 
 export interface ExecutionModeUpdateResult {

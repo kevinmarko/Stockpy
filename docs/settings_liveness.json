@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 2938,
+      "line": 2949,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3897,
+      "line": 3981,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4002,
+      "line": 4086,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -1116,7 +1116,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4375",
+        "site": "api/pilots_api.py:4463",
         "via": []
       }
     ],
@@ -1127,7 +1127,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4374",
+        "site": "api/pilots_api.py:4462",
         "via": []
       }
     ],
@@ -1138,7 +1138,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4499",
+        "site": "api/pilots_api.py:4587",
         "via": []
       },
       {
@@ -1213,7 +1213,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4479",
+        "site": "api/pilots_api.py:4567",
         "via": []
       },
       {

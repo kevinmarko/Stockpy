@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { AutomationStatus } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, Loading, ErrorState } from "../components/ui";
+import { Button, Input, Loading, ErrorState, Notice } from "../components/ui";
 import { KillSwitchToggle } from "../components/KillSwitchToggle";
 import { Modal } from "../components/Modal";
 import { PwaStatusSection } from "../components/PwaStatusSection";
@@ -12,6 +12,7 @@ import { theme } from "../theme";
 import { resetOnboarding } from "../onboarding";
 import { SectionCard } from "../components/SectionCard";
 import { TabGuide } from "../components/TabGuide";
+import { buildConfirmMap } from "../settingsLiveness";
 
 export function SettingsGeneral() {
   const {
@@ -83,6 +84,25 @@ function SignalGenerationSection({
   );
 }
 
+/**
+ * Every mode change writes ADVISORY_ONLY -- "the single highest-consequence
+ * write in the whole settings surface" (settings_keysets.py) -- and any mode
+ * other than "advisory" also writes DRY_RUN. Both are
+ * `settings_keysets.DANGEROUS_KEYS` fields (ALPACA_PAPER, also written for
+ * non-advisory modes, is NOT -- it's Alpaca's own paper/live account
+ * selector, not a broker-agnostic quarantine, and deliberately left
+ * unhardened here), and the backend now rejects this write (422, nothing
+ * written) unless every one of them is echoed back in `confirm` -- the SAME
+ * contract `PUT /settings/tunables` enforces for ADVISORY_ONLY/DRY_RUN via
+ * its own `DangerousConfirmDialog` (GenericSettingsEditor.tsx). This helper
+ * is the single place that decides which keys a given target mode touches,
+ * so the typed-confirmation gate below and the request body it builds can
+ * never drift apart.
+ */
+function dangerousKeysFor(mode: "advisory" | "simulation" | "paper" | "live"): string[] {
+  return mode === "advisory" ? ["ADVISORY_ONLY"] : ["ADVISORY_ONLY", "DRY_RUN"];
+}
+
 function ExecutionModeSection({
   advisoryOnly,
   dryRun,
@@ -95,7 +115,8 @@ function ExecutionModeSection({
   onChanged: () => void;
 }) {
   const [selectedMode, setSelectedMode] = useState<"advisory" | "simulation" | "paper" | "live" | null>(null);
-  
+  const [typed, setTyped] = useState<Record<string, string>>({});
+
   const currentMode = advisoryOnly
     ? "advisory"
     : dryRun
@@ -104,18 +125,45 @@ function ExecutionModeSection({
     ? "paper"
     : "live";
 
-  const modeMutation = useMutation((mode: "advisory" | "simulation" | "paper" | "live") => 
+  const modeMutation = useMutation((mode: "advisory" | "simulation" | "paper" | "live") =>
     api.setExecutionMode({
       mode: mode,
-      advisory_only: mode === "advisory"
+      advisory_only: mode === "advisory",
+      confirm: buildConfirmMap(dangerousKeysFor(mode)),
     })
   );
 
-  const confirmChange = async () => {
-    if (!selectedMode) return;
-    await modeMutation.run(selectedMode);
+  const pendingDangerous = selectedMode ? dangerousKeysFor(selectedMode) : [];
+  // Typing the name of EVERY dangerous field this mode change touches
+  // mirrors GenericSettingsEditor.tsx's DangerousConfirmDialog exactly (the
+  // same per-key echo pattern, not one blanket keyword) -- an AFFORDANCE, not
+  // the enforcement: the server rejects the write regardless of what the
+  // client sends if `confirm` doesn't echo every dangerous key correctly
+  // (see _require_dangerous_confirmation).
+  const allConfirmed = pendingDangerous.every((k) => (typed[k] ?? "").trim() === k);
+
+  const openConfirm = (mode: "advisory" | "simulation" | "paper" | "live") => {
+    setTyped({});
+    modeMutation.reset();
+    setSelectedMode(mode);
+  };
+
+  const closeConfirm = () => {
     setSelectedMode(null);
-    onChanged();
+    setTyped({});
+  };
+
+  const confirmChange = async () => {
+    if (!selectedMode || !allConfirmed) return;
+    const res = await modeMutation.run(selectedMode);
+    // Only close/reload on an actual success -- a failed write (e.g. a
+    // server-side confirmation rejection, AUTOMATION_WRITES_ENABLED off)
+    // must leave the dialog open with its error visible, not silently
+    // vanish as if it had applied.
+    if (res) {
+      closeConfirm();
+      onChanged();
+    }
   };
 
   return (
@@ -126,21 +174,21 @@ function ExecutionModeSection({
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2-5)" }}>
         <Button
           variant={currentMode === "advisory" ? "primary" : "neutral"}
-          onClick={() => setSelectedMode("advisory")}
+          onClick={() => openConfirm("advisory")}
           disabled={currentMode === "advisory"}
         >
           🛑 Advisory Only
         </Button>
         <Button
           variant={currentMode === "simulation" ? "primary" : "neutral"}
-          onClick={() => setSelectedMode("simulation")}
+          onClick={() => openConfirm("simulation")}
           disabled={currentMode === "simulation"}
         >
           🧪 Simulation
         </Button>
         <Button
           variant={currentMode === "paper" ? "primary" : "neutral"}
-          onClick={() => setSelectedMode("paper")}
+          onClick={() => openConfirm("paper")}
           disabled={currentMode === "paper"}
         >
           📝 Paper Trading
@@ -148,30 +196,54 @@ function ExecutionModeSection({
         <Button
           variant={currentMode === "live" ? "primary" : "neutral"}
           style={currentMode === "live" ? { backgroundColor: "var(--decline)" } : {}}
-          onClick={() => setSelectedMode("live")}
+          onClick={() => openConfirm("live")}
           disabled={currentMode === "live"}
         >
           🔴 Live Production
         </Button>
       </div>
-      
+
       {selectedMode && (
-        <Modal ariaLabel="Confirm Mode Change" onClose={() => setSelectedMode(null)}>
+        <Modal ariaLabel="Confirm Mode Change" onClose={closeConfirm}>
           <div style={{ marginBottom: "var(--s-4)" }}>
             <h3 style={{ margin: "0 0 var(--s-4) 0" }}>Confirm Mode Change</h3>
             You are changing the execution mode from <strong>{currentMode}</strong> to <strong>{selectedMode}</strong>.
             <br/><br/>
             {selectedMode === "live" && <strong style={{ color: "var(--decline)" }}>WARNING: This will allow the engine to execute real trades with real money.</strong>}
           </div>
-          <div style={{ display: "flex", gap: "var(--s-2-5)" }}>
-            <Button variant="neutral" onClick={() => setSelectedMode(null)} style={{ flex: 1 }}>
+
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
+            This touches this platform&apos;s safety and execution controls. Confirm
+            each field by typing its name exactly.
+          </p>
+          {pendingDangerous.map((k) => (
+            <div key={k} style={{ marginTop: "var(--s-2-5)" }}>
+              <Input
+                label={`Type "${k}" to confirm`}
+                value={typed[k] ?? ""}
+                onChange={(e) => setTyped((s) => ({ ...s, [k]: e.target.value }))}
+                hint="Required."
+              />
+            </div>
+          ))}
+
+          {modeMutation.error && (
+            <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }} data-testid="execution-mode-error">
+              <span>⚠️</span>
+              <span>{modeMutation.error}</span>
+            </Notice>
+          )}
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
+            <Button variant="neutral" onClick={closeConfirm} style={{ flex: 1 }}>
               Cancel
             </Button>
             <Button
               variant="primary"
               style={selectedMode === "live" ? { backgroundColor: "var(--decline)", flex: 2 } : { flex: 2 }}
               onClick={confirmChange}
+              disabled={!allConfirmed}
               pending={modeMutation.pending}
+              data-testid="execution-mode-confirm"
             >
               Confirm Change
             </Button>
