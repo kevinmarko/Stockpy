@@ -3016,31 +3016,30 @@ function daysSinceTrained(trainedDate: string): number {
   return Math.floor((Date.now() - then) / 86_400_000);
 }
 
-// Fixture trained_dates below are computed relative to "now" (not fixed
-// calendar strings) -- a hardcoded past date silently crosses the 30-day
-// MODEL_RETRAIN_WINDOW_DAYS threshold as real time passes, which previously
-// flipped needs_retrain to true for models this fixture intends to stay
-// "fresh" and broke Models.test.tsx's "exactly one stale row" assumption
-// months after the fixture was written. Offsetting from Date.now() keeps
-// the fresh/stale split stable indefinitely.
-function isoDaysAgo(days: number): string {
+// Fixture dates below are relative to "now" (not hard-coded literals) so the
+// fresh-vs-stale badge states this file's tests exercise stay correct
+// indefinitely, regardless of what day the suite actually runs on.
+function daysAgoString(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
 // ---- ML registry fixture (honest: two un-validated / not-deployable; one
 // stale -- exercises BOTH the fresh and "Needs Retrain" badge states) ----
+const MODEL_FRESH_TRAINED_DATE = daysAgoString(15); // well inside the 30-day window
+const MODEL_STALE_TRAINED_DATE = daysAgoString(45); // well outside the 30-day window
+
 const MODELS: ModelRow[] = [
   {
     name: "lgbm_ranker",
     role: "cross_sectional_ranker",
-    trained_date: isoDaysAgo(6),
+    trained_date: MODEL_FRESH_TRAINED_DATE,
     cpcv_dsr: 0.0019,
     pbo: 0.267,
     n_train: 260,
     deployable: false,
     notes: "LightGBM LambdaRank — modest weight until validated at >200 OOS dates.",
-    age_days: daysSinceTrained(isoDaysAgo(6)),
-    needs_retrain: daysSinceTrained(isoDaysAgo(6)) >= MODEL_RETRAIN_WINDOW_DAYS,
+    age_days: daysSinceTrained(MODEL_FRESH_TRAINED_DATE),
+    needs_retrain: daysSinceTrained(MODEL_FRESH_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
     // Real cpcv_dsr/pbo above -> a real (if unimpressive) CPCV OOS Sharpe/
     // MaxDD too. max_dd is a POSITIVE magnitude fraction (0.28 = 28%),
     // matching compute_max_drawdown's convention -- see ModelRow's doc.
@@ -3050,14 +3049,14 @@ const MODELS: ModelRow[] = [
   {
     name: "meta_labeler_timeseries_momentum",
     role: "meta_labeler",
-    trained_date: isoDaysAgo(6),
+    trained_date: MODEL_FRESH_TRAINED_DATE,
     cpcv_dsr: null,
     pbo: null,
     n_train: 3499,
     deployable: false,
     notes: "Binary classifier predicting P(timeseries_momentum correct).",
-    age_days: daysSinceTrained(isoDaysAgo(6)),
-    needs_retrain: daysSinceTrained(isoDaysAgo(6)) >= MODEL_RETRAIN_WINDOW_DAYS,
+    age_days: daysSinceTrained(MODEL_FRESH_TRAINED_DATE),
+    needs_retrain: daysSinceTrained(MODEL_FRESH_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
     // Un-validated (cpcv_dsr/pbo null above) -> both new fields stay null
     // too, matching this fixture's existing honesty pattern.
     cpcv_mean_oos_sharpe: null,
@@ -3069,14 +3068,14 @@ const MODELS: ModelRow[] = [
     // TRUE branch, not just the fresh/false one.
     name: "meta_labeler_cross_sectional_momentum",
     role: "meta_labeler",
-    trained_date: isoDaysAgo(45),
+    trained_date: MODEL_STALE_TRAINED_DATE,
     cpcv_dsr: null,
     pbo: null,
     n_train: 3460,
     deployable: false,
     notes: "Binary classifier predicting P(cross_sectional_momentum correct).",
-    age_days: daysSinceTrained(isoDaysAgo(45)),
-    needs_retrain: daysSinceTrained(isoDaysAgo(45)) >= MODEL_RETRAIN_WINDOW_DAYS,
+    age_days: daysSinceTrained(MODEL_STALE_TRAINED_DATE),
+    needs_retrain: daysSinceTrained(MODEL_STALE_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
     cpcv_mean_oos_sharpe: null,
     cpcv_mean_oos_max_dd: null,
   },
