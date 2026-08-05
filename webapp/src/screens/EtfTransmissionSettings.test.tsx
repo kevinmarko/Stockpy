@@ -78,6 +78,14 @@ describe("EtfTransmissionSettings screen", () => {
     });
 
     renderScreen();
+    // The "ETF Volatility Transmission" heading renders on the very first
+    // paint, before the mocked getEtfTransmissionSettings() promise settles
+    // (the screen shows loading skeletons under it in the meantime) -- so
+    // waiting on the heading alone does NOT wait for the toggle to mount.
+    // findByLabelText (not getByLabelText) is required here to actually wait
+    // for the async data load; a synchronous getBy raced the load and failed
+    // intermittently under CI's heavier parallel-worker contention while
+    // passing reliably in low-contention local runs.
     await screen.findByRole("heading", { name: "ETF Volatility Transmission" });
 
     const toggle = await screen.findByLabelText("Etf Transmission Enabled");
