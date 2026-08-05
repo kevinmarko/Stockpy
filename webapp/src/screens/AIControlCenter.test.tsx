@@ -133,8 +133,13 @@ describe("AIControlCenter screen", () => {
   it("renders ONE toggle per unique toggle_key, not one per capability", async () => {
     vi.spyOn(api, "getLlmStatus").mockResolvedValue(llmStatus());
     renderScreen();
+    // The "AI Control Center" heading renders before the async getLlmStatus()
+    // fetch resolves (the same shared-component-family race documented in
+    // FmpSettings.test.tsx / EtfTransmissionSettings.test.tsx), so findByRole
+    // on the heading alone does not wait for the switches to mount --
+    // findAllByRole (not getAllByRole) is required here.
     await screen.findByRole("heading", { name: "AI Control Center" });
-    const switches = screen.getAllByRole("switch");
+    const switches = await screen.findAllByRole("switch");
     // 5 capabilities, 3 unique toggle_keys (LLM_COMMENTARY_ENABLED shared by
     // claude_commentary/gemini_alerts/gemini_vision; GRAVITY_AI_RUNNER_ENABLED;
     // OPAL_RESEARCH_ENABLED).
