@@ -32,6 +32,29 @@
             "command": "bash .claude/hooks/webapp_typecheck.sh",
             "timeout": 60,
             "statusMessage": "Typechecking webapp..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/verify_targeted_tests.sh",
+            "timeout": 90,
+            "statusMessage": "Running targeted tests..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/sync_agent_docs.sh",
+            "timeout": 15,
+            "statusMessage": "Syncing CLAUDE.md/AGENTS.md..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/verify_before_stop.sh",
+            "timeout": 120
           }
         ]
       }

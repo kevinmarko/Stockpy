@@ -27,6 +27,51 @@ may be worked on by whichever agent is assigned the task at hand. Branch naming 
    `git -C <main-checkout-path> fetch origin && git -C <main-checkout-path> merge --ff-only origin/main`.
    Do this immediately after the merge, not at the start of some future session.
 
+## Agent Workflow: Verification & Planning
+
+Applies to whichever agent is doing the work — Claude Code or Antigravity — same framing
+as Branch Workflow above: no per-agent carve-out.
+
+- **Verification is mandatory, not advisory.** A task is not done until the relevant check
+  has actually been run and shown to pass — not "should pass." Python changes: the
+  corresponding `tests/test_<module>.py` (or the fuller `make ci` gate) must show zero
+  failures. `webapp/src/` changes: `npm run --prefix webapp typecheck` clean AND, for
+  anything UI-visible, an actual `npm run dev` + browser check (console errors + visual
+  confirmation) — a clean typecheck alone proves the code compiles, not that a screen
+  renders or behaves as intended.
+- **Claude Code enforces the Python half automatically.** `.claude/hooks/verify_targeted_tests.sh`
+  (`PostToolUse`, non-blocking) runs the mapped `tests/test_<module>.py` after every edit to a
+  tracked `.py` file and surfaces a failure inline. `.claude/hooks/verify_before_stop.sh` (`Stop`)
+  is the actual enforcement gate — it blocks ending a turn while a targeted test tied to
+  uncommitted changes is still failing, capped at 2 consecutive blocks per session before
+  releasing itself with a warning instead, so a genuinely stuck check can't deadlock the
+  session. `/verify` and `/verify-webapp` (`.claude/commands/`) run the fuller gate and the
+  browser check on demand.
+- **Antigravity has no equivalent automatic blocking gate yet.** Its documented `Stop`-event
+  hook doesn't expose the same "force continuation" semantics Claude Code's does, as far as
+  can be verified from `antigravity.google/docs/hooks` alone — so on that side this paragraph
+  is enforced *policy*, not a hook, until someone can confirm Antigravity's actual `Stop` hook
+  behavior against a live runtime. This is a real, open gap, not a claimed equivalence.
+- **Plan before building in the "Everything else" tier** (engines, signals, execution, sizing,
+  validation, orchestrators — as scoped in the Start-of-session checklist above): produce an
+  Implementation Plan and get it reviewed before writing code. Claude Code: `EnterPlanMode`.
+  Antigravity: its native `implementation_plan.md` artifact.
+- Steer a plan or diff you're unhappy with via inline comments on the artifact itself, not a
+  fresh open-ended re-prompt — targeted feedback keeps the agent from losing the thread.
+- **Decompose isolated, mechanical subtasks to a subagent** (writing/extending a test file, a
+  migration, a schema stub) instead of doing them inline in the primary agent's context.
+  `test-writer` (`.claude/agents/test-writer.md` / `.agents/agents/test-writer.md`) is the
+  ready-made subagent for "write tests for `<module>`." For genuinely hard multi-file
+  refactoring or complex logic, don't default a subagent to a fast/cheap model tier: Claude
+  Code — leave `model:` unset so it inherits the calling session's model (as `test-writer`
+  does); Antigravity — use `model: pro` (as `.agents/agents/test-writer.md` does).
+- **`CLAUDE.md`/`AGENTS.md` now auto-sync.** These two files are meant to be exact mirrors
+  (`AGENTS.md`'s own first line is literally `# CLAUDE.md`) but had already drifted by one
+  real bullet before this existed. `.claude/hooks/sync_agent_docs.sh` /
+  `.agents/hooks/sync_agent_docs.sh` now copy whichever of the two files was just edited onto
+  the other automatically — you should no longer need to hand-mirror an edit to one into the
+  other.
+
 ## Project
 
 InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative analysis pipeline: fetches market/macro data, computes technical & fundamental indicators, runs multi-horizon forecasts, backtests strategies, persists signals to SQLite, and publishes results to Google Sheets / an HTML report.

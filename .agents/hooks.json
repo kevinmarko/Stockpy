@@ -1,0 +1,21 @@
+{
+  "stockpy-guardrails": {
+    "PreToolUse": [
+      {
+        "matcher": "edit_file|create_file",
+        "hooks": [
+          { "type": "command", "command": "bash .agents/hooks/block_env_write.sh", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "edit_file|create_file",
+        "hooks": [
+          { "type": "command", "command": "bash .agents/hooks/webapp_typecheck.sh", "timeout": 60 },
+          { "type": "command", "command": "bash .agents/hooks/sync_agent_docs.sh", "timeout": 15 }
+        ]
+      }
+    ]
+  }
+}
