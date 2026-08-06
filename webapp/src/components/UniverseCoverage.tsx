@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import { api } from "../api/client";
 import type { CoverageStatus, SyncReportResponse, SyncReportSymbol } from "../api/types";
 import { useApi } from "../hooks/useApi";
@@ -33,6 +33,17 @@ import { fmtNum, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
  * POST's own echoed `report` is the same shape, but a plain reload keeps this
  * component's data flow identical to every other read-then-mutate screen in
  * this app rather than special-casing a merge).
+ *
+ * Symbol Rating (Part 3 of the Symbol Rating subsystem): each row's rating
+ * fields (`rating_consecutive_bad_cycles`/`rating_excluded`, both optional —
+ * absent means no rating history yet) come along for free on the same
+ * `GET /data/sync-report` payload (`api/data_api.py` enriches it from
+ * `rating.symbol_rating_store.SymbolRatingStore`, read-only). An excluded row
+ * gets an "Excluded" badge (mirrors `COVERAGE_BADGE_CLASS`'s `badge-bad`
+ * styling) plus a "Re-include" button that calls
+ * `POST /universe/{symbol}/reinclude` and, on success, reloads the coverage
+ * report — the exact same "mutate then plain reload" pattern `SyncNowControl`
+ * uses above, rather than a bespoke client-side merge.
  */
 
 const COVERAGE_LABEL: Record<CoverageStatus, string> = {
@@ -57,6 +68,71 @@ function CoverageBadge({ coverage }: { coverage: CoverageStatus }) {
   return (
     <span className={`badge ${COVERAGE_BADGE_CLASS[coverage] ?? "badge-neutral"}`}>
       {COVERAGE_LABEL[coverage] ?? coverage}
+    </span>
+  );
+}
+
+/** Concise rating-cycle label, or an em-dash when no rating history exists
+ * yet — `rating_consecutive_bad_cycles` is `undefined`/`null` (never a
+ * fabricated 0) for a symbol the rating engine hasn't scored yet. */
+function ratingCyclesLabel(cycles: number | null | undefined): string {
+  if (cycles == null) return "—";
+  return `${cycles} cycle${cycles === 1 ? "" : "s"}`;
+}
+
+/** "Excluded" badge — mirrors `COVERAGE_BADGE_CLASS`'s existing
+ * `badge-bad` styling rather than inventing new CSS. Only rendered when
+ * `rating_excluded === true`. */
+function ExcludedBadge() {
+  return <span className="badge badge-bad" data-testid="universe-rating-excluded-badge">Excluded</span>;
+}
+
+/**
+ * "Re-include" — POST /universe/{symbol}/reinclude. Self-contained
+ * mutation+message block, matching `SyncNowControl`'s shape (pending state,
+ * inline success/failure message, `onReincluded` reload callback) so an
+ * auth-gate 403 or a store-write 503 renders as an informative inline
+ * message here too, rather than a generic error toast.
+ */
+function ReincludeButton({ symbol, onReincluded }: { symbol: string; onReincluded: () => void }) {
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  const run = async (e: MouseEvent) => {
+    e.stopPropagation(); // don't toggle the row's expand/collapse
+    setPending(true);
+    setMessage(null);
+    setFailed(false);
+    try {
+      await api.reincludeSymbol(symbol);
+      onReincluded();
+    } catch (err: unknown) {
+      setFailed(true);
+      setMessage(err instanceof Error ? err.message : "Re-include failed.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--s-1)" }}>
+      <Button
+        onClick={run}
+        pending={pending}
+        variant="neutral"
+        data-testid={`universe-reinclude-${symbol}`}
+      >
+        Re-include
+      </Button>
+      {message && failed && (
+        <span
+          data-testid={`universe-reinclude-message-${symbol}`}
+          style={{ fontSize: "var(--t-micro)", color: theme.decline }}
+        >
+          {message}
+        </span>
+      )}
     </span>
   );
 }
@@ -131,6 +207,7 @@ function DetailRow({ r }: { r: SyncReportSymbol }) {
       <span>Source: {r.quote_source || "—"}</span>
       <span>Forecast: {boolGlyph(r.forecast_available)}</span>
       <span>Fundamentals: {boolGlyph(r.has_fundamentals)}</span>
+      <span>Rating: {ratingCyclesLabel(r.rating_consecutive_bad_cycles)}</span>
       <span style={{ gridColumn: "1 / -1" }}>
         Lists: {r.watchlists.length > 0 ? r.watchlists.join(", ") : "—"}
       </span>
@@ -213,6 +290,7 @@ function UniverseCoverageLive() {
           onGapsOnlyChange={setGapsOnly}
           expanded={expanded}
           onToggleExpanded={toggleExpanded}
+          onReincluded={reload}
         />
       )}
     </div>
@@ -241,12 +319,14 @@ function UniverseCoverageBody({
   onGapsOnlyChange,
   expanded,
   onToggleExpanded,
+  onReincluded,
 }: {
   data: SyncReportResponse;
   gapsOnly: boolean;
   onGapsOnlyChange: (v: boolean) => void;
   expanded: Set<string>;
   onToggleExpanded: (symbol: string) => void;
+  onReincluded: () => void;
 }) {
   // GET /data/sync-report returns the raw data.portfolio_sync.SyncReport
   // shape (a ticker-keyed map) — sort it into a stable display order here
@@ -345,12 +425,27 @@ function UniverseCoverageBody({
                     )}
                   </div>
                   <div className="row-end">
+                    <span
+                      style={{ fontSize: "var(--t-micro)", color: theme.textMuted, marginRight: "var(--s-1)" }}
+                      data-testid={`universe-rating-cycles-${r.symbol}`}
+                    >
+                      {ratingCyclesLabel(r.rating_consecutive_bad_cycles)}
+                    </span>
+                    {r.rating_excluded === true && <ExcludedBadge />}
                     <CoverageBadge coverage={r.coverage} />
                     <span aria-hidden style={{ marginLeft: "var(--s-1)", color: theme.textMuted }}>
                       {isOpen ? "▲" : "▼"}
                     </span>
                   </div>
                 </div>
+                {r.rating_excluded === true && (
+                  <div
+                    style={{ marginTop: "var(--s-1)", display: "flex", alignItems: "center", gap: "var(--s-1)" }}
+                    data-testid={`universe-reinclude-row-${r.symbol}`}
+                  >
+                    <ReincludeButton symbol={r.symbol} onReincluded={onReincluded} />
+                  </div>
+                )}
                 {isOpen && <DetailRow r={r} />}
               </div>
             );

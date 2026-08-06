@@ -1297,6 +1297,32 @@ class Settings(BaseSettings):
     # fraction of names capped in one cycle meets or exceeds this threshold.
     SIZING_CAP_ALERT_THRESHOLD_PCT: float = 0.30
 
+    # --- Symbol rating history (rating/symbol_rating.py, rating/symbol_rating_store.py) ---
+    # Durable per-symbol GOOD/BAD rating history, built on top of the
+    # existing per-cycle final_score / Action Signal. Diagnostic-only by
+    # default -- mirrors SIZING_CAP_AUDIT_ENABLED -- no symbol is ever
+    # excluded from tracking/buying by this flag alone.
+    SYMBOL_RATING_ENABLED: bool = True
+    # A symbol's final_score below this is classified BAD this cycle.
+    # Matches strategy_engine.py's own RISK REDUCE cutoff -- the existing
+    # single source of truth for "this score is bad", not a fresh
+    # independent threshold.
+    SYMBOL_RATING_BAD_SCORE_THRESHOLD: float = 35.0
+    # Opt-in (default False): when True, a non-held symbol rated BAD for
+    # SYMBOL_RATING_DROP_THRESHOLD_CYCLES consecutive cycles is subtracted
+    # from the resolved tracked universe (data/portfolio_sync.py::resolve_universe,
+    # main.py::_build_universe) -- stops being fetched, scored, or bought.
+    # Defaults False like every other live-trading-behavior flag in this
+    # codebase (SIZING_CAP_ESCALATION_ENABLED, ETF_TRANSMISSION_SIZING_ENABLED)
+    # so nothing changes silently on a git pull for a live capital account.
+    # A currently-held position is NEVER excluded regardless of this flag --
+    # see rating/symbol_rating.py::should_exclude.
+    SYMBOL_RATING_AUTO_DROP_ENABLED: bool = False
+    # Consecutive BAD-rated cycles (non-held symbols only) before auto-drop,
+    # when SYMBOL_RATING_AUTO_DROP_ENABLED is True. Mirrors
+    # SIZING_CAP_ESCALATION_THRESHOLD_CYCLES's default.
+    SYMBOL_RATING_DROP_THRESHOLD_CYCLES: int = 5
+
     # --- ETF volatility-transmission sizing derate (risk/etf_transmission.py) ---
     # Ben-David, Franzoni & Moussawi (2018, JF): ETF arbitrage transmits a
     # shock in one constituent to its healthy peers, so a heavily ETF-wrapped

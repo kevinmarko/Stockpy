@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 248,
+    "live_safe": 251,
     "no_op": 2,
-    "restart_required": 78,
-    "total": 328
+    "restart_required": 79,
+    "total": 332
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 2949,
+      "line": 2986,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3981,
+      "line": 4033,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4086,
+      "line": 4138,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -98,21 +98,21 @@
     {
       "expr": "getattr(settings, key, fallback)",
       "file": "gui/panels/settings_manager.py",
-      "line": 186,
+      "line": 190,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, '')",
       "file": "gui/panels/settings_manager.py",
-      "line": 203,
+      "line": 207,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, [])",
       "file": "gui/panels/settings_manager.py",
-      "line": 271,
+      "line": 275,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 340,
+  "files_scanned": 343,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -381,6 +381,9 @@
     "SNAPSHOT_HISTORY_DAYS",
     "STOCKTWITS_ENABLED",
     "STRATEGY_WRITES_ENABLED",
+    "SYMBOL_RATING_AUTO_DROP_ENABLED",
+    "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
+    "SYMBOL_RATING_ENABLED",
     "SYNC_WATCHLIST_FILES",
     "UNIVERSE_SYNC_ENABLED",
     "USE_DUAL_MOMENTUM_OVERLAY",
@@ -396,13 +399,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 669,
+    "attr": 687,
     "factory_param": 4,
     "getattr_const": 244,
     "os_environ": 16
   },
   "read_forms_distinct_fields": {
-    "attr": 202,
+    "attr": 206,
     "factory_param": 4,
     "getattr_const": 149,
     "os_environ": 13
@@ -798,6 +801,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "rating/symbol_rating_store.py:108",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "rlhf_calibration_store.py:109",
         "via": []
       },
@@ -882,6 +894,24 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:69",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "rating/symbol_rating_store.py:113",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "rating/symbol_rating_store.py:115",
         "via": []
       },
       {
@@ -1009,6 +1039,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "rating/symbol_rating_store.py:113",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "rating/symbol_rating_store.py:115",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "rlhf_calibration_store.py:114",
         "via": []
       },
@@ -1116,7 +1164,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4463",
+        "site": "api/pilots_api.py:4515",
         "via": []
       }
     ],
@@ -1127,7 +1175,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4462",
+        "site": "api/pilots_api.py:4514",
         "via": []
       }
     ],
@@ -1138,7 +1186,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4587",
+        "site": "api/pilots_api.py:4639",
         "via": []
       },
       {
@@ -1147,7 +1195,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "gui/panels/settings_manager.py:122",
+        "site": "gui/panels/settings_manager.py:126",
         "via": []
       }
     ],
@@ -1213,7 +1261,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4567",
+        "site": "api/pilots_api.py:4619",
         "via": []
       },
       {
@@ -1222,7 +1270,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "gui/panels/settings_manager.py:158",
+        "site": "gui/panels/settings_manager.py:162",
         "via": []
       }
     ],
@@ -1684,6 +1732,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "rating/symbol_rating_store.py:113",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "rlhf_calibration_store.py:114",
         "via": []
       },
@@ -1879,7 +1936,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "main_orchestrator.py:114",
+        "site": "main_orchestrator.py:118",
         "via": []
       },
       {
@@ -2127,6 +2184,17 @@
         "site": "api/ws_api.py:54",
         "via": []
       }
+    ],
+    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "closure_value"
+        ],
+        "site": "pipeline/production_steps.py:531",
+        "via": []
+      }
     ]
   },
   "restart_required_only_import_time_discard": [
@@ -2135,7 +2203,8 @@
     "ORCHESTRATOR_DAEMON_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "cross_module_init_helper": 38,
+    "closure_value": 1,
+    "cross_module_init_helper": 44,
     "decorator_arg": 13,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 10,

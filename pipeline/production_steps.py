@@ -452,6 +452,99 @@ def _apply_options_columns(dashboard_df: pd.DataFrame, tech_opt_indicators: dict
         )
 
 
+def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) -> None:
+    """Best-effort write of this cycle's per-symbol GOOD/BAD rating
+    (``rating.symbol_rating.classify_tier``) to the durable
+    ``rating.symbol_rating_store.SymbolRatingStore``.
+
+    A module-level function (same pattern as ``_apply_sector_heat_factor``/
+    ``_apply_etf_transmission`` above) so it's testable directly, without
+    going through ``StrategyEvalStep.run()``'s heavy import chain. No-ops
+    when ``settings.SYMBOL_RATING_ENABLED`` is off or ``dashboard_df`` is
+    empty/``None`` -- mirrors the CAP-EVENT AUDIT LOG block's own guard.
+    Write failures intentionally propagate (``SymbolRatingStore.record_ratings``'s
+    own documented contract) -- the caller (``StrategyEvalStep.run()``) wraps
+    this in its own best-effort try/except so a DB hiccup never affects the
+    run's own scoring/sizing decisions (CONSTRAINT #6).
+    """
+    if not settings.SYMBOL_RATING_ENABLED or dashboard_df is None or dashboard_df.empty:
+        return
+
+    from rating.symbol_rating import classify_tier
+    from rating.symbol_rating_store import SymbolRatingStore
+
+    events = []
+    for _, row in dashboard_df.iterrows():
+        # A missing Score/Action Signal means this ticker's strategy
+        # evaluation never reached the 'results' stage this cycle
+        # (dead-lettered) -- skip it rather than writing a fabricated
+        # rating (CONSTRAINT #4).
+        _raw_score = row.get("Score")
+        _raw_action = row.get("Action Signal")
+        if _raw_score is None or (isinstance(_raw_score, float) and pd.isna(_raw_score)):
+            continue
+        if _raw_action is None or (isinstance(_raw_action, float) and pd.isna(_raw_action)):
+            continue
+        _score = float(_raw_score)
+        events.append({
+            "symbol": row["Symbol"],
+            "score": _score,
+            "action_signal": str(_raw_action) or None,
+            "tier": classify_tier(_score, settings.SYMBOL_RATING_BAD_SCORE_THRESHOLD),
+            "is_held": float(row.get("Robinhood Shares", 0.0) or 0.0) > 0,
+            "cycle_id": cycle_id,
+        })
+    SymbolRatingStore().record_ratings(events, cycle_id=cycle_id)
+
+
+def _apply_symbol_rating_columns(dashboard_df: pd.DataFrame) -> None:
+    """Populate the ``config.COLUMN_SCHEMA``-registered
+    ``Symbol_Rating_Consecutive_Bad_Cycles`` / ``Symbol_Rating_Excluded``
+    columns for every ticker in ``dashboard_df``.
+
+    Defaults ("0 consecutive bad cycles" / ``"No"``) are set FIRST, same
+    pattern as ``Attention_Score``'s NaN pre-fill above -- pandera's
+    ``config.DashboardSchema`` requires both columns to exist on every row
+    regardless of whether the rating store is reachable, and "0"/"No" is
+    never a fabricated value here: it's the exact same floor
+    ``SymbolRatingStore.get_consecutive_bad_cycles`` itself already returns
+    for both "genuinely no bad-cycle streak" AND "store read failed"
+    (CONSTRAINT #4 is not violated -- a failed read and "no history" are
+    behaviorally identical for this purpose: neither should ever read as
+    excluded).
+
+    Deliberately INDEPENDENT of ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED``
+    -- these are diagnostic-only columns (Sheet/HTML report/state snapshot),
+    so the operator can see which symbols WOULD be excluded before ever
+    opting into the auto-drop behavior. Only ``settings.SYMBOL_RATING_ENABLED``
+    (default True) gates whether there's any rating history to read at all.
+    """
+    dashboard_df['Symbol_Rating_Consecutive_Bad_Cycles'] = 0.0
+    dashboard_df['Symbol_Rating_Excluded'] = "No"
+
+    if not settings.SYMBOL_RATING_ENABLED or dashboard_df.empty:
+        return
+
+    from rating.symbol_rating_store import SymbolRatingStore
+
+    store = SymbolRatingStore(readonly=True)
+    threshold = settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES
+
+    def _cycles(symbol: str) -> float:
+        return float(store.get_consecutive_bad_cycles(symbol))
+
+    dashboard_df['Symbol_Rating_Consecutive_Bad_Cycles'] = dashboard_df['Symbol'].map(_cycles)
+
+    def _excluded(row: pd.Series) -> str:
+        is_held = float(row.get("Robinhood Shares", 0.0) or 0.0) > 0
+        if is_held:
+            return "No"
+        cycles = row.get('Symbol_Rating_Consecutive_Bad_Cycles', 0.0)
+        return "Yes" if (pd.notna(cycles) and float(cycles) >= threshold) else "No"
+
+    dashboard_df['Symbol_Rating_Excluded'] = dashboard_df.apply(_excluded, axis=1)
+
+
 def _apply_sector_heat_factor(dashboard_df: pd.DataFrame) -> None:
     """Compute the GDELT-based "Sector Heat Factor" once per distinct SECTOR
     present in ``dashboard_df`` and map it onto every ticker row via its
@@ -2241,11 +2334,19 @@ class StrategyEvalStep(PipelineStep):
         # best-effort: a DB/alert-channel hiccup only logs a warning, never
         # affects the run's own sizing decisions (CONSTRAINT #6) or its
         # SUCCEEDED/FAILED state.
+        #
+        # cycle_id is hoisted above both this try block and the symbol-rating
+        # audit block below it so the two share one identical cycle
+        # identity regardless of which of SIZING_CAP_AUDIT_ENABLED /
+        # SYMBOL_RATING_ENABLED is on -- it must not live only inside the
+        # SIZING_CAP_AUDIT_ENABLED-gated branch, or referencing it from the
+        # symbol-rating block below would raise UnboundLocalError whenever
+        # cap-event auditing is disabled but symbol rating isn't.
+        cycle_id = datetime.now(timezone.utc).isoformat()
         try:
             if settings.SIZING_CAP_AUDIT_ENABLED and not ctx.dashboard_df.empty:
                 from sizing.cap_audit_store import CapAuditStore
 
-                cycle_id = datetime.now(timezone.utc).isoformat()
                 events = []
                 for _, row in ctx.dashboard_df.iterrows():
                     # None (never "" -- see _SIZING_GUARDRAIL_COLS above) means
@@ -2269,6 +2370,40 @@ class StrategyEvalStep(PipelineStep):
                 CapAuditStore().record_cap_events(events, cycle_id=cycle_id)
         except Exception as audit_exc:
             telemetry.warning(f"Sizing cap-event audit write failed (non-critical): {audit_exc}")
+
+        # ---------------------------------------------------------------------
+        # SYMBOL-RATING AUDIT LOG (rating/symbol_rating_store.py)
+        # ---------------------------------------------------------------------
+        # Records this cycle's GOOD/BAD verdict (rating.symbol_rating.classify_tier)
+        # for every symbol that actually reached the 'results' stage this
+        # cycle, mirroring the CAP-EVENT AUDIT LOG block directly above:
+        # best-effort, a DB hiccup only logs a warning and never affects the
+        # run's own scoring/sizing decisions or its SUCCEEDED/FAILED state
+        # (CONSTRAINT #6). The write itself lives in the module-level
+        # _record_symbol_ratings() helper below (same pattern as
+        # _apply_etf_transmission/_apply_sector_heat_factor) so it can be
+        # exercised directly in tests without going through the whole of
+        # StrategyEvalStep.run().
+        try:
+            _record_symbol_ratings(ctx.dashboard_df, cycle_id)
+        except Exception as rating_exc:
+            telemetry.warning(f"Symbol-rating audit write failed (non-critical): {rating_exc}")
+
+        # Populate the two config.COLUMN_SCHEMA-registered rating columns on
+        # the dashboard itself (Sheet/HTML report/state snapshot) -- a
+        # SEPARATE try/except from the write above so a read-back failure
+        # can never suppress the write, and vice versa. Always runs
+        # (independent of SYMBOL_RATING_AUTO_DROP_ENABLED -- see
+        # _apply_symbol_rating_columns's own docstring) so
+        # config.DashboardSchema.validate() always finds both columns, even
+        # when the rating store itself is unreachable this cycle.
+        try:
+            if not ctx.dashboard_df.empty:
+                _apply_symbol_rating_columns(ctx.dashboard_df)
+        except Exception as rating_col_exc:
+            telemetry.warning(f"Symbol-rating column population failed (non-critical): {rating_col_exc}")
+            ctx.dashboard_df['Symbol_Rating_Consecutive_Bad_Cycles'] = 0.0
+            ctx.dashboard_df['Symbol_Rating_Excluded'] = "No"
 
         try:
             if settings.SIZING_CAP_ALERT_ENABLED and not ctx.dashboard_df.empty:

@@ -132,6 +132,12 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "The kill switch plus every risk-gate block, merged into one severity-classified view: CRITICAL (halts everything, e.g. the kill switch or a daily loss limit) or WARNING (a single order blocked). Deduped to the most recent trip per breaker within a rolling 24h window so a chatty block log doesn't bury the signal — an unresolved trip stays visible until a newer one for that same breaker supersedes it.",
   "orchestrator daemon":
     "The always-on background process that keeps the platform's heavy engines warm between cycles instead of paying full startup cost on every run. Its own internal timer can run cycles on a schedule independent of a manual trigger from the Pipeline screen.",
+  "symbol rating":
+    // SYMBOL_RATING_AUTO_DROP_ENABLED / SYMBOL_RATING_DROP_THRESHOLD_CYCLES
+    // are settings.py fields, not Thresholds API fields (GET /thresholds
+    // doesn't surface them) -- same "documented literal" precedent as
+    // "iv rank"/"half-life"/"circuit breaker" above.
+    "Every tracked symbol gets a GOOD/BAD rating from the platform's scoring engine each cycle. After enough consecutive BAD-rated cycles (5 by default), a symbol CAN be automatically excluded from tracking and buying — but this auto-drop behavior is off by default, and even when it's on, it never applies to anything you currently hold. An excluded symbol shows an 'Excluded' badge on Tracked Universe; 'Re-include' immediately undoes the exclusion by hand.",
   "analyst note":
     "An on-demand Claude-written narrative for one symbol — a one-sentence headline, a why-now catalyst paragraph, 1-3 key-risk bullets, and an invalidation condition that would void the thesis. Grounded in the platform's own deterministic numbers, never inventing new ones, and only generated when you click Generate — nothing here runs automatically.",
   "chart-pattern read":
@@ -346,8 +352,8 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "settings-universe": {
     title: "Tracked Universe",
     description:
-      "Add or remove the symbols the pipeline processes on every run, and see per-symbol data coverage. A change here takes effect on the next pipeline run — raw data for any symbol is explorable immediately in Data Explorer regardless.",
-    keyConcepts: [],
+      "Add or remove the symbols the pipeline processes on every run, and see per-symbol data coverage — including each symbol's rating history and whether it's currently excluded by the platform's automated rating system.",
+    keyConcepts: ["symbol rating"],
   },
   "settings-brokers": {
     title: "Brokerage Connections",

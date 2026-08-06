@@ -108,6 +108,13 @@ COLUMN_SCHEMA = [
     # multiplier < 1.0; see sizing/position_sizer.py's module docstring.
     {"header": "Sizing Capped", "key": "Sizing_Was_Capped", "format": "string"},
     {"header": "Sizing Binding Constraint", "key": "Sizing_Binding_Constraint", "format": "string"},
+    # Symbol-rating subsystem (rating/symbol_rating_store.py) diagnostic
+    # columns -- how many consecutive BAD-tier cycles this symbol currently
+    # has, and whether it would be (or is) subtracted from the tracked
+    # universe by settings.SYMBOL_RATING_AUTO_DROP_ENABLED. See
+    # data/portfolio_sync.py::resolve_universe / main.py::_build_universe.
+    {"header": "Symbol Rating Bad Cycles", "key": "Symbol_Rating_Consecutive_Bad_Cycles", "format": "number"},
+    {"header": "Symbol Rating Excluded", "key": "Symbol_Rating_Excluded", "format": "string"},
     # ETF-arbitrage volatility-transmission derate applied to this name's
     # sizing weight this cycle (risk/etf_transmission.py, composed in
     # sizing/position_sizer.py::size_position step 3 alongside the HMM

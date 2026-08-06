@@ -234,13 +234,16 @@ class TestExistingEditorsAreNotBootstrap:
             # 46 -> 49: the "RLHF Calibration" _TUNABLE_GROUPS entry added
             # RLHF_CALIBRATION_AUTO_APPROVE_ENABLED/_CONFIDENCE_THRESHOLD/
             # _AUTO_EXPORT_SFT_ENABLED.
-            "_TUNABLE_INDEX": 49,
+            # 49 -> 53: the "Symbol Rating" _TUNABLE_GROUPS entry added
+            # SYMBOL_RATING_ENABLED/_BAD_SCORE_THRESHOLD/_AUTO_DROP_ENABLED/
+            # _DROP_THRESHOLD_CYCLES.
+            "_TUNABLE_INDEX": 53,
             "_SENTIMENT_INDEX": 33,
             "_SECTOR_SELECTION_INDEX": 11,
             "_FMP_INDEX": 24,
             "_ETF_TRANSMISSION_INDEX": 19,
         }
-        assert len(ALL_EDITOR_KEYS) == 136
+        assert len(ALL_EDITOR_KEYS) == 140
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {
