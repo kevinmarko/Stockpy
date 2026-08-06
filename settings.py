@@ -170,6 +170,12 @@ class Settings(BaseSettings):
     ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key (optional).")
     ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key (optional).")
     ALPACA_PAPER: bool = Field(default=True, description="Use Alpaca paper-trading endpoint.")
+    
+    FMP_PAPER_STARTING_CASH: float = Field(default=100.0, description="Starting cash balance for the paper trading account.")
+    BROKER_BACKEND: str = Field(
+        default="fmp_paper",
+        description="Selects the active broker backend in main_orchestrator.py ('alpaca' or 'fmp_paper')."
+    )
     STATE_API_TOKEN: Optional[str] = Field(
         default=None,
         description=(
@@ -4087,6 +4093,32 @@ class Settings(BaseSettings):
             if entry is not None:
                 cleaned[sector] = entry
         return cleaned
+
+    CACHE_LONG_SHORT_ENABLED: bool = Field(
+        default=True,
+        description="Master switch for the Cache Long/Short tax-loss-harvesting "
+        "advisory strategy. False (the default) is a complete no-op reproducing "
+        "today's exact behavior: the background TLH/correlation-drift scanner in "
+        "main_orchestrator.py never starts, and every read endpoint returns an "
+        "honest empty/disabled shape. Advisory only in this version -- no broker "
+        "order is ever submitted regardless of this flag.",
+    )
+    CACHE_LONG_SHORT_WRITES_ENABLED: bool = Field(
+        default=True,
+        description="Dedicated fail-closed flag for POST /pilots/cache-long-short/* "
+        "write endpoints (start, approve-bulk) -- persists a new tracked position "
+        "or marks a TLH recommendation approved. Its own risk class, must not "
+        "ride in on AUTOMATION_WRITES_ENABLED/STRATEGY_WRITES_ENABLED (this "
+        "changes what a trading strategy recommends).",
+    )
+    CACHE_LONG_SHORT_MIN_CORRELATION: float = Field(default=0.75, description="Min correlation to trigger drift alert")
+    CACHE_LONG_SHORT_TLH_THRESHOLD_PCT: float = Field(default=0.05, description="Percentage loss to trigger TLH")
+    CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS: int = Field(default=3600, description="Interval for cache l/s worker loop")
+    CACHE_LONG_SHORT_PROXY_CANDIDATES: list[str] = Field(
+        default_factory=lambda: ["SPY", "QQQ", "XLK", "XLF", "XLV", "XLE"],
+        description="Candidate proxy ETFs for hedging",
+    )
+
 
     @property
     def fred_key_is_leaked(self) -> bool:

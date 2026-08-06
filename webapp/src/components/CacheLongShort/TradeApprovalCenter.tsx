@@ -1,19 +1,20 @@
 import { useState, useEffect } from "react";
 import { theme } from "../../theme";
+import { api } from "../../api/client";
+import type { CacheLongShortPendingTrade } from "../../api/types";
 
 export function TradeApprovalCenter() {
-  const [trades, setTrades] = useState<any[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [trades, setTrades] = useState<CacheLongShortPendingTrade[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch("/api/v1/strategy/cache-long-short/pending-approvals")
-      .then(res => res.json())
-      .then(data => setTrades(data.pending_trades || []))
+    api.getClsPendingApprovals()
+      .then(setTrades)
       .catch(console.error);
   }, []);
 
-  const handleToggle = (id: string) => {
+  const handleToggle = (id: number) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
@@ -22,23 +23,20 @@ export function TradeApprovalCenter() {
 
   const handleToggleAll = () => {
     if (selected.size === trades.length) setSelected(new Set());
-    else setSelected(new Set(trades.map(t => t.id)));
+    else setSelected(new Set(trades.map(t => t.lot_id)));
   };
 
   const handleApprove = async () => {
     if (selected.size === 0) return;
     setLoading(true);
     try {
-      await fetch("/api/v1/strategy/cache-long-short/approve-bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trade_ids: Array.from(selected) })
-      });
+      await api.approveClsBulk(Array.from(selected));
       alert(`Approved ${selected.size} trades!`);
-      setTrades(trades.filter(t => !selected.has(t.id)));
+      setTrades(trades.filter(t => !selected.has(t.lot_id)));
       setSelected(new Set());
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert(e.message || "Failed to approve trades");
     } finally {
       setLoading(false);
     }
@@ -77,26 +75,24 @@ export function TradeApprovalCenter() {
                   onChange={handleToggleAll} 
                 />
               </th>
-              <th style={{ padding: 12 }}>Date</th>
-              <th style={{ padding: 12 }}>Reason</th>
-              <th style={{ padding: 12 }}>Action</th>
-              <th style={{ padding: 12 }}>Impact</th>
+              <th style={{ padding: 12 }}>Lot ID</th>
+              <th style={{ padding: 12 }}>Position ID</th>
+              <th style={{ padding: 12 }}>Cost Basis</th>
             </tr>
           </thead>
           <tbody>
             {trades.map(trade => (
-              <tr key={trade.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+              <tr key={trade.lot_id} style={{ borderBottom: `1px solid ${theme.border}` }}>
                 <td style={{ padding: 12 }}>
                   <input 
                     type="checkbox" 
-                    checked={selected.has(trade.id)} 
-                    onChange={() => handleToggle(trade.id)} 
+                    checked={selected.has(trade.lot_id)} 
+                    onChange={() => handleToggle(trade.lot_id)} 
                   />
                 </td>
-                <td style={{ padding: 12 }}>{trade.date}</td>
-                <td style={{ padding: 12 }}>{trade.reason}</td>
-                <td style={{ padding: 12, fontWeight: 500 }}>{trade.action}</td>
-                <td style={{ padding: 12, color: trade.impact.startsWith('-') ? theme.decline : theme.growth }}>{trade.impact}</td>
+                <td style={{ padding: 12 }}>{trade.lot_id}</td>
+                <td style={{ padding: 12 }}>{trade.position_id}</td>
+                <td style={{ padding: 12 }}>${trade.cost_basis.toFixed(2)}</td>
               </tr>
             ))}
           </tbody>

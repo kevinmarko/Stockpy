@@ -433,7 +433,11 @@ async def _execute_broker_orders(
         from execution.risk_gate import PreTradeRiskGate, RiskContext
         from transactions_store import TransactionsStore
 
-        broker = AlpacaBroker()
+        if getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper":
+            from execution.fmp_paper_broker import FMPPaperBroker
+            broker = FMPPaperBroker()
+        else:
+            broker = AlpacaBroker()
         ts_store = TransactionsStore()
         risk_gate = PreTradeRiskGate()
         om = OrderManager(broker, dry_run=dry_run, risk_gate=risk_gate)
@@ -1112,14 +1116,24 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
 
 
 
-async def _cache_long_short_worker(interval: int = 3600) -> None:
+async def _cache_long_short_worker() -> None:
     """Background worker for Cache Long/Short strategy operations."""
     from engine.cache_long_short_engine import CacheLongShortEngine
+    from data.cache_long_short_store import CacheLongShortStore
+    import settings
+    interval = settings.CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS
     try:
         while True:
             try:
-                CacheLongShortEngine.scan_tlh_opportunities(user_id="default")
-                CacheLongShortEngine.check_correlation_drift("AAPL", "XLK")
+                store = CacheLongShortStore()
+                CacheLongShortEngine.scan_tlh_opportunities()
+                
+                # Check correlation drift for all tracked proxies
+                for pos in store.get_open_positions():
+                    if pos.position_type == 'long':
+                        proxy = store.get_security_proxy(pos.ticker)
+                        if proxy:
+                            CacheLongShortEngine.check_correlation_drift(pos.ticker, proxy["proxy_ticker"])
             except Exception as e:
                 logger.error(f"Cache Long/Short worker error: {e}")
             await asyncio.sleep(interval)
@@ -1156,15 +1170,20 @@ async def main(dry_run: bool = False, strict: bool = False) -> None:
                 raise PipelineFatalError("Alpaca API keys are missing for live execution")
 
     _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
-    _cls_task = asyncio.create_task(_cache_long_short_worker(interval=3600))
+    _cls_task = None
+    if getattr(settings, "CACHE_LONG_SHORT_ENABLED", False):
+        _cls_task = asyncio.create_task(_cache_long_short_worker())
+    
     try:
         await _main_body(effective_dry_run, strict=strict)
     finally:
         _hb_task.cancel()
-        _cls_task.cancel()
+        if _cls_task:
+            _cls_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await _hb_task
-            await _cls_task
+            if _cls_task:
+                await _cls_task
 
 
 if __name__ == "__main__":

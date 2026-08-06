@@ -172,6 +172,8 @@ import type {
   PromptPinResult,
   DataSyncResult,
   ProviderStatus,
+  CacheLongShortSimulateRequest,
+  CacheLongShortSimulateResult,
 } from "./types";
 
 const SECTORS = [
@@ -7323,6 +7325,55 @@ export const mockApi = {
       status: "success",
       summary: mockForecastBackfill(),
       sample_rows: 11080,
+    });
+  },
+  
+  // ---- Cache Long/Short ----
+  async getClsConcentratedPositions() {
+    return delay({
+      positions: [
+        { ticker: "AAPL", market_value: 12000, pct_equity: 0.25 },
+      ]
+    });
+  },
+  async getClsDashboard() {
+    return delay({
+      status: "enabled",
+      tax_bank: 1540.23,
+      exposure: {
+        long_exposure: 45000,
+        short_exposure: 20000,
+        net_exposure: 25000,
+        gross_exposure: 65000
+      }
+    } as const);
+  },
+  async getClsPendingApprovals() {
+    return delay([
+      { lot_id: 101, position_id: 1, cost_basis: 150.5 },
+      { lot_id: 102, position_id: 2, cost_basis: 300.2 }
+    ]);
+  },
+  async simulateCls(_req: CacheLongShortSimulateRequest): Promise<CacheLongShortSimulateResult> {
+    return delay({
+      found: true,
+      reason: null,
+      beta: 1.2,
+      proxy_ticker: "XLK",
+      correlation_coefficient: 0.85
+    });
+  },
+  async startCls(req: { ticker: string; proxy_ticker: string; allocation: number; correlation_coefficient: number }) {
+    return delay({
+      status: "started",
+      position_id: 99,
+      ticker: req.ticker
+    });
+  },
+  async approveClsBulk(lotIds: number[]) {
+    return delay({
+      status: "approved",
+      count: lotIds.length
     });
   },
 };

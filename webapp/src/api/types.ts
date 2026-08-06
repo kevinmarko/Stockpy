@@ -3482,4 +3482,56 @@ export interface ForecastBackfillSummary {
   synthetic_tickers?: string[];
 }
 
+export interface CacheLongShortConcentratedPosition {
+  ticker: string;
+  market_value: number;
+  pct_equity: number;
+}
 
+export interface CacheLongShortSimulateRequest {
+  ticker: string;
+  allocation: number;
+}
+
+export interface CacheLongShortSimulateResult {
+  found: boolean;
+  reason: string | null;
+  beta: number | null;
+  proxy_ticker: string | null;
+  correlation_coefficient: number | null;
+}
+
+export interface CacheLongShortStartRequest {
+  ticker: string;
+  proxy_ticker: string;
+  allocation: number;
+  correlation_coefficient: number;
+}
+
+export interface CacheLongShortStartResult {
+  status: string;
+  position_id: number;
+  ticker: string;
+}
+
+export interface CacheLongShortDashboard {
+  status: "enabled" | "disabled";
+  tax_bank?: number;
+  exposure?: {
+    long_exposure: number;
+    short_exposure: number;
+    net_exposure: number;
+    gross_exposure: number;
+  };
+}
+
+export interface CacheLongShortPendingTrade {
+  lot_id: number;
+  position_id: number;
+  cost_basis: number;
+}
+
+export interface CacheLongShortApproveBulkResult {
+  status: string;
+  count: number;
+}

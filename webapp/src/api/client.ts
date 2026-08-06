@@ -122,6 +122,14 @@ import type {
   OrderBookLadderResponse,
   ModelComparisonResponse,
   OptionsAnalyticsSummaryResponse,
+  CacheLongShortConcentratedPosition,
+  CacheLongShortSimulateRequest,
+  CacheLongShortSimulateResult,
+  CacheLongShortStartRequest,
+  CacheLongShortStartResult,
+  CacheLongShortDashboard,
+  CacheLongShortPendingTrade,
+  CacheLongShortApproveBulkResult,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
@@ -789,6 +797,30 @@ const liveApi = {
     http<{ status: string; summary: ForecastBackfillSummary; sample_rows: number }>("/pilots/forecast_backfill/run", {
       method: "POST",
       body: JSON.stringify(params ?? {}),
+    }),
+    
+  // ---- Cache Long/Short ----
+  getClsConcentratedPositions: () =>
+    http<{ positions: CacheLongShortConcentratedPosition[] }>("/pilots/cache-long-short/concentrated-positions"),
+  getClsDashboard: () =>
+    http<CacheLongShortDashboard>("/pilots/cache-long-short/dashboard"),
+  getClsPendingApprovals: () =>
+    http<CacheLongShortPendingTrade[]>("/pilots/cache-long-short/pending-approvals"),
+  simulateCls(req: CacheLongShortSimulateRequest): Promise<CacheLongShortSimulateResult> {
+    return http<CacheLongShortSimulateResult>("/data/cache-long-short/simulate", {
+      method: "POST",
+      body: JSON.stringify(req),
+    });
+  },
+  startCls: (req: CacheLongShortStartRequest) =>
+    http<CacheLongShortStartResult>("/pilots/cache-long-short/start", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  approveClsBulk: (lotIds: number[]) =>
+    http<CacheLongShortApproveBulkResult>("/pilots/cache-long-short/approve-bulk", {
+      method: "POST",
+      body: JSON.stringify({ lot_ids: lotIds }),
     }),
 };
 

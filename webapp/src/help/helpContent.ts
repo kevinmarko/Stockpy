@@ -170,6 +170,12 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "Whether the primary US equity market is open right now, computed locally from the current time against the exchange's trading calendar rather than fetched from the server. Auto-refresh's 'pause when market closed' option reads this to decide whether background polling should pause or keep running.",
   "safety telemetry":
     "A switch separate from the auto-refresh master above, governing only the kill-switch and heartbeat readout in the top bar. It keeps polling on its own schedule even when auto-refresh is turned off or the market is closed — a stale safety reading is treated as a risk here, not as something worth pausing to save a background request.",
+  "tax loss harvesting":
+    "Selling securities at a loss to offset a capital gains tax liability. The Cache Long/Short strategy flags these opportunities automatically based on settings, holding them in a 'tax bank' tally.",
+  "proxy hedge":
+    "A highly correlated alternative security (like a sector ETF) bought when selling the original asset for tax-loss harvesting to maintain market exposure while waiting out the wash-sale rule window.",
+  "correlation drift":
+    "When a proxy security stops tracking its target asset closely enough. A background process continually monitors this correlation and flags if the proxy relationship weakens below a safety threshold.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -374,6 +380,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "chart-pattern read",
       "research brief",
     ],
+  },
+  "cache-long-short": {
+    title: "Cache Long/Short",
+    description:
+      "A systematic tax-loss harvesting (TLH) overlay. It monitors concentrated equity positions for TLH opportunities, generating a proxy hedge (like a highly-correlated sector ETF) to maintain beta exposure while avoiding wash-sale rules. Pending trades are routed here for approval before taking effect.",
+    keyConcepts: ["tax loss harvesting", "proxy hedge", "correlation drift"],
   },
 };
 
