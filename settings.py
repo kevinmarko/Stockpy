@@ -326,6 +326,22 @@ class Settings(BaseSettings):
             "single-cycle companion to that gate."
         ),
     )
+    MARKET_DATA_LATENCY_TRACKING_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Automatic, in-process instrumentation (market_data_latency.py) of "
+            "CompositeProvider.get_latest_quote's real (non-cache-hit) fetch "
+            "path -- records the gap between a provider's own quote timestamp "
+            "and local ingestion time to an in-memory ring buffer (never "
+            "persisted to disk; clears on process restart), feeding Mission "
+            "Control's per-symbol data-latency heatmap "
+            "(pilots/observability.py::latency_heatmap_summary). False (the "
+            "default) is a complete no-op -- zero recording, zero overhead on "
+            "the quote-fetch hot path -- matching this codebase's convention "
+            "that new diagnostic instrumentation defaults off even when "
+            "read-only (e.g. ETF_HOLDINGS_ENABLED, SECTOR_HEAT_ENABLED)."
+        ),
+    )
     EXCURSION_INTRADAY_ENABLED: bool = Field(
         default=False,
         description=(

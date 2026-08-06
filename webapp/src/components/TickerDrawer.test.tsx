@@ -12,7 +12,9 @@ import { TickerDrawer } from "./TickerDrawer";
 import { api } from "../api/client";
 import {
   mockEtfTransmissionDisabled,
+  mockForecastSkillBySymbolEmpty,
   mockHeartbeatNoData,
+  mockLatencyHeatmapDisabled,
   mockSizingCapAuditDisabled,
   mockStrategyPnlEmpty,
   mockSystemTelemetryUnavailable,
@@ -43,7 +45,9 @@ function observabilitySummary(entries: RiskGateBlockEntry[] = []): Observability
       macro_gate_writable: false, macro_gate_writable_note: "Writes are disabled.",
     },
     forecast_skill: { horizon_days: 30, window_days: 180, min_obs: 30, reliability_curve: [], skill_weights: {}, pending: 0, completed: 0, reason: "No forecast history yet." },
+    forecast_skill_by_symbol: mockForecastSkillBySymbolEmpty(),
     risk_gate_blocks: { entries, count: entries.length, reason: entries.length ? null : "No risk-gate blocks logged yet." },
+    latency_heatmap: mockLatencyHeatmapDisabled(),
     circuit_breakers: { trips: [], counts: { critical: 0, warning: 0, total: 0 }, window_hours: 24, reason: "No trips." },
     system_telemetry: mockSystemTelemetryUnavailable(),
     sizing_cap_audit: mockSizingCapAuditDisabled(),

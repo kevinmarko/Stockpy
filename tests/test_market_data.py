@@ -955,6 +955,69 @@ class TestCompositeProviderCache:
         yf_fallback.assert_not_called()
 
 
+class TestCompositeProviderLatencyTracking:
+    """CompositeProvider.get_latest_quote's best-effort hook into
+    market_data_latency.py — see that module's docstring and settings.py's
+    MARKET_DATA_LATENCY_TRACKING_ENABLED for the full design rationale."""
+
+    def _make_cp(self, quote_ttl=30):
+        from data.market_data import CompositeProvider, Quote, YFinanceProvider, _QuoteCache
+        cp = CompositeProvider.__new__(CompositeProvider)
+        cp._cache = _QuoteCache(ttl_seconds=quote_ttl)
+        mock_provider = MagicMock(spec=YFinanceProvider)
+        mock_provider.get_latest_quote = MagicMock(
+            return_value=Quote(
+                symbol="AAPL", price=150.0, bid=149.9, ask=150.1,
+                timestamp=datetime.now(timezone.utc), is_stale=True, source="yfinance",
+            )
+        )
+        cp._quote_provider = mock_provider
+        return cp, mock_provider
+
+    def test_disabled_by_default_records_nothing(self):
+        import market_data_latency
+        market_data_latency.get_ring().clear()
+        cp, _ = self._make_cp()
+
+        with patch("settings.settings.MARKET_DATA_LATENCY_TRACKING_ENABLED", False):
+            cp.get_latest_quote("AAPL")
+
+        assert market_data_latency.get_ring().samples() == []
+
+    def test_enabled_records_exactly_one_sample_per_real_fetch(self):
+        import market_data_latency
+        market_data_latency.get_ring().clear()
+        cp, mock_provider = self._make_cp()
+
+        with patch("settings.settings.MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
+            cp.get_latest_quote("AAPL")  # cache miss -> real fetch -> 1 sample
+            cp.get_latest_quote("AAPL")  # cache hit -> no additional sample
+
+        samples = market_data_latency.get_ring().samples()
+        assert len(samples) == 1
+        assert samples[0].symbol == "AAPL"
+        assert samples[0].source == "yfinance"
+        assert samples[0].is_stale is True
+        assert mock_provider.get_latest_quote.call_count == 1
+
+    def test_latency_write_failure_never_breaks_the_quote_fetch(self):
+        """A raising recorder must never propagate into get_latest_quote's
+        return value -- CONSTRAINT #6, best-effort per this hook's own
+        try/except-log-and-continue shape (mirrors pipeline/production_steps
+        .py's identical pattern for CapAuditStore.record_cap_events)."""
+        import market_data_latency
+        cp, _ = self._make_cp()
+
+        with patch("settings.settings.MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
+            with patch.object(
+                market_data_latency, "record_quote_latency", side_effect=RuntimeError("boom")
+            ):
+                quote = cp.get_latest_quote("AAPL")
+
+        assert quote.symbol == "AAPL"
+        assert quote.price == 150.0
+
+
 # ---------------------------------------------------------------------------
 # 8. get_provider / reset_provider singleton
 # ---------------------------------------------------------------------------

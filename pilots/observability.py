@@ -43,6 +43,16 @@ Center's "Observability / Mission Control" tab
    public tracker API doesn't expose an aggregation a caller needs) and
    applies the SAME cold-start-equal-weight / inverse-RMSE formula
    ``get_skill_weights`` uses internally — just without the per-symbol filter.
+3b. **Forecast skill by symbol** — the per-symbol × per-horizon breakdown the
+   portfolio-wide section above doesn't carry (2026-08, closing a confirmed
+   gap against the legacy panel). :func:`_forecast_stats_by_symbol` extends
+   3's bulk-SQL-aggregate trick one dimension further (``GROUP BY symbol,
+   horizon_days, model_name`` instead of just ``model_name``), replacing the
+   legacy panel's N-symbols × 4-horizons × 3-calls-per-cell loop
+   (``gui/panels/observability.py::_forecast_skill_rows``) with three bulk
+   queries regardless of universe size. A requested symbol with zero DB rows
+   still gets an entry (pending/completed 0, empty weights) — never silently
+   dropped from the table.
 4. **Risk gate block log** — last ~100 entries from
    ``output/risk_gate_blocks.jsonl``. Ported verbatim (not imported) from
    ``gui/panels/_shared.py::load_block_log`` per this effort's scope, since
@@ -73,6 +83,20 @@ Center's "Observability / Mission Control" tab
    live on every call and reports no history. Folded into
    ``GET /observability/summary`` as a new ``system_telemetry`` key (cheap,
    scalar-only — same "ride the existing composite" call as sections 1b/5).
+6b. **Data latency heatmap** — per-symbol quote fetch-to-ingestion latency
+   (2026-08, closing a confirmed gap against the legacy panel). NOT a literal
+   port: the legacy ``LatencySampleStore`` lived only in Streamlit
+   ``st.session_state``, populated only on a manual "Fetch quotes" click — a
+   stateless process has no equivalent session, and CONSTRAINT #4 forbids
+   fabricating a history that isn't real (the same reasoning that already
+   kept section 10's Heartbeat Age Trend unported). :func:`latency_heatmap_summary`
+   instead reads ``market_data_latency.py``'s in-process ring buffer,
+   recorded AUTOMATICALLY on every real (non-cache-hit) fetch through
+   ``data/market_data.py::CompositeProvider.get_latest_quote`` — strictly
+   more useful than the manual-trigger original — gated behind
+   ``settings.MARKET_DATA_LATENCY_TRACKING_ENABLED`` (default ``False``).
+   Never persisted to disk, so a restarted process honestly reports zero
+   samples rather than a stale cross-restart figure.
 7. **Log aggregation** — a bounded tail of ``logs/investyo.log``, parsed and
    tallied by level, ported from ``gui/panels/observability.py
    ::_render_observability_error_log`` via ``gui.observability_telemetry``'s
@@ -169,9 +193,11 @@ __all__ = [
     "equity_curve_with_drawdown",
     "regime_overlay",
     "portfolio_forecast_skill",
+    "forecast_skill_by_symbol_summary",
     "risk_gate_block_log",
     "circuit_breaker_summary",
     "system_telemetry_summary",
+    "latency_heatmap_summary",
     "log_aggregation",
     "sizing_cap_audit_summary",
     "etf_transmission_summary",
@@ -705,6 +731,198 @@ def portfolio_forecast_skill(
     }
 
 
+def _forecast_stats_by_symbol(
+    db_path: str, symbols: List[str], horizon_days: int, window_days: int, min_obs: int
+) -> Dict[str, Dict[str, Any]]:
+    """Direct read-only SQL aggregate over ``forecast_errors``, grouped by
+    ``(symbol, model_name)`` — the bulk-query sibling of
+    :func:`_portfolio_forecast_stats`, replacing the legacy GUI panel's
+    N-symbols x 4-horizons x 3-calls-per-cell loop
+    (``gui/panels/observability.py::_forecast_skill_rows``) with three
+    grouped queries total, regardless of how many symbols are requested.
+    Applies the SAME cold-start / inverse-RMSE formula per symbol as
+    ``_portfolio_forecast_stats``/``ForecastTracker.get_skill_weights`` —
+    just computed in Python from one bulk result set per query instead of
+    calling that per-symbol method in a loop.
+
+    Returns ``{symbol: {"skill_weights": {...}, "pending": n, "completed": n}}``
+    — a symbol with zero matching rows is simply absent from the dict (the
+    caller fills in the honest zero/empty entry), never raises."""
+    import sqlite3
+    from datetime import datetime, timedelta as _timedelta, timezone
+
+    from db_config import sqlite_readonly_uri
+    from forecasting.forecast_tracker import _MIN_RMSE
+
+    if not symbols:
+        return {}
+
+    placeholders = ",".join("?" for _ in symbols)
+    since_iso = (datetime.now(timezone.utc) - _timedelta(days=window_days)).isoformat()
+    conn = sqlite3.connect(sqlite_readonly_uri(db_path), uri=True)
+    try:
+        skill_rows = conn.execute(
+            f"""SELECT symbol, model_name, COUNT(*) AS n, AVG(squared_error) AS mse
+                FROM forecast_errors
+                WHERE horizon_days = ?
+                  AND actual_price IS NOT NULL
+                  AND forecast_ts  >= ?
+                  AND symbol IN ({placeholders})
+                GROUP BY symbol, model_name""",
+            (horizon_days, since_iso, *symbols),
+        ).fetchall()
+        pending_rows = conn.execute(
+            f"""SELECT symbol, COUNT(*) FROM forecast_errors
+                WHERE horizon_days = ? AND actual_price IS NULL
+                  AND symbol IN ({placeholders})
+                GROUP BY symbol""",
+            (horizon_days, *symbols),
+        ).fetchall()
+        completed_rows = conn.execute(
+            f"""SELECT symbol, COUNT(*) FROM forecast_errors
+                WHERE horizon_days = ? AND actual_price IS NOT NULL AND forecast_ts >= ?
+                  AND symbol IN ({placeholders})
+                GROUP BY symbol""",
+            (horizon_days, since_iso, *symbols),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    pending_by_symbol = {r[0]: int(r[1]) for r in pending_rows}
+    completed_by_symbol = {r[0]: int(r[1]) for r in completed_rows}
+
+    stats_by_symbol: Dict[str, Dict[str, Any]] = {}
+    for sym, model_name, n, mse in skill_rows:
+        stats_by_symbol.setdefault(sym, {})[model_name] = (int(n), float(mse) if mse is not None else 0.0)
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for sym, model_stats in stats_by_symbol.items():
+        if any(n < min_obs for (n, _) in model_stats.values()):
+            n_models = len(model_stats)
+            weights = {name: 1.0 / n_models for name in model_stats}
+        else:
+            inv_rmse: Dict[str, float] = {}
+            for name, (_, mse) in model_stats.items():
+                rmse = math.sqrt(mse) if mse >= 0 else 0.0
+                inv_rmse[name] = 1.0 / max(rmse, _MIN_RMSE)
+            total = sum(inv_rmse.values())
+            if total <= 0:
+                n_models = len(inv_rmse)
+                weights = {name: 1.0 / n_models for name in inv_rmse}
+            else:
+                weights = {name: w / total for name, w in inv_rmse.items()}
+        result[sym] = {
+            "skill_weights": weights,
+            "pending": pending_by_symbol.get(sym, 0),
+            "completed": completed_by_symbol.get(sym, 0),
+        }
+
+    # A symbol with pending/completed counts but NO model ever cleared
+    # min_obs's floor for a weight row still needs its counts surfaced.
+    for sym in set(pending_by_symbol) | set(completed_by_symbol):
+        result.setdefault(sym, {"skill_weights": {}, "pending": pending_by_symbol.get(sym, 0), "completed": completed_by_symbol.get(sym, 0)})
+
+    return result
+
+
+def forecast_skill_by_symbol_summary(
+    snapshot: Optional[dict],
+    horizon_days: int = 30,
+    window_days: Optional[int] = None,
+    min_obs: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Per-symbol forecast-skill table for one horizon — the granular
+    breakdown the legacy Streamlit panel showed
+    (``gui/panels/observability.py::_render_observability_forecast_skill``)
+    that the portfolio-wide :func:`portfolio_forecast_skill` section doesn't
+    carry. Symbols come from ``snapshot``'s ``signals`` list, deduped and
+    capped to the first 30 — the exact same source and bound the legacy
+    panel's own ``_forecast_skill_rows`` loader uses.
+
+    Same ``window_days``/``min_obs`` defaults and the SAME cold-start/
+    inverse-RMSE formula as the portfolio-wide section — see
+    :func:`_forecast_stats_by_symbol`. Never raises (CONSTRAINT #6); an empty
+    universe or a totally unavailable tracker both degrade to an empty
+    ``rows`` list plus an honest ``reason`` — never a table of fabricated
+    zeros (CONSTRAINT #4)."""
+    horizon = int(horizon_days)
+    window = int(window_days) if window_days is not None else int(settings.FORECAST_SKILL_WINDOW_DAYS)
+    min_o = int(min_obs) if min_obs is not None else int(settings.FORECAST_SKILL_MIN_OBS)
+
+    symbols: List[str] = []
+    for s in (snapshot or {}).get("signals", []) or []:
+        sym = s.get("symbol") if isinstance(s, dict) else None
+        if sym and sym not in symbols:
+            symbols.append(str(sym))
+    bounded_symbols = symbols[:30]
+
+    no_symbols_reason = "No symbols in the last pipeline snapshot to score."
+    no_history_reason = "No forecast history yet — run the pipeline to accumulate it."
+
+    if not bounded_symbols:
+        return {
+            "horizon_days": horizon,
+            "window_days": window,
+            "min_obs": min_o,
+            "rows": [],
+            "reason": no_symbols_reason,
+        }
+
+    try:
+        from forecasting.forecast_tracker import ForecastTracker
+
+        # Read-only: a GET must never create the table as a side effect.
+        tracker = ForecastTracker(readonly=True)
+        db_path = tracker._db_path  # noqa: SLF001 — matches portfolio_forecast_skill's identical reuse
+    except Exception as exc:  # noqa: BLE001 — dead-letter
+        logger.debug("forecast_skill_by_symbol_summary: ForecastTracker unavailable: %s", exc)
+        return {
+            "horizon_days": horizon,
+            "window_days": window,
+            "min_obs": min_o,
+            "rows": [],
+            "reason": no_history_reason,
+        }
+
+    try:
+        stats_by_symbol = _forecast_stats_by_symbol(db_path, bounded_symbols, horizon, window, min_o)
+    except Exception as exc:  # noqa: BLE001 — dead-letter (missing DB file, etc.)
+        logger.debug("forecast_skill_by_symbol_summary: bulk query failed: %s", exc)
+        stats_by_symbol = {}
+
+    rows: List[Dict[str, Any]] = []
+    any_history = False
+    for sym in bounded_symbols:
+        stats = stats_by_symbol.get(sym, {"skill_weights": {}, "pending": 0, "completed": 0})
+        skill_weights = {
+            str(k): w for k, v in stats.get("skill_weights", {}).items() if (w := _finite_or_none(v)) is not None
+        }
+        pending = int(stats.get("pending", 0) or 0)
+        completed = int(stats.get("completed", 0) or 0)
+        if skill_weights or pending or completed:
+            any_history = True
+        rows.append(
+            {"symbol": sym, "pending": pending, "completed": completed, "skill_weights": skill_weights}
+        )
+
+    if not any_history:
+        return {
+            "horizon_days": horizon,
+            "window_days": window,
+            "min_obs": min_o,
+            "rows": [],
+            "reason": no_history_reason,
+        }
+
+    return {
+        "horizon_days": horizon,
+        "window_days": window,
+        "min_obs": min_o,
+        "rows": rows,
+        "reason": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 4. Risk gate block log — ported verbatim from gui/panels/_shared.py's
 # load_block_log (per this effort's scope: api/pilots_api.py doesn't reach
@@ -912,6 +1130,90 @@ def system_telemetry_summary() -> Dict[str, Any]:
         "process_cpu_percent": _finite_or_none(t.process_cpu_percent),
         "process_threads": t.process_threads if t.process_threads >= 0 else None,
         "sampled_at": t.sampled_at.isoformat(),
+        "reason": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 6b. Data latency heatmap — per-symbol quote fetch-to-ingestion latency, from
+# market_data_latency.py's automatic, in-process ring buffer. See that
+# module's docstring for why this is an honest REPLACEMENT for (not a literal
+# port of) the legacy Streamlit panel's manual-"click Fetch quotes"-trigger,
+# Streamlit-session-local design — samples are recorded automatically on
+# every real quote fetch, and clear on process restart rather than never.
+# ---------------------------------------------------------------------------
+
+
+def _empty_latency_heatmap(reason: str) -> Dict[str, Any]:
+    return {
+        "tracking_enabled": bool(settings.MARKET_DATA_LATENCY_TRACKING_ENABLED),
+        "count": 0,
+        "p50": None,
+        "p95": None,
+        "worst_symbol": None,
+        "worst_p95": None,
+        "rows": [],
+        "reason": reason,
+    }
+
+
+def latency_heatmap_summary(limit: int = 200) -> Dict[str, Any]:
+    """Per-symbol quote-latency samples recorded since this API process last
+    started (``market_data_latency.py``'s in-process ring buffer). Degrades to
+    an honest empty shape (CONSTRAINT #4) when tracking is disabled
+    (``MARKET_DATA_LATENCY_TRACKING_ENABLED=False``, the default) or no
+    samples have been recorded yet in this process — never raises
+    (CONSTRAINT #6). Never persisted to disk, so a restarted API process
+    honestly reports zero samples rather than serving a stale cross-restart
+    figure — the exact honesty framing ``heartbeat_summary`` already uses."""
+    tracking_enabled = bool(settings.MARKET_DATA_LATENCY_TRACKING_ENABLED)
+    if not tracking_enabled:
+        return _empty_latency_heatmap(
+            "MARKET_DATA_LATENCY_TRACKING_ENABLED is False — latency samples "
+            "are not recorded this process."
+        )
+
+    try:
+        import market_data_latency
+    except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
+        logger.debug("latency_heatmap_summary import failed: %s", exc)
+        return _empty_latency_heatmap("Latency tracking module unavailable.")
+
+    try:
+        samples = market_data_latency.get_ring().samples()
+    except Exception as exc:  # noqa: BLE001 — dead-letter: ring read failure
+        logger.debug("latency_heatmap_summary: ring read failed: %s", exc)
+        return _empty_latency_heatmap("Latency samples unreadable.")
+
+    if not samples:
+        return _empty_latency_heatmap(
+            "No latency samples yet this process — tracking is on, but no "
+            "quote has been fetched yet."
+        )
+
+    summary = market_data_latency.summarize_latency(samples)
+    # Newest first, matching every other bounded-tail section's convention
+    # (risk_gate_block_log, sizing_cap_audit_summary).
+    rows = [
+        {
+            "symbol": s.symbol,
+            "source": s.source,
+            "quote_timestamp": s.quote_timestamp.isoformat(),
+            "ingested_at": s.ingested_at.isoformat(),
+            "latency_seconds": round(s.latency_seconds, 3),
+            "is_stale": s.is_stale,
+        }
+        for s in sorted(samples, key=lambda s: s.ingested_at, reverse=True)[:limit]
+    ]
+
+    return {
+        "tracking_enabled": True,
+        "count": summary["count"],
+        "p50": _finite_or_none(summary["p50"]),
+        "p95": _finite_or_none(summary["p95"]),
+        "worst_symbol": summary["worst_symbol"],
+        "worst_p95": _finite_or_none(summary["worst_p95"]),
+        "rows": rows,
         "reason": None,
     }
 
@@ -1314,7 +1616,7 @@ def observability_summary(
     horizon_days: int = 30,
     snapshot: Optional[dict] = None,
 ) -> Dict[str, Any]:
-    """Bundle all ELEVEN Mission-Control sections into one payload for
+    """Bundle all FOURTEEN Mission-Control sections into one payload for
     ``GET /observability/summary``. Each section degrades independently
     (CONSTRAINT #6) — a failure in one never blocks the others. Log
     aggregation (section 7) is deliberately NOT part of this composite — see
@@ -1326,9 +1628,11 @@ def observability_summary(
         "equity_curve": equity_curve_with_drawdown(equity_range),
         "regime": regime_overlay(snapshot),
         "forecast_skill": portfolio_forecast_skill(horizon_days),
+        "forecast_skill_by_symbol": forecast_skill_by_symbol_summary(snapshot, horizon_days),
         "risk_gate_blocks": risk_gate_block_log(),
         "circuit_breakers": circuit_breaker_summary(),
         "system_telemetry": system_telemetry_summary(),
+        "latency_heatmap": latency_heatmap_summary(),
         "sizing_cap_audit": sizing_cap_audit_summary(),
         "etf_transmission": etf_transmission_summary(snapshot),
         "heartbeat": heartbeat_summary(),

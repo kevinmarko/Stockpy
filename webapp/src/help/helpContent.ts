@@ -132,6 +132,10 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "The kill switch plus every risk-gate block, merged into one severity-classified view: CRITICAL (halts everything, e.g. the kill switch or a daily loss limit) or WARNING (a single order blocked). Deduped to the most recent trip per breaker within a rolling 24h window so a chatty block log doesn't bury the signal — an unresolved trip stays visible until a newer one for that same breaker supersedes it.",
   "orchestrator daemon":
     "The always-on background process that keeps the platform's heavy engines warm between cycles instead of paying full startup cost on every run. Its own internal timer can run cycles on a schedule independent of a manual trigger from the Pipeline screen.",
+  "sizing cap":
+    "A durable log of every time the platform's automatic position-sizing guardrails shrank a trade below what the raw signal called for. The 'Constraint' column names which limit did it — kelly_cap (the per-position Kelly ceiling), vol_target_leverage, max_position_weight, portfolio_gross (the whole-book exposure cap), or escalation (a symbol capped for several cycles running gets derated further). This is capacity management, not a sign anything is wrong: a symbol showing up here often is being sized smaller than its signal alone would suggest, on purpose.",
+  "etf transmission":
+    "A non-fundamental risk source: a stock heavily owned by ETFs can absorb a shock to one of its basket-mates purely through ETF arbitrage, even when nothing about the stock itself changed (Ben-David, Franzoni & Moussawi, 2018). Shown per symbol as ownership %, and comovement R² with its primary wrapper after removing the shared market-factor effect — a high reading can mean its position size is being quietly derated to compensate.",
   "symbol rating":
     // SYMBOL_RATING_AUTO_DROP_ENABLED / SYMBOL_RATING_DROP_THRESHOLD_CYCLES
     // are settings.py fields, not Thresholds API fields (GET /thresholds
@@ -316,8 +320,8 @@ export const TAB_HELP: Record<string, TabHelp> = {
   observability: {
     title: "Mission Control",
     description:
-      "The platform's single risk-telemetry surface: macro regime (VIX, Sahm Rule, HY OAS, yield curve, HMM risk-on probability), portfolio-wide equity/drawdown history, forecast-model skill weights, the circuit-breaker dashboard (kill switch + risk-gate blocks, deduped and classified CRITICAL/WARNING within a rolling window), and the raw risk-gate block log — every order the pre-trade gate actually vetoed, and why.",
-    keyConcepts: ["hmm regime", "risk gate", "circuit breaker"],
+      "An attention summary up top flags anything that actually needs a look — circuit-breaker trips, risk-gate blocks, a sizing-cap escalation, a stale heartbeat, the macro gate being off — with an honest 'All clear' when nothing does. Below that, always visible: the macro regime gate control (VIX, Sahm Rule, HY OAS, yield curve, HMM risk-on probability, and the toggle that vetoes new BUYs during a bad regime) and portfolio risk/equity history. Everything else — forecast-model skill (portfolio-wide and per-symbol), the circuit-breaker dashboard, the raw risk-gate block log, system telemetry, per-symbol quote latency, the sizing-cap audit trail, ETF volatility transmission, heartbeat, strategy P&L, and the log tail — lives in a collapsed 'Background telemetry' section below, expandable on demand.",
+    keyConcepts: ["hmm regime", "risk gate", "circuit breaker", "sizing cap", "etf transmission"],
   },
   pipeline: {
     title: "Pipeline",

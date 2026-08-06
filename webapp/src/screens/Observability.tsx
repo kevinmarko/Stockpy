@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type {
@@ -11,13 +11,17 @@ import type {
   RiskGateBlockEntry,
   SizingCapEvent,
   StrategyPnlRow,
+  Thresholds,
 } from "../api/types";
 import { LOG_LEVELS } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Input, Loading, Notice, Select, Table, Tile } from "../components/ui";
+import { Button, ErrorState, InfoTip, Input, Loading, Notice, Select, Table, Tile } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
+import { glossaryDef } from "../help/helpContent";
+import { loadThresholds } from "../help/thresholds";
+import { deriveAttentionItems, type AttentionItem } from "../observabilityAttention";
 import { RangeToggle } from "../components/RangeToggle";
 import { DrawdownArea, PerfLine } from "../components/charts";
 import { Modal } from "../components/Modal";
@@ -66,13 +70,153 @@ function regimeColor(regime: string | null): string {
   return theme.caution;
 }
 
-function SectionHeading({ title, sub }: { title: string; sub?: string }) {
+/**
+ * SectionHeading — optionally carries a `helpKey` into GLOSSARY (helpContent.ts)
+ * rendered as a small "?" InfoTip next to the title. This is deliberately a
+ * SECOND, per-section education surface alongside the page-top TabGuide panel
+ * (not a replacement for it): TabGuide expands only on a screen's first-ever
+ * visit and then stays collapsed forever (help/helpState.ts), so a section
+ * whose meaning isn't obvious from its title alone — "Sizing cap-event audit
+ * trail", "ETF volatility transmission" — needs an explanation that's always
+ * reachable, not just on the first visit. `thresholds` is the same
+ * `GET /thresholds` result TabGuide already loads (loadThresholds()'s
+ * module-level cache dedups the extra fetch to nothing); omit it for a
+ * heading with no `helpKey`.
+ */
+function SectionHeading({
+  title,
+  sub,
+  helpKey,
+  thresholds = null,
+  id,
+}: {
+  title: string;
+  sub?: string;
+  helpKey?: string;
+  thresholds?: Thresholds | null;
+  /** Anchor id — lets observabilityAttention.ts's items scroll straight to
+   * this section instead of leaving the operator to hunt for it. */
+  id?: string;
+}) {
+  const def = helpKey ? glossaryDef(helpKey, thresholds) : undefined;
   return (
-    <div style={{ marginTop: "var(--s-6)", marginBottom: "var(--s-2-5)" }}>
-      <h2 style={{ margin: 0, fontSize: "var(--t-title)" }}>{title}</h2>
+    <div id={id} style={{ marginTop: "var(--s-6)", marginBottom: "var(--s-2-5)", scrollMarginTop: "var(--s-4)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+        <h2 style={{ margin: 0, fontSize: "var(--t-title)" }}>{title}</h2>
+        {def && (
+          <InfoTip
+            ariaLabel={`What is ${title.toLowerCase()}?`}
+            content={def}
+            triggerStyle={{
+              background: "none",
+              border: `1px solid ${theme.border}`,
+              borderRadius: "50%",
+              width: 18,
+              height: 18,
+              lineHeight: "16px",
+              fontSize: "var(--t-micro)",
+              color: theme.textMuted,
+              cursor: "pointer",
+              padding: 0,
+            }}
+          >
+            ?
+          </InfoTip>
+        )}
+      </div>
       {sub && (
         <p style={{ margin: "var(--s-1) 0 0", color: theme.textMuted, fontSize: "var(--t-label)" }}>{sub}</p>
       )}
+    </div>
+  );
+}
+
+/**
+ * AttentionStripSection — the first thing this screen renders. Answers "does
+ * anything here need a look right now" without the operator scanning all
+ * eleven-plus sections themselves. Backed entirely by `deriveAttentionItems`
+ * (observabilityAttention.ts) — pure, synchronous, no new backend fields;
+ * Dashboard.tsx runs the exact same function so the two screens can never
+ * disagree about what's notable. Clicking an item scrolls to that section's
+ * `id` below. The empty-list "All clear" case is an honest, explicit state —
+ * never fabricated when `data` hasn't loaded (the caller only renders this
+ * once `data` exists).
+ */
+function AttentionStripSection({ items }: { items: AttentionItem[] }) {
+  const scrollTo = (anchor: string) => {
+    // Optional-chained on the method itself, not just the element -- jsdom
+    // (this codebase's test environment) implements no real layout and
+    // doesn't define scrollIntoView at all (see AIChatInterface.tsx's
+    // identical guard and LogStream.test.tsx's doc comment on the same gap).
+    document.getElementById(anchor)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  };
+
+  if (items.length === 0) {
+    return (
+      <div
+        className="card card-pad"
+        data-testid="attention-strip-clear"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--s-2)",
+          borderLeft: `3px solid ${theme.growth}`,
+          marginBottom: "var(--s-4)",
+        }}
+      >
+        <span style={{ color: theme.growth, fontWeight: 700 }}>✓ All clear</span>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-label)" }}>
+          Nothing below needs attention right now.
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="card card-pad"
+      data-testid="attention-strip"
+      style={{ marginBottom: "var(--s-4)", borderLeft: `3px solid ${theme.decline}` }}
+    >
+      <div
+        style={{
+          fontSize: "var(--t-footnote)",
+          color: theme.textMuted,
+          marginBottom: "var(--s-2)",
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+        }}
+      >
+        Needs attention
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-1-5)" }}>
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => scrollTo(item.anchor)}
+            data-testid="attention-item"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--s-2)",
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              textAlign: "left",
+              font: "inherit",
+              color: theme.textPrimary,
+            }}
+          >
+            <span className={`badge ${item.severity === "critical" ? "badge-bad" : "badge-warn"}`}>
+              {item.severity === "critical" ? "CRITICAL" : "WARNING"}
+            </span>
+            <span style={{ fontSize: "var(--t-label)" }}>{item.label}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -315,6 +459,58 @@ function ForecastSkillSection({
   );
 }
 
+/**
+ * ForecastSkillBySymbolSection — the per-symbol breakdown the portfolio-wide
+ * ForecastSkillSection above doesn't carry (rank 7 of the published Mission
+ * Control research: confirmed as wanted, previously only in the retired
+ * Streamlit panel). One row per symbol from the last pipeline snapshot;
+ * "Top model" is whichever model currently carries the largest inverse-RMSE
+ * share for that symbol — a quick "what's driving this symbol's forecast"
+ * read without needing all four models' weights spelled out per row. A
+ * symbol with zero completed forecasts still gets a row (Pending/Completed
+ * counts, "—" for the model) rather than being silently dropped — see
+ * pilots/observability.py::forecast_skill_by_symbol_summary's own contract.
+ */
+function ForecastSkillBySymbolSection({
+  bySymbol,
+}: {
+  bySymbol: ObservabilitySummary["forecast_skill_by_symbol"];
+}) {
+  if (bySymbol.reason) {
+    return <div className="empty" style={{ padding: "var(--s-4)" }}>{bySymbol.reason}</div>;
+  }
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <Table style={{ fontSize: "var(--t-caption)" }}>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th className="num">Pending</th>
+            <th className="num">Completed</th>
+            <th>Top model</th>
+            <th className="num">Weight</th>
+          </tr>
+        </thead>
+        <tbody>
+          {bySymbol.rows.map((row) => {
+            const ranked = Object.entries(row.skill_weights).sort((a, b) => b[1] - a[1]);
+            const top = ranked[0];
+            return (
+              <tr key={row.symbol} data-testid="forecast-skill-symbol-row">
+                <td>{row.symbol}</td>
+                <td className="num">{row.pending}</td>
+                <td className="num">{row.completed}</td>
+                <td>{top ? top[0] : "—"}</td>
+                <td className="num">{top ? fmtPct(top[1], 0, { fromFraction: true }) : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </Table>
+    </div>
+  );
+}
+
 function BlockLogRow({ entry }: { entry: RiskGateBlockEntry }) {
   return (
     <div
@@ -488,6 +684,73 @@ function SystemTelemetrySection({ telemetry }: { telemetry: ObservabilitySummary
       )}
       <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-2)" }}>
         Sampled {telemetry.sampled_at ? timeAgo(telemetry.sampled_at) : "—"} — reload the screen to re-sample.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * LatencyHeatmapSection — per-symbol quote fetch-to-ingestion latency
+ * (rank 8 of the published Mission Control research: confirmed as wanted,
+ * previously only in the retired Streamlit panel — and, unlike that panel,
+ * recorded automatically rather than requiring a manual "Fetch quotes"
+ * click). Samples live only in the API process's memory
+ * (market_data_latency.py) and reset on every restart — the KPI strip and
+ * "Samples since..." caption are worded the same honest, point-in-time way
+ * SystemTelemetrySection's "reload the screen to re-sample" caption is.
+ */
+function LatencyHeatmapSection({
+  latency,
+}: {
+  latency: ObservabilitySummary["latency_heatmap"];
+}) {
+  if (latency.reason) {
+    return <div className="empty" style={{ padding: "var(--s-4)" }}>{latency.reason}</div>;
+  }
+  return (
+    <div>
+      <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
+        <Tile label="Samples" value={latency.count} />
+        <Tile label="Median (p50)" value={latency.p50 == null ? "—" : `${fmtNum(latency.p50, 2)}s`} />
+        <Tile label="p95" value={latency.p95 == null ? "—" : `${fmtNum(latency.p95, 2)}s`} />
+        <Tile
+          label="Worst symbol"
+          value={latency.worst_symbol ?? "—"}
+          tone={latency.worst_symbol ? "neg" : undefined}
+        />
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <Table style={{ fontSize: "var(--t-caption)" }}>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Source</th>
+              <th className="num">Latency</th>
+              <th>Stale</th>
+              <th>Ingested</th>
+            </tr>
+          </thead>
+          <tbody>
+            {latency.rows.map((s, i) => (
+              <tr key={`${s.symbol}-${i}`} data-testid="latency-sample-row">
+                <td>{s.symbol}</td>
+                <td>{s.source}</td>
+                <td className="num">{fmtNum(s.latency_seconds, 2)}s</td>
+                <td>
+                  {s.is_stale ? (
+                    <span className="badge badge-warn">stale</span>
+                  ) : (
+                    <span className="badge badge-neutral">fresh</span>
+                  )}
+                </td>
+                <td>{timeAgo(s.ingested_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </div>
+      <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-2)" }}>
+        Samples since this API process last started — never persisted to disk, so a restart clears this table.
       </p>
     </div>
   );
@@ -826,10 +1089,26 @@ export function Observability() {
   const [range, setRange] = useState<PerfRange>("1Y");
   const [horizon, setHorizon] = useState<number>(30);
 
+  // Backs the per-section "?" InfoTips (see SectionHeading's helpKey prop) —
+  // the same GET /thresholds fetch TabGuide loads below; loadThresholds()'s
+  // module-level cache dedups this to zero extra network requests.
+  const [thresholds, setThresholds] = useState<Thresholds | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadThresholds().then((t) => {
+      if (alive) setThresholds(t);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const { data, loading, error, status, reload } = useApi<ObservabilitySummary>(
     () => api.getObservabilitySummary(range, horizon),
     [range, horizon]
   );
+
+  const attentionItems = useMemo(() => (data ? deriveAttentionItems(data) : []), [data]);
 
   // Kept as a SEPARATE fetch (not folded into `data` above) — mirrors the
   // backend's own GET /observability/logs split: a log tail is a heavier,
@@ -881,8 +1160,36 @@ export function Observability() {
 
       {!loading && !error && data && (
         <>
+          <AttentionStripSection items={attentionItems} />
+
+          {/* The page's only two real levers (this toggle + the ETF-config
+              link further down) get a visually distinct "control" treatment
+              and top billing — see AttentionStripSection's doc comment and
+              CLAUDE.md's MACRO_REGIME_GATE_ENABLED section for why this one
+              in particular belongs above the fold. */}
+          <div
+            id="macro-gate"
+            className="card card-pad"
+            data-testid="macro-gate-control-card"
+            style={{ borderLeft: `3px solid ${theme.accent}`, marginBottom: "var(--s-4)" }}
+          >
+            <div
+              style={{
+                fontSize: "var(--t-footnote)",
+                color: theme.accent,
+                marginBottom: "var(--s-1)",
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+              }}
+            >
+              ⚙ Control · Macro regime gate
+            </div>
+            <RegimeBadgeRow regime={data.regime} onChanged={reload} />
+          </div>
+
           {/* 1. Portfolio risk metrics */}
-          <SectionHeading title="Portfolio risk" sub="Over the full account equity history" />
+          <SectionHeading id="portfolio-risk" title="Portfolio risk" sub="Over the full account equity history" />
           <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
             <Tile label="Sharpe" value={fmtNum(data.portfolio_risk.sharpe_ratio, 2)} />
             <Tile label="Calmar" value={fmtNum(data.portfolio_risk.calmar_ratio, 2)} />
@@ -929,8 +1236,10 @@ export function Observability() {
             </p>
           )}
 
-          {/* 2. Equity + drawdown + regime overlay */}
-          <SectionHeading title="Equity, drawdown &amp; regime" />
+          {/* 2. Equity + drawdown (regime overlay moved into the "Control ·
+              Macro regime gate" card above, next to the toggle it actually
+              informs) */}
+          <SectionHeading title="Equity &amp; drawdown" />
           <div style={{ marginBottom: "var(--s-2-5)" }}>
             <RangeToggle value={range} onChange={setRange} />
           </div>
@@ -946,8 +1255,30 @@ export function Observability() {
               <DrawdownArea data={data.equity_curve.points} />
             </>
           )}
-          <RegimeBadgeRow regime={data.regime} onChanged={reload} />
 
+          {/* Everything below is detail, not "does anything need a look" —
+              AttentionStripSection above already answers that. Collapsed by
+              default so the always-visible page is four things (attention,
+              the macro-gate control, portfolio risk, equity & drawdown)
+              instead of the previous eleven-plus-section, always-expanded
+              scroll. A native <details> (this codebase's own established
+              collapsible idiom — see components/ui.tsx's "More info" hints)
+              rather than a bespoke component: keyboard/screen-reader support
+              for free, no extra open/close state to wire up. */}
+          <details className="card" style={{ marginTop: "var(--s-4)" }} data-testid="background-telemetry">
+            <summary
+              style={{
+                cursor: "pointer",
+                userSelect: "none",
+                padding: "var(--s-3) var(--s-4)",
+                fontWeight: 700,
+                fontSize: "var(--t-label)",
+                color: theme.textSecondary,
+              }}
+            >
+              Background telemetry — forecast detail, circuit breakers, sizing &amp; ETF risk, system health, and logs
+            </summary>
+            <div style={{ padding: "0 var(--s-4) var(--s-4)" }}>
           {/* 3. Forecast skill (portfolio-wide) */}
           <SectionHeading
             title="Forecast skill"
@@ -958,17 +1289,29 @@ export function Observability() {
           </div>
           <ForecastSkillSection skill={data.forecast_skill} />
 
+          {/* Per-symbol forecast skill — the granular breakdown the
+              portfolio-wide section above doesn't carry. */}
+          <SectionHeading
+            title="Forecast skill by symbol"
+            sub="Pending/completed forecasts and the leading model per symbol, at the horizon above"
+          />
+          <ForecastSkillBySymbolSection bySymbol={data.forecast_skill_by_symbol} />
+
           {/* 4. Circuit breakers — merged kill-switch + risk-gate-block
               severity dashboard: deduped within a rolling window, classified
               CRITICAL/WARNING, with a KPI strip up top. */}
           <SectionHeading
+            id="circuit-breakers"
             title="Circuit breakers"
             sub={`Deduped trips in the last ${data.circuit_breakers.window_hours}h — kill switch + risk-gate blocks, by severity`}
+            helpKey="circuit breaker"
+            thresholds={thresholds}
           />
           <CircuitBreakerSection breakers={data.circuit_breakers} />
 
           {/* 5. Risk gate block log (raw, undeduped JSONL tail) */}
           <SectionHeading
+            id="risk-gate-blocks"
             title="Risk gate block log"
             sub={`Last ${data.risk_gate_blocks.count} blocked order(s), raw log`}
           />
@@ -992,11 +1335,23 @@ export function Observability() {
           />
           <SystemTelemetrySection telemetry={data.system_telemetry} />
 
+          {/* Data latency heatmap — per-symbol quote fetch-to-ingestion
+              latency. In-process only (see LatencyHeatmapSection's doc
+              comment); off by default (MARKET_DATA_LATENCY_TRACKING_ENABLED). */}
+          <SectionHeading
+            title="Data latency"
+            sub="Per-symbol quote fetch-to-ingestion latency, since this process last started"
+          />
+          <LatencyHeatmapSection latency={data.latency_heatmap} />
+
           {/* Sizing cap-event audit trail — durable cross-cycle guardrail
               history from sizing/cap_audit_store.py. */}
           <SectionHeading
+            id="sizing-cap-audit"
             title="Sizing cap-event audit trail"
             sub="Durable position-sizing guardrail events, newest first"
+            helpKey="sizing cap"
+            thresholds={thresholds}
           />
           <SizingCapAuditSection audit={data.sizing_cap_audit} />
 
@@ -1005,19 +1360,21 @@ export function Observability() {
             <SectionHeading
               title="ETF volatility transmission"
               sub="Ben-David, Franzoni &amp; Moussawi (2018) — non-diversifiable variance from heavy ETF wrapping"
+              helpKey="etf transmission"
+              thresholds={thresholds}
             />
             <Button
-              variant="neutral"
+              variant="primary"
               onClick={() => nav("/settings/etf-transmission")}
               style={{ marginBottom: "var(--s-2-5)", fontSize: "var(--t-caption)" }}
             >
-              Configure ETF transmission →
+              ⚙ Configure ETF transmission →
             </Button>
           </div>
           <EtfTransmissionSection etf={data.etf_transmission} />
 
           {/* Heartbeat age — current sample only, no fabricated trend. */}
-          <SectionHeading title="Heartbeat" sub="Orchestrator liveness — current sample only" />
+          <SectionHeading id="heartbeat" title="Heartbeat" sub="Orchestrator liveness — current sample only" />
           <HeartbeatSection heartbeat={data.heartbeat} />
 
           {/* Strategy P&L — realized P&L grouped by strategy. */}
@@ -1040,6 +1397,8 @@ export function Observability() {
           <div style={{ marginTop: "var(--s-8)", marginBottom: "var(--s-4)" }}>
             <MacroSentimentDashboard />
           </div>
+            </div>
+          </details>
         </>
       )}
     </div>

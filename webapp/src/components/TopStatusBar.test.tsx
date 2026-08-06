@@ -17,7 +17,9 @@ import { ExecutionModeProvider } from "./ExecutionModeContext";
 import { api } from "../api/client";
 import {
   mockEtfTransmissionDisabled,
+  mockForecastSkillBySymbolEmpty,
   mockHeartbeatNoData,
+  mockLatencyHeatmapDisabled,
   mockSizingCapAuditDisabled,
   mockStrategyPnlEmpty,
   mockSystemTelemetryUnavailable,
@@ -131,7 +133,9 @@ function observabilitySummary(overrides: Partial<ObservabilitySummary> = {}): Ob
       completed: 0,
       reason: "No forecast history yet.",
     },
+    forecast_skill_by_symbol: mockForecastSkillBySymbolEmpty(),
     risk_gate_blocks: { entries: [], count: 0, reason: "No risk-gate blocks logged yet." },
+    latency_heatmap: mockLatencyHeatmapDisabled(),
     circuit_breakers: { trips: [], counts: { critical: 0, warning: 0, total: 0 }, window_hours: 24, reason: "No trips." },
     system_telemetry: mockSystemTelemetryUnavailable(),
     sizing_cap_audit: mockSizingCapAuditDisabled(),
