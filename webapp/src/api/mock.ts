@@ -172,8 +172,14 @@ import type {
   PromptPinResult,
   DataSyncResult,
   ProviderStatus,
+  CacheLongShortConcentratedPosition,
   CacheLongShortSimulateRequest,
   CacheLongShortSimulateResult,
+  CacheLongShortStartRequest,
+  CacheLongShortStartResult,
+  CacheLongShortDashboard,
+  CacheLongShortPendingTrade,
+  CacheLongShortApproveBulkResult,
 } from "./types";
 
 const SECTORS = [
@@ -7329,14 +7335,14 @@ export const mockApi = {
   },
   
   // ---- Cache Long/Short ----
-  async getClsConcentratedPositions() {
+  async getClsConcentratedPositions(): Promise<{ positions: CacheLongShortConcentratedPosition[] }> {
     return delay({
       positions: [
         { ticker: "AAPL", market_value: 12000, pct_equity: 0.25 },
       ]
     });
   },
-  async getClsDashboard() {
+  async getClsDashboard(): Promise<CacheLongShortDashboard> {
     return delay({
       status: "enabled",
       tax_bank: 1540.23,
@@ -7346,15 +7352,28 @@ export const mockApi = {
         net_exposure: 25000,
         gross_exposure: 65000
       }
-    } as const);
+    });
   },
-  async getClsPendingApprovals() {
+  async getClsPendingApprovals(): Promise<CacheLongShortPendingTrade[]> {
     return delay([
-      { lot_id: 101, position_id: 1, cost_basis: 150.5 },
-      { lot_id: 102, position_id: 2, cost_basis: 300.2 }
+      { lot_id: 101, position_id: 1, cost_basis: 150.5, unrealized_loss_pct: -0.12 },
+      { lot_id: 102, position_id: 2, cost_basis: 300.2, unrealized_loss_pct: -0.07 },
     ]);
   },
-  async simulateCls(_req: CacheLongShortSimulateRequest): Promise<CacheLongShortSimulateResult> {
+  async simulateCls(req: CacheLongShortSimulateRequest): Promise<CacheLongShortSimulateResult> {
+    // "ZZZ" is this codebase's established honesty-branch trigger for
+    // on-demand analyze/simulate mocks (see analyzePairs above) --
+    // exercises the "no usable proxy hedge found" path a real ticker with
+    // insufficient history would hit.
+    if (req.ticker.trim().toUpperCase() === "ZZZ") {
+      return delay({
+        found: false,
+        reason: "Insufficient price history for ticker or suitable proxy",
+        beta: null,
+        proxy_ticker: null,
+        correlation_coefficient: null,
+      });
+    }
     return delay({
       found: true,
       reason: null,
@@ -7363,14 +7382,14 @@ export const mockApi = {
       correlation_coefficient: 0.85
     });
   },
-  async startCls(req: { ticker: string; proxy_ticker: string; allocation: number; correlation_coefficient: number }) {
+  async startCls(req: CacheLongShortStartRequest): Promise<CacheLongShortStartResult> {
     return delay({
       status: "started",
       position_id: 99,
       ticker: req.ticker
     });
   },
-  async approveClsBulk(lotIds: number[]) {
+  async approveClsBulk(lotIds: number[]): Promise<CacheLongShortApproveBulkResult> {
     return delay({
       status: "approved",
       count: lotIds.length

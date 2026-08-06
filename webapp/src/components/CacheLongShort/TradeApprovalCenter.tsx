@@ -1,18 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { theme } from "../../theme";
 import { api } from "../../api/client";
-import type { CacheLongShortPendingTrade } from "../../api/types";
+import { useApi } from "../../hooks/useApi";
+import { useMutation } from "../../hooks/useMutation";
+import { Loading, EmptyState, ErrorState, Notice, Button, Table } from "../ui";
 
 export function TradeApprovalCenter() {
-  const [trades, setTrades] = useState<CacheLongShortPendingTrade[]>([]);
+  const { data: trades, loading, error, status, reload } = useApi(() => api.getClsPendingApprovals(), []);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [loading, setLoading] = useState(false);
+  const approve = useMutation((lotIds: number[]) => api.approveClsBulk(lotIds));
 
-  useEffect(() => {
-    api.getClsPendingApprovals()
-      .then(setTrades)
-      .catch(console.error);
-  }, []);
+  if (loading) return <Loading />;
+  if (error) return <ErrorState message={error} status={status} onRetry={reload} />;
+
+  const list = trades ?? [];
 
   const handleToggle = (id: number) => {
     const next = new Set(selected);
@@ -22,81 +23,74 @@ export function TradeApprovalCenter() {
   };
 
   const handleToggleAll = () => {
-    if (selected.size === trades.length) setSelected(new Set());
-    else setSelected(new Set(trades.map(t => t.lot_id)));
+    if (selected.size === list.length) setSelected(new Set());
+    else setSelected(new Set(list.map((t) => t.lot_id)));
   };
 
   const handleApprove = async () => {
     if (selected.size === 0) return;
-    setLoading(true);
-    try {
-      await api.approveClsBulk(Array.from(selected));
-      alert(`Approved ${selected.size} trades!`);
-      setTrades(trades.filter(t => !selected.has(t.lot_id)));
+    const result = await approve.run(Array.from(selected));
+    if (result) {
       setSelected(new Set());
-    } catch (e: any) {
-      console.error(e);
-      alert(e.message || "Failed to approve trades");
-    } finally {
-      setLoading(false);
+      reload();
     }
   };
 
-  if (trades.length === 0) {
-    return (
-      <div style={{ padding: 48, textAlign: "center", color: theme.textMuted, border: `1px dashed ${theme.border}`, borderRadius: 8 }}>
-        No pending trades requiring approval.
-      </div>
-    );
+  if (list.length === 0) {
+    return <EmptyState title="No pending trades" hint="TLH opportunities the background scanner flags will show up here for approval." />;
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {approve.error && <Notice variant="warn">{approve.error}</Notice>}
+      {approve.result && <Notice variant="success">Approved {approve.result.count} trade{approve.result.count === 1 ? "" : "s"}.</Notice>}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h3 style={{ margin: 0 }}>Pending Actions</h3>
-        <button 
-          className="btn btn-primary" 
-          disabled={selected.size === 0 || loading}
-          onClick={handleApprove}
-          style={{ padding: "8px 16px", background: selected.size === 0 ? theme.surface2 : theme.accent, color: selected.size === 0 ? theme.textMuted : "#fff", border: "none", borderRadius: 4, cursor: selected.size === 0 ? "default" : "pointer" }}
-        >
-          {loading ? "Processing..." : `Approve Selected (${selected.size})`}
-        </button>
+        <Button variant="primary" disabled={selected.size === 0} pending={approve.pending} onClick={handleApprove}>
+          Approve Selected ({selected.size})
+        </Button>
       </div>
 
-      <div className="card" style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 8, overflow: "hidden" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+      <div style={{ overflowX: "auto" }}>
+        <Table>
           <thead>
-            <tr style={{ background: theme.surface2, borderBottom: `1px solid ${theme.border}` }}>
-              <th style={{ padding: 12, width: 40 }}>
-                <input 
-                  type="checkbox" 
-                  checked={trades.length > 0 && selected.size === trades.length} 
-                  onChange={handleToggleAll} 
+            <tr>
+              <th style={{ width: 40 }}>
+                <input
+                  type="checkbox"
+                  checked={list.length > 0 && selected.size === list.length}
+                  onChange={handleToggleAll}
+                  aria-label="Select all pending trades"
                 />
               </th>
-              <th style={{ padding: 12 }}>Lot ID</th>
-              <th style={{ padding: 12 }}>Position ID</th>
-              <th style={{ padding: 12 }}>Cost Basis</th>
+              <th>Lot ID</th>
+              <th>Position ID</th>
+              <th className="num">Cost Basis</th>
+              <th className="num">Unrealized Loss</th>
             </tr>
           </thead>
           <tbody>
-            {trades.map(trade => (
+            {list.map((trade) => (
               <tr key={trade.lot_id} style={{ borderBottom: `1px solid ${theme.border}` }}>
-                <td style={{ padding: 12 }}>
-                  <input 
-                    type="checkbox" 
-                    checked={selected.has(trade.lot_id)} 
-                    onChange={() => handleToggle(trade.lot_id)} 
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(trade.lot_id)}
+                    onChange={() => handleToggle(trade.lot_id)}
+                    aria-label={`Select lot ${trade.lot_id}`}
                   />
                 </td>
-                <td style={{ padding: 12 }}>{trade.lot_id}</td>
-                <td style={{ padding: 12 }}>{trade.position_id}</td>
-                <td style={{ padding: 12 }}>${trade.cost_basis.toFixed(2)}</td>
+                <td>{trade.lot_id}</td>
+                <td>{trade.position_id}</td>
+                <td className="num">${trade.cost_basis.toFixed(2)}</td>
+                <td className="num" style={{ color: theme.decline }}>
+                  {trade.unrealized_loss_pct != null ? `${(trade.unrealized_loss_pct * 100).toFixed(1)}%` : "—"}
+                </td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </Table>
       </div>
     </div>
   );

@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 248,
+    "live_safe": 255,
     "no_op": 2,
-    "restart_required": 78,
-    "total": 328
+    "restart_required": 79,
+    "total": 336
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 2949,
+      "line": 2964,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3981,
+      "line": 3996,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4086,
+      "line": 4101,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 340,
+  "files_scanned": 345,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -166,6 +166,13 @@
     "BETA_LOOKBACK_DAYS",
     "BROKERAGE_CONNECT_ENABLED",
     "BROKERAGE_REFRESH_ENABLED",
+    "BROKER_BACKEND",
+    "CACHE_LONG_SHORT_ENABLED",
+    "CACHE_LONG_SHORT_MIN_CORRELATION",
+    "CACHE_LONG_SHORT_PROXY_CANDIDATES",
+    "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
+    "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
+    "CACHE_LONG_SHORT_WRITES_ENABLED",
     "CNN_LSTM_PROCESS_POOL_WORKERS",
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",
@@ -396,15 +403,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 669,
+    "attr": 690,
     "factory_param": 4,
-    "getattr_const": 244,
+    "getattr_const": 246,
     "os_environ": 16
   },
   "read_forms_distinct_fields": {
-    "attr": 202,
+    "attr": 209,
     "factory_param": 4,
-    "getattr_const": 149,
+    "getattr_const": 151,
     "os_environ": 13
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -780,6 +787,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/cache_long_short_store.py:82",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:60",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/sector_correlation_store.py:64",
         "via": []
       },
@@ -836,6 +861,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/cache_long_short_store.py:86",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/cache_long_short_store.py:88",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:728",
         "via": []
       },
@@ -846,6 +889,24 @@
           "cross_module_init_helper"
         ],
         "site": "data/historical_store.py:731",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:64",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:66",
         "via": []
       },
       {
@@ -955,6 +1016,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/cache_long_short_store.py:86",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/cache_long_short_store.py:88",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:728",
         "via": []
       },
@@ -965,6 +1044,24 @@
           "cross_module_init_helper"
         ],
         "site": "data/historical_store.py:731",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:64",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:66",
         "via": []
       },
       {
@@ -1116,7 +1213,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4463",
+        "site": "api/pilots_api.py:4478",
         "via": []
       }
     ],
@@ -1127,7 +1224,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4462",
+        "site": "api/pilots_api.py:4477",
         "via": []
       }
     ],
@@ -1138,7 +1235,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4587",
+        "site": "api/pilots_api.py:4602",
         "via": []
       },
       {
@@ -1213,7 +1310,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4567",
+        "site": "api/pilots_api.py:4582",
         "via": []
       },
       {
@@ -1224,6 +1321,19 @@
         ],
         "site": "gui/panels/settings_manager.py:158",
         "via": []
+      }
+    ],
+    "FMP_PAPER_STARTING_CASH": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "indirect_init_helper_d1"
+        ],
+        "site": "data/paper_account_store.py:77",
+        "via": [
+          71
+        ]
       }
     ],
     "FMP_QUOTES_REALTIME": [
@@ -1244,7 +1354,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:558",
+        "site": "api/pilots_api.py:573",
         "via": []
       }
     ],
@@ -1657,7 +1767,25 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/cache_long_short_store.py:86",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:728",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:64",
         "via": []
       },
       {
@@ -2106,7 +2234,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:553",
+        "site": "api/pilots_api.py:568",
         "via": []
       },
       {
@@ -2135,10 +2263,10 @@
     "ORCHESTRATOR_DAEMON_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "cross_module_init_helper": 38,
+    "cross_module_init_helper": 50,
     "decorator_arg": 13,
     "dynamic_name_literal_unattributable": 7,
-    "indirect_init_helper_d1": 10,
+    "indirect_init_helper_d1": 11,
     "init_body": 6,
     "init_self_assign": 40,
     "method_self_assign": 4,

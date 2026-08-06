@@ -6,26 +6,23 @@ across process restarts for the FMP-based paper trading engine.
 """
 
 import logging
-import os
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, inspect, text
+from sqlalchemy import Column, Integer, String, Float, DateTime, inspect
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import resolve_database_url, create_db_engine, session_scope
-import settings
-
-# Ensure we have fmp_client imported for getting market values
+from settings import settings
 from data import fmp_client
 from execution.broker_base import AccountSnapshot, PositionSnapshot, OrderResult, OrderStatus
 
 logger = logging.getLogger(__name__)
 
-DB_DIR = os.path.dirname(os.path.abspath(__file__))
-# Note: we use the same quant_platform.db as transactions_store for simplicity.
-DB_FILE = os.path.join(DB_DIR, "..", "quant_platform.db")
-DATABASE_URL = f"sqlite:///{os.path.abspath(DB_FILE)}"
+# Position quantities near zero after a full sell can carry float noise
+# (e.g. 1e-13 rather than exactly 0.0) -- see CLAUDE.md's "Degenerate-std
+# guard convention": never compare a computed float to 0 with ==.
+_QTY_EPSILON = 1e-9
 
 Base = declarative_base()
 
@@ -77,7 +74,7 @@ class PaperAccountStore:
         with session_scope(self.Session) as session:
             acc = session.query(PaperAccount).filter_by(id=1).first()
             if not acc:
-                acc = PaperAccount(id=1, cash_balance=settings.settings.FMP_PAPER_STARTING_CASH)
+                acc = PaperAccount(id=1, cash_balance=settings.FMP_PAPER_STARTING_CASH)
                 session.add(acc)
 
     def get_account(self) -> AccountSnapshot:
@@ -150,21 +147,6 @@ class PaperAccountStore:
                 ))
         return results
 
-    def record_order(self, order: OrderResult):
-        if self._readonly:
-            raise RuntimeError("Cannot record order in readonly mode.")
-            
-        with session_scope(self.Session) as session:
-            ts = order.submitted_at or datetime.now(timezone.utc)
-            po = PaperOrder(
-                client_order_id=order.client_order_id,
-                broker_order_id=order.broker_order_id,
-                symbol=order.broker_order_id.split("-")[0] if order.broker_order_id else "UNKNOWN", # Actually, order doesn't have symbol. Wait.
-                # OrderResult doesn't contain symbol/side directly. We'll pass it in.
-            )
-            # Wait, this is missing fields. Let's fix record_order signature
-            pass
-
     def apply_fill(
         self, 
         client_order_id: str,
@@ -221,7 +203,7 @@ class PaperAccountStore:
                 acc.cash_balance += total_proceeds
                 
                 pos.qty -= qty
-                if pos.qty == 0:
+                if abs(pos.qty) < _QTY_EPSILON:
                     session.delete(pos)
                     
             else:

@@ -26,6 +26,8 @@ class TaxLotDTO:
     realized_pnl: Optional[float]
     close_date: Optional[datetime]
     tlh_approved: int = 0
+    flagged_for_tlh: int = 0
+    unrealized_loss_pct: Optional[float] = None
 
 @dataclass(frozen=True)
 class CacheLongShortPositionDTO:
@@ -58,6 +60,13 @@ class CacheLongShortTaxLot(Base):
     realized_pnl = Column(Float, nullable=True)
     close_date = Column(DateTime, nullable=True)
     tlh_approved = Column(Integer, nullable=False, default=0) # 0 = false, 1 = true
+    # Set by CacheLongShortEngine.scan_tlh_opportunities() (the background
+    # worker), never computed inline by an API request -- api/pilots_api.py
+    # is AST-guarded against importing the heavy engine that computes this,
+    # so a persisted flag is the only way GET .../pending-approvals can
+    # surface real TLH opportunities without violating that guard's intent.
+    flagged_for_tlh = Column(Integer, nullable=False, default=0)  # 0 = false, 1 = true
+    unrealized_loss_pct = Column(Float, nullable=True)
 
 class SecurityProxy(Base):
     __tablename__ = 'cache_ls_security_proxies'
@@ -142,7 +151,14 @@ class CacheLongShortStore:
             if ticker:
                 query = query.filter(CacheLongShortPosition.ticker == ticker.upper().strip())
             lots = query.all()
-            return [TaxLotDTO(l.lot_id, l.position_id, l.acquisition_date, l.cost_basis_per_share, l.quantity, l.status, l.realized_pnl, l.close_date, l.tlh_approved) for l in lots]
+            return [
+                TaxLotDTO(
+                    l.lot_id, l.position_id, l.acquisition_date, l.cost_basis_per_share,
+                    l.quantity, l.status, l.realized_pnl, l.close_date, l.tlh_approved,
+                    l.flagged_for_tlh, l.unrealized_loss_pct,
+                )
+                for l in lots
+            ]
         except Exception as exc:
             logger.debug("get_open_tax_lots: %s", exc)
             return []
@@ -157,9 +173,54 @@ class CacheLongShortStore:
                 CacheLongShortTaxLot.status == 'closed',
                 CacheLongShortTaxLot.close_date >= naive_cutoff
             ).all()
-            return [TaxLotDTO(l.lot_id, l.position_id, l.acquisition_date, l.cost_basis_per_share, l.quantity, l.status, l.realized_pnl, l.close_date, l.tlh_approved) for l in lots]
+            return [
+                TaxLotDTO(
+                    l.lot_id, l.position_id, l.acquisition_date, l.cost_basis_per_share,
+                    l.quantity, l.status, l.realized_pnl, l.close_date, l.tlh_approved,
+                    l.flagged_for_tlh, l.unrealized_loss_pct,
+                )
+                for l in lots
+            ]
         except Exception as exc:
             logger.debug("get_closed_lots_since: %s", exc)
+            return []
+        finally:
+            session.close()
+
+    def flag_lot_for_tlh(self, lot_id: int, unrealized_loss_pct: float) -> None:
+        """Marks an open tax lot as a TLH opportunity (called by
+        CacheLongShortEngine.scan_tlh_opportunities()). Idempotent -- safe to
+        call every scan cycle even if the lot is already flagged."""
+        if self._readonly:
+            raise RuntimeError("Cannot write to readonly store")
+        with session_scope(self.Session) as session:
+            session.query(CacheLongShortTaxLot).filter(CacheLongShortTaxLot.lot_id == lot_id).update(
+                {"flagged_for_tlh": 1, "unrealized_loss_pct": float(unrealized_loss_pct)},
+                synchronize_session=False,
+            )
+
+    def get_pending_tlh_lots(self) -> List[TaxLotDTO]:
+        """Open lots flagged for TLH by the background scanner that haven't
+        been approved yet -- what GET /pilots/cache-long-short/pending-approvals
+        surfaces. Never fabricated per-request (CONSTRAINT #4): only lots the
+        engine's scan_tlh_opportunities() actually flagged appear here."""
+        session = self.Session()
+        try:
+            lots = session.query(CacheLongShortTaxLot).filter(
+                CacheLongShortTaxLot.status == 'open',
+                CacheLongShortTaxLot.flagged_for_tlh == 1,
+                CacheLongShortTaxLot.tlh_approved == 0,
+            ).all()
+            return [
+                TaxLotDTO(
+                    l.lot_id, l.position_id, l.acquisition_date, l.cost_basis_per_share,
+                    l.quantity, l.status, l.realized_pnl, l.close_date, l.tlh_approved,
+                    l.flagged_for_tlh, l.unrealized_loss_pct,
+                )
+                for l in lots
+            ]
+        except Exception as exc:
+            logger.debug("get_pending_tlh_lots: %s", exc)
             return []
         finally:
             session.close()
@@ -214,9 +275,12 @@ class CacheLongShortStore:
     def exposure_summary(self) -> dict:
         session = self.Session()
         try:
-            # We approximate exposure by sum of cost basis * quantity for open lots
-            # (In a real implementation we might fetch current prices, but cost basis is a reasonable proxy for summary if prices aren't available, or we just return the invested amount)
-            # We'll group by position_type.
+            # Approximated as invested capital (quantity * cost basis) rather
+            # than mark-to-market -- a live price lookup here would require
+            # importing a market-data provider into this lightweight store,
+            # which api/pilots_api.py's pilots/cache_long_short.py read
+            # helper must stay free of (see the AST-guard note in
+            # engine/cache_long_short_engine.py). Grouped by position_type.
             lots = session.query(CacheLongShortTaxLot.quantity, CacheLongShortTaxLot.cost_basis_per_share, CacheLongShortPosition.position_type)\
                 .join(CacheLongShortPosition)\
                 .filter(CacheLongShortTaxLot.status == 'open').all()

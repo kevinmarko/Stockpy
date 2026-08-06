@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ConfiguratorWizard } from "../components/CacheLongShort/ConfiguratorWizard";
 import { TaxDashboard } from "../components/CacheLongShort/TaxDashboard";
 import { TradeApprovalCenter } from "../components/CacheLongShort/TradeApprovalCenter";
+import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
 
 export function CacheLongShort() {
@@ -9,8 +10,8 @@ export function CacheLongShort() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden" }}>
-      <div style={{ 
-        padding: "16px 24px", 
+      <div style={{
+        padding: "16px 24px",
         borderBottom: `1px solid ${theme.border}`,
         display: "flex",
         gap: 24,
@@ -18,7 +19,7 @@ export function CacheLongShort() {
         flexShrink: 0
       }}>
         <h1 style={{ margin: 0, fontSize: 24, fontWeight: 600 }}>Cache Long/Short</h1>
-        
+
         <div style={{ display: "flex", gap: 16 }}>
           <button 
             className={`tab ${activeTab === "dashboard" ? "active" : ""}`}
@@ -69,6 +70,7 @@ export function CacheLongShort() {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
+        <TabGuide tabKey="cache-long-short" />
         {activeTab === "dashboard" && <TaxDashboard />}
         {activeTab === "config" && <ConfiguratorWizard />}
         {activeTab === "approvals" && <TradeApprovalCenter />}

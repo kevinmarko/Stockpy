@@ -3529,6 +3529,7 @@ export interface CacheLongShortPendingTrade {
   lot_id: number;
   position_id: number;
   cost_basis: number;
+  unrealized_loss_pct: number | null;
 }
 
 export interface CacheLongShortApproveBulkResult {

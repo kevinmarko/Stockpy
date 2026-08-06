@@ -74,14 +74,13 @@ class FMPPaperBroker(BrokerBase):
             market_cap=market_cap
         )
         
+        # TieredCostModel.calculate_cost's total_dollars already bundles
+        # commission, SEC/TAF fees, spread, and slippage into one figure. V1
+        # applies it as a flat cash deduction against the raw quote price
+        # rather than adjusting the fill price itself -- simpler, and the
+        # net cash impact to the paper account is identical either way.
         total_cost_dollars = costs["total_dollars"]
         commission_and_fees = total_cost_dollars
-        
-        # Simulated fill price is adjusted by the per-share cost if we want to bundle it into the basis,
-        # but apply_fill expects the raw fill price and a separate commission fee to deduct from cash.
-        # Wait, slippage and spread are inherently price adjustments.
-        # TieredCostModel returns total_dollars which includes commission, sec, taf, slippage, and spread.
-        # We will pass the raw_price as fill_price, and `total_cost_dollars` as commission_and_fees.
         fill_price = raw_price
         
         # 3. Apply Fill
