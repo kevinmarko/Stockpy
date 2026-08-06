@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `63d5900ff3f52faba867e5f1af9ce188c355fc0a`
+- Measured at commit: `484504fcf358f9bad1a7fecbecbee7cd35b50b71`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -49,10 +49,10 @@ kind-derivation switch over the categories above is currently total.
 
 | Name | len() | len(set()) | Note |
 |---|---|---|---|
-| `ALLOWED_KEYS` | 277 | 277 | 0 duplicate entries (clean) |
-| `SECRET_KEYS` | 39 | 39 | 0 duplicate entries |
+| `ALLOWED_KEYS` | 280 | 280 | 0 duplicate entries (clean) |
+| `SECRET_KEYS` | 40 | 40 | 0 duplicate entries |
 | `_JSON_KEYS` | 12 | 12 | frozenset |
-| `EXCLUDED_FROM_GUI` | 18 | 18 | frozenset; third classification bucket |
+| `EXCLUDED_FROM_GUI` | 19 | 19 | frozenset; third classification bucket |
 
 `ALLOWED_KEYS ∩ SECRET_KEYS` overlap: **0** (clean — no key is both writable and secret)
 
@@ -62,11 +62,11 @@ Every `Settings.model_fields` name classified into exactly one bucket.
 
 | Bucket | Count | Definition |
 |---|---|---|
-| `SECRET` | 37 | in `env_io.SECRET_KEYS` |
-| `IN_ALLOWED_KEYS` | 277 | in `env_io.ALLOWED_KEYS` |
-| `UNCLASSIFIED` | 23 | in neither |
+| `SECRET` | 38 | in `env_io.SECRET_KEYS` |
+| `IN_ALLOWED_KEYS` | 280 | in `env_io.ALLOWED_KEYS` |
+| `UNCLASSIFIED` | 19 | in neither |
 
-Of the 23 `UNCLASSIFIED` fields, **18** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **5** are accounted for nowhere.
+Of the 19 `UNCLASSIFIED` fields, **19** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
 
 ### Every `UNCLASSIFIED` field
 
@@ -78,22 +78,18 @@ Of the 23 `UNCLASSIFIED` fields, **18** are accounted for by the third `EXCLUDED
 | `BROKERAGE_REFRESH_ENABLED` | L3195 | yes | Enables POST /brokerage/refresh on the Pilots API (forces a live Robinhood re-login + account-snapshot fetch, bypassing the daily cache). Off by default; also requires FOLLOW_API_TOKEN and a loopba... |
 | `COMMAND_EXECUTION_ENABLED` | L246 | yes | Enable the 'command' job type on the orchestrator Control API's POST /jobs (api/_jobs.py) — lets the webapp's Commands screen actually run a manifest-listed CLI target (not just compose/copy it), g... |
 | `DEAD_LETTER_RETRY_ENABLED` | L3937 | yes | Enables POST /dead-letter/retry on the Pilots API (re-runs main.py for one dead-lettered symbol, advisory-only -- no orders). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable -- h... |
-| `GCLOUD_BIN` | L4159 | **no** | Path to the gcloud binary for environment integrations. |
+| `GCLOUD_BIN` | L4159 | yes | Path to the gcloud binary for environment integrations. |
 | `GENERAL_SETTINGS_WRITES_ENABLED` | L3036 | yes | Enables PUT /settings/tunables on the Pilots API (general runtime tunables -- Kelly sizing, risk gate, forecasting, market data, runtime/ops -> .env). Off by default; also requires FOLLOW_API_TOKEN... |
 | `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L3553 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `GRAVITY_REQUIRE_NATIVE` | L4163 | **no** | Require native implementation for Gravity Review Suite. |
 | `LLM_COMMENTARY_CACHE_PATH` | L3438 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
 | `LLM_WRITES_ENABLED` | L2989 | yes | Enables PUT /llm/setting on the Pilots API (LLM capability toggles + provider selection -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so AI-c... |
 | `MACRO_GATE_WRITES_ENABLED` | L3166 | yes | Enables PUT /observability/macro-gate on the Pilots API (flips MACRO_REGIME_GATE_ENABLED -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so thi... |
 | `OUTPUT_DIR` | L1381 | yes | Directory for generated reports. |
 | `PROMPT_CACHE_DIR` | L3705 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
 | `PROMPT_REGISTRY_WRITES_ENABLED` | L3959 | yes | FAIL-CLOSED master switch for api/pilots_api.py's `PUT /prompts/pin` (pins/clears a prompt ID's PROMPT_REGISTRY_PINS entry -- changes WHICH PROMPT TEXT THE PLATFORM ACTUALLY RUNS, a real behavioral... |
-| `QDRANT_COLLECTION` | L4167 | **no** | Qdrant collection name for RAG orchestrator. |
-| `QDRANT_URL` | L4171 | **no** | Qdrant URL for RAG orchestrator. |
 | `RAG_QUERY_API_ENABLED` | L3136 | yes | Enables POST /rag/query on the Pilots API (agents/rag_orchestrator.py's run_rag_query, calling a paid LLM provider). Off by default -- see AI_GENERATION_API_ENABLED for the same risk-class reasonin... |
 | `STRATEGY_WRITES_ENABLED` | L2967 | yes | Enables PUT /strategy/modules on the Pilots API (signal weights + disabled-module set -> .env). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable — hand-set in .env only, so signal... |
 | `SYNC_WATCHLIST_FILES` | L1383 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCHLIST` | L4155 | **no** | Comma-separated list of symbols to always include in the universe. |
 | `WATCH_RULES_FILE` | L3323 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check

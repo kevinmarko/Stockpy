@@ -489,6 +489,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
     "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
     "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
+    # Fields flagged by scripts/auditor/stockpy_codebase_auditor.py's
+    # undeclared_env_var check (2026-08) — non-secret tunables.
+    "WATCHLIST",                # comma-separated ticker list; see main._load_watchlist()
+    "GRAVITY_REQUIRE_NATIVE",   # bool — mirrors GRAVITY_AI_RUNNER_ENABLED's precedent above
+    "QDRANT_COLLECTION",        # str — collection name, not itself sensitive (see QDRANT_URL in SECRET_KEYS)
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -545,6 +550,11 @@ SECRET_KEYS: tuple[str, ...] = (
     # Prompt Registry credentials — 4 separate roles (read / publish / sign / url).
     # Never GUI-writable; edit .env by hand only (CONSTRAINT #3).
     "PROMPT_REGISTRY_URL",           # protected HTTPS manifest endpoint
+    # Qdrant vector DB connection (agents/rag_orchestrator.py). Treated as
+    # secret like DATABASE_URL above: a hosted-cluster URL commonly embeds an
+    # API key, and "this may be a DSN" is the conservative call even though
+    # the default local ("http://localhost:6333") is not itself sensitive.
+    "QDRANT_URL",
     "PROMPT_REGISTRY_TOKEN",         # bearer read-token
     "PROMPT_REGISTRY_PUBLISH_TOKEN", # higher-privilege publish credential
     "PROMPT_REGISTRY_SIGNING_KEY",   # HMAC-SHA256 verification key
@@ -617,6 +627,7 @@ EXCLUDED_FROM_GUI: frozenset[str] = frozenset(
         "GRAVITY_AI_RUNNER_OUTPUT_PATH",
         "LLM_COMMENTARY_CACHE_PATH",
         "SYNC_WATCHLIST_FILES",  # colon-separated local filesystem paths
+        "GCLOUD_BIN",  # path/name of the gcloud binary override
         # --- Fail-closed command / write / paid-API-exposure flags -----------
         # (hand-set in .env only; several already pinned by dedicated
         # `test_*_is_not_gui_writable` tests in tests/test_pilots_api.py)

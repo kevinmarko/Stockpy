@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "63d5900ff3f52faba867e5f1af9ce188c355fc0a",
+    "git_commit": "484504fcf358f9bad1a7fecbecbee7cd35b50b71",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -794,12 +794,12 @@
     }
   },
   "env_io_lists": {
-    "allowed_keys_len": 277,
-    "allowed_keys_unique_len": 277,
+    "allowed_keys_len": 280,
+    "allowed_keys_unique_len": 280,
     "allowed_keys_duplicates": {},
     "allowed_keys_duplicate_total_extra": 0,
-    "secret_keys_len": 39,
-    "secret_keys_unique_len": 39,
+    "secret_keys_len": 40,
+    "secret_keys_unique_len": 40,
     "secret_keys_duplicates": {},
     "json_keys_name": "_JSON_KEYS",
     "json_keys_len": 12,
@@ -818,7 +818,7 @@
       "SIGNAL_WEIGHTS"
     ],
     "excluded_from_gui_name": "EXCLUDED_FROM_GUI",
-    "excluded_from_gui_len": 18,
+    "excluded_from_gui_len": 19,
     "excluded_from_gui": [
       "AI_GENERATION_API_ENABLED",
       "ALERT_FILE_PATH",
@@ -826,6 +826,7 @@
       "BROKERAGE_REFRESH_ENABLED",
       "COMMAND_EXECUTION_ENABLED",
       "DEAD_LETTER_RETRY_ENABLED",
+      "GCLOUD_BIN",
       "GENERAL_SETTINGS_WRITES_ENABLED",
       "GRAVITY_AI_RUNNER_OUTPUT_PATH",
       "LLM_COMMENTARY_CACHE_PATH",
@@ -863,9 +864,9 @@
   },
   "partition": {
     "counts": {
-      "SECRET": 37,
-      "IN_ALLOWED_KEYS": 277,
-      "UNCLASSIFIED": 23
+      "SECRET": 38,
+      "IN_ALLOWED_KEYS": 280,
+      "UNCLASSIFIED": 19
     },
     "secret": [
       "ALERT_EMAIL_FROM",
@@ -896,6 +897,7 @@
       "PROMPT_REGISTRY_SIGNING_KEY",
       "PROMPT_REGISTRY_TOKEN",
       "PROMPT_REGISTRY_URL",
+      "QDRANT_URL",
       "REDDIT_CLIENT_ID",
       "REDDIT_CLIENT_SECRET",
       "REDDIT_USER_AGENT",
@@ -1043,6 +1045,7 @@
       "GDELT_RETRY_BACKOFF_SECONDS",
       "GOOGLE_NEWS_LOOKBACK_WINDOW",
       "GRAVITY_AI_RUNNER_ENABLED",
+      "GRAVITY_REQUIRE_NATIVE",
       "HISTORICAL_STORE_ENABLED",
       "HMM_N_STATES",
       "HMM_RETRAIN_FREQ_DAYS",
@@ -1105,6 +1108,7 @@
       "PROMPT_REGISTRY_PINS",
       "PROMPT_REGISTRY_REFRESH_SECONDS",
       "PYTRENDS_ENABLED",
+      "QDRANT_COLLECTION",
       "QUEUE_SOURCE_MAX_AGE_SECONDS",
       "RAG_EMBEDDING_PROVIDER",
       "RAG_INDEX_LOOKBACK_DAYS",
@@ -1182,6 +1186,7 @@
       "USE_DUAL_MOMENTUM_OVERLAY",
       "VALIDATION_HARNESS_OOS_GATE_ENABLED",
       "VOL_TARGET",
+      "WATCHLIST",
       "WIKIPEDIA_ATTENTION_ENABLED",
       "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS"
     ],
@@ -1195,19 +1200,15 @@
       "GCLOUD_BIN",
       "GENERAL_SETTINGS_WRITES_ENABLED",
       "GRAVITY_AI_RUNNER_OUTPUT_PATH",
-      "GRAVITY_REQUIRE_NATIVE",
       "LLM_COMMENTARY_CACHE_PATH",
       "LLM_WRITES_ENABLED",
       "MACRO_GATE_WRITES_ENABLED",
       "OUTPUT_DIR",
       "PROMPT_CACHE_DIR",
       "PROMPT_REGISTRY_WRITES_ENABLED",
-      "QDRANT_COLLECTION",
-      "QDRANT_URL",
       "RAG_QUERY_API_ENABLED",
       "STRATEGY_WRITES_ENABLED",
       "SYNC_WATCHLIST_FILES",
-      "WATCHLIST",
       "WATCH_RULES_FILE"
     ],
     "unclassified_detail": [
@@ -1249,7 +1250,7 @@
       },
       {
         "field": "GCLOUD_BIN",
-        "in_excluded_from_gui": false,
+        "in_excluded_from_gui": true,
         "settings_py_line": 4159,
         "description": "Path to the gcloud binary for environment integrations."
       },
@@ -1264,12 +1265,6 @@
         "in_excluded_from_gui": true,
         "settings_py_line": 3553,
         "description": "Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored."
-      },
-      {
-        "field": "GRAVITY_REQUIRE_NATIVE",
-        "in_excluded_from_gui": false,
-        "settings_py_line": 4163,
-        "description": "Require native implementation for Gravity Review Suite."
       },
       {
         "field": "LLM_COMMENTARY_CACHE_PATH",
@@ -1308,18 +1303,6 @@
         "description": "FAIL-CLOSED master switch for api/pilots_api.py's `PUT /prompts/pin` (pins/clears a prompt ID's PROMPT_REGISTRY_PINS entry -- changes WHICH PROMPT TEXT THE PLATFORM ACTUALLY RUNS, a real behavioral..."
       },
       {
-        "field": "QDRANT_COLLECTION",
-        "in_excluded_from_gui": false,
-        "settings_py_line": 4167,
-        "description": "Qdrant collection name for RAG orchestrator."
-      },
-      {
-        "field": "QDRANT_URL",
-        "in_excluded_from_gui": false,
-        "settings_py_line": 4171,
-        "description": "Qdrant URL for RAG orchestrator."
-      },
-      {
         "field": "RAG_QUERY_API_ENABLED",
         "in_excluded_from_gui": true,
         "settings_py_line": 3136,
@@ -1338,12 +1321,6 @@
         "description": "Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ..."
       },
       {
-        "field": "WATCHLIST",
-        "in_excluded_from_gui": false,
-        "settings_py_line": 4155,
-        "description": "Comma-separated list of symbols to always include in the universe."
-      },
-      {
         "field": "WATCH_RULES_FILE",
         "in_excluded_from_gui": true,
         "settings_py_line": 3323,
@@ -1357,6 +1334,7 @@
       "BROKERAGE_REFRESH_ENABLED",
       "COMMAND_EXECUTION_ENABLED",
       "DEAD_LETTER_RETRY_ENABLED",
+      "GCLOUD_BIN",
       "GENERAL_SETTINGS_WRITES_ENABLED",
       "GRAVITY_AI_RUNNER_OUTPUT_PATH",
       "LLM_COMMENTARY_CACHE_PATH",
@@ -1370,13 +1348,7 @@
       "SYNC_WATCHLIST_FILES",
       "WATCH_RULES_FILE"
     ],
-    "unclassified_not_covered_anywhere": [
-      "GCLOUD_BIN",
-      "GRAVITY_REQUIRE_NATIVE",
-      "QDRANT_COLLECTION",
-      "QDRANT_URL",
-      "WATCHLIST"
-    ]
+    "unclassified_not_covered_anywhere": []
   },
   "secret_sanity": {
     "phantom_secret_keys": [
