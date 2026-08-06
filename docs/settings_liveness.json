@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 249,
+    "live_safe": 259,
     "no_op": 2,
-    "restart_required": 78,
-    "total": 329
+    "restart_required": 85,
+    "total": 346
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 2962,
+      "line": 3014,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3994,
+      "line": 4061,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4099,
+      "line": 4166,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -98,21 +98,21 @@
     {
       "expr": "getattr(settings, key, fallback)",
       "file": "gui/panels/settings_manager.py",
-      "line": 186,
+      "line": 190,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, '')",
       "file": "gui/panels/settings_manager.py",
-      "line": 203,
+      "line": 207,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, [])",
       "file": "gui/panels/settings_manager.py",
-      "line": 271,
+      "line": 275,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 341,
+  "files_scanned": 349,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -166,6 +166,13 @@
     "BETA_LOOKBACK_DAYS",
     "BROKERAGE_CONNECT_ENABLED",
     "BROKERAGE_REFRESH_ENABLED",
+    "BROKER_BACKEND",
+    "CACHE_LONG_SHORT_ENABLED",
+    "CACHE_LONG_SHORT_MIN_CORRELATION",
+    "CACHE_LONG_SHORT_PROXY_CANDIDATES",
+    "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
+    "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
+    "CACHE_LONG_SHORT_WRITES_ENABLED",
     "CNN_LSTM_PROCESS_POOL_WORKERS",
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",
@@ -382,6 +389,9 @@
     "SNAPSHOT_HISTORY_DAYS",
     "STOCKTWITS_ENABLED",
     "STRATEGY_WRITES_ENABLED",
+    "SYMBOL_RATING_AUTO_DROP_ENABLED",
+    "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
+    "SYMBOL_RATING_ENABLED",
     "SYNC_WATCHLIST_FILES",
     "UNIVERSE_SYNC_ENABLED",
     "USE_DUAL_MOMENTUM_OVERLAY",
@@ -397,16 +407,16 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 673,
+    "attr": 712,
     "factory_param": 4,
-    "getattr_const": 245,
-    "os_environ": 16
+    "getattr_const": 247,
+    "os_environ": 24
   },
   "read_forms_distinct_fields": {
-    "attr": 203,
+    "attr": 214,
     "factory_param": 4,
-    "getattr_const": 150,
-    "os_environ": 13
+    "getattr_const": 152,
+    "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
   "restart_required": {
@@ -781,6 +791,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/cache_long_short_store.py:82",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:60",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/sector_correlation_store.py:64",
         "via": []
       },
@@ -791,6 +819,15 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:62",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "rating/symbol_rating_store.py:108",
         "via": []
       },
       {
@@ -837,6 +874,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/cache_long_short_store.py:86",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/cache_long_short_store.py:88",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:728",
         "via": []
       },
@@ -847,6 +902,24 @@
           "cross_module_init_helper"
         ],
         "site": "data/historical_store.py:731",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:64",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:66",
         "via": []
       },
       {
@@ -883,6 +956,24 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:69",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "rating/symbol_rating_store.py:113",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "rating/symbol_rating_store.py:115",
         "via": []
       },
       {
@@ -956,6 +1047,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/cache_long_short_store.py:86",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/cache_long_short_store.py:88",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:728",
         "via": []
       },
@@ -966,6 +1075,24 @@
           "cross_module_init_helper"
         ],
         "site": "data/historical_store.py:731",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:64",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:66",
         "via": []
       },
       {
@@ -1002,6 +1129,24 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:69",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "rating/symbol_rating_store.py:113",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "rating/symbol_rating_store.py:115",
         "via": []
       },
       {
@@ -1117,7 +1262,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4476",
+        "site": "api/pilots_api.py:4543",
         "via": []
       }
     ],
@@ -1128,7 +1273,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4475",
+        "site": "api/pilots_api.py:4542",
         "via": []
       }
     ],
@@ -1139,7 +1284,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4600",
+        "site": "api/pilots_api.py:4667",
         "via": []
       },
       {
@@ -1148,7 +1293,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "gui/panels/settings_manager.py:122",
+        "site": "gui/panels/settings_manager.py:126",
         "via": []
       }
     ],
@@ -1214,7 +1359,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4580",
+        "site": "api/pilots_api.py:4647",
         "via": []
       },
       {
@@ -1223,8 +1368,21 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "gui/panels/settings_manager.py:158",
+        "site": "gui/panels/settings_manager.py:162",
         "via": []
+      }
+    ],
+    "FMP_PAPER_STARTING_CASH": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "indirect_init_helper_d1"
+        ],
+        "site": "data/paper_account_store.py:77",
+        "via": [
+          71
+        ]
       }
     ],
     "FMP_QUOTES_REALTIME": [
@@ -1245,7 +1403,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:558",
+        "site": "api/pilots_api.py:573",
         "via": []
       }
     ],
@@ -1499,6 +1657,28 @@
         "via": []
       }
     ],
+    "GCLOUD_BIN": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "mcp_remote_adapter.py:19",
+        "via": []
+      }
+    ],
+    "GRAVITY_REQUIRE_NATIVE": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "Gravity AI Review Suite.py:4493",
+        "via": []
+      }
+    ],
     "HMM_N_STATES": [
       {
         "discarded": false,
@@ -1658,7 +1838,25 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/cache_long_short_store.py:86",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/historical_store.py:728",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "data/paper_account_store.py:64",
         "via": []
       },
       {
@@ -1677,6 +1875,15 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:67",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "rating/symbol_rating_store.py:113",
         "via": []
       },
       {
@@ -1880,7 +2087,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "main_orchestrator.py:114",
+        "site": "main_orchestrator.py:118",
         "via": []
       },
       {
@@ -1930,6 +2137,28 @@
           "os_environ"
         ],
         "site": "scripts/build_local_prompt_registry.py:150",
+        "via": []
+      }
+    ],
+    "QDRANT_COLLECTION": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "agents/rag_orchestrator.py:142",
+        "via": []
+      }
+    ],
+    "QDRANT_URL": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "agents/rag_orchestrator.py:141",
         "via": []
       }
     ],
@@ -2052,7 +2281,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/sentiment_sources.py:1895",
+        "site": "data/sentiment_sources.py:1907",
         "via": []
       }
     ],
@@ -2063,9 +2292,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/sentiment_sources.py:1865",
+        "site": "data/sentiment_sources.py:1877",
         "via": [
-          1854
+          1866
         ]
       }
     ],
@@ -2107,7 +2336,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:553",
+        "site": "api/pilots_api.py:568",
         "via": []
       },
       {
@@ -2128,6 +2357,55 @@
         "site": "api/ws_api.py:54",
         "via": []
       }
+    ],
+    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "closure_value"
+        ],
+        "site": "pipeline/production_steps.py:531",
+        "via": []
+      }
+    ],
+    "WATCHLIST": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "data/market_data_ws.py:255",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "gui/panels/_shared.py:162",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "main.py:256",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "pilots/watchlist_writer.py:137",
+        "via": []
+      }
     ]
   },
   "restart_required_only_import_time_discard": [
@@ -2136,15 +2414,16 @@
     "ORCHESTRATOR_DAEMON_TOKEN"
   ],
   "restart_required_reason_counts": {
-    "cross_module_init_helper": 38,
+    "closure_value": 1,
+    "cross_module_init_helper": 56,
     "decorator_arg": 13,
     "dynamic_name_literal_unattributable": 7,
-    "indirect_init_helper_d1": 10,
+    "indirect_init_helper_d1": 11,
     "init_body": 6,
     "init_self_assign": 40,
     "method_self_assign": 4,
     "module_level": 49,
-    "os_environ": 16
+    "os_environ": 24
   },
   "restart_required_via_name_literal_only": [
     "EDGAR_FULLTEXT_CHUNK_TOKENS",
