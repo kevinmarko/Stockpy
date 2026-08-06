@@ -38,9 +38,16 @@ Public API (the only re-exports — keep this surface intentionally small):
 
 from __future__ import annotations
 
-from llm.commentary import generate_alert_commentary, generate_analyst_rationale
-
 __all__ = [
     "generate_analyst_rationale",
     "generate_alert_commentary",
 ]
+
+def __getattr__(name):
+    if name == "generate_analyst_rationale":
+        from llm.commentary import generate_analyst_rationale
+        return generate_analyst_rationale
+    if name == "generate_alert_commentary":
+        from llm.commentary import generate_alert_commentary
+        return generate_alert_commentary
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

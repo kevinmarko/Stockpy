@@ -646,7 +646,11 @@ class StrategyValidationHarness:
         if X is None or y is None:
             logger.info("No input data provided. Fetching SPY benchmark data for validation...")
             # Default to SPY for CLI/benchmark validation
-            df = yf.download("SPY", start=start_date, end=end_date, progress=False)
+            try:
+                df = yf.download("SPY", start=start_date, end=end_date, progress=False)
+            except Exception as exc:
+                logger.warning("yf.download failed: %s", exc)
+                df = pd.DataFrame()
             if df.empty:
                 raise RuntimeError("Failed to download validation data.")
             # Standardize index

@@ -1182,6 +1182,43 @@ def get_universe() -> Dict[str, Any]:
     return {"symbols": symbols.list_universe(_load_snapshot())}
 
 
+@app.post("/universe/{symbol}/reinclude", dependencies=[Depends(require_command_token)])
+def reinclude_universe_symbol(symbol: str) -> Dict[str, Any]:
+    """Manual escape hatch: undo an automated symbol-rating exclusion.
+
+    Fail-closed ``require_command_token`` ALONE — deliberately NO dedicated
+    master-switch flag, matching ``POST /decisions``'/``POST /automation/pause``'s
+    risk tier (see the pilots-endpoint auth taxonomy): this only breaks a
+    consecutive-BAD rating streak so the symbol is eligible for tracking again
+    (via ``rating.symbol_rating_store.SymbolRatingStore.reinclude`` — Part 1 of
+    the Symbol Rating subsystem). It never places an order and never bypasses
+    any other risk gate; downstream buy eligibility for the symbol still runs
+    through the platform's normal scoring/sizing/risk-gate pipeline on the next
+    cycle. The auto-drop feature itself defaults OFF
+    (``settings.SYMBOL_RATING_AUTO_DROP_ENABLED``), so this endpoint is a no-op
+    in effect (though still a valid write) when auto-drop is disabled.
+
+    404 on an empty/whitespace-only ``symbol``. 503 if the underlying store
+    write fails (CONSTRAINT #6 — dead-letter at the endpoint boundary, not a
+    silent 200)."""
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        raise HTTPException(status_code=404, detail="symbol is required")
+
+    from rating.symbol_rating_store import SymbolRatingStore
+
+    try:
+        SymbolRatingStore().reinclude(sym)
+    except Exception as exc:  # noqa: BLE001 - dead-letter: store write failure -> clean 503
+        logger.error("pilots_api: reinclude failed for %s: %s", sym, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Could not re-include the symbol (rating store unavailable).",
+        ) from exc
+
+    return {"symbol": sym, "reincluded": True}
+
+
 @app.get("/recommendations", dependencies=[Depends(require_read_token)])
 def get_recommendations(
     limit: int = Query(25, ge=1, le=200),
@@ -3841,6 +3878,21 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("SIZING_CAP_AUDIT_ENABLED", "bool", {}),
             ("SIZING_CAP_ALERT_ENABLED", "bool", {}),
             ("SIZING_CAP_ALERT_THRESHOLD_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+        ],
+    ),
+    (
+        # Tracked Universe auto-drop (rating/symbol_rating_store.py). SYMBOL_RATING_ENABLED
+        # gates whether a per-symbol rating is computed/persisted at all (diagnostic-only,
+        # default True). SYMBOL_RATING_AUTO_DROP_ENABLED is the actual trading-behavior
+        # switch -- default False, like every other live-trading-behavior flag in this
+        # codebase -- so flipping it here is a deliberate, visible operator action, not
+        # something that happens by editing .env in the dark.
+        "Symbol Rating",
+        [
+            ("SYMBOL_RATING_ENABLED", "bool", {}),
+            ("SYMBOL_RATING_BAD_SCORE_THRESHOLD", "float", {"min": 0.0, "max": 100.0, "step": 1.0}),
+            ("SYMBOL_RATING_AUTO_DROP_ENABLED", "bool", {}),
+            ("SYMBOL_RATING_DROP_THRESHOLD_CYCLES", "int", {"min": 1, "max": 100, "step": 1}),
         ],
     ),
     (

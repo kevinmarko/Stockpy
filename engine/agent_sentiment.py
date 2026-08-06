@@ -1,3 +1,10 @@
+"""
+InvestYo Quant Platform - Agent Sentiment Engine
+================================================
+Processes and aggregates sentiment scores from multiple AI agent sources (e.g.,
+LLMs, RAG-based analysis) for a given universe of tickers. Used to augment
+the primary technical and fundamental signals in the strategy engine.
+"""
 import logging
 import pydantic
 from typing import Dict, Any

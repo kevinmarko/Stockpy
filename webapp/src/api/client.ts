@@ -83,6 +83,7 @@ import type {
   SymbolCompareResponse,
   UniverseResponse,
   SyncReportResponse,
+  SymbolReincludeResult,
   RecommendationsResponse,
   RestartDaemonResult,
   RlhfSummary,
@@ -484,6 +485,13 @@ const liveApi = {
   // base, :8603). Distinct from getDataUniverse's plain add/remove list:
   // this is the FULL/EQUITY_ONLY/UNCOVERED market-data coverage breakdown.
   getSyncReport: () => http<SyncReportResponse>("/data/sync-report"),
+  // Manual escape hatch to undo an automated symbol-rating exclusion
+  // (pilots base, :8602 — NOT under "/data/", so baseFor() routes it to
+  // BASE_URL, not DATA_BASE_URL). require_command_token-gated on the server.
+  reincludeSymbol: (symbol: string) =>
+    http<SymbolReincludeResult>(`/universe/${encodeURIComponent(symbol)}/reinclude`, {
+      method: "POST",
+    }),
   getSignalBreakdown: (symbol: string) =>
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
   getSignalImportance: (symbols: string[]) =>

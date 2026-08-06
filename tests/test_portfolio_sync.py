@@ -556,3 +556,124 @@ class TestResolveUniverse:
         monkeypatch.setattr(rc.settings, "SYNC_WATCHLIST_FILES", None)
         # Completes (returns DEFAULT_TICKERS) without ever hitting login().
         assert ps.resolve_universe("all")
+
+
+# ---------------------------------------------------------------------------
+# resolve_universe — symbol-rating auto-drop (settings.SYMBOL_RATING_AUTO_DROP_ENABLED)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRatingStore:
+    """Minimal stand-in for rating.symbol_rating_store.SymbolRatingStore --
+    only the surface resolve_universe() actually calls."""
+
+    last_kwargs: Optional[Dict[str, Any]] = None
+
+    def __init__(self, *, excluded=None, boom=False, readonly=False):
+        self._excluded = excluded or set()
+        self._boom = boom
+        self.readonly = readonly
+
+    def get_excluded_symbols(self, *, threshold_cycles, known_symbols=None):
+        type(self).last_kwargs = {
+            "threshold_cycles": threshold_cycles,
+            "known_symbols": set(known_symbols) if known_symbols is not None else None,
+        }
+        if self._boom:
+            raise RuntimeError("DB unavailable")
+        return set(self._excluded)
+
+
+class TestResolveUniverseSymbolRatingAutoDrop:
+    def test_flag_off_never_touches_rating_store(self, monkeypatch):
+        """Default (SYMBOL_RATING_AUTO_DROP_ENABLED=False) must be byte-identical
+        to pre-change behavior -- the rating store is never even imported/called."""
+        from data import portfolio_sync as ps
+        import data.robinhood_portfolio as rp
+        from settings import settings
+
+        held = {"NVDA": _FakePosition("NVDA", 3, 100.0, 300.0, 300.0)}
+        monkeypatch.setattr(rp, "fetch_account_snapshot", lambda *a, **k: _FakeSnapshot(positions=held))
+        monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", False)
+
+        def _boom(*a, **k):  # pragma: no cover - must never run
+            raise AssertionError("rating store must not be constructed when the flag is off")
+
+        import rating.symbol_rating_store as rating_store_mod
+        monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", _boom)
+
+        got = ps.resolve_universe("all")
+        expected = sorted({"NVDA"} | {t.upper() for t in settings.DEFAULT_TICKERS})
+        assert got == expected
+
+    def test_auto_drop_excludes_non_held_symbol(self, monkeypatch):
+        from data import portfolio_sync as ps
+        import data.robinhood_portfolio as rp
+        import rating.symbol_rating_store as rating_store_mod
+        from settings import settings
+
+        held = {"NVDA": _FakePosition("NVDA", 3, 100.0, 300.0, 300.0)}
+        monkeypatch.setattr(rp, "fetch_account_snapshot", lambda *a, **k: _FakeSnapshot(positions=held))
+        monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", 5)
+        monkeypatch.setattr(settings, "DEFAULT_TICKERS", ["NVDA", "BADSTOCK"])
+
+        monkeypatch.setattr(
+            rating_store_mod, "SymbolRatingStore",
+            lambda **kw: _FakeRatingStore(excluded={"BADSTOCK"}, **kw),
+        )
+
+        got = ps.resolve_universe("all")
+        assert "BADSTOCK" not in got
+        assert "NVDA" in got
+
+    def test_auto_drop_never_excludes_a_held_symbol(self, monkeypatch):
+        """Non-negotiable safety invariant: even if the store (incorrectly, or
+        due to a stale most-recent row) reports a held symbol as excluded,
+        resolve_universe's own defensive subtraction must keep it."""
+        from data import portfolio_sync as ps
+        import data.robinhood_portfolio as rp
+        import rating.symbol_rating_store as rating_store_mod
+        from settings import settings
+
+        held = {"NVDA": _FakePosition("NVDA", 3, 100.0, 300.0, 300.0)}
+        monkeypatch.setattr(rp, "fetch_account_snapshot", lambda *a, **k: _FakeSnapshot(positions=held))
+        monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", 5)
+        monkeypatch.setattr(settings, "DEFAULT_TICKERS", [])
+
+        # Store (incorrectly) reports the held symbol as excluded.
+        monkeypatch.setattr(
+            rating_store_mod, "SymbolRatingStore",
+            lambda **kw: _FakeRatingStore(excluded={"NVDA"}, **kw),
+        )
+
+        got = ps.resolve_universe("all")
+        assert "NVDA" in got
+
+    def test_auto_drop_store_failure_fails_open(self, monkeypatch):
+        """A DB hiccup in get_excluded_symbols must leave the universe
+        completely unaffected (CONSTRAINT #6) -- never shrink it."""
+        from data import portfolio_sync as ps
+        import data.robinhood_portfolio as rp
+        import rating.symbol_rating_store as rating_store_mod
+        from settings import settings
+
+        held = {"NVDA": _FakePosition("NVDA", 3, 100.0, 300.0, 300.0)}
+        monkeypatch.setattr(rp, "fetch_account_snapshot", lambda *a, **k: _FakeSnapshot(positions=held))
+        monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", 5)
+        monkeypatch.setattr(settings, "DEFAULT_TICKERS", ["NVDA", "BADSTOCK"])
+
+        monkeypatch.setattr(
+            rating_store_mod, "SymbolRatingStore",
+            lambda **kw: _FakeRatingStore(boom=True, **kw),
+        )
+
+        got = ps.resolve_universe("all")
+        expected = sorted({"NVDA", "BADSTOCK"})
+        assert got == expected

@@ -589,6 +589,14 @@ def resolve_universe(
         an "account snapshot unavailable" WARNING (not an ERROR) is logged
         instead of the noisier live-fetch-failure ERROR this path would
         otherwise produce.
+
+    When ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` is on, the resolved
+    tracked set is additionally subtracted by whatever
+    ``rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols``
+    reports (a non-held symbol on a long enough consecutive-BAD streak — see
+    ``rating/symbol_rating.py::should_exclude``). Held symbols are never
+    subtracted, and the lookup fails OPEN: any exception leaves ``tracked``
+    untouched and only logs a warning (CONSTRAINT #6).
     """
     from data.robinhood_client import _sanitize_tickers
 
@@ -621,6 +629,27 @@ def resolve_universe(
     from settings import settings
 
     tracked.update(str(t) for t in (settings.DEFAULT_TICKERS or []))
+
+    if settings.SYMBOL_RATING_AUTO_DROP_ENABLED:
+        try:
+            from rating.symbol_rating_store import SymbolRatingStore
+
+            excluded = SymbolRatingStore(readonly=True).get_excluded_symbols(
+                threshold_cycles=settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES,
+                known_symbols=tracked,
+            )
+            # held is already unioned into `tracked` above and get_excluded_symbols()
+            # never marks a held symbol excluded, but subtract defensively anyway --
+            # a symbol's held status can change between when it was last rated and
+            # right now, and a held position must never be dropped (see module docstring).
+            held_now = set(snapshot.positions.keys()) if snapshot is not None else set()
+            tracked -= (excluded - held_now)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "resolve_universe: symbol-rating exclusion lookup failed (%s) — tracking unaffected.",
+                exc,
+            )
+
     return _sanitize_tickers(tracked)
 
 

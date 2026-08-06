@@ -1706,10 +1706,14 @@ def _download_ohlcv(
 
     out: Dict[str, pd.DataFrame] = {}
     ordered = list(dict.fromkeys(tickers))
-    df = yf.download(
-        ordered, start=start_date, end=end_date, progress=False,
-        auto_adjust=True, group_by="ticker",
-    )
+    try:
+        df = yf.download(
+            ordered, start=start_date, end=end_date, progress=False,
+            auto_adjust=True, group_by="ticker",
+        )
+    except Exception as exc:
+        logger.warning("_download_ohlcv: yf.download failed: %s", exc)
+        df = None
     if df is None or df.empty:
         return out
     for ticker in ordered:
@@ -2326,9 +2330,13 @@ def _download_closes(
     import yfinance as yf
 
     ordered = list(dict.fromkeys(tickers))  # dedupe, preserve order
-    df = yf.download(
-        ordered, start=start_date, end=end_date, progress=False, auto_adjust=True
-    )
+    try:
+        df = yf.download(
+            ordered, start=start_date, end=end_date, progress=False, auto_adjust=True
+        )
+    except Exception as exc:
+        logger.warning("_download_closes: yf.download failed: %s", exc)
+        df = None
     if df is None or df.empty:
         raise RuntimeError(
             f"Failed to download price data for {ordered} ({start_date}–{end_date}). "

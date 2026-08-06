@@ -167,6 +167,10 @@ If all three are empty, `main.py` logs a warning that names all four remediation
 
 See [Section 18](#18-google-sheets-integration-legacy) for the Sheet setup.
 
+### Symbol rating and automatic exclusion
+
+Every tracked symbol gets a GOOD/BAD rating from the platform's scoring engine each cycle, persisted to a durable history (`rating/symbol_rating_store.py`). When `SYMBOL_RATING_AUTO_DROP_ENABLED` is turned on (it's `False` by default), a symbol with enough consecutive BAD-rated cycles in a row (`SYMBOL_RATING_DROP_THRESHOLD_CYCLES`, 5 by default) can be automatically excluded from tracking and buying — but a symbol you currently hold is **never** auto-excluded, regardless of its rating streak. The Pilots PWA's Tracked Universe screen (`GET /data/sync-report`) shows each symbol's consecutive-BAD-cycle count and an "Excluded" badge for anything currently dropped; a "Re-include" button (`POST /universe/{symbol}/reinclude`) lets you manually undo an exclusion at any time without waiting for a GOOD-rated cycle.
+
 ---
 
 ## 5. Running the Pipeline

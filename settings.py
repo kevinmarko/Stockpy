@@ -1313,6 +1313,32 @@ class Settings(BaseSettings):
     # fraction of names capped in one cycle meets or exceeds this threshold.
     SIZING_CAP_ALERT_THRESHOLD_PCT: float = 0.30
 
+    # --- Symbol rating history (rating/symbol_rating.py, rating/symbol_rating_store.py) ---
+    # Durable per-symbol GOOD/BAD rating history, built on top of the
+    # existing per-cycle final_score / Action Signal. Diagnostic-only by
+    # default -- mirrors SIZING_CAP_AUDIT_ENABLED -- no symbol is ever
+    # excluded from tracking/buying by this flag alone.
+    SYMBOL_RATING_ENABLED: bool = True
+    # A symbol's final_score below this is classified BAD this cycle.
+    # Matches strategy_engine.py's own RISK REDUCE cutoff -- the existing
+    # single source of truth for "this score is bad", not a fresh
+    # independent threshold.
+    SYMBOL_RATING_BAD_SCORE_THRESHOLD: float = 35.0
+    # Opt-in (default False): when True, a non-held symbol rated BAD for
+    # SYMBOL_RATING_DROP_THRESHOLD_CYCLES consecutive cycles is subtracted
+    # from the resolved tracked universe (data/portfolio_sync.py::resolve_universe,
+    # main.py::_build_universe) -- stops being fetched, scored, or bought.
+    # Defaults False like every other live-trading-behavior flag in this
+    # codebase (SIZING_CAP_ESCALATION_ENABLED, ETF_TRANSMISSION_SIZING_ENABLED)
+    # so nothing changes silently on a git pull for a live capital account.
+    # A currently-held position is NEVER excluded regardless of this flag --
+    # see rating/symbol_rating.py::should_exclude.
+    SYMBOL_RATING_AUTO_DROP_ENABLED: bool = False
+    # Consecutive BAD-rated cycles (non-held symbols only) before auto-drop,
+    # when SYMBOL_RATING_AUTO_DROP_ENABLED is True. Mirrors
+    # SIZING_CAP_ESCALATION_THRESHOLD_CYCLES's default.
+    SYMBOL_RATING_DROP_THRESHOLD_CYCLES: int = 5
+
     # --- ETF volatility-transmission sizing derate (risk/etf_transmission.py) ---
     # Ben-David, Franzoni & Moussawi (2018, JF): ETF arbitrage transmits a
     # shock in one constituent to its healthy peers, so a heavily ETF-wrapped
@@ -4152,6 +4178,45 @@ class Settings(BaseSettings):
                 "or in a local .env file (see .env.example). "
                 f"Obtain a free key at {FRED_ROTATION_URL}"
             )
+
+    # Missing fields flagged by the codebase auditor (scripts/auditor/
+    # stockpy_codebase_auditor.py's undeclared_env_var check).
+    #
+    # RH_LOGIN_WORKER and KEY are deliberately NOT declared here:
+    #  - RH_LOGIN_WORKER is a structural in-process marker
+    #    (os.environ.get("RH_LOGIN_WORKER") == "1", string comparison, never
+    #    read via settings.X) set only by data/robinhood_login_worker.py to
+    #    prove a Robinhood device-approval login is running inside its
+    #    required isolated subprocess. Declaring it as a normal bool Settings
+    #    field would invite setting it in .env, which would defeat that
+    #    isolation guard for the main process — see .env.example's comment
+    #    on it and CLAUDE.md's "Robinhood login moved from TOTP MFA to
+    #    device-approval push" section.
+    #  - KEY was a false positive: the auditor's undeclared_env_var check is
+    #    a raw regex over file text (not AST-based), and it matched the
+    #    literal string `os.environ.get("KEY")` inside a comment in
+    #    scripts/measure_settings_census.py illustrating that script's own
+    #    pattern-matching, not a real env var read anywhere in the codebase.
+    WATCHLIST: str = Field(
+        default="",
+        description="Comma-separated list of symbols to always include in the universe.",
+    )
+    GCLOUD_BIN: str = Field(
+        default="gcloud",
+        description="Path to the gcloud binary for environment integrations.",
+    )
+    GRAVITY_REQUIRE_NATIVE: bool = Field(
+        default=False,
+        description="Require native implementation for Gravity Review Suite.",
+    )
+    QDRANT_COLLECTION: str = Field(
+        default="",
+        description="Qdrant collection name for RAG orchestrator.",
+    )
+    QDRANT_URL: str = Field(
+        default="",
+        description="Qdrant URL for RAG orchestrator.",
+    )
 
     def warn_if_fred_key_leaked(self, log: logging.Logger = logger) -> bool:
         """Emit a CRITICAL warning if the configured key is the leaked one.

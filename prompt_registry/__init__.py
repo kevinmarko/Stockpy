@@ -56,32 +56,48 @@ Usage
 
 from __future__ import annotations
 
-# Stage 1 public surface
-from prompt_registry.models import PromptRecord, PromptVersion, RegistryManifest
-from prompt_registry.signing import sign, verify, compute_sha256
-from prompt_registry.guardrails import validate_prompt
+_MODELS_EXPORTS = {"PromptRecord", "PromptVersion", "RegistryManifest"}
+_SIGNING_EXPORTS = {"sign", "verify", "compute_sha256"}
+_GUARDRAILS_EXPORTS = {"validate_prompt"}
+_STORE_EXPORTS = {
+    "PromptStore",
+    "LocalJSONStore",
+    "HTTPStore",
+    "FirestoreStore",
+    "RegistryFetchError",
+    "ReadOnlyStoreError",
+}
+_CACHE_EXPORTS = {
+    "CacheManager",
+    "read_baseline",
+    "list_baseline_ids",
+}
+_REGISTRY_EXPORTS = {
+    "PromptRegistry",
+    "get_registry",
+    "reset_registry",
+}
 
-# Stage 2 public surface
-from prompt_registry.store import (
-    PromptStore,
-    LocalJSONStore,
-    HTTPStore,
-    FirestoreStore,
-    RegistryFetchError,
-    ReadOnlyStoreError,
-)
-from prompt_registry.cache import (
-    CacheManager,
-    read_baseline,
-    list_baseline_ids,
-)
-
-# Stage 3 public surface
-from prompt_registry.registry import (
-    PromptRegistry,
-    get_registry,
-    reset_registry,
-)
+def __getattr__(name):
+    if name in _MODELS_EXPORTS:
+        from prompt_registry import models
+        return getattr(models, name)
+    if name in _SIGNING_EXPORTS:
+        from prompt_registry import signing
+        return getattr(signing, name)
+    if name in _GUARDRAILS_EXPORTS:
+        from prompt_registry import guardrails
+        return getattr(guardrails, name)
+    if name in _STORE_EXPORTS:
+        from prompt_registry import store
+        return getattr(store, name)
+    if name in _CACHE_EXPORTS:
+        from prompt_registry import cache
+        return getattr(cache, name)
+    if name in _REGISTRY_EXPORTS:
+        from prompt_registry import registry
+        return getattr(registry, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     # models

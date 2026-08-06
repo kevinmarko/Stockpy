@@ -131,6 +131,7 @@ import type {
   UniverseResponse,
   SyncReportResponse,
   SyncReportSymbol,
+  SymbolReincludeResult,
   RecommendationsResponse,
   Recommendation,
   UniverseListResponse,
@@ -850,6 +851,33 @@ let MOCK_DATA_UNIVERSE: string[] = ["AAPL", "MSFT", "JNJ", "AGNC"];
 /** Exposed for tests: reset the mock universe between cases. */
 export function __resetMockDataUniverse() {
   MOCK_DATA_UNIVERSE = ["AAPL", "MSFT", "JNJ", "AGNC"];
+}
+
+// ---- Mock symbol-rating state (rating.symbol_rating_store.SymbolRatingStore) ----
+// A module-level mutable map — same pattern as MOCK_DATA_UNIVERSE above — so
+// reincludeSymbol() behaves like a real read-modify-write within a session:
+// calling it clears the symbol's entry, and the next getSyncReport() call
+// honestly reflects that (rating_excluded: false, cycles reset to 0) instead
+// of a static fixture the UI interaction can never actually change.
+// Seeded with a realistic, MOSTLY-un-excluded spread. Only non-held symbols
+// can legitimately be excluded (mirrors SymbolRatingStore.get_excluded_symbols'
+// "never exclude a held symbol" rule) -- of getSyncReport's two non-held
+// fixture rows (T, XOM), only XOM is over the default drop threshold (5); T
+// has some bad cycles but not enough yet. Every held symbol (AAPL, MSFT,
+// NVDA, ...) deliberately has NO entry here -- undefined, rendered as a dash
+// by the UI, not a fabricated 0 -- since most of this codebase's rating
+// history in practice belongs to non-held, screened-and-rejected candidates.
+let MOCK_RATING_OVERRIDES: Record<string, { consecutive_bad_cycles: number; excluded: boolean }> = {
+  XOM: { consecutive_bad_cycles: 6, excluded: true },
+  T: { consecutive_bad_cycles: 2, excluded: false },
+};
+
+/** Exposed for tests: reset the mock rating overrides between cases. */
+export function __resetMockRatingOverrides() {
+  MOCK_RATING_OVERRIDES = {
+    XOM: { consecutive_bad_cycles: 6, excluded: true },
+    T: { consecutive_bad_cycles: 2, excluded: false },
+  };
 }
 
 // ---- Local follows store (persisted to localStorage so the mock feels live) ----
@@ -1582,6 +1610,7 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   FMP_BARS_ADJUSTMENT: ["data/market_data.py:1850"],
   FMP_ECON_INDICATORS: ["api/pilots_api.py:4233"],
   ETF_HOLDINGS_TICKERS: ["api/pilots_api.py:4253"],
+  SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["pipeline/production_steps.py:531"],
 };
 
 // `settings_keysets.DANGEROUS_KEYS` ∩ the keys these five editors serve. Copied
@@ -1752,6 +1781,27 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   {
     group: "Position Sizing", key: "SIZING_CAP_ALERT_THRESHOLD_PCT", type: "number",
     value: 0.30, default: 0.30, min: 0, max: 1, step: 0.05,
+    description: null,
+  },
+  // ---- Symbol Rating (Tracked Universe auto-drop, rating/symbol_rating_store.py) ----
+  {
+    group: "Symbol Rating", key: "SYMBOL_RATING_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Compute and persist a per-symbol rating every cycle. Diagnostic-only -- no symbol is excluded by this flag alone.",
+  },
+  {
+    group: "Symbol Rating", key: "SYMBOL_RATING_BAD_SCORE_THRESHOLD", type: "number",
+    value: 35.0, default: 35.0, min: 0, max: 100, step: 1,
+    description: "A symbol's score below this is rated BAD this cycle. Matches strategy_engine.py's own RISK REDUCE cutoff.",
+  },
+  {
+    group: "Symbol Rating", key: "SYMBOL_RATING_AUTO_DROP_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in. When on, a non-held symbol rated BAD for SYMBOL_RATING_DROP_THRESHOLD_CYCLES cycles in a row is dropped from the Tracked Universe. A held position is never dropped.",
+  },
+  {
+    group: "Symbol Rating", key: "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", type: "number",
+    value: 5, default: 5, min: 1, max: 100, step: 1,
     description: null,
   },
   // ---- Risk Gate ----
@@ -5189,6 +5239,8 @@ export const mockApi = {
         forecast_available: covered,
         watchlists: held ? [] : ["file:watchlist.txt"],
         diagnostic,
+        rating_consecutive_bad_cycles: MOCK_RATING_OVERRIDES[symbol]?.consecutive_bad_cycles ?? null,
+        rating_excluded: MOCK_RATING_OVERRIDES[symbol]?.excluded ?? false,
       };
     }
 
@@ -6643,6 +6695,18 @@ export const mockApi = {
     );
     MOCK_DATA_UNIVERSE = cleaned;
     return delay({ status: "updated", symbols: [...cleaned] });
+  },
+
+  async reincludeSymbol(symbol: string): Promise<SymbolReincludeResult> {
+    // Mirror the backend: SymbolRatingStore.reinclude() inserts a synthetic
+    // GOOD event rather than deleting history, so the streak becomes 0 (not
+    // "no history" / null). Mutates the SAME fixture state getSyncReport()
+    // reads (MOCK_RATING_OVERRIDES) so a subsequent reload genuinely shows
+    // the symbol no longer excluded -- this is the "make the mock actually
+    // mutate its fixture" requirement, not just a canned success response.
+    const sym = symbol.trim().toUpperCase();
+    MOCK_RATING_OVERRIDES[sym] = { consecutive_bad_cycles: 0, excluded: false };
+    return delay({ symbol: sym, reincluded: true });
   },
 
   async getSignalBreakdown(symbol: string): Promise<SignalBreakdown> {
