@@ -199,8 +199,17 @@ export const TAB_HELP: Record<string, TabHelp> = {
   pilots: {
     title: "Pilots",
     description:
-      "Browse strategy 'Pilots' you can follow. The honesty badges (Deployable / Not deployable) and the PBO · DSR · Sharpe · Max-DD row show whether a Pilot actually cleared its backtest gates — never a marketing number.",
-    keyConcepts: ["deployable", "pbo", "dsr", "sharpe ratio", "max drawdown", "follow minimum"],
+      "Browse strategy 'Pilots' you can follow. Each Pilot now shows its actual current BUY/SELL/HOLD call per holding, with buy and sell/stop ranges. The honesty badges (Deployable / Not deployable) and the PBO · DSR · Sharpe · Max-DD row show whether a Pilot actually cleared its backtest gates — never a marketing number.",
+    keyConcepts: [
+      "deployable",
+      "pbo",
+      "dsr",
+      "sharpe ratio",
+      "max drawdown",
+      "follow minimum",
+      "buy range",
+      "sell/stop range",
+    ],
   },
   portfolio: {
     title: "Portfolio",

@@ -116,10 +116,10 @@ export interface Holding {
   weight: number; // normalized target weight, fraction summing to ~1
   score: number; // blended signal score
   price: number | null; // null when no live quote
-  action?: string;
-  buy_range?: string;
-  sell_range?: string;
-  conviction?: number;
+  action: string | null; // null when advisory data isn't available for this symbol
+  buy_range: string | null;
+  sell_range: string | null;
+  conviction: number | null;
 }
 
 export interface SectorSlice {

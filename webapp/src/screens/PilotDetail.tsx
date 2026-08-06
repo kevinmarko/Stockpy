@@ -207,7 +207,7 @@ export function PilotDetail() {
                   }}>
                     {hd.action && (
                       <div style={{ display: "flex", gap: "var(--s-1)", alignItems: "center" }}>
-                        <span className={actionStyle} style={{ padding: "0 var(--s-1)", fontSize: "0.85em" }}>{hd.action}</span>
+                        <span className={`badge ${actionStyle}`} style={{ padding: "0 var(--s-1)", fontSize: "0.85em" }}>{hd.action}</span>
                       </div>
                     )}
                     {hd.conviction != null && (

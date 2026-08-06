@@ -71,6 +71,23 @@ describe("PilotCard (real mock API)", () => {
 
     expect(await screen.findByText(/not deployable/i)).toBeInTheDocument();
   });
+
+  it("renders a top-holding symbol chip with a recognizable action indicator (trend-following's NVDA is a BUY pick)", () => {
+    renderCard(<PilotCard pilot={trendFollowing} />);
+
+    expect(trendFollowing.top_holdings[0].action).toBe("BUY");
+    const chip = screen.getByText(trendFollowing.top_holdings[0].symbol);
+    // The chip is colored via theme.growth for a BUY action -- assert the
+    // recognizable visual indicator, not just that the symbol text exists.
+    expect(chip).toHaveStyle({ color: "#10b981" });
+  });
+
+  it("shows the DSR chip when headline.dsr is non-null", () => {
+    renderCard(<PilotCard pilot={trendFollowing} />);
+
+    expect(trendFollowing.headline.dsr).not.toBeNull();
+    expect(screen.getByText(/DSR/)).toBeInTheDocument();
+  });
 });
 
 describe("PopularCard (real mock API)", () => {

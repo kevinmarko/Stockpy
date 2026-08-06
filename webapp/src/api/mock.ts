@@ -278,18 +278,47 @@ function holdings(
   symbols: [string, number, number][] // [symbol, weight(raw), score]
 ): Holding[] {
   const total = symbols.reduce((s, [, w]) => s + w, 0);
-  return symbols.map(([symbol, w, score]) => ({
-    symbol,
-    name: NAMES[symbol] ?? symbol,
-    sector: SECTOR_OF[symbol] ?? "Other",
-    weight: +(w / total).toFixed(4),
-    score,
-    price: +(50 + Math.random() * 400).toFixed(2),
-    action: Math.random() > 0.5 ? "BUY" : "HOLD",
-    buy_range: "Buy Zone: $120.00 - $130.00",
-    sell_range: "Sell Zone: $140.00 - $150.00 | Stop @ $110.00",
-    conviction: +(0.5 + Math.random() * 0.4).toFixed(2),
-  }));
+
+  // Deterministic BUY/HOLD split: the top 1-2 scored holdings in this
+  // Pilot's list are the "BUY" conviction picks, everything else "HOLD" --
+  // no Math.random() so mock data is stable across renders/reloads.
+  const byScoreDesc = [...symbols].sort((a, b) => b[2] - a[2]);
+  const buyCount = Math.min(2, byScoreDesc.length);
+  const buySymbols = new Set(byScoreDesc.slice(0, buyCount).map(([symbol]) => symbol));
+  const maxScore = byScoreDesc[0]?.[2] ?? 0;
+  const minScore = byScoreDesc[byScoreDesc.length - 1]?.[2] ?? 0;
+  const scoreSpread = maxScore - minScore || 1;
+
+  return symbols.map(([symbol, w, score]) => {
+    const price = +(50 + Math.random() * 400).toFixed(2);
+    const isBuy = buySymbols.has(symbol);
+    // Normalize this holding's score within its Pilot's own score range,
+    // then map onto a conviction band: BUY picks sit higher (0.75-0.90),
+    // the rest lower (0.50-0.65) -- higher score => more conviction.
+    const normalized = (score - minScore) / scoreSpread;
+    const conviction = isBuy
+      ? +(0.75 + normalized * 0.15).toFixed(2)
+      : +(0.5 + normalized * 0.15).toFixed(2);
+
+    const buyLow = price * 0.94;
+    const buyHigh = price * 0.98;
+    const sellLow = price * 1.05;
+    const sellHigh = price * 1.15;
+    const stop = price * 0.9;
+
+    return {
+      symbol,
+      name: NAMES[symbol] ?? symbol,
+      sector: SECTOR_OF[symbol] ?? "Other",
+      weight: +(w / total).toFixed(4),
+      score,
+      price,
+      action: isBuy ? "BUY" : "HOLD",
+      buy_range: `Buy Zone: $${buyLow.toFixed(2)} - $${buyHigh.toFixed(2)}`,
+      sell_range: `Sell Zone: $${sellLow.toFixed(2)} - $${sellHigh.toFixed(2)} | Stop @ $${stop.toFixed(2)}`,
+      conviction,
+    };
+  });
 }
 
 function sectorAlloc(hs: Holding[]): SectorSlice[] {
