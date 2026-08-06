@@ -285,6 +285,10 @@ function holdings(
     weight: +(w / total).toFixed(4),
     score,
     price: +(50 + Math.random() * 400).toFixed(2),
+    action: Math.random() > 0.5 ? "BUY" : "HOLD",
+    buy_range: "Buy Zone: $120.00 - $130.00",
+    sell_range: "Sell Zone: $140.00 - $150.00 | Stop @ $110.00",
+    conviction: +(0.5 + Math.random() * 0.4).toFixed(2),
   }));
 }
 
@@ -732,6 +736,7 @@ const CATALOG: MockPilot[] = RAW.map((r) => {
     description: r.description,
     headline: r.headline,
     holdings_count: hs.length,
+    top_holdings: hs.slice(0, 3),
     aum_proxy: r.aum,
     followers_proxy: r.followers,
     long_only: r.long_only,

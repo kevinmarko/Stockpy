@@ -35,6 +35,13 @@ describe("PilotDetail screen (real mock API)", () => {
     expect(screen.getByText(/Holdings/)).toBeInTheDocument();
     expect(screen.getByText(/Sector allocation/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Follow/ })).toBeInTheDocument();
+
+    // Verify new holding properties render
+    const actionEls = await screen.findAllByText(/BUY|HOLD|SELL/);
+    expect(actionEls).not.toHaveLength(0);
+    expect(await screen.findAllByText(/Conviction:/i)).not.toHaveLength(0);
+    expect(await screen.findAllByText(/Buy:/i)).not.toHaveLength(0);
+    expect(await screen.findAllByText(/Sell\/Stop:/i)).not.toHaveLength(0);
   });
 
   it("value-quality (curve:null) renders the honest 'no backtest series yet' panel with its reason, never a fabricated chart", async () => {

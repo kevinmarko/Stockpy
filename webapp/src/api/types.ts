@@ -103,6 +103,7 @@ export interface PilotSummary {
   description: string;
   headline: Headline;
   holdings_count: number;
+  top_holdings: Holding[];
   aum_proxy: number; // derived from follows.json (honest, local)
   followers_proxy: number;
   long_only: boolean;
@@ -115,6 +116,10 @@ export interface Holding {
   weight: number; // normalized target weight, fraction summing to ~1
   score: number; // blended signal score
   price: number | null; // null when no live quote
+  action?: string;
+  buy_range?: string;
+  sell_range?: string;
+  conviction?: number;
 }
 
 export interface SectorSlice {

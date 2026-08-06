@@ -908,6 +908,8 @@ class RlhfProposalReviewRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+_TOP_HOLDINGS_PREVIEW_N = 3
+
 def _pilot_summary(pilot: Any, snapshot: Optional[dict], store: FollowsStore) -> Dict[str, Any]:
     """The PilotSummary contract (webapp/src/api/types.ts): identity + headline
     metrics + follow proxies + holdings_count + ``long_only``.
@@ -916,14 +918,15 @@ def _pilot_summary(pilot: Any, snapshot: Optional[dict], store: FollowsStore) ->
     (``/pilots/{id}``, whose ``PilotDetail extends PilotSummary``) so the two
     responses can never silently drift apart again.
     """
-    holdings_count = len(scoring.pilot_holdings(pilot, snapshot)) if snapshot is not None else 0
+    holdings = scoring.pilot_holdings(pilot, snapshot) if snapshot is not None else []
     return {
         "id": pilot.id,
         "name": pilot.name,
         "category": pilot.category,
         "description": pilot.description,
         "headline": performance.pilot_headline(pilot, reports_dir=_reports_dir()),
-        "holdings_count": holdings_count,
+        "holdings_count": len(holdings),
+        "top_holdings": holdings[:_TOP_HOLDINGS_PREVIEW_N],
         "aum_proxy": store.aum_for(pilot.id),
         "followers_proxy": store.followers_for(pilot.id),
         "long_only": pilot.long_only,

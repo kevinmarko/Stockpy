@@ -42,6 +42,10 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "A score between 0 and 1 for how confident the system is in a recommendation. A conviction of 0.80 is NOT a promise of an 80% win rate — it reflects certainty, which the Calibration screen lets you verify empirically.",
   calibration:
     "A reliability check: 'when the system says conviction 0.80, does it actually win 80% of the time?' The reliability diagram compares stated conviction to the realized win rate per bin.",
+  "buy range":
+    "The technical zone where purchasing the asset is considered favorable, below which momentum may be failing, and above which it is overextended. Sourced from the technical options engine; purely informational.",
+  "sell/stop range":
+    "The zone to take profits, paired with a hard stop-loss level. Sourced from the technical options engine; purely informational.",
   "reliability diagram":
     "The chart on the Calibration screen. Points on the diagonal are perfectly calibrated; above the line = underconfident, below = overconfident. Bins with too little data read 'insufficient', never a fabricated win rate.",
   "kelly target": (t) =>

@@ -92,7 +92,14 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
               : fmtPct(h.max_drawdown, 0, { fromFraction: true })}
           </span>
         </span>
-        <span><span style={{ fontWeight: 600, color: theme.textPrimary }}>{pilot.holdings_count}</span> holdings</span>
+        <span style={{ textAlign: "right" }}>
+          <span style={{ fontWeight: 600, color: theme.textPrimary }}>{pilot.holdings_count}</span> holdings
+          {pilot.top_holdings && pilot.top_holdings.length > 0 && (
+            <span style={{ display: "block", color: theme.textMuted, fontSize: "0.85em", marginTop: 2 }}>
+              {pilot.top_holdings.map((h) => h.symbol).join(", ")}
+            </span>
+          )}
+        </span>
       </div>
 
       <div style={{ marginTop: "var(--s-3)" }}>
@@ -189,7 +196,14 @@ export function PopularCard({ pilot }: { pilot: PilotSummary }) {
             {pilot.headline.sharpe == null ? "—" : fmtNum(pilot.headline.sharpe, 2)}
           </span>
         </span>
-        <span><span style={{ fontWeight: 600, color: theme.textPrimary }}>{pilot.holdings_count}</span> holdings</span>
+        <span style={{ textAlign: "right" }}>
+          <span style={{ fontWeight: 600, color: theme.textPrimary }}>{pilot.holdings_count}</span> holdings
+          {pilot.top_holdings && pilot.top_holdings.length > 0 && (
+            <span style={{ display: "block", color: theme.textMuted, fontSize: "0.85em", marginTop: 2 }}>
+              {pilot.top_holdings.map((h) => h.symbol).join(", ")}
+            </span>
+          )}
+        </span>
       </div>
 
       <div style={{ marginTop: "var(--s-3)" }}>

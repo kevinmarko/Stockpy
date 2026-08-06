@@ -169,24 +169,70 @@ export function PilotDetail() {
           Holdings <span style={{ color: theme.textMuted }}>({pilot.holdings.length})</span>
         </h2>
         <div className="list">
-          {pilot.holdings.map((hd) => (
-            <Link className="row" key={hd.symbol} to={`/symbol/${hd.symbol}`}>
-              <div className="row-main">
-                <span className="row-title">{hd.symbol}</span>
-                <span className="row-sub">
-                  {hd.name} · {hd.sector}
-                </span>
-              </div>
-              <div className="row-end">
-                <div className="num" style={{ fontWeight: 700 }}>
-                  {(hd.weight * 100).toFixed(1)}%
+          {pilot.holdings.map((hd) => {
+            const actionStyle =
+              hd.action === "BUY"
+                ? "badge-good"
+                : hd.action === "SELL"
+                ? "badge-bad"
+                : "badge-neutral";
+            return (
+              <Link className="row" key={hd.symbol} to={`/symbol/${hd.symbol}`} style={{ flexWrap: "wrap", gap: "var(--s-2)" }}>
+                <div style={{ display: "flex", width: "100%", justifyContent: "space-between" }}>
+                  <div className="row-main">
+                    <span className="row-title">{hd.symbol}</span>
+                    <span className="row-sub">
+                      {hd.name} · {hd.sector}
+                    </span>
+                  </div>
+                  <div className="row-end">
+                    <div className="num" style={{ fontWeight: 700 }}>
+                      {(hd.weight * 100).toFixed(1)}%
+                    </div>
+                    <div className="row-sub num">
+                      {hd.price == null ? "no quote" : fmtUsd(hd.price)}
+                    </div>
+                  </div>
                 </div>
-                <div className="row-sub num">
-                  {hd.price == null ? "no quote" : fmtUsd(hd.price)}
-                </div>
-              </div>
-            </Link>
-          ))}
+                {(hd.action || hd.buy_range || hd.sell_range) && (
+                  <div style={{
+                    width: "100%",
+                    paddingTop: "var(--s-2)",
+                    borderTop: `1px dashed ${theme.border}`,
+                    fontSize: "var(--t-caption)",
+                    display: "flex",
+                    gap: "var(--s-3)",
+                    flexWrap: "wrap",
+                    color: theme.textSecondary
+                  }}>
+                    {hd.action && (
+                      <div style={{ display: "flex", gap: "var(--s-1)", alignItems: "center" }}>
+                        <span className={actionStyle} style={{ padding: "0 var(--s-1)", fontSize: "0.85em" }}>{hd.action}</span>
+                      </div>
+                    )}
+                    {hd.conviction != null && (
+                      <div style={{ display: "flex", gap: "var(--s-1)" }}>
+                        <span style={{ fontWeight: 600 }}>Conviction:</span>
+                        <span className="num">{fmtNum(hd.conviction, 2)}</span>
+                      </div>
+                    )}
+                    {hd.buy_range && (
+                      <div style={{ display: "flex", gap: "var(--s-1)" }}>
+                        <span style={{ fontWeight: 600 }}>Buy:</span>
+                        <span>{hd.buy_range.replace("Buy Zone: ", "")}</span>
+                      </div>
+                    )}
+                    {hd.sell_range && (
+                      <div style={{ display: "flex", gap: "var(--s-1)" }}>
+                        <span style={{ fontWeight: 600 }}>Sell/Stop:</span>
+                        <span>{hd.sell_range.replace("Sell Zone: ", "").replace(" | Stop @", ", Stop")}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Link>
+            );
+          })}
         </div>
       </section>
 
