@@ -606,6 +606,37 @@ class OptionsRecomputeRequest(BaseModel):
     delta_tolerance: float = Field(0.05, ge=0.01, le=0.25)
 
 
+class CacheLongShortSimulateRequest(BaseModel):
+    ticker: str = Field(..., min_length=1, max_length=10)
+    allocation: float = Field(..., gt=0)
+
+
+@app.post("/data/cache-long-short/simulate", dependencies=[Depends(require_token)])
+def simulate_cache_long_short(body: CacheLongShortSimulateRequest) -> Dict[str, Any]:
+    from engine.cache_long_short_engine import CacheLongShortEngine
+    sym = body.ticker.strip().upper()
+    
+    beta = CacheLongShortEngine.calculate_beta(sym)
+    proxy, corr = CacheLongShortEngine.find_correlated_proxy(sym)
+    
+    if proxy is None or beta is None:
+        return {
+            "found": False,
+            "reason": "Insufficient price history for ticker or suitable proxy",
+            "beta": None,
+            "proxy_ticker": None,
+            "correlation_coefficient": None
+        }
+        
+    return {
+        "found": True,
+        "reason": None,
+        "beta": beta,
+        "proxy_ticker": proxy,
+        "correlation_coefficient": corr
+    }
+
+
 @app.post("/data/pairs/analyze", dependencies=[Depends(require_token)])
 def analyze_pairs_ondemand(body: PairsAnalyzeRequest) -> Dict[str, Any]:
     """On-demand cointegration + spread-signal analysis for ONE named pair.

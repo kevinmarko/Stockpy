@@ -489,6 +489,18 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
     "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
     "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
+    "BROKER_BACKEND",
+    "CACHE_LONG_SHORT_ENABLED",
+    "CACHE_LONG_SHORT_MIN_CORRELATION",
+    "CACHE_LONG_SHORT_PROXY_CANDIDATES",
+    "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
+    "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
+    # CACHE_LONG_SHORT_WRITES_ENABLED is deliberately NOT here (nor in
+    # SECRET_KEYS) -- mirrors STRATEGY_WRITES_ENABLED/MACRO_GATE_WRITES_ENABLED:
+    # a dedicated writes-enabled flag must never be GUI-flippable. Hand-set in
+    # .env only. See tests/test_cache_long_short_api.py's
+    # test_cache_long_short_writes_enabled_is_not_gui_writable.
+    "FMP_PAPER_STARTING_CASH",
     # Fields flagged by scripts/auditor/stockpy_codebase_auditor.py's
     # undeclared_env_var check (2026-08) — non-secret tunables.
     "WATCHLIST",                # comma-separated ticker list; see main._load_watchlist()
@@ -634,6 +646,7 @@ EXCLUDED_FROM_GUI: frozenset[str] = frozenset(
         "AI_GENERATION_API_ENABLED",
         "AUTOMATION_WRITES_ENABLED",
         "BROKERAGE_REFRESH_ENABLED",
+        "CACHE_LONG_SHORT_WRITES_ENABLED",
         "COMMAND_EXECUTION_ENABLED",
         "DEAD_LETTER_RETRY_ENABLED",
         "GENERAL_SETTINGS_WRITES_ENABLED",

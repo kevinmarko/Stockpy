@@ -498,6 +498,21 @@ def require_macro_gate_writes_enabled() -> None:
             detail="Macro gate writes are disabled (MACRO_GATE_WRITES_ENABLED=false).",
         )
 
+def require_cache_long_short_writes_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``POST /pilots/cache-long-short/*``
+    write endpoints (start, approve-bulk) -- persists a new tracked position
+    or marks a TLH recommendation approved. A DEDICATED flag
+    (``settings.CACHE_LONG_SHORT_WRITES_ENABLED``), NOT
+    ``AUTOMATION_WRITES_ENABLED`` or ``STRATEGY_WRITES_ENABLED``: this changes
+    what a trading strategy recommends, its own risk class, and must not ride
+    in on any of those. Deliberately NOT GUI-writable, hand-set in ``.env``
+    only. ``GET`` endpoints are read-only and NOT gated by this flag."""
+    if not settings.CACHE_LONG_SHORT_WRITES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Cache Long/Short writes are disabled (CACHE_LONG_SHORT_WRITES_ENABLED=false).",
+        )
+
 
 def require_rag_query_enabled() -> None:
     """FAIL-CLOSED master-switch guard for ``POST /rag/query``. A DEDICATED
@@ -5159,3 +5174,68 @@ def post_rag_query(body: RagQueryRequest) -> Dict[str, Any]:
         "analysis": analysis if analysis else None,
         "available": bool(analysis),
     }
+
+
+class CacheLongShortStartRequest(BaseModel):
+    ticker: str = Field(..., min_length=1, max_length=10)
+    proxy_ticker: str = Field(..., min_length=1, max_length=10)
+    allocation: float = Field(..., gt=0)
+    correlation_coefficient: float = Field(...)
+
+class CacheLongShortApproveBulkRequest(BaseModel):
+    lot_ids: List[int]
+
+@app.get("/pilots/cache-long-short/concentrated-positions", dependencies=[Depends(require_read_token)])
+def get_cls_concentrated_positions() -> Dict[str, Any]:
+    """Real held (long) positions exceeding 20% of account equity, sourced
+    from the cached AccountSnapshot (allow_live_fetch=False -- never blocks
+    on a live broker login). Degrades to an empty list, never a fabricated
+    row, on any lookup failure (CONSTRAINT #6)."""
+    from data.robinhood_portfolio import fetch_account_snapshot
+
+    try:
+        snap = fetch_account_snapshot(allow_live_fetch=False)
+        equity = snap.total_equity if snap else 0
+        positions = []
+        if equity > 0 and snap:
+            for p in snap.positions:
+                if (p.market_value / equity) > 0.20:
+                    positions.append(
+                        {"ticker": p.symbol, "market_value": p.market_value, "pct_equity": (p.market_value / equity)}
+                    )
+        return {"positions": positions}
+    except Exception as exc:
+        logger.warning("get_cls_concentrated_positions: account snapshot lookup failed: %s", exc)
+        return {"positions": []}
+
+@app.get("/pilots/cache-long-short/dashboard", dependencies=[Depends(require_read_token)])
+def get_cls_dashboard() -> Dict[str, Any]:
+    from pilots.cache_long_short import get_dashboard
+    return get_dashboard()
+
+@app.get("/pilots/cache-long-short/pending-approvals", dependencies=[Depends(require_read_token)])
+def get_cls_pending_approvals() -> List[Dict[str, Any]]:
+    from pilots.cache_long_short import get_pending_approvals
+    return get_pending_approvals()
+
+@app.post("/pilots/cache-long-short/start", dependencies=[Depends(require_command_token), Depends(require_cache_long_short_writes_enabled)])
+def start_cls_strategy(body: CacheLongShortStartRequest) -> Dict[str, Any]:
+    """Persists a new tracked position + its already-simulated proxy hedge
+    (the caller must have already called POST /data/cache-long-short/simulate
+    -- this endpoint never recomputes beta/proxy/correlation itself, per the
+    AST-guard split documented in engine/cache_long_short_engine.py)."""
+    from data.cache_long_short_store import CacheLongShortStore
+    store = CacheLongShortStore()
+    pos_id = store.record_position(body.ticker, "long")
+    store.upsert_security_proxy(body.ticker, body.proxy_ticker, body.correlation_coefficient)
+    return {"status": "started", "position_id": pos_id, "ticker": body.ticker}
+
+@app.post("/pilots/cache-long-short/approve-bulk", dependencies=[Depends(require_command_token), Depends(require_cache_long_short_writes_enabled)])
+def approve_cls_bulk(body: CacheLongShortApproveBulkRequest) -> Dict[str, Any]:
+    """Marks the given TLH-flagged lots approved. Still advisory only in V1
+    -- no broker order is submitted; approval only changes what's shown as
+    actionable."""
+    from data.cache_long_short_store import CacheLongShortStore
+    store = CacheLongShortStore()
+    store.approve_tax_lots(body.lot_ids)
+    return {"status": "approved", "count": len(body.lot_ids)}
