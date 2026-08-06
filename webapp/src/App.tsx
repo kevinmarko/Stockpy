@@ -50,6 +50,7 @@ import { TradingHub } from "./screens/TradingHub";
 import { OperationsHub } from "./screens/OperationsHub";
 import { Help } from "./screens/Help";
 import { Onboarding } from "./screens/Onboarding";
+import { CacheLongShort } from "./screens/CacheLongShort";
 import { readOnboarding } from "./onboarding";
 import { TokenGate } from "./components/TokenGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -250,6 +251,7 @@ export default function App() {
                   <Route path="/trading" element={<TradingHub />} />
                   <Route path="/operations" element={<OperationsHub />} />
                   <Route path="/portfolio" element={<Portfolio />} />
+                  <Route path="/cache-long-short" element={<CacheLongShort />} />
                   <Route path="/help" element={<Help />} />
                   <Route path="/settings" element={<SettingsLayout />}>
                     <Route index element={<SettingsGeneral />} />

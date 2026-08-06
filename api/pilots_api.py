@@ -5107,3 +5107,6 @@ def post_rag_query(body: RagQueryRequest) -> Dict[str, Any]:
         "analysis": analysis if analysis else None,
         "available": bool(analysis),
     }
+
+from api.cache_long_short_api import router as cls_router
+app.include_router(cls_router)

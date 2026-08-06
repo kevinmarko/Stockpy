@@ -1112,12 +1112,27 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
 
 
 
-async def main(dry_run: bool = False, strict: bool = False):  # CLI flags propagated
-    """Master async entry point.  Starts a heartbeat background task and
-    always cancels it (even on crash) via try/finally.
+async def _cache_long_short_worker(interval: int = 3600) -> None:
+    """Background worker for Cache Long/Short strategy operations."""
+    from engine.cache_long_short_engine import CacheLongShortEngine
+    try:
+        while True:
+            try:
+                CacheLongShortEngine.scan_tlh_opportunities(user_id="default")
+                CacheLongShortEngine.check_correlation_drift("AAPL", "XLK")
+            except Exception as e:
+                logger.error(f"Cache Long/Short worker error: {e}")
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        pass
 
-    ``strict`` (``--strict``) makes DashboardSchema validation FATAL so CI can
-    gate on schema drift; the default (False) logs all violations and continues.
+
+async def main(dry_run: bool = False, strict: bool = False) -> None:
+    """Entry point for the master orchestrator.
+
+    Wraps the core run loop (_main_body) in pre-flight/post-flight setup,
+    loading environment overrides, starting the telemetry heartbeat, and gating
+    on schema drift; the default (False) logs all violations and continues.
     """
     # Load .env into os.environ.  See module-top comment on python-dotenv:
     # the loader is deliberately invoked here (not at import) so the test
@@ -1141,12 +1156,15 @@ async def main(dry_run: bool = False, strict: bool = False):  # CLI flags propag
                 raise PipelineFatalError("Alpaca API keys are missing for live execution")
 
     _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
+    _cls_task = asyncio.create_task(_cache_long_short_worker(interval=3600))
     try:
         await _main_body(effective_dry_run, strict=strict)
     finally:
         _hb_task.cancel()
+        _cls_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await _hb_task
+            await _cls_task
 
 
 if __name__ == "__main__":

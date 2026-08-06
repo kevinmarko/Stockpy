@@ -180,6 +180,54 @@ def initialize_database(db_file: str = DB_FILE):
             """
             cursor.execute(create_transactions_sql)
             logger.info("'Transactions' table created successfully.")
+
+            # 4. Cache Long/Short Strategy Tables
+            logger.info("Initializing Cache Long/Short strategy tables...")
+            
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Portfolios (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                total_value REAL DEFAULT 0.0,
+                cash_balance REAL DEFAULT 0.0,
+                margin_used REAL DEFAULT 0.0
+            );
+            """)
+            
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Positions (
+                id TEXT PRIMARY KEY,
+                portfolio_id TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                total_shares REAL NOT NULL,
+                position_type TEXT NOT NULL,
+                FOREIGN KEY(portfolio_id) REFERENCES Portfolios(id)
+            );
+            """)
+            
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Tax_Lots (
+                lot_id TEXT PRIMARY KEY,
+                position_id TEXT NOT NULL,
+                acquisition_date TEXT NOT NULL,
+                cost_basis_per_share REAL NOT NULL,
+                quantity REAL NOT NULL,
+                status TEXT NOT NULL,
+                realized_pnl REAL DEFAULT 0.0,
+                close_date TEXT,
+                FOREIGN KEY(position_id) REFERENCES Positions(id)
+            );
+            """)
+            
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS Security_Proxies (
+                primary_ticker TEXT PRIMARY KEY,
+                proxy_ticker_1 TEXT,
+                proxy_ticker_2 TEXT,
+                correlation_coefficient REAL
+            );
+            """)
+            logger.info("Cache Long/Short strategy tables created successfully.")
     except Exception as e:
         # Unwrap SQLAlchemy OperationalError to raise raw sqlite3.OperationalError for tests
         if hasattr(e, "orig") and e.orig is not None:
