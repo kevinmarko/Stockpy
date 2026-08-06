@@ -2064,6 +2064,18 @@ class CompositeProvider(MarketDataProvider):
             # Alpaca/yfinance rather than ever calling into FMP.
             quote = provider.get_latest_quote(sym)
         self._cache.put(quote)
+
+        try:
+            from settings import settings as _settings
+            if bool(getattr(_settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", False)):
+                import market_data_latency
+
+                market_data_latency.record_quote_latency(
+                    sym, quote.source, quote.timestamp, quote.is_stale
+                )
+        except Exception as exc:  # noqa: BLE001 — best-effort, never blocks a quote fetch
+            logger.debug("CompositeProvider: latency sample write failed (non-critical): %s", exc)
+
         return quote
 
     def get_intraday_bars(

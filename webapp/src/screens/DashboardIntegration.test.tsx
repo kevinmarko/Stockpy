@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "./Dashboard";
 import { Comparison } from "./Comparison";
+import { Observability } from "./Observability";
 import { api } from "../api/client";
 import { ApiError } from "../api/types";
 import { theme } from "../theme";
@@ -81,6 +82,23 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
     // which lives in the sibling-owned ActivityFeed component (frozen prop
     // `pilotIds`). It passes once that component filters by pilotIds.
     expect(screen.queryByText("Dip Buyer executed SELL order")).not.toBeInTheDocument();
+  });
+
+  // Mission Control attention banner: real cross-screen navigation
+  it("navigates from the Dashboard attention banner straight to Mission Control", async () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/observability" element={<Observability />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const link = await screen.findByText("view in Mission Control →");
+    fireEvent.click(link);
+
+    expect(await screen.findByRole("heading", { name: "Mission Control" })).toBeInTheDocument();
   });
 
   // T4.1: Initial Cold Start (No Backend Pipeline)

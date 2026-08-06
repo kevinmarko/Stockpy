@@ -186,6 +186,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "MARKET_DATA_PROVIDER",
     "MARKET_DATA_QUOTE_TTL_SECONDS",
     "MARKET_DATA_BARS_TTL_SECONDS",
+    # In-process, never-persisted quote-latency instrumentation
+    # (market_data_latency.py) feeding Mission Control's data-latency
+    # heatmap. Non-secret, read-only diagnostic -- carries no credential.
+    "MARKET_DATA_LATENCY_TRACKING_ENABLED",
     # Opt-in real-time WS quote ingestion (data/market_data_ws.py). Non-secret
     # tunables only; Alpaca credentials stay in SECRET_KEYS.
     "MARKET_DATA_WS_ENABLED",

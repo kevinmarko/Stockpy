@@ -2128,6 +2128,67 @@ export interface PortfolioForecastSkill {
   reason: string | null;
 }
 
+/**
+ * One symbol's forecast-skill row at ObservabilitySummary's currently-selected
+ * horizon (`pilots/observability.py::forecast_skill_by_symbol_summary`) — the
+ * per-symbol breakdown the portfolio-wide PortfolioForecastSkill above
+ * doesn't carry. `skill_weights` is `{}` (never a fabricated equal split)
+ * when this symbol has no forecast history in the window yet — a symbol
+ * requested via the last pipeline snapshot's signals is never silently
+ * omitted from `rows` just because it has zero completed forecasts so far.
+ */
+export interface ForecastSkillSymbolRow {
+  symbol: string;
+  pending: number;
+  completed: number;
+  skill_weights: Record<string, number>;
+}
+
+export interface ForecastSkillBySymbol {
+  horizon_days: number;
+  window_days: number;
+  min_obs: number;
+  rows: ForecastSkillSymbolRow[];
+  reason: string | null; // present when rows is empty
+}
+
+/**
+ * One quote-latency sample (`market_data_latency.py::LatencySample`) — the
+ * end-to-end gap between a provider's own quote timestamp and local
+ * ingestion time, recorded automatically on every real (non-cache-hit)
+ * fetch through `data.market_data.CompositeProvider.get_latest_quote`.
+ */
+export interface LatencySample {
+  symbol: string;
+  source: string;
+  quote_timestamp: string;
+  ingested_at: string;
+  latency_seconds: number;
+  is_stale: boolean;
+}
+
+/**
+ * `GET /observability/summary`'s `latency_heatmap` section
+ * (`pilots/observability.py::latency_heatmap_summary`). `tracking_enabled`
+ * mirrors `MARKET_DATA_LATENCY_TRACKING_ENABLED` (default `false`) —
+ * distinct from `rows` being empty, since tracking can be ON with zero
+ * samples yet (no quote fetched since this API process started). Samples
+ * are an IN-PROCESS ring buffer only — never persisted to disk — so they
+ * reset on every API restart; `rows`/`count`/`p50`/`p95` describe only
+ * "since this process last started", never a fabricated cross-restart trend
+ * (the same honesty framing `HeartbeatSummary` already uses).
+ */
+export interface LatencyHeatmap {
+  tracking_enabled: boolean;
+  count: number;
+  p50: number | null;
+  p95: number | null;
+  worst_symbol: string | null;
+  worst_p95: number | null;
+  rows: LatencySample[];
+  reason: string | null;
+}
+
 /** One entry from output/risk_gate_blocks.jsonl (execution/risk_gate.py). */
 export interface RiskGateBlockEntry {
   ts: string | null;
@@ -2330,7 +2391,9 @@ export interface ObservabilitySummary {
   equity_curve: EquityDrawdownCurve;
   regime: RegimeOverlay;
   forecast_skill: PortfolioForecastSkill;
+  forecast_skill_by_symbol: ForecastSkillBySymbol;
   risk_gate_blocks: RiskGateBlockLog;
+  latency_heatmap: LatencyHeatmap;
   circuit_breakers: CircuitBreakerSummary;
   system_telemetry: SystemTelemetry;
   sizing_cap_audit: SizingCapAuditTrail;
