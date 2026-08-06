@@ -480,7 +480,20 @@ def get_quotes(symbols: str) -> Dict[str, Any]:
 
 @app.get("/data/sync-report", dependencies=[Depends(require_token)])
 def get_sync_report() -> Dict[str, Any]:
-    """Portfolio & watchlist coverage report (holdings ∪ watchlists)."""
+    """Portfolio & watchlist coverage report (holdings ∪ watchlists).
+
+    Enriches each symbol entry with two rating fields sourced from
+    ``rating.symbol_rating_store.SymbolRatingStore`` (Part 1 of the Symbol
+    Rating subsystem — this endpoint never writes to that store, only reads):
+    ``rating_consecutive_bad_cycles`` (int) and ``rating_excluded`` (bool,
+    True only for a non-held symbol whose consecutive-BAD streak has reached
+    ``settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES`` — mirrors
+    ``SymbolRatingStore.get_excluded_symbols``'s own "never exclude a held
+    symbol" rule so the badge can't disagree with what auto-drop would
+    actually do). Enrichment is best-effort and self-contained to this file
+    (``data/portfolio_sync.py`` is untouched) — a rating-store failure
+    (missing DB, import error, etc.) degrades to leaving the two keys off
+    every symbol rather than failing the whole endpoint (CONSTRAINT #6)."""
     try:
         snapshot = fetch_account_snapshot(force=False)
     except Exception as exc:
@@ -491,7 +504,24 @@ def get_sync_report() -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("data_api: sync report failed: %s", exc)
         raise HTTPException(status_code=503, detail="Sync report unavailable")
-    return _clean_nan(report.to_dict())
+
+    resp = _clean_nan(report.to_dict())
+    try:
+        from rating.symbol_rating_store import SymbolRatingStore
+        from settings import settings as _settings
+
+        store = SymbolRatingStore(readonly=True)
+        threshold = _settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES
+        for sym, entry in (resp.get("symbols") or {}).items():
+            is_held = bool(entry.get("held"))
+            cycles = store.get_consecutive_bad_cycles(sym)
+            entry["rating_consecutive_bad_cycles"] = cycles
+            entry["rating_excluded"] = (not is_held) and cycles >= threshold
+    except Exception as exc:
+        logger.warning("data_api: symbol-rating enrichment failed for sync report (%s)", exc)
+        # Degrade: leave symbols without the two new keys rather than failing
+        # the whole endpoint (CONSTRAINT #6).
+    return resp
 
 
 @app.get("/data/account", dependencies=[Depends(require_token)])
@@ -574,6 +604,37 @@ class OptionsRecomputeRequest(BaseModel):
     )
     strike_grid: float = Field(0.50, ge=0.5, le=10.0)
     delta_tolerance: float = Field(0.05, ge=0.01, le=0.25)
+
+
+class CacheLongShortSimulateRequest(BaseModel):
+    ticker: str = Field(..., min_length=1, max_length=10)
+    allocation: float = Field(..., gt=0)
+
+
+@app.post("/data/cache-long-short/simulate", dependencies=[Depends(require_token)])
+def simulate_cache_long_short(body: CacheLongShortSimulateRequest) -> Dict[str, Any]:
+    from engine.cache_long_short_engine import CacheLongShortEngine
+    sym = body.ticker.strip().upper()
+    
+    beta = CacheLongShortEngine.calculate_beta(sym)
+    proxy, corr = CacheLongShortEngine.find_correlated_proxy(sym)
+    
+    if proxy is None or beta is None:
+        return {
+            "found": False,
+            "reason": "Insufficient price history for ticker or suitable proxy",
+            "beta": None,
+            "proxy_ticker": None,
+            "correlation_coefficient": None
+        }
+        
+    return {
+        "found": True,
+        "reason": None,
+        "beta": beta,
+        "proxy_ticker": proxy,
+        "correlation_coefficient": corr
+    }
 
 
 @app.post("/data/pairs/analyze", dependencies=[Depends(require_token)])

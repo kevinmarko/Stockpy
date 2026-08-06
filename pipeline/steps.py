@@ -239,3 +239,42 @@ class AdvisoryEvalStep(PipelineStep):
             else:
                 logger.warning("Advisory failed for %s: %s", symbol, payload["message"])
                 ctx.errors.append(payload)
+
+        # ---------------------------------------------------------------------
+        # SYMBOL-RATING AUDIT LOG (rating/symbol_rating_store.py)
+        # ---------------------------------------------------------------------
+        # Records this cycle's GOOD/BAD verdict (rating.symbol_rating.classify_tier)
+        # for every recommendation with a real (finite) score. Best-effort: a
+        # DB hiccup only logs a warning and never affects the run's own
+        # recommendations or its SUCCEEDED/FAILED state (CONSTRAINT #6).
+        if settings.SYMBOL_RATING_ENABLED:
+            import math
+
+            from rating.symbol_rating import classify_tier
+            from rating.symbol_rating_store import SymbolRatingStore
+
+            events = []
+            held_symbols = ctx.snapshot.positions if ctx.snapshot else {}
+            for rec in ctx.recommendations:
+                _ki = getattr(rec, "key_indicators", None)
+                score = _ki.get("score") if _ki else None
+                # A missing/non-finite score means this recommendation never
+                # got a real evaluation this cycle -- skip it rather than
+                # writing a fabricated rating (CONSTRAINT #4), mirroring
+                # rating.symbol_rating.classify_tier's own NaN handling.
+                if score is None or not math.isfinite(score):
+                    continue
+                events.append({
+                    "symbol": rec.symbol,
+                    "score": float(score),
+                    "action_signal": rec.action,
+                    "tier": classify_tier(float(score), settings.SYMBOL_RATING_BAD_SCORE_THRESHOLD),
+                    "is_held": rec.symbol in held_symbols,
+                })
+
+            if events:
+                cycle_id = datetime.now(timezone.utc).isoformat()
+                try:
+                    SymbolRatingStore().record_ratings(events, cycle_id=cycle_id)
+                except Exception as exc:
+                    logger.warning(f"Symbol-rating audit write failed (non-critical): {exc}")

@@ -133,11 +133,14 @@ def _fetch_yfinance_close(symbol: str, start: date, end: date) -> pd.Series:
     """
     import yfinance as yf  # type: ignore
 
-    df = yf.Ticker(symbol).history(
-        start=start.isoformat(),
-        end=(end + timedelta(days=1)).isoformat(),  # yfinance end is exclusive
-        auto_adjust=True,
-    )
+    try:
+        df = yf.Ticker(symbol).history(
+            start=start.isoformat(),
+            end=(end + timedelta(days=1)).isoformat(),  # yfinance end is exclusive
+            auto_adjust=True,
+        )
+    except Exception as exc:
+        raise VerificationError(f"yfinance request failed for {symbol!r}: {exc}")
     if df is None or df.empty:
         raise VerificationError(f"yfinance returned no bars for {symbol!r}")
     if "Close" not in df.columns:

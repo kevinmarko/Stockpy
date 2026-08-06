@@ -83,6 +83,7 @@ import type {
   SymbolCompareResponse,
   UniverseResponse,
   SyncReportResponse,
+  SymbolReincludeResult,
   RecommendationsResponse,
   RestartDaemonResult,
   RlhfSummary,
@@ -122,6 +123,14 @@ import type {
   OrderBookLadderResponse,
   ModelComparisonResponse,
   OptionsAnalyticsSummaryResponse,
+  CacheLongShortConcentratedPosition,
+  CacheLongShortSimulateRequest,
+  CacheLongShortSimulateResult,
+  CacheLongShortStartRequest,
+  CacheLongShortStartResult,
+  CacheLongShortDashboard,
+  CacheLongShortPendingTrade,
+  CacheLongShortApproveBulkResult,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
@@ -476,6 +485,13 @@ const liveApi = {
   // base, :8603). Distinct from getDataUniverse's plain add/remove list:
   // this is the FULL/EQUITY_ONLY/UNCOVERED market-data coverage breakdown.
   getSyncReport: () => http<SyncReportResponse>("/data/sync-report"),
+  // Manual escape hatch to undo an automated symbol-rating exclusion
+  // (pilots base, :8602 — NOT under "/data/", so baseFor() routes it to
+  // BASE_URL, not DATA_BASE_URL). require_command_token-gated on the server.
+  reincludeSymbol: (symbol: string) =>
+    http<SymbolReincludeResult>(`/universe/${encodeURIComponent(symbol)}/reinclude`, {
+      method: "POST",
+    }),
   getSignalBreakdown: (symbol: string) =>
     http<SignalBreakdown>(`/metrics/signals/${encodeURIComponent(symbol)}`),
   getSignalImportance: (symbols: string[]) =>
@@ -789,6 +805,30 @@ const liveApi = {
     http<{ status: string; summary: ForecastBackfillSummary; sample_rows: number }>("/pilots/forecast_backfill/run", {
       method: "POST",
       body: JSON.stringify(params ?? {}),
+    }),
+    
+  // ---- Cache Long/Short ----
+  getClsConcentratedPositions: () =>
+    http<{ positions: CacheLongShortConcentratedPosition[] }>("/pilots/cache-long-short/concentrated-positions"),
+  getClsDashboard: () =>
+    http<CacheLongShortDashboard>("/pilots/cache-long-short/dashboard"),
+  getClsPendingApprovals: () =>
+    http<CacheLongShortPendingTrade[]>("/pilots/cache-long-short/pending-approvals"),
+  simulateCls(req: CacheLongShortSimulateRequest): Promise<CacheLongShortSimulateResult> {
+    return http<CacheLongShortSimulateResult>("/data/cache-long-short/simulate", {
+      method: "POST",
+      body: JSON.stringify(req),
+    });
+  },
+  startCls: (req: CacheLongShortStartRequest) =>
+    http<CacheLongShortStartResult>("/pilots/cache-long-short/start", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  approveClsBulk: (lotIds: number[]) =>
+    http<CacheLongShortApproveBulkResult>("/pilots/cache-long-short/approve-bulk", {
+      method: "POST",
+      body: JSON.stringify({ lot_ids: lotIds }),
     }),
 };
 

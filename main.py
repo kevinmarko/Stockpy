@@ -299,10 +299,37 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
       1. Robinhood held positions (always included when available).
       2. WATCHLIST env var or watchlist.txt (always merged in when present).
       3. Google Sheet → Sheet2 column A (fallback only when 1 + 2 are both empty).
+
+    When ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` is on, `combined` is
+    additionally subtracted by whatever
+    ``rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols``
+    reports (a non-held symbol on a long enough consecutive-BAD streak — see
+    ``rating/symbol_rating.py::should_exclude``). Held symbols are never
+    dropped, and the lookup fails OPEN: any exception leaves `combined`
+    untouched and only logs a warning (CONSTRAINT #6). Applied once, before
+    the Sheet2 fallback, so exclusion is honored whether or not that
+    fallback ends up running.
     """
     held = set(snapshot.positions.keys())
     watchlist = set(_load_watchlist())
     combined = held | watchlist
+
+    if settings.SYMBOL_RATING_AUTO_DROP_ENABLED:
+        try:
+            from rating.symbol_rating_store import SymbolRatingStore
+
+            excluded = SymbolRatingStore(readonly=True).get_excluded_symbols(
+                threshold_cycles=settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES,
+                known_symbols=combined,
+            )
+            # held is never dropped regardless of get_excluded_symbols()'s own
+            # is_held handling -- defensive subtraction, see docstring above.
+            combined -= (excluded - held)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "_build_universe: symbol-rating exclusion lookup failed (%s) — universe unaffected.",
+                exc,
+            )
 
     if not combined:
         sheet2 = set(_load_tickers_from_sheet2())

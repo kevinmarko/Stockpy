@@ -44,24 +44,34 @@ cd "$cwd" || exit 0
 # is not specially handled here -- taking $2 for a rename line yields the
 # old path, which is an acceptable simplification for this gate (a rename
 # with no other content change is not the case this hook exists to catch).
-mapfile -t changed_py < <(
+# NOTE: `mapfile` and `declare -A` are bash 4+ features, absent from stock
+# macOS's shipped bash (3.2 -- Apple has never updated it past the last GPLv2
+# release). Both are avoided below (while-read loop; a delimited-string
+# membership test instead of an associative array) so this gate actually
+# enforces on a fresh macOS checkout with no Homebrew bash installed, rather
+# than silently erroring out into a permanent no-op.
+changed_py=()
+while IFS= read -r line; do
+  [ -n "$line" ] && changed_py+=("$line")
+done < <(
   git status --porcelain -- '*.py' 2>/dev/null \
     | awk '{print $2}' \
     | grep -vE '^(tests/|docs/|\.claude/|\.agents/)' || true
 )
 
 # Build the deduped list of mapped test files that actually exist on disk.
-declare -A seen=()
+seen=""
 test_files=()
 for f in "${changed_py[@]:-}"; do
   [ -n "$f" ] || continue
   base="$(basename "$f" .py)"
   t="tests/test_${base}.py"
   [ -f "$t" ] || continue
-  if [ -z "${seen[$t]:-}" ]; then
-    seen["$t"]=1
-    test_files+=("$t")
-  fi
+  case " $seen " in
+    *" $t "*) continue ;;
+  esac
+  seen="$seen $t"
+  test_files+=("$t")
 done
 
 # Nothing to enforce -- doc-only turn, chat-only turn, or changes to modules
@@ -96,7 +106,23 @@ else
   exit 0
 fi
 
-output="$(timeout 100 "$python_bin" -m pytest -q "${test_files[@]}" -m "not network and not slow" 2>&1)"
+# Locate a timeout wrapper -- GNU coreutils' `timeout` isn't present on stock
+# macOS (only via `brew install coreutils`, as `gtimeout`); degrade to running
+# without a timeout wrapper rather than hard-failing the whole gate when
+# neither is available.
+if command -v timeout >/dev/null 2>&1; then
+  timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  timeout_bin="gtimeout"
+else
+  timeout_bin=""
+fi
+
+if [ -n "$timeout_bin" ]; then
+  output="$("$timeout_bin" 100 "$python_bin" -m pytest -q "${test_files[@]}" -m "not network and not slow" 2>&1)"
+else
+  output="$("$python_bin" -m pytest -q "${test_files[@]}" -m "not network and not slow" 2>&1)"
+fi
 status=$?
 
 if [ "$status" -eq 0 ]; then

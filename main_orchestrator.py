@@ -93,7 +93,11 @@ from diagnostics_and_visuals import (
 # telemetry for the GUI. Import is cheap (stdlib + settings only), no
 # circular-import risk. See _PROGRESS_STAGES below for the stage contract.
 from reporting.progress import ProgressReporter
-from reporting.state_snapshot import _safe_float_or_none
+from reporting.state_snapshot import (
+    _safe_float_or_none,
+    _rating_consecutive_cycles,
+    _rating_is_excluded,
+)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -433,7 +437,11 @@ async def _execute_broker_orders(
         from execution.risk_gate import PreTradeRiskGate, RiskContext
         from transactions_store import TransactionsStore
 
-        broker = AlpacaBroker()
+        if getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper":
+            from execution.fmp_paper_broker import FMPPaperBroker
+            broker = FMPPaperBroker()
+        else:
+            broker = AlpacaBroker()
         ts_store = TransactionsStore()
         risk_gate = PreTradeRiskGate()
         om = OrderManager(broker, dry_run=dry_run, risk_gate=risk_gate)
@@ -812,6 +820,17 @@ def _write_state_snapshot(
                     # never computed) rather than fabricating False -- CONSTRAINT #4.
                     "sizing_was_capped": _safe_bool_or_none(row.get("Sizing_Was_Capped")),
                     "sizing_binding_constraint": (str(row.get("Sizing_Binding_Constraint")).strip() or None) if pd.notna(row.get("Sizing_Binding_Constraint")) else None,
+                    # Symbol-rating subsystem diagnostics (rating/symbol_rating_store.py)
+                    # -- shown regardless of settings.SYMBOL_RATING_AUTO_DROP_ENABLED
+                    # so an operator can see what WOULD be dropped before ever
+                    # flipping that flag on. Only settings.SYMBOL_RATING_ENABLED
+                    # gates whether there's any rating history to read at all.
+                    # Same shared helpers reporting/state_snapshot.py's advisory
+                    # writer uses, sourced identically from the DB-backed store,
+                    # so parity between the two writers is structural, not
+                    # incidental (see tests/test_state_snapshot_parity.py).
+                    "symbol_rating_consecutive_bad_cycles": _rating_consecutive_cycles(sym),
+                    "symbol_rating_excluded": _rating_is_excluded(sym, is_held=shares > 0),
                 })
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1112,12 +1131,64 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
 
 
 
-async def main(dry_run: bool = False, strict: bool = False):  # CLI flags propagated
-    """Master async entry point.  Starts a heartbeat background task and
-    always cancels it (even on crash) via try/finally.
+async def _cache_long_short_worker() -> None:
+    """Background worker for Cache Long/Short strategy operations.
 
-    ``strict`` (``--strict``) makes DashboardSchema validation FATAL so CI can
-    gate on schema drift; the default (False) logs all violations and continues.
+    Runs every ``settings.CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS`` seconds
+    while ``settings.CACHE_LONG_SHORT_ENABLED`` is True (see ``main()``'s
+    conditional ``asyncio.create_task`` below). Scans open tax lots for TLH
+    opportunities (persisted by the engine itself so
+    ``GET /pilots/cache-long-short/pending-approvals`` can read them without
+    ever importing a heavy engine) and monitors correlation drift for every
+    tracked long position's proxy hedge.
+    """
+    from engine.cache_long_short_engine import CacheLongShortEngine
+    from data.cache_long_short_store import CacheLongShortStore
+
+    interval = settings.CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS
+    try:
+        while True:
+            try:
+                store = CacheLongShortStore()
+                opportunities = CacheLongShortEngine.scan_tlh_opportunities()
+                if opportunities:
+                    logger.info(
+                        "Cache Long/Short: flagged %d TLH opportunit%s",
+                        len(opportunities),
+                        "y" if len(opportunities) == 1 else "ies",
+                    )
+
+                for pos in store.get_open_positions():
+                    if pos.position_type != "long":
+                        continue
+                    proxy = store.get_security_proxy(pos.ticker)
+                    if not proxy:
+                        continue
+                    corr = CacheLongShortEngine.check_correlation_drift(
+                        pos.ticker, proxy["proxy_ticker"]
+                    )
+                    if corr is not None and corr < settings.CACHE_LONG_SHORT_MIN_CORRELATION:
+                        logger.warning(
+                            "Cache Long/Short: %s/%s correlation drifted to %.2f "
+                            "(below %.2f) -- proxy hedge is out of balance",
+                            pos.ticker,
+                            proxy["proxy_ticker"],
+                            corr,
+                            settings.CACHE_LONG_SHORT_MIN_CORRELATION,
+                        )
+            except Exception as e:
+                logger.error(f"Cache Long/Short worker error: {e}")
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        pass
+
+
+async def main(dry_run: bool = False, strict: bool = False) -> None:
+    """Entry point for the master orchestrator.
+
+    Wraps the core run loop (_main_body) in pre-flight/post-flight setup,
+    loading environment overrides, starting the telemetry heartbeat, and gating
+    on schema drift; the default (False) logs all violations and continues.
     """
     # Load .env into os.environ.  See module-top comment on python-dotenv:
     # the loader is deliberately invoked here (not at import) so the test
@@ -1141,12 +1212,20 @@ async def main(dry_run: bool = False, strict: bool = False):  # CLI flags propag
                 raise PipelineFatalError("Alpaca API keys are missing for live execution")
 
     _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
+    _cls_task = None
+    if getattr(settings, "CACHE_LONG_SHORT_ENABLED", False):
+        _cls_task = asyncio.create_task(_cache_long_short_worker())
+    
     try:
         await _main_body(effective_dry_run, strict=strict)
     finally:
         _hb_task.cancel()
+        if _cls_task:
+            _cls_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await _hb_task
+            if _cls_task:
+                await _cls_task
 
 
 if __name__ == "__main__":

@@ -170,6 +170,22 @@ class Settings(BaseSettings):
     ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key (optional).")
     ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key (optional).")
     ALPACA_PAPER: bool = Field(default=True, description="Use Alpaca paper-trading endpoint.")
+
+    FMP_PAPER_STARTING_CASH: float = Field(
+        default=100000.0,
+        description="Starting cash balance seeded into a fresh FMPPaperBroker "
+        "virtual account (data/paper_account_store.py) the first time it's "
+        "constructed. Only takes effect when BROKER_BACKEND='fmp_paper'.",
+    )
+    BROKER_BACKEND: str = Field(
+        default="alpaca",
+        description="Selects the active broker backend in main_orchestrator.py's "
+        "_execute_broker_orders ('alpaca' (default, today's exact behavior) or "
+        "'fmp_paper' — see execution/fmp_paper_broker.py). Defaults to 'alpaca' "
+        "so this is purely additive: nothing about ALPACA_PAPER's existing "
+        "behavior changes for any existing deployment unless an operator "
+        "explicitly opts into 'fmp_paper'.",
+    )
     STATE_API_TOKEN: Optional[str] = Field(
         default=None,
         description=(
@@ -1312,6 +1328,32 @@ class Settings(BaseSettings):
     # specific mechanism) -- when SIZING_CAP_ALERT_ENABLED is True AND the
     # fraction of names capped in one cycle meets or exceeds this threshold.
     SIZING_CAP_ALERT_THRESHOLD_PCT: float = 0.30
+
+    # --- Symbol rating history (rating/symbol_rating.py, rating/symbol_rating_store.py) ---
+    # Durable per-symbol GOOD/BAD rating history, built on top of the
+    # existing per-cycle final_score / Action Signal. Diagnostic-only by
+    # default -- mirrors SIZING_CAP_AUDIT_ENABLED -- no symbol is ever
+    # excluded from tracking/buying by this flag alone.
+    SYMBOL_RATING_ENABLED: bool = True
+    # A symbol's final_score below this is classified BAD this cycle.
+    # Matches strategy_engine.py's own RISK REDUCE cutoff -- the existing
+    # single source of truth for "this score is bad", not a fresh
+    # independent threshold.
+    SYMBOL_RATING_BAD_SCORE_THRESHOLD: float = 35.0
+    # Opt-in (default False): when True, a non-held symbol rated BAD for
+    # SYMBOL_RATING_DROP_THRESHOLD_CYCLES consecutive cycles is subtracted
+    # from the resolved tracked universe (data/portfolio_sync.py::resolve_universe,
+    # main.py::_build_universe) -- stops being fetched, scored, or bought.
+    # Defaults False like every other live-trading-behavior flag in this
+    # codebase (SIZING_CAP_ESCALATION_ENABLED, ETF_TRANSMISSION_SIZING_ENABLED)
+    # so nothing changes silently on a git pull for a live capital account.
+    # A currently-held position is NEVER excluded regardless of this flag --
+    # see rating/symbol_rating.py::should_exclude.
+    SYMBOL_RATING_AUTO_DROP_ENABLED: bool = False
+    # Consecutive BAD-rated cycles (non-held symbols only) before auto-drop,
+    # when SYMBOL_RATING_AUTO_DROP_ENABLED is True. Mirrors
+    # SIZING_CAP_ESCALATION_THRESHOLD_CYCLES's default.
+    SYMBOL_RATING_DROP_THRESHOLD_CYCLES: int = 5
 
     # --- ETF volatility-transmission sizing derate (risk/etf_transmission.py) ---
     # Ben-David, Franzoni & Moussawi (2018, JF): ETF arbitrage transmits a
@@ -4104,6 +4146,35 @@ class Settings(BaseSettings):
                 cleaned[sector] = entry
         return cleaned
 
+    CACHE_LONG_SHORT_ENABLED: bool = Field(
+        default=False,
+        description="Master switch for the Cache Long/Short tax-loss-harvesting "
+        "advisory strategy. False (the default) is a complete no-op reproducing "
+        "today's exact behavior: the background TLH/correlation-drift scanner in "
+        "main_orchestrator.py never starts, and every read endpoint returns an "
+        "honest empty/disabled shape. Advisory only in this version -- no broker "
+        "order is ever submitted regardless of this flag. This is a trading-"
+        "behavior flag, not an admin/API capability, so it keeps the opt-in "
+        "default per the 2026-08-03 convention-change carve-out above.",
+    )
+    CACHE_LONG_SHORT_WRITES_ENABLED: bool = Field(
+        default=False,
+        description="Dedicated fail-closed flag for POST /pilots/cache-long-short/* "
+        "write endpoints (start, approve-bulk) -- persists a new tracked position "
+        "or marks a TLH recommendation approved. Its own risk class, must not "
+        "ride in on AUTOMATION_WRITES_ENABLED/STRATEGY_WRITES_ENABLED (this "
+        "changes what a trading strategy recommends). Deliberately absent from "
+        "gui/env_io.py's ALLOWED_KEYS -- hand-set in .env only.",
+    )
+    CACHE_LONG_SHORT_MIN_CORRELATION: float = Field(default=0.75, description="Min correlation to trigger drift alert")
+    CACHE_LONG_SHORT_TLH_THRESHOLD_PCT: float = Field(default=0.05, description="Percentage loss to trigger TLH")
+    CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS: int = Field(default=3600, description="Interval for cache l/s worker loop")
+    CACHE_LONG_SHORT_PROXY_CANDIDATES: list[str] = Field(
+        default_factory=lambda: ["SPY", "QQQ", "XLK", "XLF", "XLV", "XLE"],
+        description="Candidate proxy ETFs find_correlated_proxy() screens "
+        "against for a concentrated ticker's hedge leg.",
+    )
+
     @property
     def fred_key_is_leaked(self) -> bool:
         """True if the configured FRED key is the known-compromised value.
@@ -4123,6 +4194,45 @@ class Settings(BaseSettings):
                 "or in a local .env file (see .env.example). "
                 f"Obtain a free key at {FRED_ROTATION_URL}"
             )
+
+    # Missing fields flagged by the codebase auditor (scripts/auditor/
+    # stockpy_codebase_auditor.py's undeclared_env_var check).
+    #
+    # RH_LOGIN_WORKER and KEY are deliberately NOT declared here:
+    #  - RH_LOGIN_WORKER is a structural in-process marker
+    #    (os.environ.get("RH_LOGIN_WORKER") == "1", string comparison, never
+    #    read via settings.X) set only by data/robinhood_login_worker.py to
+    #    prove a Robinhood device-approval login is running inside its
+    #    required isolated subprocess. Declaring it as a normal bool Settings
+    #    field would invite setting it in .env, which would defeat that
+    #    isolation guard for the main process — see .env.example's comment
+    #    on it and CLAUDE.md's "Robinhood login moved from TOTP MFA to
+    #    device-approval push" section.
+    #  - KEY was a false positive: the auditor's undeclared_env_var check is
+    #    a raw regex over file text (not AST-based), and it matched the
+    #    literal string `os.environ.get("KEY")` inside a comment in
+    #    scripts/measure_settings_census.py illustrating that script's own
+    #    pattern-matching, not a real env var read anywhere in the codebase.
+    WATCHLIST: str = Field(
+        default="",
+        description="Comma-separated list of symbols to always include in the universe.",
+    )
+    GCLOUD_BIN: str = Field(
+        default="gcloud",
+        description="Path to the gcloud binary for environment integrations.",
+    )
+    GRAVITY_REQUIRE_NATIVE: bool = Field(
+        default=False,
+        description="Require native implementation for Gravity Review Suite.",
+    )
+    QDRANT_COLLECTION: str = Field(
+        default="",
+        description="Qdrant collection name for RAG orchestrator.",
+    )
+    QDRANT_URL: str = Field(
+        default="",
+        description="Qdrant URL for RAG orchestrator.",
+    )
 
     def warn_if_fred_key_leaked(self, log: logging.Logger = logger) -> bool:
         """Emit a CRITICAL warning if the configured key is the leaked one.

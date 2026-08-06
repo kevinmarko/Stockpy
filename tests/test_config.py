@@ -61,7 +61,7 @@ class TestColumnSchemaIntegrity:
     COLUMN_SCHEMA, that's exactly the drift this test exists to catch."""
 
     # Update deliberately, in the same commit as any COLUMN_SCHEMA change.
-    EXPECTED_COLUMN_COUNT = 110
+    EXPECTED_COLUMN_COUNT = 112
 
     def test_exact_column_count(self) -> None:
         assert len(config.COLUMN_SCHEMA) == self.EXPECTED_COLUMN_COUNT, (
@@ -291,6 +291,11 @@ class TestAdvisoryColumnCoverage:
         "Days_To_Earnings", "Last_EPS_Surprise_Pct",
         "Insider_Buy_Sell_Ratio",
         "Sector_PE", "Sector_1D_Change",
+        # Symbol-rating subsystem diagnostics (rating/symbol_rating_store.py)
+        # -- orchestrator-only by construction: no dashboard_df write path
+        # for these two exists on the advisory side, and rec_to_sheet_row
+        # never sets them.
+        "Symbol_Rating_Consecutive_Bad_Cycles", "Symbol_Rating_Excluded",
     })
 
     def test_mapped_and_unmapped_sets_are_exact_complements_of_column_schema(self) -> None:
@@ -309,8 +314,8 @@ class TestAdvisoryColumnCoverage:
             f"keys in one of the sets but no longer in COLUMN_SCHEMA: {(mapped | unmapped) - all_keys}"
         )
         assert len(mapped) == 35
-        assert len(unmapped) == 75
-        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 110
+        assert len(unmapped) == 77
+        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 112
 
     def test_rec_to_sheet_row_emits_exactly_the_known_mapped_keys(self) -> None:
         """AST/behavioral cross-check: call rec_to_sheet_row() for real and

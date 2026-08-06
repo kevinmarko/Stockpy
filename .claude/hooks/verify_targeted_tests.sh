@@ -42,7 +42,23 @@ else
   exit 0
 fi
 
-output="$(timeout 90 "$python_bin" -m pytest -q "$test_file" -m "not network and not slow" 2>&1)"
+# Locate a timeout wrapper -- GNU coreutils' `timeout` isn't present on stock
+# macOS (only via `brew install coreutils`, as `gtimeout`); degrade to running
+# without a timeout wrapper rather than hard-failing the whole hook when
+# neither is available.
+if command -v timeout >/dev/null 2>&1; then
+  timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+  timeout_bin="gtimeout"
+else
+  timeout_bin=""
+fi
+
+if [ -n "$timeout_bin" ]; then
+  output="$("$timeout_bin" 90 "$python_bin" -m pytest -q "$test_file" -m "not network and not slow" 2>&1)"
+else
+  output="$("$python_bin" -m pytest -q "$test_file" -m "not network and not slow" 2>&1)"
+fi
 status=$?
 
 if [ "$status" -eq 0 ]; then
