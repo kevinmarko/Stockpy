@@ -14,8 +14,8 @@
   "counts": {
     "live_safe": 251,
     "no_op": 2,
-    "restart_required": 79,
-    "total": 332
+    "restart_required": 84,
+    "total": 337
   },
   "dynamic_sites": [
     {
@@ -402,13 +402,13 @@
     "attr": 687,
     "factory_param": 4,
     "getattr_const": 244,
-    "os_environ": 16
+    "os_environ": 24
   },
   "read_forms_distinct_fields": {
     "attr": 206,
     "factory_param": 4,
     "getattr_const": 149,
-    "os_environ": 13
+    "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
   "restart_required": {
@@ -1546,6 +1546,28 @@
         "via": []
       }
     ],
+    "GCLOUD_BIN": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "mcp_remote_adapter.py:19",
+        "via": []
+      }
+    ],
+    "GRAVITY_REQUIRE_NATIVE": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "Gravity AI Review Suite.py:4493",
+        "via": []
+      }
+    ],
     "HMM_N_STATES": [
       {
         "discarded": false,
@@ -1989,6 +2011,28 @@
         "via": []
       }
     ],
+    "QDRANT_COLLECTION": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "agents/rag_orchestrator.py:142",
+        "via": []
+      }
+    ],
+    "QDRANT_URL": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "agents/rag_orchestrator.py:141",
+        "via": []
+      }
+    ],
     "REGIME_SIGNAL_WEIGHTS": [
       {
         "discarded": false,
@@ -2108,7 +2152,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/sentiment_sources.py:1895",
+        "site": "data/sentiment_sources.py:1907",
         "via": []
       }
     ],
@@ -2119,9 +2163,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/sentiment_sources.py:1865",
+        "site": "data/sentiment_sources.py:1877",
         "via": [
-          1854
+          1866
         ]
       }
     ],
@@ -2195,6 +2239,44 @@
         "site": "pipeline/production_steps.py:531",
         "via": []
       }
+    ],
+    "WATCHLIST": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "data/market_data_ws.py:255",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "gui/panels/_shared.py:162",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "main.py:256",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "pilots/watchlist_writer.py:137",
+        "via": []
+      }
     ]
   },
   "restart_required_only_import_time_discard": [
@@ -2212,7 +2294,7 @@
     "init_self_assign": 40,
     "method_self_assign": 4,
     "module_level": 49,
-    "os_environ": 16
+    "os_environ": 24
   },
   "restart_required_via_name_literal_only": [
     "EDGAR_FULLTEXT_CHUNK_TOKENS",

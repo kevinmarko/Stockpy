@@ -4134,6 +4134,45 @@ class Settings(BaseSettings):
                 f"Obtain a free key at {FRED_ROTATION_URL}"
             )
 
+    # Missing fields flagged by the codebase auditor (scripts/auditor/
+    # stockpy_codebase_auditor.py's undeclared_env_var check).
+    #
+    # RH_LOGIN_WORKER and KEY are deliberately NOT declared here:
+    #  - RH_LOGIN_WORKER is a structural in-process marker
+    #    (os.environ.get("RH_LOGIN_WORKER") == "1", string comparison, never
+    #    read via settings.X) set only by data/robinhood_login_worker.py to
+    #    prove a Robinhood device-approval login is running inside its
+    #    required isolated subprocess. Declaring it as a normal bool Settings
+    #    field would invite setting it in .env, which would defeat that
+    #    isolation guard for the main process — see .env.example's comment
+    #    on it and CLAUDE.md's "Robinhood login moved from TOTP MFA to
+    #    device-approval push" section.
+    #  - KEY was a false positive: the auditor's undeclared_env_var check is
+    #    a raw regex over file text (not AST-based), and it matched the
+    #    literal string `os.environ.get("KEY")` inside a comment in
+    #    scripts/measure_settings_census.py illustrating that script's own
+    #    pattern-matching, not a real env var read anywhere in the codebase.
+    WATCHLIST: str = Field(
+        default="",
+        description="Comma-separated list of symbols to always include in the universe.",
+    )
+    GCLOUD_BIN: str = Field(
+        default="gcloud",
+        description="Path to the gcloud binary for environment integrations.",
+    )
+    GRAVITY_REQUIRE_NATIVE: bool = Field(
+        default=False,
+        description="Require native implementation for Gravity Review Suite.",
+    )
+    QDRANT_COLLECTION: str = Field(
+        default="",
+        description="Qdrant collection name for RAG orchestrator.",
+    )
+    QDRANT_URL: str = Field(
+        default="",
+        description="Qdrant URL for RAG orchestrator.",
+    )
+
     def warn_if_fred_key_leaked(self, log: logging.Logger = logger) -> bool:
         """Emit a CRITICAL warning if the configured key is the leaked one.
 

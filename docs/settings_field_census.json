@@ -1,10 +1,10 @@
 {
   "meta": {
-    "git_commit": "10e9d0e28d041a878e3f5a3bb924a16b0047b36f",
+    "git_commit": "484504fcf358f9bad1a7fecbecbee7cd35b50b71",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
-    "total_fields": 332,
+    "total_fields": 337,
     "label_by_field": {
       "FRED_API_KEY": "str",
       "ALPACA_API_KEY": "Optional[str]",
@@ -337,14 +337,19 @@
       "FORECAST_BACKFILL_N_ESTIMATORS": "int",
       "FORECAST_BACKFILL_MAX_DEPTH": "int",
       "FORECAST_BACKFILL_RANDOM_STATE": "int",
-      "FORECAST_BACKFILL_CLASSIFIER_TYPE": "str"
+      "FORECAST_BACKFILL_CLASSIFIER_TYPE": "str",
+      "WATCHLIST": "str",
+      "GCLOUD_BIN": "str",
+      "GRAVITY_REQUIRE_NATIVE": "bool",
+      "QDRANT_COLLECTION": "str",
+      "QDRANT_URL": "str"
     },
     "counts_by_label": {
       "int": 94,
-      "bool": 91,
+      "bool": 92,
       "float": 58,
       "Optional[str]": 42,
-      "str": 34,
+      "str": 38,
       "list[str]": 7,
       "Path": 1,
       "dict[str, dict[str, float]]": 1,
@@ -780,16 +785,21 @@
       "FORECAST_BACKFILL_N_ESTIMATORS": 4047,
       "FORECAST_BACKFILL_MAX_DEPTH": 4051,
       "FORECAST_BACKFILL_RANDOM_STATE": 4055,
-      "FORECAST_BACKFILL_CLASSIFIER_TYPE": 4059
+      "FORECAST_BACKFILL_CLASSIFIER_TYPE": 4059,
+      "WATCHLIST": 4155,
+      "GCLOUD_BIN": 4159,
+      "GRAVITY_REQUIRE_NATIVE": 4163,
+      "QDRANT_COLLECTION": 4167,
+      "QDRANT_URL": 4171
     }
   },
   "env_io_lists": {
-    "allowed_keys_len": 277,
-    "allowed_keys_unique_len": 277,
+    "allowed_keys_len": 280,
+    "allowed_keys_unique_len": 280,
     "allowed_keys_duplicates": {},
     "allowed_keys_duplicate_total_extra": 0,
-    "secret_keys_len": 39,
-    "secret_keys_unique_len": 39,
+    "secret_keys_len": 40,
+    "secret_keys_unique_len": 40,
     "secret_keys_duplicates": {},
     "json_keys_name": "_JSON_KEYS",
     "json_keys_len": 12,
@@ -808,7 +818,7 @@
       "SIGNAL_WEIGHTS"
     ],
     "excluded_from_gui_name": "EXCLUDED_FROM_GUI",
-    "excluded_from_gui_len": 18,
+    "excluded_from_gui_len": 19,
     "excluded_from_gui": [
       "AI_GENERATION_API_ENABLED",
       "ALERT_FILE_PATH",
@@ -816,6 +826,7 @@
       "BROKERAGE_REFRESH_ENABLED",
       "COMMAND_EXECUTION_ENABLED",
       "DEAD_LETTER_RETRY_ENABLED",
+      "GCLOUD_BIN",
       "GENERAL_SETTINGS_WRITES_ENABLED",
       "GRAVITY_AI_RUNNER_OUTPUT_PATH",
       "LLM_COMMENTARY_CACHE_PATH",
@@ -853,9 +864,9 @@
   },
   "partition": {
     "counts": {
-      "SECRET": 37,
-      "IN_ALLOWED_KEYS": 277,
-      "UNCLASSIFIED": 18
+      "SECRET": 38,
+      "IN_ALLOWED_KEYS": 280,
+      "UNCLASSIFIED": 19
     },
     "secret": [
       "ALERT_EMAIL_FROM",
@@ -886,6 +897,7 @@
       "PROMPT_REGISTRY_SIGNING_KEY",
       "PROMPT_REGISTRY_TOKEN",
       "PROMPT_REGISTRY_URL",
+      "QDRANT_URL",
       "REDDIT_CLIENT_ID",
       "REDDIT_CLIENT_SECRET",
       "REDDIT_USER_AGENT",
@@ -1033,6 +1045,7 @@
       "GDELT_RETRY_BACKOFF_SECONDS",
       "GOOGLE_NEWS_LOOKBACK_WINDOW",
       "GRAVITY_AI_RUNNER_ENABLED",
+      "GRAVITY_REQUIRE_NATIVE",
       "HISTORICAL_STORE_ENABLED",
       "HMM_N_STATES",
       "HMM_RETRAIN_FREQ_DAYS",
@@ -1095,6 +1108,7 @@
       "PROMPT_REGISTRY_PINS",
       "PROMPT_REGISTRY_REFRESH_SECONDS",
       "PYTRENDS_ENABLED",
+      "QDRANT_COLLECTION",
       "QUEUE_SOURCE_MAX_AGE_SECONDS",
       "RAG_EMBEDDING_PROVIDER",
       "RAG_INDEX_LOOKBACK_DAYS",
@@ -1172,6 +1186,7 @@
       "USE_DUAL_MOMENTUM_OVERLAY",
       "VALIDATION_HARNESS_OOS_GATE_ENABLED",
       "VOL_TARGET",
+      "WATCHLIST",
       "WIKIPEDIA_ATTENTION_ENABLED",
       "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS"
     ],
@@ -1182,6 +1197,7 @@
       "BROKERAGE_REFRESH_ENABLED",
       "COMMAND_EXECUTION_ENABLED",
       "DEAD_LETTER_RETRY_ENABLED",
+      "GCLOUD_BIN",
       "GENERAL_SETTINGS_WRITES_ENABLED",
       "GRAVITY_AI_RUNNER_OUTPUT_PATH",
       "LLM_COMMENTARY_CACHE_PATH",
@@ -1231,6 +1247,12 @@
         "in_excluded_from_gui": true,
         "settings_py_line": 3937,
         "description": "Enables POST /dead-letter/retry on the Pilots API (re-runs main.py for one dead-lettered symbol, advisory-only -- no orders). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable -- h..."
+      },
+      {
+        "field": "GCLOUD_BIN",
+        "in_excluded_from_gui": true,
+        "settings_py_line": 4159,
+        "description": "Path to the gcloud binary for environment integrations."
       },
       {
         "field": "GENERAL_SETTINGS_WRITES_ENABLED",
@@ -1312,6 +1334,7 @@
       "BROKERAGE_REFRESH_ENABLED",
       "COMMAND_EXECUTION_ENABLED",
       "DEAD_LETTER_RETRY_ENABLED",
+      "GCLOUD_BIN",
       "GENERAL_SETTINGS_WRITES_ENABLED",
       "GRAVITY_AI_RUNNER_OUTPUT_PATH",
       "LLM_COMMENTARY_CACHE_PATH",
@@ -3361,9 +3384,10 @@
       ]
     },
     "form_d_os_environ": {
-      "total_reads": 16,
-      "distinct_fields": 13,
+      "total_reads": 24,
+      "distinct_fields": 18,
       "counts": {
+        "WATCHLIST": 4,
         "FINNHUB_RATE_LIMIT_PER_MIN": 2,
         "FUNDAMENTALS_CACHE_TTL_SECONDS": 2,
         "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS": 2,
@@ -3375,15 +3399,19 @@
         "ALERT_EMAIL_TO": 1,
         "ALERT_NTFY_TOPIC": 1,
         "ALERT_SLACK_WEBHOOK_URL": 1,
+        "GCLOUD_BIN": 1,
+        "GRAVITY_REQUIRE_NATIVE": 1,
         "LOG_LEVEL": 1,
-        "PROMPT_REGISTRY_SIGNING_KEY": 1
+        "PROMPT_REGISTRY_SIGNING_KEY": 1,
+        "QDRANT_COLLECTION": 1,
+        "QDRANT_URL": 1
       },
       "shapes": {
-        "os.environ.get()": 8,
+        "os.environ.get()": 16,
         "os.getenv()": 8
       }
     },
-    "fields_reached_by_any_form": 323,
+    "fields_reached_by_any_form": 328,
     "fields_only_via_b_or_d": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3472,12 +3500,14 @@
       "FORECAST_MODEL_PERSISTENCE_ENABLED",
       "FORECAST_PROPHET_WEIGHT",
       "FRED_KEY_ROTATED_DATE",
+      "GCLOUD_BIN",
       "GDELT_COOLDOWN_SECONDS",
       "GDELT_COOLDOWN_THRESHOLD",
       "GDELT_MAX_RETRIES",
       "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
       "GDELT_RETRY_BACKOFF_SECONDS",
       "GRAVITY_AI_RUNNER_ENABLED",
+      "GRAVITY_REQUIRE_NATIVE",
       "LLM_COMMENTARY_CACHE_PATH",
       "LLM_STATUS_MAX_AGE_HOURS",
       "MARKET_DATA_WS_ENABLED",
@@ -3493,6 +3523,8 @@
       "OPTIONS_MATRIX_ENABLED",
       "PAIRS_SNAPSHOT_ENABLED",
       "PAIRS_SNAPSHOT_MAX_PAIRS",
+      "QDRANT_COLLECTION",
+      "QDRANT_URL",
       "RAG_EMBEDDING_PROVIDER",
       "RAG_INDEX_LOOKBACK_DAYS",
       "RAG_INDEX_MAX_DOCUMENTS",
@@ -3504,9 +3536,10 @@
       "SECTOR_FORECAST_CONFIG_PATH",
       "SENTIMENT_LLM_VERIFICATION_ENABLED",
       "SENTIMENT_LLM_VERIFICATION_PROVIDER",
-      "VALIDATION_HARNESS_OOS_GATE_ENABLED"
+      "VALIDATION_HARNESS_OOS_GATE_ENABLED",
+      "WATCHLIST"
     ],
-    "fields_only_via_b_or_d_count": 120,
+    "fields_only_via_b_or_d_count": 125,
     "fields_only_via_b": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3629,7 +3662,12 @@
       "ALERT_EMAIL_SMTP_PORT",
       "ALERT_NTFY_TOPIC",
       "ALERT_SLACK_WEBHOOK_URL",
-      "FINNHUB_RATE_LIMIT_PER_MIN"
+      "FINNHUB_RATE_LIMIT_PER_MIN",
+      "GCLOUD_BIN",
+      "GRAVITY_REQUIRE_NATIVE",
+      "QDRANT_COLLECTION",
+      "QDRANT_URL",
+      "WATCHLIST"
     ],
     "fields_no_static_read": [
       "AI_GENERATION_API_ENABLED",

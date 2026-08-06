@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `10e9d0e28d041a878e3f5a3bb924a16b0047b36f`
+- Measured at commit: `484504fcf358f9bad1a7fecbecbee7cd35b50b71`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -14,15 +14,15 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 
 ## 1. Field-type breakdown
 
-`len(Settings.model_fields)` = **332**
+`len(Settings.model_fields)` = **337**
 
 | Annotation | Count |
 |---|---|
 | `int` | 94 |
-| `bool` | 91 |
+| `bool` | 92 |
 | `float` | 58 |
 | `Optional[str]` | 42 |
-| `str` | 34 |
+| `str` | 38 |
 | `list[str]` | 7 |
 | `Path` | 1 |
 | `dict[str, dict[str, float]]` | 1 |
@@ -49,10 +49,10 @@ kind-derivation switch over the categories above is currently total.
 
 | Name | len() | len(set()) | Note |
 |---|---|---|---|
-| `ALLOWED_KEYS` | 277 | 277 | 0 duplicate entries (clean) |
-| `SECRET_KEYS` | 39 | 39 | 0 duplicate entries |
+| `ALLOWED_KEYS` | 280 | 280 | 0 duplicate entries (clean) |
+| `SECRET_KEYS` | 40 | 40 | 0 duplicate entries |
 | `_JSON_KEYS` | 12 | 12 | frozenset |
-| `EXCLUDED_FROM_GUI` | 18 | 18 | frozenset; third classification bucket |
+| `EXCLUDED_FROM_GUI` | 19 | 19 | frozenset; third classification bucket |
 
 `ALLOWED_KEYS ∩ SECRET_KEYS` overlap: **0** (clean — no key is both writable and secret)
 
@@ -62,11 +62,11 @@ Every `Settings.model_fields` name classified into exactly one bucket.
 
 | Bucket | Count | Definition |
 |---|---|---|
-| `SECRET` | 37 | in `env_io.SECRET_KEYS` |
-| `IN_ALLOWED_KEYS` | 277 | in `env_io.ALLOWED_KEYS` |
-| `UNCLASSIFIED` | 18 | in neither |
+| `SECRET` | 38 | in `env_io.SECRET_KEYS` |
+| `IN_ALLOWED_KEYS` | 280 | in `env_io.ALLOWED_KEYS` |
+| `UNCLASSIFIED` | 19 | in neither |
 
-Of the 18 `UNCLASSIFIED` fields, **18** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
+Of the 19 `UNCLASSIFIED` fields, **19** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
 
 ### Every `UNCLASSIFIED` field
 
@@ -78,6 +78,7 @@ Of the 18 `UNCLASSIFIED` fields, **18** are accounted for by the third `EXCLUDED
 | `BROKERAGE_REFRESH_ENABLED` | L3195 | yes | Enables POST /brokerage/refresh on the Pilots API (forces a live Robinhood re-login + account-snapshot fetch, bypassing the daily cache). Off by default; also requires FOLLOW_API_TOKEN and a loopba... |
 | `COMMAND_EXECUTION_ENABLED` | L246 | yes | Enable the 'command' job type on the orchestrator Control API's POST /jobs (api/_jobs.py) — lets the webapp's Commands screen actually run a manifest-listed CLI target (not just compose/copy it), g... |
 | `DEAD_LETTER_RETRY_ENABLED` | L3937 | yes | Enables POST /dead-letter/retry on the Pilots API (re-runs main.py for one dead-lettered symbol, advisory-only -- no orders). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable -- h... |
+| `GCLOUD_BIN` | L4159 | yes | Path to the gcloud binary for environment integrations. |
 | `GENERAL_SETTINGS_WRITES_ENABLED` | L3036 | yes | Enables PUT /settings/tunables on the Pilots API (general runtime tunables -- Kelly sizing, risk gate, forecasting, market data, runtime/ops -> .env). Off by default; also requires FOLLOW_API_TOKEN... |
 | `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L3553 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
 | `LLM_COMMENTARY_CACHE_PATH` | L3438 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
@@ -234,9 +235,9 @@ _S.settings, _bl_settings, _live_settings, _oos_gate_settings, _rh_settings, _s,
 | (a) `settings.KEY` | 643 | 203 |
 | (b) `getattr(settings, "KEY", default)` | 244 | 149 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
-| (d) `os.environ` / `os.getenv("KEY")` | 16 | 13 |
+| (d) `os.environ` / `os.getenv("KEY")` | 24 | 18 |
 
-Fields reached by at least one form: **323** of 332.
+Fields reached by at least one form: **328** of 337.
 
 ### Fields with NO statically-attributable read — **9**
 
@@ -257,7 +258,7 @@ referenced by name somewhere and is probably read dynamically.
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1085` | likely read dynamically |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **120**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **125**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -350,12 +351,14 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `FORECAST_MODEL_PERSISTENCE_ENABLED` | b | 2 | 0 |
 | `FORECAST_PROPHET_WEIGHT` | b | 2 | 0 |
 | `FRED_KEY_ROTATED_DATE` | b | 1 | 0 |
+| `GCLOUD_BIN` | d | 0 | 1 |
 | `GDELT_COOLDOWN_SECONDS` | b | 1 | 0 |
 | `GDELT_COOLDOWN_THRESHOLD` | b | 1 | 0 |
 | `GDELT_MAX_RETRIES` | b | 1 | 0 |
 | `GDELT_MIN_REQUEST_INTERVAL_SECONDS` | b | 1 | 0 |
 | `GDELT_RETRY_BACKOFF_SECONDS` | b | 1 | 0 |
 | `GRAVITY_AI_RUNNER_ENABLED` | b | 3 | 0 |
+| `GRAVITY_REQUIRE_NATIVE` | d | 0 | 1 |
 | `LLM_COMMENTARY_CACHE_PATH` | b | 1 | 0 |
 | `LLM_STATUS_MAX_AGE_HOURS` | b | 1 | 0 |
 | `MARKET_DATA_WS_ENABLED` | b | 2 | 0 |
@@ -371,6 +374,8 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPTIONS_MATRIX_ENABLED` | b | 1 | 0 |
 | `PAIRS_SNAPSHOT_ENABLED` | b | 1 | 0 |
 | `PAIRS_SNAPSHOT_MAX_PAIRS` | b | 1 | 0 |
+| `QDRANT_COLLECTION` | d | 0 | 1 |
+| `QDRANT_URL` | d | 0 | 1 |
 | `RAG_EMBEDDING_PROVIDER` | b | 1 | 0 |
 | `RAG_INDEX_LOOKBACK_DAYS` | b | 1 | 0 |
 | `RAG_INDEX_MAX_DOCUMENTS` | b | 1 | 0 |
@@ -383,6 +388,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `SENTIMENT_LLM_VERIFICATION_ENABLED` | b | 2 | 0 |
 | `SENTIMENT_LLM_VERIFICATION_PROVIDER` | b | 1 | 0 |
 | `VALIDATION_HARNESS_OOS_GATE_ENABLED` | b | 1 | 0 |
+| `WATCHLIST` | d | 0 | 4 |
 
 ### Dynamic `getattr` sites (form c) — **17**
 
@@ -408,7 +414,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `runtime_flags_writer.py:774` | `getattr(settings_module.settings, key, None)` |
 | `runtime_flags_writer.py:783` | `getattr(settings_module.settings, key, None)` |
 
-### Fields read via `os.environ` (form d) — 13 field(s)
+### Fields read via `os.environ` (form d) — 18 field(s)
 
 `.env` is loaded into the `Settings` model directly by pydantic-settings; it is only
 copied into the real `os.environ` when something calls `load_dotenv()`. A field read
@@ -417,6 +423,7 @@ this way therefore reads a *different source* than `settings.KEY` does — see C
 
 | Field | Reads | Also read via (a) |
 |---|---|---|
+| `WATCHLIST` | 4 | **no** |
 | `FINNHUB_RATE_LIMIT_PER_MIN` | 2 | **no** |
 | `FUNDAMENTALS_CACHE_TTL_SECONDS` | 2 | yes |
 | `FUNDAMENTALS_NEG_CACHE_TTL_SECONDS` | 2 | yes |
@@ -428,8 +435,12 @@ this way therefore reads a *different source* than `settings.KEY` does — see C
 | `ALERT_EMAIL_TO` | 1 | yes |
 | `ALERT_NTFY_TOPIC` | 1 | **no** |
 | `ALERT_SLACK_WEBHOOK_URL` | 1 | **no** |
+| `GCLOUD_BIN` | 1 | **no** |
+| `GRAVITY_REQUIRE_NATIVE` | 1 | **no** |
 | `LOG_LEVEL` | 1 | yes |
 | `PROMPT_REGISTRY_SIGNING_KEY` | 1 | yes |
+| `QDRANT_COLLECTION` | 1 | **no** |
+| `QDRANT_URL` | 1 | **no** |
 
 ---
 
