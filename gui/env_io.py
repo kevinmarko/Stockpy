@@ -95,6 +95,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SIZING_CAP_AUDIT_ENABLED",
     "SIZING_CAP_ALERT_ENABLED",
     "SIZING_CAP_ALERT_THRESHOLD_PCT",
+    # Symbol rating history (rating/symbol_rating.py, rating/symbol_rating_store.py)
+    "SYMBOL_RATING_ENABLED",
+    "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
+    "SYMBOL_RATING_AUTO_DROP_ENABLED",
+    "SYMBOL_RATING_DROP_THRESHOLD_CYCLES",
     # Risk gate
     "MAX_CORRELATION",
     "DAILY_LOSS_LIMIT_PCT",

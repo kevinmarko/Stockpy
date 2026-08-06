@@ -466,6 +466,83 @@ def test_sync_report_tolerates_missing_snapshot(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# GET /data/sync-report -- symbol-rating enrichment (rating_consecutive_bad_cycles /
+# rating_excluded, sourced from rating.symbol_rating_store.SymbolRatingStore)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRatingStore:
+    """Stand-in for rating.symbol_rating_store.SymbolRatingStore -- records
+    the readonly flag it was constructed with and returns a scripted
+    consecutive-bad-cycle count per symbol."""
+
+    def __init__(self, *args, readonly: bool = False, **kwargs):
+        self.readonly = readonly
+
+    def get_consecutive_bad_cycles(self, symbol: str) -> int:
+        return {"AAPL": 0, "XOM": 7, "T": 2}.get(symbol.upper(), 0)
+
+
+def test_sync_report_includes_rating_fields(monkeypatch):
+    symbols = {
+        "AAPL": {"symbol": "AAPL", "held": True, "coverage": "full"},
+        # Not held, streak (7) >= default threshold (5) -> excluded.
+        "XOM": {"symbol": "XOM", "held": False, "coverage": "uncovered"},
+        # Not held, streak (2) < threshold -> not excluded.
+        "T": {"symbol": "T", "held": False, "coverage": "uncovered"},
+    }
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(
+        data_api, "build_sync_report",
+        lambda snap: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
+    )
+    monkeypatch.setattr(
+        "rating.symbol_rating_store.SymbolRatingStore", _FakeRatingStore,
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None), \
+         mock.patch.object(settings, "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", 5):
+        resp = client.get("/data/sync-report")
+    assert resp.status_code == 200
+    body = resp.json()["symbols"]
+
+    # Held symbol: never excluded regardless of streak.
+    assert body["AAPL"]["rating_consecutive_bad_cycles"] == 0
+    assert body["AAPL"]["rating_excluded"] is False
+
+    # Not held, streak >= threshold -> excluded.
+    assert body["XOM"]["rating_consecutive_bad_cycles"] == 7
+    assert body["XOM"]["rating_excluded"] is True
+
+    # Not held, streak < threshold -> not excluded.
+    assert body["T"]["rating_consecutive_bad_cycles"] == 2
+    assert body["T"]["rating_excluded"] is False
+
+
+def test_sync_report_rating_enrichment_degrades_gracefully(monkeypatch):
+    """A SymbolRatingStore failure (import error, DB outage, etc.) must never
+    500 the whole endpoint (CONSTRAINT #6) -- the base sync-report payload
+    still returns, just without the two rating keys on each symbol."""
+    symbols = {"AAPL": {"symbol": "AAPL", "held": True, "coverage": "full"}}
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(
+        data_api, "build_sync_report",
+        lambda snap: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
+    )
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("rating.symbol_rating_store.SymbolRatingStore", _boom)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/data/sync-report")
+    assert resp.status_code == 200
+    body = resp.json()["symbols"]
+    assert body["AAPL"]["symbol"] == "AAPL"
+    assert "rating_consecutive_bad_cycles" not in body["AAPL"]
+    assert "rating_excluded" not in body["AAPL"]
+
+
+# ---------------------------------------------------------------------------
 # GET /data/account
 # ---------------------------------------------------------------------------
 

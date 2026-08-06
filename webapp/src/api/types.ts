@@ -273,6 +273,22 @@ export interface SyncReportSymbol {
   forecast_available: boolean;
   watchlists: string[];
   diagnostic: string;
+  /**
+   * How many of this symbol's most recent per-cycle ratings
+   * (`rating.symbol_rating_store.SymbolRatingStore.get_consecutive_bad_cycles`)
+   * were consecutively BAD. Optional: older cached responses / the mock API
+   * may not always populate this — `undefined`/`null` means "no rating
+   * history available", not zero.
+   */
+  rating_consecutive_bad_cycles?: number | null;
+  /**
+   * True when the platform's symbol-rating auto-drop rule would currently
+   * exclude this symbol (non-held, consecutive-BAD streak at/above
+   * `SYMBOL_RATING_DROP_THRESHOLD_CYCLES`) — mirrors
+   * `SymbolRatingStore.get_excluded_symbols`. Optional for the same reason
+   * as `rating_consecutive_bad_cycles` above.
+   */
+  rating_excluded?: boolean;
 }
 
 /**
@@ -292,6 +308,18 @@ export interface SyncReportResponse {
   symbols: Record<string, SyncReportSymbol>;
   provider_source: string;
   fundamentals_source: string;
+}
+
+/**
+ * POST /universe/{symbol}/reinclude — manual escape hatch that breaks a
+ * symbol's consecutive-BAD rating streak (`rating.symbol_rating_store.
+ * SymbolRatingStore.reinclude`), undoing an automated symbol-rating
+ * exclusion. Never places an order; downstream buy eligibility still runs
+ * through the platform's normal scoring/sizing/risk-gate pipeline.
+ */
+export interface SymbolReincludeResult {
+  symbol: string;
+  reincluded: boolean;
 }
 
 /**

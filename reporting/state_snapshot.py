@@ -44,6 +44,34 @@ def _safe_float_or_none(val: Any) -> Optional[float]:
         return None
 
 
+def _rating_consecutive_cycles(symbol: str) -> Optional[int]:
+    """Best-effort read of ``rating.symbol_rating_store.SymbolRatingStore
+    .get_consecutive_bad_cycles`` for *symbol*. ``None`` (never a fabricated
+    0) on any failure -- CONSTRAINT #6, mirrors this module's own
+    swallow-all-errors contract; the daily report must always render."""
+    try:
+        from rating.symbol_rating_store import SymbolRatingStore
+
+        return SymbolRatingStore(readonly=True).get_consecutive_bad_cycles(symbol)
+    except Exception:
+        return None
+
+
+def _rating_is_excluded(symbol: str, *, is_held: bool) -> bool:
+    """Diagnostic-only: would this symbol currently be dropped by
+    ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` (regardless of whether that
+    flag is actually on)? A held symbol is never excluded (see
+    ``rating/symbol_rating.py::should_exclude``'s non-negotiable invariant).
+    Degrades to ``False`` when rating history is unavailable/unknown --
+    never fabricates an exclusion."""
+    if is_held:
+        return False
+    cycles = _rating_consecutive_cycles(symbol)
+    if cycles is None:
+        return False
+    return cycles >= settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES
+
+
 def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO]) -> None:
     """Persist OUTPUT_DIR/state_snapshot.json + rotate into history/.
 
@@ -179,6 +207,13 @@ def write_state_snapshot(result: RunResult, macro_dto: Optional[MacroEconomicDTO
                 # their inputs were unavailable this cycle.
                 "news_sentiment": _safe_float_or_none(ki.get("news_sentiment")),
                 "covar_proxy": _safe_float_or_none(ki.get("covar_proxy")),
+                # Symbol-rating subsystem diagnostics (rating/symbol_rating_store.py)
+                # -- shown regardless of settings.SYMBOL_RATING_AUTO_DROP_ENABLED
+                # so an operator can see what WOULD be dropped before ever
+                # flipping that flag on. Only settings.SYMBOL_RATING_ENABLED
+                # gates whether there's any rating history to read at all.
+                "symbol_rating_consecutive_bad_cycles": _rating_consecutive_cycles(rec.symbol),
+                "symbol_rating_excluded": _rating_is_excluded(rec.symbol, is_held=bool(pos)),
             })
 
         regime = "UNKNOWN"
