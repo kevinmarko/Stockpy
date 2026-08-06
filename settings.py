@@ -4108,6 +4108,36 @@ class Settings(BaseSettings):
                 f"Obtain a free key at {FRED_ROTATION_URL}"
             )
 
+    # Missing fields flagged by auditor
+    WATCHLIST: str = Field(
+        default="",
+        description="Comma-separated list of symbols to always include in the universe.",
+    )
+    RH_LOGIN_WORKER: bool = Field(
+        default=False,
+        description="Worker flag for Robinhood login flows.",
+    )
+    GCLOUD_BIN: str = Field(
+        default="gcloud",
+        description="Path to the gcloud binary for environment integrations.",
+    )
+    KEY: str = Field(
+        default="",
+        description="Generic API key placeholder flagged by auditor.",
+    )
+    GRAVITY_REQUIRE_NATIVE: bool = Field(
+        default=False,
+        description="Require native implementation for Gravity Review Suite.",
+    )
+    QDRANT_COLLECTION: str = Field(
+        default="",
+        description="Qdrant collection name for RAG orchestrator.",
+    )
+    QDRANT_URL: str = Field(
+        default="",
+        description="Qdrant URL for RAG orchestrator.",
+    )
+
     def warn_if_fred_key_leaked(self, log: logging.Logger = logger) -> bool:
         """Emit a CRITICAL warning if the configured key is the leaked one.
 

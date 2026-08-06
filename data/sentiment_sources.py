@@ -1559,13 +1559,17 @@ class EdgarSource(SentimentSource):
 
     def _lookup_cik(self, symbol: str, headers: Dict[str, str]) -> Optional[str]:
         if self._ticker_to_cik is None:
-            resp = requests.get(self._TICKERS_URL, headers=headers, timeout=10)
-            resp.raise_for_status()
-            payload = resp.json()
-            self._ticker_to_cik = {
-                entry["ticker"].upper(): str(entry["cik_str"])
-                for entry in payload.values()
-            }
+            try:
+                resp = requests.get(self._TICKERS_URL, headers=headers, timeout=10)
+                resp.raise_for_status()
+                payload = resp.json()
+                self._ticker_to_cik = {
+                    entry["ticker"].upper(): str(entry["cik_str"])
+                    for entry in payload.values()
+                }
+            except Exception as exc:
+                logger.warning("EdgarSource: Failed to fetch CIK mapping: %s", exc)
+                return None
         return self._ticker_to_cik.get(symbol.upper())
 
     @staticmethod
@@ -1685,10 +1689,14 @@ class EdgarSource(SentimentSource):
             "enddt": now.strftime("%Y-%m-%d"),
         }
         _throttle()
-        resp = requests.get(self._FULLTEXT_URL, headers=headers, params=params, timeout=10)
-        resp.raise_for_status()
-        payload = resp.json()
-        return self._parse_fulltext_hits(payload)
+        try:
+            resp = requests.get(self._FULLTEXT_URL, headers=headers, params=params, timeout=10)
+            resp.raise_for_status()
+            payload = resp.json()
+            return self._parse_fulltext_hits(payload)
+        except Exception as exc:
+            logger.warning("EdgarSource: EFTS search request failed: %s", exc)
+            return []
 
     @staticmethod
     def _parse_fulltext_hits(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1753,9 +1761,13 @@ class EdgarSource(SentimentSource):
         if not url:
             return ""
         _throttle()
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        return self._extract_filing_text(resp.text)
+        try:
+            resp = requests.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            return self._extract_filing_text(resp.text)
+        except Exception as exc:
+            logger.warning("EdgarSource: Document text fetch failed: %s", exc)
+            return ""
 
     @staticmethod
     def _extract_filing_text(html: str) -> str:

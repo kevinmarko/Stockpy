@@ -463,9 +463,12 @@ def _send_discord(
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        if resp.status not in (200, 204):
-            raise RuntimeError(f"Discord returned HTTP {resp.status}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status not in (200, 204):
+                raise RuntimeError(f"Discord returned HTTP {resp.status}")
+    except Exception as exc:
+        logger.warning("Discord webhook failed: %s", exc)
 
 
 def _send_slack(
@@ -491,9 +494,12 @@ def _send_slack(
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        if resp.status not in (200, 204):
-            raise RuntimeError(f"Slack returned HTTP {resp.status}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status not in (200, 204):
+                raise RuntimeError(f"Slack returned HTTP {resp.status}")
+    except Exception as exc:
+        logger.warning("Slack webhook failed: %s", exc)
 
 
 def _send_email(
