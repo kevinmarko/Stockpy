@@ -63,7 +63,7 @@ describe("ForecastBackfillScreen (real mock API)", () => {
       horizons: [10, 30, 60, 90],
       metrics: {},
       tickers: ["ZZZZ"],
-      synthetic_tickers: ["ZZZZ"],
+      dropped_tickers: ["ZZZZ"],
     });
     renderScreen();
     expect(

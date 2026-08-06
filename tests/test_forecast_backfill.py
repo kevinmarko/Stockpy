@@ -169,28 +169,28 @@ def test_step_6_no_model_produces_nan_not_fabricated_confidence():
     assert not (engine.data["TSMOM_Meta_Prob_10d"] == 1.0).any()
 
 
-def test_synthetic_fallback_is_flagged_not_silently_indistinguishable_from_real():
-    """When neither FMP nor CompositeProvider returns data for a ticker, the
-    substituted synthetic random-walk panel must be tracked and surfaced in
-    the exported summary -- a provider outage must never look like a genuine
-    backtest (CONSTRAINT #4)."""
+def test_dropped_fallback_is_flagged_and_removed():
+    """When neither FMP nor CompositeProvider returns data for a ticker, it must
+    be dropped from the run and surfaced in the exported summary -- a provider
+    outage must never look like a genuine backtest (CONSTRAINT #4)."""
     engine = AgenticForecastBackfiller(
-        tickers=["ZZZZ_NOT_REAL"],
+        tickers=["AAPL", "ZZZZ_NOT_REAL"],
         start_date="2020-01-01",
         end_date="2022-01-01",
         horizons=[10],
         use_fmp=False,
     )
     engine.step_1_fetch_data()
-    assert "ZZZZ_NOT_REAL" in engine.synthetic_tickers
+    assert "ZZZZ_NOT_REAL" in engine.dropped_tickers
+    assert "ZZZZ_NOT_REAL" not in engine.tickers
 
     engine.step_2_calculate_technical_features()
     engine.step_3_generate_primary_signals()
     engine.step_4_create_meta_targets()
     engine.step_5_backtrain_meta_labelers()
     engine.step_6_execute_backfill()
-    _, summary = engine.export_results(filename="test_synthetic_flag_output.csv")
-    assert summary["synthetic_tickers"] == ["ZZZZ_NOT_REAL"]
+    _, summary = engine.export_results(filename="test_dropped_flag_output.csv")
+    assert summary["dropped_tickers"] == ["ZZZZ_NOT_REAL"]
 
 
 def test_train_test_split_embargoes_overlapping_forward_window(monkeypatch):

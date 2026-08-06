@@ -24,6 +24,7 @@ Design constraints (mirrors :mod:`pilots.scan_config_store` /
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -40,6 +41,8 @@ __all__ = [
     "InvalidSymbolError",
     "WatchlistAppendResult",
     "append_symbols",
+    "remove_symbols",
+    "record_fetch_failures",
     "DEFAULT_WATCHLIST_PATH",
 ]
 
@@ -179,3 +182,77 @@ def append_symbols(
         already_present=already_present,
         watchlist_file=str(target),
     )
+
+
+def remove_symbols(
+    symbols: List[str],
+    path: Optional[Path] = None,
+) -> None:
+    """Remove *symbols* from ``watchlist.txt``.
+    Ignores them if they aren't in the file.
+    """
+    target = path if path is not None else DEFAULT_WATCHLIST_PATH
+    if not target.exists():
+        return
+
+    normalized = {_normalize(sym) for sym in symbols}
+    if not normalized:
+        return
+
+    lines = target.read_text(encoding="utf-8").splitlines()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            if stripped.upper() in normalized:
+                continue
+        new_lines.append(line)
+
+    # Write back, ensure trailing newline
+    content = "\n".join(new_lines)
+    if content:
+        content += "\n"
+    target.write_text(content, encoding="utf-8")
+
+
+def record_fetch_failures(
+    symbols: List[str],
+    max_failures: int = 3,
+    watchlist_path: Optional[Path] = None,
+    failure_file_path: Optional[Path] = None,
+) -> List[str]:
+    """Record fetch failures for symbols and drop them from the watchlist
+    if they hit `max_failures`.
+    """
+    if not symbols:
+        return []
+
+    target_watchlist = watchlist_path if watchlist_path is not None else DEFAULT_WATCHLIST_PATH
+    target_failures = failure_file_path if failure_file_path is not None else target_watchlist.parent / "watchlist_failures.json"
+
+    # Load existing failures
+    failures = {}
+    if target_failures.exists():
+        try:
+            failures = json.loads(target_failures.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("Failed to parse watchlist_failures.json, resetting.")
+            failures = {}
+
+    dropped_symbols = []
+    for sym in symbols:
+        normalized_sym = _normalize(sym)
+        failures[normalized_sym] = failures.get(normalized_sym, 0) + 1
+        
+        if failures[normalized_sym] >= max_failures:
+            dropped_symbols.append(normalized_sym)
+            del failures[normalized_sym]
+
+    # Save updated failures
+    target_failures.write_text(json.dumps(failures, indent=2), encoding="utf-8")
+
+    # Actually remove the dropped symbols
+    if dropped_symbols:
+        remove_symbols(dropped_symbols, path=target_watchlist)
+
+    return dropped_symbols

@@ -81,15 +81,14 @@ export function ForecastBackfillScreen() {
         <ErrorState message={error} status={status} onRetry={() => void reload()} />
       ) : (
         <>
-          {(data?.synthetic_tickers?.length ?? 0) > 0 && (
+          {(data?.dropped_tickers?.length ?? 0) > 0 && (
             <div
               className="card card-pad"
               style={{ marginBottom: "var(--s-4)", borderColor: theme.caution, color: theme.textPrimary }}
             >
-              <strong>No real market data for {data?.synthetic_tickers?.length} ticker(s)</strong> —
-              FMP and the fallback provider both returned nothing, so a synthetic random-walk price
-              panel was substituted for: {data?.synthetic_tickers?.join(", ")}. Metrics/probabilities
-              touching these tickers are not from real market data.
+              <strong>No real market data for {data?.dropped_tickers?.length} ticker(s)</strong> —
+              FMP and the fallback provider both returned nothing, so they were dropped from the current run
+              (they will be removed from the watchlist after 3 consecutive failures): {data?.dropped_tickers?.join(", ")}.
             </div>
           )}
 
