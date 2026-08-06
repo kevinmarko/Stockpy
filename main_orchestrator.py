@@ -51,6 +51,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import pandas as pd
+pd.options.mode.string_storage = "pyarrow"
 import numpy as np
 from datetime import datetime, timezone
 from typing import Optional, Any
@@ -513,6 +514,7 @@ async def _execute_broker_orders(
             log_fn(result)
 
         now = datetime.now(timezone.utc)
+        submission_tasks = []
         for _, row in final_df.iterrows():
             symbol = str(row.get("Symbol", "")).upper()
             signal = str(row.get("Action Signal", "")).upper()
@@ -521,80 +523,82 @@ async def _execute_broker_orders(
             if not symbol:
                 continue
 
-            try:
-                if "BUY" in signal and kelly > 0 and symbol not in open_symbols:
-                    # Size the new long from the Kelly Target weight against live
-                    # account equity — NOT a hardcoded 1 share. An unsizable order
-                    # (no account equity available, missing/zero price, or a
-                    # quantity that rounds to 0) is SKIPPED rather than submitted
-                    # at an arbitrary size (CONSTRAINT #4).
-                    equity = float(account.equity) if account is not None else 0.0
-                    price = float(prices.get(symbol, 0.0) or 0.0)
-                    buy_qty = _kelly_target_qty(kelly, equity, price)
-                    if buy_qty <= 0.0:
-                        telemetry.warning(
-                            "Skipping BUY %s — cannot size order "
-                            "(kelly=%.4f, equity=%.2f, price=%.2f). Kelly Target is a "
-                            "portfolio weight and needs both equity and price to convert "
-                            "to shares.",
-                            symbol, kelly, equity, price,
-                        )
-                        continue
-                    intent = OrderIntent(
-                        strategy_id="main_pipeline",
-                        symbol=symbol,
-                        side=OrderSide.BUY,
-                        qty=buy_qty,
-                        order_type=OrderType.MARKET,
-                        priority=OrderPriority.NORMAL,
+            if "BUY" in signal and kelly > 0 and symbol not in open_symbols:
+                # Size the new long from the Kelly Target weight against live
+                # account equity — NOT a hardcoded 1 share. An unsizable order
+                # (no account equity available, missing/zero price, or a
+                # quantity that rounds to 0) is SKIPPED rather than submitted
+                # at an arbitrary size (CONSTRAINT #4).
+                equity = float(account.equity) if account is not None else 0.0
+                price = float(prices.get(symbol, 0.0) or 0.0)
+                buy_qty = _kelly_target_qty(kelly, equity, price)
+                if buy_qty <= 0.0:
+                    telemetry.warning(
+                        "Skipping BUY %s — cannot size order "
+                        "(kelly=%.4f, equity=%.2f, price=%.2f). Kelly Target is a "
+                        "portfolio weight and needs both equity and price to convert "
+                        "to shares.",
+                        symbol, kelly, equity, price,
+                    )
+                    continue
+                intent = OrderIntent(
+                    strategy_id="main_pipeline",
+                    symbol=symbol,
+                    side=OrderSide.BUY,
+                    qty=buy_qty,
+                    order_type=OrderType.MARKET,
+                    priority=OrderPriority.NORMAL,
+                )
+
+                def _log_buy(result, symbol=symbol, buy_qty=buy_qty, kelly=kelly,
+                             equity=equity, price=price):
+                    telemetry.info(
+                        "Order submitted: BUY %s x %.6f (kelly=%.4f, equity=%.2f, "
+                        "price=%.2f) -> status=%s broker_id=%s",
+                        symbol, buy_qty, kelly, equity, price,
+                        result.status.value, result.broker_order_id,
                     )
 
-                    def _log_buy(result, symbol=symbol, buy_qty=buy_qty, kelly=kelly,
-                                 equity=equity, price=price):
-                        telemetry.info(
-                            "Order submitted: BUY %s x %.6f (kelly=%.4f, equity=%.2f, "
-                            "price=%.2f) -> status=%s broker_id=%s",
-                            symbol, buy_qty, kelly, equity, price,
-                            result.status.value, result.broker_order_id,
-                        )
+                if pending_queue is not None:
+                    pending_queue.push((intent, _log_buy), OrderPriority.NORMAL)
+                else:
+                    submission_tasks.append((intent, _log_buy))
 
-                    if pending_queue is not None:
-                        pending_queue.push((intent, _log_buy), OrderPriority.NORMAL)
-                    else:
-                        await _submit_and_log(intent, _log_buy)
+            elif signal in ("SELL", "TRIM") and symbol in open_symbols:
+                sell_qty = abs(open_symbols[symbol])
+                intent = OrderIntent(
+                    strategy_id="main_pipeline",
+                    symbol=symbol,
+                    side=OrderSide.SELL,
+                    qty=sell_qty,
+                    order_type=OrderType.MARKET,
+                    priority=OrderPriority.URGENT,
+                )
 
-                elif signal in ("SELL", "TRIM") and symbol in open_symbols:
-                    sell_qty = abs(open_symbols[symbol])
-                    intent = OrderIntent(
-                        strategy_id="main_pipeline",
-                        symbol=symbol,
-                        side=OrderSide.SELL,
-                        qty=sell_qty,
-                        order_type=OrderType.MARKET,
-                        priority=OrderPriority.URGENT,
+                def _log_sell(result, symbol=symbol, sell_qty=sell_qty):
+                    telemetry.info(
+                        "Order submitted: SELL %s x %.4f -> status=%s broker_id=%s",
+                        symbol, sell_qty, result.status.value, result.broker_order_id,
                     )
 
-                    def _log_sell(result, symbol=symbol, sell_qty=sell_qty):
-                        telemetry.info(
-                            "Order submitted: SELL %s x %.4f -> status=%s broker_id=%s",
-                            symbol, sell_qty, result.status.value, result.broker_order_id,
-                        )
+                if pending_queue is not None:
+                    pending_queue.push((intent, _log_sell), OrderPriority.URGENT)
+                else:
+                    submission_tasks.append((intent, _log_sell))
 
-                    if pending_queue is not None:
-                        pending_queue.push((intent, _log_sell), OrderPriority.URGENT)
-                    else:
-                        await _submit_and_log(intent, _log_sell)
-
-            except KillSwitchActiveError as ks_err:
-                telemetry.critical(
-                    "Kill switch is ACTIVE — aborting all remaining order submission. %s", ks_err
-                )
-                return  # bail out of the entire loop; no further submissions this cycle
-
-            except Exception as order_err:
-                telemetry.error(
-                    "Order submission failed for %s: %s", symbol, order_err, exc_info=True
-                )
+        if submission_tasks:
+            async def _do_submit(intent, log_fn):
+                try:
+                    await _submit_and_log(intent, log_fn)
+                except KillSwitchActiveError as ks_err:
+                    telemetry.critical(
+                        "Kill switch is ACTIVE — aborting order submission. %s", ks_err
+                    )
+                except Exception as order_err:
+                    telemetry.error(
+                        "Order submission failed for %s: %s", intent.symbol, order_err, exc_info=True
+                    )
+            await asyncio.gather(*[_do_submit(i, l) for i, l in submission_tasks])
 
         # Drain the priority queue (URGENT before NORMAL, paced by the leaky
         # bucket) — a no-op loop when the queue is disabled (pending_queue is

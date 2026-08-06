@@ -160,6 +160,7 @@ def initialize_database(db_file: str = DB_FILE):
             
             logger.debug(f"Executing SQL:\n{create_daily_signals_sql}")
             cursor.execute(create_daily_signals_sql)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_signals_date_ticker ON DailySignals (Date, ticker);")
 
             # F-07 FIX: Migrate schema — add any new COLUMN_SCHEMA columns missing from existing DB
             migrate_daily_signals_schema(cursor, dbapi_conn)
@@ -179,6 +180,7 @@ def initialize_database(db_file: str = DB_FILE):
             );
             """
             cursor.execute(create_transactions_sql)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_transactions_ticker_date ON Transactions (ticker, execution_date);")
             logger.info("'Transactions' table created successfully.")
     except Exception as e:
         # Unwrap SQLAlchemy OperationalError to raise raw sqlite3.OperationalError for tests

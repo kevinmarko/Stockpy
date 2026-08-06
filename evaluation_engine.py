@@ -623,9 +623,7 @@ class EvaluationEngine:
         if portfolio_heat > self.max_portfolio_heat:
             logger.critical(f"🛑 PORTFOLIO HEAT BREACH: {portfolio_heat*100:.2f}% exceeds {self.max_portfolio_heat*100:.2f}% limit. Halting new trade allocations.")
             if 'Action Signal' in df.columns:
-                df['Action Signal'] = df['Action Signal'].apply(
-                    lambda s: "AVOID (HEAT LIMIT)" if s in ["BUY", "STRONG BUY"] else s
-                )
+                df.loc[df['Action Signal'].isin(["BUY", "STRONG BUY"]), 'Action Signal'] = "AVOID (HEAT LIMIT)"
 
         # 3. Evaluate Brinson-Fachler Sector Attribution
         if 'sector' in df.columns and not benchmark_df.empty:
@@ -663,9 +661,9 @@ class EvaluationEngine:
         # 5. Evaluate Tail Dependency Risk (CoVaR Proxy)
         var_key = 'VaR 95' if 'VaR 95' in df.columns else 'VaR_95' if 'VaR_95' in df.columns else None
         if var_key and 'Beta' in df.columns:
-            df['CoVaR Proxy'] = df.apply(
-                lambda row: self.calculate_tail_dependency(row[var_key], row['Beta']), axis=1
-            )
+            # Vectorized CoVaR Proxy: absolute VaR scaled by Beta (floored at 0)
+            covar = df[var_key].abs() * df['Beta'].clip(lower=0.0)
+            df['CoVaR Proxy'] = covar.fillna(0.0).round(4)
         else:
             df['CoVaR Proxy'] = 0.0
 

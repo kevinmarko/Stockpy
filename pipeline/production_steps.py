@@ -789,18 +789,24 @@ def _apply_etf_transmission(
         shares_out: dict = {}
         _mcap_col = 'Market Cap' if 'Market Cap' in dashboard_df.columns else None
         _price_col = 'Price' if 'Price' in dashboard_df.columns else None
-        if _mcap_col and _price_col:
-            for _, row in dashboard_df.iterrows():
-                sym = str(row.get('Symbol', '') or '').upper().strip()
-                if not sym:
-                    continue
-                try:
-                    mcap = float(row.get(_mcap_col))
-                    price = float(row.get(_price_col))
-                except (TypeError, ValueError):
-                    continue
-                if mcap > 0.0 and price > 0.0:
-                    shares_out[sym] = mcap / price
+        if _mcap_col and _price_col and 'Symbol' in dashboard_df.columns:
+            # Vectorized calculation to replace iterrows()
+            # 1. Clean symbols
+            valid_df = dashboard_df.copy()
+            valid_df['Symbol'] = valid_df['Symbol'].astype(str).str.upper().str.strip()
+            valid_df = valid_df[valid_df['Symbol'] != ""]
+            
+            # 2. Coerce numeric columns, setting invalid to NaN
+            valid_df[_mcap_col] = pd.to_numeric(valid_df[_mcap_col], errors='coerce')
+            valid_df[_price_col] = pd.to_numeric(valid_df[_price_col], errors='coerce')
+            
+            # 3. Filter > 0
+            valid_df = valid_df[(valid_df[_mcap_col] > 0.0) & (valid_df[_price_col] > 0.0)]
+            
+            # 4. Calculate shares out and convert to dict
+            if not valid_df.empty:
+                valid_df.set_index('Symbol', inplace=True)
+                shares_out = (valid_df[_mcap_col] / valid_df[_price_col]).to_dict()
 
         ownership = compute_etf_ownership(
             holdings, shares_out, exclude_symbols=frozenset(excluded),
