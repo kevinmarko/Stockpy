@@ -370,6 +370,80 @@ def test_universe_cold_start_empty_not_404(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# POST /universe/{symbol}/reinclude — manual symbol-rating re-include
+# ---------------------------------------------------------------------------
+
+
+class TestUniverseReinclude:
+    def test_happy_path_calls_store_write_and_returns_result(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch(
+                "rating.symbol_rating_store.SymbolRatingStore"
+            ) as MockStore:
+                inst = MockStore.return_value
+                resp = client.post(
+                    "/universe/xom/reinclude",
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        assert resp.json() == {"symbol": "XOM", "reincluded": True}
+        # Constructed in write mode (no readonly=True) and called exactly once
+        # with the upper-cased symbol.
+        MockStore.assert_called_once_with()
+        inst.reinclude.assert_called_once_with("XOM")
+
+    def test_uppercases_and_strips_symbol(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch("rating.symbol_rating_store.SymbolRatingStore") as MockStore:
+                inst = MockStore.return_value
+                resp = client.post(
+                    "/universe/%20nvda%20/reinclude",
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 200
+        assert resp.json()["symbol"] == "NVDA"
+        inst.reinclude.assert_called_once_with("NVDA")
+
+    def test_command_token_required_unset_disables(self):
+        """Fail-closed require_command_token ALONE (matches POST /decisions /
+        POST /automation/pause's tier — see the pilots-endpoint auth
+        taxonomy): FOLLOW_API_TOKEN unset means the endpoint is fully disabled."""
+        resp = client.post("/universe/XOM/reinclude")
+        assert resp.status_code == 403
+
+    def test_command_token_wrong_401(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            resp = client.post(
+                "/universe/XOM/reinclude", headers={"Authorization": "Bearer wrong"}
+            )
+        assert resp.status_code == 401
+
+    def test_store_write_failure_returns_503_not_500(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch("rating.symbol_rating_store.SymbolRatingStore") as MockStore:
+                MockStore.return_value.reinclude.side_effect = RuntimeError("db unavailable")
+                resp = client.post(
+                    "/universe/XOM/reinclude",
+                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                )
+        assert resp.status_code == 503
+
+    def test_not_gated_by_a_dedicated_writes_enabled_flag(self):
+        """Deliberate: reinclude sits behind require_command_token alone --
+        no SYMBOL_RATING_*_ENABLED gate exists on this endpoint (it only
+        breaks a rating streak; it never places an order or bypasses any
+        other risk gate)."""
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "SYMBOL_RATING_AUTO_DROP_ENABLED", False):
+                with mock.patch("rating.symbol_rating_store.SymbolRatingStore"):
+                    resp = client.post(
+                        "/universe/XOM/reinclude",
+                        headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                    )
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # GET /recommendations — the ranked BUY-picks feed
 # ---------------------------------------------------------------------------
 

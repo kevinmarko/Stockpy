@@ -16,12 +16,13 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UniverseCoverage } from "./UniverseCoverage";
 import { AutoRefreshProvider } from "./AutoRefreshContext";
 import { api, ApiError } from "../api/client";
+import { __resetMockRatingOverrides } from "../api/mock";
 import type { SyncReportResponse } from "../api/types";
 
 /**
@@ -48,6 +49,7 @@ describe("UniverseCoverage (real mock API)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     localStorage.clear();
+    __resetMockRatingOverrides();
   });
 
   it("renders summary counts and per-symbol rows", async () => {
@@ -171,6 +173,76 @@ describe("UniverseCoverage (real mock API)", () => {
     await screen.findByTestId("universe-coverage-row-AAPL");
     await userEvent.click(screen.getByTestId("universe-sync-now"));
     expect(await screen.findByTestId("universe-sync-message")).toHaveTextContent(/disabled/);
+  });
+});
+
+describe("UniverseCoverage — symbol rating column, Excluded badge, Re-include", () => {
+  beforeEach(() => {
+    localStorage.setItem("stockpy.auto_refresh.robinhood_enabled", "1");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+    __resetMockRatingOverrides();
+  });
+
+  it("a symbol with no rating history shows a dash, not a fabricated 0", async () => {
+    renderLive();
+    // The mock's default MOCK_RATING_OVERRIDES fixture has no entry for
+    // AAPL -- rating_consecutive_bad_cycles is null/undefined for it.
+    const row = await screen.findByTestId("universe-coverage-row-AAPL");
+    expect(screen.getByTestId("universe-rating-cycles-AAPL")).toHaveTextContent("—");
+    expect(row).not.toHaveTextContent("Excluded");
+  });
+
+  it("a symbol with some bad cycles but below threshold shows the cycle count and no Excluded badge", async () => {
+    renderLive();
+    const row = await screen.findByTestId("universe-coverage-row-T");
+    expect(screen.getByTestId("universe-rating-cycles-T")).toHaveTextContent("2 cycles");
+    expect(within(row).queryByTestId("universe-rating-excluded-badge")).not.toBeInTheDocument();
+  });
+
+  it("an excluded symbol (XOM, per the mock fixture) shows the Excluded badge and a Re-include button", async () => {
+    renderLive();
+    await screen.findByTestId("universe-coverage-row-XOM");
+    expect(screen.getByTestId("universe-rating-cycles-XOM")).toHaveTextContent("6 cycles");
+    expect(screen.getByTestId("universe-rating-excluded-badge")).toHaveTextContent("Excluded");
+    expect(screen.getByTestId("universe-reinclude-XOM")).toBeInTheDocument();
+  });
+
+  it("clicking Re-include calls the API and reloads the report, clearing the Excluded badge", async () => {
+    const reincludeSpy = vi.spyOn(api, "reincludeSymbol");
+    const syncReportSpy = vi.spyOn(api, "getSyncReport");
+    renderLive();
+    await screen.findByTestId("universe-coverage-row-XOM");
+    expect(screen.getByTestId("universe-rating-excluded-badge")).toBeInTheDocument();
+
+    const callsBefore = syncReportSpy.mock.calls.length;
+    await userEvent.click(screen.getByTestId("universe-reinclude-XOM"));
+
+    await waitFor(() => expect(reincludeSpy).toHaveBeenCalledTimes(1));
+    expect(reincludeSpy).toHaveBeenCalledWith("XOM");
+    // A reload (fresh GET /data/sync-report) followed the successful call.
+    await waitFor(() => expect(syncReportSpy.mock.calls.length).toBeGreaterThan(callsBefore));
+    // The mock's reincludeSymbol genuinely mutates its own fixture state, so
+    // the post-reload report honestly no longer marks XOM excluded.
+    await waitFor(() =>
+      expect(screen.queryByTestId("universe-rating-excluded-badge")).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("universe-reinclude-XOM")).not.toBeInTheDocument();
+  });
+
+  it("a failed Re-include call renders an inline error message, not a crash", async () => {
+    vi.spyOn(api, "reincludeSymbol").mockRejectedValue(new Error("re-include failed"));
+    renderLive();
+    await screen.findByTestId("universe-coverage-row-XOM");
+    await userEvent.click(screen.getByTestId("universe-reinclude-XOM"));
+    expect(await screen.findByTestId("universe-reinclude-message-XOM")).toHaveTextContent(
+      /re-include failed/,
+    );
+    // The badge/button stay put -- the mutation never actually landed.
+    expect(screen.getByTestId("universe-rating-excluded-badge")).toBeInTheDocument();
   });
 });
 

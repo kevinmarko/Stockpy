@@ -93,7 +93,11 @@ from diagnostics_and_visuals import (
 # telemetry for the GUI. Import is cheap (stdlib + settings only), no
 # circular-import risk. See _PROGRESS_STAGES below for the stage contract.
 from reporting.progress import ProgressReporter
-from reporting.state_snapshot import _safe_float_or_none
+from reporting.state_snapshot import (
+    _safe_float_or_none,
+    _rating_consecutive_cycles,
+    _rating_is_excluded,
+)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -812,6 +816,17 @@ def _write_state_snapshot(
                     # never computed) rather than fabricating False -- CONSTRAINT #4.
                     "sizing_was_capped": _safe_bool_or_none(row.get("Sizing_Was_Capped")),
                     "sizing_binding_constraint": (str(row.get("Sizing_Binding_Constraint")).strip() or None) if pd.notna(row.get("Sizing_Binding_Constraint")) else None,
+                    # Symbol-rating subsystem diagnostics (rating/symbol_rating_store.py)
+                    # -- shown regardless of settings.SYMBOL_RATING_AUTO_DROP_ENABLED
+                    # so an operator can see what WOULD be dropped before ever
+                    # flipping that flag on. Only settings.SYMBOL_RATING_ENABLED
+                    # gates whether there's any rating history to read at all.
+                    # Same shared helpers reporting/state_snapshot.py's advisory
+                    # writer uses, sourced identically from the DB-backed store,
+                    # so parity between the two writers is structural, not
+                    # incidental (see tests/test_state_snapshot_parity.py).
+                    "symbol_rating_consecutive_bad_cycles": _rating_consecutive_cycles(sym),
+                    "symbol_rating_excluded": _rating_is_excluded(sym, is_held=shares > 0),
                 })
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

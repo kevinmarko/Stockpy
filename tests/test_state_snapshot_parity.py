@@ -98,6 +98,13 @@ SHARED_SIGNAL_FIELDS = {
     # .sizing_binding_constraint, threaded through reporting/state_snapshot.py.
     "sizing_was_capped",
     "sizing_binding_constraint",
+    # Symbol-rating subsystem diagnostics (rating/symbol_rating_store.py) --
+    # both writers source these identically from the shared DB-backed store
+    # (reporting/state_snapshot._rating_consecutive_cycles/_rating_is_excluded),
+    # not from either orchestrator's own per-cycle computation, so parity here
+    # is structural rather than incidental.
+    "symbol_rating_consecutive_bad_cycles",
+    "symbol_rating_excluded",
 }
 
 # The four sizing-decomposition fields, tested together below (mirrors _TRIPLET).
@@ -177,6 +184,12 @@ def _macro() -> SimpleNamespace:
 @pytest.fixture()
 def advisory_signals(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+    # Isolate the symbol-rating store reads (reporting/state_snapshot.
+    # _rating_consecutive_cycles/_rating_is_excluded) from the real repo DB --
+    # a fresh, never-written-to SQLite file has no symbol_rating_events table,
+    # so both helpers deterministically degrade to None/False (CONSTRAINT #6),
+    # matching tests/test_symbol_rating.py's own missing-table convention.
+    monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{tmp_path / 'rating_parity.db'}")
     result = SimpleNamespace(
         snapshot=SimpleNamespace(positions={"AAPL": _position(10.0, 150.0)}),
         recommendations=[_recommendation("AAPL")],
@@ -189,6 +202,9 @@ def advisory_signals(tmp_path, monkeypatch):
 @pytest.fixture()
 def orchestrator_signals(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+    # Same DB isolation as advisory_signals above -- see that fixture's
+    # comment for why (both writers share the same rating-store helpers).
+    monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{tmp_path / 'rating_parity.db'}")
     # Row 1: the triplet columns present (round-trip). Row 2: absent (null).
     rows = [
         {
