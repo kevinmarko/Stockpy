@@ -29,6 +29,10 @@ venv/
 # and never committed. Each developer builds their own.
 /InvestYo.app
 
+# Same as above, for scripts/build_pilots_launcher.command's two app bundles.
+/Stockpy Pilots.app
+/Stockpy Pilots (Stop).app
+
 # Debug output files / DB
 *.csv
 # Curated, version-controlled data fixtures (exceptions to the blanket *.csv rule).

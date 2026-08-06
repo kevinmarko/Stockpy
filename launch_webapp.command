@@ -40,6 +40,29 @@
 #   Keep in Dock.
 # =============================================================================
 
+# ── Repair PATH for GUI-launched contexts ────────────────────────────────────
+# A double-clicked .app bundle (Stockpy Pilots.app, built by
+# scripts/build_pilots_launcher.command) runs this script via AppleScript's
+# `do shell script`, which uses a minimal, non-login PATH
+# (/usr/bin:/bin:/usr/sbin:/sbin) — it never sources ~/.zprofile the way a
+# real Terminal session does, so Homebrew's npm/node go missing even though
+# they work fine when this same script is run from a normal terminal.
+# Deliberately NOT a hand-rolled priority list of common install dirs — that
+# was tried and got the ORDER wrong: it put /usr/local/bin ahead of
+# /opt/homebrew/bin and silently picked up a stale Node v16 (a leftover 2021
+# nodejs.org installer) instead of the real Homebrew v26 a normal terminal
+# resolves to. Asking the user's own login shell for its actual PATH is the
+# only way to get both the right directories AND the right order — it's
+# exactly what ~/.zprofile's `eval "$(brew shellenv)"` line is for, and it's
+# a no-op here whenever npm is already resolvable (i.e. every plain terminal
+# double-click), so this only ever changes behavior in the one case it needs
+# to.
+if ! command -v npm >/dev/null 2>&1; then
+    _login_path="$("${SHELL:-/bin/zsh}" -lc 'echo $PATH' 2>/dev/null)"
+    [ -n "$_login_path" ] && PATH="$_login_path" && export PATH
+    unset _login_path
+fi
+
 # PIDs of backends THIS script starts (so the exit trap stops only those).
 STARTED_PIDS=()
 # Budget (seconds) the exit trap waits for STARTED_PIDS to exit on their own
@@ -49,6 +72,34 @@ STARTED_PIDS=()
 # DAEMON_SHUTDOWN_TIMEOUT_SECONDS (default 25s), well beyond what a plain
 # uvicorn stub needs.
 BACKEND_SHUTDOWN_WAIT_SECONDS=15
+
+# ── App mode (--background / --stop) ─────────────────────────────────────────
+# Invoked from the double-clickable "Stockpy Pilots.app" / "Stockpy Pilots
+# (Stop).app" wrappers built by scripts/build_pilots_launcher.command — no
+# Terminal window, no interactive prompt, no "press any key" pause, and (for
+# --background) the launcher process itself exits once the app is up instead
+# of blocking in the foreground, handing the backends off to a pidfile so a
+# separate --stop invocation can find and stop them later. A plain
+# double-click with no args keeps today's exact interactive-Terminal
+# behavior, byte-for-byte unchanged.
+APP_MODE="${1:-}"
+INTERACTIVE=true
+APP_PID_FILE="/tmp/stockpy_webapp_logs/pilots_app.pids"
+if [ "$APP_MODE" = "--background" ] || [ "$APP_MODE" = "--stop" ]; then
+    INTERACTIVE=false
+    # No visible window in app mode — keep every echo so app_launcher.log is
+    # still a real record, instead of output vanishing into nothing.
+    mkdir -p /tmp/stockpy_webapp_logs
+    exec >> /tmp/stockpy_webapp_logs/app_launcher.log 2>&1
+    echo ""
+    echo "── $(date '+%Y-%m-%d %H:%M:%S') — mode=$APP_MODE ──"
+fi
+
+_notify() {  # $1 = message ; best-effort macOS notification, never fatal
+    command -v osascript >/dev/null 2>&1 &&
+        osascript -e "display notification \"$1\" with title \"Stockpy Pilots\"" >/dev/null 2>&1
+    return 0
+}
 
 # ── Always pause before the window closes; stop only backends we started ─────
 # Guarded with _cleaned so this can't run twice (see TERM/HUP traps below).
@@ -85,7 +136,11 @@ _on_exit() {
     # crash) rather than via Ctrl+C, the foreground npm/vite tree can occasionally
     # survive as an orphan and squat on :5173 for the next launch. Path-scoped to
     # THIS project's vite binary only — never touches anything else.
-    if [ -n "$SCRIPT_DIR" ]; then
+    # SKIPPED on a clean --background hand-off (STARTED_PIDS was deliberately
+    # cleared just before that exit 0, further down) — this sweep would
+    # otherwise kill the very vite process that launch just started and
+    # handed off to the pidfile for --stop to manage instead.
+    if [ -n "$SCRIPT_DIR" ] && ! { [ "$APP_MODE" = "--background" ] && [ "$_exit_code" = "0" ]; }; then
         pkill -f "$SCRIPT_DIR/webapp/node_modules/.bin/vite" 2>/dev/null
     fi
     # Release the single-instance lock LAST, and only if it's still ours (a
@@ -103,8 +158,15 @@ _on_exit() {
         130) echo "  Stopped by keyboard interrupt (Ctrl+C)." ;;
         *)   echo "  Pilots PWA exited with code $_exit_code." ;;
     esac
-    read -r -s -n 1 -p "  Press any key to close this window…" _ 2>/dev/null || true
-    echo ""
+    if [ "$INTERACTIVE" = true ]; then
+        read -r -s -n 1 -p "  Press any key to close this window…" _ 2>/dev/null || true
+        echo ""
+    elif [ "$APP_MODE" = "--background" ] && [ "$_exit_code" != 0 ]; then
+        # Only a genuine failure reaches this trap in background mode — the
+        # success path clears STARTED_PIDS and exits 0 itself, further down,
+        # before this trap would have anything to kill.
+        _notify "Failed to start (exit $_exit_code) — see /tmp/stockpy_webapp_logs/app_launcher.log"
+    fi
 }
 trap '_on_exit' EXIT
 # TERM/HUP (window closed, session torn down) don't exit a script by default once
@@ -115,6 +177,76 @@ trap 'exit 129' HUP
 # ── Navigate to the project root (same folder as this script) ─────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# ── --stop: tear down whatever a prior --background launch started, then exit.
+# Bypasses the launch lock entirely (stopping must work even if a stale lock
+# is sitting there) and reuses the same wait-then-kill-9 grace period as the
+# interactive trap above, just driven from a pidfile instead of STARTED_PIDS
+# (this is a fresh process invocation — it never held those PIDs itself).
+_read_env_value() {  # $1 = KEY ; echoes the value from ./.env (quotes stripped)
+    local key="$1" line val
+    [ -f ".env" ] || return 0
+    line="$(grep -E "^${key}=" .env | tail -n 1)"
+    val="${line#*=}"
+    # strip surrounding whitespace and matching single/double quotes
+    val="$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    val="${val%\"}"; val="${val#\"}"
+    val="${val%\'}"; val="${val#\'}"
+    printf '%s' "$val"
+}
+
+_app_stop() {
+    if [ ! -f "$APP_PID_FILE" ]; then
+        echo "  Nothing to stop — no pidfile at $APP_PID_FILE."
+        _notify "Pilots PWA wasn't running."
+        exit 0
+    fi
+    # Match the interactive path's own daemon-aware shutdown budget (see
+    # _bring_up_control_and_pilots_api) — a --background launch that started
+    # the real orchestrator daemon needs the same up-to-DAEMON_SHUTDOWN_
+    # TIMEOUT_SECONDS grace here too, or a --stop invocation would force-kill
+    # (-9) a daemon that's still mid-_teardown() well before it's actually
+    # hung, instead of only escalating to -9 once a genuinely-stuck shutdown
+    # has blown its own advertised budget.
+    local daemon_timeout
+    daemon_timeout="$(_read_env_value DAEMON_SHUTDOWN_TIMEOUT_SECONDS)"
+    [[ "$daemon_timeout" =~ ^[0-9]+$ ]] || daemon_timeout=25
+    BACKEND_SHUTDOWN_WAIT_SECONDS=$((daemon_timeout + 5))
+    echo "  ▶  Stopping backends listed in $APP_PID_FILE …"
+    local pid _i _still_alive
+    while read -r pid; do
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    done < "$APP_PID_FILE"
+    for _i in $(seq 1 $((BACKEND_SHUTDOWN_WAIT_SECONDS * 2))); do
+        _still_alive=false
+        while read -r pid; do
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && _still_alive=true
+        done < "$APP_PID_FILE"
+        $_still_alive || break
+        sleep 0.5
+    done
+    while read -r pid; do
+        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    done < "$APP_PID_FILE"
+    pkill -f "$SCRIPT_DIR/webapp/node_modules/.bin/vite" 2>/dev/null
+    rm -f "$APP_PID_FILE" /tmp/stockpy_webapp_logs/launch.lock
+    echo "  ✓  Stopped."
+    _notify "Pilots PWA stopped."
+    exit 0
+}
+if [ "$APP_MODE" = "--stop" ]; then
+    _app_stop
+fi
+
+# ── --background fast path: already running (from a prior --background
+# launch) → just reopen the tab instead of redoing the whole bring-up. Keeps
+# a second "open" double-click from restarting an already-healthy session.
+if [ "$APP_MODE" = "--background" ] && [ -f "$APP_PID_FILE" ] && curl -sf "http://localhost:5173/" >/dev/null 2>&1; then
+    echo "  Already running — reopening the browser tab."
+    open "http://localhost:5173"
+    _notify "Pilots PWA is already running — http://localhost:5173"
+    exit 0
+fi
 
 echo ""
 echo "══════════════════════════════════════════════════════════════"
@@ -135,18 +267,6 @@ echo "  ✓  node $(node --version), npm $(npm --version)"
 # ── Helpers ──────────────────────────────────────────────────────────────────
 _port_up() {  # $1 = port ; returns 0 if /health answers
     curl -sf "http://localhost:$1/health" >/dev/null 2>&1
-}
-
-_read_env_value() {  # $1 = KEY ; echoes the value from ./.env (quotes stripped)
-    local key="$1" line val
-    [ -f ".env" ] || return 0
-    line="$(grep -E "^${key}=" .env | tail -n 1)"
-    val="${line#*=}"
-    # strip surrounding whitespace and matching single/double quotes
-    val="$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-    val="${val%\"}"; val="${val#\"}"
-    val="${val%\'}"; val="${val#\'}"
-    printf '%s' "$val"
 }
 
 _start_api() {  # $1 = module:app ; $2 = port ; $3 = friendly name
@@ -332,13 +452,19 @@ _acquire_launch_lock() {
 _acquire_launch_lock
 
 # ── Ask: mock or live? (defaults to mock after 20s / on empty Enter) ─────────
-echo ""
-echo "  How would you like to run the Pilots PWA?"
-echo "    [1] Mock data   — offline, zero-config (default)"
-echo "    [2] Live data   — reads your real pipeline data via the backend APIs"
-echo ""
-read -r -t 20 -p "  Choice [1]: " MODE_CHOICE
-echo ""
+# --background always runs live — that's the whole point of the app wrapper;
+# an operator who wants mock data still has the plain interactive launch.
+if [ "$APP_MODE" = "--background" ]; then
+    MODE_CHOICE=2
+else
+    echo ""
+    echo "  How would you like to run the Pilots PWA?"
+    echo "    [1] Mock data   — offline, zero-config (default)"
+    echo "    [2] Live data   — reads your real pipeline data via the backend APIs"
+    echo ""
+    read -r -t 20 -p "  Choice [1]: " MODE_CHOICE
+    echo ""
+fi
 MODE_CHOICE="${MODE_CHOICE:-1}"
 
 LIVE_MODE=false
@@ -401,7 +527,31 @@ fi
 _check_vite_port
 
 echo ""
-if [ "$LIVE_MODE" = true ]; then
+if [ "$APP_MODE" = "--background" ]; then
+    echo "  ▶  Starting the Pilots PWA against LIVE data in the background…"
+    # --strictPort: a silent port bump would break CORS against the backends.
+    npm run dev -- --strictPort > "/tmp/stockpy_webapp_logs/vite.log" 2>&1 &
+    STARTED_PIDS+=("$!")
+    ok=false
+    for _ in $(seq 1 40); do
+        curl -sf "http://localhost:5173/" >/dev/null 2>&1 && { ok=true; break; }
+        sleep 0.5
+    done
+    if [ "$ok" != true ]; then
+        echo "  ERROR: Pilots PWA did not come up on :5173 — see /tmp/stockpy_webapp_logs/vite.log"
+        exit 1
+    fi
+    # Hand every backend PID this run started off to the pidfile so a later
+    # --stop invocation (a fresh process, holding none of these PIDs itself)
+    # can find and stop them — then clear STARTED_PIDS so the EXIT trap above
+    # does NOT kill them when *this* launcher process exits a few lines down.
+    printf '%s\n' "${STARTED_PIDS[@]}" > "$APP_PID_FILE"
+    open "http://localhost:5173"
+    echo "  ✓  Running at http://localhost:5173"
+    _notify "Pilots PWA is running — http://localhost:5173"
+    STARTED_PIDS=()
+    exit 0
+elif [ "$LIVE_MODE" = true ]; then
     echo "  ▶  Starting the Pilots PWA against LIVE data — opening in your browser."
     echo "     Must stay on :5173 for CORS (settings.CORS_ALLOWED_ORIGINS)."
     echo "     Close this window (or Ctrl+C) to stop (leaves any running daemon up)."
