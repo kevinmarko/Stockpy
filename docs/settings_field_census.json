@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "a45c5f548959442e9de2878e03e176beb7d874d2",
+    "git_commit": "10e9d0e28d041a878e3f5a3bb924a16b0047b36f",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2302,7 +2302,7 @@
         "route": "/settings/tunables",
         "method": "PUT",
         "function": "put_settings_tunables",
-        "line": 4081,
+        "line": 4096,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2321,7 +2321,7 @@
         "route": "/settings/tunables",
         "method": "PATCH",
         "function": "put_settings_tunables",
-        "line": 4081,
+        "line": 4096,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2340,7 +2340,7 @@
         "route": "/settings/sentiment",
         "method": "PUT",
         "function": "put_settings_sentiment",
-        "line": 4688,
+        "line": 4703,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2359,7 +2359,7 @@
         "route": "/settings/sentiment",
         "method": "PATCH",
         "function": "put_settings_sentiment",
-        "line": 4688,
+        "line": 4703,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2378,7 +2378,7 @@
         "route": "/settings/sector-selection",
         "method": "PUT",
         "function": "put_settings_sector_selection",
-        "line": 4713,
+        "line": 4728,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2397,7 +2397,7 @@
         "route": "/settings/sector-selection",
         "method": "PATCH",
         "function": "put_settings_sector_selection",
-        "line": 4713,
+        "line": 4728,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2416,7 +2416,7 @@
         "route": "/settings/fmp",
         "method": "PUT",
         "function": "put_settings_fmp",
-        "line": 4738,
+        "line": 4753,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2435,7 +2435,7 @@
         "route": "/settings/fmp",
         "method": "PATCH",
         "function": "put_settings_fmp",
-        "line": 4738,
+        "line": 4753,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2454,7 +2454,7 @@
         "route": "/settings/etf-transmission",
         "method": "PUT",
         "function": "put_settings_etf_transmission",
-        "line": 4763,
+        "line": 4778,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2473,7 +2473,7 @@
         "route": "/settings/etf-transmission",
         "method": "PATCH",
         "function": "put_settings_etf_transmission",
-        "line": 4763,
+        "line": 4778,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2492,7 +2492,7 @@
         "route": "/dead-letter/retry",
         "method": "POST",
         "function": "post_dead_letter_retry",
-        "line": 4884,
+        "line": 4899,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2513,7 +2513,7 @@
         "route": "/prompts/pin",
         "method": "PUT",
         "function": "put_prompts_pin",
-        "line": 5034,
+        "line": 5049,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2536,7 +2536,7 @@
         "route": "/rag/query",
         "method": "POST",
         "function": "post_rag_query",
-        "line": 5111,
+        "line": 5126,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -3300,12 +3300,12 @@
         },
         {
           "file": "api/pilots_api.py",
-          "line": 4018,
+          "line": 4033,
           "expr": "getattr(settings, key, None)"
         },
         {
           "file": "api/pilots_api.py",
-          "line": 4123,
+          "line": 4138,
           "expr": "getattr(settings, key, None)"
         },
         {
@@ -3656,7 +3656,7 @@
       {
         "field": "EDGAR_FULLTEXT_CHUNK_TOKENS",
         "name_literal_sites": [
-          "api/pilots_api.py:4500"
+          "api/pilots_api.py:4515"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -3664,7 +3664,7 @@
       {
         "field": "EDGAR_FULLTEXT_FORMS",
         "name_literal_sites": [
-          "api/pilots_api.py:4499"
+          "api/pilots_api.py:4514"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -3672,7 +3672,7 @@
       {
         "field": "ETF_HOLDINGS_TICKERS",
         "name_literal_sites": [
-          "api/pilots_api.py:4624",
+          "api/pilots_api.py:4639",
           "gui/panels/settings_manager.py:126"
         ],
         "name_literal_site_count": 2,
@@ -3681,7 +3681,7 @@
       {
         "field": "FMP_ECON_INDICATORS",
         "name_literal_sites": [
-          "api/pilots_api.py:4604",
+          "api/pilots_api.py:4619",
           "gui/panels/settings_manager.py:162"
         ],
         "name_literal_site_count": 2,

@@ -1602,6 +1602,7 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   FMP_BARS_ADJUSTMENT: ["data/market_data.py:1850"],
   FMP_ECON_INDICATORS: ["api/pilots_api.py:4233"],
   ETF_HOLDINGS_TICKERS: ["api/pilots_api.py:4253"],
+  SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["pipeline/production_steps.py:531"],
 };
 
 // `settings_keysets.DANGEROUS_KEYS` ∩ the keys these five editors serve. Copied
@@ -1772,6 +1773,27 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   {
     group: "Position Sizing", key: "SIZING_CAP_ALERT_THRESHOLD_PCT", type: "number",
     value: 0.30, default: 0.30, min: 0, max: 1, step: 0.05,
+    description: null,
+  },
+  // ---- Symbol Rating (Tracked Universe auto-drop, rating/symbol_rating_store.py) ----
+  {
+    group: "Symbol Rating", key: "SYMBOL_RATING_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Compute and persist a per-symbol rating every cycle. Diagnostic-only -- no symbol is excluded by this flag alone.",
+  },
+  {
+    group: "Symbol Rating", key: "SYMBOL_RATING_BAD_SCORE_THRESHOLD", type: "number",
+    value: 35.0, default: 35.0, min: 0, max: 100, step: 1,
+    description: "A symbol's score below this is rated BAD this cycle. Matches strategy_engine.py's own RISK REDUCE cutoff.",
+  },
+  {
+    group: "Symbol Rating", key: "SYMBOL_RATING_AUTO_DROP_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in. When on, a non-held symbol rated BAD for SYMBOL_RATING_DROP_THRESHOLD_CYCLES cycles in a row is dropped from the Tracked Universe. A held position is never dropped.",
+  },
+  {
+    group: "Symbol Rating", key: "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", type: "number",
+    value: 5, default: 5, min: 1, max: 100, step: 1,
     description: null,
   },
   // ---- Risk Gate ----

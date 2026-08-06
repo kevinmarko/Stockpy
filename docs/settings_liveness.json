@@ -56,14 +56,14 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4018,
+      "line": 4033,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4123,
+      "line": 4138,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -1164,7 +1164,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4500",
+        "site": "api/pilots_api.py:4515",
         "via": []
       }
     ],
@@ -1175,7 +1175,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4499",
+        "site": "api/pilots_api.py:4514",
         "via": []
       }
     ],
@@ -1186,7 +1186,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4624",
+        "site": "api/pilots_api.py:4639",
         "via": []
       },
       {
@@ -1261,7 +1261,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4604",
+        "site": "api/pilots_api.py:4619",
         "via": []
       },
       {

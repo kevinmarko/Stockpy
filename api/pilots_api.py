@@ -3866,6 +3866,21 @@ _TUNABLE_GROUPS: List[tuple] = [
         ],
     ),
     (
+        # Tracked Universe auto-drop (rating/symbol_rating_store.py). SYMBOL_RATING_ENABLED
+        # gates whether a per-symbol rating is computed/persisted at all (diagnostic-only,
+        # default True). SYMBOL_RATING_AUTO_DROP_ENABLED is the actual trading-behavior
+        # switch -- default False, like every other live-trading-behavior flag in this
+        # codebase -- so flipping it here is a deliberate, visible operator action, not
+        # something that happens by editing .env in the dark.
+        "Symbol Rating",
+        [
+            ("SYMBOL_RATING_ENABLED", "bool", {}),
+            ("SYMBOL_RATING_BAD_SCORE_THRESHOLD", "float", {"min": 0.0, "max": 100.0, "step": 1.0}),
+            ("SYMBOL_RATING_AUTO_DROP_ENABLED", "bool", {}),
+            ("SYMBOL_RATING_DROP_THRESHOLD_CYCLES", "int", {"min": 1, "max": 100, "step": 1}),
+        ],
+    ),
+    (
         "Risk Gate",
         [
             ("MAX_CORRELATION", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
