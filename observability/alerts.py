@@ -468,7 +468,17 @@ def _send_discord(
             if resp.status not in (200, 204):
                 raise RuntimeError(f"Discord returned HTTP {resp.status}")
     except Exception as exc:
+        # Logged here for immediate visibility, then re-raised: callers
+        # (send_alert()'s per-channel dispatch loop, check_channel_health())
+        # depend on this propagating so *their* except blocks can record the
+        # failure (send_alert logs it at ERROR with channel context;
+        # check_channel_health reports {"ok": False, "error": ...} instead of
+        # silently claiming the channel is healthy). Swallowing here instead
+        # of re-raising previously made check_channel_health() — which
+        # backs scripts/preflight_check.py's pre-live readiness gate — always
+        # report Discord as reachable even when the webhook was broken.
         logger.warning("Discord webhook failed: %s", exc)
+        raise
 
 
 def _send_slack(
@@ -499,7 +509,11 @@ def _send_slack(
             if resp.status not in (200, 204):
                 raise RuntimeError(f"Slack returned HTTP {resp.status}")
     except Exception as exc:
+        # See _send_discord's matching comment: re-raise after logging so
+        # send_alert()/check_channel_health() keep seeing real failures
+        # instead of a channel that always reports healthy.
         logger.warning("Slack webhook failed: %s", exc)
+        raise
 
 
 def _send_email(

@@ -1,10 +1,10 @@
 {
   "meta": {
-    "git_commit": "3444d98d637a75c84bda4e338dd3c4f8c8e84a89",
+    "git_commit": "619d2a72f89eab73bff9bd9a0c6beb01135fcd4e",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
-    "total_fields": 328,
+    "total_fields": 333,
     "label_by_field": {
       "FRED_API_KEY": "str",
       "ALPACA_API_KEY": "Optional[str]",
@@ -333,14 +333,19 @@
       "FORECAST_BACKFILL_N_ESTIMATORS": "int",
       "FORECAST_BACKFILL_MAX_DEPTH": "int",
       "FORECAST_BACKFILL_RANDOM_STATE": "int",
-      "FORECAST_BACKFILL_CLASSIFIER_TYPE": "str"
+      "FORECAST_BACKFILL_CLASSIFIER_TYPE": "str",
+      "WATCHLIST": "str",
+      "GCLOUD_BIN": "str",
+      "GRAVITY_REQUIRE_NATIVE": "bool",
+      "QDRANT_COLLECTION": "str",
+      "QDRANT_URL": "str"
     },
     "counts_by_label": {
       "int": 93,
-      "bool": 89,
+      "bool": 90,
       "float": 57,
       "Optional[str]": 42,
-      "str": 34,
+      "str": 38,
       "list[str]": 7,
       "Path": 1,
       "dict[str, dict[str, float]]": 1,
@@ -770,7 +775,12 @@
       "FORECAST_BACKFILL_N_ESTIMATORS": 4021,
       "FORECAST_BACKFILL_MAX_DEPTH": 4025,
       "FORECAST_BACKFILL_RANDOM_STATE": 4029,
-      "FORECAST_BACKFILL_CLASSIFIER_TYPE": 4033
+      "FORECAST_BACKFILL_CLASSIFIER_TYPE": 4033,
+      "WATCHLIST": 4129,
+      "GCLOUD_BIN": 4133,
+      "GRAVITY_REQUIRE_NATIVE": 4137,
+      "QDRANT_COLLECTION": 4141,
+      "QDRANT_URL": 4145
     }
   },
   "env_io_lists": {
@@ -845,7 +855,7 @@
     "counts": {
       "SECRET": 37,
       "IN_ALLOWED_KEYS": 273,
-      "UNCLASSIFIED": 18
+      "UNCLASSIFIED": 23
     },
     "secret": [
       "ALERT_EMAIL_FROM",
@@ -1168,17 +1178,22 @@
       "BROKERAGE_REFRESH_ENABLED",
       "COMMAND_EXECUTION_ENABLED",
       "DEAD_LETTER_RETRY_ENABLED",
+      "GCLOUD_BIN",
       "GENERAL_SETTINGS_WRITES_ENABLED",
       "GRAVITY_AI_RUNNER_OUTPUT_PATH",
+      "GRAVITY_REQUIRE_NATIVE",
       "LLM_COMMENTARY_CACHE_PATH",
       "LLM_WRITES_ENABLED",
       "MACRO_GATE_WRITES_ENABLED",
       "OUTPUT_DIR",
       "PROMPT_CACHE_DIR",
       "PROMPT_REGISTRY_WRITES_ENABLED",
+      "QDRANT_COLLECTION",
+      "QDRANT_URL",
       "RAG_QUERY_API_ENABLED",
       "STRATEGY_WRITES_ENABLED",
       "SYNC_WATCHLIST_FILES",
+      "WATCHLIST",
       "WATCH_RULES_FILE"
     ],
     "unclassified_detail": [
@@ -1219,6 +1234,12 @@
         "description": "Enables POST /dead-letter/retry on the Pilots API (re-runs main.py for one dead-lettered symbol, advisory-only -- no orders). Off by default; also requires FOLLOW_API_TOKEN. Never GUI-writable -- h..."
       },
       {
+        "field": "GCLOUD_BIN",
+        "in_excluded_from_gui": false,
+        "settings_py_line": 4133,
+        "description": "Path to the gcloud binary for environment integrations."
+      },
+      {
         "field": "GENERAL_SETTINGS_WRITES_ENABLED",
         "in_excluded_from_gui": true,
         "settings_py_line": 3010,
@@ -1229,6 +1250,12 @@
         "in_excluded_from_gui": true,
         "settings_py_line": 3527,
         "description": "Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored."
+      },
+      {
+        "field": "GRAVITY_REQUIRE_NATIVE",
+        "in_excluded_from_gui": false,
+        "settings_py_line": 4137,
+        "description": "Require native implementation for Gravity Review Suite."
       },
       {
         "field": "LLM_COMMENTARY_CACHE_PATH",
@@ -1267,6 +1294,18 @@
         "description": "FAIL-CLOSED master switch for api/pilots_api.py's `PUT /prompts/pin` (pins/clears a prompt ID's PROMPT_REGISTRY_PINS entry -- changes WHICH PROMPT TEXT THE PLATFORM ACTUALLY RUNS, a real behavioral..."
       },
       {
+        "field": "QDRANT_COLLECTION",
+        "in_excluded_from_gui": false,
+        "settings_py_line": 4141,
+        "description": "Qdrant collection name for RAG orchestrator."
+      },
+      {
+        "field": "QDRANT_URL",
+        "in_excluded_from_gui": false,
+        "settings_py_line": 4145,
+        "description": "Qdrant URL for RAG orchestrator."
+      },
+      {
         "field": "RAG_QUERY_API_ENABLED",
         "in_excluded_from_gui": true,
         "settings_py_line": 3110,
@@ -1283,6 +1322,12 @@
         "in_excluded_from_gui": true,
         "settings_py_line": 1357,
         "description": "Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ..."
+      },
+      {
+        "field": "WATCHLIST",
+        "in_excluded_from_gui": false,
+        "settings_py_line": 4129,
+        "description": "Comma-separated list of symbols to always include in the universe."
       },
       {
         "field": "WATCH_RULES_FILE",
@@ -1311,7 +1356,13 @@
       "SYNC_WATCHLIST_FILES",
       "WATCH_RULES_FILE"
     ],
-    "unclassified_not_covered_anywhere": []
+    "unclassified_not_covered_anywhere": [
+      "GCLOUD_BIN",
+      "GRAVITY_REQUIRE_NATIVE",
+      "QDRANT_COLLECTION",
+      "QDRANT_URL",
+      "WATCHLIST"
+    ]
   },
   "secret_sanity": {
     "phantom_secret_keys": [
@@ -3326,9 +3377,10 @@
       ]
     },
     "form_d_os_environ": {
-      "total_reads": 16,
-      "distinct_fields": 13,
+      "total_reads": 24,
+      "distinct_fields": 18,
       "counts": {
+        "WATCHLIST": 4,
         "FINNHUB_RATE_LIMIT_PER_MIN": 2,
         "FUNDAMENTALS_CACHE_TTL_SECONDS": 2,
         "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS": 2,
@@ -3340,15 +3392,19 @@
         "ALERT_EMAIL_TO": 1,
         "ALERT_NTFY_TOPIC": 1,
         "ALERT_SLACK_WEBHOOK_URL": 1,
+        "GCLOUD_BIN": 1,
+        "GRAVITY_REQUIRE_NATIVE": 1,
         "LOG_LEVEL": 1,
-        "PROMPT_REGISTRY_SIGNING_KEY": 1
+        "PROMPT_REGISTRY_SIGNING_KEY": 1,
+        "QDRANT_COLLECTION": 1,
+        "QDRANT_URL": 1
       },
       "shapes": {
-        "os.environ.get()": 8,
+        "os.environ.get()": 16,
         "os.getenv()": 8
       }
     },
-    "fields_reached_by_any_form": 319,
+    "fields_reached_by_any_form": 324,
     "fields_only_via_b_or_d": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3437,12 +3493,14 @@
       "FORECAST_MODEL_PERSISTENCE_ENABLED",
       "FORECAST_PROPHET_WEIGHT",
       "FRED_KEY_ROTATED_DATE",
+      "GCLOUD_BIN",
       "GDELT_COOLDOWN_SECONDS",
       "GDELT_COOLDOWN_THRESHOLD",
       "GDELT_MAX_RETRIES",
       "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
       "GDELT_RETRY_BACKOFF_SECONDS",
       "GRAVITY_AI_RUNNER_ENABLED",
+      "GRAVITY_REQUIRE_NATIVE",
       "LLM_COMMENTARY_CACHE_PATH",
       "LLM_STATUS_MAX_AGE_HOURS",
       "MARKET_DATA_WS_ENABLED",
@@ -3458,6 +3516,8 @@
       "OPTIONS_MATRIX_ENABLED",
       "PAIRS_SNAPSHOT_ENABLED",
       "PAIRS_SNAPSHOT_MAX_PAIRS",
+      "QDRANT_COLLECTION",
+      "QDRANT_URL",
       "RAG_EMBEDDING_PROVIDER",
       "RAG_INDEX_LOOKBACK_DAYS",
       "RAG_INDEX_MAX_DOCUMENTS",
@@ -3469,9 +3529,10 @@
       "SECTOR_FORECAST_CONFIG_PATH",
       "SENTIMENT_LLM_VERIFICATION_ENABLED",
       "SENTIMENT_LLM_VERIFICATION_PROVIDER",
-      "VALIDATION_HARNESS_OOS_GATE_ENABLED"
+      "VALIDATION_HARNESS_OOS_GATE_ENABLED",
+      "WATCHLIST"
     ],
-    "fields_only_via_b_or_d_count": 120,
+    "fields_only_via_b_or_d_count": 125,
     "fields_only_via_b": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3594,7 +3655,12 @@
       "ALERT_EMAIL_SMTP_PORT",
       "ALERT_NTFY_TOPIC",
       "ALERT_SLACK_WEBHOOK_URL",
-      "FINNHUB_RATE_LIMIT_PER_MIN"
+      "FINNHUB_RATE_LIMIT_PER_MIN",
+      "GCLOUD_BIN",
+      "GRAVITY_REQUIRE_NATIVE",
+      "QDRANT_COLLECTION",
+      "QDRANT_URL",
+      "WATCHLIST"
     ],
     "fields_no_static_read": [
       "AI_GENERATION_API_ENABLED",
