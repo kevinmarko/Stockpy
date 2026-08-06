@@ -1460,9 +1460,9 @@ class TestObservabilitySummary:
         body = resp.json()
         assert set(body) == {
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
-            "forecast_skill", "risk_gate_blocks", "circuit_breakers",
-            "system_telemetry", "sizing_cap_audit", "etf_transmission",
-            "heartbeat", "strategy_pnl",
+            "forecast_skill", "forecast_skill_by_symbol", "risk_gate_blocks",
+            "circuit_breakers", "system_telemetry", "latency_heatmap",
+            "sizing_cap_audit", "etf_transmission", "heartbeat", "strategy_pnl",
         }
         # system_telemetry is a LIVE psutil sample (point-in-time, not read
         # from a cold-start fixture) -- psutil is a hard requirements.txt

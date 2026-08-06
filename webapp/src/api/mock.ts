@@ -53,6 +53,10 @@ import type {
   FollowResult,
   ForecastSkill,
   ForecastBackfillSummary,
+  ForecastSkillBySymbol,
+  ForecastSkillSymbolRow,
+  LatencyHeatmap,
+  LatencySample,
   Headline,
   Holding,
   IntervalUpdateResult,
@@ -4043,6 +4047,103 @@ function mockPortfolioForecastSkill(horizon: number): PortfolioForecastSkill {
   };
 }
 
+// Same symbol universe mockRiskGateBlocks/mockCircuitBreakers/
+// mockSizingCapEvents already use, so mock mode's cross-section stories stay
+// consistent (a cap event on NVDA, a risk-gate block on AMD -- and now a
+// forecast-skill row for each of them too).
+const FORECAST_SKILL_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "AMD"];
+
+function mockForecastSkillBySymbol(horizon: number): ForecastSkillBySymbol {
+  const models = ["arima", "monte_carlo", "holt_winters", "cnn_lstm"];
+  const rows: ForecastSkillSymbolRow[] = FORECAST_SKILL_SYMBOLS.map((symbol, i) => {
+    const rng = seeded(horizon * 7919 + symbol.charCodeAt(0) * 31 + i);
+    // One symbol (the last) is deliberately cold-start -- zero history yet,
+    // even though it's part of the requested universe -- to exercise the
+    // "never silently omit a requested symbol" rendering path in mock mode
+    // too, not just in the backend's own unit tests.
+    if (i === FORECAST_SKILL_SYMBOLS.length - 1) {
+      return { symbol, pending: 0, completed: 0, skill_weights: {} };
+    }
+    const raw = models.map(() => 0.1 + rng());
+    const tot = raw.reduce((a, b) => a + b, 0);
+    const skill_weights: Record<string, number> = {};
+    models.forEach((m, j) => (skill_weights[m] = +(raw[j] / tot).toFixed(3)));
+    return {
+      symbol,
+      pending: Math.floor(rng() * 4) + 1,
+      completed: Math.floor(rng() * 60) + 20,
+      skill_weights,
+    };
+  });
+  return { horizon_days: horizon, window_days: 180, min_obs: 30, rows, reason: null };
+}
+
+// The honest "no forecast history yet" degrade -- exported for the same
+// reason as mockSizingCapAuditDisabled/mockEtfTransmissionDisabled above:
+// Observability.test.tsx's COLD_START fixture pins to this canonical shape
+// rather than hand-rolling its own copy.
+export function mockForecastSkillBySymbolEmpty(): ForecastSkillBySymbol {
+  return {
+    horizon_days: 30,
+    window_days: 180,
+    min_obs: 30,
+    rows: [],
+    reason: "No forecast history yet — run the pipeline to accumulate it.",
+  };
+}
+
+// Mission Control's data-latency heatmap (market_data_latency.py's
+// in-process ring buffer). Tracking is OFF by default in real deployments
+// (MARKET_DATA_LATENCY_TRACKING_ENABLED=false) -- mockLatencyHeatmapDisabled
+// is the honest cold-start shape most operators will actually see; the
+// "on" fixture below is for exercising the populated-table rendering path
+// in mock mode.
+function mockLatencyHeatmap(): LatencyHeatmap {
+  const now = Date.now();
+  const rng = seeded(4242);
+  const rows: LatencySample[] = FORECAST_SKILL_SYMBOLS.map((symbol, i) => {
+    const latency = +(0.3 + rng() * (i === 1 ? 6 : 2)).toFixed(3); // MSFT deliberately slow
+    const quoteTs = new Date(now - (i + 1) * 90_000 - latency * 1000);
+    return {
+      symbol,
+      source: i % 2 === 0 ? "alpaca" : "yfinance",
+      quote_timestamp: quoteTs.toISOString(),
+      ingested_at: new Date(quoteTs.getTime() + latency * 1000).toISOString(),
+      latency_seconds: latency,
+      is_stale: latency > 3,
+    };
+  }).sort((a, b) => new Date(b.ingested_at).getTime() - new Date(a.ingested_at).getTime());
+  const latencies = rows.map((r) => r.latency_seconds).sort((a, b) => a - b);
+  const mid = latencies[Math.floor(latencies.length / 2)];
+  const worst = rows.reduce((w, r) => (r.latency_seconds > w.latency_seconds ? r : w));
+  return {
+    tracking_enabled: true,
+    count: rows.length,
+    p50: mid,
+    p95: latencies[latencies.length - 1],
+    worst_symbol: worst.symbol,
+    worst_p95: worst.latency_seconds,
+    rows,
+    reason: null,
+  };
+}
+
+// The honest "tracking disabled" degrade -- exported for the same reason as
+// the other mock*Disabled/*Empty helpers: Observability.test.tsx's
+// COLD_START fixture pins to this canonical shape.
+export function mockLatencyHeatmapDisabled(): LatencyHeatmap {
+  return {
+    tracking_enabled: false,
+    count: 0,
+    p50: null,
+    p95: null,
+    worst_symbol: null,
+    worst_p95: null,
+    rows: [],
+    reason: "MARKET_DATA_LATENCY_TRACKING_ENABLED is False — latency samples are not recorded this process.",
+  };
+}
+
 function mockRiskGateBlocks(): RiskGateBlockLog {
   const now = Date.now();
   const entries: RiskGateBlockEntry[] = [
@@ -4335,11 +4436,20 @@ function mockObservabilitySummary(range: PerfRange, horizon: number): Observabil
     equity_curve: mockEquityDrawdownCurve(range),
     regime: mockRegimeOverlay(),
     forecast_skill: mockPortfolioForecastSkill(horizon),
+    forecast_skill_by_symbol: readObservabilityColdStart()
+      ? mockForecastSkillBySymbolEmpty()
+      : mockForecastSkillBySymbol(horizon),
     risk_gate_blocks: mockRiskGateBlocks(),
     circuit_breakers: mockCircuitBreakers(),
     system_telemetry: readObservabilityColdStart()
       ? mockSystemTelemetryUnavailable()
       : mockSystemTelemetry(),
+    // Tracking defaults OFF in real deployments -- mock mode's cold-start
+    // toggle mirrors that as the "clean" state, matching every other
+    // opt-in-flag section here (sizing_cap_audit, etf_transmission).
+    latency_heatmap: readObservabilityColdStart()
+      ? mockLatencyHeatmapDisabled()
+      : mockLatencyHeatmap(),
     sizing_cap_audit: readObservabilityColdStart()
       ? mockSizingCapAuditDisabled()
       : mockSizingCapAuditTrail(),

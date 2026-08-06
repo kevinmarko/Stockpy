@@ -564,6 +564,167 @@ class TestPortfolioForecastSkill:
         assert out["skill_weights"] == {}
 
 
+def _snapshot_with_symbols(symbols):
+    return {"signals": [{"symbol": s} for s in symbols]}
+
+
+class TestForecastSkillBySymbol:
+    """forecast_skill_by_symbol_summary — the per-symbol x per-horizon
+    breakdown (rank 7 of the Mission Control research backlog). Same
+    cold-start/inverse-RMSE formula as TestPortfolioForecastSkill above,
+    just grouped one dimension further; these tests focus on the things that
+    ARE different: symbol extraction/dedup/cap, per-symbol independence, and
+    the "never omit a requested symbol" contract."""
+
+    def test_empty_snapshot_is_honest_empty(self):
+        out = obs.forecast_skill_by_symbol_summary(snapshot=None, horizon_days=30)
+        assert out["rows"] == []
+        assert out["reason"]
+
+    def test_tracker_unavailable_is_honest_empty(self):
+        with mock.patch(
+            "forecasting.forecast_tracker.ForecastTracker",
+            side_effect=RuntimeError("unavailable"),
+        ):
+            out = obs.forecast_skill_by_symbol_summary(
+                snapshot=_snapshot_with_symbols(["AAPL"]), horizon_days=30
+            )
+        assert out["rows"] == []
+        assert out["reason"]
+
+    def test_warm_path_computes_independent_weights_per_symbol(self, tmp_path):
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        rows = []
+        # AAPL: arima alone -> full weight 1.0.
+        for j in range(12):
+            ts = _iso(now - timedelta(days=5 + j))
+            rows.append(("AAPL", "arima", 30, ts, 100.0, 101.0, 1.0, ts))
+        # MSFT: arima clearly beats monte_carlo (lower MSE) -> arima gets the
+        # larger inverse-RMSE share, not an even split with AAPL's numbers.
+        for j in range(12):
+            ts = _iso(now - timedelta(days=5 + j))
+            rows.append(("MSFT", "arima", 30, ts, 100.0, 100.5, 0.25, ts))
+            rows.append(("MSFT", "monte_carlo", 30, ts, 100.0, 104.0, 16.0, ts))
+        _make_forecast_db(db_path, rows)
+
+        with mock.patch(
+            "forecasting.forecast_tracker.ForecastTracker",
+            side_effect=_tracker_factory_for(db_path),
+        ):
+            out = obs.forecast_skill_by_symbol_summary(
+                snapshot=_snapshot_with_symbols(["AAPL", "MSFT", "NVDA"]),
+                horizon_days=30,
+                window_days=90,
+                min_obs=10,
+            )
+
+        assert out["reason"] is None
+        by_symbol = {r["symbol"]: r for r in out["rows"]}
+        # Every requested symbol is present -- NVDA has zero DB rows but is
+        # never silently dropped from the table.
+        assert set(by_symbol) == {"AAPL", "MSFT", "NVDA"}
+
+        assert by_symbol["AAPL"]["completed"] == 12
+        assert by_symbol["AAPL"]["skill_weights"] == {"arima": pytest.approx(1.0)}
+
+        assert by_symbol["MSFT"]["completed"] == 24
+        assert by_symbol["MSFT"]["skill_weights"]["arima"] > by_symbol["MSFT"]["skill_weights"]["monte_carlo"]
+        assert sum(by_symbol["MSFT"]["skill_weights"].values()) == pytest.approx(1.0)
+
+        assert by_symbol["NVDA"] == {"symbol": "NVDA", "pending": 0, "completed": 0, "skill_weights": {}}
+
+    def test_cold_start_within_window_uses_equal_weights_per_symbol(self, tmp_path):
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        rows = []
+        for j in range(20):
+            ts = _iso(now - timedelta(days=5 + j))
+            rows.append(("AAPL", "arima", 30, ts, 100.0, 101.0, 1.0, ts))
+        for j in range(3):  # too few rows to clear min_obs
+            ts = _iso(now - timedelta(days=5 + j))
+            rows.append(("AAPL", "monte_carlo", 30, ts, 100.0, 102.0, 4.0, ts))
+        _make_forecast_db(db_path, rows)
+
+        with mock.patch(
+            "forecasting.forecast_tracker.ForecastTracker",
+            side_effect=_tracker_factory_for(db_path),
+        ):
+            out = obs.forecast_skill_by_symbol_summary(
+                snapshot=_snapshot_with_symbols(["AAPL"]),
+                horizon_days=30,
+                window_days=90,
+                min_obs=10,
+            )
+
+        row = out["rows"][0]
+        assert row["skill_weights"] == {"arima": pytest.approx(0.5), "monte_carlo": pytest.approx(0.5)}
+
+    def test_pending_counted_separately_and_per_symbol(self, tmp_path):
+        db_path = tmp_path / "forecasts.db"
+        ts = _iso(datetime.now(timezone.utc))
+        rows = [
+            ("AAPL", "arima", 30, ts, 100.0, None, None, ts),
+            ("AAPL", "arima", 30, ts, 100.0, None, None, ts),
+            ("MSFT", "arima", 30, ts, 100.0, None, None, ts),
+        ]
+        _make_forecast_db(db_path, rows)
+
+        with mock.patch(
+            "forecasting.forecast_tracker.ForecastTracker",
+            side_effect=_tracker_factory_for(db_path),
+        ):
+            out = obs.forecast_skill_by_symbol_summary(
+                snapshot=_snapshot_with_symbols(["AAPL", "MSFT"]), horizon_days=30
+            )
+
+        by_symbol = {r["symbol"]: r for r in out["rows"]}
+        assert by_symbol["AAPL"]["pending"] == 2
+        assert by_symbol["MSFT"]["pending"] == 1
+        assert by_symbol["AAPL"]["completed"] == 0
+
+    def test_symbols_are_deduped_and_capped_at_30(self, tmp_path):
+        db_path = tmp_path / "forecasts.db"
+        _make_forecast_db(db_path, [])
+        symbols = [f"SYM{i}" for i in range(35)] + ["SYM0"]  # 35 unique + 1 dup
+
+        with mock.patch(
+            "forecasting.forecast_tracker.ForecastTracker",
+            side_effect=_tracker_factory_for(db_path),
+        ):
+            out = obs.forecast_skill_by_symbol_summary(
+                snapshot=_snapshot_with_symbols(symbols), horizon_days=30
+            )
+
+        # No history at all -> honest empty, but the cap/dedup applies before
+        # that check runs; assert indirectly via a warm-path variant instead
+        # so we can actually observe which symbols were queried.
+        assert out["rows"] == []
+        assert out["reason"]
+
+    def test_symbol_cap_is_exactly_thirty_on_the_warm_path(self, tmp_path):
+        db_path = tmp_path / "forecasts.db"
+        now = datetime.now(timezone.utc)
+        symbols = [f"SYM{i}" for i in range(35)]
+        rows = []
+        for sym in symbols:  # give every symbol (including the 31st+) real history
+            for j in range(12):
+                ts = _iso(now - timedelta(days=5 + j))
+                rows.append((sym, "arima", 30, ts, 100.0, 101.0, 1.0, ts))
+        _make_forecast_db(db_path, rows)
+
+        with mock.patch(
+            "forecasting.forecast_tracker.ForecastTracker",
+            side_effect=_tracker_factory_for(db_path),
+        ):
+            out = obs.forecast_skill_by_symbol_summary(
+                snapshot=_snapshot_with_symbols(symbols), horizon_days=30, window_days=90, min_obs=10
+            )
+
+        assert len(out["rows"]) == 30
+        assert {r["symbol"] for r in out["rows"]} == set(symbols[:30])
+
+
 # ---------------------------------------------------------------------------
 # risk_gate_block_log
 # ---------------------------------------------------------------------------
@@ -788,6 +949,74 @@ class TestSystemTelemetrySummary:
 
 
 # ---------------------------------------------------------------------------
+# latency_heatmap_summary — market_data_latency.py's in-process ring buffer
+# ---------------------------------------------------------------------------
+
+
+class TestLatencyHeatmapSummary:
+    def test_tracking_disabled_is_honest_empty(self):
+        with mock.patch.object(settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", False):
+            out = obs.latency_heatmap_summary()
+        assert out["tracking_enabled"] is False
+        assert out["rows"] == []
+        assert out["count"] == 0
+        assert out["p50"] is None
+        assert out["reason"]
+
+    def test_tracking_enabled_but_no_samples_yet_is_honest_empty(self):
+        import market_data_latency
+
+        market_data_latency.get_ring().clear()
+        with mock.patch.object(settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
+            out = obs.latency_heatmap_summary()
+        assert out["tracking_enabled"] is True
+        assert out["rows"] == []
+        assert out["reason"]
+
+    def test_warm_path_surfaces_recorded_samples_newest_first(self):
+        import market_data_latency
+
+        market_data_latency.get_ring().clear()
+        now = datetime.now(timezone.utc)
+        market_data_latency.record_quote_latency("AAPL", "alpaca", now - timedelta(seconds=5), False)
+        market_data_latency.record_quote_latency("MSFT", "alpaca", now - timedelta(seconds=1), True)
+
+        with mock.patch.object(settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
+            out = obs.latency_heatmap_summary()
+
+        assert out["tracking_enabled"] is True
+        assert out["reason"] is None
+        assert out["count"] == 2
+        assert out["p50"] is not None
+        # Newest first.
+        assert out["rows"][0]["symbol"] == "MSFT"
+        assert out["rows"][1]["symbol"] == "AAPL"
+        assert out["rows"][1]["is_stale"] is False
+        assert out["rows"][0]["is_stale"] is True
+        assert out["worst_symbol"] == "AAPL"  # the older, higher-latency sample
+
+    def test_respects_limit(self):
+        import market_data_latency
+
+        market_data_latency.get_ring().clear()
+        now = datetime.now(timezone.utc)
+        for i in range(5):
+            market_data_latency.record_quote_latency(f"SYM{i}", "alpaca", now - timedelta(seconds=i), False)
+
+        with mock.patch.object(settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
+            out = obs.latency_heatmap_summary(limit=2)
+
+        assert len(out["rows"]) == 2
+
+    def test_module_import_failure_degrades_to_empty(self):
+        with mock.patch.object(settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
+            with mock.patch.dict("sys.modules", {"market_data_latency": None}):
+                out = obs.latency_heatmap_summary()
+        assert out["rows"] == []
+        assert out["reason"]
+
+
+# ---------------------------------------------------------------------------
 # log_aggregation — bounded, parsed tail of logs/investyo.log
 # ---------------------------------------------------------------------------
 
@@ -908,9 +1137,9 @@ class TestObservabilitySummary:
 
         assert set(out) == {
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
-            "forecast_skill", "risk_gate_blocks", "circuit_breakers",
-            "system_telemetry", "sizing_cap_audit", "etf_transmission",
-            "heartbeat", "strategy_pnl",
+            "forecast_skill", "forecast_skill_by_symbol", "risk_gate_blocks",
+            "circuit_breakers", "system_telemetry", "latency_heatmap",
+            "sizing_cap_audit", "etf_transmission", "heartbeat", "strategy_pnl",
         }
 
     def test_one_section_failure_never_blocks_the_others(self, tmp_path):

@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
-import type { Portfolio, PilotSummary, PerfRange, CurvePoint } from "../api/types";
+import type { Portfolio, PilotSummary, PerfRange, CurvePoint, ObservabilitySummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { ErrorState, Loading, Notice, Tile } from "../components/ui";
@@ -13,6 +13,7 @@ import { PerfLine, Sparkline } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
 import { theme } from "../theme";
 import { fmtUsd, fmtSignedUsd } from "../format";
+import { deriveAttentionItems } from "../observabilityAttention";
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -25,11 +26,24 @@ export function Dashboard() {
   );
   const pilots = useApi<PilotSummary[]>(() => api.listPilots(), []);
 
+  // Feeds the "needs attention" banner below — reuses the exact same
+  // GET /observability/summary + deriveAttentionItems() Mission Control
+  // itself renders (observabilityAttention.ts), so the two screens can never
+  // disagree about what's notable. range/horizon here don't affect any field
+  // deriveAttentionItems reads (only equity_curve/forecast_skill vary by
+  // those params), so the choice is arbitrary.
+  const obs = useApi<ObservabilitySummary>(() => api.getObservabilitySummary("1M", 30), []);
+  const attentionItems = useMemo(
+    () => (obs.data ? deriveAttentionItems(obs.data) : []),
+    [obs.data]
+  );
+
   useAutoPoll(
     () => {
       port.reload();
       equity.reload();
       pilots.reload();
+      obs.reload();
     },
     "dashboard",
     { hasError: port.error != null }
@@ -74,6 +88,36 @@ export function Dashboard() {
       </div>
 
       <TabGuide tabKey="dashboard" />
+
+      {/* Only rendered when something's actually notable — an all-clear
+          banner on the one screen already opened every session would just be
+          new noise (see the published Mission Control research: the whole
+          point of this pointer is giving that screen a reason to be opened,
+          not turning this one into a second copy of it). */}
+      {attentionItems.length > 0 && (
+        <Notice
+          variant="warn"
+          style={{ marginBottom: "var(--s-4)" }}
+          data-testid="dashboard-attention-banner"
+        >
+          {attentionItems.length} item{attentionItems.length === 1 ? "" : "s"} need
+          {attentionItems.length === 1 ? "s" : ""} attention —{" "}
+          <button
+            onClick={() => navigate("/observability")}
+            style={{
+              background: "none",
+              border: "none",
+              color: theme.accent,
+              cursor: "pointer",
+              textDecoration: "underline",
+              padding: 0,
+              font: "inherit",
+            }}
+          >
+            view in Mission Control →
+          </button>
+        </Notice>
+      )}
 
       <div className="dashboard-grid">
         {/* Portfolio Summary */}

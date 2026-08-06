@@ -1612,23 +1612,35 @@ def get_observability_summary(
     horizon: int = Query(30, ge=1, le=365),
 ) -> Dict[str, Any]:
     """Composite Mission-Control summary — the PWA's port of the retired
-    Streamlit Command Center's Observability tab (now ELEVEN sections):
+    Streamlit Command Center's Observability tab (now FOURTEEN sections):
     portfolio risk metrics (Sharpe/Calmar/MaxDD/MaxDD-duration/CAGR), the
     live portfolio heat (aggregate adverse open P&L vs. total equity, against
     ``MAX_PORTFOLIO_HEAT``), the account equity curve + drawdown, the current
     macro-regime overlay, the portfolio-wide forecast-skill reliability curve
-    + weights, the last ~100 risk-gate block-log entries, the merged
-    kill-switch + risk-gate-block circuit-breaker dashboard —
-    severity-classified, 24h-deduped trips with threshold/observed values
-    and a counts-by-severity KPI strip, ported from ``gui/panels
-    /gravity_audit.py::_render_circuit_breaker_dashboard`` via
+    + weights, the **per-symbol forecast-skill breakdown**
+    (``forecast_skill_by_symbol`` — pending/completed counts and inverse-RMSE
+    weights per symbol at the requested horizon, via a bulk SQL aggregate
+    over ``forecast_errors`` rather than the legacy panel's N-symbols
+    per-cell-round-trip loop; see ``pilots/observability.py
+    ::forecast_skill_by_symbol_summary``), the last ~100 risk-gate block-log
+    entries, the merged kill-switch + risk-gate-block circuit-breaker
+    dashboard — severity-classified, 24h-deduped trips with
+    threshold/observed values and a counts-by-severity KPI strip, ported from
+    ``gui/panels/gravity_audit.py::_render_circuit_breaker_dashboard`` via
     ``gui.circuit_breakers`` (see ``pilots/observability.py
     ::circuit_breaker_summary`` — no new endpoint, this rides the existing
     composite), host/process **system telemetry** (CPU/memory/disk
     %, load average, process RSS/CPU%/threads) via ``gui.observability_telemetry
     .collect_system_telemetry`` (see ``pilots/observability.py
     ::system_telemetry_summary`` — also rides the existing composite, since
-    it's a cheap, scalar-only, point-in-time sample), the durable **sizing
+    it's a cheap, scalar-only, point-in-time sample), the per-symbol **data
+    latency heatmap** (``latency_heatmap`` — quote fetch-to-ingestion latency,
+    recorded automatically by ``market_data_latency.py``'s in-process ring
+    buffer on every real ``CompositeProvider.get_latest_quote`` fetch, gated
+    behind ``MARKET_DATA_LATENCY_TRACKING_ENABLED`` (default ``False``); see
+    ``pilots/observability.py::latency_heatmap_summary``'s docstring for why
+    this is an honest REPLACEMENT for, not a literal port of, the legacy
+    panel's manual-trigger design), the durable **sizing
     cap-event audit trail** (``sizing_cap_audit``, reusing ``sizing
     .cap_audit_store.CapAuditStore`` directly), the **ETF volatility
     transmission** per-symbol diagnostic view (``etf_transmission``, reusing
@@ -1644,7 +1656,7 @@ def get_observability_summary(
     a separate ``GET /observability/logs`` endpoint below (see that
     endpoint's docstring for why it's not folded in here).
 
-    Composes ELEVEN independently-degrading sections (``pilots.observability
+    Composes FOURTEEN independently-degrading sections (``pilots.observability
     .observability_summary`` — see that module's docstring for the full
     per-section contract); one section's cold-start/failure never blocks the
     others, and every section carries its own honest ``reason`` when
@@ -1652,7 +1664,8 @@ def get_observability_summary(
     full history — Sharpe/CAGR need enough samples to be meaningful);
     ``horizon`` selects the forecast-skill horizon (10/30/60/90 are the
     horizons the pipeline actually forecasts, but any 1-365 is accepted
-    leniently, matching ``GET /symbols/{ticker}/forecast``). Never raises
+    leniently, matching ``GET /symbols/{ticker}/forecast`` — also selects the
+    per-symbol forecast-skill horizon above). Never raises
     (CONSTRAINT #6); never fabricates a metric (CONSTRAINT #4).
 
     Adds two API-layer fields to the ``regime`` section only (mirrors ``GET

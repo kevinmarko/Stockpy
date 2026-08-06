@@ -14,7 +14,9 @@ import { api } from "../api/client";
 import {
   mockEmptyLogAggregation,
   mockEtfTransmissionDisabled,
+  mockForecastSkillBySymbolEmpty,
   mockHeartbeatNoData,
+  mockLatencyHeatmapDisabled,
   mockSizingCapAuditDisabled,
   mockStrategyPnlEmpty,
   mockSystemTelemetryUnavailable,
@@ -74,7 +76,9 @@ const COLD_START: ObservabilitySummary = {
     completed: 0,
     reason: "No forecast history yet — run the pipeline to accumulate it.",
   },
+  forecast_skill_by_symbol: mockForecastSkillBySymbolEmpty(),
   risk_gate_blocks: { entries: [], count: 0, reason: "No risk-gate blocks logged yet." },
+  latency_heatmap: mockLatencyHeatmapDisabled(),
   circuit_breakers: {
     trips: [],
     counts: { critical: 0, warning: 0, total: 0 },
@@ -116,6 +120,14 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     expect(await screen.findByText("1.18")).toBeInTheDocument();
   });
 
+  it("collapses everything past portfolio risk/equity into a closed-by-default 'Background telemetry' disclosure", async () => {
+    renderScreen();
+    const details = await screen.findByTestId("background-telemetry");
+    expect(details.tagName).toBe("DETAILS");
+    expect((details as HTMLDetailsElement).open).toBe(false);
+    expect(await screen.findByText(/Background telemetry/)).toBeInTheDocument();
+  });
+
   it("renders the portfolio heat tile from the mock", async () => {
     renderScreen();
     expect(await screen.findByText("Portfolio heat")).toBeInTheDocument();
@@ -155,6 +167,47 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     expect(await screen.findByText("Forecast skill")).toBeInTheDocument();
     expect((await screen.findAllByText("arima")).length).toBeGreaterThan(0);
     expect((await screen.findAllByText("monte_carlo")).length).toBeGreaterThan(0);
+  });
+
+  it("renders one forecast-skill-by-symbol row per symbol from the mock, including a zero-history symbol never dropped", async () => {
+    renderScreen();
+    expect(await screen.findByText("Forecast skill by symbol")).toBeInTheDocument();
+    const rows = (await screen.findAllByTestId("forecast-skill-symbol-row")) as HTMLTableRowElement[];
+    // mock.ts's FORECAST_SKILL_SYMBOLS: AAPL, MSFT, NVDA, TSLA, AMD.
+    expect(rows.length).toBe(5);
+    const bySymbol = Object.fromEntries(rows.map((r) => [r.cells[0].textContent, r]));
+    expect(bySymbol.AAPL.cells[3].textContent).not.toBe("—"); // has a top model
+    // The mock's last symbol (AMD) is the deliberately cold-start one.
+    expect(bySymbol.AMD.cells[1].textContent).toBe("0");
+    expect(bySymbol.AMD.cells[2].textContent).toBe("0");
+    expect(bySymbol.AMD.cells[3].textContent).toBe("—");
+  });
+
+  it("a disabled forecast-skill-by-symbol section renders the honest reason, never a fabricated table", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(screen.queryByTestId("forecast-skill-symbol-row")).not.toBeInTheDocument();
+  });
+
+  it("renders the data-latency heatmap rows and KPI strip from the mock", async () => {
+    renderScreen();
+    expect(await screen.findByText("Data latency")).toBeInTheDocument();
+    const rows = await screen.findAllByTestId("latency-sample-row");
+    expect(rows.length).toBe(5); // mock.ts's FORECAST_SKILL_SYMBOLS
+    expect(await screen.findByText("Worst symbol")).toBeInTheDocument();
+    // mock.ts deliberately makes MSFT the slow one (is_stale, latency > 3s).
+    expect((await screen.findAllByText("stale")).length).toBeGreaterThan(0);
+  });
+
+  it("tracking disabled (the real default) renders the honest reason, never a fabricated table", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(
+      await screen.findByText(
+        "MARKET_DATA_LATENCY_TRACKING_ENABLED is False — latency samples are not recorded this process."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("latency-sample-row")).not.toBeInTheDocument();
   });
 
   it("renders the risk-gate block log entries from the mock", async () => {
@@ -221,10 +274,12 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     // Regime section shows its cold-start reason instead of fabricated badges.
     expect(screen.getByText("No state snapshot yet — run the pipeline first.")).toBeInTheDocument();
 
-    // Forecast skill and risk-gate block log both degrade honestly too.
+    // Forecast skill (both the portfolio-wide AND per-symbol sections
+    // legitimately share this exact reason string) and risk-gate block log
+    // both degrade honestly too.
     expect(
-      screen.getByText("No forecast history yet — run the pipeline to accumulate it.")
-    ).toBeInTheDocument();
+      screen.getAllByText("No forecast history yet — run the pipeline to accumulate it.")
+    ).toHaveLength(2);
     expect(screen.getByText("No risk-gate blocks logged yet.")).toBeInTheDocument();
 
     // System telemetry: psutil unavailable -> honest reason, no fabricated
@@ -447,6 +502,43 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
       await screen.findByText("No closed trades in the transactions store yet.")
     ).toBeInTheDocument();
     expect(screen.queryByTestId("strategy-pnl-row")).not.toBeInTheDocument();
+  });
+});
+
+describe("Observability (Mission Control) screen — attention strip", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("surfaces the mock's real notable conditions (1 critical + 2 warning circuit breakers, 2 risk-gate blocks)", async () => {
+    renderScreen();
+    expect(await screen.findByTestId("attention-strip")).toBeInTheDocument();
+    const items = await screen.findAllByTestId("attention-item");
+    const labels = items.map((el) => el.textContent);
+    expect(labels.some((t) => t?.includes("1 critical circuit breaker tripped"))).toBe(true);
+    expect(labels.some((t) => t?.includes("2 circuit breaker warnings"))).toBe(true);
+    expect(labels.some((t) => t?.includes("2 orders blocked by the risk gate"))).toBe(true);
+    // Never fabricated: the mock's sizing-cap events are kelly_cap/null/
+    // portfolio_gross, not "escalation" -- no sizing-cap item should appear.
+    expect(labels.some((t) => t?.includes("sizing-cap"))).toBe(false);
+  });
+
+  it("clicking an item scrolls to that section's anchor", async () => {
+    const scrollIntoViewSpy = vi.fn();
+    // jsdom implements no real layout and defines no scrollIntoView at all
+    // (see AIChatInterface.tsx's identical guard) -- stub it to observe the call.
+    Element.prototype.scrollIntoView = scrollIntoViewSpy;
+    const user = userEvent.setup();
+    renderScreen();
+    const items = await screen.findAllByTestId("attention-item");
+    await user.click(items[0]);
+    expect(scrollIntoViewSpy).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+  });
+
+  it("a fully cold-start summary (zero counts everywhere) renders an honest 'All clear', never a fabricated warning", async () => {
+    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
+    renderScreen();
+    expect(await screen.findByTestId("attention-strip-clear")).toBeInTheDocument();
+    expect(await screen.findByText("✓ All clear")).toBeInTheDocument();
+    expect(screen.queryByTestId("attention-strip")).not.toBeInTheDocument();
   });
 });
 
