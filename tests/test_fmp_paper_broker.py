@@ -18,14 +18,14 @@ from execution.kill_switch import GlobalKillSwitch
 
 
 def _intent(**overrides):
-    defaults = dict(
-        strategy_id="test_strat",
-        symbol="AAPL",
-        side=OrderSide.BUY,
-        qty=10.0,
-        order_type=OrderType.MARKET,
-        client_order_id="test_order_1",
-    )
+    defaults = {
+        "strategy_id": "test_strat",
+        "symbol": "AAPL",
+        "side": OrderSide.BUY,
+        "qty": 10.0,
+        "order_type": OrderType.MARKET,
+        "client_order_id": "test_order_1",
+    }
     defaults.update(overrides)
     return OrderIntent(**defaults)
 
@@ -70,6 +70,75 @@ def test_submit_order_invalid_price_is_rejected():
 
     assert result.status == OrderStatus.ERROR
     assert "invalid price" in result.error_message.lower()
+
+
+def test_submit_order_rejects_multi_leg_options_orders():
+    # A single-symbol FMP quote cannot honestly price a spread/condor --
+    # V1 rejects rather than silently mis-filling it.
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    intent = _intent(legs=[{"symbol": "AAPL240119C00150000", "ratio_qty": 1.0, "side": OrderSide.BUY}])
+    with patch("data.fmp_client.quote") as mock_quote:
+        result = asyncio.run(broker.submit_order(intent))
+        mock_quote.assert_not_called()
+
+    assert result.status == OrderStatus.REJECTED
+    assert "multi-leg" in result.error_message.lower()
+
+
+def test_submit_order_rejects_non_positive_quantity():
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    with patch("data.fmp_client.quote") as mock_quote:
+        result = asyncio.run(broker.submit_order(_intent(qty=0.0)))
+        mock_quote.assert_not_called()
+
+    assert result.status == OrderStatus.REJECTED
+    assert "invalid order quantity" in result.error_message.lower()
+
+
+def test_submit_order_marketable_limit_buy_fills_at_quote():
+    # BUY limit at $160, quote is $150 -- already marketable (better than
+    # asked), fills for real like a real broker's price improvement.
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    intent = _intent(order_type=OrderType.LIMIT, limit_price=160.0)
+    with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+        result = asyncio.run(broker.submit_order(intent))
+
+    assert result.status == OrderStatus.FILLED
+    assert result.filled_avg_price == 150.0
+
+
+def test_submit_order_unmarketable_limit_buy_is_rejected_not_mis_filled():
+    # BUY limit at $100, quote is $150 -- not marketable. V1 has no
+    # resting-order book, so this must be an honest rejection, never a
+    # fill at a price the order never asked for.
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    intent = _intent(order_type=OrderType.LIMIT, limit_price=100.0)
+    with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+        result = asyncio.run(broker.submit_order(intent))
+
+    assert result.status == OrderStatus.REJECTED
+    assert "not marketable" in result.error_message.lower()
+
+
+def test_submit_order_unmarketable_limit_sell_is_rejected():
+    # SELL limit at $160, quote is $150 -- asking for more than the market
+    # will pay right now, not marketable.
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    intent = _intent(side=OrderSide.SELL, order_type=OrderType.LIMIT, limit_price=160.0)
+    with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+        result = asyncio.run(broker.submit_order(intent))
+
+    assert result.status == OrderStatus.REJECTED
+
+
+def test_submit_order_limit_missing_limit_price_is_rejected():
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    intent = _intent(order_type=OrderType.LIMIT, limit_price=None)
+    with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+        result = asyncio.run(broker.submit_order(intent))
+
+    assert result.status == OrderStatus.REJECTED
+    assert "limit_price" in result.error_message.lower()
 
 
 def test_submit_order_insufficient_funds():

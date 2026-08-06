@@ -4,6 +4,19 @@ InvestYo Quant Platform - FMP Paper Broker
 Paper trading backend using Financial Modeling Prep (FMP) quotes and a local
 SQLite store for cash/position tracking. Uses `TieredCostModel` to enforce
 realistic commissions, bid-ask spread, slippage, and regulatory fees.
+
+V1 scope (matches main_orchestrator.py's only production caller, which
+submits equity market orders exclusively):
+  - Market orders: instant fill-or-fail at the current FMP quote.
+  - Limit orders: instant fill-or-REJECT -- filled at the quote price only
+    if it's already marketable against the limit (immediately executable);
+    otherwise rejected. There is no resting-order book, so an unmarketable
+    limit order can never later fill on its own -- rejecting it is the
+    honest outcome, not silently filling at a price the order didn't ask
+    for and not silently accepting an order that will sit forever.
+  - Multi-leg options orders (OrderIntent.legs non-empty): rejected. A
+    single-symbol FMP quote cannot honestly price a spread/condor; faking
+    one from an equity quote would be fabricated data (CONSTRAINT #4).
 """
 
 import asyncio
@@ -17,6 +30,7 @@ from execution.broker_base import (
     OrderResult,
     OrderStatus,
     OrderSide,
+    OrderType,
     AccountSnapshot,
     PositionSnapshot,
     TradeUpdateEvent
@@ -44,28 +58,64 @@ class FMPPaperBroker(BrokerBase):
             )
 
         client_order_id = intent.client_order_id or "unknown"
-        
-        # 1. Fetch live quote
+
+        # 1. Reject what this broker cannot honestly simulate (see module
+        # docstring) instead of silently mis-filling it.
+        if intent.legs:
+            return self._error_result(
+                client_order_id,
+                "FMPPaperBroker does not support multi-leg options orders in V1 "
+                "(a single-symbol quote cannot honestly price a spread/condor)",
+                OrderStatus.REJECTED,
+            )
+        if intent.qty <= 0:
+            return self._error_result(
+                client_order_id, f"Invalid order quantity {intent.qty}", OrderStatus.REJECTED
+            )
+
+        # 2. Fetch live quote
         try:
             # quote() returns a list of dicts, e.g. [{"symbol": "AAPL", "price": 150.0, "marketCap": 2e9}]
             resp = fmp_client.quote(intent.symbol)
             if not resp or not isinstance(resp, list):
                 logger.error(f"FMPPaperBroker: Empty or invalid quote for {intent.symbol}")
                 return self._error_result(client_order_id, "Quote not found or invalid format")
-            
+
             quote_data = resp[0]
             raw_price = float(quote_data.get("price", 0.0))
             if raw_price <= 0:
                 logger.error(f"FMPPaperBroker: Invalid price {raw_price} for {intent.symbol}")
                 return self._error_result(client_order_id, f"Invalid price {raw_price}")
-                
+
             market_cap = float(quote_data.get("marketCap", 0.0))
-            
+
         except Exception as e:
             logger.error(f"FMPPaperBroker: Failed to fetch quote for {intent.symbol}: {e}")
             return self._error_result(client_order_id, f"FMP quote failed: {e}")
 
-        # 2. Calculate execution costs
+        # 3. Limit orders: no resting-order book in V1, so an order that
+        # isn't marketable RIGHT NOW against the current quote is honestly
+        # rejected rather than silently filled at a price the order never
+        # asked for, or silently accepted and left to sit forever.
+        if intent.order_type == OrderType.LIMIT:
+            if intent.limit_price is None:
+                return self._error_result(
+                    client_order_id, "LIMIT order missing limit_price", OrderStatus.REJECTED
+                )
+            marketable = (
+                raw_price <= intent.limit_price
+                if intent.side == OrderSide.BUY
+                else raw_price >= intent.limit_price
+            )
+            if not marketable:
+                return self._error_result(
+                    client_order_id,
+                    f"Limit price {intent.limit_price} not marketable at current quote "
+                    f"{raw_price} (FMPPaperBroker has no resting-order book in V1)",
+                    OrderStatus.REJECTED,
+                )
+
+        # 4. Calculate execution costs
         costs = self.cost_model.calculate_cost(
             side=intent.side.value,
             shares=intent.qty,
@@ -83,7 +133,7 @@ class FMPPaperBroker(BrokerBase):
         commission_and_fees = total_cost_dollars
         fill_price = raw_price
         
-        # 3. Apply Fill
+        # 5. Apply Fill
         success = self.store.apply_fill(
             client_order_id=client_order_id,
             symbol=intent.symbol,
@@ -97,7 +147,7 @@ class FMPPaperBroker(BrokerBase):
         if not success:
             return self._error_result(client_order_id, "Insufficient funds or inventory", OrderStatus.REJECTED)
             
-        # 4. Result and Stream Event
+        # 6. Result and Stream Event
         broker_order_id = f"FMP-{client_order_id}"
         now = datetime.now(timezone.utc)
         
