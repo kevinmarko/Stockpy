@@ -168,20 +168,28 @@ class AgenticForecastBackfiller:
 
         # Fallback if zero real data returned
         still_missing = [t for t in self.tickers if t not in price_dict or price_dict[t].empty]
+
+        # Record fetch outcomes for the 3-strike permanent-removal rule
+        # (pilots.watchlist_writer.record_fetch_failures) unconditionally --
+        # not only when this run had a miss -- so a ticker that succeeds
+        # resets its strike counter to zero even on a run where every OTHER
+        # ticker failed. Without this, "3 consecutive failures" silently
+        # degrades into "3 failures ever", since a stale strike from weeks
+        # ago would never be cleared by a later success.
+        succeeded = [t for t in self.tickers if t not in still_missing]
+        try:
+            from pilots.watchlist_writer import record_fetch_failures
+            permanently_removed = record_fetch_failures(still_missing, succeeded_symbols=succeeded)
+            if permanently_removed:
+                logger.warning(
+                    "Permanently removed %d ticker(s) from watchlist.txt due to 3 consecutive failures: %s",
+                    len(permanently_removed), permanently_removed,
+                )
+        except Exception as exc:
+            logger.warning("Failed to record fetch failures or update watchlist.txt: %s", exc)
+
         if still_missing:
             self.dropped_tickers = list(still_missing)
-            
-            try:
-                from pilots.watchlist_writer import record_fetch_failures
-                permanently_removed = record_fetch_failures(still_missing)
-                if permanently_removed:
-                    logger.warning(
-                        "Permanently removed %d ticker(s) from watchlist.txt due to 3 consecutive failures: %s",
-                        len(permanently_removed), permanently_removed
-                    )
-            except Exception as exc:
-                logger.warning("Failed to record fetch failures or update watchlist.txt: %s", exc)
-
             logger.warning(
                 "No real data (FMP nor CompositeProvider) for %d ticker(s) — "
                 "dropping them from the current run: %s.",

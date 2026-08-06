@@ -1,12 +1,19 @@
-"""Append operator-named tickers to ``watchlist.txt`` so the advisory pipeline
-starts tracking them.
+"""Append/remove operator-named tickers in ``watchlist.txt`` so the advisory
+pipeline starts (or stops) tracking them.
 
 Backs the Agentic Trading tab's Discovery "Watch" action: an operator taps a
-discovered candidate and this appends it to ``watchlist.txt``, the same file
-``main._load_watchlist()`` reads when building the evaluation universe. It is
-the programmatic equivalent of the ``agentic-discovery`` skill's step-7
-"track a candidate" flow (see that skill's docstring) — same file, same
-uppercase/dedup/audit-comment conventions — so the two paths never diverge.
+discovered candidate and ``append_symbols`` appends it to ``watchlist.txt``,
+the same file ``main._load_watchlist()`` reads when building the evaluation
+universe. It is the programmatic equivalent of the ``agentic-discovery``
+skill's step-7 "track a candidate" flow (see that skill's docstring) — same
+file, same uppercase/dedup/audit-comment conventions — so the two paths never
+diverge.
+
+``remove_symbols``/``record_fetch_failures`` are the other direction: the
+3-strike rule ``ml/forecast_backfill.py`` uses to permanently drop a ticker
+that neither FMP nor the fallback provider has been able to fetch data for
+across 3 consecutive fetch cycles, tracked in a sibling
+``watchlist_failures.json`` counter file next to ``watchlist.txt``.
 
 Design constraints (mirrors :mod:`pilots.scan_config_store` /
 :mod:`pilots.follows_store`):
@@ -187,32 +194,39 @@ def append_symbols(
 def remove_symbols(
     symbols: List[str],
     path: Optional[Path] = None,
-) -> None:
-    """Remove *symbols* from ``watchlist.txt``.
-    Ignores them if they aren't in the file.
+) -> List[str]:
+    """Remove *symbols* from ``watchlist.txt``, preserving every comment and
+    blank line. Symbols not present in the file are silently ignored.
+
+    Returns the (normalized, deduped) subset of *symbols* that was actually
+    present and removed — never a fabricated success for a no-op write
+    (CONSTRAINT #4). A missing file or an empty/all-blank *symbols* list is
+    also a no-op and returns ``[]``.
     """
     target = path if path is not None else DEFAULT_WATCHLIST_PATH
-    if not target.exists():
-        return
-
-    normalized = {_normalize(sym) for sym in symbols}
-    if not normalized:
-        return
+    normalized = {_normalize(sym) for sym in symbols if _normalize(sym)}
+    if not target.exists() or not normalized:
+        return []
 
     lines = target.read_text(encoding="utf-8").splitlines()
     new_lines = []
+    removed: set = set()
     for line in lines:
         stripped = line.strip()
-        if stripped and not stripped.startswith("#"):
-            if stripped.upper() in normalized:
-                continue
+        if stripped and not stripped.startswith("#") and stripped.upper() in normalized:
+            removed.add(stripped.upper())
+            continue
         new_lines.append(line)
+
+    if not removed:
+        return []
 
     # Write back, ensure trailing newline
     content = "\n".join(new_lines)
     if content:
         content += "\n"
     target.write_text(content, encoding="utf-8")
+    return sorted(removed)
 
 
 def record_fetch_failures(
@@ -220,39 +234,83 @@ def record_fetch_failures(
     max_failures: int = 3,
     watchlist_path: Optional[Path] = None,
     failure_file_path: Optional[Path] = None,
+    succeeded_symbols: Optional[List[str]] = None,
 ) -> List[str]:
-    """Record fetch failures for symbols and drop them from the watchlist
-    if they hit `max_failures`.
+    """Record a fetch-failure "strike" for each of *symbols* and permanently
+    drop any that reach *max_failures* CONSECUTIVE failures from
+    ``watchlist.txt`` (the 3-strike rule).
+
+    ``succeeded_symbols`` — tickers that DID return real data in the same
+    fetch cycle — reset their strike counter to zero first, in the same
+    read-modify-write pass. Without this, a ticker that fails once, then
+    succeeds for weeks, then fails again would resume counting from its old
+    strike total instead of starting over, silently turning "3 consecutive
+    failures" into "3 failures ever" and removing a ticker that is mostly
+    healthy. Pass the full set of tickers that were actually attempted this
+    cycle (both hits and misses) so counters stay accurate either way.
+
+    Returns the (normalized) list of symbols permanently removed this call.
+    Never raises — a corrupt/unreadable ``watchlist_failures.json`` resets to
+    an empty counter (logged) rather than blocking the pipeline, matching
+    this module's dead-letter-resilience convention elsewhere.
     """
-    if not symbols:
+    if not symbols and not succeeded_symbols:
         return []
 
     target_watchlist = watchlist_path if watchlist_path is not None else DEFAULT_WATCHLIST_PATH
-    target_failures = failure_file_path if failure_file_path is not None else target_watchlist.parent / "watchlist_failures.json"
+    target_failures = (
+        failure_file_path if failure_file_path is not None
+        else target_watchlist.parent / "watchlist_failures.json"
+    )
 
     # Load existing failures
-    failures = {}
+    failures: dict = {}
     if target_failures.exists():
         try:
-            failures = json.loads(target_failures.read_text(encoding="utf-8"))
+            loaded = json.loads(target_failures.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                failures = loaded
+            else:
+                logger.warning("watchlist_failures.json is not a JSON object, resetting.")
         except Exception:
             logger.warning("Failed to parse watchlist_failures.json, resetting.")
-            failures = {}
 
-    dropped_symbols = []
+    changed = False
+    for sym in succeeded_symbols or []:
+        normalized_sym = _normalize(sym)
+        if normalized_sym and failures.pop(normalized_sym, None) is not None:
+            changed = True
+
+    dropped_symbols: List[str] = []
     for sym in symbols:
         normalized_sym = _normalize(sym)
+        if not normalized_sym:
+            continue
         failures[normalized_sym] = failures.get(normalized_sym, 0) + 1
-        
+        changed = True
+
         if failures[normalized_sym] >= max_failures:
             dropped_symbols.append(normalized_sym)
             del failures[normalized_sym]
 
-    # Save updated failures
-    target_failures.write_text(json.dumps(failures, indent=2), encoding="utf-8")
+    if changed:
+        target_failures.parent.mkdir(parents=True, exist_ok=True)
+        target_failures.write_text(json.dumps(failures, indent=2, sort_keys=True), encoding="utf-8")
 
-    # Actually remove the dropped symbols
+    # Actually remove the dropped symbols. Removing from watchlist.txt is
+    # silently ineffective while the WATCHLIST env var is set (it takes
+    # precedence over the file — see main._load_watchlist()); still perform
+    # the removal for consistency, but say so, matching this module's
+    # append_symbols honesty convention for the same precedence rule.
     if dropped_symbols:
-        remove_symbols(dropped_symbols, path=target_watchlist)
+        removed = remove_symbols(dropped_symbols, path=target_watchlist)
+        if os.environ.get("WATCHLIST", "").strip():
+            logger.warning(
+                "Removed %s from watchlist.txt after %d consecutive fetch "
+                "failures, but the WATCHLIST env var is set and takes "
+                "precedence — the pipeline will keep evaluating these "
+                "symbols until WATCHLIST is updated too.",
+                removed, max_failures,
+            )
 
     return dropped_symbols

@@ -5,8 +5,10 @@ secrets.py
 .env.bak*
 .env.*.bak
 
-# Operator-local ticker list (personal, not shared codebase state)
+# Operator-local ticker list (personal, not shared codebase state), plus its
+# 3-strike fetch-failure counter (pilots/watchlist_writer.py)
 watchlist.txt
+watchlist_failures.json
 
 # Python caching
 __pycache__/
