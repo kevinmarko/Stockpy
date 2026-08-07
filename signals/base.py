@@ -101,6 +101,11 @@ class SignalOutput:
     confidence: float      # Sizing probability/reliability metric in [0.0, 1.0]
     explanation: str       # Rationale log for verbose explainer notes
     meta_label_proba: float = 1.0  # Stage 4 meta-label placeholder (default=1.0, no-op)
+    # Standardized Primary Signal Payload for Meta-Labeling Backfills:
+    model_id: str = ""     # Strategy / Model ID
+    raw_signal: int = 0    # Direction vector S_t in {-1, 0, 1}
+    horizon_days: Optional[List[int]] = None # Target multi-horizon windows (e.g. [10, 30, 60, 90])
+    market_features: Optional[Dict[str, float]] = None # Regime indicators, volatility, etc.
 
 
 class SignalModule(ABC):
@@ -120,6 +125,13 @@ class SignalModule(ABC):
 
     name: str = ""
     required_features: List[str] = []
+    
+    # Meta-labeling schema definitions
+    # Subclasses should override these if they support meta-labeling training.
+    # Defines the specific features this strategy needs to train its meta-labeler,
+    # and the horizons it predicts for.
+    meta_label_features: List[str] = []
+    meta_label_horizons: List[int] = [10, 30, 60, 90]
 
     def is_active_in_regime(self, macro: MacroEconomicDTO) -> bool:
         """Whether this module should contribute to the aggregate score this cycle.

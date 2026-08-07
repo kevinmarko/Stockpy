@@ -1019,6 +1019,12 @@ def test_garch_and_edge_scoring(monkeypatch):
     monkeypatch.setattr(
         settings, "SIGNAL_WEIGHTS", type(settings)(_env_file=None).SIGNAL_WEIGHTS
     )
+    
+    # Force meta-labeling to pass through during testing so it doesn't zero out the Kelly Target
+    class DummyMetaRegistry:
+        def has(self, name): return True
+        def get_proba(self, name, df): return 1.0
+    monkeypatch.setattr("ml.meta_labeling.global_meta_registry", DummyMetaRegistry())
 
     # Inject an in-memory store so this test's Kelly-sizing assertions are
     # deterministic regardless of how many real closed trades exist in the live

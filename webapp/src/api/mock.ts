@@ -7610,7 +7610,7 @@ export const mockApi = {
   async getForecastBackfill() {
     return delay(mockForecastBackfill());
   },
-  async runForecastBackfill() {
+  async runForecastBackfill(_params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean; strategy_ids?: string[]; theta_c?: number }) {
     return delay({
       status: "success",
       summary: mockForecastBackfill(),

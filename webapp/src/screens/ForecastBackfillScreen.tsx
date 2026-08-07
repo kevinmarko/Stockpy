@@ -16,6 +16,11 @@ export function ForecastBackfillScreen() {
 
   const [running, setRunning] = useState(false);
   const [runMessage, setRunMessage] = useState<string | null>(null);
+  const [selectedStrategies, setSelectedStrategies] = useState<string[]>([]);
+  const [thetaC, setThetaC] = useState<number>(0.50);
+  
+  const allStrategies = ["timeseries_momentum", "cross_sectional_momentum", "rsi2_mean_reversion", "pairs_trading", "macro_regime_pit"];
+
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
@@ -23,7 +28,11 @@ export function ForecastBackfillScreen() {
     setRunning(true);
     setRunMessage("Running forecast backfill & meta-labeling training cycle...");
     try {
-      const res = await api.runForecastBackfill();
+      const params = {
+        strategy_ids: selectedStrategies.length > 0 ? selectedStrategies : undefined,
+        theta_c: thetaC
+      };
+      const res = await api.runForecastBackfill(params);
       setRunMessage(`Success! Processed ${res.sample_rows} historical rows across horizons.`);
       await reload();
     } catch (err: any) {
@@ -34,7 +43,16 @@ export function ForecastBackfillScreen() {
   };
 
   const metrics = data?.metrics || {};
-  const modelKeys = Object.keys(metrics).sort();
+  let modelKeys = Object.keys(metrics).sort((a, b) => {
+    // Sort active (proven) models first
+    const aActive = metrics[a]?.is_active ? 1 : 0;
+    const bActive = metrics[b]?.is_active ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+    return a.localeCompare(b);
+  });
+  if (selectedStrategies.length > 0) {
+    modelKeys = modelKeys.filter(key => selectedStrategies.some(s => key.startsWith(s)));
+  }
 
   return (
     <div className="screen">
@@ -42,14 +60,28 @@ export function ForecastBackfillScreen() {
         <button className="btn btn-ghost" onClick={back} type="button">
           ← Back
         </button>
-        <button
-          className="btn btn-primary"
-          onClick={() => void handleRunBackfill()}
-          disabled={running}
-          type="button"
-        >
-          {running ? "🔄 Processing..." : "🚀 Run Forecast Backfill"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-4)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+            <label style={{ fontSize: "14px", fontWeight: 600 }}>
+              θ<sub>c</sub>: {thetaC.toFixed(2)}
+            </label>
+            <input 
+              type="range" 
+              min="0" max="1" step="0.05" 
+              value={thetaC} 
+              onChange={e => setThetaC(parseFloat(e.target.value))}
+              disabled={running}
+            />
+          </div>
+          <button
+            className="btn btn-primary"
+            onClick={() => void handleRunBackfill()}
+            disabled={running}
+            type="button"
+          >
+            {running ? "🔄 Processing..." : "🚀 Run Forecast Backfill"}
+          </button>
+        </div>
       </div>
 
       <header style={{ marginBottom: "var(--s-4)" }}>
@@ -119,8 +151,29 @@ export function ForecastBackfillScreen() {
           </section>
 
           <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-            <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", marginBottom: "var(--s-3)" }}>
-              Trained Meta-Labelers Performance (8 Models)
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)" }}>
+              <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>
+                Trained Meta-Labelers Performance
+              </div>
+              <select 
+                multiple 
+                value={selectedStrategies} 
+                onChange={e => setSelectedStrategies(Array.from(e.target.selectedOptions, option => option.value))}
+                style={{ 
+                  background: theme.surface2, 
+                  color: theme.textPrimary, 
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: "4px",
+                  padding: "4px"
+                }}
+              >
+                {allStrategies.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ fontSize: "12px", color: theme.textMuted, marginBottom: "16px" }}>
+              Hold Cmd/Ctrl to select multiple. If none selected, runs all available.
             </div>
             {modelKeys.length === 0 ? (
               <p style={{ color: theme.textMuted }}>
@@ -132,6 +185,7 @@ export function ForecastBackfillScreen() {
                   <thead>
                     <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
                       <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Model Key</th>
+                      <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Status</th>
                       <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Accuracy</th>
                       <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>ROC-AUC</th>
                       <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Train N</th>
@@ -146,6 +200,17 @@ export function ForecastBackfillScreen() {
                       return (
                         <tr key={key} style={{ borderBottom: `1px solid ${theme.border}` }}>
                           <td style={{ padding: "var(--s-2)", fontWeight: 600 }}>{key}</td>
+                          <td style={{ padding: "var(--s-2)" }}>
+                            <span style={{ 
+                              padding: "2px 6px", 
+                              borderRadius: "4px", 
+                              fontSize: "12px", 
+                              background: m.is_active ? "rgba(46, 204, 113, 0.2)" : "rgba(108, 117, 125, 0.2)",
+                              color: m.is_active ? theme.growth : theme.textMuted 
+                            }}>
+                              {m.is_active ? "Active" : "Diagnostic"}
+                            </span>
+                          </td>
                           <td style={{ padding: "var(--s-2)", color: isHighAcc ? theme.growth : theme.textPrimary }}>
                             {fmtNum(m.accuracy, 4)}
                           </td>
@@ -167,11 +232,10 @@ export function ForecastBackfillScreen() {
               How This Research Engine Works
             </div>
             <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", lineHeight: 1.6 }}>
-              Primary models (TSMOM & CSMOM) generate raw directional signals (+1 for Buy, -1 for Sell).
+              Primary models generate raw directional signals (+1 for Buy, -1 for Sell).
               Secondary Meta-Labelers learn market environment conditions (volatility regime, RSI, MACD, volume ratio)
               under which primary signals succeed or fail at each horizon, and report out-of-sample accuracy/AUC per
-              model above. This is a standalone research &amp; backfill diagnostic — its trained models are not
-              currently wired into live position sizing or the signal aggregator's confidence gate.
+              model above. These models are dynamically integrated into the platform's live position sizing pipeline, which uses their outputs as a confidence gate to scale or zero positions.
             </p>
           </section>
         </>

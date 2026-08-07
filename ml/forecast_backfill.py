@@ -76,6 +76,8 @@ class AgenticForecastBackfiller:
         random_state: Optional[int] = None,
         classifier_type: Optional[str] = None,
         use_fmp: bool = True,
+        strategy_ids: Optional[List[str]] = None,
+        theta_c: Optional[float] = None,
     ):
         """Initialize backfill pipeline with parameters sourced from settings.py defaults."""
         self.tickers = tickers or settings.DEFAULT_TICKERS or ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"]
@@ -103,6 +105,8 @@ class AgenticForecastBackfiller:
         self.random_state = random_state or getattr(settings, "FORECAST_BACKFILL_RANDOM_STATE", 42)
         self.classifier_type = (classifier_type or getattr(settings, "FORECAST_BACKFILL_CLASSIFIER_TYPE", "random_forest")).lower()
         self.use_fmp = use_fmp
+        self.strategy_ids = strategy_ids
+        self.theta_c = theta_c if theta_c is not None else getattr(settings, "META_LABEL_MIN_CONFIDENCE", 0.5)
 
         self.prices: pd.DataFrame = pd.DataFrame()
         self.volumes: pd.DataFrame = pd.DataFrame()
@@ -238,10 +242,25 @@ class AgenticForecastBackfiller:
             ema_fast = df["Close"].ewm(span=self.macd_fast, adjust=False).mean()
             ema_slow = df["Close"].ewm(span=self.macd_slow, adjust=False).mean()
             df["MACD"] = ema_fast - ema_slow
+            df["MACD_Line"] = df["MACD"]
+            df["MACD_Signal"] = df["MACD_Line"].ewm(span=9, adjust=False).mean()
 
             # Volume Ratio (Current Volume / 20-day MA Volume)
             vol_ma = df["Volume"].rolling(window=self.vol_ratio_window).mean()
             df["Vol_Ratio"] = df["Volume"] / vol_ma.replace(0.0, np.nan)
+
+            # Additional features for various signals
+            df["ROC_12M"] = df["Close"].shift(1) / df["Close"].shift(253) - 1.0
+            df["ROC_6M"] = df["Close"].shift(1) / df["Close"].shift(127) - 1.0
+            daily_returns = df["Close"].pct_change().shift(1)
+            ewma_var = daily_returns.pow(2).ewm(alpha=0.06, adjust=False).mean()
+            df["GARCH_Vol"] = np.sqrt(ewma_var * 252.0)
+            df["SMA_5"] = df["Close"].rolling(5).mean()
+            df["SMA_200"] = df["Close"].rolling(200).mean()
+            delta = df["Close"].diff()
+            gain_2 = (delta.where(delta > 0, 0.0)).rolling(window=2).mean()
+            loss_2 = (-delta.where(delta < 0, 0.0)).rolling(window=2).mean()
+            df["RSI_2"] = 100.0 - (100.0 / (1.0 + gain_2 / loss_2.replace(0.0, np.nan)))
 
             df["Ticker"] = ticker
             features_list.append(df)
@@ -258,52 +277,72 @@ class AgenticForecastBackfiller:
         return self.data
 
     def step_3_generate_primary_signals(self) -> pd.DataFrame:
-        """Step 3: Generate primary TSMOM and CSMOM signals."""
-        logger.info("[*] Step 3: Generating primary TSMOM and CSMOM signals...")
-
-        # 252-day return
-        returns_252 = self.prices.pct_change(periods=self.momentum_window)
-
-        # 1. TSMOM: +1 if 252d return > 0, else -1
-        tsmom_signals = np.sign(returns_252).replace(0, 1)
-
-        # 2. CSMOM: Cross-sectional percentile rank daily. > 0.5 -> +1, <= 0.5 -> -1
-        csmom_ranks = returns_252.rank(axis=1, pct=True)
-        csmom_signals = pd.DataFrame(
-            np.where(csmom_ranks > 0.5, 1, -1),
-            index=returns_252.index,
-            columns=returns_252.columns
+        """Step 3: Generate primary signals dynamically from global_registry."""
+        logger.info("[*] Step 3: Generating primary signals from registry...")
+        from signals.registry import global_registry
+        from signals.base import SignalContext
+        from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+        import numpy as np
+        
+        self.active_strategies = []
+        
+        # Build dummy context
+        context = SignalContext(
+            market_bar=MarketBarDTO(ticker="DUMMY", open_price=0, high_price=0, low_price=0, close_price=0, volume=0),
+            fundamentals=FundamentalDataDTO(ticker="DUMMY", pe_ratio=0, pb_ratio=0, dividend_yield=0, book_value=0, eps_trailing=0, dividend_growth_rate=0, payout_ratio=0, sector="N/A", company_name="DUMMY", market_cap=0),
+            macro=MacroEconomicDTO(yield_curve_10y_2y=0, high_yield_oas=0, inflation_rate=0, sahm_rule_indicator=0, vix_value=15, hmm_risk_on_probability=None)
         )
 
-        tsmom_stacked = tsmom_signals.unstack().swaplevel()
-        csmom_stacked = csmom_signals.unstack().swaplevel()
+        for name, module in global_registry.get_all().items():
+            if self.strategy_ids and name not in self.strategy_ids:
+                continue
+                
+            missing = [f for f in module.required_features if f not in self.data.columns]
+            if missing:
+                logger.debug(f"Skipping {name} due to missing features: {missing}")
+                continue
 
-        self.data["TSMOM_Signal"] = tsmom_stacked.reindex(self.data.index)
-        self.data["CSMOM_Signal"] = csmom_stacked.reindex(self.data.index)
-        logger.info("[+] Step 3 complete. Primary signals generated.")
+            try:
+                out_df = module.compute_vectorized(self.data, context)
+                if "score" in out_df.columns:
+                    signal_col = np.sign(out_df["score"]).replace(0, np.nan)
+                    self.data[f"{name}_Signal"] = signal_col
+                    
+                    features_to_use = getattr(module, "meta_label_features", [])
+                    for feat in features_to_use:
+                        if feat in out_df.columns:
+                            self.data[f"{name}_{feat}"] = out_df[feat]
+                            
+                    self.active_strategies.append(name)
+            except Exception as e:
+                logger.warning(f"Error computing vectorized signal for {name}: {e}")
+                
+        logger.info(f"[+] Step 3 complete. Primary signals generated for: {self.active_strategies}")
         return self.data
 
     def step_4_create_meta_targets(self) -> pd.DataFrame:
-        """Step 4: Create binary meta-labels for all configured horizons (10, 30, 60, 90d)."""
-        logger.info("[*] Step 4: Creating binary meta-labels for horizons: %s...", self.horizons)
+        """Step 4: Create binary meta-labels for all configured horizons."""
+        logger.info("[*] Step 4: Creating binary meta-labels for horizons...")
 
-        for h in self.horizons:
+        from signals.registry import global_registry
+        all_horizons = set(self.horizons)
+        for name in self.active_strategies:
+            module = global_registry.get(name)
+            if module and getattr(module, "meta_label_horizons", []):
+                all_horizons.update(module.meta_label_horizons)
+
+        for h in all_horizons:
             forward_returns = self.prices.shift(-h) / self.prices - 1.0
             forward_stacked = forward_returns.unstack().swaplevel()
 
             self.data[f"Fwd_Return_{h}d"] = forward_stacked.reindex(self.data.index)
 
-            # Target = 1 if primary signal sign matches forward return sign
-            tsmom_match = np.sign(self.data[f"Fwd_Return_{h}d"]) == np.sign(self.data["TSMOM_Signal"])
-            csmom_match = np.sign(self.data[f"Fwd_Return_{h}d"]) == np.sign(self.data["CSMOM_Signal"])
-
-            self.data[f"TSMOM_Target_{h}d"] = tsmom_match.astype(int)
-            self.data[f"CSMOM_Target_{h}d"] = csmom_match.astype(int)
-
-            # Future forward returns that are NaN are masked to NaN
-            isna_mask = self.data[f"Fwd_Return_{h}d"].isna()
-            self.data.loc[isna_mask, f"TSMOM_Target_{h}d"] = np.nan
-            self.data.loc[isna_mask, f"CSMOM_Target_{h}d"] = np.nan
+            for name in self.active_strategies:
+                match = np.sign(self.data[f"Fwd_Return_{h}d"]) == np.sign(self.data[f"{name}_Signal"])
+                self.data[f"{name}_Target_{h}d"] = match.astype(int)
+                
+                isna_mask = self.data[f"Fwd_Return_{h}d"].isna() | self.data[f"{name}_Signal"].isna()
+                self.data.loc[isna_mask, f"{name}_Target_{h}d"] = np.nan
 
         logger.info("[+] Step 4 complete. Meta-targets created.")
         return self.data
@@ -324,78 +363,111 @@ class AgenticForecastBackfiller:
         isn't inflated by boundary leakage.
         """
         logger.info("[*] Step 5: Training meta-labelers across models & horizons...")
-        features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
 
-        for model_type in ["TSMOM", "CSMOM"]:
-            for h in self.horizons:
+        from validation.purged_cv import CombinatorialPurgedCV
+        from signals.registry import global_registry
+
+        for model_type in self.active_strategies:
+            module = global_registry.get(model_type)
+            if not module:
+                continue
+                
+            features_raw = getattr(module, "meta_label_features", [])
+            if not features_raw:
+                logger.warning("Strategy %s has no meta_label_features defined, skipping training.", model_type)
+                continue
+                
+            resolved_features = []
+            for f in features_raw:
+                if f"{model_type}_{f}" in self.data.columns:
+                    resolved_features.append(f"{model_type}_{f}")
+                elif f in self.data.columns:
+                    resolved_features.append(f)
+                    
+            if not resolved_features:
+                logger.warning("Could not resolve any features for %s", model_type)
+                continue
+                
+            horizons_raw = getattr(module, "meta_label_horizons", self.horizons)
+
+            for h in horizons_raw:
                 target_col = f"{model_type}_Target_{h}d"
-                clean_df = self.data.dropna(subset=features + [target_col])
+                
+                if target_col not in self.data.columns:
+                    continue
+                    
+                clean_df = self.data.dropna(subset=resolved_features + [target_col]).copy()
+                
+                # Ensure it's sorted by Date chronologically so CPCV blocks are contiguous in time
+                clean_df.sort_index(level="Date", inplace=True)
 
                 if len(clean_df) < 30:
                     logger.warning("Insufficient samples (%d) for %s_%dd model. Skipping.", len(clean_df), model_type, h)
                     continue
+                    
+                X = clean_df[resolved_features]
+                y = clean_df[target_col].astype(int)
+                
+                # We need to drop MultiIndex for CombinatorialPurgedCV since it expects a single DateTimeIndex.
+                # CombinatorialPurgedCV groups sequentially. We will pass a daily index for purging.
+                dates_only = clean_df.index.get_level_values("Date")
+                X_dates = pd.DataFrame(X.values, index=dates_only, columns=X.columns)
 
-                dates = clean_df.index.get_level_values("Date").unique().sort_values()
-                split_idx = int(len(dates) * self.train_split)
-                split_date = dates[split_idx]
-                embargo_idx = max(0, split_idx - h)
-                train_cutoff_date = dates[embargo_idx]
+                # 1. Dynamic embargo percentage
+                unique_dates = len(np.unique(dates_only))
+                # embargo_pct = h / unique_dates ensures the index-based embargo size 
+                # (n_samples * pct) roughly equals h days of rows.
+                embargo_pct = min(0.10, h / unique_dates) if unique_dates > h else 0.01
+                cv = CombinatorialPurgedCV(n_splits=10, n_test_splits=2, embargo_pct=embargo_pct)
+                
+                # 2. Dynamic purge windows (t1): event ends h days in the future
+                t1 = pd.Series(dates_only + pd.Timedelta(days=h), index=dates_only)
 
-                train_df = clean_df[clean_df.index.get_level_values("Date") <= train_cutoff_date]
-                test_df = clean_df[clean_df.index.get_level_values("Date") > split_date]
-
-                if len(train_df) < 30 or len(test_df) < 30:
-                    logger.warning(
-                        "Insufficient post-embargo samples (train=%d, test=%d) for %s_%dd model. Skipping.",
-                        len(train_df), len(test_df), model_type, h,
-                    )
-                    continue
-
-                X_train, y_train = train_df[features], train_df[target_col].astype(int)
-                X_test, y_test = test_df[features], test_df[target_col].astype(int)
-
-                if self.classifier_type == "lightgbm":
-                    try:
-                        import lightgbm as lgb
-                        clf = lgb.LGBMClassifier(
-                            n_estimators=self.n_estimators,
-                            max_depth=self.max_depth,
-                            random_state=self.random_state,
-                            verbose=-1,
-                        )
-                    except ImportError:
-                        clf = RandomForestClassifier(
-                            n_estimators=self.n_estimators,
-                            max_depth=self.max_depth,
-                            random_state=self.random_state,
-                            n_jobs=-1,
-                        )
-                else:
-                    clf = RandomForestClassifier(
-                        n_estimators=self.n_estimators,
-                        max_depth=self.max_depth,
-                        random_state=self.random_state,
-                        n_jobs=-1,
-                    )
-
-                clf.fit(X_train, y_train)
-                y_pred = clf.predict(X_test)
-                accuracy = float(np.mean(y_pred == y_test))
-
+                accuracies = []
+                aucs = []
                 try:
-                    probas_test = clf.predict_proba(X_test)[:, 1]
-                    auc = float(roc_auc_score(y_test, probas_test))
-                except Exception:
-                    auc = 0.50
+                    for train_idx, test_idx, _ in cv.split(X_dates, y, t1=t1):
+                        if len(train_idx) < 10 or len(test_idx) < 10: continue
+                        X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
+                        X_test, y_test = X.iloc[test_idx], y.iloc[test_idx]
+
+                        clf = RandomForestClassifier(
+                            n_estimators=self.n_estimators, max_depth=self.max_depth,
+                            random_state=self.random_state, n_jobs=-1,
+                        )
+                        clf.fit(X_train, y_train)
+                        try:
+                            probas = clf.predict_proba(X_test)[:, 1]
+                            # Use theta_c threshold to determine predict success (1) vs block (0)
+                            y_pred_custom = (probas >= self.theta_c).astype(int)
+                            accuracies.append(float(np.mean(y_pred_custom == y_test)))
+                            aucs.append(float(roc_auc_score(y_test, probas)))
+                        except:
+                            y_pred = clf.predict(X_test)
+                            accuracies.append(float(np.mean(y_pred == y_test)))
+                            aucs.append(0.50)
+                except Exception as e:
+                    logger.warning(f"CPCV failed for {model_type}_{h}d, skipping CV evaluation. {e}")
+                
+                accuracy = np.mean(accuracies) if accuracies else 0.50
+                auc = np.mean(aucs) if aucs else 0.50
+
+                # Train final model on ALL data
+                clf_final = RandomForestClassifier(
+                    n_estimators=self.n_estimators, max_depth=self.max_depth,
+                    random_state=self.random_state, n_jobs=-1,
+                )
+                clf_final.fit(X, y)
 
                 model_key = f"{model_type}_{h}d"
-                self.models[model_key] = clf
+                self.models[model_key] = clf_final
                 self.metrics[model_key] = {
                     "accuracy": round(accuracy, 4),
                     "auc": round(auc, 4),
-                    "n_train": len(X_train),
-                    "n_test": len(X_test),
-                    "split_date": str(split_date)[:10],
+                    "n_train": len(X),
+                    "n_test": 0,
+                    "split_date": "CPCV",
+                    "is_active": model_type in ["timeseries_momentum", "cross_sectional_momentum", "rsi2_mean_reversion"],
                 }
 
                 # Save trained model artifact. model_key is built only from a
@@ -425,7 +497,7 @@ class AgenticForecastBackfiller:
         inference_df = self.data[valid_mask]
         X_infer = inference_df[features]
 
-        for model_type in ["TSMOM", "CSMOM"]:
+        for model_type in self.active_strategies:
             for h in self.horizons:
                 model_key = f"{model_type}_{h}d"
                 clf = self.models.get(model_key)
@@ -460,8 +532,8 @@ class AgenticForecastBackfiller:
         out_csv = output_dir / filename
         out_json = output_dir / "agentic_forecast_summary.json"
 
-        export_cols = ["Close", "TSMOM_Signal", "CSMOM_Signal"]
-        for model_type in ["TSMOM", "CSMOM"]:
+        export_cols = ["Close"] + [f"{m}_Signal" for m in self.active_strategies]
+        for model_type in self.active_strategies:
             for h in self.horizons:
                 prob_col = f"{model_type}_Meta_Prob_{h}d"
                 if prob_col in self.data.columns:

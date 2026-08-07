@@ -753,6 +753,8 @@ class ForecastBackfillRunRequest(BaseModel):
     end_date: Optional[str] = Field(default=None)
     use_fmp: bool = Field(default=True)
     horizons: Optional[list[int]] = Field(default=None)
+    strategy_ids: Optional[list[str]] = Field(default=None)
+    theta_c: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
     @field_validator("horizons")
     @classmethod
@@ -1051,6 +1053,8 @@ def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Dict[str,
             end_date=req.end_date,
             horizons=req.horizons,
             use_fmp=req.use_fmp,
+            strategy_ids=req.strategy_ids,
+            theta_c=req.theta_c,
         )
 
         try:
