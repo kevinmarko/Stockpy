@@ -29,7 +29,7 @@ if str(_REPO_ROOT) not in sys.path:
 from scripts._bootstrap import bootstrap  # noqa: E402
 bootstrap()
 
-from ml.forecast_backfill import AgenticForecastBackfiller
+from ml.backfill.GlobalBackfillEngine import GlobalBackfillEngine
 from settings import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -93,37 +93,37 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    import asyncio
     args = parse_args()
 
     tickers_list = [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
-    horizons_list = [int(h.strip()) for h in args.horizons.split(",") if h.strip().isdigit()] if args.horizons else None
 
-    logger.info("Initializing AgenticForecastBackfiller...")
-    engine = AgenticForecastBackfiller(
-        tickers=tickers_list,
-        start_date=args.start or None,
-        end_date=args.end or None,
-        horizons=horizons_list,
-        classifier_type=args.classifier or None,
-        use_fmp=args.use_fmp,
-    )
+    logger.info("Initializing GlobalBackfillEngine...")
+    from ml.backfill.registry import backfill_engine
+    engine = backfill_engine
+
+    async def _print_status(task_id: str, status: str, progress: int, message: str):
+        logger.info(f"[{progress}%] {message}")
 
     try:
-        engine.step_1_fetch_data()
-        engine.step_2_calculate_technical_features()
-        engine.step_3_generate_primary_signals()
-        engine.step_4_create_meta_targets()
-        metrics = engine.step_5_backtrain_meta_labelers()
-        forecasts = engine.step_6_execute_backfill()
-        output_df, summary = engine.export_results(filename=args.output)
+        results = asyncio.run(engine.run_full_system_backfill(
+            task_id="CLI_RUN", 
+            status_callback=_print_status,
+            tickers=tickers_list,
+            start_date=args.start or None,
+            end_date=args.end or None,
+            use_fmp=args.use_fmp,
+        ))
 
         print("\n" + "=" * 60)
         print("FORECAST BACKFILL & META-LABELING RESULTS SUMMARY")
         print("=" * 60)
-        for model_key, m in metrics.items():
-            print(f"  Model: {model_key:<15} Accuracy: {m['accuracy']:.4f} | AUC: {m['auc']:.4f} | Train Samples: {m['n_train']}")
+        for strategy_id, model_metrics in results.items():
+            for m in model_metrics:
+                model_key = f"{strategy_id}_{m['horizon']}d"
+                print(f"  Model: {model_key:<15} Accuracy: {m['accuracy']:.4f} | AUC: {m['roc_auc']:.4f} | Train Samples: {m['train_n']}")
         print("=" * 60)
-        print(f"Backfill complete! Exported {len(output_df)} rows to '{summary['csv_path']}'.")
+        print("Backfill complete! Exported summary to agentic_forecast_summary.json.")
         return 0
     except Exception as exc:
         logger.error("Forecast backfill failed: %s", exc, exc_info=True)

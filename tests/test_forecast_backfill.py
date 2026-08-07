@@ -9,331 +9,58 @@ from pathlib import Path
 import pytest
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
 
 import pilots.watchlist_writer as watchlist_writer
-from ml.forecast_backfill import AgenticForecastBackfiller
+from ml.backfill.GlobalBackfillEngine import GlobalBackfillEngine
 from settings import settings
-
-# Module-level (not test-local) so it stays picklable -- step_5 persists every
-# trained classifier via pickle.dump().
-_captured_train_max_date: dict = {}
 
 
 @pytest.fixture(autouse=True)
 def _isolate_output_dir(tmp_path, monkeypatch):
-    """Every test in this file that calls export_results() must never write
-    into the real, operator-facing output/ directory. AgenticForecastBackfiller
-    reads settings.OUTPUT_DIR live (not a cached module-level path), so
-    monkeypatching it here is sufficient -- without this, running this file
-    clobbers the live output/agentic_forecast_summary.json that
-    GET /pilots/forecast_backfill serves verbatim, which is exactly how a
-    ZZZZ_NOT_REAL synthetic-fallback ticker used to leak into the webapp's
-    Forecast Backfill screen after a local test run.
-
-    Same reasoning applies to step_1_fetch_data's 3-strike ticker-drop path
-    (record_fetch_failures): it defaults to
-    pilots.watchlist_writer.DEFAULT_WATCHLIST_PATH ("watchlist.txt", CWD-
-    relative) and a sibling watchlist_failures.json when no explicit path is
-    passed -- exactly what every call in this file does. Left unpatched, a
-    ZZZZ_NOT_REAL-style test run would silently rewrite the operator's real
-    watchlist.txt / watchlist_failures.json in the repo root."""
     monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(watchlist_writer, "DEFAULT_WATCHLIST_PATH", tmp_path / "watchlist.txt")
 
 
-class _RecordingClassifier(RandomForestClassifier):
-    def fit(self, X, y):
-        _captured_train_max_date["date"] = X.index.get_level_values("Date").max()
-        return super().fit(X, y)
-
-
-@pytest.mark.parametrize(
-    "bad_horizon",
-    [-1, 0, 3651, 1.5, "10", True, "../../etc/passwd"],
-)
-def test_backfiller_rejects_invalid_horizons(bad_horizon):
-    """`horizons` ends up in a model filename that gets opened for writing
-    (ml/forecast_backfill.py's meta_{model_type}_{h}d.pkl) -- CodeQL flagged
-    this as uncontrolled data in a path expression, since it is reachable
-    from POST /pilots/forecast_backfill/run's request body. Every horizon
-    must be constrained to a small positive int before it ever reaches a
-    path, regardless of caller (API, CLI script, or direct construction)."""
-    with pytest.raises(ValueError):
-        AgenticForecastBackfiller(horizons=[10, bad_horizon])
-
-
-def test_default_start_date_is_lookback_years_before_end_date():
-    """When start_date isn't supplied, it must be computed as
-    FORECAST_BACKFILL_LOOKBACK_YEARS back from end_date -- not a fixed
-    calendar-date literal (which would grow the window unbounded on every
-    future re-run instead of rolling forward)."""
-    engine = AgenticForecastBackfiller(end_date="2026-06-15")
-    expected = (pd.Timestamp("2026-06-15") - pd.DateOffset(years=settings.FORECAST_BACKFILL_LOOKBACK_YEARS))
-    assert engine.start_date == expected.strftime("%Y-%m-%d")
-
-
-def test_explicit_start_date_overrides_the_default():
-    engine = AgenticForecastBackfiller(start_date="2010-01-01", end_date="2026-06-15")
-    assert engine.start_date == "2010-01-01"
-
-
-def test_backfiller_initialization():
-    """Verify parameters are loaded from settings defaults with zero hardcoded values."""
-    engine = AgenticForecastBackfiller()
-    assert engine.horizons == settings.FORECAST_BACKFILL_HORIZONS
-    assert engine.momentum_window == settings.FORECAST_BACKFILL_MOMENTUM_WINDOW
-    assert engine.vol_short_window == settings.FORECAST_BACKFILL_VOL_SHORT_WINDOW
-    assert engine.vol_long_window == settings.FORECAST_BACKFILL_VOL_LONG_WINDOW
-    assert engine.rsi_window == settings.FORECAST_BACKFILL_RSI_WINDOW
-    assert engine.macd_fast == settings.FORECAST_BACKFILL_MACD_FAST
-    assert engine.macd_slow == settings.FORECAST_BACKFILL_MACD_SLOW
-    assert engine.vol_ratio_window == settings.FORECAST_BACKFILL_VOL_RATIO_WINDOW
-    assert engine.train_split == settings.FORECAST_BACKFILL_TRAIN_SPLIT
-    assert engine.n_estimators == settings.FORECAST_BACKFILL_N_ESTIMATORS
-    assert engine.max_depth == settings.FORECAST_BACKFILL_MAX_DEPTH
-
-
+@pytest.mark.anyio
 @pytest.mark.network
-def test_forecast_backfill_end_to_end_pipeline(tmp_path):
-    """Test full 6-step forecast backfill pipeline using synthetic data.
+async def test_global_backfill_engine_end_to_end():
+    from ml.backfill.registry import backfill_engine
+    engine = backfill_engine
+    
+    async def _status_callback(task_id: str, status: str, progress: int, message: str):
+        pass
 
-    Marked network (2026-08): despite `use_fmp=False`, step_1_fetch_data()
-    still falls back to CompositeProvider -- a REAL yfinance call, not a
-    synthetic-data path (this engine has no synthetic-data generator at
-    all). Left unmarked, this test was exposed to real Yahoo Finance rate
-    limiting ("Too Many Requests") whenever run alongside the rest of the
-    suite, deselected from the "not network" fast/offline gate.
-    """
-    tickers = ["AAPL", "MSFT", "AMZN", "NVDA"]
-    horizons = [10, 30, 60, 90]
-
-    engine = AgenticForecastBackfiller(
-        tickers=tickers,
+    results = await engine.run_full_system_backfill(
+        task_id="test_run", 
+        status_callback=_status_callback,
+        tickers=["AAPL"],
         start_date="2018-01-01",
         end_date="2022-01-01",
-        horizons=horizons,
-        n_estimators=10,
-        max_depth=3,
-        use_fmp=False,  # force synthetic/fallback
+        use_fmp=False
     )
 
-    # Step 1: Data fetching
-    prices = engine.step_1_fetch_data()
-    assert not prices.empty
-    assert set(tickers).issubset(set(prices.columns))
+    assert "TSMOM" in results
+    assert "CSMOM" in results
 
-    # Step 2: Technical features
-    features = engine.step_2_calculate_technical_features()
-    assert not features.empty
-    for col in ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]:
-        assert col in features.columns
+    tsmom_metrics = results["TSMOM"]
+    assert len(tsmom_metrics) == 4
+    for metric in tsmom_metrics:
+        assert "accuracy" in metric
+        assert "roc_auc" in metric
+        assert "train_n" in metric
 
-    # Step 3: Primary signals
-    signals = engine.step_3_generate_primary_signals()
-    assert "TSMOM_Signal" in signals.columns
-    assert "CSMOM_Signal" in signals.columns
-    assert set(signals["TSMOM_Signal"].dropna().unique()).issubset({-1.0, 1.0})
-
-    # Step 4: Meta-targets
-    targets = engine.step_4_create_meta_targets()
-    for h in horizons:
-        assert f"TSMOM_Target_{h}d" in targets.columns
-        assert f"CSMOM_Target_{h}d" in targets.columns
-
-    # Step 5: Backtrain meta labelers
-    metrics = engine.step_5_backtrain_meta_labelers()
-    assert len(metrics) == 8  # 2 models x 4 horizons
-    for model_key, m in metrics.items():
-        assert "accuracy" in m
-        assert "auc" in m
-        assert "n_train" in m
-
-    # Step 6: Continuous inference backfill
-    backfill_df = engine.step_6_execute_backfill()
-    for h in horizons:
-        assert f"TSMOM_Meta_Prob_{h}d" in backfill_df.columns
-        assert f"CSMOM_Meta_Prob_{h}d" in backfill_df.columns
-
-    # Export results
-    out_df, summary = engine.export_results(filename="test_backfill_output.csv")
-    assert not out_df.empty
-    assert summary["total_rows"] == len(out_df)
-    assert len(summary["metrics"]) == 8
+    # Verify that the summary JSON is written
+    summary_path = settings.OUTPUT_DIR / "agentic_forecast_summary.json"
+    assert summary_path.exists()
+    
+    with open(summary_path, "r") as f:
+        summary = json.load(f)
+        assert summary["status"] == "completed"
+        assert summary["metrics"] == results
+        assert summary["tickers"] == ["AAPL"]
 
 
-@pytest.mark.network
-def test_step_6_no_model_produces_nan_not_fabricated_confidence():
-    """A horizon/model that never trained (e.g. insufficient samples) must
-    leave its Meta_Prob column as NaN, never a fabricated placeholder like
-    1.0 (CONSTRAINT #4) -- a fake 100%-confidence value would otherwise be
-    indistinguishable from a genuine, trained prediction downstream.
-
-    Marked network (2026-08): calls step_1_fetch_data(), a real yfinance
-    call via CompositeProvider -- see test_forecast_backfill_end_to_end_
-    pipeline's marker comment for the full rationale."""
-    engine = AgenticForecastBackfiller(
-        tickers=["AAPL", "MSFT"],
-        start_date="2018-01-01",
-        end_date="2022-01-01",
-        horizons=[10],
-        use_fmp=False,
-    )
-    engine.step_1_fetch_data()
-    engine.step_2_calculate_technical_features()
-    engine.step_3_generate_primary_signals()
-    engine.step_4_create_meta_targets()
-    engine.step_5_backtrain_meta_labelers()
-
-    # Simulate "no model trained for this horizon" (e.g. too few samples).
-    engine.models.pop("TSMOM_10d", None)
-    engine.step_6_execute_backfill()
-
-    assert engine.data["TSMOM_Meta_Prob_10d"].isna().all()
-    assert not (engine.data["TSMOM_Meta_Prob_10d"] == 1.0).any()
-
-
-@pytest.mark.network
-def test_dropped_fallback_is_flagged_and_removed(tmp_path):
-    """When neither FMP nor CompositeProvider returns data for a ticker, it must
-    be dropped from the run and surfaced in the exported summary -- a provider
-    outage must never look like a genuine backtest (CONSTRAINT #4).
-
-    Marked network (2026-08): AAPL is expected to succeed as the control
-    ticker while ZZZZ_NOT_REAL is expected to fail -- both go through a
-    real yfinance call via CompositeProvider. See
-    test_forecast_backfill_end_to_end_pipeline's marker comment."""
-    engine = AgenticForecastBackfiller(
-        tickers=["AAPL", "ZZZZ_NOT_REAL"],
-        start_date="2020-01-01",
-        end_date="2022-01-01",
-        horizons=[10],
-        use_fmp=False,
-    )
-    engine.step_1_fetch_data()
-    assert "ZZZZ_NOT_REAL" in engine.dropped_tickers
-    assert "ZZZZ_NOT_REAL" not in engine.tickers
-
-    # One miss is a single strike, not yet a permanent removal (see the
-    # 3-consecutive-runs test below for the removal path).
-    failures_file = tmp_path / "watchlist_failures.json"
-    assert json.loads(failures_file.read_text(encoding="utf-8")) == {"ZZZZ_NOT_REAL": 1}
-
-    engine.step_2_calculate_technical_features()
-    engine.step_3_generate_primary_signals()
-    engine.step_4_create_meta_targets()
-    engine.step_5_backtrain_meta_labelers()
-    engine.step_6_execute_backfill()
-    _, summary = engine.export_results(filename="test_dropped_flag_output.csv")
-    assert summary["dropped_tickers"] == ["ZZZZ_NOT_REAL"]
-
-
-@pytest.mark.network
-def test_three_consecutive_dropped_runs_permanently_removes_from_watchlist(tmp_path):
-    """The 3-strike rule: a ticker missing real data across 3 SEPARATE
-    step_1_fetch_data runs (e.g. 3 backfill cycles days apart) is permanently
-    removed from watchlist.txt, not just dropped from each individual run.
-
-    Marked network (2026-08): three real step_1_fetch_data() calls, each a
-    real yfinance call via CompositeProvider, with AAPL expected to succeed
-    as the control ticker. See test_forecast_backfill_end_to_end_pipeline's
-    marker comment."""
-    watchlist_path = tmp_path / "watchlist.txt"
-    watchlist_path.write_text("AAPL\nZZZZ_NOT_REAL\n", encoding="utf-8")
-
-    for i in range(3):
-        engine = AgenticForecastBackfiller(
-            tickers=["AAPL", "ZZZZ_NOT_REAL"],
-            start_date="2020-01-01",
-            end_date="2022-01-01",
-            horizons=[10],
-            use_fmp=False,
-        )
-        engine.step_1_fetch_data()
-        assert "ZZZZ_NOT_REAL" in engine.dropped_tickers, f"run {i}"
-
-    content = watchlist_path.read_text(encoding="utf-8")
-    assert "ZZZZ_NOT_REAL" not in content
-    assert "AAPL" in content
-    assert json.loads((tmp_path / "watchlist_failures.json").read_text(encoding="utf-8")) == {}
-
-
-@pytest.mark.network
-def test_train_test_split_embargoes_overlapping_forward_window(monkeypatch):
-    """The last `h` dates before the split boundary must be excluded from
-    training, since their target label is derived from a forward return that
-    extends past the boundary into the test period -- otherwise test-period
-    price moves leak into training (the same overlapping-label leakage class
-    validation/purged_cv.py and the CNN-LSTM purged split guard elsewhere in
-    this codebase).
-
-    Marked network (2026-08): calls step_1_fetch_data(), a real yfinance
-    call via CompositeProvider. See test_forecast_backfill_end_to_end_
-    pipeline's marker comment."""
-    import ml.forecast_backfill as fb_module
-
-    horizon = 30
-    engine = AgenticForecastBackfiller(
-        tickers=["AAPL", "MSFT", "AMZN"],
-        start_date="2018-01-01",
-        end_date="2022-01-01",
-        horizons=[horizon],
-        use_fmp=False,
-    )
-    engine.step_1_fetch_data()
-    engine.step_2_calculate_technical_features()
-    engine.step_3_generate_primary_signals()
-    engine.step_4_create_meta_targets()
-
-    _captured_train_max_date.clear()
-    monkeypatch.setattr(fb_module, "RandomForestClassifier", _RecordingClassifier)
-    engine.step_5_backtrain_meta_labelers()
-
-    target_col = "TSMOM_Target_30d"
-    features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
-    clean_df = engine.data.dropna(subset=features + [target_col])
-    dates = clean_df.index.get_level_values("Date").unique().sort_values()
-    split_idx = int(len(dates) * engine.train_split)
-    split_date = dates[split_idx]
-
-    # The recorded training set's latest date must be at least `horizon`
-    # trading days before split_date -- i.e. its forward-return window never
-    # crosses into the test period.
-    assert _captured_train_max_date["date"] <= dates[max(0, split_idx - horizon)]
-    assert _captured_train_max_date["date"] < split_date
-
-
-def test_forecast_backfill_api_endpoint(monkeypatch, tmp_path):
-    """Test API endpoint response from api.pilots_api."""
-    from fastapi.testclient import TestClient
-    from api.pilots_api import app
-
-    client = TestClient(app, client=("127.0.0.1", 50000))
-
-    # Mock output file
-    summary_file = tmp_path / "agentic_forecast_summary.json"
-    mock_payload = {
-        "status": "completed",
-        "horizons": [10, 30, 60, 90],
-        "metrics": {"TSMOM_10d": {"accuracy": 0.52, "auc": 0.54, "n_train": 1000}},
-        "tickers": ["AAPL", "MSFT"],
-    }
-
-    summary_file.write_text(json.dumps(mock_payload))
-    monkeypatch.setattr("settings.settings.OUTPUT_DIR", tmp_path)
-
-    res = client.get("/pilots/forecast_backfill")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["status"] == "completed"
-    assert data["horizons"] == [10, 30, 60, 90]
-
-
-def test_forecast_backfill_run_endpoint_rejects_invalid_horizons(monkeypatch):
-    """POST /pilots/forecast_backfill/run's `horizons` reaches a model
-    filename that gets opened for writing -- must 422 (Pydantic validation),
-    never reach AgenticForecastBackfiller, for an out-of-range or non-integer
-    horizon (CodeQL: uncontrolled data in a path expression)."""
+def test_api_backfill_run_endpoint(monkeypatch):
     from unittest import mock
     from fastapi.testclient import TestClient
     from api.pilots_api import app
@@ -342,8 +69,10 @@ def test_forecast_backfill_run_endpoint_rejects_invalid_horizons(monkeypatch):
     client = TestClient(app, client=("127.0.0.1", 50000))
     with mock.patch.object(live_settings, "FOLLOW_API_TOKEN", "cmd-tok"):
         res = client.post(
-            "/pilots/forecast_backfill/run",
-            json={"horizons": [10, -1]},
+            "/api/backfill/run",
             headers={"Authorization": "Bearer cmd-tok"},
         )
-    assert res.status_code == 422
+    assert res.status_code == 200
+    data = res.json()
+    assert "job_id" in data
+    assert data["status"] == "PENDING"

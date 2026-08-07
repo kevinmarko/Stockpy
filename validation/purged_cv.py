@@ -55,14 +55,21 @@ class CombinatorialPurgedCV:
             # symbols) string + int would raise TypeError, so fall back to re-using
             # the final label itself — a zero-duration sentinel that is still the
             # correct type for the downstream string comparisons in the purge loop.
-            t1_times = pd.Series(X.index).shift(-1)
-            if isinstance(X.index, pd.DatetimeIndex):
-                t1_times.iloc[-1] = X.index[-1] + pd.Timedelta(days=1)
-            elif pd.api.types.is_integer_dtype(X.index.dtype):
-                t1_times.iloc[-1] = X.index[-1] + 1
+            if isinstance(X.index, pd.MultiIndex):
+                idx_vals = X.index.get_level_values(0)
             else:
-                # String or other label index: sentinel = the label itself
-                t1_times.iloc[-1] = X.index[-1]
+                idx_vals = X.index
+                
+            t1_times = pd.Series(idx_vals).shift(-1)
+            
+            if isinstance(idx_vals, pd.DatetimeIndex):
+                t1_times.iloc[-1] = idx_vals[-1] + pd.Timedelta(days=1)
+            else:
+                try:
+                    t1_times.iloc[-1] = idx_vals[-1] + 1
+                except TypeError:
+                    t1_times.iloc[-1] = idx_vals[-1]
+            t1_times.index = X.index
             t1 = pd.Series(t1_times.values, index=X.index)
 
         # 1. Partition observations into contiguous blocks
@@ -99,8 +106,8 @@ class CombinatorialPurgedCV:
             
             for b in combo:
                 block_indices = blocks[b]
-                test_start_time = X.index[block_indices[0]]
-                test_end_time = X.index[block_indices[-1]]
+                test_start_time = idx_vals[block_indices[0]]
+                test_end_time = idx_vals[block_indices[-1]]
                 
                 # Get max t1 in the test block
                 test_t1 = t1.iloc[block_indices]
@@ -108,7 +115,7 @@ class CombinatorialPurgedCV:
                 
                 # Purging and Embargo: we check each training index
                 for tr_idx in list(purged_train_idx):
-                    tr_time = X.index[tr_idx]
+                    tr_time = idx_vals[tr_idx]
                     tr_t1 = t1.iloc[tr_idx]
                     
                     # Purge if training event overlaps with test block

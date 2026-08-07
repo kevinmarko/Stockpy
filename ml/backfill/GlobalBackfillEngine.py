@@ -2,13 +2,21 @@ import time
 import asyncio
 import pandas as pd
 from typing import Dict, List, Any
-from .BaseStrategy import BaseStrategy
+from ml.strategies.backfill_strategies import BaseStrategy
 
 class GlobalBackfillEngine:
     def __init__(self, registry: Dict[str, BaseStrategy]):
         self.registry = registry
 
-    async def run_full_system_backfill(self, task_id: str, status_callback):
+    async def run_full_system_backfill(
+        self,
+        task_id: str,
+        status_callback,
+        tickers: List[str] = None,
+        start_date: str = None,
+        end_date: str = None,
+        use_fmp: bool = True,
+    ):
         """
         Executes backfilling across all registered models and emits status events.
         """
@@ -26,13 +34,26 @@ class GlobalBackfillEngine:
         )
 
         # 1. Fetch universe data (mocked universe for now, or read from settings.DEFAULT_TICKERS)
-        import settings
-        tickers = settings.DEFAULT_TICKERS[:10]  # Just use top 10 for speed in backfill if needed, or all.
+        from settings import settings
         
+        # Load parameters
+        self.tickers = tickers or settings.DEFAULT_TICKERS
+        self.start_date = start_date
+        self.end_date = end_date
+        self.use_fmp = use_fmp
+        
+        if not self.start_date:
+            from datetime import datetime
+            from dateutil.relativedelta import relativedelta
+            ed = pd.to_datetime(self.end_date) if self.end_date else pd.to_datetime(datetime.now())
+            sd = ed - relativedelta(years=settings.FORECAST_BACKFILL_LOOKBACK_YEARS)
+            self.start_date = sd.strftime("%Y-%m-%d")
+            
         provider = CompositeProvider()
+        
         price_dict = {}
         volume_dict = {}
-        for ticker in tickers:
+        for ticker in self.tickers:
             try:
                 bars = provider.get_intraday_bars(ticker, lookback_days=3000, interval="1d")
                 if isinstance(bars, pd.DataFrame) and not bars.empty and "Close" in bars.columns:
@@ -44,7 +65,6 @@ class GlobalBackfillEngine:
 
         prices = pd.DataFrame(price_dict).dropna(how="all")
         volumes = pd.DataFrame(volume_dict).dropna(how="all")
-
         features_list = []
         for ticker in prices.columns:
             if ticker not in volumes.columns: continue
@@ -119,6 +139,28 @@ class GlobalBackfillEngine:
                 message=f"Completed {strategy.name} ({completed}/{total_strategies})"
             )
 
+        # Export summary for the UI
+        import json
+        import os
+        from datetime import datetime, timezone
+        from settings import settings
+        
+        summary = {
+            "status": "completed",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "horizons": [10, 30, 60, 90],
+            "metrics": results,
+            "tickers": self.tickers,
+            "message": "Global backfill & meta-labeling completed successfully!"
+        }
+        
+        output_dir = settings.OUTPUT_DIR
+        output_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = output_dir / "agentic_forecast_summary.json"
+        
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2)
+
         await status_callback(
             task_id=task_id,
             status="COMPLETED",
@@ -141,7 +183,7 @@ class GlobalBackfillEngine:
         from sklearn.metrics import accuracy_score, roc_auc_score
         import os
         import joblib
-        import settings
+        from settings import settings
 
         features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
         target_col = f"target_{horizon}d"
