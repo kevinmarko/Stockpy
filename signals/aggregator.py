@@ -64,6 +64,45 @@ def _get_meta_registry():
     return global_meta_registry
 
 
+def _build_meta_features(tickers: List[str], tech_raw: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Compute the fixed set of technical features expected by the ForecastMetaLabeler."""
+    features = pd.DataFrame(index=tickers, columns=["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]).fillna(0.0)
+    if not tech_raw:
+        return features
+        
+    for ticker in tickers:
+        if ticker in tech_raw:
+            bars = tech_raw[ticker]
+            if len(bars) >= 50 and "Close" in bars.columns and "Volume" in bars.columns:
+                close = bars["Close"]
+                vol = bars["Volume"]
+                ret = close.pct_change()
+                
+                v20 = ret.rolling(20).std().iloc[-1] * np.sqrt(252)
+                v50 = ret.rolling(50).std().iloc[-1] * np.sqrt(252)
+                
+                delta = close.diff()
+                gain = (delta.where(delta > 0, 0.0)).rolling(14).mean().iloc[-1]
+                loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean().iloc[-1]
+                rs = gain / loss if loss != 0 else np.nan
+                rsi = 100.0 - (100.0 / (1.0 + rs)) if pd.notna(rs) else 50.0
+                
+                ema_fast = close.ewm(span=12, adjust=False).mean().iloc[-1]
+                ema_slow = close.ewm(span=26, adjust=False).mean().iloc[-1]
+                macd = ema_fast - ema_slow
+                
+                vol_ma = vol.rolling(20).mean().iloc[-1]
+                vol_r = vol.iloc[-1] / vol_ma if vol_ma != 0 else 1.0
+                
+                features.loc[ticker, "Vol_20"] = v20
+                features.loc[ticker, "Vol_50"] = v50
+                features.loc[ticker, "RSI_14"] = rsi
+                features.loc[ticker, "MACD"] = macd
+                features.loc[ticker, "Vol_Ratio"] = vol_r
+                
+    return features.fillna(0.0)
+
+
 # ---------------------------------------------------------------------------
 # Task B4 — Signal-weight & regime-config validation
 # ---------------------------------------------------------------------------
@@ -370,6 +409,7 @@ class SignalAggregator:
         meta_hard_gate: bool = False
 
         meta_registry = _get_meta_registry()
+        meta_features_row = _build_meta_features([row.name], getattr(context, "tech_raw", {}))
 
         for name, output in outputs.items():
             # Regime gate: a module that declares itself inactive this cycle
@@ -406,6 +446,8 @@ class SignalAggregator:
                 try:
                     feat_row = pd.DataFrame([row.to_dict()])
                     feat_row["primary_score"] = output.score
+                    for col in meta_features_row.columns:
+                        feat_row[col] = meta_features_row.at[row.name, col]
                     mlp = meta_registry.get_proba(name, feat_row)
                 except Exception as exc:
                     import logging as _logging
@@ -507,6 +549,8 @@ class SignalAggregator:
         # hard-gate/geometric-mean composite collapse to two matrix ops
         # instead of a per-ticker running accumulator.
         clamped_mlp_columns: Dict[str, pd.Series] = {}
+        
+        meta_features_df = _build_meta_features(list(universe_df.index), getattr(context, "tech_raw", {}))
 
         for name, df_out in outputs.items():
             if name in settings.DISABLED_SIGNAL_MODULES:
@@ -526,6 +570,8 @@ class SignalAggregator:
                 try:
                     feat_df = universe_df.copy()
                     feat_df["primary_score"] = df_out['score']
+                    for col in meta_features_df.columns:
+                        feat_df[col] = meta_features_df[col]
                     labeler = meta_registry._labelers.get(name)
                     if labeler:
                         mlps = labeler.predict_proba(feat_df)

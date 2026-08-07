@@ -33,7 +33,7 @@ import logging
 import pickle
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 import numpy as np
 import pandas as pd
@@ -302,6 +302,50 @@ class MetaLabeler(Model):
         return cls.load(pickles[-1])
 
 
+class ForecastMetaLabeler:
+    """Wraps scikit-learn RandomForestClassifier models produced by GlobalBackfillEngine.
+    
+    Averages predictions across all provided horizons (e.g., 10d, 30d, 60d, 90d).
+    """
+    def __init__(self, signal_id: str, models: list):
+        self.signal_id = signal_id
+        self._models = models  # list of loaded sklearn classifiers
+        self._feature_names = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
+
+    def predict_proba_scalar(self, X: pd.DataFrame) -> float:
+        if not self._models:
+            return 1.0
+            
+        X_prep = self._prepare_X(X)
+        probas = []
+        for clf in self._models:
+            p = clf.predict_proba(X_prep)[:, 1]
+            probas.append(float(np.mean(p)))
+            
+        return float(np.mean(probas))
+        
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        if not self._models:
+            return np.ones(len(X), dtype=float)
+            
+        X_prep = self._prepare_X(X)
+        all_probas = []
+        for clf in self._models:
+            all_probas.append(clf.predict_proba(X_prep)[:, 1])
+            
+        return np.mean(all_probas, axis=0)
+
+    def _prepare_X(self, X: pd.DataFrame) -> pd.DataFrame:
+        if not self._feature_names:
+            return X.fillna(0.0)
+        missing = [c for c in self._feature_names if c not in X.columns]
+        if missing:
+            X = X.copy()
+            for c in missing:
+                X[c] = 0.0
+        return X[self._feature_names].fillna(0.0)
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -319,9 +363,9 @@ class MetaLabelerRegistry:
     """
 
     def __init__(self) -> None:
-        self._labelers: dict[str, MetaLabeler] = {}
+        self._labelers: dict[str, Any] = {}
 
-    def register(self, labeler: MetaLabeler) -> None:
+    def register(self, labeler: Any) -> None:
         """Add or replace the MetaLabeler for a given signal_id."""
         self._labelers[labeler.signal_id] = labeler
         logger.info("MetaLabelerRegistry: registered '%s'.", labeler.signal_id)

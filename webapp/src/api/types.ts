@@ -120,6 +120,7 @@ export interface Holding {
   buy_range: string | null;
   sell_range: string | null;
   conviction: number | null;
+  meta_label_composite: number | null;
 }
 
 export interface SectorSlice {

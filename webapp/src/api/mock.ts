@@ -319,9 +319,10 @@ function holdings(
       score,
       price,
       action: isBuy ? "BUY" : "HOLD",
-      buy_range: `Buy Zone: $${buyLow.toFixed(2)} - $${buyHigh.toFixed(2)}`,
+      buy_range: isBuy ? `Buy Zone: $${buyLow.toFixed(2)} - $${buyHigh.toFixed(2)}` : null,
       sell_range: `Sell Zone: $${sellLow.toFixed(2)} - $${sellHigh.toFixed(2)} | Stop @ $${stop.toFixed(2)}`,
       conviction,
+      meta_label_composite: +(0.8 + Math.random() * 0.2).toFixed(3),
     };
   });
 }

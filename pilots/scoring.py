@@ -261,6 +261,7 @@ def pilot_holdings(
             "buy_range": sig.get("buy_range"),
             "sell_range": sig.get("sell_range"),
             "conviction": _coerce_float(sig.get("advisory_conviction")),
+            "meta_label_composite": _coerce_float(sig.get("meta_label_composite")),
         })
 
     if not scored:
@@ -292,6 +293,7 @@ def pilot_holdings(
             "buy_range": d["buy_range"],
             "sell_range": d["sell_range"],
             "conviction": d["conviction"],
+            "meta_label_composite": d["meta_label_composite"],
         }
         for d in scored
     ]

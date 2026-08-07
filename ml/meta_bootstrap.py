@@ -183,8 +183,18 @@ def bootstrap_meta_registry(
         )
         registry_data = {}
 
+    BACKFILL_STRATEGY_MAP = {
+        "TSMOM": "timeseries_momentum",
+        "CSMOM": "cross_sectional_momentum",
+        "PAIRS_RADAR": "pairs_radar",
+        "OPTIONS": "options_premium",
+        "SECTOR_SELECTION": "sector_rotation"
+    }
+
     registered: List[str] = []
     for signal_id in ids:
+        labeler = None
+        
         try:
             labeler = MetaLabeler.load_latest(signal_id)
         except Exception as exc:
@@ -194,6 +204,31 @@ def bootstrap_meta_registry(
                 "(%s) — skipping.", signal_id, exc,
             )
             continue
+
+        # Try to load ForecastMetaLabeler from backfill engine
+        if labeler is None:
+            backfill_strategy_id = next((k for k, v in BACKFILL_STRATEGY_MAP.items() if v == signal_id), None)
+            if backfill_strategy_id:
+                try:
+                    import joblib
+                    from ml.meta_labeling import ForecastMetaLabeler, _MODELS_DIR
+                    backfill_models = []
+                    for h in [10, 30, 60, 90]:
+                        p = _MODELS_DIR / f"meta_{backfill_strategy_id}_{h}d.pkl"
+                        if p.exists():
+                            try:
+                                backfill_models.append(joblib.load(p))
+                            except Exception as e:
+                                logger.warning("Failed to load %s: %s", p, e)
+                    
+                    if backfill_models:
+                        labeler = ForecastMetaLabeler(signal_id=signal_id, models=backfill_models)
+                        setattr(labeler, "_n_train_samples", len(backfill_models))  # hack for log statement
+                except Exception as exc:
+                    logger.warning(
+                        "bootstrap_meta_registry: failed to load backfill forecast models for %r "
+                        "(%s) — skipping.", signal_id, exc,
+                    )
 
         if labeler is None:
             # Strict no-op path: no saved model yet. This is the CURRENT state
