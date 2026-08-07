@@ -1284,7 +1284,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4670",
+        "site": "api/pilots_api.py:4690",
         "via": []
       },
       {
@@ -1359,7 +1359,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4650",
+        "site": "api/pilots_api.py:4670",
         "via": []
       },
       {

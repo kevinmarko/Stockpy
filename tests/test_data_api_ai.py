@@ -214,11 +214,18 @@ def test_commentary_reaches_capability_logic_when_ai_generation_api_enabled(monk
     assert resp.json() == {"available": False, "reason": "disabled", "payload": None}
 
 
-def test_ai_generation_api_enabled_is_not_gui_writable():
+def test_ai_generation_api_enabled_is_gui_writable():
+    """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by explicit
+    operator decision -- not secret, so this no longer needs to be
+    hand-set-only. Still a settings_keysets.DANGEROUS_KEYS member (typed
+    confirmation required on write); the three /data/ai/* endpoints it
+    guards remain independently gated by STATE_API_TOKEN + each generator's
+    own capability flag regardless."""
     from gui import env_io
 
-    assert "AI_GENERATION_API_ENABLED" not in env_io.ALLOWED_KEYS
+    assert "AI_GENERATION_API_ENABLED" in env_io.ALLOWED_KEYS
     assert "AI_GENERATION_API_ENABLED" not in env_io.SECRET_KEYS
+    assert "AI_GENERATION_API_ENABLED" not in env_io.EXCLUDED_FROM_GUI
 
 
 # ---------------------------------------------------------------------------

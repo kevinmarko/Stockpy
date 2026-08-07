@@ -540,11 +540,16 @@ class TestBrokerageRefreshGating:
                     resp = loopback_client.post("/brokerage/refresh", headers=_auth())
         assert resp.status_code == 202
 
-    def test_brokerage_refresh_enabled_is_not_gui_writable(self):
-        """Mirrors test_automation_writes_enabled_is_not_gui_writable in
-        test_pilots_api.py: a GUI bug must never be able to flip this on."""
-        assert "BROKERAGE_REFRESH_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_brokerage_refresh_enabled_is_gui_writable(self):
+        """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
+        explicit operator decision -- not secret, so this no longer needs to
+        be hand-set-only. Still a settings_keysets.DANGEROUS_KEYS member
+        (typed confirmation required on write); the endpoint remains
+        independently gated by FOLLOW_API_TOKEN and the loopback check
+        regardless."""
+        assert "BROKERAGE_REFRESH_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "BROKERAGE_REFRESH_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "BROKERAGE_REFRESH_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
 
     def test_brokerage_connect_enabled_is_gui_writable(self):
         """BROKERAGE_CONNECT_ENABLED was previously a hand-set-only invariant

@@ -596,12 +596,17 @@ class TestGeneralSettingsWritesEnabledInvariants:
         from settings import Settings
         assert Settings.model_fields["GENERAL_SETTINGS_WRITES_ENABLED"].default is False
 
-    def test_flag_is_not_gui_writable(self):
-        """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI bug
-        must never flip this on. Neither allowlisted nor secret — hand-set only,
-        exactly like STRATEGY_WRITES_ENABLED/LLM_WRITES_ENABLED."""
-        assert "GENERAL_SETTINGS_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_flag_is_gui_writable(self):
+        """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
+        explicit operator decision, exactly like
+        STRATEGY_WRITES_ENABLED/LLM_WRITES_ENABLED -- not secret, so this no
+        longer needs to be hand-set-only. Still a
+        settings_keysets.DANGEROUS_KEYS member (typed confirmation required
+        on write); the endpoint remains independently gated by
+        FOLLOW_API_TOKEN regardless."""
+        assert "GENERAL_SETTINGS_WRITES_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "GENERAL_SETTINGS_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "GENERAL_SETTINGS_WRITES_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
 
 
 # ---------------------------------------------------------------------------

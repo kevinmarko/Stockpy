@@ -1858,15 +1858,19 @@ class TestMacroGateWritesInvariants:
         — this new write path must not require (or accidentally break) that."""
         assert "MACRO_REGIME_GATE_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
 
-    def test_macro_gate_writes_enabled_is_not_gui_writable(self):
-        """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI bug
-        must never flip this GATING flag on. Neither allowlisted nor secret —
-        hand-set only. (Distinct from the assertion above: that one is about
-        the TARGET key MACRO_REGIME_GATE_ENABLED, which SHOULD stay allowlisted;
-        this one is about the NEW master switch that guards this endpoint,
-        which must NOT be.)"""
-        assert "MACRO_GATE_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_macro_gate_writes_enabled_is_gui_writable(self):
+        """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
+        explicit operator decision -- not secret, so GUI-writability no
+        longer turns on capability class alone. (Distinct from the assertion
+        above: that one is about the TARGET key MACRO_REGIME_GATE_ENABLED,
+        which has been allowlisted separately for a long time; this one is
+        about the master switch that guards the NEW write path to it.) Still
+        a settings_keysets.DANGEROUS_KEYS member (typed confirmation
+        required on write); the endpoint remains independently gated by
+        FOLLOW_API_TOKEN regardless."""
+        assert "MACRO_GATE_WRITES_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "MACRO_GATE_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "MACRO_GATE_WRITES_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
 
 
 # ---------------------------------------------------------------------------
@@ -2899,12 +2903,15 @@ class TestAutomationWritesInvariants:
     def test_interval_key_is_allowlisted(self):
         assert "ORCHESTRATOR_INTERVAL_SECONDS" in pilots_api.env_io.ALLOWED_KEYS
 
-    def test_automation_writes_enabled_is_not_gui_writable(self):
-        """The D5 invariant: a GUI bug must never
-        be able to flip this on. It must be in NEITHER allowlist nor
-        secret-list (hand-set in .env only)."""
-        assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_automation_writes_enabled_is_gui_writable(self):
+        """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
+        explicit operator decision -- not secret, so this no longer needs to
+        be hand-set-only. Still a settings_keysets.DANGEROUS_KEYS member
+        (typed confirmation required on write); the endpoint remains
+        independently gated by FOLLOW_API_TOKEN regardless."""
+        assert "AUTOMATION_WRITES_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "AUTOMATION_WRITES_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
 
 
 class TestExecutionModeWrite:
@@ -3455,11 +3462,15 @@ class TestStrategyWritesInvariants:
         assert "SIGNAL_WEIGHTS" in pilots_api.env_io.ALLOWED_KEYS
         assert "DISABLED_SIGNAL_MODULES" in pilots_api.env_io.ALLOWED_KEYS
 
-    def test_strategy_writes_enabled_is_not_gui_writable(self):
-        """Mirrors test_automation_writes_enabled_is_not_gui_writable: a GUI bug
-        must never flip this on. Neither allowlisted nor secret — hand-set only."""
-        assert "STRATEGY_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_strategy_writes_enabled_is_gui_writable(self):
+        """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
+        explicit operator decision -- not secret, so this no longer needs to
+        be hand-set-only. Still a settings_keysets.DANGEROUS_KEYS member
+        (typed confirmation required on write); the endpoint remains
+        independently gated by FOLLOW_API_TOKEN regardless."""
+        assert "STRATEGY_WRITES_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "STRATEGY_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "STRATEGY_WRITES_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
 
 
 # ===========================================================================
@@ -4999,11 +5010,15 @@ class TestPromptsPinWrite:
 
 
 class TestPromptRegistryWritesInvariants:
-    def test_prompt_registry_writes_enabled_is_not_gui_writable(self):
-        """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI bug
-        must never flip this on. Neither allowlisted nor secret — hand-set only."""
-        assert "PROMPT_REGISTRY_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_prompt_registry_writes_enabled_is_gui_writable(self):
+        """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
+        explicit operator decision -- not secret, so this no longer needs to
+        be hand-set-only. Still a settings_keysets.DANGEROUS_KEYS member
+        (typed confirmation required on write); the endpoint remains
+        independently gated by FOLLOW_API_TOKEN regardless."""
+        assert "PROMPT_REGISTRY_WRITES_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "PROMPT_REGISTRY_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "PROMPT_REGISTRY_WRITES_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
 
     def test_prompt_registry_pins_key_stays_allowlisted(self):
         """The TARGET key this endpoint writes has been GUI-writable via the
@@ -5103,12 +5118,16 @@ class TestRagQuery:
 
 
 class TestRagQueryInvariants:
-    def test_rag_query_api_enabled_is_not_gui_writable(self):
-        """Mirrors test_macro_gate_writes_enabled_is_not_gui_writable: a GUI
-        bug must never flip this on. Neither allowlisted nor secret — hand-set
-        only, same treatment as AI_GENERATION_API_ENABLED."""
-        assert "RAG_QUERY_API_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_rag_query_api_enabled_is_gui_writable(self):
+        """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
+        explicit operator decision, same treatment as AI_GENERATION_API_ENABLED
+        -- not secret, so this no longer needs to be hand-set-only. Still a
+        settings_keysets.DANGEROUS_KEYS member (typed confirmation required
+        on write); the endpoint remains independently gated by
+        require_command_token regardless."""
+        assert "RAG_QUERY_API_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "RAG_QUERY_API_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "RAG_QUERY_API_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
 
 
 # ---------------------------------------------------------------------------

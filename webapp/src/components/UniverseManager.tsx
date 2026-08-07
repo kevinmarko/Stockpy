@@ -143,6 +143,12 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
           </div>
 
           <SymbolInput
+            // SymbolInput only reads `initial` on mount (it's uncontrolled
+            // internally), so re-keying on `draft` forces a remount -- and
+            // therefore a visible clear of the typed text -- once addSymbol
+            // resets draft back to "" after a successful add. Without this
+            // the input silently kept showing the just-added ticker.
+            key={draft}
             label="Add a stock"
             initial={draft}
             onSubmit={(sym) => {

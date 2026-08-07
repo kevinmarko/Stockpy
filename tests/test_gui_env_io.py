@@ -187,30 +187,40 @@ def test_excluded_from_gui_keys_are_neither_writable_nor_secret():
 @pytest.mark.parametrize(
     "key",
     [
+        "AGENTIC_DISCOVERY_ENABLED",
+        "BROKERAGE_CONNECT_ENABLED",
+        "UNIVERSE_SYNC_ENABLED",
+        # 2026-08-08 (PR #630 audit): the 12 fail-closed write/execution gates
+        # that used to be gui/env_io.py's EXCLUDED_FROM_GUI + this module's
+        # own test_fail_closed_flags_are_hand_set_only. "Not secret
+        # information" is now the sole bar for GUI-writability, per explicit
+        # operator decision -- each endpoint remains independently gated by
+        # its own command token (and, for a few, a loopback/confirmation
+        # check) regardless. Also DANGEROUS_KEYS members now (see
+        # settings_keysets.SAFETY_CRITICAL_KEY_REASONS), so a write through
+        # any editor that exposes one still requires typed confirmation.
         "AI_GENERATION_API_ENABLED",
+        "AUTOMATION_WRITES_ENABLED",
+        "BROKERAGE_REFRESH_ENABLED",
+        "CACHE_LONG_SHORT_WRITES_ENABLED",
         "COMMAND_EXECUTION_ENABLED",
+        "DEAD_LETTER_RETRY_ENABLED",
         "GENERAL_SETTINGS_WRITES_ENABLED",
+        "LLM_WRITES_ENABLED",
+        "MACRO_GATE_WRITES_ENABLED",
+        "PROMPT_REGISTRY_WRITES_ENABLED",
         "RAG_QUERY_API_ENABLED",
         "STRATEGY_WRITES_ENABLED",
     ],
 )
-def test_fail_closed_flags_are_hand_set_only(key):
-    """A GUI bug must never flip these on -- mirrors
-    tests/test_pilots_api.py's `*_is_not_gui_writable` assertions."""
-    assert key not in env_io.ALLOWED_KEYS
-    assert key not in env_io.SECRET_KEYS
-
-
-@pytest.mark.parametrize(
-    "key",
-    ["AGENTIC_DISCOVERY_ENABLED", "BROKERAGE_CONNECT_ENABLED", "UNIVERSE_SYNC_ENABLED"],
-)
 def test_reclassified_flags_are_now_gui_writable(key):
-    """PR #560 reclassified these three "per explicit operator decision" out
-    of the hand-set-only class into ALLOWED_KEYS -- each endpoint remains
-    independently gated by its own command-token/loopback check regardless
-    (see gui/env_io.py's EXCLUDED_FROM_GUI docstring for the full note).
-    Pinned here (rather than left to silently pass
+    """PR #560 reclassified the first three "per explicit operator decision"
+    out of the hand-set-only class into ALLOWED_KEYS; PR #630's audit
+    generalized that same decision to the remaining 12 fail-closed write/
+    execution gates on 2026-08-08 -- each endpoint remains independently
+    gated by its own command-token/loopback check regardless (see
+    gui/env_io.py's EXCLUDED_FROM_GUI docstring for the full note). Pinned
+    here (rather than left to silently pass
     test_every_settings_field_is_classified) so a future revert of that
     policy decision is a visible test failure, not a silent classification
     drift."""

@@ -53,8 +53,11 @@ classifications. Nothing here changes any current runtime behavior.
     unaffected by ``BOOTSTRAP_KEYS``.
 
 ``gui/env_io.py::EXCLUDED_FROM_GUI``
-    The third bucket: 7 filesystem paths + 11 fail-closed write/execution
-    gates that are hand-set in ``.env`` only.
+    The third bucket: 8 filesystem paths. Used to also hold 12 fail-closed
+    write/execution gates, hand-set in ``.env`` only; those were reclassified
+    into ``ALLOWED_KEYS`` on 2026-08-08 by explicit operator decision (see
+    that module's own comment) and now carry no marker here at all — see
+    ``HAND_SET_ONLY_KEYS`` below for where they live now.
 
 ``api/pilots_api.py``'s five scoped editors
     ``_TUNABLE_INDEX`` (46) / ``_SENTIMENT_INDEX`` (33) /
@@ -212,54 +215,36 @@ BOOTSTRAP_KEYS: frozenset[str] = frozenset(BOOTSTRAP_KEY_REASONS)
 #
 # Fields carrying an explicit "Never GUI-writable" / "hand-set in .env only"
 # marker in settings.py, cross-checked by scripts/measure_settings_census.py
-# against whether that claim currently holds. 19 fields carry such a marker;
-# the 8 that are ALSO in SECRET_KEYS are excluded here (see the note under
-# DANGEROUS_KEYS below), leaving these 11. Zero marker contradictions were
-# found — every one is genuinely absent from both ALLOWED_KEYS and
-# SECRET_KEYS, and all 11 are in gui/env_io.py's EXCLUDED_FROM_GUI.
+# against whether that claim currently holds.
 #
-# These are the platform author saying, in the source, "a GUI bug must never
-# be able to flip this on". That is the strongest existing signal in this
-# codebase for "requires extra confirmation", so it is honored verbatim.
-#
-# This set is expected to STOP GROWING. AGENTS.md §2's 2026-08-03 convention
-# change says new admin/API write or execution capabilities now ship active by
-# default rather than behind a freshly-added fail-closed `_ENABLED` flag, and
-# names these same 11 as predating that decision and explicitly unaffected. So
-# source (a) is effectively a closed set: it captures the gates that exist
-# because the old convention created them, not a category new work will keep
-# adding to. The drift test still runs — a closed set is a prediction, not a
-# guarantee.
+# EMPTY as of 2026-08-08. Until then this held the 11 fail-closed write/
+# execution gates (12 counting CACHE_LONG_SHORT_WRITES_ENABLED, added and
+# already contradicting this set in the introducing PR — see the drift note
+# below) that were EXCLUDED_FROM_GUI. Per explicit operator decision (PR #630
+# audit) all 12 were reclassified into gui/env_io.py's ALLOWED_KEYS: "not
+# secret information" is now the sole bar for GUI-writability, replacing the
+# older "a GUI bug must never flip this on" theory this set encoded. Rather
+# than simply deleting the safety signal those markers carried, all 12 were
+# moved into SAFETY_CRITICAL_KEY_REASONS below instead of being dropped
+# outright — they remain DANGEROUS_KEYS members (typed confirmation required
+# on write, on any editor that exposes them) even though they are no longer
+# hand-set-only. This set is intentionally left in place, empty, rather than
+# deleted: a future genuinely-hand-set-only marker in settings.py should still
+# land here, and the drift test below still enforces that.
 #
 # NOT included, and deliberately not second-guessed: BROKERAGE_CONNECT_ENABLED,
 # UNIVERSE_SYNC_ENABLED and AGENTIC_DISCOVERY_ENABLED were moved OUT of this
 # hand-set-only category and INTO ALLOWED_KEYS on 2026-08-02 by explicit
 # operator decision (CLAUDE.md's env-write-safety bullet), each still
-# independently gated by its own endpoint's command token. Reclassifying any
-# of them as DANGEROUS days after the operator deliberately loosened them
-# would be this module overriding a fresh decision it was not asked to
-# revisit. Flagged in the introducing PR as a question for the operator
-# instead. None is currently exposed by any of the five editors.
+# independently gated by its own endpoint's command token — the same pattern
+# the 2026-08-08 decision above generalized to the remaining 12.
 #
 # DRIFT: tests/test_settings_keysets.py reads
 # docs/settings_field_census.json's hand_set_markers.marked_fields and asserts
 # this set equals the non-secret, comment_claim_holds=True subset EXACTLY. Add
 # a new hand-set-only field to settings.py without adding it here and that
 # test fails loudly.
-HAND_SET_ONLY_KEYS: frozenset[str] = frozenset({
-    "AI_GENERATION_API_ENABLED",
-    "AUTOMATION_WRITES_ENABLED",
-    "BROKERAGE_REFRESH_ENABLED",
-    "CACHE_LONG_SHORT_WRITES_ENABLED",
-    "COMMAND_EXECUTION_ENABLED",
-    "DEAD_LETTER_RETRY_ENABLED",
-    "GENERAL_SETTINGS_WRITES_ENABLED",
-    "LLM_WRITES_ENABLED",
-    "MACRO_GATE_WRITES_ENABLED",
-    "PROMPT_REGISTRY_WRITES_ENABLED",
-    "RAG_QUERY_API_ENABLED",
-    "STRATEGY_WRITES_ENABLED",
-})
+HAND_SET_ONLY_KEYS: frozenset[str] = frozenset()
 
 # -- Source (b): safety-critical fields, marker or no marker ----------------
 #
@@ -316,6 +301,77 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "Read at module scope by five separate API modules "
         "(control_api / data_api / metrics_api / pilots_api / state_api), so "
         "a change is also only half-observable in a running process."
+    ),
+    # -- 2026-08-08: moved here from HAND_SET_ONLY_KEYS (PR #630 audit) ------
+    # These 12 are the fail-closed write/execution master switches that used
+    # to be gui/env_io.py's EXCLUDED_FROM_GUI + this module's source (a). Per
+    # explicit operator decision, "not secret" is now sufficient for
+    # GUI-writability on its own, so none of them is hand-set-only anymore —
+    # but each still gates a real side effect a silent flip would be bad for,
+    # so they land here instead of being dropped from DANGEROUS_KEYS
+    # entirely: still confirmation-required on write, now via ALLOWED_KEYS
+    # rather than via being unreachable. Reasons kept short since the full
+    # rationale for each already lives in its own settings.py Field comment
+    # and api/pilots_api.py `require_*_enabled` docstring.
+    "AI_GENERATION_API_ENABLED": (
+        "Master gate for api/data_api.py's three paid Claude/Gemini/Opal "
+        "generation endpoints, which are otherwise reachable over a "
+        "fail-open HTTP API. A silent flip turns on real, billed external "
+        "API calls triggerable by anyone who can reach the Data API."
+    ),
+    "AUTOMATION_WRITES_ENABLED": (
+        "Gates POST /automation/resume, which re-enables live order "
+        "submission after ADVISORY_ONLY was previously engaged — a silent "
+        "flip re-arms order flow the operator may have paused deliberately."
+    ),
+    "BROKERAGE_REFRESH_ENABLED": (
+        "Gates POST /brokerage/refresh, a real live login against the "
+        "operator's actual brokerage account bypassing the daily cache — "
+        "not a simulated or sandboxed action."
+    ),
+    "CACHE_LONG_SHORT_WRITES_ENABLED": (
+        "Gates POST /pilots/cache-long-short/{start,approve-bulk}, which "
+        "persists a new tracked position or approves a TLH recommendation — "
+        "changes what a trading strategy recommends."
+    ),
+    "COMMAND_EXECUTION_ENABLED": (
+        "The highest-risk flag in this group: enables the 'command' job "
+        "type on POST /jobs, which can execute the global kill switch, a "
+        "forced Robinhood re-login, or arbitrary flags to the "
+        "orchestrators via a manifest-listed CLI target."
+    ),
+    "DEAD_LETTER_RETRY_ENABLED": (
+        "Gates POST /dead-letter/retry, which spawns a real main.py "
+        "subprocess (network calls, a fresh data fetch, a real advisory "
+        "evaluation) for one symbol."
+    ),
+    "GENERAL_SETTINGS_WRITES_ENABLED": (
+        "Gates PUT /settings/tunables — Kelly sizing, risk-gate, and "
+        "forecasting knobs that change how large a position gets and when "
+        "the risk gate blocks an order."
+    ),
+    "LLM_WRITES_ENABLED": (
+        "Gates PUT /llm/setting — which LLM provider narrates a rationale "
+        "and whether the Gravity AI runner / Opal research agent can fire."
+    ),
+    "MACRO_GATE_WRITES_ENABLED": (
+        "Gates PUT /observability/macro-gate, the write path for "
+        "MACRO_REGIME_GATE_ENABLED itself — the recession/credit-event "
+        "BUY-veto bypass. A silent flip here silently removes that veto."
+    ),
+    "PROMPT_REGISTRY_WRITES_ENABLED": (
+        "Gates PUT /prompts/pin, which changes WHICH PROMPT TEXT THE "
+        "PLATFORM ACTUALLY RUNS — a real behavioral change, not a config "
+        "tunable."
+    ),
+    "RAG_QUERY_API_ENABLED": (
+        "Gates POST /rag/query, a paid external LLM call otherwise "
+        "reachable behind the command token alone — same risk class as "
+        "AI_GENERATION_API_ENABLED."
+    ),
+    "STRATEGY_WRITES_ENABLED": (
+        "Gates PUT /strategy/modules — signal weights and the "
+        "disabled-module set, which changes WHAT THE PLATFORM RECOMMENDS."
     ),
 }
 

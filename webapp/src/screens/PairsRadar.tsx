@@ -104,6 +104,7 @@ function PairAnalyzeSection() {
             onChange={(sym) => setSymY(sym.toUpperCase())}
             onSubmit={(sym) => setSymY(sym.toUpperCase())}
             hideButton
+            testId="symbol-input-y"
           />
         </div>
         <div style={{ flex: "1 1 120px" }}>
@@ -113,6 +114,7 @@ function PairAnalyzeSection() {
             onChange={(sym) => setSymX(sym.toUpperCase())}
             onSubmit={(sym) => setSymX(sym.toUpperCase())}
             hideButton
+            testId="symbol-input-x"
           />
         </div>
       </div>

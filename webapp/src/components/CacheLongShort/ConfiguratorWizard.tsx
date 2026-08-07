@@ -33,7 +33,8 @@ export function ConfiguratorWizard() {
           <SymbolInput
             label="Concentrated Ticker"
             initial={ticker}
-            onSubmit={(val) => setTicker(val)}
+            onChange={(val) => setTicker(val.toUpperCase())}
+            onSubmit={(val) => setTicker(val.toUpperCase())}
             hideButton={true}
           />
           <Input
