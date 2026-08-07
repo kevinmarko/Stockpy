@@ -53,6 +53,8 @@ import type {
   FollowResult,
   ForecastSkill,
   ForecastBackfillSummary,
+  ForecastBackfillJob,
+  ForecastBackfillPhase,
   ForecastSkillBySymbol,
   ForecastSkillSymbolRow,
   LatencyHeatmap,
@@ -1132,6 +1134,72 @@ function _mockLoginJobStatus(jobId: string, job: _MockLoginJob): BrokerageLoginJ
     seconds_remaining: secondsRemaining,
     connected: nowConnected,
     has_account_snapshot: true,
+  };
+}
+
+interface _MockForecastBackfillJob {
+  mode: "run";
+  startedAt: number; // Date.now() at creation
+  cancelled: boolean;
+}
+
+let _mockForecastBackfillJobSeq = 0;
+const _mockForecastBackfillJobs: Record<string, _MockForecastBackfillJob> = {};
+
+function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfillJob): ForecastBackfillJob {
+  const elapsedSeconds = (Date.now() - job.startedAt) / 1000;
+  const SECONDS_PER_PHASE = 2;
+  const TOTAL_STEPS = 7;
+  const TOTAL_SECONDS = TOTAL_STEPS * SECONDS_PER_PHASE;
+  const secondsRemaining = Math.max(0, Math.round(TOTAL_SECONDS - elapsedSeconds));
+
+  if (job.cancelled) {
+    return {
+      job_id: jobId,
+      state: "cancelled",
+      phase: "fetching_data",
+      step: 1,
+      total_steps: TOTAL_STEPS,
+      error: "Job cancelled",
+      summary: null,
+      sample_rows: null,
+      seconds_remaining: secondsRemaining,
+    };
+  }
+
+  let phase: ForecastBackfillPhase;
+  let step: number;
+  if (elapsedSeconds < 2) { phase = "fetching_data"; step = 1; }
+  else if (elapsedSeconds < 4) { phase = "technical_features"; step = 2; }
+  else if (elapsedSeconds < 6) { phase = "primary_signals"; step = 3; }
+  else if (elapsedSeconds < 8) { phase = "meta_targets"; step = 4; }
+  else if (elapsedSeconds < 10) { phase = "backtraining"; step = 5; }
+  else if (elapsedSeconds < 12) { phase = "backfilling"; step = 6; }
+  else if (elapsedSeconds < 14) { phase = "exporting"; step = 7; }
+  else {
+    return {
+      job_id: jobId,
+      state: "succeeded",
+      phase: "exporting",
+      step: TOTAL_STEPS,
+      total_steps: TOTAL_STEPS,
+      error: null,
+      summary: mockForecastBackfill(),
+      sample_rows: 11080,
+      seconds_remaining: 0,
+    };
+  }
+
+  return {
+    job_id: jobId,
+    state: "running",
+    phase,
+    step,
+    total_steps: TOTAL_STEPS,
+    error: null,
+    summary: null,
+    sample_rows: null,
+    seconds_remaining: secondsRemaining,
   };
 }
 
@@ -7850,11 +7918,30 @@ export const mockApi = {
     return delay(mockForecastBackfill());
   },
   async runForecastBackfill(_params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean; strategy_ids?: string[]; theta_c?: number }) {
-    return delay({
-      status: "success",
-      summary: mockForecastBackfill(),
-      sample_rows: 11080,
-    });
+    _mockForecastBackfillJobSeq++;
+    const jobId = `fb-mock-${_mockForecastBackfillJobSeq}`;
+    const job: _MockForecastBackfillJob = {
+      mode: "run",
+      startedAt: Date.now(),
+      cancelled: false,
+    };
+    _mockForecastBackfillJobs[jobId] = job;
+    return delay(_mockForecastBackfillJobStatus(jobId, job));
+  },
+  async getForecastBackfillJobStatus(jobId: string) {
+    const job = _mockForecastBackfillJobs[jobId];
+    if (!job) {
+      throw new ApiError(`Job not found: ${jobId}`, 404);
+    }
+    return delay(_mockForecastBackfillJobStatus(jobId, job));
+  },
+  async cancelForecastBackfillJob(jobId: string) {
+    const job = _mockForecastBackfillJobs[jobId];
+    if (!job) {
+      throw new ApiError(`Job not found: ${jobId}`, 404);
+    }
+    job.cancelled = true;
+    return delay(_mockForecastBackfillJobStatus(jobId, job));
   },
   
   // ---- Cache Long/Short ----

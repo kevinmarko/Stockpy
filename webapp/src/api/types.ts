@@ -3586,6 +3586,29 @@ export interface ForecastBackfillSummary {
   dropped_tickers?: string[];
 }
 
+export type ForecastBackfillJobState = "running" | "succeeded" | "failed" | "timeout" | "cancelled";
+
+export type ForecastBackfillPhase =
+  | "fetching_data"
+  | "technical_features"
+  | "primary_signals"
+  | "meta_targets"
+  | "backtraining"
+  | "backfilling"
+  | "exporting";
+
+export interface ForecastBackfillJob {
+  job_id: string;
+  state: ForecastBackfillJobState;
+  phase: ForecastBackfillPhase | null;
+  step: number;
+  total_steps: number;
+  error: string | null;
+  summary: ForecastBackfillSummary | null;
+  sample_rows: number | null;
+  seconds_remaining: number;
+}
+
 export interface CacheLongShortConcentratedPosition {
   ticker: string;
   market_value: number;

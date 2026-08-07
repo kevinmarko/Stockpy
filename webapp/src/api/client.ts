@@ -38,6 +38,7 @@ import type {
   FollowResult,
   ForecastSkill,
   ForecastBackfillSummary,
+  ForecastBackfillJob,
   IntervalUpdateResult,
   ExecutionModeUpdateRequest,
   ExecutionModeUpdateResult,
@@ -819,9 +820,15 @@ const liveApi = {
     http<OptionsAnalyticsSummaryResponse>(`/metrics/options/analytics/${encodeURIComponent(symbol)}`),
   getForecastBackfill: () => http<ForecastBackfillSummary>("/pilots/forecast_backfill"),
   runForecastBackfill: (params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean; strategy_ids?: string[]; theta_c?: number }) =>
-    http<{ status: string; summary: ForecastBackfillSummary; sample_rows: number }>("/pilots/forecast_backfill/run", {
+    http<ForecastBackfillJob>("/pilots/forecast_backfill/run", {
       method: "POST",
       body: JSON.stringify(params ?? {}),
+    }),
+  getForecastBackfillJobStatus: (jobId: string) =>
+    http<ForecastBackfillJob>(`/pilots/forecast_backfill/status/${encodeURIComponent(jobId)}`),
+  cancelForecastBackfillJob: (jobId: string) =>
+    http<ForecastBackfillJob>(`/pilots/forecast_backfill/cancel/${encodeURIComponent(jobId)}`, {
+      method: "POST",
     }),
     
   // ---- Cache Long/Short ----
