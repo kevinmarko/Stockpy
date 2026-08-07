@@ -548,8 +548,18 @@ class TestNoOrderFunctions:
     })
 
     @classmethod
-    def _is_excluded(cls, path: Path) -> bool:
-        if set(path.parts) & cls._EXCLUDED_PATH_PARTS:
+    def _is_excluded(cls, path: Path, repo_root: Path) -> bool:
+        # Check the subpath RELATIVE to repo_root, not the absolute path —
+        # the repo itself may be checked out under an ancestor directory
+        # that happens to contain a literal ".claude"/".venv"/etc. component
+        # (e.g. a Claude Code worktree lives at <repo>/.claude/worktrees/<name>/),
+        # which would otherwise match every single file in the tree and make
+        # the scan below vacuous.
+        try:
+            rel_parts = path.relative_to(repo_root).parts
+        except ValueError:
+            rel_parts = path.parts
+        if set(rel_parts) & cls._EXCLUDED_PATH_PARTS:
             return True
         if path.stem in cls._EXCLUDED_STEMS:
             return True
@@ -585,7 +595,7 @@ class TestNoOrderFunctions:
         violations: list[str] = []
 
         for py_file in _repo_py_files:
-            if self._is_excluded(py_file):
+            if self._is_excluded(py_file, repo_root):
                 continue
             hits = self._order_function_names_in(py_file)
             for fn_name in hits:
@@ -691,7 +701,7 @@ class TestNoOrderFunctions:
         for rel in ("simulation_engine.py", "pairs/simulation.py"):
             path = repo_root / rel
             assert path.exists(), f"{rel} is missing"
-            assert not self._is_excluded(path), f"{rel} unexpectedly excluded from the scan"
+            assert not self._is_excluded(path, repo_root), f"{rel} unexpectedly excluded from the scan"
             hits = self._order_function_names_in(path)
             assert not hits, (
                 f"{rel} was flagged by the repo-wide scan (found: {hits}) — "
