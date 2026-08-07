@@ -1,11 +1,53 @@
 import { Link } from "react-router";
 import { api } from "../api/client";
-import type { PilotSummary } from "../api/types";
+import type { Holding, PilotSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { Sparkline } from "./charts";
-import { CategoryChip, DeployableBadge } from "./ui";
+import { CategoryChip, DeployableBadge, MetricBadge } from "./ui";
 import { fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
+
+/**
+ * Compact row of action-colored holding chips for a marketplace card — the
+ * dense-card counterpart to RecommendedStocks.tsx's `r.action` pill (same
+ * visual language: small pill, `var(--t-micro)`/700-weight text,
+ * `var(--r-2xs)` radius). Never fabricates a fallback action for a `null`
+ * `Holding.action` — it just renders muted, matching neither "BUY" nor
+ * "SELL".
+ */
+function HoldingsChips({ holdings }: { holdings: Holding[] }) {
+  if (holdings.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: "var(--s-1)", flexWrap: "wrap", marginTop: "var(--s-1-5)" }}>
+      {holdings.slice(0, 3).map((h) => {
+        const color =
+          h.action === "BUY" ? theme.growth : h.action === "SELL" ? theme.decline : theme.textMuted;
+        const background =
+          h.action === "BUY"
+            ? "rgba(16,185,129,0.12)"
+            : h.action === "SELL"
+            ? "rgba(239,68,68,0.12)"
+            : "rgba(148,163,184,0.12)";
+        return (
+          <span
+            key={h.symbol}
+            style={{
+              fontSize: "var(--t-micro)",
+              fontWeight: 700,
+              color,
+              background,
+              padding: "1px 6px",
+              borderRadius: "var(--r-2xs)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {h.symbol}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 /**
  * Marketplace rail card. Performance-percentage-forward: the headline metric
@@ -84,16 +126,23 @@ export function PilotCard({ pilot }: { pilot: PilotSummary }) {
           paddingTop: "var(--s-2)",
         }}
       >
-        <span>
-          Max DD{" "}
-          <span style={{ fontWeight: 600, color: theme.textPrimary }}>
-            {h.max_drawdown == null
-              ? "—"
-              : fmtPct(h.max_drawdown, 0, { fromFraction: true })}
+        <span style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
+          <span>
+            Max DD{" "}
+            <span style={{ fontWeight: 600, color: theme.textPrimary }}>
+              {h.max_drawdown == null
+                ? "—"
+                : fmtPct(h.max_drawdown, 0, { fromFraction: true })}
+            </span>
           </span>
+          <MetricBadge label="DSR" value={h.dsr == null ? "—" : fmtNum(h.dsr, 3)} good={h.dsr == null ? null : h.dsr > 0.95} />
         </span>
-        <span><span style={{ fontWeight: 600, color: theme.textPrimary }}>{pilot.holdings_count}</span> holdings</span>
+        <span style={{ textAlign: "right" }}>
+          <span style={{ fontWeight: 600, color: theme.textPrimary }}>{pilot.holdings_count}</span> holdings
+        </span>
       </div>
+
+      {pilot.top_holdings && <HoldingsChips holdings={pilot.top_holdings} />}
 
       <div style={{ marginTop: "var(--s-3)" }}>
         {/* interactive=false: this badge is nested inside the card's own
@@ -183,14 +232,25 @@ export function PopularCard({ pilot }: { pilot: PilotSummary }) {
           paddingTop: "var(--s-2)",
         }}
       >
-        <span>
-          Sharpe{" "}
-          <span style={{ fontWeight: 600, color: theme.textPrimary }}>
-            {pilot.headline.sharpe == null ? "—" : fmtNum(pilot.headline.sharpe, 2)}
+        <span style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
+          <span>
+            Sharpe{" "}
+            <span style={{ fontWeight: 600, color: theme.textPrimary }}>
+              {pilot.headline.sharpe == null ? "—" : fmtNum(pilot.headline.sharpe, 2)}
+            </span>
           </span>
+          <MetricBadge
+            label="DSR"
+            value={pilot.headline.dsr == null ? "—" : fmtNum(pilot.headline.dsr, 3)}
+            good={pilot.headline.dsr == null ? null : pilot.headline.dsr > 0.95}
+          />
         </span>
-        <span><span style={{ fontWeight: 600, color: theme.textPrimary }}>{pilot.holdings_count}</span> holdings</span>
+        <span style={{ textAlign: "right" }}>
+          <span style={{ fontWeight: 600, color: theme.textPrimary }}>{pilot.holdings_count}</span> holdings
+        </span>
       </div>
+
+      {pilot.top_holdings && <HoldingsChips holdings={pilot.top_holdings} />}
 
       <div style={{ marginTop: "var(--s-3)" }}>
         {/* interactive=false: see PilotCard's identical DeployableBadge comment above. */}

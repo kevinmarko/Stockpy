@@ -47,6 +47,16 @@ describe("Marketplace screen (real mock API)", () => {
     expect(screen.getAllByText(/not deployable/i).length).toBeGreaterThan(0);
   });
 
+  it("cards render a top-holding chip and a DSR honesty chip, not just a plain symbol list", async () => {
+    renderMarketplace();
+    await screen.findByText("Top Performers");
+
+    // trend-following's top holding (NVDA) renders as a chip on its card.
+    expect(screen.getAllByText("NVDA").length).toBeGreaterThan(0);
+    // Every rail card's footer now also surfaces a DSR honesty badge.
+    expect(screen.getAllByText(/DSR/).length).toBeGreaterThan(0);
+  });
+
   it("shows a loading skeleton before data resolves", () => {
     renderMarketplace();
     // Loading renders `.skeleton` placeholder divs; the rails aren't present yet.

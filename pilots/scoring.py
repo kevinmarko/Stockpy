@@ -257,6 +257,10 @@ def pilot_holdings(
             "score": score,
             "price": _coerce_float(sig.get("price")),
             "sector": sector,
+            "action": sig.get("advisory_action") or sig.get("action"),
+            "buy_range": sig.get("buy_range"),
+            "sell_range": sig.get("sell_range"),
+            "conviction": _coerce_float(sig.get("advisory_conviction")),
         })
 
     if not scored:
@@ -284,6 +288,10 @@ def pilot_holdings(
             "score": d["score"],
             "price": d["price"],
             "sector": d["sector"],
+            "action": d["action"],
+            "buy_range": d["buy_range"],
+            "sell_range": d["sell_range"],
+            "conviction": d["conviction"],
         }
         for d in scored
     ]

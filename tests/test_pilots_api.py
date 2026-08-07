@@ -84,7 +84,7 @@ def test_pilots_list_shape(monkeypatch):
     # cutover needs it on every list item, so it's an exact key of the response.
     assert set(tf.keys()) == {
         "id", "name", "category", "description",
-        "headline", "holdings_count", "aum_proxy", "followers_proxy",
+        "headline", "holdings_count", "top_holdings", "aum_proxy", "followers_proxy",
         "long_only",
     }
     assert tf["long_only"] is False
@@ -94,6 +94,8 @@ def test_pilots_list_shape(monkeypatch):
     # trend-following weights timeseries_momentum; the fixture snapshot has 5
     # names with a positive timeseries_momentum contribution.
     assert tf["holdings_count"] == 5
+    assert len(tf["top_holdings"]) == 3
+    assert tf["top_holdings"][0]["symbol"] == "NVDA"
     assert tf["aum_proxy"] == 0.0
     assert tf["followers_proxy"] == 0
 
@@ -164,6 +166,7 @@ def test_pilot_detail_cold_start_empty_but_not_404(tmp_path, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["holdings"] == []
+    assert body["top_holdings"] == []
     assert body["sector_allocation"] == []
     assert body["recent_trades"] == []
     assert body["as_of"] is None

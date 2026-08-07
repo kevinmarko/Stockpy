@@ -29,6 +29,7 @@ const PILOT: PilotSummary = {
   aum_proxy: 10000,
   followers_proxy: 12,
   long_only: true,
+  top_holdings: [],
 };
 
 afterEach(() => {
