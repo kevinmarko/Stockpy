@@ -6721,6 +6721,27 @@ export const mockApi = {
     return delay(applyFmpTunables(values, confirm));
   },
 
+
+  async getFeatureFlags(): Promise<TunablesResponse> {
+    return delay({ groups: [], values: {}, applies: "next_daemon_restart", env_drift: { detected: false, keys: [], note: "" } });
+  },
+
+  async updateFeatureFlags(
+    values: Record<string, any>,
+    _confirm?: any
+  ): Promise<TunablesUpdateResult> {
+    return delay({ 
+      applied: true, 
+      needs_confirmation: false, 
+      confirmed_keys: [], 
+      warnings: [],
+      updated_values: values,
+      written: values,
+      rejected: {},
+      applies: "next_daemon_restart"
+    });
+  },
+
   async getEtfTransmissionSettings(): Promise<TunablesResponse> {
     return delay(mockEtfTransmissionTunables());
   },

@@ -288,7 +288,7 @@ class Settings(BaseSettings):
         ),
     )
     PILOTS_API_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Host the Pilots API (api/pilots_api.py) inside the persistent "
             "orchestrator daemon process (desktop/orchestrator_daemon.py) on "
@@ -312,7 +312,7 @@ class Settings(BaseSettings):
         ),
     )
     JOBS_API_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enable background process execution and SSE log streaming endpoints "
             "on the orchestrator Control API (api/control_api.py). False (default) "
@@ -389,7 +389,7 @@ class Settings(BaseSettings):
         ),
     )
     MARKET_DATA_LATENCY_TRACKING_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Automatic, in-process instrumentation (market_data_latency.py) of "
             "CompositeProvider.get_latest_quote's real (non-cache-hit) fetch "
@@ -2171,7 +2171,7 @@ class Settings(BaseSettings):
             "no-op: no network call is attempted for any symbol, matching this "
             "codebase's convention for opt-in networked features "
             "(ORCHESTRATOR_DAEMON_ENABLED, GRAVITY_AI_RUNNER_ENABLED, "
-            "PILOTS_API_ENABLED all default False the same way). This exists "
+            "PILOTS_API_ENABLED all default True the same way). This exists "
             "because two of the four sources (Yahoo RSS, GDELT) need no API key "
             "and so have no other way to stay quiet by default -- unlike "
             "Finnhub/Reddit/EDGAR, which already degrade to a no-op when their "
@@ -2252,7 +2252,7 @@ class Settings(BaseSettings):
         ),
     )
     SENTIMENT_INDEX_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the composite sentiment index S_t = "
             "w1*news_score + w2*review_score (signals/sentiment_index.py). "
@@ -2541,7 +2541,7 @@ class Settings(BaseSettings):
         ),
     )
     EDGAR_FULLTEXT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the SEC EDGAR full-text search (EFTS) "
             "additions to EdgarSource -- fetching and chunking 10-K/10-Q "
@@ -2571,7 +2571,7 @@ class Settings(BaseSettings):
         ),
     )
     SECTOR_HEAT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the GDELT article-volume-based 'Sector Heat "
             "Factor' attention feature (cross-sectional news-volume z-score "
@@ -2713,7 +2713,7 @@ class Settings(BaseSettings):
     )
 
     WIKIPEDIA_ATTENTION_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the Wikipedia-pageviews-based attention "
             "feature (per-symbol article pageview volume as a retail-"
@@ -2781,7 +2781,7 @@ class Settings(BaseSettings):
     # defaults False and is a complete no-op (zero network calls, all three
     # columns NaN).
     ETF_TRANSMISSION_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the ETF volatility-transmission measurement "
             "columns (risk/etf_transmission.py, wired by "
@@ -3022,10 +3022,10 @@ class Settings(BaseSettings):
     # command token, reused from the follow write-path) and a loopback-only
     # check, so flipping this flag alone is not sufficient to enable intake.
     BROKERAGE_CONNECT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables the Pilots API's brokerage-credential connect/disconnect "
-            "endpoints. Off by default; also requires FOLLOW_API_TOKEN and a "
+            "endpoints. On by default; also requires FOLLOW_API_TOKEN and a "
             "loopback (127.0.0.1) request."
         ),
     )
@@ -3044,10 +3044,10 @@ class Settings(BaseSettings):
     # risk ordering. Reserved for the two writes with a real persistence/rollback
     # cost: an .env edit and re-enabling live order submission.
     AUTOMATION_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /automation/schedule/interval and POST /automation/resume "
-            "on the Pilots API. Off by default; also requires FOLLOW_API_TOKEN. "
+            "on the Pilots API. On by default; also requires FOLLOW_API_TOKEN. "
             "GUI-writable by operator decision (2026-08-08) — the endpoint "
             "remains gated by FOLLOW_API_TOKEN regardless. POST /automation/run "
             "and /automation/pause are NOT gated by this flag "
@@ -3067,10 +3067,10 @@ class Settings(BaseSettings):
     # GET /strategy/matrix is read-only and NOT gated by this flag
     # (require_read_token alone, matching GET /brokerage/status).
     STRATEGY_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /strategy/modules on the Pilots API (signal weights + "
-            "disabled-module set -> .env). Off by default; also requires "
+            "disabled-module set -> .env). On by default; also requires "
             "FOLLOW_API_TOKEN. GUI-writable by operator decision (2026-08-08) — "
             "the endpoint remains gated by FOLLOW_API_TOKEN regardless, so "
             "signal tuning cannot ride in on AUTOMATION_WRITES_ENABLED."
@@ -3090,10 +3090,10 @@ class Settings(BaseSettings):
     # GET /llm/status is read-only and NOT gated by this flag (require_read_token
     # alone, matching GET /brokerage/status and GET /strategy/matrix).
     LLM_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /llm/setting on the Pilots API (LLM capability toggles + "
-            "provider selection -> .env). Off by default; also requires "
+            "provider selection -> .env). On by default; also requires "
             "FOLLOW_API_TOKEN. GUI-writable by operator decision (2026-08-08) — "
             "the endpoint remains gated by FOLLOW_API_TOKEN regardless, so "
             "AI-capability writes cannot ride in on AUTOMATION_WRITES_ENABLED or "
@@ -3112,11 +3112,11 @@ class Settings(BaseSettings):
     # and NOT gated by this flag (require_read_token alone, matching GET
     # /brokerage/status, GET /strategy/matrix, and GET /llm/status).
     AGENTIC_DISCOVERY_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /agentic/scan-config on the Pilots API (Robinhood broker-scan "
             "config -> output/scan_configs.json, consumed by the agentic-discovery "
-            "skill). Off by default; also requires FOLLOW_API_TOKEN."
+            "skill). On by default; also requires FOLLOW_API_TOKEN."
         ),
     )
     # Master switch for the Pilots API's general Settings Manager WRITE endpoint
@@ -3131,7 +3131,7 @@ class Settings(BaseSettings):
     # position gets and when the risk gate blocks an order, not just what gets
     # scanned or which LLM narrates) and must not ride in on any of those.
     # Mirrors AUTOMATION_WRITES_ENABLED / STRATEGY_WRITES_ENABLED /
-    # LLM_WRITES_ENABLED exactly: default False. GUI-writable (added to
+    # LLM_WRITES_ENABLED exactly: default True. GUI-writable (added to
     # gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor), and also requires
@@ -3139,11 +3139,11 @@ class Settings(BaseSettings):
     # this flag (require_read_token alone, matching GET /brokerage/status, GET
     # /strategy/matrix, GET /llm/status, and GET /agentic/status).
     GENERAL_SETTINGS_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /settings/tunables on the Pilots API (general runtime "
             "tunables -- Kelly sizing, risk gate, forecasting, market data, "
-            "runtime/ops -> .env). Off by default; also requires "
+            "runtime/ops -> .env). On by default; also requires "
             "FOLLOW_API_TOKEN. GUI-writable by operator decision (2026-08-08) — "
             "the endpoint remains gated by FOLLOW_API_TOKEN regardless, so "
             "sizing/risk-gate tuning cannot ride in on any other writes-enabled "
@@ -3219,10 +3219,10 @@ class Settings(BaseSettings):
     # immediately stops all three endpoints (403), on top of each generator's
     # own existing capability flag as a second, independent kill switch.
     AI_GENERATION_API_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables POST /data/ai/{commentary,chart,research}/{symbol} on the "
-            "Data API. Off by default -- exposing paid Claude/Gemini/Opal calls "
+            "Data API. On by default -- exposing paid Claude/Gemini/Opal calls "
             "over a fail-open HTTP API is its own risk/cost class, separate from "
             "the underlying capability being enabled for the Streamlit GUI. "
             "GUI-writable by operator decision (2026-08-08)."
@@ -3243,10 +3243,10 @@ class Settings(BaseSettings):
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor).
     RAG_QUERY_API_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables POST /rag/query on the Pilots API (agents/rag_orchestrator.py's "
-            "run_rag_query, calling a paid LLM provider). Off by default -- see "
+            "run_rag_query, calling a paid LLM provider). On by default -- see "
             "AI_GENERATION_API_ENABLED for the same risk-class reasoning. "
             "GUI-writable by operator decision (2026-08-08)."
         ),
@@ -3262,7 +3262,7 @@ class Settings(BaseSettings):
     # flag some unrelated feature also gates, would silently remove that veto. Its
     # own risk class, must not ride in on any sibling flag. Mirrors
     # GENERAL_SETTINGS_WRITES_ENABLED / STRATEGY_WRITES_ENABLED /
-    # LLM_WRITES_ENABLED exactly: default False. GUI-writable (added to
+    # LLM_WRITES_ENABLED exactly: default True. GUI-writable (added to
     # gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor), and also requires
@@ -3275,10 +3275,10 @@ class Settings(BaseSettings):
     # read-only and NOT gated by this flag (require_read_token alone, matching
     # every other GET here).
     MACRO_GATE_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /observability/macro-gate on the Pilots API (flips "
-            "MACRO_REGIME_GATE_ENABLED -> .env). Off by default; also requires "
+            "MACRO_REGIME_GATE_ENABLED -> .env). On by default; also requires "
             "FOLLOW_API_TOKEN. GUI-writable by operator decision (2026-08-08) — "
             "the endpoint remains gated by FOLLOW_API_TOKEN regardless, so this "
             "recession/credit-event BUY-veto bypass cannot ride in on any other "
@@ -3298,7 +3298,7 @@ class Settings(BaseSettings):
     # must not ride in on a flag named for a different action. Mirrors
     # AUTOMATION_WRITES_ENABLED / STRATEGY_WRITES_ENABLED / LLM_WRITES_ENABLED /
     # GENERAL_SETTINGS_WRITES_ENABLED /
-    # MACRO_GATE_WRITES_ENABLED exactly: default False. GUI-writable (added to
+    # MACRO_GATE_WRITES_ENABLED exactly: default True. GUI-writable (added to
     # gui/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision — carries no
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor), and also requires
@@ -3307,11 +3307,11 @@ class Settings(BaseSettings):
     # remain read-only and are NOT gated by this flag (require_read_token
     # alone).
     BROKERAGE_REFRESH_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables POST /brokerage/refresh on the Pilots API (forces a live "
             "Robinhood re-login + account-snapshot fetch, bypassing the daily "
-            "cache). Off by default; also requires FOLLOW_API_TOKEN and a "
+            "cache). On by default; also requires FOLLOW_API_TOKEN and a "
             "loopback (127.0.0.1) request. GUI-writable by operator decision "
             "(2026-08-08) — the endpoint remains gated by FOLLOW_API_TOKEN and "
             "the loopback check regardless, so on-demand refresh cannot ride "
@@ -3916,7 +3916,7 @@ class Settings(BaseSettings):
     # Journal of Finance 73(6):2471-2535.  Nothing in the platform consumes
     # these holdings yet — this is a self-contained data-layer capability.
     ETF_HOLDINGS_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for live ETF constituent-holdings ingestion "
             "(SEC N-PORT primary, optional iShares CSV secondary). False "
@@ -4052,7 +4052,7 @@ class Settings(BaseSettings):
     # requires FOLLOW_API_TOKEN. GET /dead-letter is read-only and NOT gated
     # by this flag (require_read_token alone, matching every other GET here).
     DEAD_LETTER_RETRY_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables POST /dead-letter/retry on the Pilots API (re-runs main.py "
             "for one dead-lettered symbol, advisory-only -- no orders). Off by "
@@ -4078,7 +4078,7 @@ class Settings(BaseSettings):
     # UNIVERSE_SYNC_ENABLED (below) is GUI-writable by operator decision — see
     # its own Field description.
     PROMPT_REGISTRY_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "FAIL-CLOSED master switch for api/pilots_api.py's `PUT /prompts/pin` "
             "(pins/clears a prompt ID's PROMPT_REGISTRY_PINS entry -- changes WHICH "
@@ -4096,7 +4096,7 @@ class Settings(BaseSettings):
         ),
     )
     UNIVERSE_SYNC_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "FAIL-CLOSED master switch for api/data_api.py's `POST /data/sync` "
             "(runs data.portfolio_sync.async_sync_now() -- a live Robinhood/broker "
@@ -4255,7 +4255,7 @@ class Settings(BaseSettings):
         "default per the 2026-08-03 convention-change carve-out above.",
     )
     CACHE_LONG_SHORT_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description="Dedicated fail-closed flag for POST /pilots/cache-long-short/* "
         "write endpoints (start, approve-bulk) -- persists a new tracked position "
         "or marks a TLH recommendation approved. Its own risk class, must not "
