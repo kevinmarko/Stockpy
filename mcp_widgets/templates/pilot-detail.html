@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+/*__WIDGET_COMMON_CSS__*/
+</style>
+<body>
+  <div id="root"></div>
+</body>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+/*__WIDGET_COMMON_JS__*/
+const { App } = globalThis.ExtApps;
+(async () => {
+  const app = new App({ name: "PilotDetail", version: "1.0.0" }, {}, { autoResize: true });
+
+  app.ontoolresult = ({ content }) => {
+    const detail = extractJsonPayload(content[0].text);
+    const root = document.getElementById("root");
+    root.innerHTML = "";
+    renderDetailPanel(root, detail);
+    renderFollowForm(root, detail, app);
+  };
+
+  await app.connect();
+  const ctx = app.getHostContext?.();
+  if (ctx) applyHostTheme(ctx.theme);
+  app.onhostcontextchanged = (c) => applyHostTheme(c.theme);
+})();
+</script>
