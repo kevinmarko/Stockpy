@@ -26,7 +26,12 @@
 # interpreter to run that test with.
 set -uo pipefail
 
-input="$(cat)"
+input=""
+if [ ! -t 0 ]; then
+  if IFS= read -r -t 1 first_line; then
+    input="$(printf '%s\n' "$first_line"; cat)"
+  fi
+fi
 cwd="$(jq -r '.cwd // empty' <<<"$input")"
 session_id="$(jq -r '.session_id // empty' <<<"$input")"
 
