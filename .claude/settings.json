@@ -58,6 +58,12 @@
             "command": "bash .claude/hooks/sync_agent_docs.sh",
             "timeout": 15,
             "statusMessage": "Syncing CLAUDE.md/AGENTS.md..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/sync_launch_json.sh",
+            "timeout": 15,
+            "statusMessage": "Syncing launch.json..."
           }
         ]
       }
