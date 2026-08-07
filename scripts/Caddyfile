@@ -1,0 +1,62 @@
+:8888 {
+    admin off
+    auto_https off
+
+    encode gzip
+
+    # Pilots API (:8602)
+    # The frontend uses VITE_API_BASE_URL=https://<tailnet>/svc
+    # Caddy strips /svc before forwarding to 8602
+    handle_path /svc/* {
+        reverse_proxy 127.0.0.1:8602
+    }
+
+    # Data API (:8603)
+    handle /data/* {
+        reverse_proxy 127.0.0.1:8603
+    }
+    handle /api/chat* {
+        reverse_proxy 127.0.0.1:8603
+    }
+    handle /ws/ticks/* {
+        reverse_proxy 127.0.0.1:8603
+    }
+
+    # Metrics API (:8604)
+    handle /metrics/* {
+        reverse_proxy 127.0.0.1:8604
+    }
+
+    # Control API (:8601)
+    handle /status {
+        reverse_proxy 127.0.0.1:8601
+    }
+    handle /run* {
+        reverse_proxy 127.0.0.1:8601
+    }
+    handle /pipeline/* {
+        reverse_proxy 127.0.0.1:8601
+    }
+    handle /jobs* {
+        reverse_proxy 127.0.0.1:8601
+    }
+    handle /daemon/* {
+        reverse_proxy 127.0.0.1:8601
+    }
+    handle /ws/training/* {
+        reverse_proxy 127.0.0.1:8601
+    }
+
+    # Static Assets (Pilots PWA)
+    handle {
+        root * webapp/dist
+        file_server
+
+        # SPA fallback
+        try_files {path} /index.html
+
+        # Static asset caching
+        @assets path /assets/*
+        header @assets Cache-Control "max-age=31536000"
+    }
+}

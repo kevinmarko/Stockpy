@@ -14,6 +14,7 @@
 #       skips the network pull.
 #   * data_api    :8603  (background)
 #   * metrics_api :8604  (background)
+#   * caddy       :8888  (background) — reverse proxy for Pilots PWA
 #
 # SIGNAL PATH (2026-07 fix — read before changing anything below)
 # -----------------------------------------------------------------
@@ -81,6 +82,7 @@ echo "$(date '+%F %T')  Starting InvestYo stack (daemon + data_api + metrics_api
 # cannot host them (its AST guard forbids the heavy-engine imports they need).
 "$UVICORN" api.data_api:app    --port 8603 >> "$LOG_DIR/stack_data_api.log"    2>&1 &
 "$UVICORN" api.metrics_api:app --port 8604 >> "$LOG_DIR/stack_metrics_api.log" 2>&1 &
+caddy run --config "$REPO_ROOT/scripts/Caddyfile" >> "$LOG_DIR/stack_caddy.log" 2>&1 &
 
 # Orchestrator daemon, BACKGROUNDED (see the SIGNAL PATH comment at the top
 # of this file for why this is deliberate, not equivalent to the previous
