@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3014,
+      "line": 3017,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4061,
+      "line": 4064,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4166,
+      "line": 4169,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -410,7 +410,7 @@
     "attr": 712,
     "factory_param": 4,
     "getattr_const": 247,
-    "os_environ": 24
+    "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 214,
@@ -1262,7 +1262,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4543",
+        "site": "api/pilots_api.py:4546",
         "via": []
       }
     ],
@@ -1273,7 +1273,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4542",
+        "site": "api/pilots_api.py:4545",
         "via": []
       }
     ],
@@ -1284,7 +1284,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4667",
+        "site": "api/pilots_api.py:4670",
         "via": []
       },
       {
@@ -1359,7 +1359,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4647",
+        "site": "api/pilots_api.py:4650",
         "via": []
       },
       {
@@ -2403,7 +2403,16 @@
         "rules": [
           "os_environ"
         ],
-        "site": "pilots/watchlist_writer.py:137",
+        "site": "pilots/watchlist_writer.py:147",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "pilots/watchlist_writer.py:307",
         "via": []
       }
     ]
@@ -2423,7 +2432,7 @@
     "init_self_assign": 40,
     "method_self_assign": 4,
     "module_level": 49,
-    "os_environ": 24
+    "os_environ": 25
   },
   "restart_required_via_name_literal_only": [
     "EDGAR_FULLTEXT_CHUNK_TOKENS",
