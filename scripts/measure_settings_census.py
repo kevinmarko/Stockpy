@@ -80,7 +80,12 @@ MD_OUT = DOCS_DIR / "settings_field_census.md"
 # Directories never walked for the read-form census. `tests` / `webapp` /
 # `.venv` / `node_modules` are excluded by the task's definition of
 # "production code"; the rest are build/output artifacts that contain no
-# hand-written source.
+# hand-written source. `.claude` / `.gemini` also each nest a `worktrees/`
+# subdirectory holding OTHER agents' full checkouts (often on a different
+# branch) — walking into one contaminates the census with read-form sites
+# from unrelated code, exactly the class of bug this file's `meta` comment
+# above (no baked-in repo_root) already exists to avoid one layer up. Skip
+# both wholesale, same coarse granularity already used for `.claude`.
 _SKIP_DIRS = {
     ".venv",
     ".git",
@@ -94,6 +99,7 @@ _SKIP_DIRS = {
     "output",
     "cache",
     ".claude",
+    ".gemini",
     "build",
     "dist",
     ".ipynb_checkpoints",
