@@ -3649,6 +3649,35 @@ class HistoricalStore:
                 fetch_days, symbol, max_date.date(),
             )
 
+        # A readonly instance can never persist a top-up -- self._upsert_bars
+        # below would always raise OperationalError ("attempt to write a
+        # readonly database"), caught only by get_bars()'s own outer
+        # try/except, which then falls back to ANOTHER, WIDER live fetch
+        # (lookback_days, not fetch_days) to actually satisfy the caller. So
+        # skip straight to that same wider fetch: identical data returned to
+        # every readonly caller (pilots/rolling_beta.py,
+        # gui/panels/sentiment_dynamics.py, api/metrics_api.py,
+        # api/data_api.py, api/pilots_api.py's attribution helper), just
+        # without wasting a fetch_days-wide round-trip on a write that was
+        # never going to succeed, or logging a WARNING for an outcome this
+        # is not actually surprising. This does NOT change the documented,
+        # intentional fact that get_bars() defeats its own cache for a
+        # readonly store with a stale cache -- a caller that wants real
+        # caching still needs a write-mode store (see
+        # evaluation_engine.py's recommendation_tracking_report); see
+        # tests/test_historical_store.py's "NOT-a-safe-hardening-target"
+        # comment.
+        if self._readonly:
+            if provider is not None:
+                logger.debug(
+                    "HistoricalStore.get_bars(%s): readonly store, cache "
+                    "needs a top-up it can't persist -- skipping the write "
+                    "attempt, live-fetching directly.",
+                    symbol,
+                )
+                return self._live_fetch(symbol, lookback_days, provider)
+            return self._read_from_db(symbol, lookback_days)
+
         if provider is not None:
             raw_df = self._live_fetch(symbol, fetch_days, provider)
             if not raw_df.empty:
