@@ -1472,7 +1472,10 @@ class Settings(BaseSettings):
     )
 
     # --- Runtime / IO ---
-    OUTPUT_DIR: Path = Field(default=Path("./output"), description="Directory for generated reports.")
+    OUTPUT_DIR: Path = Field(
+        default=Path(__file__).resolve().parent / "output",
+        description="Directory for generated reports.",
+    )
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
     SYNC_WATCHLIST_FILES: Optional[str] = Field(
         default=None,
@@ -4185,7 +4188,14 @@ class Settings(BaseSettings):
     def _ensure_output_dir(cls, value: Path) -> Path:
         """Coerce to ``Path`` and create the directory if it does not exist."""
         path = Path(value)
-        path.mkdir(parents=True, exist_ok=True)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "Unable to create output directory %s (%s). Proceeding anyway.",
+                path,
+                exc,
+            )
         return path
 
     @field_validator("DAEMON_SHUTDOWN_TIMEOUT_SECONDS")

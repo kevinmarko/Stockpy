@@ -143,6 +143,17 @@ def test_output_dir_created(monkeypatch, tmp_path):
     assert s.OUTPUT_DIR.is_dir()
 
 
+def test_output_dir_read_only_graceful(monkeypatch, tmp_path):
+    from unittest.mock import patch
+    target = tmp_path / "read-only-dir"
+    monkeypatch.setenv("OUTPUT_DIR", str(target))
+
+    with patch.object(Path, "mkdir", side_effect=OSError("Read-only file system")):
+        s = Settings(_env_file=None)
+        assert s.OUTPUT_DIR == target
+
+
+
 # =============================================================================
 # 4. MISSING REQUIRED KEY — fails clearly on the live path
 # =============================================================================
