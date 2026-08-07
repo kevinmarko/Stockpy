@@ -94,8 +94,17 @@ def test_backfiller_initialization():
     assert engine.max_depth == settings.FORECAST_BACKFILL_MAX_DEPTH
 
 
+@pytest.mark.network
 def test_forecast_backfill_end_to_end_pipeline(tmp_path):
-    """Test full 6-step forecast backfill pipeline using synthetic data."""
+    """Test full 6-step forecast backfill pipeline using synthetic data.
+
+    Marked network (2026-08): despite `use_fmp=False`, step_1_fetch_data()
+    still falls back to CompositeProvider -- a REAL yfinance call, not a
+    synthetic-data path (this engine has no synthetic-data generator at
+    all). Left unmarked, this test was exposed to real Yahoo Finance rate
+    limiting ("Too Many Requests") whenever run alongside the rest of the
+    suite, deselected from the "not network" fast/offline gate.
+    """
     tickers = ["AAPL", "MSFT", "AMZN", "NVDA"]
     horizons = [10, 30, 60, 90]
 
@@ -153,11 +162,16 @@ def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     assert len(summary["metrics"]) == 8
 
 
+@pytest.mark.network
 def test_step_6_no_model_produces_nan_not_fabricated_confidence():
     """A horizon/model that never trained (e.g. insufficient samples) must
     leave its Meta_Prob column as NaN, never a fabricated placeholder like
     1.0 (CONSTRAINT #4) -- a fake 100%-confidence value would otherwise be
-    indistinguishable from a genuine, trained prediction downstream."""
+    indistinguishable from a genuine, trained prediction downstream.
+
+    Marked network (2026-08): calls step_1_fetch_data(), a real yfinance
+    call via CompositeProvider -- see test_forecast_backfill_end_to_end_
+    pipeline's marker comment for the full rationale."""
     engine = AgenticForecastBackfiller(
         tickers=["AAPL", "MSFT"],
         start_date="2018-01-01",
@@ -179,10 +193,16 @@ def test_step_6_no_model_produces_nan_not_fabricated_confidence():
     assert not (engine.data["TSMOM_Meta_Prob_10d"] == 1.0).any()
 
 
+@pytest.mark.network
 def test_dropped_fallback_is_flagged_and_removed(tmp_path):
     """When neither FMP nor CompositeProvider returns data for a ticker, it must
     be dropped from the run and surfaced in the exported summary -- a provider
-    outage must never look like a genuine backtest (CONSTRAINT #4)."""
+    outage must never look like a genuine backtest (CONSTRAINT #4).
+
+    Marked network (2026-08): AAPL is expected to succeed as the control
+    ticker while ZZZZ_NOT_REAL is expected to fail -- both go through a
+    real yfinance call via CompositeProvider. See
+    test_forecast_backfill_end_to_end_pipeline's marker comment."""
     engine = AgenticForecastBackfiller(
         tickers=["AAPL", "ZZZZ_NOT_REAL"],
         start_date="2020-01-01",
@@ -208,10 +228,16 @@ def test_dropped_fallback_is_flagged_and_removed(tmp_path):
     assert summary["dropped_tickers"] == ["ZZZZ_NOT_REAL"]
 
 
+@pytest.mark.network
 def test_three_consecutive_dropped_runs_permanently_removes_from_watchlist(tmp_path):
     """The 3-strike rule: a ticker missing real data across 3 SEPARATE
     step_1_fetch_data runs (e.g. 3 backfill cycles days apart) is permanently
-    removed from watchlist.txt, not just dropped from each individual run."""
+    removed from watchlist.txt, not just dropped from each individual run.
+
+    Marked network (2026-08): three real step_1_fetch_data() calls, each a
+    real yfinance call via CompositeProvider, with AAPL expected to succeed
+    as the control ticker. See test_forecast_backfill_end_to_end_pipeline's
+    marker comment."""
     watchlist_path = tmp_path / "watchlist.txt"
     watchlist_path.write_text("AAPL\nZZZZ_NOT_REAL\n", encoding="utf-8")
 
@@ -232,13 +258,18 @@ def test_three_consecutive_dropped_runs_permanently_removes_from_watchlist(tmp_p
     assert json.loads((tmp_path / "watchlist_failures.json").read_text(encoding="utf-8")) == {}
 
 
+@pytest.mark.network
 def test_train_test_split_embargoes_overlapping_forward_window(monkeypatch):
     """The last `h` dates before the split boundary must be excluded from
     training, since their target label is derived from a forward return that
     extends past the boundary into the test period -- otherwise test-period
     price moves leak into training (the same overlapping-label leakage class
     validation/purged_cv.py and the CNN-LSTM purged split guard elsewhere in
-    this codebase)."""
+    this codebase).
+
+    Marked network (2026-08): calls step_1_fetch_data(), a real yfinance
+    call via CompositeProvider. See test_forecast_backfill_end_to_end_
+    pipeline's marker comment."""
     import ml.forecast_backfill as fb_module
 
     horizon = 30
