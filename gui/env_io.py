@@ -141,9 +141,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # Total seconds budgeted for the daemon's graceful teardown (see
     # settings.py's own field docstring for the full shutdown-budget ladder).
     # Non-secret; a GUI bug here can only make shutdown less graceful, never
-    # leak a credential or enable a dangerous action -- unlike
-    # AUTOMATION_WRITES_ENABLED, which is
-    # deliberately excluded from this allowlist for that reason.
+    # leak a credential or enable a dangerous action.
     "DAEMON_SHUTDOWN_TIMEOUT_SECONDS",
     # The daemon's internal timer cadence. Writable via the Pilots API's
     # PUT /automation/schedule/interval (api/pilots_api.py) and the GUI.
@@ -499,17 +497,49 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "CACHE_LONG_SHORT_PROXY_CANDIDATES",
     "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
     "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
-    # CACHE_LONG_SHORT_WRITES_ENABLED is deliberately NOT here (nor in
-    # SECRET_KEYS) -- mirrors STRATEGY_WRITES_ENABLED/MACRO_GATE_WRITES_ENABLED:
-    # a dedicated writes-enabled flag must never be GUI-flippable. Hand-set in
-    # .env only. See tests/test_cache_long_short_api.py's
-    # test_cache_long_short_writes_enabled_is_not_gui_writable.
+    # CACHE_LONG_SHORT_WRITES_ENABLED: reclassified into ALLOWED_KEYS
+    # 2026-08-08 -- see the "Fail-closed command/write flags" block near the
+    # end of this tuple for the policy change and the full list of siblings
+    # reclassified alongside it. It carries no secret material; the
+    # POST /pilots/cache-long-short/{start,approve-bulk} endpoints it guards
+    # remain independently gated by their own command token regardless.
+    "CACHE_LONG_SHORT_WRITES_ENABLED",
     "FMP_PAPER_STARTING_CASH",
     # Fields flagged by scripts/auditor/stockpy_codebase_auditor.py's
     # undeclared_env_var check (2026-08) — non-secret tunables.
     "WATCHLIST",                # comma-separated ticker list; see main._load_watchlist()
     "GRAVITY_REQUIRE_NATIVE",   # bool — mirrors GRAVITY_AI_RUNNER_ENABLED's precedent above
     "QDRANT_COLLECTION",        # str — collection name, not itself sensitive (see QDRANT_URL in SECRET_KEYS)
+    # --- Fail-closed command/write flags -- reclassified 2026-08-08 --------
+    # Per explicit operator decision (PR #630 audit): "not secret information"
+    # is the sole bar for GUI-writability going forward. These 11 flags
+    # (CACHE_LONG_SHORT_WRITES_ENABLED above makes 12) previously lived in
+    # EXCLUDED_FROM_GUI specifically because each is a dedicated,
+    # own-risk-class fail-closed master switch (see each's own
+    # `require_*_enabled` docstring in api/pilots_api.py / api/data_api.py /
+    # api/_jobs.py for what it individually guards) -- none holds credential
+    # material, so none belongs in SECRET_KEYS either. The write/execution
+    # endpoint each one gates remains independently protected by its own
+    # command token (and, where applicable, a loopback/confirmation check)
+    # regardless of the flag's own GUI-writability -- a GUI bug can flip the
+    # boolean, but cannot bypass the endpoint's separate auth. This mirrors
+    # the precedent already established above for BROKERAGE_CONNECT_ENABLED /
+    # UNIVERSE_SYNC_ENABLED / AGENTIC_DISCOVERY_ENABLED (PR #560) and
+    # RLHF_CALIBRATION_ENABLED. Flag DEFAULT VALUES are unchanged (still
+    # `False`) -- this is a GUI-visibility change only, not a behavior
+    # change, per this codebase's "new settings default to today's exact
+    # behavior" convention.
+    "AI_GENERATION_API_ENABLED",
+    "AUTOMATION_WRITES_ENABLED",
+    "BROKERAGE_REFRESH_ENABLED",
+    "COMMAND_EXECUTION_ENABLED",
+    "DEAD_LETTER_RETRY_ENABLED",
+    "GENERAL_SETTINGS_WRITES_ENABLED",
+    "LLM_WRITES_ENABLED",
+    "MACRO_GATE_WRITES_ENABLED",
+    "PROMPT_REGISTRY_WRITES_ENABLED",
+    "RAG_QUERY_API_ENABLED",
+    "STRATEGY_WRITES_ENABLED",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -618,17 +648,24 @@ SECRET_KEYS: tuple[str, ...] = (
 # Deliberately excluded from BOTH allowlists
 # ---------------------------------------------------------------------------
 # Fields on settings.Settings that are neither GUI-writable non-secret tunables
-# nor secrets to mask -- each is either (a) a filesystem path (editing it from
-# the GUI has no clear safety benefit and risks pointing the app at a bogus
-# location), or (b) a fail-closed master switch gating a real side effect
-# (arbitrary command execution, a paid LLM call exposed over a fail-open HTTP
-# API, a .env-writing endpoint) that must stay hand-set-only per this
-# codebase's established "a GUI bug must never flip this on" pattern (see e.g.
-# tests/test_pilots_api.py's `*_is_not_gui_writable` tests). NOTE:
-# BROKERAGE_CONNECT_ENABLED/UNIVERSE_SYNC_ENABLED/AGENTIC_DISCOVERY_ENABLED
-# were in this class too until PR #560's "per explicit operator decision"
-# reclassified them into ALLOWED_KEYS above (each stays independently gated
-# by its own command-token/loopback check downstream) -- they are NOT here.
+# nor secrets to mask -- today that means exactly one class: filesystem paths,
+# where editing from the GUI has no clear safety benefit and risks pointing
+# the app at a bogus location.
+#
+# HISTORY (2026-08-08): a second class used to live here too -- 12 fail-closed
+# master switches gating a real side effect (arbitrary command execution, a
+# paid LLM call exposed over a fail-open HTTP API, a .env-writing endpoint),
+# kept hand-set-only on the theory that "a GUI bug must never flip this on."
+# Per explicit operator decision (PR #630 audit) that theory was replaced with
+# a narrower one: GUI-writability is now gated on secrecy alone, not on the
+# flag's capability class -- see the dated "Fail-closed command/write flags"
+# block near the end of ALLOWED_KEYS above for the full list and reasoning.
+# Each write/execution endpoint those flags guard remains independently
+# protected by its own command token regardless, so this was a GUI-visibility
+# change, not a new capability. This mirrors the PR #560 precedent already
+# noted throughout this file for BROKERAGE_CONNECT_ENABLED /
+# UNIVERSE_SYNC_ENABLED / AGENTIC_DISCOVERY_ENABLED / RLHF_CALIBRATION_ENABLED.
+#
 # This set exists purely so tests/test_gui_env_io.py can assert every
 # settings.py field is accounted for -- it grants no capability and is not
 # consulted by read_settings/write_setting/write_many (unclassified access
@@ -644,21 +681,6 @@ EXCLUDED_FROM_GUI: frozenset[str] = frozenset(
         "LLM_COMMENTARY_CACHE_PATH",
         "SYNC_WATCHLIST_FILES",  # colon-separated local filesystem paths
         "GCLOUD_BIN",  # path/name of the gcloud binary override
-        # --- Fail-closed command / write / paid-API-exposure flags -----------
-        # (hand-set in .env only; several already pinned by dedicated
-        # `test_*_is_not_gui_writable` tests in tests/test_pilots_api.py)
-        "AI_GENERATION_API_ENABLED",
-        "AUTOMATION_WRITES_ENABLED",
-        "BROKERAGE_REFRESH_ENABLED",
-        "CACHE_LONG_SHORT_WRITES_ENABLED",
-        "COMMAND_EXECUTION_ENABLED",
-        "DEAD_LETTER_RETRY_ENABLED",
-        "GENERAL_SETTINGS_WRITES_ENABLED",
-        "LLM_WRITES_ENABLED",
-        "MACRO_GATE_WRITES_ENABLED",
-        "PROMPT_REGISTRY_WRITES_ENABLED",
-        "RAG_QUERY_API_ENABLED",
-        "STRATEGY_WRITES_ENABLED",
     }
 )
 

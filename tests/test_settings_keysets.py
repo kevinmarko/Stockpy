@@ -116,11 +116,19 @@ class TestNamesAreRealFields:
             f"— a stale entry classifies nothing and fails silently in production."
         )
 
-    def test_sets_are_non_empty_frozensets(self):
+    def test_sets_are_frozensets(self):
+        # HAND_SET_ONLY_KEYS is deliberately excluded from the non-empty
+        # check: as of 2026-08-08 all 12 fields it used to hold were
+        # reclassified into ALLOWED_KEYS + SAFETY_CRITICAL_KEY_REASONS by
+        # explicit operator decision (PR #630 audit) -- see that module's own
+        # comment. An empty frozenset is the correct, honest current state,
+        # not a bug; DANGEROUS_KEYS/SAFETY_CRITICAL_KEYS are still checked
+        # non-empty since they carry live classifications.
         for name in ("BOOTSTRAP_KEYS", "DANGEROUS_KEYS", "HAND_SET_ONLY_KEYS", "SAFETY_CRITICAL_KEYS"):
             value = getattr(ks, name)
             assert isinstance(value, frozenset), f"{name} must be a frozenset, got {type(value)}"
-            assert value, f"{name} is empty"
+        for name in ("BOOTSTRAP_KEYS", "DANGEROUS_KEYS", "SAFETY_CRITICAL_KEYS"):
+            assert getattr(ks, name), f"{name} is empty"
 
     def test_dangerous_keys_is_exactly_the_union_of_its_two_sources(self):
         assert ks.DANGEROUS_KEYS == ks.HAND_SET_ONLY_KEYS | ks.SAFETY_CRITICAL_KEYS

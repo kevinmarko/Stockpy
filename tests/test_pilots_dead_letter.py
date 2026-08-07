@@ -208,9 +208,12 @@ class TestDeadLetterRetryWrite:
 
 
 class TestDeadLetterRetryInvariants:
-    def test_dead_letter_retry_enabled_is_not_gui_writable(self):
-        """Mirrors test_automation_writes_enabled_is_not_gui_writable: a GUI
-        bug must never flip this on. Neither allowlisted nor secret --
-        hand-set in .env only."""
-        assert "DEAD_LETTER_RETRY_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_dead_letter_retry_enabled_is_gui_writable(self):
+        """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
+        explicit operator decision -- not secret, so this no longer needs to
+        be hand-set-only. Still a settings_keysets.DANGEROUS_KEYS member
+        (typed confirmation required on write); the endpoint remains
+        independently gated by FOLLOW_API_TOKEN regardless."""
+        assert "DEAD_LETTER_RETRY_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "DEAD_LETTER_RETRY_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "DEAD_LETTER_RETRY_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI

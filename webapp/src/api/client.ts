@@ -558,6 +558,15 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
     }),
+  getCacheLongShortSettings: () => http<TunablesResponse>("/settings/cache-long-short"),
+  updateCacheLongShortSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
+    http<TunablesUpdateResult>("/settings/cache-long-short", {
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
+    }),
   getSectorSelectionSettings: () => http<TunablesResponse>("/settings/sector-selection"),
   updateSectorSelectionSettings: (
     values: Record<string, number | boolean | string>,

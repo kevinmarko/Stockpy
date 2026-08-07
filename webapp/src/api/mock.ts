@@ -1651,7 +1651,7 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["pipeline/production_steps.py:531"],
 };
 
-// `settings_keysets.DANGEROUS_KEYS` ∩ the keys these five editors serve. Copied
+// `settings_keysets.DANGEROUS_KEYS` ∩ the keys these six editors serve. Copied
 // from the real set -- these are precisely the fields that were live-writable
 // with no confirmation before this feature existed.
 const MOCK_DANGEROUS_KEYS = new Set([
@@ -1660,6 +1660,12 @@ const MOCK_DANGEROUS_KEYS = new Set([
   "CORS_ALLOWED_ORIGINS",
   "FMP_BARS_ENABLED",
   "FMP_BARS_ADJUSTMENT",
+  // 2026-08-08: settings_keysets.SAFETY_CRITICAL_KEY_REASONS gained this
+  // field (and 11 siblings) when the fail-closed write/execution gates were
+  // reclassified out of EXCLUDED_FROM_GUI into ALLOWED_KEYS -- only this one
+  // is currently exposed by any editor (the Cache Long/Short settings
+  // screen), so it's the only sibling that needs a mock entry here.
+  "CACHE_LONG_SHORT_WRITES_ENABLED",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -2478,6 +2484,8 @@ const FMP_TUNABLES_KEY = "stockpy.mock.fmp_tunables";
 const FMP_TUNABLES_DRIFT_KEY = "stockpy.mock.fmp_tunables_drift";
 const ETF_TRANSMISSION_TUNABLES_KEY = "stockpy.mock.etf_transmission_tunables";
 const ETF_TRANSMISSION_TUNABLES_DRIFT_KEY = "stockpy.mock.etf_transmission_tunables_drift";
+const CACHE_LONG_SHORT_TUNABLES_KEY = "stockpy.mock.cache_long_short_tunables";
+const CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY = "stockpy.mock.cache_long_short_tunables_drift";
 
 const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   {
@@ -2702,6 +2710,42 @@ const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
   },
 ];
 
+const CACHE_LONG_SHORT_TUNABLE_DEFS: MockTunableDef[] = [
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for the Cache Long/Short tax-loss-harvesting advisory strategy.",
+  },
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_WRITES_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Dedicated fail-closed flag for the position-writing endpoints (start, approve-bulk).",
+  },
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_MIN_CORRELATION", type: "number",
+    value: 0.75, default: 0.75, min: 0.0, max: 1.0, step: 0.05,
+    description: "Min correlation to trigger drift alert.",
+  },
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT", type: "number",
+    value: 0.05, default: 0.05, min: 0.0, max: 1.0, step: 0.01,
+    description: "Percentage loss to trigger a tax-loss-harvesting recommendation.",
+  },
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS", type: "number",
+    value: 3600, default: 3600, min: 60, max: 86400, step: 60,
+    description: "Interval (seconds) for the Cache Long/Short background worker loop.",
+  },
+  {
+    // JSON-array field -- kept as a "string" type like every other JSON-blob
+    // tunable (ETF_HOLDINGS_TICKERS, SECTOR_FORECAST_CONFIGS, etc.); the
+    // frontend's TunableFieldType has no separate "json" member.
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_PROXY_CANDIDATES", type: "string",
+    value: '["SPY","QQQ","XLK","XLF","XLV","XLE"]', default: '["SPY","QQQ","XLK","XLF","XLV","XLE"]',
+    description: "JSON array of candidate proxy ETFs screened for a concentrated ticker's hedge leg.",
+  },
+];
+
 function mockSentimentTunables(): TunablesResponse {
   return buildTunablesResponse(SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY);
 }
@@ -2762,6 +2806,27 @@ function applyEtfTransmissionTunables(
     ETF_TRANSMISSION_TUNABLE_DEFS,
     ETF_TRANSMISSION_TUNABLES_KEY,
     ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
+    confirm
+  );
+}
+
+function mockCacheLongShortTunables(): TunablesResponse {
+  return buildTunablesResponse(
+    CACHE_LONG_SHORT_TUNABLE_DEFS,
+    CACHE_LONG_SHORT_TUNABLES_KEY,
+    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY
+  );
+}
+
+function applyCacheLongShortTunables(
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
+): TunablesUpdateResult {
+  return applyTunablesGeneric(
+    values,
+    CACHE_LONG_SHORT_TUNABLE_DEFS,
+    CACHE_LONG_SHORT_TUNABLES_KEY,
+    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY,
     confirm
   );
 }
@@ -6665,6 +6730,17 @@ export const mockApi = {
     confirm: SettingsConfirmMap = {}
   ): Promise<TunablesUpdateResult> {
     return delay(applyEtfTransmissionTunables(values, confirm));
+  },
+
+  async getCacheLongShortSettings(): Promise<TunablesResponse> {
+    return delay(mockCacheLongShortTunables());
+  },
+
+  async updateCacheLongShortSettings(
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {}
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyCacheLongShortTunables(values, confirm));
   },
 
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----

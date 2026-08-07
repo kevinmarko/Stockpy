@@ -4589,6 +4589,26 @@ _SENTIMENT_INDEX = {
     for key, kind, extras in _specs
 }
 
+_CACHE_LONG_SHORT_GROUPS = [
+    (
+        "Cache Long/Short Overlay",
+        [
+            ("CACHE_LONG_SHORT_ENABLED", "bool", {}),
+            ("CACHE_LONG_SHORT_WRITES_ENABLED", "bool", {}),
+            ("CACHE_LONG_SHORT_MIN_CORRELATION", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("CACHE_LONG_SHORT_TLH_THRESHOLD_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
+            ("CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS", "int", {"min": 60, "max": 86400, "step": 60}),
+            ("CACHE_LONG_SHORT_PROXY_CANDIDATES", "json", {}),
+        ],
+    ),
+]
+
+_CACHE_LONG_SHORT_INDEX = {
+    key: (kind, extras)
+    for _group, _specs in _CACHE_LONG_SHORT_GROUPS
+    for key, kind, extras in _specs
+}
+
 _SECTOR_SELECTION_GROUPS = [
     (
         "Related Sector Selection",
@@ -4759,6 +4779,31 @@ def get_settings_sector_selection() -> Dict[str, Any]:
 def put_settings_sector_selection(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update sector selection configuration in .env."""
     return _validate_and_write_payload(body.values, _SECTOR_SELECTION_INDEX, confirm=body.confirm)
+
+
+@app.get("/settings/cache-long-short", dependencies=[Depends(require_read_token)])
+def get_settings_cache_long_short() -> Dict[str, Any]:
+    """Get Cache Long/Short configuration."""
+    return _settings_editor_payload(_CACHE_LONG_SHORT_GROUPS, _CACHE_LONG_SHORT_INDEX)
+
+
+@app.put(
+    "/settings/cache-long-short",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
+    "/settings/cache-long-short",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_cache_long_short(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Update Cache Long/Short configuration in .env."""
+    return _validate_and_write_payload(body.values, _CACHE_LONG_SHORT_INDEX, confirm=body.confirm)
 
 
 @app.get("/settings/fmp", dependencies=[Depends(require_read_token)])

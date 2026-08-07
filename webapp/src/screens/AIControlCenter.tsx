@@ -155,9 +155,12 @@ function ToggleGroupRow({
   const groundTruth = rows.find((r) => r.provider_selector_setting == null);
   const checked = groundTruth ? groundTruth.enabled : rows.some((r) => r.enabled);
 
-  const mutation = useMutation((next: boolean) => api.putLlmSetting(toggleKey, next));
-
   const labels = rows.map((r) => r.label).join(" + ");
+
+  const mutation = useMutation(
+    (next: boolean) => api.putLlmSetting(toggleKey, next),
+    { successMessage: (result) => `Toggled ${labels} to ${result.value}` }
+  );
 
   const handleToggle = async (next: boolean) => {
     await mutation.run(next);
@@ -216,7 +219,10 @@ function ProviderSelectRow({
   ];
   const current = row.active_provider ?? "none";
 
-  const mutation = useMutation((value: string) => api.putLlmSetting(settingKey, value));
+  const mutation = useMutation(
+    (value: string) => api.putLlmSetting(settingKey, value),
+    { successMessage: (result) => `Set ${row.label} to ${result.value}` }
+  );
 
   const handleChange = async (value: string) => {
     await mutation.run(value);
