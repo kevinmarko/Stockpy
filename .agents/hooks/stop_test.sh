@@ -35,7 +35,12 @@ set -uo pipefail
 # Drain stdin for consistency with the other Antigravity hooks in this repo
 # (block_env_write.sh / sync_agent_docs.sh / webapp_typecheck.sh all read the
 # full hook input even when, as here, no field of it is actually consumed).
-input="$(cat)"
+input=""
+if [ ! -t 0 ]; then
+  if IFS= read -r -t 1 first_line; then
+    input="$(printf '%s\n' "$first_line"; cat)"
+  fi
+fi
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)"
 [ -n "$root" ] || exit 0

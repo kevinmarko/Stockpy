@@ -15,7 +15,12 @@
 # bypasses the tool layer entirely so there's nothing to re-trigger.
 set -uo pipefail
 
-input="$(cat)"
+input=""
+if [ ! -t 0 ]; then
+  if IFS= read -r -t 1 first_line; then
+    input="$(printf '%s\n' "$first_line"; cat)"
+  fi
+fi
 file_path="$(jq -r '.tool_input.file_path // .tool_response.filePath // empty' <<<"$input")"
 
 [ -n "$file_path" ] || exit 0

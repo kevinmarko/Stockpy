@@ -22,7 +22,12 @@
 # system-level gate the way the Claude Code hook is.
 set -uo pipefail
 
-input="$(cat)"
+input=""
+if [ ! -t 0 ]; then
+  if IFS= read -r -t 1 first_line; then
+    input="$(printf '%s\n' "$first_line"; cat)"
+  fi
+fi
 
 candidates="$(printf '%s' "$input" | jq -r '.toolCall.args.TargetFile // empty' 2>/dev/null)"
 
