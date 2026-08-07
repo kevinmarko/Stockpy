@@ -13,13 +13,10 @@
 # guardrail (.claude/hooks/block_env_write.sh) to Antigravity's hook I/O
 # contract, which differs (stdin/stdout JSON shape, tool/arg names).
 #
-# UNVERIFIED against a live Antigravity runtime -- this environment has no
-# Antigravity instance available to test against. Uses a defensive recursive
-# string-scan over toolCall.args instead of a specific key name (e.g.
-# file_path/path/target_file) because the exact Antigravity arg schema for
-# edit_file/create_file isn't confirmed from documentation alone. If this
-# doesn't fire as expected the first time an Antigravity session edits a
-# matching file, that's the first thing to check.
+# VERIFIED against a live Antigravity runtime. The exact Antigravity arg schema
+# for write_to_file/replace_file_content/multi_replace_file_content uses TargetFile.
+# Note: These hooks do not natively intercept file-editing tools in the IDE runtime,
+# so this remains policy-only for Antigravity sessions.
 set -uo pipefail
 
 input="$(cat)"
