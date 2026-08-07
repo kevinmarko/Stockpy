@@ -585,6 +585,14 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
     }),
+  
+  getFeatureFlags: () => http<TunablesResponse>("/settings/feature-flags"),
+  updateFeatureFlags: (values: Record<string, any>, confirm?: import("./types").SettingsConfirmMap) =>
+    http<TunablesUpdateResult>("/settings/feature-flags", {
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
+    }),
+
   getEtfTransmissionSettings: () => http<TunablesResponse>("/settings/etf-transmission"),
   updateEtfTransmissionSettings: (
     values: Record<string, number | boolean | string>,

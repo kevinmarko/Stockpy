@@ -1651,21 +1651,37 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["pipeline/production_steps.py:531"],
 };
 
-// `settings_keysets.DANGEROUS_KEYS` ∩ the keys these six editors serve. Copied
-// from the real set -- these are precisely the fields that were live-writable
-// with no confirmation before this feature existed.
+// `settings_keysets.DANGEROUS_KEYS`, in full -- copied from the real set.
+// All 20 real settings_keysets.DANGEROUS_KEYS members are now covered here,
+// since the Feature Flags screen (webapp/src/api/mock.ts's
+// FEATURE_FLAGS_TUNABLE_DEFS) serves every one of them, exercising the
+// typed-confirmation flow for all 20 in mock mode.
 const MOCK_DANGEROUS_KEYS = new Set([
   "ADVISORY_ONLY",
   "DRY_RUN",
+  "ROBINHOOD_EXECUTION_MODE",
   "CORS_ALLOWED_ORIGINS",
   "FMP_BARS_ENABLED",
   "FMP_BARS_ADJUSTMENT",
-  // 2026-08-08: settings_keysets.SAFETY_CRITICAL_KEY_REASONS gained this
-  // field (and 11 siblings) when the fail-closed write/execution gates were
-  // reclassified out of EXCLUDED_FROM_GUI into ALLOWED_KEYS -- only this one
-  // is currently exposed by any editor (the Cache Long/Short settings
-  // screen), so it's the only sibling that needs a mock entry here.
   "CACHE_LONG_SHORT_WRITES_ENABLED",
+  // 2026-08-08: settings_keysets.SAFETY_CRITICAL_KEY_REASONS gained these 13
+  // fields (CACHE_LONG_SHORT_WRITES_ENABLED above being one of them) when the
+  // fail-closed write/execution gates were reclassified out of
+  // EXCLUDED_FROM_GUI into ALLOWED_KEYS -- now all exposed by the Feature
+  // Flags screen.
+  "MACRO_REGIME_GATE_ENABLED",
+  "AI_GENERATION_API_ENABLED",
+  "AUTOMATION_WRITES_ENABLED",
+  "BROKERAGE_REFRESH_ENABLED",
+  "COMMAND_EXECUTION_ENABLED",
+  "DEAD_LETTER_RETRY_ENABLED",
+  "GENERAL_SETTINGS_WRITES_ENABLED",
+  "LLM_WRITES_ENABLED",
+  "MACRO_GATE_WRITES_ENABLED",
+  "MCP_OAUTH_ENABLED",
+  "PROMPT_REGISTRY_WRITES_ENABLED",
+  "RAG_QUERY_API_ENABLED",
+  "STRATEGY_WRITES_ENABLED",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1995,11 +2011,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     group: "Advanced / Config", key: "ORCHESTRATOR_DAEMON_ENABLED", type: "boolean",
     value: false, default: false,
     description: "Route the desktop shell's always-on refresh loop and the Launcher tab's manual run trigger through the persistent orchestrator daemon instead of spawning a fresh subprocess per cycle. False (default) preserves today's exact subprocess behavior everywhere.",
-  },
-  {
-    group: "Advanced / Config", key: "PILOTS_API_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Host the Pilots API inside the persistent orchestrator daemon process, alongside the existing Control API. False (default) preserves today's exact behavior -- pilots_api.py remains a manually-launched standalone service.",
   },
   {
     group: "Advanced / Config", key: "CORS_ALLOWED_ORIGINS", type: "string",
@@ -2746,6 +2757,187 @@ const CACHE_LONG_SHORT_TUNABLE_DEFS: MockTunableDef[] = [
   },
 ];
 
+// Mirrors api/pilots_api.py's _FEATURE_FLAGS_GROUPS exactly: the 19
+// settings_keysets.DANGEROUS_KEYS + the 6 pilots/feature_flags.py
+// WRITE_GATE_REASONS keys in one group, the 7 DIAGNOSTIC_FLAG_REASONS keys
+// in the other. Values/defaults mirror the real settings.py defaults after
+// the 2026-08-07 admin-gate default flip.
+const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
+  // -- Write & Execution Gates (settings_keysets.DANGEROUS_KEYS -- typed
+  // confirmation required on write) --
+  {
+    group: "Write & Execution Gates", key: "ADVISORY_ONLY", type: "boolean",
+    value: true, default: true,
+    description: "The execution quarantine -- when True, ALL broker order submission is suppressed.",
+  },
+  {
+    group: "Write & Execution Gates", key: "DRY_RUN", type: "boolean",
+    value: false, default: false,
+    description: "The second execution quarantine -- turning it off is what makes logged orders become submitted orders.",
+  },
+  {
+    group: "Write & Execution Gates", key: "ROBINHOOD_EXECUTION_MODE", type: "enum",
+    value: "off", default: "off", options: ["off", "review", "live"],
+    description: "Moving this to 'live' is what lets the Robinhood execution bridge place real orders.",
+  },
+  {
+    group: "Write & Execution Gates", key: "MACRO_REGIME_GATE_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "The recession/credit-event BUY veto (Sahm Rule, VIX, HY OAS). Setting it False bypasses that veto entirely.",
+  },
+  {
+    group: "Write & Execution Gates", key: "FMP_BARS_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Read FMP_BARS_ADJUSTMENT before enabling -- an adjustment-convention mismatch corrupts every return series, indicator, and backtest.",
+  },
+  {
+    group: "Write & Execution Gates", key: "FMP_BARS_ADJUSTMENT", type: "enum",
+    value: "dividend-adjusted", default: "dividend-adjusted",
+    options: ["dividend-adjusted", "light", "full", "non-split-adjusted"],
+    description: "The single highest-risk value in the FMP integration -- 'full' looks like the obvious pick and is wrong (split-only, not dividend-adjusted).",
+  },
+  {
+    group: "Write & Execution Gates", key: "CORS_ALLOWED_ORIGINS", type: "string",
+    value: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    default: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    description: "Which browser origins the State API and Pilots API accept requests from.",
+  },
+  {
+    group: "Write & Execution Gates", key: "AI_GENERATION_API_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Master gate for the three paid Claude/Gemini/Opal generation endpoints on the Data API.",
+  },
+  {
+    group: "Write & Execution Gates", key: "AUTOMATION_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /automation/resume, which re-enables live order submission after ADVISORY_ONLY was previously engaged.",
+  },
+  {
+    group: "Write & Execution Gates", key: "BROKERAGE_REFRESH_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /brokerage/refresh -- a real live login against the operator's actual brokerage account, bypassing the daily cache.",
+  },
+  {
+    group: "Write & Execution Gates", key: "CACHE_LONG_SHORT_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates the Cache Long/Short position-writing endpoints (start, approve-bulk) -- changes what a trading strategy recommends.",
+  },
+  {
+    group: "Write & Execution Gates", key: "COMMAND_EXECUTION_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "The highest-risk flag in this group -- enables the 'command' job type, which can execute the kill switch or arbitrary orchestrator flags.",
+  },
+  {
+    group: "Write & Execution Gates", key: "DEAD_LETTER_RETRY_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /dead-letter/retry, which spawns a real main.py subprocess for one symbol.",
+  },
+  {
+    group: "Write & Execution Gates", key: "GENERAL_SETTINGS_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /settings/tunables -- Kelly sizing, risk-gate, and forecasting knobs.",
+  },
+  {
+    group: "Write & Execution Gates", key: "LLM_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /llm/setting -- which LLM provider narrates a rationale, and whether Gravity AI / Opal research can fire.",
+  },
+  {
+    group: "Write & Execution Gates", key: "MACRO_GATE_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /observability/macro-gate, the write path for MACRO_REGIME_GATE_ENABLED itself.",
+  },
+  {
+    group: "Write & Execution Gates", key: "MCP_OAUTH_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Whether investyo_mcp_server.py's OAuth authorization-server endpoints are live.",
+  },
+  {
+    group: "Write & Execution Gates", key: "PROMPT_REGISTRY_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /prompts/pin -- changes which prompt text the platform actually runs.",
+  },
+  {
+    group: "Write & Execution Gates", key: "RAG_QUERY_API_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /rag/query, a paid external LLM call.",
+  },
+  {
+    group: "Write & Execution Gates", key: "STRATEGY_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /strategy/modules -- signal weights and the disabled-module set, which changes what the platform recommends.",
+  },
+  // -- Write gates NOT in DANGEROUS_KEYS (pilots/feature_flags.py's
+  // WRITE_GATE_REASONS -- visible, no typed confirmation required) --
+  {
+    group: "Write & Execution Gates", key: "BROKERAGE_CONNECT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /brokerage/connect and /disconnect -- real brokerage-credential intake.",
+  },
+  {
+    group: "Write & Execution Gates", key: "UNIVERSE_SYNC_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /data/sync -- refreshes the tracked ticker universe from the configured sources.",
+  },
+  {
+    group: "Write & Execution Gates", key: "AGENTIC_DISCOVERY_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /agentic/scan-config -- the Robinhood broker-scan configuration for the agentic-discovery skill.",
+  },
+  {
+    group: "Write & Execution Gates", key: "JOBS_API_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates background job execution and SSE log-streaming endpoints on the orchestrator Control API.",
+  },
+  {
+    group: "Write & Execution Gates", key: "PILOTS_API_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Whether the Pilots API is hosted inside the persistent orchestrator daemon process at all -- a process-startup switch, not a per-request guard.",
+  },
+  {
+    group: "Write & Execution Gates", key: "RLHF_CALIBRATION_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates the RLHF Calibration Review Queue's write endpoints -- defaults on since every proposal is hypothetical/paper-only.",
+  },
+  // -- Diagnostic & Data Features (read-only measurement/data-source
+  // master switches, feed no scoring or sizing decision) --
+  {
+    group: "Diagnostic & Data Features", key: "SECTOR_HEAT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables Sector Heat Factor computation from GDELT article volume.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "WIKIPEDIA_ATTENTION_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables Attention Score computation from Wikipedia pageviews.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "ETF_HOLDINGS_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables fetching ETF constituent baskets for exposure analysis.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "ETF_TRANSMISSION_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables ETF volatility-transmission measurement columns (diagnostic only -- not read by scoring or sizing).",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "MARKET_DATA_LATENCY_TRACKING_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Tracks and surfaces real-time market data feed latency.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "SENTIMENT_INDEX_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Computes composite sentiment index from news and reviews.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "EDGAR_FULLTEXT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables full-text ingestion of 10-K/10-Q SEC filings.",
+  },
+];
+
 function mockSentimentTunables(): TunablesResponse {
   return buildTunablesResponse(SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY);
 }
@@ -2827,6 +3019,30 @@ function applyCacheLongShortTunables(
     CACHE_LONG_SHORT_TUNABLE_DEFS,
     CACHE_LONG_SHORT_TUNABLES_KEY,
     CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY,
+    confirm
+  );
+}
+
+const FEATURE_FLAGS_TUNABLES_KEY = "stockpy.mock.feature_flags_tunables";
+const FEATURE_FLAGS_TUNABLES_DRIFT_KEY = "stockpy.mock.feature_flags_tunables_drift";
+
+function mockFeatureFlagsTunables(): TunablesResponse {
+  return buildTunablesResponse(
+    FEATURE_FLAGS_TUNABLE_DEFS,
+    FEATURE_FLAGS_TUNABLES_KEY,
+    FEATURE_FLAGS_TUNABLES_DRIFT_KEY
+  );
+}
+
+function applyFeatureFlagsTunables(
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
+): TunablesUpdateResult {
+  return applyTunablesGeneric(
+    values,
+    FEATURE_FLAGS_TUNABLE_DEFS,
+    FEATURE_FLAGS_TUNABLES_KEY,
+    FEATURE_FLAGS_TUNABLES_DRIFT_KEY,
     confirm
   );
 }
@@ -6719,6 +6935,18 @@ export const mockApi = {
     confirm: SettingsConfirmMap = {}
   ): Promise<TunablesUpdateResult> {
     return delay(applyFmpTunables(values, confirm));
+  },
+
+
+  async getFeatureFlags(): Promise<TunablesResponse> {
+    return delay(mockFeatureFlagsTunables());
+  },
+
+  async updateFeatureFlags(
+    values: Record<string, any>,
+    confirm?: SettingsConfirmMap
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyFeatureFlagsTunables(values, confirm ?? {}));
   },
 
   async getEtfTransmissionSettings(): Promise<TunablesResponse> {

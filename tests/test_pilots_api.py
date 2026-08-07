@@ -2426,10 +2426,10 @@ class TestAutomationSchedule:
         assert body["interval"]["running_value"] is None
         assert body["interval"]["drift"] is False  # null running_value never claims drift
 
-    def test_interval_is_read_only_in_this_build(self):
+    def test_interval_is_writable_by_default_in_this_build(self):
         with mock.patch.object(pilots_api.daemon_client, "get_status", return_value=None):
             resp = client.get("/automation/schedule")
-        assert resp.json()["interval"]["writable"] is False
+        assert resp.json()["interval"]["writable"] is True
 
     def test_cron_never_shells_out_and_installed_is_honestly_null(self):
         """Regression guard for the RCE-adjacent surface this design

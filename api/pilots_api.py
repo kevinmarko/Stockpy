@@ -71,7 +71,7 @@ GUI-writable by operator decision; the endpoint remains gated by the command
 token and loopback check below regardless), ``require_automation_writes_enabled``
 (``PUT /automation/schedule/interval``, ``POST /automation/resume``,
 ``PUT /automation/execution-mode`` — deliberately kept out of
-``gui/env_io.py``'s ALLOWED_KEYS, hand-set in ``.env`` only),
+``gui/env_io.py``'s ALLOWED_KEYS, surfaced in the Feature Flags screen),
 ``require_strategy_writes_enabled`` (``PUT /strategy/modules`` — signal weights +
 disabled-module set to ``.env``; its own flag so signal tuning cannot ride in on
 the automation flag), ``require_llm_writes_enabled`` (``PUT /llm/setting`` —
@@ -200,6 +200,8 @@ from rlhf_calibration_store import (
 # restart, does nothing, or is pinned by a real shell export). Stdlib +
 # runtime_flags + settings_keysets only — see its module docstring.
 import pilots.settings_meta as settings_meta
+import pilots.feature_flags as feature_flags
+import settings_keysets
 
 # Execution / persistence — explicitly ALLOWED here (unlike state_api.py),
 # forbidden only for the heavy calculation engines (see this module's AST guard
@@ -376,10 +378,9 @@ def require_brokerage_refresh_enabled() -> None:
     disconnect) — refresh receives no credential material and instead re-uses
     whatever is already configured, but it is still a real, live login against
     the operator's actual brokerage account and must not ride in on a flag
-    named for a different action. ``settings.BROKERAGE_REFRESH_ENABLED`` is
-    deliberately NOT GUI-writable (gui/env_io.py) — it must be hand-set in
-    ``.env``. ``/brokerage/status`` and ``GET /portfolio`` are read-only and NOT
-    gated by this flag."""
+    named for a different action. GUI-writable (as of 2026-08-08) (gui/env_io.py) —
+    surfaced in the Feature Flags screen. ``/brokerage/status`` and ``GET /portfolio``
+    are read-only and NOT gated by this flag."""
     if not settings.BROKERAGE_REFRESH_ENABLED:
         raise HTTPException(
             status_code=403,
@@ -392,7 +393,7 @@ def require_automation_writes_enabled() -> None:
     with a real persistence/rollback cost: ``PUT /automation/schedule/interval``
     (an ``.env`` edit) and ``POST /automation/resume`` (re-enabling live order
     submission when ``ADVISORY_ONLY=False``). ``settings.AUTOMATION_WRITES_ENABLED``
-    is deliberately NOT GUI-writable — hand-set in ``.env`` only.
+    is GUI-writable (as of 2026-08-08) — surfaced in the Feature Flags screen.
 
     ``POST /automation/run`` and ``POST /automation/pause`` are NOT gated by
     this — they sit behind ``require_command_token`` alone, matching
@@ -411,8 +412,8 @@ def require_strategy_writes_enabled() -> None:
     (``settings.STRATEGY_WRITES_ENABLED``), NOT ``AUTOMATION_WRITES_ENABLED``:
     that one was scoped to the daemon interval and kill-switch resume, and
     signal-weight tuning changes WHAT THE PLATFORM RECOMMENDS. Mirrors
-    ``require_brokerage_connect_enabled`` exactly — deliberately NOT GUI-writable,
-    hand-set in ``.env`` only. ``GET /strategy/matrix`` is read-only and NOT gated
+    ``require_brokerage_connect_enabled`` exactly — GUI-writable (as of 2026-08-08),
+    surfaced in the Feature Flags screen. ``GET /strategy/matrix`` is read-only and NOT gated
     by this flag (``require_read_token`` alone, matching ``/brokerage/status``)."""
     if not settings.STRATEGY_WRITES_ENABLED:
         raise HTTPException(
@@ -430,7 +431,7 @@ def require_llm_writes_enabled() -> None:
     which LLM provider narrates a rationale, or whether the Gravity AI runner
     / Opal research agent can fire, is its own risk class and must not ride
     in on either. Mirrors ``require_strategy_writes_enabled`` exactly —
-    deliberately NOT GUI-writable, hand-set in ``.env`` only. ``GET /llm/status``
+    GUI-writable (as of 2026-08-08), surfaced in the Feature Flags screen. ``GET /llm/status``
     is read-only and NOT gated by this flag (``require_read_token`` alone,
     matching ``/brokerage/status`` and ``GET /strategy/matrix``)."""
     if not settings.LLM_WRITES_ENABLED:
@@ -468,8 +469,8 @@ def require_general_settings_writes_enabled() -> None:
     ``LLM_WRITES_ENABLED``, or ``AGENTIC_DISCOVERY_ENABLED``: this changes sizing
     and risk-gate behavior (how large a position gets, when the risk gate blocks
     an order), its own risk class, and must not ride in on any of those. Mirrors
-    ``require_strategy_writes_enabled`` exactly — deliberately NOT GUI-writable,
-    hand-set in ``.env`` only. ``GET /settings/tunables`` is read-only and NOT
+    ``require_strategy_writes_enabled`` exactly — GUI-writable (as of 2026-08-08),
+    surfaced in the Feature Flags screen. ``GET /settings/tunables`` is read-only and NOT
     gated by this flag (``require_read_token`` alone, matching ``GET
     /strategy/matrix``, ``GET /llm/status``, and ``GET /agentic/status``)."""
     if not settings.GENERAL_SETTINGS_WRITES_ENABLED:
@@ -489,7 +490,7 @@ def require_macro_gate_writes_enabled() -> None:
     ``PreTradeRiskGate.macro_kill_switch_check`` (the recession/credit-event BUY
     veto), its own risk class, and must not ride in on any sibling flag. Mirrors
     ``require_general_settings_writes_enabled`` exactly — deliberately NOT
-    GUI-writable, hand-set in ``.env`` only. ``GET /observability/summary`` is
+    GUI-writable, surfaced in the Feature Flags screen. ``GET /observability/summary`` is
     read-only and NOT gated by this flag (``require_read_token`` alone, matching
     every other GET here)."""
     if not settings.MACRO_GATE_WRITES_ENABLED:
@@ -505,7 +506,7 @@ def require_cache_long_short_writes_enabled() -> None:
     (``settings.CACHE_LONG_SHORT_WRITES_ENABLED``), NOT
     ``AUTOMATION_WRITES_ENABLED`` or ``STRATEGY_WRITES_ENABLED``: this changes
     what a trading strategy recommends, its own risk class, and must not ride
-    in on any of those. Deliberately NOT GUI-writable, hand-set in ``.env``
+    in on any of those. GUI-writable (as of 2026-08-08), surfaced in the Feature Flags screen
     only. ``GET`` endpoints are read-only and NOT gated by this flag."""
     if not settings.CACHE_LONG_SHORT_WRITES_ENABLED:
         raise HTTPException(
@@ -524,7 +525,7 @@ def require_rag_query_enabled() -> None:
     call via ``llm/router.py::get_rationale_provider``, otherwise reachable
     behind ``require_command_token`` alone), so it gets the identical
     fail-closed treatment. Mirrors ``require_strategy_writes_enabled``
-    exactly — deliberately NOT GUI-writable, hand-set in ``.env`` only.
+    exactly — GUI-writable (as of 2026-08-08), surfaced in the Feature Flags screen.
     There is no read-only companion endpoint to exempt (this is the entry
     point being wired up for the first time)."""
     if not settings.RAG_QUERY_API_ENABLED:
@@ -3969,7 +3970,6 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("PROMPT_REGISTRY_ENABLED", "bool", {}),
             ("PROMPT_REGISTRY_BACKEND", "str", {}),
             ("ORCHESTRATOR_DAEMON_ENABLED", "bool", {}),
-            ("PILOTS_API_ENABLED", "bool", {}),
             ("CORS_ALLOWED_ORIGINS", "json", {}),
         ],
     ),
@@ -4809,6 +4809,74 @@ def put_settings_cache_long_short(body: TunablesUpdateRequest) -> Dict[str, Any]
     """Update Cache Long/Short configuration in .env."""
     return _validate_and_write_payload(body.values, _CACHE_LONG_SHORT_INDEX, confirm=body.confirm)
 
+# A handful of the DANGEROUS_KEYS-tier fields are not plain booleans and
+# need the same enum/json treatment their OTHER editors already give them
+# (_FMP_GROUPS's own FMP_BARS_ADJUSTMENT entry, _TUNABLE_GROUPS's own
+# CORS_ALLOWED_ORIGINS entry) -- inferring kind from the pydantic type
+# annotation alone would render FMP_BARS_ADJUSTMENT and
+# ROBINHOOD_EXECUTION_MODE as free-text inputs with no options constraint,
+# which is precisely wrong for the two highest-risk string fields in the
+# whole registry. Every other feature-flag key is a plain bool.
+_FEATURE_FLAGS_NON_BOOL_SPECS: Dict[str, tuple] = {
+    "ROBINHOOD_EXECUTION_MODE": ("enum", {"options": ["off", "review", "live"]}),
+    "FMP_BARS_ADJUSTMENT": (
+        "enum",
+        {"options": ["dividend-adjusted", "light", "full", "non-split-adjusted"]},
+    ),
+    "CORS_ALLOWED_ORIGINS": ("json", {}),
+}
+
+
+def _build_feature_flags_index():
+    dangerous_specs = [
+        (key, *_FEATURE_FLAGS_NON_BOOL_SPECS.get(key, ("bool", {})))
+        for key in sorted(settings_keysets.DANGEROUS_KEYS | set(feature_flags.WRITE_GATE_REASONS))
+    ]
+    diagnostic_specs = [
+        (key, *_FEATURE_FLAGS_NON_BOOL_SPECS.get(key, ("bool", {})))
+        for key in sorted(feature_flags.DIAGNOSTIC_FLAG_REASONS)
+    ]
+    groups = [
+        ("Write & Execution Gates", dangerous_specs),
+        ("Diagnostic & Data Features", diagnostic_specs),
+    ]
+    index = {k: (knd, ext) for _, sps in groups for k, knd, ext in sps}
+    return groups, index
+
+_FEATURE_FLAGS_GROUPS, _FEATURE_FLAGS_INDEX = _build_feature_flags_index()
+
+@app.get("/settings/feature-flags", dependencies=[Depends(require_read_token)])
+def get_feature_flags_settings() -> Dict[str, Any]:
+    """Return current values and metadata for every admin/write/execution
+    gate and read-only diagnostic feature flag in one place -- the single,
+    clearly-labeled Feature Flags screen. See pilots/feature_flags.py's
+    module docstring for the three-tier registry this is built from."""
+    return _settings_editor_payload(
+        _FEATURE_FLAGS_GROUPS, _FEATURE_FLAGS_INDEX
+    )
+
+@app.put(
+    "/settings/feature-flags",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
+    "/settings/feature-flags",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_feature_flags_settings(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Update feature flags in .env. Gated by
+    require_general_settings_writes_enabled -- matching every other
+    /settings/* editor's PUT (not require_automation_writes_enabled, whose
+    own docstring scopes it to the daemon interval and kill-switch resume
+    specifically and says every sibling flag must not ride in on it)."""
+    return _validate_and_write_payload(body.values, _FEATURE_FLAGS_INDEX, confirm=body.confirm)
+
 
 @app.get("/settings/fmp", dependencies=[Depends(require_read_token)])
 def get_settings_fmp() -> Dict[str, Any]:
@@ -4880,7 +4948,7 @@ def require_dead_letter_retry_enabled() -> None:
     ``main.py`` subprocess (network calls, a fresh data fetch, a real
     advisory evaluation) — a materially different cost/risk than any
     existing flag was scoped for. Mirrors ``require_automation_writes_enabled``
-    exactly — deliberately NOT GUI-writable (``gui/env_io.py``), hand-set in
+    exactly — GUI-writable (as of 2026-08-08) (``gui/env_io.py``), surfaced in the Feature Flags screen
     ``.env`` only. ``GET /dead-letter`` is read-only and NOT gated by this
     flag (``require_read_token`` alone, matching every other GET here)."""
     if not settings.DEAD_LETTER_RETRY_ENABLED:
@@ -5053,8 +5121,8 @@ def require_prompt_registry_writes_enabled() -> None:
     PLATFORM ACTUALLY RUNS, its own risk class distinct from a numeric
     tunable or a signal weight, and must not ride in on a flag scoped to a
     different concern. Mirrors ``require_strategy_writes_enabled`` exactly —
-    deliberately NOT GUI-writable (absent from BOTH ``gui/env_io.py``'s
-    ``ALLOWED_KEYS`` and ``SECRET_KEYS``), hand-set in ``.env`` only.
+    GUI-writable (as of 2026-08-08) (absent from BOTH ``gui/env_io.py``'s
+    ``ALLOWED_KEYS`` and ``SECRET_KEYS``), surfaced in the Feature Flags screen.
     ``GET /prompts`` and ``GET /prompts/{id}`` are read-only and NOT gated by
     this flag (``require_read_token`` alone, matching ``GET /strategy/matrix``
     and every other GET on this API)."""

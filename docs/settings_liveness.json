@@ -49,7 +49,7 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3021,
+      "line": 3022,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 352,
+  "files_scanned": 353,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -618,7 +618,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:305",
+        "site": "api/pilots_api.py:307",
         "via": []
       },
       {
@@ -1429,7 +1429,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:573",
+        "site": "api/pilots_api.py:574",
         "via": []
       }
     ],
@@ -2444,7 +2444,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:568",
+        "site": "api/pilots_api.py:569",
         "via": []
       },
       {
