@@ -9,9 +9,11 @@
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
+import { MemoryRouter } from "react-router";
 import { TopStatusBar } from "./TopStatusBar";
 import { AutoRefreshProvider } from "./AutoRefreshContext";
 import { ToastProvider } from "./ToastProvider";
+import { TaskProvider } from "../hooks/TaskContext";
 import { DensityProvider } from "./DensityContext";
 import { ExecutionModeProvider } from "./ExecutionModeContext";
 import { api } from "../api/client";
@@ -29,11 +31,15 @@ import type { AutomationStatus, ObservabilitySummary } from "../api/types";
 function renderBar() {
   return render(
     <ToastProvider>
-      <DensityProvider>
-        <ExecutionModeProvider>
-          <TopStatusBar />
-        </ExecutionModeProvider>
-      </DensityProvider>
+      <MemoryRouter>
+        <TaskProvider>
+          <DensityProvider>
+            <ExecutionModeProvider>
+              <TopStatusBar />
+            </ExecutionModeProvider>
+          </DensityProvider>
+        </TaskProvider>
+      </MemoryRouter>
     </ToastProvider>
   );
 }
@@ -44,13 +50,17 @@ function renderBar() {
 function renderBarWithAutoRefresh() {
   return render(
     <ToastProvider>
-      <DensityProvider>
-        <AutoRefreshProvider>
-          <ExecutionModeProvider>
-            <TopStatusBar />
-          </ExecutionModeProvider>
-        </AutoRefreshProvider>
-      </DensityProvider>
+      <MemoryRouter>
+        <TaskProvider>
+          <DensityProvider>
+            <AutoRefreshProvider>
+              <ExecutionModeProvider>
+                <TopStatusBar />
+              </ExecutionModeProvider>
+            </AutoRefreshProvider>
+          </DensityProvider>
+        </TaskProvider>
+      </MemoryRouter>
     </ToastProvider>
   );
 }

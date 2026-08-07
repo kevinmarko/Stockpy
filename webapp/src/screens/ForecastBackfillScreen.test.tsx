@@ -9,12 +9,15 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ForecastBackfillScreen } from "./ForecastBackfillScreen";
 import { api } from "../api/client";
+import { TaskProvider } from "../hooks/TaskContext";
 
 function renderScreen() {
   return render(
-    <MemoryRouter>
-      <ForecastBackfillScreen />
-    </MemoryRouter>
+    <TaskProvider>
+      <MemoryRouter>
+        <ForecastBackfillScreen />
+      </MemoryRouter>
+    </TaskProvider>
   );
 }
 
@@ -50,7 +53,7 @@ describe("ForecastBackfillScreen (real mock API)", () => {
     await screen.findByText("TSMOM_10d");
     statusSpy.mockClear();
 
-    fireEvent.click(screen.getByText("🚀 Run Full System Backfill"));
+    fireEvent.click(screen.getByText("Run Full System Backfill"));
     await waitFor(() => expect(runSpy).toHaveBeenCalled());
   });
 
@@ -77,7 +80,7 @@ describe("ForecastBackfillScreen (real mock API)", () => {
     renderScreen();
     await screen.findByText("TSMOM_10d");
 
-    fireEvent.click(screen.getByText("🚀 Run Full System Backfill"));
+    fireEvent.click(screen.getByText("Run Full System Backfill"));
     await waitFor(() => expect(runSpy).toHaveBeenCalled());
   });
 });

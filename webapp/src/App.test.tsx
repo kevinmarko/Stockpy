@@ -21,6 +21,7 @@ import type { LlmProviderName, LlmStatus } from "./api/types";
 import { writeOnboarding } from "./onboarding";
 import { ChatProvider } from "./chat/ChatContext";
 import { NAV_ITEMS } from "./navigation";
+import { TaskProvider } from "./hooks/TaskContext";
 
 const _noCall = (provider: LlmProviderName) => ({
   provider,
@@ -93,9 +94,11 @@ vi.mock("virtual:pwa-register/react", () => ({
 function renderApp(initialPath = "/") {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
-      <ChatProvider>
-        <App />
-      </ChatProvider>
+      <TaskProvider>
+        <ChatProvider>
+          <App />
+        </ChatProvider>
+      </TaskProvider>
     </MemoryRouter>
   );
 }
@@ -393,14 +396,16 @@ describe("App — route table integrity (regression: 5 corrupted route paths)", 
       let observedPathname: string | null = null;
       render(
         <MemoryRouter initialEntries={[to]}>
-          <ChatProvider>
-            <App />
-            <LocationProbe
-              onLocation={(p) => {
-                observedPathname = p;
-              }}
-            />
-          </ChatProvider>
+          <TaskProvider>
+            <ChatProvider>
+              <App />
+              <LocationProbe
+                onLocation={(p) => {
+                  observedPathname = p;
+                }}
+              />
+            </ChatProvider>
+          </TaskProvider>
         </MemoryRouter>
       );
 

@@ -2611,6 +2611,48 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   },
 ];
 
+const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
+  {
+    group: "Feature Flags", key: "AGENTIC_DISCOVERY_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enable the LLM-driven research loop for discovery candidates.",
+  },
+  {
+    group: "Feature Flags", key: "BROKERAGE_CONNECT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Allow interactive brokerage linking and credential exchange.",
+  },
+  {
+    group: "Feature Flags", key: "RLHF_CALIBRATION_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Submit operator feedback to the local LLM finetuning store.",
+  },
+  // Add DANGEROUS_KEYS manually to match python side? Let's just mock a couple.
+  {
+    group: "Feature Flags", key: "MACRO_SHORTING_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Allow the engine to flip to net-short exposure during deep macro stress.",
+  },
+  {
+    group: "Feature Flags", key: "OPTIONS_WRITING_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Allow the engine to write unhedged options to harvest VRP.",
+  },
+  {
+    group: "Feature Flags", key: "KILL_SWITCH_ACTIVE", type: "boolean",
+    value: false, default: false,
+    description: "Global halt on all trades and API orders. Must be false to trade.",
+  },
+  {
+    group: "Feature Flags", key: "DRY_RUN_MODE", type: "boolean",
+    value: true, default: true,
+    description: "Execute all pipeline steps but do not place live API orders.",
+  }
+];
+
+const FEATURE_FLAGS_TUNABLES_KEY = "mock_feature_flags_tunables_v1";
+const FEATURE_FLAGS_TUNABLES_DRIFT_KEY = "mock_feature_flags_tunables_drift_v1";
+
 const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
   {
     group: "Holdings Ingestion", key: "ETF_HOLDINGS_ENABLED", type: "boolean",
@@ -2807,6 +2849,27 @@ function applyEtfTransmissionTunables(
     ETF_TRANSMISSION_TUNABLE_DEFS,
     ETF_TRANSMISSION_TUNABLES_KEY,
     ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
+    confirm
+  );
+}
+
+function mockFeatureFlagsTunables(): TunablesResponse {
+  return buildTunablesResponse(
+    FEATURE_FLAGS_TUNABLE_DEFS,
+    FEATURE_FLAGS_TUNABLES_KEY,
+    FEATURE_FLAGS_TUNABLES_DRIFT_KEY
+  );
+}
+
+function applyFeatureFlagsTunables(
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
+): TunablesUpdateResult {
+  return applyTunablesGeneric(
+    values,
+    FEATURE_FLAGS_TUNABLE_DEFS,
+    FEATURE_FLAGS_TUNABLES_KEY,
+    FEATURE_FLAGS_TUNABLES_DRIFT_KEY,
     confirm
   );
 }
@@ -6731,6 +6794,17 @@ export const mockApi = {
     confirm: SettingsConfirmMap = {}
   ): Promise<TunablesUpdateResult> {
     return delay(applyEtfTransmissionTunables(values, confirm));
+  },
+
+  async getFeatureFlags(): Promise<TunablesResponse> {
+    return delay(mockFeatureFlagsTunables());
+  },
+
+  async updateFeatureFlags(
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {}
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyFeatureFlagsTunables(values, confirm));
   },
 
   async getCacheLongShortSettings(): Promise<TunablesResponse> {

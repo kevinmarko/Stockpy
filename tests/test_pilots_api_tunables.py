@@ -592,9 +592,9 @@ class TestPutTunables:
 
 
 class TestGeneralSettingsWritesEnabledInvariants:
-    def test_flag_defaults_to_false(self):
+    def test_flag_defaults_to_true_after_phase_1(self):
         from settings import Settings
-        assert Settings.model_fields["GENERAL_SETTINGS_WRITES_ENABLED"].default is False
+        assert Settings.model_fields["GENERAL_SETTINGS_WRITES_ENABLED"].default is True
 
     def test_flag_is_gui_writable(self):
         """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
@@ -626,6 +626,7 @@ _SETTINGS_SUBROUTES = [
     ("/settings/sector-selection", "_SECTOR_SELECTION_INDEX"),
     ("/settings/fmp", "_FMP_INDEX"),
     ("/settings/etf-transmission", "_ETF_TRANSMISSION_INDEX"),
+    ("/settings/feature-flags", "_FEATURE_FLAGS_INDEX"),
 ]
 
 

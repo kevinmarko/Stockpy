@@ -251,7 +251,7 @@ class Settings(BaseSettings):
             "unauthenticated by design, so this flag alone does not gate "
             "access: MCP_OAUTH_PASSWORD, checked at the /login form, is the "
             "real trust boundary once a client can register itself and start "
-            "an auth flow. False (default) preserves today's exact bearer-only "
+            "an auth flow. False preserves today's exact bearer-only "
             "behavior — mcp_oauth_provider.py is never imported. Carries no "
             "secret material, so per the 2026-08-08 operator decision (see "
             "gui/env_io.py's ALLOWED_KEYS) it is GUI-writable; it decides "
@@ -288,7 +288,7 @@ class Settings(BaseSettings):
         ),
     )
     PILOTS_API_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Host the Pilots API (api/pilots_api.py) inside the persistent "
             "orchestrator daemon process (desktop/orchestrator_daemon.py) on "
@@ -312,10 +312,10 @@ class Settings(BaseSettings):
         ),
     )
     JOBS_API_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enable background process execution and SSE log streaming endpoints "
-            "on the orchestrator Control API (api/control_api.py). False (default) "
+            "on the orchestrator Control API (api/control_api.py). False "
             "preserves fail-closed behavior for jobs execution."
         ),
     )
@@ -327,7 +327,7 @@ class Settings(BaseSettings):
             "actually run a manifest-listed CLI target (not just compose/copy "
             "it), gated on top of the existing JOBS_API_ENABLED + "
             "ORCHESTRATOR_DAEMON_TOKEN guard already protecting POST /jobs. "
-            "False (default) preserves today's compose-only behavior. Carries "
+            "False preserves today's compose-only behavior. Carries "
             "no secret material, so per the 2026-08-08 operator decision (see "
             "gui/env_io.py's ALLOWED_KEYS) it is GUI-writable; it gates "
             "execution of the global kill switch, a forced Robinhood re-login, "
@@ -389,7 +389,7 @@ class Settings(BaseSettings):
         ),
     )
     MARKET_DATA_LATENCY_TRACKING_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Automatic, in-process instrumentation (market_data_latency.py) of "
             "CompositeProvider.get_latest_quote's real (non-cache-hit) fetch "
@@ -416,7 +416,7 @@ class Settings(BaseSettings):
             "intraday precision. Any hourly-fetch failure (provider error, "
             "unsupported interval, empty result) degrades to the existing "
             "daily-bar path rather than raising -- never blocks the excursion "
-            "calculation. False (the default) reproduces pre-existing "
+            "calculation. False reproduces pre-existing "
             "daily-only behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA "
             "opt-in convention."
         ),
@@ -428,7 +428,7 @@ class Settings(BaseSettings):
             "quotes, SUPPLEMENTING (never replacing) the REST-polling "
             "CompositeProvider -- see data/market_data_ws.py. Only takes effect "
             "when the active quote provider is AlpacaProvider; otherwise a no-op "
-            "with an INFO log. False (default) reproduces the exact current "
+            "with an INFO log. False reproduces the exact current "
             "REST-only behavior -- matches the FORECAST_USE_GARCH_SIGMA opt-in "
             "convention. Any WS failure (connect, subscribe, disconnect, missing "
             "credentials) degrades to the existing REST path -- never crashes "
@@ -639,7 +639,7 @@ class Settings(BaseSettings):
         description=(
             "Two-gate capability switch for FMP-sourced quotes, independent "
             "of FMP_BARS_ENABLED (an operator may want one live without the "
-            "other). False (the default) is a complete no-op reproducing "
+            "other). False is a complete no-op reproducing "
             "today's exact behavior. Requires MARKET_DATA_PROVIDER='fmp' to "
             "have any effect at all -- with that set but this flag False, "
             "get_latest_quote() falls through UNCONDITIONALLY to the same "
@@ -707,7 +707,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "Master switch for the FMP company-news feed (data.fmp_client."
-            "stock_news, wrapping /news/stock). False (the default) is a "
+            "stock_news, wrapping /news/stock). False is a "
             "complete no-op reproducing today's exact behavior — "
             "signals/news_catalyst.py's headline fetch stays on its existing "
             "Finnhub-only path, and data/sentiment_sources.py's 'fmp_news' "
@@ -743,7 +743,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "Master switch for the FMP insider-trading statistics feed "
-            "(diagnostic Insider_Buy_Sell_Ratio column). False (the default) "
+            "(diagnostic Insider_Buy_Sell_Ratio column). False "
             "is a complete no-op reproducing today's exact behavior. Separate "
             "from FMP_SECTOR_SNAPSHOT_ENABLED on purpose: insider stats are "
             "one request PER SYMBOL while sector snapshots are two requests "
@@ -756,7 +756,7 @@ class Settings(BaseSettings):
         description=(
             "Master switch for the dated FMP sector P/E + sector performance "
             "snapshots (diagnostic Sector_PE / Sector_1D_Change columns). "
-            "False (the default) is a complete no-op reproducing today's exact "
+            "False is a complete no-op reproducing today's exact "
             "behavior. Two requests per cycle total regardless of universe "
             "size — hence its own switch, separate from the per-symbol "
             "FMP_INSIDER_ENABLED. Single gate."
@@ -768,7 +768,7 @@ class Settings(BaseSettings):
             "Master switch for the FMP fundamental-health overlay bundled into "
             "the options premium-directive matrix (reporting/options_snapshot.py"
             "::write_options_matrix → technical_options_engine.build_premium_"
-            "directive). False (the default) is a complete no-op reproducing "
+            "directive). False is a complete no-op reproducing "
             "today's exact behavior: Altman_Z_Score, Piotroski_F_Score, "
             "Net_Debt_EBITDA, FCF_Yield, and Realized_Vol_30D all stay None and "
             "zero additional FMP requests are attempted. When True, gates three "
@@ -791,7 +791,7 @@ class Settings(BaseSettings):
             "Master switch for the FMP market/qualitative-context overlay "
             "bundled into the options premium-directive matrix (reporting/"
             "options_snapshot.py::write_options_matrix → technical_options_"
-            "engine.build_premium_directive). False (the default) is a "
+            "engine.build_premium_directive). False is a "
             "complete no-op reproducing today's exact behavior: News_Snippets "
             "stays [], Peers stays [], and zero additional FMP requests are "
             "attempted. When True, gates two endpoints for every symbol in "
@@ -815,7 +815,7 @@ class Settings(BaseSettings):
             "triggered FMP peer-group lookup (`/peers` via "
             "data.fmp_feeds_market.fetch_peer_group) for the webapp's "
             "'Suggest peers for this ticker' affordance on SymbolComparison. "
-            "False (the default) is a complete no-op: the endpoint returns "
+            "False is a complete no-op: the endpoint returns "
             "an empty peer list + an honest reason, with ZERO network calls "
             "— fetch_peer_group is never even imported. Deliberately kept "
             "SEPARATE from FMP_OPTIONS_CONTEXT_ENABLED, which already gates "
@@ -1173,7 +1173,7 @@ class Settings(BaseSettings):
             "submission-rate budget. Does NOT replace or bypass "
             "MAX_ORDER_RATE_PER_MIN's hard cap (execution/risk_gate.py) or "
             "execution/kill_switch.py -- both remain the sole authorization "
-            "gate, checked at submission exactly as before. False (default) "
+            "gate, checked at submission exactly as before. False "
             "preserves the exact current sequential per-row submission order "
             "-- matches the FORECAST_USE_GARCH_SIGMA opt-in convention."
         ),
@@ -1429,7 +1429,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "Master switch for the per-name ETF-volatility-transmission "
-            "position-sizing derate. False (the default) is a complete no-op: "
+            "position-sizing derate. False is a complete no-op: "
             "no multiplier is computed, ETF_Transmission_Multiplier stays NaN "
             "in config.COLUMN_SCHEMA, and size_position() composes exactly "
             "the pre-change weight (the derate it receives is the identity "
@@ -1562,7 +1562,7 @@ class Settings(BaseSettings):
             "cached model is loaded and only inference (predict) runs. "
             "Behavior-preserving BETWEEN retrains (same fitted weights -> same "
             "forecast for repeated calls); only changes WHEN a fit happens. "
-            "When False (the default) every call retrains from scratch, matching "
+            "When False every call retrains from scratch, matching "
             "pre-persistence behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA "
             "opt-in convention. Requires TensorFlow/Prophet to be installed; a "
             "missing library or a corrupt/unreadable cached artifact degrades to a "
@@ -1593,7 +1593,7 @@ class Settings(BaseSettings):
             "(vectorized via numpy cumulative min/max, not a per-window sklearn "
             "refit). The final live inference window is unaffected either way -- it "
             "still uses the train-span scaler, since at inference time 'now' truly is "
-            "the most recent data available. False (the default) reproduces "
+            "the most recent data available. False reproduces "
             "pre-existing behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA "
             "opt-in convention. Intended for high-fidelity walk-forward backtesting, "
             "not the live pipeline; costs more compute per fit."
@@ -1629,7 +1629,7 @@ class Settings(BaseSettings):
             "UNCHANGED either way (still the full-sample series) -- a single "
             "non-overlapping OOS equity curve needs the AFML CPCV backtest-"
             "path-recombination algorithm, not implemented here (a real, "
-            "separate follow-up, not silently faked). False (the default) "
+            "separate follow-up, not silently faked). False "
             "reproduces pre-existing behavior exactly: every currently-recorded "
             "docs/VALIDATION_STRATEGY_FIX_LOG.md PBO/DSR/Sharpe/MaxDD baseline "
             "for the registered STRATEGY_REGISTRY fleet was measured with this "
@@ -1648,7 +1648,7 @@ class Settings(BaseSettings):
             "Master switch for the BERT-LLA multi-horizon forecaster "
             "(forecasting/bert_lla.py -- PyTorch dual-LSTM + self-attention, "
             "three registered ablations: lstm_baseline, lstm_attention, "
-            "bert_lla). False (the default) is a complete no-op: "
+            "bert_lla). False is a complete no-op: "
             "ForecastingEngine.run_bert_lla_forecast() returns the zero "
             "sentinel without ever touching torch. Requires the optional "
             "torch package (already in requirements-optional.txt for local "
@@ -1677,7 +1677,7 @@ class Settings(BaseSettings):
             "When True, generate_forecast() runs all three BERT-LLA "
             "ablations (lstm_baseline, lstm_attention, bert_lla) instead of "
             "just 'bert_lla' alone -- three PyTorch trainings per ticker per "
-            "cycle instead of one. False (the default) keeps the marginal "
+            "cycle instead of one. False keeps the marginal "
             "compute cost to a single model. Only consulted once "
             "BERT_LLA_ENABLED is True."
         ),
@@ -1806,7 +1806,7 @@ class Settings(BaseSettings):
             "(CNN-LSTM's random weight init, GARCH's numerical optimizer), turning "
             "this on can move Advisory_* column values slightly -- hence default "
             "False and its own opt-in flag, unlike the byte-identical PR A hot-path "
-            "changes. When False (the default), every advisory-overlay call passes "
+            "changes. When False, every advisory-overlay call passes "
             "precomputed_garch=None/precomputed_forecast=None, reproducing the exact "
             "pre-dedup behavior."
         ),
@@ -1865,7 +1865,7 @@ class Settings(BaseSettings):
     )
     # Cutover flag for the persistent orchestrator daemon (desktop/
     # daemon_runtime.py + desktop/orchestrator_daemon.py + api/control_api.py).
-    # False (the default) preserves today's exact behavior everywhere: the
+    # False preserves today's exact behavior everywhere: the
     # desktop shell's always-on refresh loop spawns `main.py --interval N`
     # (gui.orchestrator_runner.launch_scheduled_advisory), and the Launcher
     # tab's manual "Run Pipeline" button spawns a fresh
@@ -1883,7 +1883,7 @@ class Settings(BaseSettings):
             "Route the desktop shell's always-on refresh loop and the "
             "Launcher tab's manual run trigger through the persistent "
             "orchestrator daemon instead of spawning a fresh subprocess per "
-            "cycle. False (default) preserves today's exact subprocess "
+            "cycle. False preserves today's exact subprocess "
             "behavior everywhere."
         ),
     )
@@ -1905,7 +1905,7 @@ class Settings(BaseSettings):
         description=(
             "Periodically re-check output/runtime_flags.json for changes "
             "written by another process and apply them onto this daemon's "
-            "live settings. False (default) preserves today's exact "
+            "live settings. False preserves today's exact "
             "behavior -- a cross-process write only takes effect on next "
             "restart."
         ),
@@ -2164,7 +2164,7 @@ class Settings(BaseSettings):
         description=(
             "Master switch for NewsCatalystSignal.pre_compute()'s multi-source "
             "ingestion step (data/sentiment_sources.py's CompositeSentimentSource "
-            "-- Yahoo RSS/GDELT/Reddit/EDGAR). False (the default) is a complete "
+            "-- Yahoo RSS/GDELT/Reddit/EDGAR). False is a complete "
             "no-op: no network call is attempted for any symbol, matching this "
             "codebase's convention for opt-in networked features "
             "(ORCHESTRATOR_DAEMON_ENABLED, GRAVITY_AI_RUNNER_ENABLED, "
@@ -2249,11 +2249,11 @@ class Settings(BaseSettings):
         ),
     )
     SENTIMENT_INDEX_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the composite sentiment index S_t = "
             "w1*news_score + w2*review_score (signals/sentiment_index.py). "
-            "False (the default) is a complete no-op: no "
+            "False is a complete no-op: no "
             "sentiment_ingestion_audit read is attempted. Reuses "
             "SECTOR_SELECTION_W1/SECTOR_SELECTION_W2 for w1/w2 rather than "
             "a second, redundant weight pair -- see that pair's own "
@@ -2386,7 +2386,7 @@ class Settings(BaseSettings):
         description=(
             "Master switch for data/sentiment_sources.py's StockTwitsSource "
             "(free, uncredentialed -- unlike RedditSource, no OAuth "
-            "registration needed). False (the default) is a complete "
+            "registration needed). False is a complete "
             "no-op: no StockTwits request is attempted. Also requires "
             "'stocktwits' to be added to SENTIMENT_SOURCES -- this flag "
             "alone does not add it to the fan-out list, matching "
@@ -2538,12 +2538,12 @@ class Settings(BaseSettings):
         ),
     )
     EDGAR_FULLTEXT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the SEC EDGAR full-text search (EFTS) "
             "additions to EdgarSource -- fetching and chunking 10-K/10-Q "
             "filing text (per EDGAR_FULLTEXT_FORMS), not just the existing "
-            "8-K RSS feed. False (the default) is a complete no-op: the "
+            "8-K RSS feed. False is a complete no-op: the "
             "existing 8-K-only RSS path in EdgarSource is completely "
             "unaffected by this flag either way and keeps running whenever "
             "'edgar' is enabled in SENTIMENT_SOURCES. Set True only once the "
@@ -2568,11 +2568,11 @@ class Settings(BaseSettings):
         ),
     )
     SECTOR_HEAT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the GDELT article-volume-based 'Sector Heat "
             "Factor' attention feature (cross-sectional news-volume z-score "
-            "per sector). False (the default) is a complete no-op: no GDELT "
+            "per sector). False is a complete no-op: no GDELT "
             "query is attempted and Sector_Heat_Factor stays NaN in "
             "config.COLUMN_SCHEMA. Independent of SENTIMENT_SOURCES' "
             "existing 'gdelt' entry, which feeds per-document sentiment "
@@ -2710,11 +2710,11 @@ class Settings(BaseSettings):
     )
 
     WIKIPEDIA_ATTENTION_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the Wikipedia-pageviews-based attention "
             "feature (per-symbol article pageview volume as a retail-"
-            "attention proxy). False (the default) is a complete no-op: no "
+            "attention proxy). False is a complete no-op: no "
             "Wikimedia Pageviews API call is attempted and Attention_Score "
             "stays NaN in config.COLUMN_SCHEMA."
         ),
@@ -2732,7 +2732,7 @@ class Settings(BaseSettings):
         description=(
             "Best-effort optional Google Trends overlay (via the unofficial "
             "'pytrends' library) on top of the Wikipedia-pageviews attention "
-            "feature. False (the default) -- pytrends is an unmaintained, "
+            "feature. False -- pytrends is an unmaintained, "
             "rate-limit-fragile scraper of an undocumented Google endpoint "
             "per the source research for this feature, so it must NEVER be "
             "load-bearing: any consumer of this flag must treat a pytrends "
@@ -2778,7 +2778,7 @@ class Settings(BaseSettings):
     # defaults False and is a complete no-op (zero network calls, all three
     # columns NaN).
     ETF_TRANSMISSION_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the ETF volatility-transmission measurement "
             "columns (risk/etf_transmission.py, wired by "
@@ -2855,7 +2855,7 @@ class Settings(BaseSettings):
     # (apply_portfolio_gross_cap's existing cov_matrix path, see
     # sizing/vol_target.py::portfolio_vol_target) is where it genuinely
     # belongs, not a second per-name lever alongside ETF_TRANSMISSION_SIZING_ENABLED
-    # above. False (the default) is a complete no-op: cov_matrix=None is
+    # above. False is a complete no-op: cov_matrix=None is
     # passed to apply_portfolio_gross_cap exactly as before this feature
     # existed, reproducing today's sum-of-|weight| fallback byte-for-byte.
     ETF_TRANSMISSION_PORTFOLIO_ENABLED: bool = Field(
@@ -2865,7 +2865,7 @@ class Settings(BaseSettings):
             "through apply_portfolio_gross_cap's risk-aware cov_matrix path, "
             "using an ETF-co-ownership-inflated covariance matrix "
             "(risk.etf_transmission.build_transmission_adjusted_cov) instead "
-            "of the sum-of-|weight| fallback. False (the default) is a "
+            "of the sum-of-|weight| fallback. False is a "
             "complete no-op: cov_matrix=None every cycle, byte-identical to "
             "pre-feature behavior. Requires ETF_HOLDINGS_ENABLED (a holdings "
             "source) to produce anything other than the same fallback -- "
@@ -2913,7 +2913,7 @@ class Settings(BaseSettings):
             "Opt-in activation of inverse-RMSE skill-weighted multi-model forecast "
             "blending (ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM weighted by "
             "recent realized accuracy via forecasting.forecast_tracker.ForecastTracker). "
-            "When False (the default) the static sector-preference blend is used "
+            "When False the static sector-preference blend is used "
             "unchanged — matching the FORECAST_USE_GARCH_SIGMA opt-in convention. "
             "When True, a persistent ForecastTracker is threaded into every "
             "ForecastingEngine construction, self-provisioning its forecast_errors "
@@ -3019,7 +3019,7 @@ class Settings(BaseSettings):
     # command token, reused from the follow write-path) and a loopback-only
     # check, so flipping this flag alone is not sufficient to enable intake.
     BROKERAGE_CONNECT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables the Pilots API's brokerage-credential connect/disconnect "
             "endpoints. Off by default; also requires FOLLOW_API_TOKEN and a "
@@ -3041,7 +3041,7 @@ class Settings(BaseSettings):
     # risk ordering. Reserved for the two writes with a real persistence/rollback
     # cost: an .env edit and re-enabling live order submission.
     AUTOMATION_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /automation/schedule/interval and POST /automation/resume "
             "on the Pilots API. Off by default; also requires FOLLOW_API_TOKEN. "
@@ -3064,7 +3064,7 @@ class Settings(BaseSettings):
     # GET /strategy/matrix is read-only and NOT gated by this flag
     # (require_read_token alone, matching GET /brokerage/status).
     STRATEGY_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /strategy/modules on the Pilots API (signal weights + "
             "disabled-module set -> .env). Off by default; also requires "
@@ -3087,7 +3087,7 @@ class Settings(BaseSettings):
     # GET /llm/status is read-only and NOT gated by this flag (require_read_token
     # alone, matching GET /brokerage/status and GET /strategy/matrix).
     LLM_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /llm/setting on the Pilots API (LLM capability toggles + "
             "provider selection -> .env). Off by default; also requires "
@@ -3109,7 +3109,7 @@ class Settings(BaseSettings):
     # and NOT gated by this flag (require_read_token alone, matching GET
     # /brokerage/status, GET /strategy/matrix, and GET /llm/status).
     AGENTIC_DISCOVERY_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /agentic/scan-config on the Pilots API (Robinhood broker-scan "
             "config -> output/scan_configs.json, consumed by the agentic-discovery "
@@ -3136,7 +3136,7 @@ class Settings(BaseSettings):
     # this flag (require_read_token alone, matching GET /brokerage/status, GET
     # /strategy/matrix, GET /llm/status, and GET /agentic/status).
     GENERAL_SETTINGS_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /settings/tunables on the Pilots API (general runtime "
             "tunables -- Kelly sizing, risk gate, forecasting, market data, "
@@ -3216,7 +3216,7 @@ class Settings(BaseSettings):
     # immediately stops all three endpoints (403), on top of each generator's
     # own existing capability flag as a second, independent kill switch.
     AI_GENERATION_API_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables POST /data/ai/{commentary,chart,research}/{symbol} on the "
             "Data API. Off by default -- exposing paid Claude/Gemini/Opal calls "
@@ -3240,7 +3240,7 @@ class Settings(BaseSettings):
     # secret material; also a settings_keysets.DANGEROUS_KEYS member, requiring
     # typed confirmation on write regardless of editor).
     RAG_QUERY_API_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables POST /rag/query on the Pilots API (agents/rag_orchestrator.py's "
             "run_rag_query, calling a paid LLM provider). Off by default -- see "
@@ -3272,7 +3272,7 @@ class Settings(BaseSettings):
     # read-only and NOT gated by this flag (require_read_token alone, matching
     # every other GET here).
     MACRO_GATE_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables PUT /observability/macro-gate on the Pilots API (flips "
             "MACRO_REGIME_GATE_ENABLED -> .env). Off by default; also requires "
@@ -3304,7 +3304,7 @@ class Settings(BaseSettings):
     # remain read-only and are NOT gated by this flag (require_read_token
     # alone).
     BROKERAGE_REFRESH_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables POST /brokerage/refresh on the Pilots API (forces a live "
             "Robinhood re-login + account-snapshot fetch, bypassing the daily "
@@ -3514,7 +3514,7 @@ class Settings(BaseSettings):
     )
 
     # --- Tier 9: Claude + Gemini commentary integration (llm/) ---
-    # Master switch.  When False (the default) the platform behaves byte-
+    # Master switch.  When False the platform behaves byte-
     # identically to pre-Tier-9: ZERO SDK imports, ZERO network calls, the
     # deterministic template rationale and alert text remain the single SoT.
     # CONSTRAINT: API keys live in SECRET_KEYS (gui/env_io.SECRET_KEYS); the
@@ -3752,7 +3752,7 @@ class Settings(BaseSettings):
     PROMPT_REGISTRY_ENABLED: bool = Field(
         default=False,
         description=(
-            "Master switch.  False (default) → baseline-only, zero network calls. "
+            "Master switch.  False → baseline-only, zero network calls. "
             "Set True to enable remote manifest fetch and cache."
         ),
     )
@@ -3851,7 +3851,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "Master switch for the RAG-powered portfolio contextualizer. "
-            "When False (the default), generate_portfolio_context_note() returns "
+            "When False, generate_portfolio_context_note() returns "
             "the deterministic sector-exposure summary only — no retrieval, no "
             "embedding calls, no LLM call. When True AND "
             "RAG_PORTFOLIO_CONTEXT_PROVIDER is not 'none', a best-effort retrieval "
@@ -3913,7 +3913,7 @@ class Settings(BaseSettings):
     # Journal of Finance 73(6):2471-2535.  Nothing in the platform consumes
     # these holdings yet — this is a self-contained data-layer capability.
     ETF_HOLDINGS_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for live ETF constituent-holdings ingestion "
             "(SEC N-PORT primary, optional iShares CSV secondary). False "
@@ -3960,7 +3960,7 @@ class Settings(BaseSettings):
         description=(
             "Opt-in SECONDARY holdings source: the iShares issuer CSV "
             "endpoint, consulted ONLY when SEC N-PORT produced nothing for a "
-            "symbol. False (the default) means the iShares endpoint is never "
+            "symbol. False means the iShares endpoint is never "
             "contacted — N-PORT is the sole source. Never the default "
             "because issuer files are undocumented, unversioned, and can "
             "change shape without notice; N-PORT is a regulatory filing with "
@@ -4049,7 +4049,7 @@ class Settings(BaseSettings):
     # requires FOLLOW_API_TOKEN. GET /dead-letter is read-only and NOT gated
     # by this flag (require_read_token alone, matching every other GET here).
     DEAD_LETTER_RETRY_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enables POST /dead-letter/retry on the Pilots API (re-runs main.py "
             "for one dead-lettered symbol, advisory-only -- no orders). Off by "
@@ -4075,7 +4075,7 @@ class Settings(BaseSettings):
     # UNIVERSE_SYNC_ENABLED (below) is GUI-writable by operator decision — see
     # its own Field description.
     PROMPT_REGISTRY_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "FAIL-CLOSED master switch for api/pilots_api.py's `PUT /prompts/pin` "
             "(pins/clears a prompt ID's PROMPT_REGISTRY_PINS entry -- changes WHICH "
@@ -4093,7 +4093,7 @@ class Settings(BaseSettings):
         ),
     )
     UNIVERSE_SYNC_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "FAIL-CLOSED master switch for api/data_api.py's `POST /data/sync` "
             "(runs data.portfolio_sync.async_sync_now() -- a live Robinhood/broker "
@@ -4236,7 +4236,7 @@ class Settings(BaseSettings):
     CACHE_LONG_SHORT_ENABLED: bool = Field(
         default=False,
         description="Master switch for the Cache Long/Short tax-loss-harvesting "
-        "advisory strategy. False (the default) is a complete no-op reproducing "
+        "advisory strategy. False is a complete no-op reproducing "
         "today's exact behavior: the background TLH/correlation-drift scanner in "
         "main_orchestrator.py never starts, and every read endpoint returns an "
         "honest empty/disabled shape. Advisory only in this version -- no broker "
@@ -4245,7 +4245,7 @@ class Settings(BaseSettings):
         "default per the 2026-08-03 convention-change carve-out above.",
     )
     CACHE_LONG_SHORT_WRITES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description="Dedicated fail-closed flag for POST /pilots/cache-long-short/* "
         "write endpoints (start, approve-bulk) -- persists a new tracked position "
         "or marks a TLH recommendation approved. Its own risk class, must not "

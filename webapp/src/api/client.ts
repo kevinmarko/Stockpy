@@ -595,6 +595,15 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
     }),
+  getFeatureFlags: () => http<TunablesResponse>("/settings/feature-flags"),
+  updateFeatureFlags: (
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {},
+  ) =>
+    http<TunablesUpdateResult>("/settings/feature-flags", {
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
+    }),
   getFollows: () => http<Follow[]>("/follows"),
   follow: (id: string, amount: number) =>
     http<FollowResult>(`/pilots/${encodeURIComponent(id)}/follow`, {

@@ -34,6 +34,7 @@ import { SectorSelectionSettings } from "./screens/SectorSelectionSettings";
 import { FmpSettings } from "./screens/FmpSettings";
 import { EtfTransmissionSettings } from "./screens/EtfTransmissionSettings";
 import { SettingsCacheLongShort } from "./screens/SettingsCacheLongShort";
+import { SettingsFeatureFlags } from "./screens/SettingsFeatureFlags";
 import { AIControlCenter } from "./screens/AIControlCenter";
 import { DataExplorer } from "./screens/DataExplorer";
 import { SignalBreakdown } from "./screens/SignalBreakdown";
@@ -268,6 +269,7 @@ export default function App() {
                     <Route path="fmp" element={<FmpSettings />} />
                     <Route path="etf-transmission" element={<EtfTransmissionSettings />} />
                     <Route path="cache-long-short" element={<SettingsCacheLongShort />} />
+                    <Route path="feature-flags" element={<SettingsFeatureFlags />} />
                     <Route path="ai" element={<AIControlCenter />} />
                     <Route path="prompts" element={<PromptRegistry />} />
                   </Route>

@@ -200,6 +200,7 @@ from rlhf_calibration_store import (
 # restart, does nothing, or is pinned by a real shell export). Stdlib +
 # runtime_flags + settings_keysets only — see its module docstring.
 import pilots.settings_meta as settings_meta
+from pilots.feature_flags import FEATURE_FLAG_KEYS, DIAGNOSTIC_FLAG_REASONS
 
 # Execution / persistence — explicitly ALLOWED here (unlike state_api.py),
 # forbidden only for the heavy calculation engines (see this module's AST guard
@@ -377,8 +378,7 @@ def require_brokerage_refresh_enabled() -> None:
     whatever is already configured, but it is still a real, live login against
     the operator's actual brokerage account and must not ride in on a flag
     named for a different action. ``settings.BROKERAGE_REFRESH_ENABLED`` is
-    deliberately NOT GUI-writable (gui/env_io.py) — it must be hand-set in
-    ``.env``. ``/brokerage/status`` and ``GET /portfolio`` are read-only and NOT
+    GUI-writable via Feature Flags. ``/brokerage/status`` and ``GET /portfolio`` are read-only and NOT
     gated by this flag."""
     if not settings.BROKERAGE_REFRESH_ENABLED:
         raise HTTPException(
@@ -392,7 +392,7 @@ def require_automation_writes_enabled() -> None:
     with a real persistence/rollback cost: ``PUT /automation/schedule/interval``
     (an ``.env`` edit) and ``POST /automation/resume`` (re-enabling live order
     submission when ``ADVISORY_ONLY=False``). ``settings.AUTOMATION_WRITES_ENABLED``
-    is deliberately NOT GUI-writable — hand-set in ``.env`` only.
+    is GUI-writable via Feature Flags.
 
     ``POST /automation/run`` and ``POST /automation/pause`` are NOT gated by
     this — they sit behind ``require_command_token`` alone, matching
@@ -411,8 +411,7 @@ def require_strategy_writes_enabled() -> None:
     (``settings.STRATEGY_WRITES_ENABLED``), NOT ``AUTOMATION_WRITES_ENABLED``:
     that one was scoped to the daemon interval and kill-switch resume, and
     signal-weight tuning changes WHAT THE PLATFORM RECOMMENDS. Mirrors
-    ``require_brokerage_connect_enabled`` exactly — deliberately NOT GUI-writable,
-    hand-set in ``.env`` only. ``GET /strategy/matrix`` is read-only and NOT gated
+    ``require_brokerage_connect_enabled`` exactly — GUI-writable via Feature Flags. ``GET /strategy/matrix`` is read-only and NOT gated
     by this flag (``require_read_token`` alone, matching ``/brokerage/status``)."""
     if not settings.STRATEGY_WRITES_ENABLED:
         raise HTTPException(
@@ -430,7 +429,7 @@ def require_llm_writes_enabled() -> None:
     which LLM provider narrates a rationale, or whether the Gravity AI runner
     / Opal research agent can fire, is its own risk class and must not ride
     in on either. Mirrors ``require_strategy_writes_enabled`` exactly —
-    deliberately NOT GUI-writable, hand-set in ``.env`` only. ``GET /llm/status``
+    GUI-writable via Feature Flags. ``GET /llm/status``
     is read-only and NOT gated by this flag (``require_read_token`` alone,
     matching ``/brokerage/status`` and ``GET /strategy/matrix``)."""
     if not settings.LLM_WRITES_ENABLED:
@@ -468,8 +467,7 @@ def require_general_settings_writes_enabled() -> None:
     ``LLM_WRITES_ENABLED``, or ``AGENTIC_DISCOVERY_ENABLED``: this changes sizing
     and risk-gate behavior (how large a position gets, when the risk gate blocks
     an order), its own risk class, and must not ride in on any of those. Mirrors
-    ``require_strategy_writes_enabled`` exactly — deliberately NOT GUI-writable,
-    hand-set in ``.env`` only. ``GET /settings/tunables`` is read-only and NOT
+    ``require_strategy_writes_enabled`` exactly — GUI-writable via Feature Flags. ``GET /settings/tunables`` is read-only and NOT
     gated by this flag (``require_read_token`` alone, matching ``GET
     /strategy/matrix``, ``GET /llm/status``, and ``GET /agentic/status``)."""
     if not settings.GENERAL_SETTINGS_WRITES_ENABLED:
@@ -524,7 +522,7 @@ def require_rag_query_enabled() -> None:
     call via ``llm/router.py::get_rationale_provider``, otherwise reachable
     behind ``require_command_token`` alone), so it gets the identical
     fail-closed treatment. Mirrors ``require_strategy_writes_enabled``
-    exactly — deliberately NOT GUI-writable, hand-set in ``.env`` only.
+    exactly — GUI-writable via Feature Flags.
     There is no read-only companion endpoint to exempt (this is the entry
     point being wired up for the first time)."""
     if not settings.RAG_QUERY_API_ENABLED:
@@ -3976,6 +3974,23 @@ _TUNABLE_INDEX: Dict[str, tuple] = {
     for key, kind, extras in _specs
 }
 
+_FEATURE_FLAGS_GROUPS: List[tuple] = [
+    (
+        "Admin Gates",
+        [(k, "bool", {}) for k in sorted(FEATURE_FLAG_KEYS) if k not in DIAGNOSTIC_FLAG_REASONS]
+    ),
+    (
+        "Diagnostic Features",
+        [(k, "bool", {}) for k in sorted(DIAGNOSTIC_FLAG_REASONS)]
+    )
+]
+
+_FEATURE_FLAGS_INDEX: Dict[str, tuple] = {
+    key: (kind, extras)
+    for _group, _specs in _FEATURE_FLAGS_GROUPS
+    for key, kind, extras in _specs
+}
+
 # Soft drift guard (the HARD one is tests/test_pilots_api_tunables.py): every
 # served key must be a writable non-secret. A drift can never actually leak a
 # secret — the PUT re-checks each key against ALLOWED_KEYS/SECRET_KEYS at write
@@ -4117,6 +4132,36 @@ def get_settings_tunables() -> Dict[str, Any]:
 def put_settings_tunables(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Write a partial map of non-secret tunables to ``.env``."""
     return _validate_and_write_payload(body.values, _TUNABLE_INDEX, confirm=body.confirm)
+
+
+# ---------------------------------------------------------------------------
+# Feature Flags (GET: fail-open read; PUT: fail-closed command token + general settings writes)
+# ---------------------------------------------------------------------------
+
+@app.get("/settings/feature-flags", dependencies=[Depends(require_read_token)])
+def get_feature_flags() -> Dict[str, Any]:
+    """The feature flags (Admin Gates and Diagnostic Features), grouped, with live
+    value/default/description."""
+    return _settings_editor_payload(_FEATURE_FLAGS_GROUPS, _FEATURE_FLAGS_INDEX)
+
+
+@app.put(
+    "/settings/feature-flags",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
+    "/settings/feature-flags",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_feature_flags(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Write a partial map of feature flags to ``.env``."""
+    return _validate_and_write_payload(body.values, _FEATURE_FLAGS_INDEX, confirm=body.confirm)
 
 
 def _build_groups_payload(groups_spec: List[tuple]) -> List[Dict[str, Any]]:
@@ -4866,8 +4911,7 @@ def require_dead_letter_retry_enabled() -> None:
     ``main.py`` subprocess (network calls, a fresh data fetch, a real
     advisory evaluation) — a materially different cost/risk than any
     existing flag was scoped for. Mirrors ``require_automation_writes_enabled``
-    exactly — deliberately NOT GUI-writable (``gui/env_io.py``), hand-set in
-    ``.env`` only. ``GET /dead-letter`` is read-only and NOT gated by this
+    exactly — GUI-writable via Feature Flags. ``GET /dead-letter`` is read-only and NOT gated by this
     flag (``require_read_token`` alone, matching every other GET here)."""
     if not settings.DEAD_LETTER_RETRY_ENABLED:
         raise HTTPException(
@@ -5039,8 +5083,7 @@ def require_prompt_registry_writes_enabled() -> None:
     PLATFORM ACTUALLY RUNS, its own risk class distinct from a numeric
     tunable or a signal weight, and must not ride in on a flag scoped to a
     different concern. Mirrors ``require_strategy_writes_enabled`` exactly —
-    deliberately NOT GUI-writable (absent from BOTH ``gui/env_io.py``'s
-    ``ALLOWED_KEYS`` and ``SECRET_KEYS``), hand-set in ``.env`` only.
+    GUI-writable via Feature Flags.
     ``GET /prompts`` and ``GET /prompts/{id}`` are read-only and NOT gated by
     this flag (``require_read_token`` alone, matching ``GET /strategy/matrix``
     and every other GET on this API)."""
