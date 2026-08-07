@@ -126,6 +126,12 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FORECAST_BACKFILL_MAX_DEPTH",
     "FORECAST_BACKFILL_RANDOM_STATE",
     "FORECAST_BACKFILL_CLASSIFIER_TYPE",
+    # Wall-clock deadline for the async forecast-backfill job's worker
+    # subprocess (ml/forecast_backfill_job.py) -- a timeout tunable, same
+    # treatment as RH_LOGIN_DEADLINE_SECONDS below. FORECAST_BACKFILL_ENABLED
+    # itself (the master switch that actually lets the run/cancel endpoints
+    # fire) is classified separately -- see EXCLUDED_FROM_GUI below.
+    "FORECAST_BACKFILL_DEADLINE_SECONDS",
     # Observability / runtime
     "DASHBOARD_REFRESH_SECONDS",
     # Poll interval (seconds) for the Launcher tab's live pipeline-progress bar
@@ -662,9 +668,10 @@ SECRET_KEYS: tuple[str, ...] = (
 # Deliberately excluded from BOTH allowlists
 # ---------------------------------------------------------------------------
 # Fields on settings.Settings that are neither GUI-writable non-secret tunables
-# nor secrets to mask -- today that means exactly one class: filesystem paths,
+# nor secrets to mask -- today that means two classes: filesystem paths,
 # where editing from the GUI has no clear safety benefit and risks pointing
-# the app at a bogus location.
+# the app at a bogus location, and (as of FORECAST_BACKFILL_ENABLED below) one
+# deliberate single exception to the 2026-08-08 policy change described next.
 #
 # HISTORY (2026-08-08): a second class used to live here too -- 12 fail-closed
 # master switches gating a real side effect (arbitrary command execution, a
@@ -679,6 +686,15 @@ SECRET_KEYS: tuple[str, ...] = (
 # change, not a new capability. This mirrors the PR #560 precedent already
 # noted throughout this file for BROKERAGE_CONNECT_ENABLED /
 # UNIVERSE_SYNC_ENABLED / AGENTIC_DISCOVERY_ENABLED / RLHF_CALIBRATION_ENABLED.
+#
+# FORECAST_BACKFILL_ENABLED (added after the above) is a deliberate, narrow
+# exception to that generalized "gate on secrecy alone" policy, not a drift
+# back to the old default: unlike the 12 flags above, it does not merely gate
+# an .env-writing HTTP endpoint -- it gates spawning a CPU-bound subprocess
+# that retrains and overwrites the meta-labeler model artifacts
+# (ml/models/meta_*.pkl) feeding the live meta_label_composite score, a real
+# resource cost and a real change to what the platform's scoring is trained
+# on. See its own settings.py Field docstring for the full reasoning.
 #
 # This set exists purely so tests/test_gui_env_io.py can assert every
 # settings.py field is accounted for -- it grants no capability and is not
@@ -695,6 +711,8 @@ EXCLUDED_FROM_GUI: frozenset[str] = frozenset(
         "LLM_COMMENTARY_CACHE_PATH",
         "SYNC_WATCHLIST_FILES",  # colon-separated local filesystem paths
         "GCLOUD_BIN",  # path/name of the gcloud binary override
+        # --- Deliberate single exception (see the block comment above) --------
+        "FORECAST_BACKFILL_ENABLED",
     }
 )
 

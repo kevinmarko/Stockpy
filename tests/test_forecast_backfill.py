@@ -2,14 +2,29 @@
 tests/test_forecast_backfill.py
 ================================
 Unit tests for the Multi-Horizon Forecast Backfill & Meta-Labeling Engine.
+
+The async, job-based POST /pilots/forecast_backfill/{run,cancel/{job_id}}
+and GET /pilots/forecast_backfill/status/{job_id} endpoints (added to
+replace the old blocking POST /pilots/forecast_backfill/run) are tested at
+the bottom of this file, mirroring tests/test_brokerage_connect.py's
+TestBrokerageConnectGating / TestBrokerageLoginStatus / TestBrokerageLoginCancel
+structure -- mocked at the pilots_api.forecast_backfill_job layer (fast,
+deterministic, no real subprocess). The underlying job primitive itself
+(ml/forecast_backfill_job.py, a real killable subprocess against a stub
+worker) is covered end-to-end in tests/test_forecast_backfill_job.py, not
+here.
 """
 
 import json
 from pathlib import Path
+from unittest import mock
+
 import pytest
 import pandas as pd
 import numpy as np
+from fastapi.testclient import TestClient
 
+import api.pilots_api as pilots_api
 import pilots.watchlist_writer as watchlist_writer
 from ml.forecast_backfill import AgenticForecastBackfiller
 from settings import settings
@@ -479,18 +494,246 @@ def test_forecast_backfill_api_endpoint(monkeypatch, tmp_path):
 def test_forecast_backfill_run_endpoint_rejects_invalid_horizons(monkeypatch):
     """POST /pilots/forecast_backfill/run's `horizons` reaches a model
     filename that gets opened for writing -- must 422 (Pydantic validation),
-    never reach AgenticForecastBackfiller, for an out-of-range or non-integer
-    horizon (CodeQL: uncontrolled data in a path expression)."""
-    from unittest import mock
-    from fastapi.testclient import TestClient
-    from api.pilots_api import app
-    from settings import settings as live_settings
+    never reach forecast_backfill_job.start_job (and therefore never spawn a
+    subprocess), for an out-of-range or non-integer horizon (CodeQL:
+    uncontrolled data in a path expression).
 
-    client = TestClient(app, client=("127.0.0.1", 50000))
-    with mock.patch.object(live_settings, "FOLLOW_API_TOKEN", "cmd-tok"):
+    FORECAST_BACKFILL_ENABLED must be True for this test to actually prove
+    what it claims: FastAPI resolves a route's `dependencies` (which
+    includes require_forecast_backfill_enabled) BEFORE parsing/validating
+    the request body, so with the flag at its default False, EVERY request
+    -- valid or invalid horizons alike -- would 403 before ever reaching
+    Pydantic validation, and this test would pass for the wrong reason."""
+
+    def _fail_if_called(*args, **kwargs):
+        pytest.fail("start_job must never be called on the 422 validation-failure path")
+
+    monkeypatch.setattr(pilots_api.forecast_backfill_job, "start_job", _fail_if_called)
+
+    client = TestClient(pilots_api.app, client=("127.0.0.1", 50000))
+    with mock.patch.object(settings, "FOLLOW_API_TOKEN", "cmd-tok"), mock.patch.object(
+        settings, "FORECAST_BACKFILL_ENABLED", True
+    ):
         res = client.post(
             "/pilots/forecast_backfill/run",
             json={"horizons": [10, -1]},
             headers={"Authorization": "Bearer cmd-tok"},
         )
     assert res.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Async job endpoints — POST /run, GET /status/{job_id}, POST /cancel/{job_id}
+# ---------------------------------------------------------------------------
+# Mocked at the pilots_api.forecast_backfill_job layer (mirrors
+# tests/test_brokerage_connect.py's TestBrokerageConnectHappyPath /
+# TestBrokerageLoginStatus / TestBrokerageLoginCancel) so these run fast and
+# deterministically with no real subprocess involved.
+
+_client = TestClient(pilots_api.app, client=("127.0.0.1", 50000))
+_CMD_TOKEN = "backfill-cmd-tok"
+
+
+def _auth():
+    return {"Authorization": f"Bearer {_CMD_TOKEN}"}
+
+
+class TestForecastBackfillRunEndpointGating:
+    def test_403_when_flag_disabled(self):
+        with mock.patch.object(settings, "FORECAST_BACKFILL_ENABLED", False):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = _client.post(
+                    "/pilots/forecast_backfill/run", json={}, headers=_auth()
+                )
+        assert resp.status_code == 403
+
+    def test_403_when_token_unset_even_if_flag_enabled(self):
+        with mock.patch.object(settings, "FORECAST_BACKFILL_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
+                resp = _client.post("/pilots/forecast_backfill/run", json={})
+        assert resp.status_code == 403
+
+    def test_401_wrong_token(self):
+        with mock.patch.object(settings, "FORECAST_BACKFILL_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = _client.post(
+                    "/pilots/forecast_backfill/run",
+                    json={},
+                    headers={"Authorization": "Bearer WRONG"},
+                )
+        assert resp.status_code == 401
+
+
+class TestForecastBackfillRunEndpointHappyPath:
+    def test_run_starts_a_job_and_returns_202_with_its_status(self, monkeypatch):
+        captured = {}
+
+        def fake_start_job(params):
+            captured["params"] = params
+            return "the-job-object"
+
+        monkeypatch.setattr(pilots_api.forecast_backfill_job, "start_job", fake_start_job)
+        monkeypatch.setattr(
+            pilots_api.forecast_backfill_job,
+            "serialize_job",
+            lambda job: {
+                "job_id": "backfill-abc123",
+                "state": "running",
+                "phase": None,
+                "step": 0,
+                "total_steps": 7,
+                "error": None,
+                "error_type": None,
+                "summary": None,
+                "sample_rows": None,
+                "seconds_remaining": 1800.0,
+            },
+        )
+
+        with mock.patch.object(settings, "FORECAST_BACKFILL_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = _client.post(
+                    "/pilots/forecast_backfill/run",
+                    json={"tickers": ["AAPL"], "horizons": [10, 30]},
+                    headers=_auth(),
+                )
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["job_id"] == "backfill-abc123"
+        assert body["state"] == "running"
+        assert body["total_steps"] == 7
+        # The full validated request body (model_dump()) reaches start_job,
+        # not a hand-picked subset.
+        assert captured["params"]["tickers"] == ["AAPL"]
+        assert captured["params"]["horizons"] == [10, 30]
+
+    def test_run_returns_structured_409_with_the_existing_job_id(self, monkeypatch):
+        """start_job() returning None (a run is already in progress) must
+        translate into a STRUCTURED 409 body carrying the in-flight job's
+        id, not a bare error string, mirroring POST /automation/run's
+        already_running response shape -- so a client can poll the existing
+        job instead of hitting a dead end."""
+        monkeypatch.setattr(pilots_api.forecast_backfill_job, "start_job", lambda params: None)
+        monkeypatch.setattr(
+            pilots_api.forecast_backfill_job,
+            "get_active_job_id",
+            lambda: "backfill-already-running",
+        )
+
+        with mock.patch.object(settings, "FORECAST_BACKFILL_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = _client.post(
+                    "/pilots/forecast_backfill/run", json={}, headers=_auth()
+                )
+        assert resp.status_code == 409
+        body = resp.json()
+        assert body["detail"]["job_id"] == "backfill-already-running"
+        assert isinstance(body["detail"]["detail"], str)
+
+
+class TestForecastBackfillStatusEndpoint:
+    def test_status_unknown_job_returns_404(self, monkeypatch):
+        monkeypatch.setattr(pilots_api.forecast_backfill_job, "get_job_state", lambda job_id: None)
+        resp = _client.get("/pilots/forecast_backfill/status/nope")
+        assert resp.status_code == 404
+
+    def test_status_known_job_returns_serialized_shape(self, monkeypatch):
+        monkeypatch.setattr(
+            pilots_api.forecast_backfill_job, "get_job_state", lambda job_id: "job-obj"
+        )
+        monkeypatch.setattr(
+            pilots_api.forecast_backfill_job,
+            "serialize_job",
+            lambda job: {
+                "job_id": "backfill-abc",
+                "state": "running",
+                "phase": "primary_signals",
+                "step": 3,
+                "total_steps": 7,
+                "error": None,
+                "error_type": None,
+                "summary": None,
+                "sample_rows": None,
+                "seconds_remaining": 900.4,
+            },
+        )
+        resp = _client.get("/pilots/forecast_backfill/status/backfill-abc")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["phase"] == "primary_signals"
+        assert body["step"] == 3
+        assert body["seconds_remaining"] == 900.4
+
+    def test_status_is_not_gated_by_the_forecast_backfill_flag(self, monkeypatch):
+        """GET status is read-only -- require_read_token alone, matching
+        every other GET in this file. Must succeed even with the master
+        write flag off."""
+        monkeypatch.setattr(
+            pilots_api.forecast_backfill_job, "get_job_state", lambda job_id: "job-obj"
+        )
+        monkeypatch.setattr(pilots_api.forecast_backfill_job, "serialize_job", lambda job: {})
+        with mock.patch.object(settings, "FORECAST_BACKFILL_ENABLED", False):
+            resp = _client.get("/pilots/forecast_backfill/status/backfill-abc")
+        assert resp.status_code == 200
+
+
+class TestForecastBackfillCancelEndpoint:
+    def test_cancel_unknown_job_returns_404(self, monkeypatch):
+        def boom(job_id):
+            raise KeyError(job_id)
+
+        monkeypatch.setattr(pilots_api.forecast_backfill_job, "cancel_job", boom)
+        with mock.patch.object(settings, "FORECAST_BACKFILL_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = _client.post(
+                    "/pilots/forecast_backfill/cancel/nope", headers=_auth()
+                )
+        assert resp.status_code == 404
+
+    def test_cancel_known_job_reports_confirmed_stop(self, monkeypatch):
+        monkeypatch.setattr(pilots_api.forecast_backfill_job, "cancel_job", lambda job_id: True)
+        monkeypatch.setattr(
+            pilots_api.forecast_backfill_job, "get_job_state", lambda job_id: "job-obj"
+        )
+        monkeypatch.setattr(
+            pilots_api.forecast_backfill_job,
+            "serialize_job",
+            lambda job: {"job_id": "backfill-abc", "state": "cancelled"},
+        )
+        with mock.patch.object(settings, "FORECAST_BACKFILL_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = _client.post(
+                    "/pilots/forecast_backfill/cancel/backfill-abc", headers=_auth()
+                )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cancelled"] is True
+        assert body["state"] == "cancelled"
+
+    def test_cancel_403_when_flag_disabled(self):
+        with mock.patch.object(settings, "FORECAST_BACKFILL_ENABLED", False):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = _client.post(
+                    "/pilots/forecast_backfill/cancel/backfill-abc", headers=_auth()
+                )
+        assert resp.status_code == 403
+
+
+class TestForecastBackfillEnabledFlagClassification:
+    """Mirrors the pilots-endpoint skill's `test_<flag>_is_not_gui_writable`
+    checklist item -- but FORECAST_BACKFILL_ENABLED is the deliberate
+    exception to the 2026-08-08 "gate on secrecy alone" policy generalization
+    (see its own settings.py Field docstring and gui/env_io.py's
+    EXCLUDED_FROM_GUI comment), so this positively confirms EXCLUDED_FROM_GUI
+    membership rather than just the absence-from-ALLOWED_KEYS check every
+    other flag's version of this test uses."""
+
+    def test_forecast_backfill_enabled_is_hand_set_only(self):
+        assert "FORECAST_BACKFILL_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+        assert "FORECAST_BACKFILL_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "FORECAST_BACKFILL_ENABLED" in pilots_api.env_io.EXCLUDED_FROM_GUI
+
+    def test_forecast_backfill_enabled_defaults_false(self):
+        from settings import Settings
+
+        assert Settings.model_fields["FORECAST_BACKFILL_ENABLED"].default is False
