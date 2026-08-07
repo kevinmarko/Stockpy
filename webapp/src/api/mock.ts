@@ -279,7 +279,7 @@ function h(
 }
 
 function holdings(
-  symbols: [string, number, number][] // [symbol, weight(raw), score]
+  symbols: [string, number, number, (number | null)?][] // [symbol, weight(raw), score, meta_label_composite_override?]
 ): Holding[] {
   const total = symbols.reduce((s, [, w]) => s + w, 0);
 
@@ -293,7 +293,7 @@ function holdings(
   const minScore = byScoreDesc[byScoreDesc.length - 1]?.[2] ?? 0;
   const scoreSpread = maxScore - minScore || 1;
 
-  return symbols.map(([symbol, w, score]) => {
+  return symbols.map(([symbol, w, score, metaOverride]) => {
     const price = +(50 + Math.random() * 400).toFixed(2);
     const isBuy = buySymbols.has(symbol);
     // Normalize this holding's score within its Pilot's own score range,
@@ -303,6 +303,14 @@ function holdings(
     const conviction = isBuy
       ? +(0.75 + normalized * 0.15).toFixed(2)
       : +(0.5 + normalized * 0.15).toFixed(2);
+    // Deterministic meta-label composite default, mirroring conviction's
+    // normalized-score derivation -- no Math.random(). `metaOverride ===
+    // undefined` means the tuple omitted the 4th slot (use the derived
+    // default); an explicit `null` override (trend-following's LMT) is
+    // passed through unchanged to exercise the honest "not computed" render
+    // path -- never fabricate a value where the real API would say null.
+    const metaLabelComposite =
+      metaOverride !== undefined ? metaOverride : +(0.55 + normalized * 0.35).toFixed(3);
 
     const buyLow = price * 0.94;
     const buyHigh = price * 0.98;
@@ -321,6 +329,7 @@ function holdings(
       buy_range: `Buy Zone: $${buyLow.toFixed(2)} - $${buyHigh.toFixed(2)}`,
       sell_range: `Sell Zone: $${sellLow.toFixed(2)} - $${sellHigh.toFixed(2)} | Stop @ $${stop.toFixed(2)}`,
       conviction,
+      meta_label_composite: metaLabelComposite,
     };
   });
 }
@@ -378,7 +387,7 @@ const RAW: Array<{
   hasCurve: boolean;
   drift: number;
   vol: number;
-  syms: [string, number, number][];
+  syms: [string, number, number, (number | null)?][];
   // Optional; defaults to true (a distinct SPY macro overlay is available).
   // Set false to model the honest redundancy case (underlying already IS SPY).
   macroBenchmark?: boolean;
@@ -401,7 +410,9 @@ const RAW: Array<{
       ["MSFT", 24, 0.61],
       ["AAPL", 20, 0.48],
       ["CAT", 14, 0.4],
-      ["LMT", 12, 0.33],
+      // Explicit null exercises the honest "not computed this cycle" render
+      // path for meta_label_composite (never fabricate a fallback value).
+      ["LMT", 12, 0.33, null],
     ],
   },
   {

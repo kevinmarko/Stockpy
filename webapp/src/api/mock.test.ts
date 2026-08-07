@@ -61,6 +61,7 @@ function expectHolding(h: Holding) {
   expect(typeof h.weight).toBe("number");
   expect(typeof h.score).toBe("number");
   expect(h.price === null || typeof h.price === "number").toBe(true);
+  expect(h.meta_label_composite === null || typeof h.meta_label_composite === "number").toBe(true);
 }
 
 describe("mock API — /pilots list contract", () => {

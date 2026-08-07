@@ -120,6 +120,13 @@ export interface Holding {
   buy_range: string | null;
   sell_range: string | null;
   conviction: number | null;
+  /**
+   * ML meta-labeler gate output (roughly [0,1]) this holding's position
+   * sizing was scaled by. `0` is a real, meaningful value (a hard gate can
+   * zero it); `null` means it wasn't computed this cycle — never a
+   * fabricated default.
+   */
+  meta_label_composite: number | null;
 }
 
 export interface SectorSlice {
