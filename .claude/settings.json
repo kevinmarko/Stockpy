@@ -7,7 +7,21 @@
       "mcp__Claude_Browser__read_network_requests",
       "mcp__Claude_Browser__read_console_messages",
       "mcp__Claude_Browser__find",
-      "Bash(npm run typecheck *)"
+      "Bash(npm run typecheck *)",
+      "Bash(git fetch *)",
+      "Bash(git rebase *)",
+      "Bash(git worktree *)",
+      "Bash(git rev-list *)",
+      "Bash(gh run *)",
+      "Bash(./setup.sh)",
+      "Bash(.venv/bin/python --version)",
+      "Bash(.venv/bin/pip list *)",
+      "Bash(.venv/bin/python -m pytest tests/ -q -p no:cacheprovider --tb=no)",
+      "Bash(.venv/bin/python -m pytest tests/ -q -p no:cacheprovider --tb=short)",
+      "Bash(npx --version)",
+      "mcp__robinhood-trading__get_equity_positions",
+      "mcp__robinhood-trading__get_portfolio",
+      "mcp__robinhood-trading__get_scans"
     ]
   },
   "hooks": {
