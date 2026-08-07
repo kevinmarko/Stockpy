@@ -19,6 +19,7 @@ import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice } from "../components/ui";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
@@ -67,40 +68,72 @@ export function StrategyMatrix() {
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/settings"));
 
   return (
-    <div className="screen">
-      <button
-        onClick={back}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          color: theme.textSecondary,
-          fontSize: "var(--t-callout)",
-          marginBottom: "var(--s-2)",
-        }}
-      >
-        ← Settings
-      </button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1 className="screen-title">Signal modules</h1>
-        {data?.as_of && (
-          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
+    <div className="screen" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <div>
+          <button
+            onClick={back}
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              color: theme.textSecondary,
+              fontSize: "var(--t-callout)",
+              marginBottom: "var(--s-2)",
+            }}
+          >
+            ← Settings
+          </button>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
+            <h1 className="screen-title" style={{ margin: 0 }}>Signal modules</h1>
+            {data?.as_of && (
+              <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
+            )}
+          </div>
+          <p className="screen-sub" style={{ marginTop: "var(--s-1)" }}>
+            Per-module weights and enabled state for the signal aggregator. Advisory
+            only — tuning changes what the platform recommends, never places an order.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
+          <Button variant="neutral" onClick={() => resetGridLayout("strategy-matrix")}>Reset Layout</Button>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-4)" }}>
+        {loading && !data && <Loading lines={4} />}
+        {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+        {!loading && !error && data && (
+          <DynamicGrid
+            layoutKey="strategy-matrix"
+            defaultLayouts={{
+              lg: [
+                { i: "meta-label", x: 0, y: 0, w: 12, h: 8, minW: 6, minH: 6 },
+                { i: "context", x: 0, y: 8, w: 12, h: 4, minW: 6, minH: 3 },
+                ...data.modules.map((m, i) => ({
+                  i: m.name,
+                  x: (i % 3) * 4,
+                  y: 12 + Math.floor(i / 3) * 4,
+                  w: 4,
+                  h: 4,
+                  minW: 3,
+                  minH: 3,
+                })),
+              ],
+            }}
+          >
+            <div key="meta-label">
+              <div style={{ height: "100%" }}>
+                <MetaLabelSection dist={data.meta_label} />
+              </div>
+            </div>
+            
+            {/* The rest is handled inside MatrixEditor but since it's a grid, we should probably pass the grid wrapper to MatrixEditor, or inline it. */}
+            <MatrixEditor data={data} onReload={reload} />
+          </DynamicGrid>
         )}
       </div>
-      <p className="screen-sub">
-        Per-module weights and enabled state for the signal aggregator. Advisory
-        only — tuning changes what the platform recommends, never places an order.
-      </p>
-
-      {loading && <Loading lines={4} />}
-      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
-      {!loading && !error && data && (
-        <>
-          <MetaLabelSection dist={data.meta_label} />
-          <MatrixEditor data={data} onReload={reload} />
-        </>
-      )}
     </div>
   );
 }
@@ -128,8 +161,8 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
   );
 
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="meta-label-section">
-      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Meta-label confidence distribution</h2>
+    <section className="card card-pad" style={{ height: "100%" }} data-testid="meta-label-section">
+      <div className="drag-handle" style={{ cursor: "grab", borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-1)", marginBottom: "var(--s-2)" }}><h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Meta-label confidence distribution</h2></div>
       <p style={{ margin: "0 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
         Distribution of meta-label confidence (geometric mean of active
         modules' P(signal correct)) across all symbols in the last snapshot.
@@ -264,76 +297,62 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
 
   return (
     <>
-      {/* Context row */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", margin: "var(--s-1) 0 var(--s-3)" }}>
-        <span className="chip">Regime {data.market_regime ?? "—"}</span>
-        <span className="chip">Max weight {fmtNum(max, 0)}</span>
-        {data.regime_overrides_active && <span className="chip">Regime overrides active</span>}
+      <div key="context">
+        <section className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", height: "100%", cursor: "grab" }}>
+          <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Context & Alerts</h2>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", margin: "var(--s-1) 0 var(--s-3)" }}>
+            <span className="chip">Regime {data.market_regime ?? "—"}</span>
+            <span className="chip">Max weight {fmtNum(max, 0)}</span>
+            {data.regime_overrides_active && <span className="chip">Regime overrides active</span>}
+          </div>
+
+          {!data.writable && (
+            <Notice variant="warn" style={{ marginBottom: "var(--s-1)" }}>
+              <span>{data.note}</span>
+            </Notice>
+          )}
+
+          {data.env_drift.detected && (
+            <Notice variant="info" style={{ marginBottom: "var(--s-1)" }} data-testid="env-drift-notice">
+              <span>{data.env_drift.note}</span>
+            </Notice>
+          )}
+
+          {saved && (
+            <Notice variant="success" style={{ marginBottom: "var(--s-1)" }} data-testid="saved-notice">
+              <span>
+                Saved to .env. The running engine keeps the previous values until its
+                next restart.
+              </span>
+            </Notice>
+          )}
+          
+          {data.writable && (
+            <div style={{ marginTop: "auto", paddingTop: "var(--s-2)" }}>
+              <Button
+                variant="primary"
+                block
+                disabled={!canSave}
+                onClick={() => setConfirming(true)}
+              >
+                Save changes
+              </Button>
+            </div>
+          )}
+        </section>
       </div>
 
-      {!data.writable && (
-        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
-          <span>{data.note}</span>
-        </Notice>
-      )}
-
-      {data.env_drift.detected && (
-        <Notice variant="info" style={{ marginBottom: "var(--s-3)" }} data-testid="env-drift-notice">
-          <span>{data.env_drift.note}</span>
-        </Notice>
-      )}
-
-      {saved && (
-        <Notice variant="success" style={{ marginBottom: "var(--s-3)" }} data-testid="saved-notice">
-          <span>
-            Saved to .env. The running engine keeps the previous values until its
-            next restart.
-          </span>
-        </Notice>
-      )}
-
-      {/* Module rows */}
-      <div>
-        {data.modules.map((m) => {
-          const enabled = !edit.disabled.has(m.name);
-          const invalid = invalidNames.has(m.name);
-          return (
+      {data.modules.map((m) => {
+        const enabled = !edit.disabled.has(m.name);
+        const invalid = invalidNames.has(m.name);
+        return (
+          <div key={m.name}>
             <section
-              key={m.name}
               className="card card-pad"
-              style={{ marginBottom: "var(--s-2-5)", opacity: enabled ? 1 : 0.6 }}
+              style={{ display: "flex", flexDirection: "column", height: "100%", opacity: enabled ? 1 : 0.6 }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <div style={{ fontWeight: 700 }}>{m.name}</div>
-                  <div style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
-                    {m.source === "snapshot"
-                      ? "scored last run, no configured weight"
-                      : m.source === "weights"
-                        ? "configured, not scored last run"
-                        : `${m.symbols_scored ?? "—"} symbols scored`}
-                  </div>
-                  <InfoTip
-                    triggerStyle={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      fontSize: "var(--t-micro)",
-                      color: theme.textMuted,
-                      marginTop: "var(--s-0-5)",
-                      fontFamily: "monospace",
-                      cursor: "pointer",
-                    }}
-                    content="sha256-prefix fingerprint of signals/<name>.py + its last-modified time"
-                  >
-                    {m.version_hash
-                      ? `v${m.version_hash} · modified ${timeAgo(m.last_modified)}`
-                      : "no file on disk"}
-                  </InfoTip>
-                </div>
+              <div className="drag-handle" style={{ cursor: "grab", borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-2)", marginBottom: "var(--s-2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontWeight: 700 }}>{m.name}</div>
                 <Toggle
                   checked={enabled}
                   onChange={(v) => setEnabled(m.name, v)}
@@ -341,43 +360,59 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
                   disabled={!data.writable}
                 />
               </div>
-              <div style={{ marginTop: "var(--s-2-5)", maxWidth: 180 }}>
-                <Input
-                  label="Weight"
-                  type="number"
-                  min={0}
-                  max={max}
-                  step={1}
-                  value={edit.weights[m.name] ?? ""}
-                  onChange={(e) => setWeight(m.name, e.target.value)}
-                  invalid={invalid}
-                  hint={
-                    m.pinned_zero
-                      ? "Pinned to 0 — carries information via confidence, not score."
-                      : invalid
-                        ? `Must be a number in [0, ${max}].`
-                        : undefined
-                  }
-                  disabled={!data.writable || m.pinned_zero}
-                />
+              <div style={{ flex: 1, overflow: "auto" }}>
+                <div style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
+                  {m.source === "snapshot"
+                    ? "scored last run, no configured weight"
+                    : m.source === "weights"
+                      ? "configured, not scored last run"
+                      : `${m.symbols_scored ?? "—"} symbols scored`}
+                </div>
+                <InfoTip
+                  triggerStyle={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    background: "none",
+                    border: "none",
+                    padding: 0,
+                    fontSize: "var(--t-micro)",
+                    color: theme.textMuted,
+                    marginTop: "var(--s-0-5)",
+                    fontFamily: "monospace",
+                    cursor: "pointer",
+                  }}
+                  content="sha256-prefix fingerprint of signals/<name>.py + its last-modified time"
+                >
+                  {m.version_hash
+                    ? `v${m.version_hash} · modified ${timeAgo(m.last_modified)}`
+                    : "no file on disk"}
+                </InfoTip>
+                <div style={{ marginTop: "var(--s-2-5)", maxWidth: "100%" }}>
+                  <Input
+                    label="Weight"
+                    type="number"
+                    min={0}
+                    max={max}
+                    step={1}
+                    value={edit.weights[m.name] ?? ""}
+                    onChange={(e) => setWeight(m.name, e.target.value)}
+                    invalid={invalid}
+                    hint={
+                      m.pinned_zero
+                        ? "Pinned to 0 — carries information via confidence, not score."
+                        : invalid
+                          ? `Must be a number in [0, ${max}].`
+                          : undefined
+                    }
+                    disabled={!data.writable || m.pinned_zero}
+                  />
+                </div>
               </div>
             </section>
-          );
-        })}
-      </div>
-
-      {data.writable && (
-        <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
-          <Button
-            variant="primary"
-            block
-            disabled={!canSave}
-            onClick={() => setConfirming(true)}
-          >
-            Save changes
-          </Button>
-        </div>
-      )}
+          </div>
+        );
+      })}
 
       {confirming && (
         <Modal ariaLabel="Confirm signal-module changes" onClose={() => setConfirming(false)}>

@@ -1,6 +1,8 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { Button } from "../components/ui";
 
 /**
  * OperationsHub — landing screen for the "Operations" nav section (see
@@ -52,40 +54,72 @@ export function OperationsHub() {
 
   return (
     <div className="screen">
-      <h1 className="screen-title">Operations</h1>
-      <p className="screen-sub">
-        The platform and pipeline itself, not a symbol or your money.
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>Operations</h1>
+          <p className="screen-sub">
+            The platform and pipeline itself, not a symbol or your money.
+          </p>
+        </div>
+        <Button variant="neutral" onClick={() => resetGridLayout("operationsHub")}>Reset Layout</Button>
+      </div>
 
-      <div style={{ marginTop: "var(--s-3)" }}>
-        {CARDS.map((c) => (
-          <button
-            key={c.to}
-            type="button"
-            onClick={() => nav(c.to)}
-            className="card card-pad"
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: "var(--s-3)",
-              width: "100%",
-              textAlign: "left",
-              marginBottom: "var(--s-3)",
-              background: "none",
-              cursor: "pointer",
-            }}
-          >
-            <span aria-hidden style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>
-              {c.ico}
-            </span>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{c.label}</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-label)", marginTop: "var(--s-1)", lineHeight: 1.5 }}>
-                {c.description}
+      <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-3)" }}>
+        <DynamicGrid
+          layoutKey="operationsHub"
+          defaultLayouts={{
+            lg: CARDS.map((c, i) => ({
+              i: c.to,
+              x: (i % 2) * 6,
+              y: Math.floor(i / 2) * 2,
+              w: 6,
+              h: 2,
+              minW: 4,
+              minH: 2,
+            })),
+          }}
+        >
+          {CARDS.map((c) => (
+            <div key={c.to}>
+              <div className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+                <div
+                  className="drag-handle"
+                  style={{
+                    padding: "var(--s-3)",
+                    borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
+                    cursor: "grab",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "var(--s-2)"
+                  }}
+                >
+                  <span aria-hidden style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>
+                    {c.ico}
+                  </span>
+                  <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{c.label}</div>
+                </div>
+                <div
+                  role="button"
+                  aria-label={c.label}
+                  tabIndex={0}
+                  onClick={() => nav(c.to)}
+                  onKeyDown={(e) => e.key === "Enter" && nav(c.to)}
+                  style={{
+                    padding: "var(--s-3)",
+                    flex: 1,
+                    overflow: "auto",
+                    color: theme.textMuted,
+                    fontSize: "var(--t-label)",
+                    lineHeight: 1.5,
+                    cursor: "pointer"
+                  }}
+                >
+                  {c.description}
+                </div>
               </div>
             </div>
-          </button>
-        ))}
+          ))}
+        </DynamicGrid>
       </div>
     </div>
   );

@@ -1,5 +1,4 @@
-import React, { useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import React from "react";
 import type { TunableField } from "../api/types";
 import { theme } from "../theme";
 
@@ -15,67 +14,41 @@ interface TunableGroupCardProps {
 export function TunableGroupCard({
   name,
   fields,
-  defaultOpen = false,
   dirtyCount = 0,
   rejectedCount = 0,
   children,
 }: TunableGroupCardProps) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-  // Hooks must run unconditionally on every render of this instance -- called
-  // ahead of the `fields.length === 0` early return below so the hook
-  // count/order never varies across renders.
-  const shouldReduceMotion = useReducedMotion();
-
   if (fields.length === 0) return null;
-
-  // Snappy by design: this is a UI density control the operator may toggle
-  // repeatedly while scanning a settings screen, not a slow reveal.
-  // Collapses to near-instant when the OS reports a reduced-motion
-  // preference (no local precedent for this elsewhere in webapp/src, so this
-  // follows framer-motion's own `useReducedMotion` recommendation directly).
-  const contentTransition = shouldReduceMotion
-    ? { duration: 0.01 }
-    : { duration: 0.2, ease: [0.4, 0, 0.2, 1] as const };
 
   return (
     <section
       className="card"
       style={{
-        marginBottom: "var(--s-3)",
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
         overflow: "hidden",
         border: `1px solid ${rejectedCount > 0 ? theme.decline : dirtyCount > 0 ? theme.accent : theme.border}`,
+        margin: 0
       }}
     >
-      <button
-        type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
+      <div
+        className="drag-handle"
         style={{
           width: "100%",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           padding: "var(--s-3) var(--s-4)",
-          background: isOpen ? theme.surface2 : "transparent",
-          border: "none",
-          cursor: "pointer",
+          background: theme.surface2,
+          borderBottom: `1px solid ${theme.border}`,
+          cursor: "grab",
           textAlign: "left",
           color: theme.textPrimary,
-          transition: "background 0.15s ease",
         }}
         data-testid={`group-header-${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
-          <span
-            style={{
-              fontSize: 12,
-              color: theme.textMuted,
-              transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
-              transition: "transform 0.15s ease",
-              display: "inline-block",
-            }}
-          >
-            ▶
-          </span>
           <h2 style={{ margin: 0, fontSize: "var(--t-title)", fontWeight: 700 }}>
             {name}
           </h2>
@@ -120,25 +93,11 @@ export function TunableGroupCard({
             </span>
           )}
         </div>
-        <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>
-          {isOpen ? "Collapse" : "Expand"}
-        </span>
-      </button>
+      </div>
 
-      <AnimatePresence initial={false}>
-        {isOpen && (
-          <motion.div
-            key="content"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={contentTransition}
-            style={{ overflow: "hidden" }}
-          >
-            <div style={{ padding: "var(--s-4)" }}>{children}</div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "var(--s-4)" }}>
+        {children}
+      </div>
     </section>
   );
 }

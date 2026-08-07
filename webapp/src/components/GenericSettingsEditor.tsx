@@ -27,6 +27,7 @@ import { TunableGroupCard } from "./TunableGroupCard";
 import { Modal } from "./Modal";
 import { theme } from "../theme";
 import { TagInput } from "./TagInput";
+import { DynamicGrid, resetGridLayout } from "./DynamicGrid";
 import {
   buildConfirmMap,
   dangerousKeysIn,
@@ -157,23 +158,26 @@ export function GenericSettingsEditor({
   const appliesNotice = data ? screenAppliesNotice(data.applies, data.applies_counts) : null;
 
   return (
-    <div className="screen">
-      <button
-        onClick={back}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          color: theme.textSecondary,
-          fontSize: "var(--t-callout)",
-          marginBottom: "var(--s-2)",
-        }}
-      >
-        ← Settings
-      </button>
-      <h1 className="screen-title">{title}</h1>
-      <p className="screen-sub">{subtitle}</p>
+    <div className="screen" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <div>
+          <button
+            onClick={back}
+            style={{ background: "none", padding: 0, cursor: "pointer", color: "var(--text-secondary)", fontSize: "var(--t-callout)", marginBottom: "var(--s-2)", border: "none" }}
+          >
+            ← Settings
+          </button>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
+            <h1 className="screen-title" style={{ margin: 0 }}>{title}</h1>
+          </div>
+          <p className="screen-sub" style={{ marginTop: "var(--s-1)" }}>{subtitle}</p>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
+          <button type="button" className="btn btn-neutral" onClick={() => resetGridLayout(`settings-${title.toLowerCase().replace(/[^a-z0-9]/g, '-')}`)}>
+            Reset Layout
+          </button>
+        </div>
+      </div>
 
       {appliesNotice && (
         <Notice
@@ -218,10 +222,14 @@ export function GenericSettingsEditor({
       {loading && <Loading lines={4} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && !hasFields && (
-        <EmptyState title={emptyTitle} hint={emptyHint} />
+        <div style={{ flex: 1, overflow: "auto" }}>
+          <EmptyState title={emptyTitle} hint={emptyHint} />
+        </div>
       )}
       {!loading && !error && data && hasFields && (
-        <SettingsForm
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <SettingsForm
+          title={title}
           data={data}
           onReload={reload}
           updateSettings={updateSettings}
@@ -230,12 +238,14 @@ export function GenericSettingsEditor({
           lastResult={lastResult}
           onResult={setLastResult}
         />
+        </div>
       )}
     </div>
   );
 }
 
 function SettingsForm({
+  title,
   data,
   onReload,
   updateSettings,
@@ -244,6 +254,7 @@ function SettingsForm({
   lastResult,
   onResult,
 }: {
+  title: string;
   data: TunablesResponse;
   onReload: () => void;
   updateSettings: (
@@ -426,37 +437,59 @@ function SettingsForm({
         </Notice>
       )}
 
-      {data.groups.map((group, idx) => {
-        if (group.fields.length === 0) return null;
-        const groupDirtyCount = group.fields.filter((f) => edited[f.key] !== baseline[f.key]).length;
-        const groupRejectedCount = group.fields.filter((f) => Boolean(rejected[f.key])).length;
-        return (
-          <TunableGroupCard
-            key={group.name}
-            name={group.name}
-            fields={group.fields}
-            defaultOpen={data.groups.length <= 3 || idx === 0}
-            dirtyCount={groupDirtyCount}
-            rejectedCount={groupRejectedCount}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
-              {group.fields.map((f) => (
-                <FieldRow
-                  key={f.key}
-                  field={f}
-                  value={edited[f.key]}
-                  onChange={(v) => setVal(f.key, v)}
-                  invalid={invalidKeys.has(f.key)}
-                  rejectedReason={rejected[f.key] ?? null}
-                  labelMap={labelMap}
-                />
-              ))}
+      
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <DynamicGrid
+          layoutKey={`settings-${title.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
+          defaultLayouts={{
+            lg: [
+              ...data.groups.map((g, idx) => ({ i: `group-${idx}`, x: (idx % 2) * 6, y: Math.floor(idx / 2) * 4, w: 6, h: 4 })),
+              ...(dangerZone ? [{ i: "danger-zone", x: 0, y: Math.ceil(data.groups.length / 2) * 4, w: 12, h: 4 }] : [])
+            ]
+          }}
+        >
+          {data.groups.map((group, idx) => {
+            if (group.fields.length === 0) return null;
+            const groupDirtyCount = group.fields.filter((f) => edited[f.key] !== baseline[f.key]).length;
+            const groupRejectedCount = group.fields.filter((f) => Boolean(rejected[f.key])).length;
+            return (
+              <div key={`group-${idx}`}>
+                <TunableGroupCard
+                  name={group.name}
+                  fields={group.fields}
+                  defaultOpen={data.groups.length <= 3 || idx === 0}
+                  dirtyCount={groupDirtyCount}
+                  rejectedCount={groupRejectedCount}
+                >
+                  <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
+                    {group.fields.map((f) => (
+                      <FieldRow
+                        key={f.key}
+                        field={f}
+                        value={edited[f.key]}
+                        onChange={(v) => setVal(f.key, v)}
+                        invalid={invalidKeys.has(f.key)}
+                        rejectedReason={rejected[f.key] ?? null}
+                        labelMap={labelMap}
+                      />
+                    ))}
+                  </div>
+                </TunableGroupCard>
+              </div>
+            );
+          })}
+          {dangerZone && (
+            <div key="danger-zone" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+              <div className="drag-handle" style={{ background: "transparent", cursor: "grab", height: "20px", display: "flex", justifyContent: "center", alignItems: "center" }}>
+                <div style={{ width: "40px", height: "4px", background: "var(--border)", borderRadius: "2px" }} />
+              </div>
+              <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                {dangerZone}
+              </div>
             </div>
-          </TunableGroupCard>
-        );
-      })}
-
-      {dangerZone}
+          )}
+        </DynamicGrid>
+      </div>
 
       <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)", padding: "var(--s-3)", background: "var(--surface-glass)", backdropFilter: "blur(12px)", borderTop: "1px solid var(--border)", zIndex: 10, borderRadius: "var(--r-md)" }}>
         <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>

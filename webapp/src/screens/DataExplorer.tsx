@@ -10,6 +10,8 @@ import { SymbolInput } from "../components/SymbolInput";
 import { RecommendedStocks } from "../components/RecommendedStocks";
 import { MarketDataHealth } from "../components/MarketDataHealth";
 import { TabGuide } from "../components/TabGuide";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { Button } from "../components/ui";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -91,8 +93,11 @@ function MacroSection() {
     ["high_yield_oas", "HY OAS"],
   ];
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
-      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Macro snapshot</h2>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Macro snapshot</h2>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       {loading && <Loading lines={1} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
@@ -104,6 +109,7 @@ function MacroSection() {
           )}
         </div>
       )}
+      </div>
     </section>
   );
 }
@@ -131,42 +137,80 @@ export function DataExplorer() {
       >
         ← Back
       </button>
-      <h1 className="screen-title">Data explorer</h1>
-      <p className="screen-sub">
-        See the platform's recommended stocks and browse the raw data layer for
-        a symbol — daily bars, current fundamentals, and the macro snapshot.{" "}
-        Manage which stocks are tracked in <Link to="/settings">Settings</Link>.
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>Data explorer</h1>
+          <p className="screen-sub">
+            See the platform's recommended stocks and browse the raw data layer for
+            a symbol — daily bars, current fundamentals, and the macro snapshot.{" "}
+            Manage which stocks are tracked in <Link to="/settings">Settings</Link>.
+          </p>
+        </div>
+        <Button variant="neutral" onClick={() => resetGridLayout("dataExplorer")}>Reset Layout</Button>
+      </div>
 
       <TabGuide tabKey="data-explorer" />
 
-      <RecommendedStocks onSelect={setSymbol} />
-
       <SymbolInput initial={symbol} onSubmit={setSymbol} pending={bars.loading} />
 
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Price bars · {symbol}</h2>
-        {bars.loading && <Loading lines={2} />}
-        {!bars.loading && bars.error && (
-          <ErrorState message={bars.error} status={bars.status} onRetry={bars.reload} />
-        )}
-        {!bars.loading && !bars.error && bars.data && <BarsChart bars={bars.data} />}
-      </section>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <DynamicGrid
+          layoutKey="dataExplorer"
+          defaultLayouts={{
+            lg: [
+              { i: "recommended", x: 0, y: 0, w: 12, h: 4, minW: 6, minH: 3 },
+              { i: "bars", x: 0, y: 4, w: 8, h: 4, minW: 4, minH: 3 },
+              { i: "fundamentals", x: 8, y: 4, w: 4, h: 4, minW: 3, minH: 3 },
+              { i: "macro", x: 0, y: 8, w: 12, h: 2, minW: 4, minH: 2 },
+              { i: "health", x: 0, y: 10, w: 12, h: 4, minW: 6, minH: 3 },
+            ],
+          }}
+        >
+          <div key="recommended">
+            <RecommendedStocks onSelect={setSymbol} />
+          </div>
 
-      <section className="card card-pad">
-        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Fundamentals · {symbol}</h2>
-        {fundamentals.loading && <Loading lines={2} />}
-        {!fundamentals.loading && fundamentals.error && (
-          <ErrorState message={fundamentals.error} status={fundamentals.status} onRetry={fundamentals.reload} />
-        )}
-        {!fundamentals.loading && !fundamentals.error && fundamentals.data && (
-          <FundamentalsTable f={fundamentals.data} />
-        )}
-      </section>
+          <div key="bars">
+            <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Price bars · {symbol}</h2>
+              </div>
+              <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+                {bars.loading && <Loading lines={2} />}
+                {!bars.loading && bars.error && (
+                  <ErrorState message={bars.error} status={bars.status} onRetry={bars.reload} />
+                )}
+                {!bars.loading && !bars.error && bars.data && <BarsChart bars={bars.data} />}
+              </div>
+            </section>
+          </div>
 
-      <MacroSection />
+          <div key="fundamentals">
+            <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Fundamentals · {symbol}</h2>
+              </div>
+              <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+                {fundamentals.loading && <Loading lines={2} />}
+                {!fundamentals.loading && fundamentals.error && (
+                  <ErrorState message={fundamentals.error} status={fundamentals.status} onRetry={fundamentals.reload} />
+                )}
+                {!fundamentals.loading && !fundamentals.error && fundamentals.data && (
+                  <FundamentalsTable f={fundamentals.data} />
+                )}
+              </div>
+            </section>
+          </div>
 
-      <MarketDataHealth />
+          <div key="macro">
+            <MacroSection />
+          </div>
+
+          <div key="health">
+            <MarketDataHealth />
+          </div>
+        </DynamicGrid>
+      </div>
     </div>
   );
 }

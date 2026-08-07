@@ -7,6 +7,8 @@ import { ErrorState, Loading, Tile } from "../components/ui";
 import { AttentionHeatmapStrip, ForecastCandleChart } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { Button } from "../components/ui";
 import toast from "react-hot-toast";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
@@ -151,18 +153,33 @@ function ForecastView({
         ))}
       </div>
 
-      {/* 4. UI & Layout Optimization: Key Metrics Summary Card & Horizon shortcuts */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-3-5)", background: "var(--surface-2)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-3)", flexWrap: "wrap", gap: "var(--s-2)" }}>
-          <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Horizon & Expected Return Summary</h2>
-          <Link
-            to={`/symbol/${symbol}`}
-            className="btn"
-            style={{ fontSize: "var(--t-caption)", background: "var(--surface-3)", color: "var(--accent)" }}
-          >
-            📊 View Model Skill & Historical Accuracy
-          </Link>
-        </div>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <DynamicGrid
+          layoutKey="forecastViewer"
+          defaultLayouts={{
+            lg: [
+              { i: "summary", x: 0, y: 0, w: 12, h: 4, minW: 6, minH: 3 },
+              { i: "price", x: 0, y: 4, w: 8, h: 6, minW: 4, minH: 4 },
+              { i: "model", x: 8, y: 4, w: 4, h: 6, minW: 3, minH: 4 },
+            ],
+          }}
+        >
+          <div key="summary">
+            <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0, background: "var(--surface-2)" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
+                  <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Horizon & Expected Return Summary</h2>
+                  <Link
+                    to={`/symbol/${symbol}`}
+                    className="btn"
+                    style={{ fontSize: "var(--t-caption)", background: "var(--surface-3)", color: "var(--accent)" }}
+                  >
+                    📊 View Model Skill & Historical Accuracy
+                  </Link>
+                </div>
+              </div>
+              
+              <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
           {HORIZONS.map((h) => {
@@ -209,14 +226,21 @@ function ForecastView({
             }
           />
         </div>
-      </section>
+              </div>
+            </section>
+          </div>
 
-      {/* 1. Data Visualization & Chart Enhancements */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-3-5)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
-          <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Price & forecast</h2>
-          <LookbackToggle value={lookbackDays} onChange={onLookbackChange} />
-        </div>
+          <div key="price">
+            {/* 1. Data Visualization & Chart Enhancements */}
+            <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
+                  <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Price & forecast</h2>
+                  <LookbackToggle value={lookbackDays} onChange={onLookbackChange} />
+                </div>
+              </div>
+
+              <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
 
         {chartEmpty ? (
           <div className="empty" style={{ padding: "var(--s-5)" }}>
@@ -237,15 +261,21 @@ function ForecastView({
                 heavily when forming this forecast — not a stronger buy/sell
                 signal.
               </p>
+                )}
+              </>
             )}
-          </>
-        )}
-      </section>
+              </div>
+            </section>
+          </div>
 
-      {/* 2. Model Breakdown & Insights */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-3-5)" }}>
-        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-3)" }}>Model detail</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
+          <div key="model">
+            {/* 2. Model Breakdown & Insights */}
+            <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Model detail</h2>
+              </div>
+              <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
           <Tile label="ARIMA" value={d.ARIMA == null ? DASH : fmtNum(d.ARIMA, 2)} />
           <Tile
             label="MC band"
@@ -283,7 +313,11 @@ function ForecastView({
             </div>
           </div>
         </div>
-      </section>
+              </div>
+            </section>
+          </div>
+        </DynamicGrid>
+      </div>
 
       {/* 3. User Interaction & Export Capabilities */}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--s-2)" }}>
@@ -320,10 +354,15 @@ export function ForecastViewer() {
       >
         ← Back
       </button>
-      <h1 className="screen-title">Forecast viewer</h1>
-      <p className="screen-sub">
-        Multi-horizon price forecast for a symbol — 10/30/60/90-day blended levels, model weighting, drivers, and Monte-Carlo confidence bands.
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>Forecast viewer</h1>
+          <p className="screen-sub">
+            Multi-horizon price forecast for a symbol — 10/30/60/90-day blended levels, model weighting, drivers, and Monte-Carlo confidence bands.
+          </p>
+        </div>
+        <Button variant="neutral" onClick={() => resetGridLayout("forecastViewer")}>Reset Layout</Button>
+      </div>
 
       <TabGuide tabKey="forecast" />
 

@@ -120,12 +120,10 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     expect(await screen.findByText("1.18")).toBeInTheDocument();
   });
 
-  it("collapses everything past portfolio risk/equity into a closed-by-default 'Background telemetry' disclosure", async () => {
+  it("renders the DynamicGrid layout instead of the legacy <details> disclosure", async () => {
     renderScreen();
-    const details = await screen.findByTestId("background-telemetry");
-    expect(details.tagName).toBe("DETAILS");
-    expect((details as HTMLDetailsElement).open).toBe(false);
-    expect(await screen.findByText(/Background telemetry/)).toBeInTheDocument();
+    // In test environment, DynamicGrid renders the items without grid logic but assigns test id
+    expect(await screen.findByTestId("grid-observability")).toBeInTheDocument();
   });
 
   it("renders the portfolio heat tile from the mock", async () => {

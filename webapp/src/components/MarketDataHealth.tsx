@@ -213,18 +213,21 @@ export function MarketDataHealth() {
           : { label: `Down (${okCount}/${total} ok)`, color: theme.decline };
 
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }} data-testid="market-data-health">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--s-2)", flexWrap: "wrap" }}>
-        <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Market data connection</h2>
-        <span style={{ fontSize: "var(--t-caption)", fontWeight: 700, color: badge.color }} data-testid="md-health-badge">
-          {badge.label}
-        </span>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="market-data-health">
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--s-2)", flexWrap: "wrap" }}>
+          <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Market data connection</h2>
+          <span style={{ fontSize: "var(--t-caption)", fontWeight: 700, color: badge.color }} data-testid="md-health-badge">
+            {badge.label}
+          </span>
+        </div>
+        <p style={{ margin: "var(--s-1-5) 0 0", fontSize: "var(--t-body)", color: theme.textMuted }}>
+          Checks the live quote feed for each tracked symbol and times the round trip — a quick
+          read on whether the data layer feeding every screen is actually up.
+        </p>
       </div>
-      <p style={{ margin: "var(--s-1-5) 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
-        Checks the live quote feed for each tracked symbol and times the round trip — a quick
-        read on whether the data layer feeding every screen is actually up.
-      </p>
 
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       {providerStatus.data && (
         <div
           data-testid="md-provider-tiles"
@@ -304,6 +307,7 @@ export function MarketDataHealth() {
           )}
         </>
       )}
+      </div>
     </section>
   );
 }

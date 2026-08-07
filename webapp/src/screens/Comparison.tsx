@@ -320,14 +320,7 @@ export function Comparison() {
 
           <DynamicGrid layoutKey="comparison" defaultLayouts={defaultComparisonLayouts}>
             {/* Recommended stocks table */}
-            <div key="recommended" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
-                <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Recommended Stocks</h2>
-              </div>
-              <div style={{ flex: 1, overflow: "auto" }}>
-                <RecommendedStocks />
-              </div>
-            </div>
+            <RecommendedStocks key="recommended" />
 
 
 

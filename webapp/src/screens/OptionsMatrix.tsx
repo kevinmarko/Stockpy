@@ -13,6 +13,7 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -143,17 +144,20 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
           onOpen();
         }
       }}
+      className="card card-pad"
       style={{
         display: "flex",
         flexDirection: "column",
+        background: "none",
         width: "100%",
         height: "100%",
         textAlign: "left",
-        cursor: "pointer",
         border: "1px solid var(--border)",
+        padding: 0,
+        cursor: "pointer",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "baseline", cursor: "grab" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <span style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>{d.Symbol}</span>
           {d.Stale === true && (
@@ -168,10 +172,16 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
       </div>
       <div
         style={{
+          flex: 1,
+          padding: "var(--s-3)",
+          overflow: "auto",
+        }}
+      >
+      <div
+        style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginTop: "var(--s-2)",
         }}
       >
         <span style={{ fontWeight: 600 }}>{d.Strategy ?? "—"}</span>
@@ -250,6 +260,7 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
             ⚠ Integrity
           </span>
         )}
+      </div>
       </div>
     </div>
   );
@@ -991,24 +1002,30 @@ export function OptionsMatrix() {
     : null;
 
   return (
-    <div className="screen">
-      <button
-        onClick={back}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          color: theme.textSecondary,
-          fontSize: "var(--t-callout)",
-          marginBottom: "var(--s-2)",
-        }}
-      >
-        ← Back
-      </button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 className="screen-title">Options premium</h1>
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+    <div className="screen" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <div>
+          <button
+            onClick={back}
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              color: theme.textSecondary,
+              fontSize: "var(--t-callout)",
+              marginBottom: "var(--s-2)",
+            }}
+          >
+            ← Back
+          </button>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
+            <h1 className="screen-title" style={{ margin: 0 }}>Options premium</h1>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
+          <Button variant="neutral" onClick={() => resetGridLayout("options-matrix")}>Reset Layout</Button>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <Button
             onClick={() => openChat(buildOptionsContextText(directives))}
             style={{
@@ -1031,8 +1048,8 @@ export function OptionsMatrix() {
 
       <TabGuide tabKey="options" />
 
-
-      {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
+      <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
+        {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
 
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
@@ -1044,7 +1061,7 @@ export function OptionsMatrix() {
       )}
 
       {!loading && !error && data && directives.length > 0 && (
-        <>
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
           {/* Read-only context row */}
           <div
             style={{
@@ -1156,15 +1173,34 @@ export function OptionsMatrix() {
               No directives match this filter.
             </div>
           ) : (
-            <div className="tiles">
-              {visible.map((d) => (
-                <DirectiveCard key={d.Symbol} d={d} onOpen={() => setOpenSymbol(d.Symbol)} />
-              ))}
+            <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-3)" }}>
+              <DynamicGrid
+                layoutKey="options-matrix"
+                defaultLayouts={{
+                  lg: visible.map((d, i) => ({
+                    i: d.Symbol,
+                    x: (i % 3) * 4,
+                    y: Math.floor(i / 3) * 4,
+                    w: 4,
+                    h: 4,
+                    minW: 3,
+                    minH: 3,
+                  })),
+                }}
+              >
+                {visible.map((d) => (
+                  <div key={d.Symbol}>
+                    <DirectiveCard d={d} onOpen={() => setOpenSymbol(d.Symbol)} />
+                  </div>
+                ))}
+              </DynamicGrid>
             </div>
           )}
 
-          <GreeksRollup directives={directives} />
-        </>
+          <div style={{ marginTop: "var(--s-4)" }}>
+            <GreeksRollup directives={directives} />
+          </div>
+        </div>
       )}
 
       {openDirective && (
@@ -1191,6 +1227,9 @@ export function OptionsMatrix() {
       <div style={{ marginTop: "var(--s-8)", marginBottom: "var(--s-4)" }}>
         <OptionsAnalyticsDashboard />
       </div>
+      </div>
+    </div>
+  );
     </div>
   );
 }
