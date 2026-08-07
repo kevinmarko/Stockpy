@@ -1,4 +1,4 @@
-import type { ForecastBackfillPhase } from "./api/types";
+import type { ForecastBackfillJob, ForecastBackfillPhase } from "./api/types";
 
 export const PHASE_LABEL: Record<ForecastBackfillPhase, string> = {
   fetching_data: "Fetching data…",
@@ -17,7 +17,14 @@ export function formatBackfillCountdown(seconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-export function backfillFailureMessage(job: import("./api/types").ForecastBackfillJob | null): string {
+/**
+ * Honest, per-cause failure copy for a terminal `ForecastBackfillJob` --
+ * mirrors `brokerageLoginCopy.ts`'s `loginFailureMessage`'s style, branching
+ * on the more specific `error_type` where it adds real value over the
+ * coarse terminal `state` alone (e.g. distinguishing "the request
+ * parameters were invalid" from "an unexpected error occurred mid-training").
+ */
+export function backfillFailureMessage(job: ForecastBackfillJob | null): string {
   if (!job) return "The backfill did not complete. Nothing was saved.";
   if (job.state === "timeout") {
     return "The backfill timed out. Nothing was saved.";
@@ -25,5 +32,16 @@ export function backfillFailureMessage(job: import("./api/types").ForecastBackfi
   if (job.state === "cancelled") {
     return "Backfill cancelled. Nothing was saved.";
   }
-  return job.error || "The backfill failed. Nothing was saved.";
+  switch (job.error_type) {
+    case "value_error":
+      return job.error
+        ? `The backfill's request parameters were invalid: ${job.error}`
+        : "The backfill's request parameters were invalid.";
+    case "unexpected":
+      return job.error
+        ? `An unexpected error occurred during training: ${job.error}`
+        : "An unexpected error occurred during training. Nothing was saved.";
+    default:
+      return job.error || "The backfill failed. Nothing was saved.";
+  }
 }

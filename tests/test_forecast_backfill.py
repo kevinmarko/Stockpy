@@ -720,18 +720,24 @@ class TestForecastBackfillCancelEndpoint:
 
 
 class TestForecastBackfillEnabledFlagClassification:
-    """Mirrors the pilots-endpoint skill's `test_<flag>_is_not_gui_writable`
-    checklist item -- but FORECAST_BACKFILL_ENABLED is the deliberate
-    exception to the 2026-08-08 "gate on secrecy alone" policy generalization
-    (see its own settings.py Field docstring and gui/env_io.py's
-    EXCLUDED_FROM_GUI comment), so this positively confirms EXCLUDED_FROM_GUI
-    membership rather than just the absence-from-ALLOWED_KEYS check every
-    other flag's version of this test uses."""
+    """Mirrors the pilots-endpoint skill's `test_<flag>_is_gui_writable`
+    checklist item, same pattern as the other 2026-08-08 "moved here from
+    HAND_SET_ONLY_KEYS" flags (e.g. STRATEGY_WRITES_ENABLED,
+    RAG_QUERY_API_ENABLED): GUI-writable per explicit operator decision --
+    "not secret" is the sole bar -- but still a
+    settings_keysets.DANGEROUS_KEYS member (SAFETY_CRITICAL_KEY_REASONS),
+    requiring typed confirmation on write regardless of editor."""
 
-    def test_forecast_backfill_enabled_is_hand_set_only(self):
-        assert "FORECAST_BACKFILL_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_forecast_backfill_enabled_is_gui_writable(self):
+        assert "FORECAST_BACKFILL_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "FORECAST_BACKFILL_ENABLED" not in pilots_api.env_io.SECRET_KEYS
-        assert "FORECAST_BACKFILL_ENABLED" in pilots_api.env_io.EXCLUDED_FROM_GUI
+        assert "FORECAST_BACKFILL_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
+
+    def test_forecast_backfill_enabled_is_dangerous(self):
+        import settings_keysets
+
+        assert "FORECAST_BACKFILL_ENABLED" in settings_keysets.DANGEROUS_KEYS
+        assert "FORECAST_BACKFILL_ENABLED" in settings_keysets.SAFETY_CRITICAL_KEYS
 
     def test_forecast_backfill_enabled_defaults_false(self):
         from settings import Settings

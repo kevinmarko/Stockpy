@@ -581,15 +581,16 @@ def require_rlhf_calibration_enabled() -> None:
 def require_forecast_backfill_enabled() -> None:
     """FAIL-CLOSED master-switch guard for ``POST /pilots/forecast_backfill/run``
     and ``POST /pilots/forecast_backfill/cancel/{job_id}``. A DEDICATED flag
-    (``settings.FORECAST_BACKFILL_ENABLED``), default ``False`` and
-    deliberately NOT reclassified into ``gui/env_io.py``'s ``ALLOWED_KEYS``
-    alongside the 2026-08-08 policy generalization documented on the other
-    ``require_*_enabled`` guards above — see that flag's own ``settings.py``
-    docstring for why: unlike a config-toggle write, this spawns a CPU-bound
-    subprocess that trains and overwrites the meta-labeler model artifacts
-    (``ml/models/meta_*.pkl``) feeding the live ``meta_label_composite``
-    score, a materially heavier and more consequential action. An operator
-    must set it directly in ``.env``. ``GET /pilots/forecast_backfill`` and
+    (``settings.FORECAST_BACKFILL_ENABLED``), default ``False``. GUI-writable
+    (``gui/env_io.py``'s ``ALLOWED_KEYS``) like every other non-secret
+    tunable, per explicit operator decision, but also a
+    ``settings_keysets.DANGEROUS_KEYS`` member (``SAFETY_CRITICAL_KEY_REASONS``),
+    requiring typed confirmation on write regardless of editor — see that
+    flag's own ``settings.py`` docstring for why: unlike an ordinary
+    config-toggle write, this spawns a CPU-bound subprocess that trains and
+    overwrites the meta-labeler model artifacts (``ml/models/meta_*.pkl``)
+    feeding the live ``meta_label_composite`` score, a materially heavier and
+    more consequential action. ``GET /pilots/forecast_backfill`` and
     ``GET /pilots/forecast_backfill/status/{job_id}`` are read-only and NOT
     gated by this flag (``require_read_token`` alone, matching every other
     GET here)."""
@@ -1095,9 +1096,10 @@ def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Any:
     caller can poll it instead of hitting a dead end.
 
     Gated by two independent controls (see the dependencies above): the
-    dedicated ``FORECAST_BACKFILL_ENABLED`` flag (default ``False``, hand-set
-    in ``.env`` only -- see ``require_forecast_backfill_enabled``) and the
-    fail-closed follow command token.
+    dedicated ``FORECAST_BACKFILL_ENABLED`` flag (default ``False``,
+    GUI-writable but confirmation-required -- see
+    ``require_forecast_backfill_enabled``) and the fail-closed follow
+    command token.
 
     ``req.horizons`` is still validated by ``ForecastBackfillRunRequest``'s
     own ``@field_validator`` -- FastAPI resolves the route's ``dependencies``

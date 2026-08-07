@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -231,6 +232,78 @@ class TestSingleFlight:
 
     def test_get_active_job_id_is_none_when_nothing_has_run(self):
         assert forecast_backfill_job.get_active_job_id() is None
+
+    def test_concurrent_start_job_calls_do_not_both_win(self, monkeypatch):
+        """Genuinely concurrent start_job() calls, racing via real threads,
+        must never both return a non-None job -- regression test for the
+        TOCTOU window where `_active_job_id` was set inside one
+        `_jobs_lock` critical section but the job's `_jobs` dict entry was
+        only inserted later, in a SEPARATE critical section, AFTER
+        subprocess.Popen() returned. A concurrent caller could observe the
+        marker already set but the dict entry still missing, conclude it
+        was stale, clear it, and claim the slot itself -- letting two
+        training subprocesses run at once.
+
+        Unlike test_start_job_returns_none_while_one_is_already_running
+        above (which calls start_job(), waits for it to FULLY return, THEN
+        calls it again -- never exercising the race window), this uses real
+        threads plus a barrier so both calls genuinely overlap, plus an
+        injected delay around subprocess.Popen() to widen whatever window
+        the buggy code left between releasing the initial lock and
+        re-acquiring it to insert into `_jobs`. With the fix (the marker
+        and the dict insertion happening inside ONE critical section,
+        before Popen is ever called), a second start_job() call blocks on
+        the lock until the first is already fully registered and returns
+        None immediately -- no window survives regardless of how slow
+        Popen is, so this is not a timing-sensitive/flaky assertion."""
+        _set_behavior(monkeypatch, "hang")
+
+        real_popen = forecast_backfill_job.subprocess.Popen
+
+        def _slow_popen(argv, *args, **kwargs):
+            # Widens the (buggy code's) gap between the initial _jobs_lock
+            # critical section and the later re-acquisition that used to
+            # insert into _jobs, so a real race is reliably exercised
+            # rather than depending on incidental thread scheduling.
+            time.sleep(0.3)
+            return real_popen(argv, *args, **kwargs)
+
+        monkeypatch.setattr(forecast_backfill_job.subprocess, "Popen", _slow_popen)
+
+        barrier = threading.Barrier(2)
+        results: list = [None, None]
+        errors: list = [None, None]
+
+        def _call(idx: int, tickers: list) -> None:
+            try:
+                barrier.wait(timeout=5)
+                results[idx] = forecast_backfill_job.start_job({"tickers": tickers})
+            except Exception as exc:  # noqa: BLE001 - surface via `errors`, never lose the thread's failure
+                errors[idx] = exc
+
+        t1 = threading.Thread(target=_call, args=(0, ["AAPL"]))
+        t2 = threading.Thread(target=_call, args=(1, ["MSFT"]))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert errors == [None, None], f"start_job() raised in a worker thread: {errors}"
+        assert not t1.is_alive() and not t2.is_alive()
+
+        winners = [r for r in results if r is not None]
+        assert len(winners) == 1, (
+            f"expected exactly one concurrent start_job() call to win the single-flight "
+            f"slot, got {results}"
+        )
+        winner = winners[0]
+
+        # Exactly one job ever tracked as active/running -- not two.
+        assert forecast_backfill_job.get_active_job_id() == winner.job_id
+        assert len(forecast_backfill_job._jobs) == 1
+        assert winner.state == "running"
+
+        forecast_backfill_job.cancel_job(winner.job_id)  # tidy up the hung child
 
 
 # ---------------------------------------------------------------------------

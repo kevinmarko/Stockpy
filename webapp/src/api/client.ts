@@ -8,7 +8,7 @@
  */
 
 import { mockApi, MOCK_META } from "./mock";
-import { ApiError } from "./types";
+import { ApiError, ForecastBackfillConflictError } from "./types";
 import { readCacheEntry, writeCacheEntry } from "./offlineCache";
 import type {
   AgenticDiscovery,
@@ -819,11 +819,65 @@ const liveApi = {
   getOptionsAnalytics: (symbol: string) =>
     http<OptionsAnalyticsSummaryResponse>(`/metrics/options/analytics/${encodeURIComponent(symbol)}`),
   getForecastBackfill: () => http<ForecastBackfillSummary>("/pilots/forecast_backfill"),
-  runForecastBackfill: (params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean; strategy_ids?: string[]; theta_c?: number }) =>
-    http<ForecastBackfillJob>("/pilots/forecast_backfill/run", {
-      method: "POST",
-      body: JSON.stringify(params ?? {}),
-    }),
+  /**
+   * POST /pilots/forecast_backfill/run. Deliberately bypasses the shared
+   * http() helper (a bespoke fetch instead), mirroring triggerRun()'s own
+   * precedent above: http()'s generic error path does `String(body.detail)`,
+   * which would mangle the STRUCTURED 409 body
+   * (`{"detail": {"detail": "...", "job_id": "<id>"}}`) the backend's
+   * single-flight guard (`ml/forecast_backfill_job.py::start_job`) returns
+   * into the literal string "[object Object]" and lose the existing job's
+   * id entirely. A 409 here throws `ForecastBackfillConflictError`
+   * (carrying that job_id) instead of a generic ApiError, so
+   * useBackfillJob's start() can catch it specifically and start polling
+   * the already-running job -- see api/pilots_api.py's
+   * run_forecast_backfill_endpoint docstring for why the id is included in
+   * the 409 body at all. Every other non-2xx (or a network failure) still
+   * throws the normal ApiError, same as every http()-backed endpoint.
+   */
+  runForecastBackfill: async (params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean; strategy_ids?: string[]; theta_c?: number }): Promise<ForecastBackfillJob> => {
+    const path = "/pilots/forecast_backfill/run";
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    };
+    if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
+
+    const base = baseFor(path);
+    let resp: Response;
+    try {
+      resp = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(params ?? {}),
+      });
+    } catch {
+      throw new ApiError(
+        `Network error reaching the API at ${base}. Is the owning service running (Pilots :8602)?`,
+        0
+      );
+    }
+
+    let body: { detail?: unknown } | null = null;
+    try {
+      body = await resp.json();
+    } catch {
+      /* non-JSON body */
+    }
+
+    if (resp.status === 409) {
+      const detail = body?.detail as { detail?: string; job_id?: string } | undefined;
+      throw new ForecastBackfillConflictError(
+        detail?.detail ?? "A forecast backfill run is already in progress.",
+        detail?.job_id ?? null
+      );
+    }
+    if (!resp.ok) {
+      const detailStr = typeof body?.detail === "string" ? body.detail : undefined;
+      throw new ApiError(detailStr ?? `${resp.status} ${resp.statusText}`, resp.status);
+    }
+    return body as unknown as ForecastBackfillJob;
+  },
   getForecastBackfillJobStatus: (jobId: string) =>
     http<ForecastBackfillJob>(`/pilots/forecast_backfill/status/${encodeURIComponent(jobId)}`),
   cancelForecastBackfillJob: (jobId: string) =>

@@ -4189,11 +4189,12 @@ class Settings(BaseSettings):
     # (ml/forecast_backfill_worker.py) that trains and OVERWRITES the
     # meta-labeler model artifacts (ml/models/meta_*.pkl) feeding the live
     # meta_label_composite score -- a materially heavier and more
-    # consequential action than the config-toggle writes the 12 flags
-    # generalized into gui/env_io.py's ALLOWED_KEYS on 2026-08-08 guard, so
-    # this one keeps the older, stricter posture: an operator sets it
-    # directly in `.env`, and gui/env_io.py's Settings Manager editors carry
-    # no control for it at all (see that module's EXCLUDED_FROM_GUI set).
+    # consequential action than an ordinary config-toggle write. GUI-writable
+    # (gui/env_io.py's ALLOWED_KEYS) like every other non-secret tunable, per
+    # explicit operator decision, but also a settings_keysets.DANGEROUS_KEYS
+    # member (SAFETY_CRITICAL_KEY_REASONS), requiring typed confirmation on
+    # write regardless of editor -- the same treatment as the other
+    # 2026-08-08 "moved here from HAND_SET_ONLY_KEYS" flags in that module.
     # The endpoints remain independently gated by the FOLLOW_API_TOKEN
     # command token regardless of this flag's own value.
     FORECAST_BACKFILL_ENABLED: bool = Field(
@@ -4201,11 +4202,14 @@ class Settings(BaseSettings):
         description=(
             "Enables POST /pilots/forecast_backfill/run and "
             "POST /pilots/forecast_backfill/cancel/{job_id} on the Pilots "
-            "API. False by default -- an operator must set this directly in "
-            "`.env` before either endpoint will run (the Settings Manager "
-            "GUI carries no control for it). GET /pilots/forecast_backfill "
-            "and GET /pilots/forecast_backfill/status/{job_id} remain "
-            "read-only and are NOT gated by this flag."
+            "API. False by default. GUI-writable like any other non-secret "
+            "tunable, but requires typed confirmation on write (a "
+            "settings_keysets.DANGEROUS_KEYS member) because flipping it "
+            "spawns a subprocess that retrains and overwrites production "
+            "ml/models/meta_*.pkl artifacts read by live inference. "
+            "GET /pilots/forecast_backfill and "
+            "GET /pilots/forecast_backfill/status/{job_id} remain read-only "
+            "and are NOT gated by this flag."
         ),
     )
     FORECAST_BACKFILL_DEADLINE_SECONDS: int = Field(

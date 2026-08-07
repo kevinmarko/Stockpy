@@ -16,8 +16,14 @@ export function ForecastBackfillScreen() {
     []
   );
 
-  const { job, starting, error: jobError, start, cancel, reset } = useBackfillJob();
-  const running = starting || (job?.state === "running");
+  const { job, starting, error: jobError, notice, start, cancel, reset } = useBackfillJob();
+  // "Tracking" covers the brief window after a 409-resumed start() where we
+  // know we're polling an existing job (notice is set) but haven't received
+  // its first real status yet (job is still null) -- treated the same as
+  // job?.state === "running" for disabling the controls and offering Cancel,
+  // since there genuinely IS an active job being tracked either way.
+  const tracking = job?.state === "running" || (notice !== null && job === null);
+  const running = starting || tracking;
 
   useEffect(() => {
     if (job?.state === "succeeded") {
@@ -109,7 +115,7 @@ export function ForecastBackfillScreen() {
         </p>
       </header>
 
-      {(job || jobError || starting) && (
+      {(job || jobError || starting || notice) && (
         <div
           className="card card-pad"
           style={{
@@ -122,10 +128,20 @@ export function ForecastBackfillScreen() {
           }}
         >
           <div>
-            {starting ? "Starting…" : jobError ? `Error: ${jobError}` : job?.state === "running" ? `${PHASE_LABEL[job.phase!]} (Step ${job.step} of ${job.total_steps}) - ${formatBackfillCountdown(job.seconds_remaining)} remaining` : job?.state === "succeeded" ? `Success! Processed ${job.sample_rows} historical rows across horizons.` : backfillFailureMessage(job)}
+            {starting
+              ? "Starting…"
+              : jobError
+              ? `Error: ${jobError}`
+              : job?.state === "running"
+              ? `${job.phase ? PHASE_LABEL[job.phase] : "Starting…"} (Step ${job.step} of ${job.total_steps}) - ${formatBackfillCountdown(job.seconds_remaining)} remaining`
+              : job?.state === "succeeded"
+              ? `Success! Processed ${job.sample_rows} historical rows across horizons.`
+              : job
+              ? backfillFailureMessage(job)
+              : notice}
           </div>
           <div>
-            {job?.state === "running" && (
+            {tracking && (
               <button className="btn btn-ghost" style={{ color: theme.decline }} onClick={() => void cancel()} type="button">
                 Cancel
               </button>

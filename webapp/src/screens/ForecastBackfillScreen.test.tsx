@@ -9,7 +9,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ForecastBackfillScreen } from "./ForecastBackfillScreen";
 import { api } from "../api/client";
-import { ApiError } from "../api/types";
+import { ApiError, ForecastBackfillConflictError } from "../api/types";
 
 function renderScreen() {
   return render(
@@ -87,6 +87,7 @@ describe("ForecastBackfillScreen (real mock API)", () => {
       step: 1,
       total_steps: 7,
       error: null,
+      error_type: null,
       summary: null,
       sample_rows: null,
       seconds_remaining: 14,
@@ -98,12 +99,13 @@ describe("ForecastBackfillScreen (real mock API)", () => {
       step: 7,
       total_steps: 7,
       error: null,
+      error_type: null,
       summary: null,
       sample_rows: 1200,
       seconds_remaining: 0,
     });
     const statusSpy = vi.spyOn(api, "getForecastBackfill");
-    
+
     renderScreen();
     await screen.findByText("timeseries_momentum_10d");
     statusSpy.mockClear();
@@ -111,15 +113,50 @@ describe("ForecastBackfillScreen (real mock API)", () => {
     fireEvent.click(screen.getByText("🚀 Run Forecast Backfill"));
     await waitFor(() => expect(runSpy).toHaveBeenCalled());
     expect(await screen.findByText(/Fetching data…/)).toBeInTheDocument();
-    
+
     // Advance timers to trigger the poll and resolve the mock job
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2500);
     });
-    
+
     expect(await screen.findByText(/Success! Processed/)).toBeInTheDocument();
+    expect(jobStatusSpy).toHaveBeenCalledWith("job-1");
     vi.useRealTimers();
     await waitFor(() => expect(statusSpy).toHaveBeenCalled());
+  });
+
+  it("a 409 conflict on start shows an honest 'already in progress' notice and tracks the existing job", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    vi.spyOn(api, "runForecastBackfill").mockRejectedValueOnce(
+      new ForecastBackfillConflictError("A forecast backfill run is already in progress.", "job-existing")
+    );
+    const jobStatusSpy = vi.spyOn(api, "getForecastBackfillJobStatus").mockResolvedValueOnce({
+      job_id: "job-existing",
+      state: "running",
+      phase: "backtraining",
+      step: 5,
+      total_steps: 7,
+      error: null,
+      error_type: null,
+      summary: null,
+      sample_rows: null,
+      seconds_remaining: 20,
+    });
+
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+
+    fireEvent.click(screen.getByText("🚀 Run Forecast Backfill"));
+    expect(await screen.findByText(/already in progress/i)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+
+    expect(jobStatusSpy).toHaveBeenCalledWith("job-existing");
+    expect(await screen.findByText(/Backtraining meta labelers…/)).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it("flags synthetic (non-real) fallback data instead of presenting it as a genuine backtest", async () => {

@@ -381,6 +381,13 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "Gates PUT /strategy/modules — signal weights and the "
         "disabled-module set, which changes WHAT THE PLATFORM RECOMMENDS."
     ),
+    "FORECAST_BACKFILL_ENABLED": (
+        "Gates POST /pilots/forecast_backfill/run and "
+        "POST /pilots/forecast_backfill/cancel/{job_id}, which retrain and "
+        "overwrite production ml/models/meta_*.pkl files read by live "
+        "inference — a real change to what the platform's scoring is "
+        "trained on, not a config toggle."
+    ),
 }
 
 SAFETY_CRITICAL_KEYS: frozenset[str] = frozenset(SAFETY_CRITICAL_KEY_REASONS)

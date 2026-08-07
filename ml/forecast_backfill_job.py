@@ -186,6 +186,16 @@ def _drain_events(events_r: int, job: BackfillJobState) -> None:
                         step = obj.get("step")
                         if isinstance(step, int) and not isinstance(step, bool):
                             job.step = step
+                        # Read off the event itself rather than trusting this
+                        # module's own _TOTAL_STEPS copy to stay in sync with
+                        # ml/forecast_backfill_worker.py's _PHASES -- the
+                        # worker is the file that actually owns the real
+                        # pipeline shape, so its emitted value is the single
+                        # source of truth (falls back to the existing value
+                        # only if the field is somehow missing).
+                        total_steps = obj.get("total_steps", job.total_steps)
+                        if isinstance(total_steps, int) and not isinstance(total_steps, bool):
+                            job.total_steps = total_steps
                     elif event == "result":
                         if obj.get("ok"):
                             job.state = "succeeded"
@@ -198,6 +208,19 @@ def _drain_events(events_r: int, job: BackfillJobState) -> None:
     except Exception as exc:  # noqa: BLE001 - the deadline thread is the safety net either way
         logger.debug("forecast_backfill_job: event-drain thread ended: %s", exc)
     finally:
+        # EOF on the events pipe means the child closed its write end --
+        # it's done (successfully, or with a reported failure) or about to
+        # be, so this reap is cheap. Without it, a cleanly-exited worker is
+        # left as a zombie until some unrelated subprocess.Popen() call
+        # elsewhere in this process incidentally reaps it via Python's own
+        # subprocess._cleanup() sweep. _kill_process_group() (cancel/
+        # timeout paths) already calls proc.wait() itself, so this is a
+        # no-op there -- this covers the clean-completion path specifically.
+        if job._process is not None:
+            try:
+                job._process.wait(timeout=_KILL_GRACE_SECONDS)
+            except Exception as exc:  # noqa: BLE001 - never let a reap failure block state fixup below
+                logger.debug("forecast_backfill_job: process reap failed: %s", exc)
         with job._lock:
             if job.state == "running":
                 job.state = "failed"
@@ -258,8 +281,23 @@ def start_job(params: Dict[str, Any]) -> Optional[BackfillJobState]:
             _active_job_id = None
         job_id = f"backfill-{uuid.uuid4().hex[:8]}"
         job = BackfillJobState(job_id=job_id)
+        # Both the single-flight marker AND the job's dict entry must become
+        # visible together, inside this ONE critical section, before the
+        # lock is released and (much slower) subprocess setup begins below.
+        # Splitting these across two separate `with _jobs_lock:` blocks (the
+        # dict insertion used to happen only after subprocess.Popen()
+        # succeeded) left a TOCTOU window: a concurrent start_job() call
+        # could observe `_active_job_id` already set but `_jobs.get(...)`
+        # still `None`, conclude the marker was stale, clear it, and claim
+        # the slot itself -- letting two training subprocesses run at once.
         _active_job_id = job_id
+        _jobs[job_id] = job
 
+    # fds opened below are tracked individually (None once closed/handed
+    # off) so any failure partway through -- os.pipe(), Popen(), or the
+    # params write -- can close exactly the fds still open before
+    # re-raising, instead of leaking them for the life of this process.
+    params_r = params_w = events_r = events_w = None
     try:
         params_r, params_w = os.pipe()
         events_r, events_w = os.pipe()
@@ -284,22 +322,34 @@ def start_job(params: Dict[str, Any]) -> Optional[BackfillJobState]:
         finally:
             # The child has its own copies (post-fork) of every fd it needs;
             # the parent must close ITS copies of the ends it doesn't use
-            # itself, or they leak for the life of this process.
+            # itself, or they leak for the life of this process. This runs
+            # even if Popen() itself raised (nothing to close in that case
+            # beyond what's already tracked -- the cleanup below handles it).
             os.close(params_r)
             os.close(events_w)
+            params_r = events_w = None  # already closed -- don't double-close
 
         job._process = proc
 
         with os.fdopen(params_w, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(params) + "\n")
+        params_w = None  # closed by the `with` block above
         # Writing then closing (the `with` block above) sends EOF to the
         # child's read end after exactly one line.
     except Exception:
+        for fd in (params_r, params_w, events_r, events_w):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        with job._lock:
+            if job.state == "running":
+                job.state = "failed"
+                job.error = "Forecast backfill worker failed to start."
+                job.error_type = "unexpected"
         _clear_active_job(job_id)
         raise
-
-    with _jobs_lock:
-        _jobs[job_id] = job
 
     threading.Thread(target=_drain_events, args=(events_r, job), daemon=True).start()
     threading.Thread(target=_enforce_deadline, args=(job,), daemon=True).start()

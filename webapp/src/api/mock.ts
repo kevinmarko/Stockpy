@@ -7,7 +7,7 @@
  *  - `value-quality` has curve:null ("no backtest series yet"), never a fake line.
  */
 
-import { ApiError } from "./types";
+import { ApiError, ForecastBackfillConflictError } from "./types";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -1141,10 +1141,43 @@ interface _MockForecastBackfillJob {
   mode: "run";
   startedAt: number; // Date.now() at creation
   cancelled: boolean;
+  // Deterministic "fails partway through" trigger -- same "flip it from
+  // devtools" convention as BROKERAGE_LOGIN_TIMEOUT_KEY below (there's no
+  // magic ticker/theta_c value here since a bad *value* would legitimately
+  // belong in a 422 the real backend's own request validation would catch
+  // before start_job() ever runs, not a mid-training failure):
+  //   localStorage.setItem("stockpy.mock.forecast_backfill_failure", "1")  // next run fails partway through instead of succeeding
+  //   localStorage.removeItem("stockpy.mock.forecast_backfill_failure")   // back to the happy path
+  simulateFailure: boolean;
+}
+
+const FORECAST_BACKFILL_FAILURE_KEY = "stockpy.mock.forecast_backfill_failure";
+
+function readForecastBackfillFailure(): boolean {
+  try {
+    return localStorage.getItem(FORECAST_BACKFILL_FAILURE_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 let _mockForecastBackfillJobSeq = 0;
 const _mockForecastBackfillJobs: Record<string, _MockForecastBackfillJob> = {};
+
+/** The currently-`"running"` mock job's id, or `null` -- mirrors the real
+ *  backend's single-flight guard (`ml/forecast_backfill_job.py::start_job`
+ *  returns `None` when `_active_job_id` is still `"running"`) so the mock's
+ *  `runForecastBackfill` can 409 the same way, rather than always accepting
+ *  a second concurrent "run" and leaving that whole path untestable against
+ *  the mock/dev-server UI. */
+function _findRunningForecastBackfillJobId(): string | null {
+  for (const [jobId, job] of Object.entries(_mockForecastBackfillJobs)) {
+    if (_mockForecastBackfillJobStatus(jobId, job).state === "running") {
+      return jobId;
+    }
+  }
+  return null;
+}
 
 function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfillJob): ForecastBackfillJob {
   const elapsedSeconds = (Date.now() - job.startedAt) / 1000;
@@ -1153,30 +1186,78 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
   const TOTAL_SECONDS = TOTAL_STEPS * SECONDS_PER_PHASE;
   const secondsRemaining = Math.max(0, Math.round(TOTAL_SECONDS - elapsedSeconds));
 
-  if (job.cancelled) {
-    return {
-      job_id: jobId,
-      state: "cancelled",
-      phase: "fetching_data",
-      step: 1,
-      total_steps: TOTAL_STEPS,
-      error: "Job cancelled",
-      summary: null,
-      sample_rows: null,
-      seconds_remaining: secondsRemaining,
-    };
-  }
-
-  let phase: ForecastBackfillPhase;
+  // Time-derived phase/step, shared by every branch below -- including the
+  // terminal ones -- so a cancelled/failed job honestly reports whatever
+  // phase it had actually reached rather than resetting to the first phase.
+  // Mirrors the real backend exactly: `cancel_job()` / the worker's own
+  // failure path only ever flip state/error/error_type, never phase/step
+  // (see `ml/forecast_backfill_job.py`). The real backend's initial 202
+  // response ALSO has `phase: null` (nothing has been drained off the
+  // child's events pipe yet) -- reproduced here as a brief `< 1s` window
+  // rather than assigning a real phase from the very first status response,
+  // which would hide the frontend's own `phase: null` handling from anyone
+  // testing against the mock.
+  let phase: ForecastBackfillPhase | null;
   let step: number;
-  if (elapsedSeconds < 2) { phase = "fetching_data"; step = 1; }
+  if (elapsedSeconds < 1) { phase = null; step = 0; }
+  else if (elapsedSeconds < 2) { phase = "fetching_data"; step = 1; }
   else if (elapsedSeconds < 4) { phase = "technical_features"; step = 2; }
   else if (elapsedSeconds < 6) { phase = "primary_signals"; step = 3; }
   else if (elapsedSeconds < 8) { phase = "meta_targets"; step = 4; }
   else if (elapsedSeconds < 10) { phase = "backtraining"; step = 5; }
   else if (elapsedSeconds < 12) { phase = "backfilling"; step = 6; }
   else if (elapsedSeconds < 14) { phase = "exporting"; step = 7; }
-  else {
+  else { phase = "exporting"; step = TOTAL_STEPS; }
+
+  if (job.cancelled) {
+    return {
+      job_id: jobId,
+      state: "cancelled",
+      phase,
+      step,
+      total_steps: TOTAL_STEPS,
+      error: "Forecast backfill run was cancelled.",
+      error_type: "cancelled",
+      summary: null,
+      sample_rows: null,
+      seconds_remaining: secondsRemaining,
+    };
+  }
+
+  if (job.simulateFailure) {
+    // Fails partway through rather than at t=0 -- a job that fails is still
+    // a job, discovered through a status poll, matching both the real
+    // subprocess-isolated worker's shape and _mockLoginJobStatus's
+    // noCredentials precedent above (a believable "running" beat first).
+    if (elapsedSeconds < 3) {
+      return {
+        job_id: jobId,
+        state: "running",
+        phase,
+        step,
+        total_steps: TOTAL_STEPS,
+        error: null,
+        error_type: null,
+        summary: null,
+        sample_rows: null,
+        seconds_remaining: secondsRemaining,
+      };
+    }
+    return {
+      job_id: jobId,
+      state: "failed",
+      phase: "technical_features",
+      step: 2,
+      total_steps: TOTAL_STEPS,
+      error: "Training data contained fewer than the minimum required samples for one or more horizons.",
+      error_type: "value_error",
+      summary: null,
+      sample_rows: null,
+      seconds_remaining: 0,
+    };
+  }
+
+  if (elapsedSeconds >= TOTAL_SECONDS) {
     return {
       job_id: jobId,
       state: "succeeded",
@@ -1184,6 +1265,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
       step: TOTAL_STEPS,
       total_steps: TOTAL_STEPS,
       error: null,
+      error_type: null,
       summary: mockForecastBackfill(),
       sample_rows: 11080,
       seconds_remaining: 0,
@@ -1197,6 +1279,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
     step,
     total_steps: TOTAL_STEPS,
     error: null,
+    error_type: null,
     summary: null,
     sample_rows: null,
     seconds_remaining: secondsRemaining,
@@ -7918,12 +8001,24 @@ export const mockApi = {
     return delay(mockForecastBackfill());
   },
   async runForecastBackfill(_params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean; strategy_ids?: string[]; theta_c?: number }) {
+    // Single-flight, mirrors the real backend's ml/forecast_backfill_job.py
+    // guard: reject (409-equivalent) rather than silently starting a second
+    // concurrent run -- guarded synchronously (before any job mutation), so
+    // no timer advance is needed for the rejection itself to be observed.
+    const existingJobId = _findRunningForecastBackfillJobId();
+    if (existingJobId) {
+      throw new ForecastBackfillConflictError(
+        "A forecast backfill run is already in progress.",
+        existingJobId
+      );
+    }
     _mockForecastBackfillJobSeq++;
     const jobId = `fb-mock-${_mockForecastBackfillJobSeq}`;
     const job: _MockForecastBackfillJob = {
       mode: "run",
       startedAt: Date.now(),
       cancelled: false,
+      simulateFailure: readForecastBackfillFailure(),
     };
     _mockForecastBackfillJobs[jobId] = job;
     return delay(_mockForecastBackfillJobStatus(jobId, job));
