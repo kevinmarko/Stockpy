@@ -123,6 +123,7 @@ import type {
   OrderBookLadderResponse,
   ModelComparisonResponse,
   OptionsAnalyticsSummaryResponse,
+  BackfillJobStatus,
   CacheLongShortConcentratedPosition,
   CacheLongShortSimulateRequest,
   CacheLongShortSimulateResult,
@@ -815,6 +816,13 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify(params ?? {}),
     }),
+  runGlobalBackfill: () =>
+    http<{ job_id: string; status: string }>("/api/backfill/run", {
+      method: "POST",
+    }),
+  getGlobalBackfillStatus: (jobId: string) =>
+    http<BackfillJobStatus>(`/api/backfill/status/${encodeURIComponent(jobId)}`),
+    
     
   // ---- Cache Long/Short ----
   getClsConcentratedPositions: () =>

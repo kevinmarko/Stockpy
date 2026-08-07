@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { ForecastBackfillSummary } from "../api/types";
@@ -6,6 +5,7 @@ import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, MetricBadge } from "../components/ui";
 import { fmtDate, fmtNum } from "../format";
 import { theme } from "../theme";
+import { RunBackfillButton } from "../components/RunBackfillButton";
 
 export function ForecastBackfillScreen() {
   const nav = useNavigate();
@@ -14,24 +14,7 @@ export function ForecastBackfillScreen() {
     []
   );
 
-  const [running, setRunning] = useState(false);
-  const [runMessage, setRunMessage] = useState<string | null>(null);
-
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
-
-  const handleRunBackfill = async () => {
-    setRunning(true);
-    setRunMessage("Running forecast backfill & meta-labeling training cycle...");
-    try {
-      const res = await api.runForecastBackfill();
-      setRunMessage(`Success! Processed ${res.sample_rows} historical rows across horizons.`);
-      await reload();
-    } catch (err: any) {
-      setRunMessage(`Backfill failed: ${err?.message || String(err)}`);
-    } finally {
-      setRunning(false);
-    }
-  };
 
   const metrics = data?.metrics || {};
   const modelKeys = Object.keys(metrics).sort();
@@ -42,14 +25,7 @@ export function ForecastBackfillScreen() {
         <button className="btn btn-ghost" onClick={back} type="button">
           ← Back
         </button>
-        <button
-          className="btn btn-primary"
-          onClick={() => void handleRunBackfill()}
-          disabled={running}
-          type="button"
-        >
-          {running ? "🔄 Processing..." : "🚀 Run Forecast Backfill"}
-        </button>
+        <RunBackfillButton />
       </div>
 
       <header style={{ marginBottom: "var(--s-4)" }}>
@@ -61,19 +37,6 @@ export function ForecastBackfillScreen() {
           and Cross-Sectional Momentum (CSMOM) via Financial Modeling Prep (FMP).
         </p>
       </header>
-
-      {runMessage && (
-        <div
-          className="card card-pad"
-          style={{
-            marginBottom: "var(--s-4)",
-            borderColor: running ? theme.accent : theme.growth,
-            color: theme.textPrimary,
-          }}
-        >
-          {runMessage}
-        </div>
-      )}
 
       {loading ? (
         <Loading lines={4} />

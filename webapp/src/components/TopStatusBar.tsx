@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Modal } from "./Modal";
 import { DensityToggle } from "./DensityToggle";
+import { TaskExecutionMonitor } from "./TaskExecutionMonitor";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
@@ -191,6 +192,7 @@ export function TopStatusBar() {
 
         {/* Quick Actions */}
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+          <TaskExecutionMonitor />
           <DensityToggle />
           <button
             onClick={openConfirm}

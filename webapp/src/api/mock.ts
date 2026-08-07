@@ -18,6 +18,7 @@ import type {
   AlertsFeed,
   AutomationSchedule,
   AutomationStatus,
+  BackfillJobStatus,
   BrinsonFachlerResult,
   BrinsonFachlerRow,
   BrinsonFachlerSectorDetail,
@@ -7615,6 +7616,20 @@ export const mockApi = {
       status: "success",
       summary: mockForecastBackfill(),
       sample_rows: 11080,
+    });
+  },
+  async runGlobalBackfill() {
+    return delay({ job_id: "mock-job-id", status: "PENDING" });
+  },
+  async getGlobalBackfillStatus(jobId: string): Promise<BackfillJobStatus> {
+    return delay({
+      id: jobId,
+      name: "Global Backfill & Meta-Labeling",
+      status: "RUNNING",
+      progress: 50,
+      message: "Mocking progress...",
+      start_time: new Date().toISOString(),
+      end_time: null,
     });
   },
   

@@ -2240,6 +2240,16 @@ export interface CircuitBreakerCounts {
   total: number;
 }
 
+export interface BackfillJobStatus {
+  id: string;
+  name: string;
+  status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+  progress: number;
+  message: string;
+  start_time: string;
+  end_time: string | null;
+}
+
 export interface CircuitBreakerSummary {
   trips: CircuitBreakerTrip[];
   counts: CircuitBreakerCounts; // feeds the KPI strip

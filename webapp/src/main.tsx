@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import App from "./App";
 import { ChatProvider } from "./chat/ChatContext";
+import { TaskProvider } from "./hooks/TaskContext";
 import { EnvError } from "./components/EnvError";
 import { envIssues, isEnvValid } from "./config/env";
 import "./index.css";
@@ -21,7 +22,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             every routed screen (e.g. Options Matrix) can also call it to open
             the same global panel pre-loaded with screen-specific context. */}
         <ChatProvider>
-          <App />
+          <TaskProvider>
+            <App />
+          </TaskProvider>
         </ChatProvider>
       </BrowserRouter>
     ) : (

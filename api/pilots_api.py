@@ -1073,6 +1073,44 @@ def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Dict[str,
         _forecast_backfill_lock.release()
 
 
+# ---------------------------------------------------------------------------
+# Global Backfill / Meta-Labeling Jobs
+# ---------------------------------------------------------------------------
+
+@app.post("/api/backfill/run", dependencies=[Depends(require_command_token)])
+def run_global_backfill_endpoint() -> Dict[str, Any]:
+    import uuid
+    import asyncio
+    import threading
+    from ml.backfill.registry import backfill_engine
+    from ml.backfill.status_store import create_job, set_job_status
+    
+    job_id = str(uuid.uuid4())
+    create_job(job_id, "Global Backfill & Meta-Labeling")
+    
+    async def _status_callback(task_id: str, status: str, progress: int, message: str):
+        set_job_status(task_id, {"status": status, "progress": progress, "message": message})
+        
+    def _run_in_background():
+        try:
+            asyncio.run(backfill_engine.run_full_system_backfill(job_id, _status_callback))
+        except Exception as exc:
+            logger.error("Global backfill failed: %s", exc, exc_info=True)
+            set_job_status(job_id, {"status": "FAILED", "message": f"Failed: {exc}"})
+            
+    threading.Thread(target=_run_in_background, daemon=True).start()
+    return {"job_id": job_id, "status": "PENDING"}
+
+
+@app.get("/api/backfill/status/{job_id}", dependencies=[Depends(require_read_token)])
+def get_global_backfill_status(job_id: str) -> Dict[str, Any]:
+    from ml.backfill.status_store import get_job_status
+    status = get_job_status(job_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return status
+
+
 @app.get("/pilots/{pilot_id}", dependencies=[Depends(require_read_token)])
 def get_pilot_detail(pilot_id: str) -> Any:
     """Full Pilot detail: identity + top-N holdings + sector allocation +
