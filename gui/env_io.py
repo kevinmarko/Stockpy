@@ -171,6 +171,12 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PILOTS_API_ENABLED",
     "PILOTS_API_PORT",
     "JOBS_API_ENABLED",
+    # Public OAuth issuer hostname advertised by investyo_mcp_server.py
+    # --auth-mode oauth (MCP_OAUTH_ENABLED). Non-secret -- a public URL, not a
+    # credential; the actual OAuth trust boundary is MCP_OAUTH_PASSWORD
+    # (SECRET_KEYS above). MCP_OAUTH_ENABLED itself stays out of ALLOWED_KEYS
+    # -- see EXCLUDED_FROM_GUI below.
+    "MCP_OAUTH_ISSUER_URL",
     # Persisted Pilots-PWA analytics artifacts (options premium matrix + pairs
     # radar). When on, the pipeline writes output/options_matrix.json /
     # output/pairs.json for the AST-guarded Pilots API to read. Non-secret.
@@ -537,6 +543,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "GENERAL_SETTINGS_WRITES_ENABLED",
     "LLM_WRITES_ENABLED",
     "MACRO_GATE_WRITES_ENABLED",
+    "MCP_OAUTH_ENABLED",
     "PROMPT_REGISTRY_WRITES_ENABLED",
     "RAG_QUERY_API_ENABLED",
     "STRATEGY_WRITES_ENABLED",
@@ -581,6 +588,9 @@ SECRET_KEYS: tuple[str, ...] = (
     # (investyo_mcp_server.py --transport streamable-http). Same secret
     # treatment as STATE_API_TOKEN/ORCHESTRATOR_DAEMON_TOKEN/FOLLOW_API_TOKEN.
     "MCP_HTTP_BEARER_TOKEN",
+    # Passphrase gating the OAuth /login form (investyo_mcp_server.py
+    # --auth-mode oauth). Same secret treatment as MCP_HTTP_BEARER_TOKEN.
+    "MCP_OAUTH_PASSWORD",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
     # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood

@@ -132,3 +132,31 @@ documents: it doesn't touch `~/.claude.json`, `claude_desktop_config.json`,
 registration is expected to ever switch to it. Treat any `streamable-http`
 instance as ephemeral, developer-machine-local tooling, separate from the two
 production-ish stdio connections this document tracks.
+
+## Addendum: `--auth-mode oauth` is an orthogonal choice within `streamable-http`, not a fourth path (2026-08)
+
+`--transport streamable-http` gained a further `--auth-mode {bearer,oauth}`
+flag (default `bearer`, preserving the behavior described above exactly).
+This is **not** a fourth deployment path competing with the three already
+documented in this file — it's a second axis *within* the same
+`streamable-http` transport, choosing how that one transport authenticates:
+
+- `--auth-mode bearer` (default): the existing `MCP_HTTP_BEARER_TOKEN`
+  perimeter described above, unchanged.
+- `--auth-mode oauth` (`settings.MCP_OAUTH_ENABLED=True`): a full OAuth 2.1
+  authorization server (`mcp_oauth_provider.py`) instead of a static token.
+  This exists because claude.ai's custom-connector UI has no field for a
+  static bearer token — it only speaks OAuth's dynamic-client-registration +
+  authorization-code flow — so a bearer-token instance cannot be added there
+  as a connector at all, only an oauth-mode one can.
+
+The same tunnel-stability reasoning already established for `streamable-http`
+above applies with one extra constraint for oauth mode specifically: OAuth has
+an issuer-identity concept (`MCP_OAUTH_ISSUER_URL`) that plain bearer-token
+auth doesn't, so oauth mode requires a **named/stable-hostname tunnel** —
+unlike bearer mode, which tolerates an ephemeral quick-tunnel URL, an
+oauth-mode server's issuer URL must stay constant across restarts for
+already-registered OAuth clients (and their issued tokens) to keep working.
+Both sub-modes remain ephemeral, developer-machine-local tooling in the same
+sense as the rest of this addendum — neither is wired into `~/.claude.json`,
+`claude_desktop_config.json`, `investyo-vm`, or `deploy/investyo-mcp.service`.

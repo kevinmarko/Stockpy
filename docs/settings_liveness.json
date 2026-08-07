@@ -14,8 +14,8 @@
   "counts": {
     "live_safe": 259,
     "no_op": 2,
-    "restart_required": 86,
-    "total": 347
+    "restart_required": 89,
+    "total": 350
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 350,
+  "files_scanned": 352,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -407,13 +407,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 713,
+    "attr": 723,
     "factory_param": 4,
     "getattr_const": 247,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 215,
+    "attr": 218,
     "factory_param": 4,
     "getattr_const": 152,
     "os_environ": 18
@@ -827,6 +827,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "mcp_oauth_store.py:255",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "rating/symbol_rating_store.py:108",
         "via": []
       },
@@ -956,6 +965,15 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:69",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "mcp_oauth_store.py:256",
         "via": []
       },
       {
@@ -1129,6 +1147,15 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:69",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "mcp_oauth_store.py:256",
         "via": []
       },
       {
@@ -1921,7 +1948,67 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3251",
+        "site": "investyo_mcp_server.py:3353",
+        "via": []
+      }
+    ],
+    "MCP_OAUTH_ENABLED": [
+      {
+        "discarded": true,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "investyo_mcp_server.py:24",
+        "via": []
+      },
+      {
+        "discarded": true,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "investyo_mcp_server.py:3311",
+        "via": []
+      }
+    ],
+    "MCP_OAUTH_ISSUER_URL": [
+      {
+        "discarded": true,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "investyo_mcp_server.py:32",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "investyo_mcp_server.py:44",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "investyo_mcp_server.py:45",
+        "via": []
+      }
+    ],
+    "MCP_OAUTH_PASSWORD": [
+      {
+        "discarded": true,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "investyo_mcp_server.py:3319",
         "via": []
       }
     ],
@@ -2431,18 +2518,20 @@
   "restart_required_only_import_time_discard": [
     "ADVISORY_ONLY",
     "FOLLOW_API_TOKEN",
+    "MCP_OAUTH_ENABLED",
+    "MCP_OAUTH_PASSWORD",
     "ORCHESTRATOR_DAEMON_TOKEN"
   ],
   "restart_required_reason_counts": {
     "closure_value": 1,
-    "cross_module_init_helper": 56,
+    "cross_module_init_helper": 59,
     "decorator_arg": 13,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 11,
     "init_body": 6,
     "init_self_assign": 40,
     "method_self_assign": 4,
-    "module_level": 50,
+    "module_level": 56,
     "os_environ": 25
   },
   "restart_required_via_name_literal_only": [

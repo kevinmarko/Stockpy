@@ -9,9 +9,51 @@ import json
 from functools import lru_cache
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
+from settings import settings as _settings
 
-# Initialize the FastMCP server for the Investyo Platform
-mcp = FastMCP("InvestyoPlatform")
+# Initialize the FastMCP server for the Investyo Platform. When
+# MCP_OAUTH_ENABLED is True, this also wires in a full OAuth 2.1
+# authorization server (mcp_oauth_provider.py) so claude.ai's
+# custom-connector UI -- which has no static-bearer-token field -- can
+# connect via `--transport streamable-http --auth-mode oauth`. Imports of
+# mcp_oauth_provider / mcp.server.auth.settings are scoped to this branch so
+# the default (False) bearer-token deployment never depends on
+# mcp_oauth_provider.py existing or importing cleanly.
+_oauth_provider = None
+_fastmcp_auth_kwargs: Dict[str, Any] = {}
+if _settings.MCP_OAUTH_ENABLED:
+    from mcp.server.auth.settings import (
+        AuthSettings,
+        ClientRegistrationOptions,
+        RevocationOptions,
+    )
+    from mcp_oauth_provider import InvestyoOAuthProvider
+
+    if not _settings.MCP_OAUTH_ISSUER_URL:
+        raise RuntimeError(
+            "MCP_OAUTH_ENABLED is True but MCP_OAUTH_ISSUER_URL is not set. "
+            "Set it to the externally-reachable base URL (scheme + host, no "
+            "path) this server is actually reached through -- e.g. the "
+            "stable/named tunnel hostname -- before enabling OAuth mode."
+        )
+
+    _oauth_provider = InvestyoOAuthProvider()
+    _fastmcp_auth_kwargs = {
+        "auth_server_provider": _oauth_provider,
+        "auth": AuthSettings(
+            issuer_url=_settings.MCP_OAUTH_ISSUER_URL,
+            resource_server_url=_settings.MCP_OAUTH_ISSUER_URL,
+            client_registration_options=ClientRegistrationOptions(enabled=True),
+            revocation_options=RevocationOptions(enabled=True),
+        ),
+    }
+
+mcp = FastMCP("InvestyoPlatform", **_fastmcp_auth_kwargs)
+
+if _oauth_provider is not None:
+    from mcp_oauth_provider import register_login_routes
+
+    register_login_routes(mcp, _oauth_provider)
 
 import mcp_widget_resources
 
@@ -3232,21 +3274,81 @@ if __name__ == "__main__":
         default="127.0.0.1",
         help="Bind host for sse/streamable-http (default: 127.0.0.1; use 0.0.0.0 only behind a tunnel, e.g. cloudflared)",
     )
+    parser.add_argument(
+        "--auth-mode",
+        choices=["bearer", "oauth"],
+        default="bearer",
+        help="Auth scheme for --transport streamable-http: 'bearer' for a static MCP_HTTP_BEARER_TOKEN (default), 'oauth' for the OAuth 2.1 authorization server (MCP_OAUTH_ENABLED) needed by claude.ai's custom-connector UI, which has no static-bearer-token field",
+    )
     args = parser.parse_args()
+
+    def _apply_transport_security_override(host: str) -> None:
+        """Disable the SDK's Host/Origin allowlist for a non-loopback bind.
+
+        Shared by both the bearer and oauth streamable-http sub-paths -- a
+        tunneled/remote deployment reaches this process through a hostname
+        the SDK's default allowlist would otherwise reject.
+        """
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            from mcp.server.transport_security import TransportSecuritySettings
+            mcp.settings.transport_security = TransportSecuritySettings(
+                enable_dns_rebinding_protection=False
+            )
+            print(
+                "WARNING: --host is non-loopback -- the SDK's Host/Origin "
+                "allowlist has been disabled (it would otherwise reject every "
+                "request through a tunnel with a random hostname).",
+                file=sys.stderr,
+            )
 
     if args.transport == "sse":
         print(f"Starting InvestYo MCP Server in SSE mode on port {args.port}...")
         mcp.settings.port = args.port
         mcp.run(transport="sse")
+    elif args.transport == "streamable-http" and args.auth_mode == "oauth":
+        import uvicorn
+
+        if not _settings.MCP_OAUTH_ENABLED or _oauth_provider is None:
+            print(
+                "Refusing to start --transport streamable-http --auth-mode oauth: "
+                "MCP_OAUTH_ENABLED is not set to True. Set it in .env before "
+                "running this mode.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not _settings.MCP_OAUTH_PASSWORD:
+            print(
+                "Refusing to start --transport streamable-http --auth-mode oauth: "
+                "MCP_OAUTH_PASSWORD is not set. Set it in .env before running "
+                "this mode (it gates the OAuth /login form -- dynamic client "
+                "registration itself is unauthenticated by design).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        _apply_transport_security_override(args.host)
+        print(
+            "WARNING: MCP_OAUTH_PASSWORD is now the real perimeter for this "
+            "server -- anyone who can reach --host can register an OAuth "
+            "client (RFC 7591) and reach the /login form.",
+            file=sys.stderr,
+        )
+
+        print(f"Starting InvestYo MCP Server in streamable-http/oauth mode on {args.host}:{args.port}...")
+        # No extra middleware wrapper needed: the SDK's own RequireAuthMiddleware
+        # gates /mcp because auth_server_provider was supplied at FastMCP()
+        # construction (module top).
+        app = mcp.streamable_http_app()
+        uvicorn.run(app, host=args.host, port=args.port, log_level=mcp.settings.log_level.lower())
     # Deliberately bypasses mcp.run() here -- FastMCP.run_streamable_http_async
     # has no middleware injection hook, so this replicates its two-line
     # uvicorn.Config/.serve() body by hand to wrap the bearer-auth middleware.
     # Re-diff against that method if the mcp package is ever upgraded past
     # the <2.0.0 pin (see requirements.txt).
     elif args.transport == "streamable-http":
-        import sys
         import uvicorn
-        from settings import settings as _settings
 
         token = _settings.MCP_HTTP_BEARER_TOKEN
         if not token:
@@ -3259,15 +3361,9 @@ if __name__ == "__main__":
 
         mcp.settings.host = args.host
         mcp.settings.port = args.port
+        _apply_transport_security_override(args.host)
         if args.host not in ("127.0.0.1", "localhost", "::1"):
-            from mcp.server.transport_security import TransportSecuritySettings
-            mcp.settings.transport_security = TransportSecuritySettings(
-                enable_dns_rebinding_protection=False
-            )
             print(
-                "WARNING: --host is non-loopback -- the SDK's Host/Origin "
-                "allowlist has been disabled (it would otherwise reject every "
-                "request through a tunnel with a random hostname). "
                 "MCP_HTTP_BEARER_TOKEN is now the real perimeter for this server.",
                 file=sys.stderr,
             )
