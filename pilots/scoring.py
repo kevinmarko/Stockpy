@@ -223,7 +223,8 @@ def pilot_holdings(
     target ``weight`` that sums to ``1.0`` — so the advertised weights always
     describe exactly the holdings shown.
 
-    Returns a list of ``{"symbol", "weight", "score", "price", "sector"}`` dicts
+    Returns a list of ``{"symbol", "weight", "score", "price", "sector", "action",
+    "buy_range", "sell_range", "conviction", "meta_label_composite"}`` dicts
     (empty when the snapshot has no usable signals). Never raises.
     """
     if top_n is None:
@@ -261,6 +262,12 @@ def pilot_holdings(
             "buy_range": sig.get("buy_range"),
             "sell_range": sig.get("sell_range"),
             "conviction": _coerce_float(sig.get("advisory_conviction")),
+            # ML meta-labeler gate output — read straight off the persisted
+            # snapshot (both writers already compute it; see
+            # pilots/symbols.py for the identical pattern). None (never
+            # fabricated) when not computed this cycle; a genuine 0.0 hard
+            # gate survives untouched via _coerce_float.
+            "meta_label_composite": _coerce_float(sig.get("meta_label_composite")),
         })
 
     if not scored:
@@ -292,6 +299,7 @@ def pilot_holdings(
             "buy_range": d["buy_range"],
             "sell_range": d["sell_range"],
             "conviction": d["conviction"],
+            "meta_label_composite": d["meta_label_composite"],
         }
         for d in scored
     ]

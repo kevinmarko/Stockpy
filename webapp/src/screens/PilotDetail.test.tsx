@@ -5,7 +5,7 @@
  * line; a non-deployable Pilot's badge must render plainly. Also covers the
  * Follow CTA opening the modal and an unknown pilot id's 404 state.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +42,19 @@ describe("PilotDetail screen (real mock API)", () => {
     expect(await screen.findAllByText(/Conviction:/i)).not.toHaveLength(0);
     expect(await screen.findAllByText(/Buy:/i)).not.toHaveLength(0);
     expect(await screen.findAllByText(/Sell\/Stop:/i)).not.toHaveLength(0);
+
+    // Meta-Label Conf renders for holdings with a real value...
+    const metaLabelRows = await screen.findAllByText(/Meta-Label Conf:/i);
+    expect(metaLabelRows.length).toBeGreaterThan(0);
+    // ...but LMT (mock.ts's explicit meta_label_composite: null fixture)
+    // must NOT render the row -- honest omission, not a fabricated "—".
+    // Scope to the Holdings section since "LMT" also appears in the Recent
+    // signal changes section below (a REWEIGHT trade for the same symbol).
+    const holdingsSection = screen.getByRole("heading", { name: /Holdings/ }).closest("section");
+    expect(holdingsSection).not.toBeNull();
+    const lmtRow = within(holdingsSection as HTMLElement).getByText("LMT").closest(".row");
+    expect(lmtRow).not.toBeNull();
+    expect(within(lmtRow as HTMLElement).queryByText(/Meta-Label Conf:/i)).toBeNull();
   });
 
   it("value-quality (curve:null) renders the honest 'no backtest series yet' panel with its reason, never a fabricated chart", async () => {

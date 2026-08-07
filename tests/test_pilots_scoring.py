@@ -287,13 +287,17 @@ class TestNormalizationAndTopN:
     def test_holding_dict_shape(self, snapshot):
         holdings = pilot_holdings(get_pilot("trend-following"), snapshot)
         h = holdings[0]
-        assert set(h.keys()) == {"symbol", "weight", "score", "price", "sector", "action", "buy_range", "sell_range", "conviction"}
+        assert set(h.keys()) == {
+            "symbol", "weight", "score", "price", "sector", "action",
+            "buy_range", "sell_range", "conviction", "meta_label_composite",
+        }
         assert h["price"] == pytest.approx(128.72)   # NVDA price from fixture
         assert h["sector"] == "Information Technology"
         assert h["action"] == "BUY"
         assert h["buy_range"] == "Buy Zone: $118.00 - $126.00"
         assert h["sell_range"] == "Sell Zone: $138.00 - $152.00 | Stop @ $112.00"
         assert h["conviction"] == pytest.approx(0.88)
+        assert h["meta_label_composite"] == pytest.approx(1.0)
 
     def test_holding_action_fallback(self, snapshot):
         # Create a mock snapshot with a signal having only "action", no "advisory_action"
@@ -308,6 +312,39 @@ class TestNormalizationAndTopN:
         holdings = pilot_holdings(get_pilot("trend-following"), snap)
         assert len(holdings) == 1
         assert holdings[0]["action"] == "SELL"
+
+    def test_holding_meta_label_composite_absent_is_none(self):
+        # A signal dict with no meta_label_composite key at all -> None, never
+        # fabricated (e.g. a snapshot predating the meta-labeling pipeline).
+        snap = {
+            "signals": [{
+                "symbol": "FOO",
+                "action": "BUY",
+                "price": 100.0,
+                "score_components": {"timeseries_momentum": 15.0},
+            }]
+        }
+        holdings = pilot_holdings(get_pilot("trend-following"), snap)
+        assert len(holdings) == 1
+        assert holdings[0]["meta_label_composite"] is None
+
+    def test_holding_meta_label_composite_zero_preserved(self):
+        # A genuine hard-gated 0.0 (settings.META_LABEL_MIN_CONFIDENCE gate
+        # tripped) must survive as 0.0, not be coerced to None or fabricated
+        # as 1.0.
+        snap = {
+            "signals": [{
+                "symbol": "FOO",
+                "action": "BUY",
+                "price": 100.0,
+                "score_components": {"timeseries_momentum": 15.0},
+                "meta_label_composite": 0.0,
+            }]
+        }
+        holdings = pilot_holdings(get_pilot("trend-following"), snap)
+        assert len(holdings) == 1
+        assert holdings[0]["meta_label_composite"] == 0.0
+        assert holdings[0]["meta_label_composite"] is not None
 
 
 # ---------------------------------------------------------------------------
