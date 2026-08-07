@@ -1416,6 +1416,15 @@ class TestReadonlyMode:
 # recommendation_tracking_report deliberately stays on a write-mode
 # HistoricalStore() despite only calling get_bars() (a read, in isolation) --
 # see the comment at that call site. These tests pin the exact mechanism.
+#
+# _get_bars_db_path now short-circuits on self._readonly BEFORE attempting
+# the doomed fetch_days-wide top-up + write, going straight to the same
+# lookback_days-wide live fetch get_bars()'s outer except used to fall back
+# to once the write raised OperationalError -- identical data returned, one
+# fewer live-provider round-trip, and no more "attempt to write a readonly
+# database" WARNING log. The caching semantics above are UNCHANGED by this:
+# a readonly store with a stale cache still always live-fetches instead of
+# genuinely caching; see tests below for what's actually pinned now.
 
 class TestReadonlyGetBarsFallsBackToLive:
     def test_readonly_store_with_a_fully_fresh_cache_needs_no_write(self, tmp_path):
@@ -1437,8 +1446,8 @@ class TestReadonlyGetBarsFallsBackToLive:
 
     def test_readonly_store_with_a_stale_cache_falls_back_to_live(self, tmp_path):
         """When the cache is STALE (ends days ago), a top-up write is genuinely
-        needed. A readonly store cannot perform it, so get_bars() takes the
-        DB-path exception branch and live-fetches instead -- this is the case
+        needed. A readonly store cannot perform it, so get_bars() skips the
+        write attempt entirely and live-fetches directly -- this is the case
         that makes get_bars() unsuitable for a readonly-hardened call site."""
         db = str(tmp_path / "t.db")
         writer = HistoricalStore(db_path=db)
@@ -1449,13 +1458,35 @@ class TestReadonlyGetBarsFallsBackToLive:
         live_provider = _make_provider(_make_ohlcv(5))
         result = reader.get_bars("AAPL", lookback_days=30, provider=live_provider)
 
-        # Exact call count is an internal implementation detail (the blocked
-        # top-up attempt itself may call the provider before failing to
-        # persist, then _live_fetch calls it again) -- what matters is that the
-        # provider WAS reached (the cache alone could not satisfy the request)
-        # and real data still came back despite the write being blocked.
+        # The provider WAS reached (the cache alone could not satisfy the
+        # request) and real data still came back despite the write being
+        # blocked -- see test_readonly_stale_cache_skips_the_doomed_topup_
+        # attempt below for the exact, now-pinned call count.
         assert live_provider.get_intraday_bars.call_count >= 1
         assert not result.empty
+
+    def test_readonly_stale_cache_skips_the_doomed_topup_attempt(self, tmp_path, caplog):
+        """Tightens the '>= 1' assertion above into an exact pin: readonly +
+        stale cache now reaches the provider exactly ONCE (the wide
+        lookback_days-width fetch), never twice (the old behavior wasted a
+        fetch_days-width top-up fetch first, then failed the write and did a
+        second, wider fetch via get_bars()'s outer except). Also asserts no
+        "readonly database" WARNING is logged -- the whole point of the fix."""
+        import logging
+
+        db = str(tmp_path / "t.db")
+        writer = HistoricalStore(db_path=db)
+        five_days_ago = pd.Timestamp.now().normalize() - pd.offsets.BDay(5)
+        writer._upsert_bars("AAPL", _make_ohlcv(30, end=five_days_ago), source="yfinance")
+
+        reader = HistoricalStore(db_path=db, readonly=True)
+        live_provider = _make_provider(_make_ohlcv(5))
+        with caplog.at_level(logging.WARNING):
+            result = reader.get_bars("AAPL", lookback_days=30, provider=live_provider)
+
+        assert live_provider.get_intraday_bars.call_count == 1
+        assert not result.empty
+        assert not any("readonly database" in rec.message for rec in caplog.records)
 
     def test_readonly_get_bars_write_attempt_leaves_the_cache_unchanged(self, tmp_path):
         """The blocked top-up write (on a STALE cache -- see the test above for

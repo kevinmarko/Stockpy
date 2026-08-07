@@ -70,6 +70,7 @@ DEFAULT_EXCLUDE_DIRS = {
     "env",
     ".git",
     ".claude",  # Claude Code transient dir (agent worktrees, etc.) — never app code
+    ".gemini",  # Antigravity's equivalent transient dir (agent worktrees, etc.)
     ".worktrees",
     "__pycache__",
     "node_modules",

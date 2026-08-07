@@ -512,6 +512,11 @@ class TestNoOrderFunctions:
       execution/                   — legitimate order code lives here
       tests/                       — test code may define mock broker implementations
       .venv/                       — third-party libraries
+      .claude/, .gemini/           — other agents' nested worktree checkouts (often a
+                                      different branch); scanning one risks a spurious
+                                      failure over code that isn't even part of this
+                                      tree, and needlessly re-scans the whole repo a
+                                      second (or third) time over
       Gravity AI Review Suite.py   — auditor file; contains inline mock broker stubs
       ai_verification_prompts.py   — auditor code
     """
@@ -532,6 +537,8 @@ class TestNoOrderFunctions:
         "tests",
         ".venv",
         "__pycache__",
+        ".claude",
+        ".gemini",
     })
 
     # Specific file stems (name without extension) excluded by filename.
