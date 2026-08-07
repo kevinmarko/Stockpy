@@ -1045,6 +1045,7 @@ export function OptionsMatrix() {
           {data?.as_of && (
             <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
           )}
+          </div>
         </div>
       </div>
 
@@ -1230,8 +1231,6 @@ export function OptionsMatrix() {
         <OptionsAnalyticsDashboard />
       </div>
       </div>
-    </div>
-  );
     </div>
   );
 }
