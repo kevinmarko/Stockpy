@@ -2117,3 +2117,6 @@ that approving it completes within the deadline, whether a denied approval is
 distinguishable from an ignored one (reading the library's source, it appears not to be),
 and whether the session-pickle fix measurably reduces how often a real account is
 re-challenged.
+
+- **Global Backfill Engine (Stage 4 Meta-Labeling)** (2026-08-07):
+  Replaced the legacy `AgenticForecastBackfiller` with a centralized, asynchronous `GlobalBackfillEngine` (`ml/backfill/GlobalBackfillEngine.py`). This removes hardcoded technical feature fetching per strategy in favor of dynamic `SignalModule` resolution and `ml.backfill.registry.STRATEGY_REGISTRY`. The GUI/CLI polling endpoint transitions from WebSocket/sync endpoints to robust polling on `GET /api/backfill/status/{job_id}`, ensuring isolation and cleaner PWA state.

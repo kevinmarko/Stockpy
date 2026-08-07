@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Multi-Horizon Forecast Backfill and Meta-Labeling engine (`ml/forecast_backfill.py`) implements Marcos Lopez de Prado's Meta-Labeling methodology across **10, 30, 60, and 90-day horizons** for primary momentum models:
+The Multi-Horizon Forecast Backfill and Meta-Labeling engine (`ml/backfill/GlobalBackfillEngine.py`) implements Marcos Lopez de Prado's Meta-Labeling methodology across **10, 30, 60, and 90-day horizons** for primary momentum models:
 
 1. **Time-Series Momentum (TSMOM)**
 2. **Cross-Sectional Momentum (CSMOM)**
@@ -67,8 +67,8 @@ All hyperparameters are centralized in `settings.py` and configurable via `.env`
 ## API Endpoints & Web App UI
 
 ### REST API Endpoints (`api/pilots_api.py`)
-- `GET /pilots/forecast_backfill`: Returns backfill status, trained 8-model metrics (Accuracy, ROC-AUC, sample counts), and metadata.
-- `POST /pilots/forecast_backfill/run`: Triggers an on-demand forecast backfill cycle.
+- `GET /api/backfill/status/{job_id}`: Returns backfill polling status, trained model metrics (Accuracy, ROC-AUC, sample counts), and metadata.
+- `POST /api/backfill/run`: Triggers an on-demand async global backfill cycle.
 
 ### Web App (Pilots PWA)
 - **Screen**: `<ForecastBackfillScreen />` (`webapp/src/screens/ForecastBackfillScreen.tsx`)
