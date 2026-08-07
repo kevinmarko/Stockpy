@@ -143,6 +143,7 @@ SKIP_DIRS = {
     "output",
     "cache",
     ".claude",
+    ".gemini",
     "build",
     "dist",
     ".ipynb_checkpoints",
