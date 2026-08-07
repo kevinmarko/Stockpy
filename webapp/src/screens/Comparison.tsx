@@ -217,6 +217,23 @@ export function Comparison() {
               )}
             </div>
             
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}` }}>
+              <select 
+                className="input" 
+                value="" 
+                onChange={(e) => { if(e.target.value) toggleSelect(e.target.value); }}
+                disabled={selectedIds.length >= 5 || pilotsList.loading}
+                style={{ width: "100%", cursor: "pointer", fontSize: "var(--t-caption)" }}
+              >
+                <option value="" disabled>Quick add pilot...</option>
+                {pilotsList.data?.map(p => (
+                   <option key={p.id} value={p.id} disabled={selectedIds.includes(p.id)}>
+                     {p.name}
+                   </option>
+                ))}
+              </select>
+            </div>
+
             <div style={{ padding: "var(--s-3)" }}>
               {pilotsList.loading ? (
                 <Loading lines={1} />
