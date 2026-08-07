@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
+import pilots.watchlist_writer as watchlist_writer
 from ml.forecast_backfill import AgenticForecastBackfiller
 from settings import settings
 
@@ -28,8 +29,17 @@ def _isolate_output_dir(tmp_path, monkeypatch):
     clobbers the live output/agentic_forecast_summary.json that
     GET /pilots/forecast_backfill serves verbatim, which is exactly how a
     ZZZZ_NOT_REAL synthetic-fallback ticker used to leak into the webapp's
-    Forecast Backfill screen after a local test run."""
+    Forecast Backfill screen after a local test run.
+
+    Same reasoning applies to step_1_fetch_data's 3-strike ticker-drop path
+    (record_fetch_failures): it defaults to
+    pilots.watchlist_writer.DEFAULT_WATCHLIST_PATH ("watchlist.txt", CWD-
+    relative) and a sibling watchlist_failures.json when no explicit path is
+    passed -- exactly what every call in this file does. Left unpatched, a
+    ZZZZ_NOT_REAL-style test run would silently rewrite the operator's real
+    watchlist.txt / watchlist_failures.json in the repo root."""
     monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(watchlist_writer, "DEFAULT_WATCHLIST_PATH", tmp_path / "watchlist.txt")
 
 
 class _RecordingClassifier(RandomForestClassifier):
@@ -169,28 +179,57 @@ def test_step_6_no_model_produces_nan_not_fabricated_confidence():
     assert not (engine.data["TSMOM_Meta_Prob_10d"] == 1.0).any()
 
 
-def test_synthetic_fallback_is_flagged_not_silently_indistinguishable_from_real():
-    """When neither FMP nor CompositeProvider returns data for a ticker, the
-    substituted synthetic random-walk panel must be tracked and surfaced in
-    the exported summary -- a provider outage must never look like a genuine
-    backtest (CONSTRAINT #4)."""
+def test_dropped_fallback_is_flagged_and_removed(tmp_path):
+    """When neither FMP nor CompositeProvider returns data for a ticker, it must
+    be dropped from the run and surfaced in the exported summary -- a provider
+    outage must never look like a genuine backtest (CONSTRAINT #4)."""
     engine = AgenticForecastBackfiller(
-        tickers=["ZZZZ_NOT_REAL"],
+        tickers=["AAPL", "ZZZZ_NOT_REAL"],
         start_date="2020-01-01",
         end_date="2022-01-01",
         horizons=[10],
         use_fmp=False,
     )
     engine.step_1_fetch_data()
-    assert "ZZZZ_NOT_REAL" in engine.synthetic_tickers
+    assert "ZZZZ_NOT_REAL" in engine.dropped_tickers
+    assert "ZZZZ_NOT_REAL" not in engine.tickers
+
+    # One miss is a single strike, not yet a permanent removal (see the
+    # 3-consecutive-runs test below for the removal path).
+    failures_file = tmp_path / "watchlist_failures.json"
+    assert json.loads(failures_file.read_text(encoding="utf-8")) == {"ZZZZ_NOT_REAL": 1}
 
     engine.step_2_calculate_technical_features()
     engine.step_3_generate_primary_signals()
     engine.step_4_create_meta_targets()
     engine.step_5_backtrain_meta_labelers()
     engine.step_6_execute_backfill()
-    _, summary = engine.export_results(filename="test_synthetic_flag_output.csv")
-    assert summary["synthetic_tickers"] == ["ZZZZ_NOT_REAL"]
+    _, summary = engine.export_results(filename="test_dropped_flag_output.csv")
+    assert summary["dropped_tickers"] == ["ZZZZ_NOT_REAL"]
+
+
+def test_three_consecutive_dropped_runs_permanently_removes_from_watchlist(tmp_path):
+    """The 3-strike rule: a ticker missing real data across 3 SEPARATE
+    step_1_fetch_data runs (e.g. 3 backfill cycles days apart) is permanently
+    removed from watchlist.txt, not just dropped from each individual run."""
+    watchlist_path = tmp_path / "watchlist.txt"
+    watchlist_path.write_text("AAPL\nZZZZ_NOT_REAL\n", encoding="utf-8")
+
+    for i in range(3):
+        engine = AgenticForecastBackfiller(
+            tickers=["AAPL", "ZZZZ_NOT_REAL"],
+            start_date="2020-01-01",
+            end_date="2022-01-01",
+            horizons=[10],
+            use_fmp=False,
+        )
+        engine.step_1_fetch_data()
+        assert "ZZZZ_NOT_REAL" in engine.dropped_tickers, f"run {i}"
+
+    content = watchlist_path.read_text(encoding="utf-8")
+    assert "ZZZZ_NOT_REAL" not in content
+    assert "AAPL" in content
+    assert json.loads((tmp_path / "watchlist_failures.json").read_text(encoding="utf-8")) == {}
 
 
 def test_train_test_split_embargoes_overlapping_forward_window(monkeypatch):

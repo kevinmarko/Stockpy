@@ -110,11 +110,8 @@ class AgenticForecastBackfiller:
         self.models: Dict[str, Any] = {}
         self.metrics: Dict[str, Dict[str, float]] = {}
         # Tickers for which no real provider (FMP nor CompositeProvider) returned
-        # data and a synthetic random-walk panel was substituted instead (offline
-        # testing only, in principle) — tracked so a real-environment provider
-        # outage is never silently indistinguishable from genuine market data in
-        # the exported summary/API/UI (CONSTRAINT #4).
-        self.synthetic_tickers: List[str] = []
+        # data. They are dropped from the run and recorded via the 3-strike rule.
+        self.dropped_tickers: List[str] = []
 
     def step_1_fetch_data(self) -> pd.DataFrame:
         """Step 1: Fetch daily OHLCV price and volume data using FMP or fallback providers."""
@@ -169,24 +166,38 @@ class AgenticForecastBackfiller:
             except Exception as exc:
                 logger.warning("CompositeProvider fallback failed: %s", exc)
 
-        # Synthetic fallback if zero real data returned (e.g. offline unit testing)
+        # Fallback if zero real data returned
         still_missing = [t for t in self.tickers if t not in price_dict or price_dict[t].empty]
+
+        # Record fetch outcomes for the 3-strike permanent-removal rule
+        # (pilots.watchlist_writer.record_fetch_failures) unconditionally --
+        # not only when this run had a miss -- so a ticker that succeeds
+        # resets its strike counter to zero even on a run where every OTHER
+        # ticker failed. Without this, "3 consecutive failures" silently
+        # degrades into "3 failures ever", since a stale strike from weeks
+        # ago would never be cleared by a later success.
+        succeeded = [t for t in self.tickers if t not in still_missing]
+        try:
+            from pilots.watchlist_writer import record_fetch_failures
+            permanently_removed = record_fetch_failures(still_missing, succeeded_symbols=succeeded)
+            if permanently_removed:
+                logger.warning(
+                    "Permanently removed %d ticker(s) from watchlist.txt due to 3 consecutive failures: %s",
+                    len(permanently_removed), permanently_removed,
+                )
+        except Exception as exc:
+            logger.warning("Failed to record fetch failures or update watchlist.txt: %s", exc)
+
         if still_missing:
-            self.synthetic_tickers = list(still_missing)
+            self.dropped_tickers = list(still_missing)
             logger.warning(
                 "No real data (FMP nor CompositeProvider) for %d ticker(s) — "
-                "substituting a SYNTHETIC random-walk price panel: %s. Any "
-                "metrics/probabilities for these tickers are not from real "
-                "market data.", len(still_missing), still_missing,
+                "dropping them from the current run: %s.",
+                len(still_missing), still_missing,
             )
-            dates = pd.date_range(start=self.start_date, end=self.end_date, freq="B")
-            for i, ticker in enumerate(still_missing):
-                rng = np.random.default_rng(abs(hash((ticker, self.random_state))) % (2**32))
-                returns = rng.normal(0.0004, 0.015, len(dates))
-                price = 100.0 * np.exp(np.cumsum(returns))
-                volume = rng.uniform(1e6, 5e6, len(dates))
-                price_dict[ticker] = pd.Series(price, index=dates, name=ticker)
-                volume_dict[ticker] = pd.Series(volume, index=dates, name=ticker)
+            for t in still_missing:
+                if t in self.tickers:
+                    self.tickers.remove(t)
 
         self.prices = pd.DataFrame(price_dict).dropna(how="all")
         self.volumes = pd.DataFrame(volume_dict).dropna(how="all")
@@ -467,12 +478,8 @@ class AgenticForecastBackfiller:
             "metrics": self.metrics,
             "total_rows": len(output_df),
             "csv_path": str(out_csv),
-            # Non-empty iff step_1_fetch_data had to substitute a synthetic
-            # random-walk panel for one or more tickers (no real FMP/
-            # CompositeProvider data available) — surfaced end-to-end so a
-            # provider outage is never silently indistinguishable from a real
-            # backtest in the API response or webapp screen (CONSTRAINT #4).
-            "synthetic_tickers": list(self.synthetic_tickers),
+            # Non-empty iff step_1_fetch_data dropped tickers due to missing data.
+            "dropped_tickers": list(self.dropped_tickers),
         }
         with open(out_json, "w") as f:
             json.dump(summary_payload, f, indent=2)

@@ -3567,10 +3567,10 @@ export interface ForecastBackfillSummary {
   total_rows?: number;
   csv_path?: string;
   message?: string;
-  /** Non-empty iff one or more tickers had no real FMP/provider data and a
-   * synthetic random-walk panel was substituted — metrics/probabilities for
-   * these tickers are not from real market data. */
-  synthetic_tickers?: string[];
+  /** Non-empty iff one or more tickers had no real FMP/provider data and were
+   * dropped from the run. They are permanently removed from the watchlist after
+   * 3 consecutive failures. */
+  dropped_tickers?: string[];
 }
 
 export interface CacheLongShortConcentratedPosition {
