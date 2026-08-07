@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { Portfolio, PilotSummary, PerfRange, CurvePoint, ObservabilitySummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
-import { ErrorState, Loading, Notice, Tile } from "../components/ui";
+import { ErrorState, Loading, Notice, Tile, Button } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { TabGuide } from "../components/TabGuide";
 import { ActivityFeed } from "../components/ActivityFeed";
@@ -14,6 +14,24 @@ import { RangeToggle } from "../components/RangeToggle";
 import { theme } from "../theme";
 import { fmtUsd, fmtSignedUsd } from "../format";
 import { deriveAttentionItems } from "../observabilityAttention";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+
+const defaultDashboardLayouts = {
+  lg: [
+    { i: "portfolio", x: 0, y: 0, w: 4, h: 9 },
+    { i: "performance", x: 4, y: 0, w: 8, h: 12 },
+    { i: "activity", x: 0, y: 9, w: 4, h: 9 },
+    { i: "pilots", x: 4, y: 12, w: 5, h: 9 },
+    { i: "notebook", x: 9, y: 12, w: 3, h: 6 },
+  ],
+  sm: [
+    { i: "portfolio", x: 0, y: 0, w: 6, h: 9 },
+    { i: "performance", x: 0, y: 9, w: 6, h: 12 },
+    { i: "activity", x: 0, y: 21, w: 6, h: 9 },
+    { i: "pilots", x: 0, y: 30, w: 6, h: 9 },
+    { i: "notebook", x: 0, y: 39, w: 6, h: 6 },
+  ]
+};
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -85,6 +103,9 @@ export function Dashboard() {
     <div className="screen" data-testid="dashboard-screen">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-4)" }}>
         <h1 className="screen-title" data-testid="dashboard-title">Dashboard</h1>
+        <Button variant="neutral" onClick={() => resetGridLayout("dashboard")}>
+          Reset Layout
+        </Button>
       </div>
 
       <TabGuide tabKey="dashboard" />
@@ -119,25 +140,27 @@ export function Dashboard() {
         </Notice>
       )}
 
-      <div className="dashboard-grid">
+      <DynamicGrid layoutKey="dashboard" defaultLayouts={defaultDashboardLayouts}>
         {/* Portfolio Summary */}
         <div
+          key="portfolio"
           className="card card-pad dashboard-widget-wide"
           style={{
             display: "flex",
             flexDirection: "column",
             border: `1px solid ${theme.borderStrong}`,
-            minHeight: 280,
+            height: "100%",
           }}
           data-testid={`widget-portfolio-summary`}
         >
-          <div style={{
+          <div className="drag-handle" style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
+            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Portfolio Summary</span>
           </div>
@@ -191,22 +214,24 @@ export function Dashboard() {
 
         {/* Account Performance */}
         <div
+          key="performance"
           className="card card-pad dashboard-widget-full"
           style={{
             display: "flex",
             flexDirection: "column",
             border: `1px solid ${theme.borderStrong}`,
-            minHeight: 380,
+            height: "100%",
           }}
           data-testid={`widget-performance-curve`}
         >
-          <div style={{
+          <div className="drag-handle" style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
+            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Account Performance</span>
           </div>
@@ -238,22 +263,24 @@ export function Dashboard() {
 
         {/* Activity Feed */}
         <div
+          key="activity"
           className="card card-pad dashboard-widget-wide"
           style={{
             display: "flex",
             flexDirection: "column",
             border: `1px solid ${theme.borderStrong}`,
-            minHeight: 280,
+            height: "100%",
           }}
           data-testid={`widget-activity-feed`}
         >
-          <div style={{
+          <div className="drag-handle" style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
+            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Activity Feed</span>
           </div>
@@ -264,22 +291,24 @@ export function Dashboard() {
 
         {/* Top Pilots */}
         <div
+          key="pilots"
           className="card card-pad dashboard-widget-wide"
           style={{
             display: "flex",
             flexDirection: "column",
             border: `1px solid ${theme.borderStrong}`,
-            minHeight: 280,
+            height: "100%",
           }}
           data-testid={`widget-top-pilots`}
         >
-          <div style={{
+          <div className="drag-handle" style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
+            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Top Pilots</span>
           </div>
@@ -316,22 +345,24 @@ export function Dashboard() {
 
         {/* NotebookML Export */}
         <div
+          key="notebook"
           className="card card-pad"
           style={{
             display: "flex",
             flexDirection: "column",
             border: `1px solid ${theme.borderStrong}`,
-            minHeight: 180,
+            height: "100%",
           }}
           data-testid={`widget-notebook-export`}
         >
-          <div style={{
+          <div className="drag-handle" style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
+            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>NotebookML Export</span>
           </div>
@@ -339,7 +370,7 @@ export function Dashboard() {
             <NotebookMLExport portfolio={port.data} />
           </div>
         </div>
-      </div>
+      </DynamicGrid>
     </div>
   );
 }

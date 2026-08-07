@@ -8,6 +8,8 @@ import { useBrokerageLoginJob } from "../hooks/useBrokerageLoginJob";
 import { useDebounce } from "../hooks/useDebounce";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { useExecutionMode } from "../components/ExecutionModeContext";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import type { ResponsiveLayouts } from "react-grid-layout";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -49,6 +51,27 @@ import { ModelHealthPanel } from "../components/ModelHealthPanel";
  * server-side before this screen existed — see ExecutionQueueSection's
  * docstring for why order placement itself is out of reach entirely.
  */
+const AGENTIC_LAYOUTS: ResponsiveLayouts = {
+  lg: [
+    { i: "agent_status", x: 0, y: 0, w: 12, h: 8 },
+    { i: "discovery", x: 0, y: 8, w: 12, h: 12 },
+    { i: "execution", x: 0, y: 20, w: 12, h: 10 },
+    { i: "advanced_visuals", x: 0, y: 30, w: 12, h: 14 },
+    { i: "rlhf", x: 0, y: 44, w: 12, h: 10 },
+    { i: "decision", x: 0, y: 54, w: 6, h: 12 },
+    { i: "controls", x: 6, y: 54, w: 6, h: 12 },
+  ],
+  md: [
+    { i: "agent_status", x: 0, y: 0, w: 10, h: 8 },
+    { i: "discovery", x: 0, y: 8, w: 10, h: 12 },
+    { i: "execution", x: 0, y: 20, w: 10, h: 10 },
+    { i: "advanced_visuals", x: 0, y: 30, w: 10, h: 14 },
+    { i: "rlhf", x: 0, y: 44, w: 10, h: 10 },
+    { i: "decision", x: 0, y: 54, w: 10, h: 12 },
+    { i: "controls", x: 0, y: 66, w: 10, h: 12 },
+  ],
+};
+
 export function AgenticTrading() {
   const status = useApi<AgenticStatus>(() => api.getAgenticStatus(), []);
   const brokerageStatus = useApi<BrokerageStatus>(() => api.getBrokerageStatus(), []);
@@ -134,6 +157,10 @@ export function AgenticTrading() {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
+          <Button variant="neutral" onClick={() => resetGridLayout("agentic")}>
+            Reset Layout
+          </Button>
+
           <Button variant="neutral" onClick={refreshAll} pending={isRefreshingData}>
             {isRefreshingData ? "Refreshing Data…" : "Refresh Data 🔄"}
           </Button>
@@ -171,57 +198,86 @@ export function AgenticTrading() {
       {!status.loading && status.error && (
         <ErrorState message={status.error} status={status.status} onRetry={status.reload} />
       )}
-      {!status.loading && !status.error && status.data && (
-        <AgentStatusHeader data={status.data} onRefreshAll={refreshAll} />
-      )}
-
-      <DiscoverySection refreshToken={refreshToken} />
-
-      <ExecutionQueueSection />
-
-      {/* Advanced Quantitative Visualizations Section */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-          gap: "var(--s-4)",
-          marginTop: "var(--s-4)",
-          marginBottom: "var(--s-4)",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
-            <label htmlFor="ladder-ticker-input" style={{ fontSize: "var(--t-caption)", fontWeight: 600, color: theme.textSecondary }}>
-              Ladder Ticker:
-            </label>
-            <input
-              id="ladder-ticker-input"
-              data-testid="ladder-ticker-input"
-              type="text"
-              value={ladderSymbol}
-              onChange={(e) => setLadderSymbol(e.target.value.toUpperCase())}
-              style={{
-                background: theme.surface2,
-                color: theme.textPrimary,
-                border: `1px solid ${theme.border}`,
-                borderRadius: "var(--r-sm)",
-                padding: "4px 8px",
-                width: "80px",
-                fontSize: "var(--t-caption)",
-                fontWeight: 600,
-              }}
-            />
+      
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <DynamicGrid layoutKey="agentic" defaultLayouts={AGENTIC_LAYOUTS}>
+          {/* Agent Status */}
+          <div key="agent_status" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            {!status.loading && !status.error && status.data && (
+              <AgentStatusHeader data={status.data} onRefreshAll={refreshAll} />
+            )}
           </div>
-          <ActiveTraderLadder symbol={debouncedLadderSymbol} />
-        </div>
-        <ModelHealthPanel />
+
+          {/* Discovery */}
+          <div key="discovery" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <DiscoverySection refreshToken={refreshToken} />
+          </div>
+
+          {/* Execution Queue */}
+          <div key="execution" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <ExecutionQueueSection />
+          </div>
+
+          {/* Advanced Quantitative Visualizations Section */}
+          <div key="advanced_visuals" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+              <h2 style={{ fontSize: "var(--t-title)", margin: 0 }}>Advanced Quantitative Visualizations</h2>
+            </div>
+            <div
+              style={{
+                flex: 1,
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+                gap: "var(--s-4)",
+                overflowY: "auto",
+                minHeight: 0
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginBottom: "var(--s-2)" }}>
+                  <label htmlFor="ladder-ticker-input" style={{ fontSize: "var(--t-caption)", fontWeight: 600, color: theme.textSecondary }}>
+                    Ladder Ticker:
+                  </label>
+                  <input
+                    id="ladder-ticker-input"
+                    data-testid="ladder-ticker-input"
+                    type="text"
+                    value={ladderSymbol}
+                    onChange={(e) => setLadderSymbol(e.target.value.toUpperCase())}
+                    style={{
+                      background: theme.surface2,
+                      color: theme.textPrimary,
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: "var(--r-sm)",
+                      padding: "4px 8px",
+                      width: "80px",
+                      fontSize: "var(--t-caption)",
+                      fontWeight: 600,
+                    }}
+                  />
+                </div>
+                <ActiveTraderLadder symbol={debouncedLadderSymbol} />
+              </div>
+              <ModelHealthPanel />
+            </div>
+          </div>
+
+          {/* RLHF Review Queue */}
+          <div key="rlhf" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <RlhfReviewQueue refreshToken={refreshToken} />
+          </div>
+
+          {/* Decision Journal */}
+          <div key="decision" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <DecisionJournalSection refreshToken={refreshToken} />
+          </div>
+
+          {/* Controls */}
+          <div key="controls" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <ControlsSection status={status.data} onChanged={status.reload} />
+          </div>
+        </DynamicGrid>
       </div>
-
-      <RlhfReviewQueue refreshToken={refreshToken} />
-
-      <DecisionJournalSection refreshToken={refreshToken} />
-
-      <ControlsSection status={status.data} onChanged={status.reload} />
 
       {showAuthModal && (
         <Modal ariaLabel="Robinhood Authentication Modal" onClose={() => setShowAuthModal(false)}>
@@ -249,14 +305,18 @@ function SectionCard({
   children: ReactNode;
 }) {
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
-      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>{title}</h2>
-      {sub && (
-        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
-          {sub}
-        </p>
-      )}
-      {children}
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+        <h2 style={{ margin: 0, fontSize: "var(--t-title)" }}>{title}</h2>
+        {sub && (
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)", marginBottom: 0 }}>
+            {sub}
+          </p>
+        )}
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+        {children}
+      </div>
     </section>
   );
 }

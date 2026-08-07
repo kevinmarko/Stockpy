@@ -3,7 +3,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api } from "../api/client";
 import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Notice } from "../components/ui";
+import { ErrorState, Loading, Notice, Button } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
@@ -13,6 +13,22 @@ import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from 
 import { FollowModal } from "./FollowModal";
 import { seriesColor, theme } from "../theme";
 import { fmtNum, fmtPct, fmtUsd } from "../format";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+
+const defaultComparisonLayouts = {
+  lg: [
+    { i: 'recommended', x: 0, y: 0, w: 12, h: 10 },
+    { i: 'performance', x: 0, y: 10, w: 12, h: 8 },
+    { i: 'metrics', x: 0, y: 18, w: 12, h: 12 },
+    { i: 'alerts', x: 0, y: 30, w: 12, h: 8 },
+  ],
+  sm: [
+    { i: 'recommended', x: 0, y: 0, w: 6, h: 10 },
+    { i: 'performance', x: 0, y: 10, w: 6, h: 8 },
+    { i: 'metrics', x: 0, y: 18, w: 6, h: 12 },
+    { i: 'alerts', x: 0, y: 30, w: 6, h: 8 },
+  ]
+};
 
 export function Comparison() {
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
@@ -185,7 +201,12 @@ export function Comparison() {
 
   return (
     <div className="screen" data-testid="comparison-screen">
-      <h1 className="screen-title" data-testid="comparison-title">Pilot Strategy Comparison</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-4)" }}>
+        <h1 className="screen-title" data-testid="comparison-title" style={{ margin: 0 }}>Pilot Strategy Comparison</h1>
+        <Button variant="neutral" onClick={() => resetGridLayout("comparison")}>
+          Reset Layout
+        </Button>
+      </div>
 
       <TabGuide tabKey="compare" />
 
@@ -289,27 +310,39 @@ export function Comparison() {
         </div>
 
         {/* Right Pane (Visualizations & Data) */}
-        <div style={{ flex: "2 1 600px", minWidth: 0, position: "sticky", top: "var(--s-4)", display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
-          
-          {/* Recommended stocks table */}
-          <RecommendedStocks />
-
+        <div style={{ flex: "2 1 600px", minWidth: 0, position: "sticky", top: "var(--s-4)" }}>
           {/* Row Error Banner for fetch failures */}
           {Object.keys(fetchErrors).length > 0 && (
-            <Notice variant="warn" data-testid="row-error-banner">
+            <Notice variant="warn" data-testid="row-error-banner" style={{ marginBottom: "var(--s-4)" }}>
               <strong>Notice:</strong> Failed to load performance curve data for some strategies.
             </Notice>
           )}
 
+          <DynamicGrid layoutKey="comparison" defaultLayouts={defaultComparisonLayouts}>
+            {/* Recommended stocks table */}
+            <div key="recommended" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
+                <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Recommended Stocks</h2>
+              </div>
+              <div style={{ flex: 1, overflow: "auto" }}>
+                <RecommendedStocks />
+              </div>
+            </div>
+
+
+
           {selectedIds.length === 0 ? (
-            <div className="card card-pad empty" style={{ padding: 40 }}>
+            <div key="empty" className="card card-pad empty" style={{ padding: 40 }}>
               Select at least one pilot strategy in the left pane to start comparing metrics and performance curves.
             </div>
           ) : (
-            <>
-              {/* Overlaid Performance Chart */}
-              <section className="card card-pad">
-                <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Overlaid Performance</h2>
+            [
+              /* Overlaid Performance Chart */
+              <div key="performance" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
+                  <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Overlaid Performance</h2>
+                </div>
+                <div style={{ flex: 1, padding: "var(--s-3)", overflow: "auto" }}>
                 {loadingCurves ? (
                   <div className="skeleton" style={{ height: 200 }} />
                 ) : chartData.length === 0 ? (
@@ -362,13 +395,15 @@ export function Comparison() {
                     </div>
                   </div>
                 )}
-              </section>
+                </div>
+              </div>,
 
-              {/* Comparison Grid */}
-              <section className="card card-pad" style={{ overflowX: "auto", padding: 0 }}>
-                <div style={{ padding: "var(--s-3)" }}>
+              /* Comparison Grid */
+              <div key="metrics" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
                   <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Key Metrics Comparison</h2>
                 </div>
+                <div style={{ flex: 1, overflowX: "auto" }}>
                 
                 {(() => {
                   const sharpes = selectedPilots.map(p => p.headline.sharpe).filter((v): v is number => v != null);
@@ -490,15 +525,21 @@ export function Comparison() {
                     </div>
                   );
                 })()}
-              </section>
+                </div>
+              </div>,
 
-              {/* Recent pilot alerts */}
-              <section className="card card-pad" data-testid="comparison-activity-feed">
-                <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Recent pilot alerts</h2>
-                <ActivityFeed limit={5} pilotIds={selectedIds} />
-              </section>
-            </>
+              /* Recent pilot alerts */
+              <div key="alerts" className="card card-pad" data-testid="comparison-activity-feed" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
+                  <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Recent pilot alerts</h2>
+                </div>
+                <div style={{ flex: 1, padding: "var(--s-3)", overflow: "auto" }}>
+                  <ActivityFeed limit={5} pilotIds={selectedIds} />
+                </div>
+              </div>
+            ]
           )}
+          </DynamicGrid>
         </div>
       </div>
 
