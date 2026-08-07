@@ -73,18 +73,35 @@ STARTED_PIDS=()
 # uvicorn stub needs.
 BACKEND_SHUTDOWN_WAIT_SECONDS=15
 
-# ── App mode (--background / --stop) ─────────────────────────────────────────
+# ── App mode (--live / --background / --stop) ─────────────────────────────────
 # Invoked from the double-clickable "Stockpy Pilots.app" / "Stockpy Pilots
-# (Stop).app" wrappers built by scripts/build_pilots_launcher.command — no
-# Terminal window, no interactive prompt, no "press any key" pause, and (for
-# --background) the launcher process itself exits once the app is up instead
-# of blocking in the foreground, handing the backends off to a pidfile so a
-# separate --stop invocation can find and stop them later. A plain
-# double-click with no args keeps today's exact interactive-Terminal
-# behavior, byte-for-byte unchanged.
+# (Stop).app" wrappers built by scripts/build_pilots_launcher.command.
+#
+# --live: what "Stockpy Pilots.app" runs. Opens a REAL, VISIBLE Terminal
+# window (see build_pilots_launcher.command's _build_terminal_app) and skips
+# the Mock/Live prompt (always Live) — otherwise it's byte-for-byte the same
+# foreground bring-up as a plain double-click choosing Live. Closing that
+# window (or Ctrl+C inside it) is the ENTIRE shutdown story: it routes
+# through the same EXIT/TERM/HUP traps as every other foreground mode below,
+# which already kill every backend this run started. No pidfile, no second
+# icon required for the normal case.
+#
+# --stop: what "Stockpy Pilots (Stop).app" runs — now positioned as a SAFETY
+# NET rather than the required shutdown step, for the case Terminal gets
+# force-quit/crashes before a --live window's own close-triggered cleanup
+# gets to run. See _app_stop()/_sweep_stray_ports() further down.
+#
+# --background: kept, unmodified, for backward compatibility — no visible
+# window, hands backends off to a pidfile, exits immediately. No longer
+# referenced by either app icon (confirmed nothing else in this repo calls
+# it), but harmless to leave in place.
+#
+# A plain double-click with no args keeps today's exact interactive-Terminal
+# behavior (Mock/Live prompt), byte-for-byte unchanged.
 APP_MODE="${1:-}"
 INTERACTIVE=true
 APP_PID_FILE="/tmp/stockpy_webapp_logs/pilots_app.pids"
+LOCK_FILE="/tmp/stockpy_webapp_logs/launch.lock"
 if [ "$APP_MODE" = "--background" ] || [ "$APP_MODE" = "--stop" ]; then
     INTERACTIVE=false
     # No visible window in app mode — keep every echo so app_launcher.log is
@@ -98,6 +115,21 @@ fi
 _notify() {  # $1 = message ; best-effort macOS notification, never fatal
     command -v osascript >/dev/null 2>&1 &&
         osascript -e "display notification \"$1\" with title \"Stockpy Pilots\"" >/dev/null 2>&1
+    return 0
+}
+
+# Echoes $LOCK_FILE's PID iff it's a LIVE launch_webapp.command process; silent
+# (empty output) otherwise — a missing lock, a dead pid, or a pid recycled by
+# an unrelated process since all read as "no genuine holder". Shared by
+# _acquire_launch_lock (below) and --live's "already running" fast path, so
+# the same-process verification logic exists in exactly one place.
+_lock_holder_pid() {
+    [ -f "$LOCK_FILE" ] || return 0
+    local lock_pid lock_cmd
+    lock_pid="$(cat "$LOCK_FILE" 2>/dev/null)"
+    [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null || return 0
+    lock_cmd="$(ps -p "$lock_pid" -ww -o command= 2>/dev/null)"
+    [[ "$lock_cmd" == *"launch_webapp.command"* ]] && printf '%s' "$lock_pid"
     return 0
 }
 
@@ -195,43 +227,116 @@ _read_env_value() {  # $1 = KEY ; echoes the value from ./.env (quotes stripped)
     printf '%s' "$val"
 }
 
-_app_stop() {
-    if [ ! -f "$APP_PID_FILE" ]; then
-        echo "  Nothing to stop — no pidfile at $APP_PID_FILE."
-        _notify "Pilots PWA wasn't running."
-        exit 0
+# Stop-mode safety net for when there's no pidfile to work from — the --live
+# mode (unlike the old --background mode) never writes $APP_PID_FILE at all,
+# since a --live window's own EXIT/HUP trap handles its cleanup directly,
+# in-process. If Terminal gets force-quit or crashes before that trap can
+# run, nothing is left to tell a later --stop invocation what to kill. This
+# sweeps this project's 5 known ports directly instead, generalizing
+# _check_vite_port's own same-project verification (an owning process' cwd
+# must match this checkout) from just :5173 to all five. Anything on these
+# ports that ISN'T this project is reported and left strictly alone — same
+# safety invariant _check_vite_port already guarantees for :5173 alone.
+# Echoes nothing; returns 0 if it stopped >=1 of this project's processes,
+# 1 if every port was either free or foreign. Defined here (ahead of
+# _check_vite_port, further down) rather than next to its closest sibling,
+# because _app_stop (right below) can be invoked as early as line ~296 —
+# well before the script reaches _check_vite_port's own definition — and
+# bash resolves a function call against whatever's already been defined by
+# the time it's reached, not by where the call appears in the file.
+_sweep_stray_ports() {
+    local ports=(5173 8601 8602 8603 8604)
+    local port pid cmd expect_dir own_pids=() found_any=false p _i _still_alive
+    echo "  ▶  Checking ports 5173/8601-8604 for stray Pilots processes…"
+    for port in "${ports[@]}"; do
+        pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1)"
+        [ -z "$pid" ] && continue
+        found_any=true
+        expect_dir="$SCRIPT_DIR"
+        [ "$port" = "5173" ] && expect_dir="$SCRIPT_DIR/webapp"
+        if lsof -p "$pid" -a -d cwd 2>/dev/null | grep -q "$expect_dir"; then
+            echo "  ⚠  :$port held by PID $pid (this project) — will stop it."
+            # Same pid can legitimately own two ports (e.g. the orchestrator
+            # daemon hosts both :8601 and :8602) — dedupe so it's only
+            # signaled/waited-on once.
+            case " ${own_pids[*]} " in *" $pid "*) ;; *) own_pids+=("$pid") ;; esac
+        else
+            cmd="$(ps -p "$pid" -ww -o command= 2>/dev/null)"
+            echo "  ℹ  :$port is in use by PID $pid (${cmd:-unknown}) — not this project, leaving it alone."
+        fi
+    done
+    if [ "${#own_pids[@]}" -eq 0 ]; then
+        $found_any || echo "  ✓  No stray processes found on 5173/8601-8604."
+        return 1
     fi
+    for p in "${own_pids[@]}"; do kill "$p" 2>/dev/null; done
+    for _i in $(seq 1 $((BACKEND_SHUTDOWN_WAIT_SECONDS * 2))); do
+        _still_alive=false
+        for p in "${own_pids[@]}"; do kill -0 "$p" 2>/dev/null && _still_alive=true; done
+        $_still_alive || break
+        sleep 0.5
+    done
+    for p in "${own_pids[@]}"; do kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null; done
+    echo "  ✓  Stopped ${#own_pids[@]} stray process(es) from this project."
+    return 0
+}
+
+_app_stop() {
     # Match the interactive path's own daemon-aware shutdown budget (see
-    # _bring_up_control_and_pilots_api) — a --background launch that started
-    # the real orchestrator daemon needs the same up-to-DAEMON_SHUTDOWN_
-    # TIMEOUT_SECONDS grace here too, or a --stop invocation would force-kill
-    # (-9) a daemon that's still mid-_teardown() well before it's actually
-    # hung, instead of only escalating to -9 once a genuinely-stuck shutdown
-    # has blown its own advertised budget.
+    # _bring_up_control_and_pilots_api) — a session that started the real
+    # orchestrator daemon needs the same up-to-DAEMON_SHUTDOWN_TIMEOUT_
+    # SECONDS grace here too, or --stop would force-kill (-9) a daemon
+    # that's still mid-_teardown() well before it's actually hung, instead
+    # of only escalating to -9 once a genuinely-stuck shutdown has blown its
+    # own advertised budget. Applies to both the pidfile path below AND
+    # _sweep_stray_ports (which reads this same global).
     local daemon_timeout
     daemon_timeout="$(_read_env_value DAEMON_SHUTDOWN_TIMEOUT_SECONDS)"
     [[ "$daemon_timeout" =~ ^[0-9]+$ ]] || daemon_timeout=25
     BACKEND_SHUTDOWN_WAIT_SECONDS=$((daemon_timeout + 5))
-    echo "  ▶  Stopping backends listed in $APP_PID_FILE …"
-    local pid _i _still_alive
-    while read -r pid; do
-        [ -n "$pid" ] && kill "$pid" 2>/dev/null
-    done < "$APP_PID_FILE"
-    for _i in $(seq 1 $((BACKEND_SHUTDOWN_WAIT_SECONDS * 2))); do
-        _still_alive=false
+
+    local did_pidfile_stop=false did_sweep_stop=false
+
+    # Pidfile path: only ever populated by the legacy --background mode.
+    if [ -f "$APP_PID_FILE" ]; then
+        did_pidfile_stop=true
+        echo "  ▶  Stopping backends listed in $APP_PID_FILE …"
+        local pid _i _still_alive
         while read -r pid; do
-            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && _still_alive=true
+            [ -n "$pid" ] && kill "$pid" 2>/dev/null
         done < "$APP_PID_FILE"
-        $_still_alive || break
-        sleep 0.5
-    done
-    while read -r pid; do
-        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
-    done < "$APP_PID_FILE"
+        for _i in $(seq 1 $((BACKEND_SHUTDOWN_WAIT_SECONDS * 2))); do
+            _still_alive=false
+            while read -r pid; do
+                [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && _still_alive=true
+            done < "$APP_PID_FILE"
+            $_still_alive || break
+            sleep 0.5
+        done
+        while read -r pid; do
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+        done < "$APP_PID_FILE"
+        rm -f "$APP_PID_FILE"
+    fi
+
+    # Safety net: catches everything the pidfile path can't — a --live
+    # Terminal window that was force-quit/crashed (that mode never writes a
+    # pidfile at all, by design) as well as anything the pidfile above
+    # missed. Always runs, regardless of whether the pidfile path found
+    # anything, since the two are independent (e.g. an old --background
+    # session's pidfile alongside an unrelated stray --live process).
+    _sweep_stray_ports && did_sweep_stop=true
+
     pkill -f "$SCRIPT_DIR/webapp/node_modules/.bin/vite" 2>/dev/null
-    rm -f "$APP_PID_FILE" /tmp/stockpy_webapp_logs/launch.lock
-    echo "  ✓  Stopped."
-    _notify "Pilots PWA stopped."
+    rm -f "$LOCK_FILE"
+
+    if [ "$did_pidfile_stop" = true ] || [ "$did_sweep_stop" = true ]; then
+        echo "  ✓  Stopped."
+        _notify "Pilots PWA stopped."
+    else
+        echo "  Nothing to stop — no pidfile, and none of ports 5173/8601-8604 are held by this project."
+        _notify "Pilots PWA wasn't running."
+    fi
     exit 0
 }
 if [ "$APP_MODE" = "--stop" ]; then
@@ -246,6 +351,35 @@ if [ "$APP_MODE" = "--background" ] && [ -f "$APP_PID_FILE" ] && curl -sf "http:
     open "http://localhost:5173"
     _notify "Pilots PWA is already running — http://localhost:5173"
     exit 0
+fi
+
+# ── --live fast path: already running (from a prior --live window still
+# open) → just reopen the tab instead of starting a second session. Checks
+# THREE things, not just :5173 — the single-instance lock is held by a real
+# launch_webapp.command process, AND :5173 answers, AND :8602/health (the
+# live pilots_api) answers. The third check is what distinguishes a genuine
+# live session from a concurrently-running MOCK session, which would also
+# hold the lock and serve :5173 but answer nothing on the backend ports —
+# without it, a second Start click during an active mock session would
+# silently reopen a tab that's still showing mock data under a "live" icon.
+# When a mock session (or nothing) holds the lock, this intentionally falls
+# through to _acquire_launch_lock below, which reports its own accurate
+# "another launch already running" error instead.
+if [ "$APP_MODE" = "--live" ]; then
+    _live_holder_pid="$(_lock_holder_pid)"
+    if [ -n "$_live_holder_pid" ] \
+        && curl -sf "http://localhost:5173/" >/dev/null 2>&1 \
+        && curl -sf "http://localhost:8602/health" >/dev/null 2>&1; then
+        echo "  Already running live (PID $_live_holder_pid) — reopening the browser tab."
+        open "http://localhost:5173"
+        _notify "Pilots PWA is already running — http://localhost:5173"
+        # Nothing was started or locked by THIS invocation -- skip the EXIT
+        # trap's cleanup/pause entirely so this transient window doesn't sit
+        # on "press any key" for no reason.
+        trap - EXIT
+        exit 0
+    fi
+    unset _live_holder_pid
 fi
 
 echo ""
@@ -428,33 +562,28 @@ _check_vite_port() {
 # one well-known path rather than scoped under SCRIPT_DIR.
 _acquire_launch_lock() {
     mkdir -p /tmp/stockpy_webapp_logs
-    LOCK_FILE="/tmp/stockpy_webapp_logs/launch.lock"
-    if [ -f "$LOCK_FILE" ]; then
-        local lock_pid lock_cmd
-        lock_pid="$(cat "$LOCK_FILE" 2>/dev/null)"
-        lock_cmd=""
-        if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
-            lock_cmd="$(ps -p "$lock_pid" -ww -o command= 2>/dev/null)"
-        fi
-        if [[ "$lock_cmd" == *"launch_webapp.command"* ]]; then
-            echo ""
-            echo "  ⚠  Another launch_webapp.command is already running (PID $lock_pid)."
-            echo "     Close that window (or wait for it to fully exit) before starting a"
-            echo "     new one — two at once races the backend startup and can leave the"
-            echo "     daemon unreachable in the webapp."
-            exit 1
-        fi
-        # Stale lock (dead pid, or the pid was recycled by an unrelated
-        # process since) — harmless, just overwrite it below.
+    local lock_pid
+    lock_pid="$(_lock_holder_pid)"
+    if [ -n "$lock_pid" ]; then
+        echo ""
+        echo "  ⚠  Another launch_webapp.command is already running (PID $lock_pid)."
+        echo "     Close that window (or wait for it to fully exit) before starting a"
+        echo "     new one — two at once races the backend startup and can leave the"
+        echo "     daemon unreachable in the webapp."
+        exit 1
     fi
+    # A lock file that's present but not a genuine live holder (dead pid, or
+    # the pid was recycled by an unrelated process since) is stale and
+    # harmless — just overwrite it below.
     echo $$ > "$LOCK_FILE"
 }
 _acquire_launch_lock
 
 # ── Ask: mock or live? (defaults to mock after 20s / on empty Enter) ─────────
-# --background always runs live — that's the whole point of the app wrapper;
-# an operator who wants mock data still has the plain interactive launch.
-if [ "$APP_MODE" = "--background" ]; then
+# --background and --live both always run live — that's the whole point of
+# either app wrapper; an operator who wants mock data still has the plain
+# interactive launch.
+if [ "$APP_MODE" = "--background" ] || [ "$APP_MODE" = "--live" ]; then
     MODE_CHOICE=2
 else
     echo ""
