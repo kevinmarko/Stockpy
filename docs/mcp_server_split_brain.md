@@ -12,7 +12,7 @@ local disk and the other reads it off a remote VM that nobody has redeployed:
 
 | Registration | Config file | Transport | What it actually runs |
 |---|---|---|---|
-| `investyo-platform` | `~/.claude.json` (Claude Code project config, under both the `/Users/kevinlee/Desktop/Stockpy` and `/Users/kevinlee` project entries) | stdio, direct | `/Users/kevinlee/Desktop/Stockpy/.venv/bin/python3 /Users/kevinlee/Desktop/Stockpy/investyo_mcp_server.py` — whatever is checked out **locally**, currently `origin/main` tip |
+| `investyo-platform` | `~/.claude.json` (Claude Code project config, under both the `/Users/kevinlee/Stockpy-live` and `/Users/kevinlee` project entries) | stdio, direct | `/Users/kevinlee/Stockpy-live/.venv/bin/python3 /Users/kevinlee/Stockpy-live/investyo_mcp_server.py` — whatever is checked out **locally**, currently `origin/main` tip |
 | `investyo` | `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop) | stdio, via `gcloud compute ssh` | `sudo -u investyo bash -c 'cd /opt/investyo && exec .venv/bin/python investyo_mcp_server.py'` on the **`investyo-vm`** GCP VM (`us-east4-c` / `stock-data-engine`) — whatever was checked out at `/opt/investyo` the last time someone ran `deploy/setup_gcp_vm.sh` or manually pulled |
 
 `deploy/setup_gcp_vm.sh` is a **one-time bootstrap** script (creates the service
@@ -111,7 +111,7 @@ there won't propagate to this hand-rolled config unless someone remembers to
 port it by hand a second time).
 
 Worth switching this config entry to invoke `mcp_remote_adapter.py` directly
-(`python3 /Users/kevinlee/Desktop/Stockpy/mcp_remote_adapter.py`), matching the
+(`python3 /Users/kevinlee/Stockpy-live/mcp_remote_adapter.py`), matching the
 pattern `investyo-platform`'s own Claude Code registration already uses for the
 local server. **Not fixed here** — editing a live Claude Desktop config is
 outside a code PR's blast radius and deserves its own explicit go-ahead from
