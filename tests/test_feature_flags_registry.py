@@ -2,7 +2,7 @@ import ast
 from pathlib import Path
 import pytest
 
-from pilots.feature_flags import FEATURE_FLAG_KEYS, DIAGNOSTIC_FLAG_REASONS
+from pilots.feature_flags import FEATURE_FLAG_KEYS, DIAGNOSTIC_FLAG_REASONS, WRITE_GATE_REASONS
 from settings_keysets import DANGEROUS_KEYS
 
 def test_feature_flags_registry_inherits_dangerous_keys():
@@ -18,16 +18,43 @@ def test_feature_flags_registry_diagnostic_keys():
     """
     assert set(DIAGNOSTIC_FLAG_REASONS.keys()).issubset(FEATURE_FLAG_KEYS), "FEATURE_FLAG_KEYS must include all diagnostic flag reasons"
 
+def test_feature_flags_registry_write_gate_keys():
+    """
+    Ensure the non-dangerous write-gate keys are in the feature flag keys.
+    """
+    assert set(WRITE_GATE_REASONS.keys()).issubset(FEATURE_FLAG_KEYS), "FEATURE_FLAG_KEYS must include all write-gate flag reasons"
+
+def test_write_gate_reasons_disjoint_from_dangerous_keys():
+    """
+    WRITE_GATE_REASONS is specifically for real write gates that are NOT
+    typed-confirmation-required. A key belonging to both would mean the
+    typed-confirmation requirement is either redundant or contradicted --
+    it should be added to settings_keysets.SAFETY_CRITICAL_KEY_REASONS
+    instead of here if it needs confirmation.
+    """
+    overlap = set(WRITE_GATE_REASONS) & DANGEROUS_KEYS
+    assert not overlap, f"WRITE_GATE_REASONS overlaps DANGEROUS_KEYS: {overlap}"
+
 def test_require_enabled_guards_registered():
     """
-    Scans api/pilots_api.py and api/data_api.py for every def require_*_enabled(
-    function, extracts the settings.X attribute each one's if not settings.X: guard checks,
-    and asserts X in feature_flags.FEATURE_FLAG_KEYS.
+    Scans api/pilots_api.py, api/data_api.py, and api/control_api.py for
+    every def require_*_enabled( function, extracts the settings.X attribute
+    each one's if not settings.X: guard checks, and asserts
+    X in feature_flags.FEATURE_FLAG_KEYS.
+
+    Known blind spot, documented rather than silently accepted: a flag
+    guarded by an inline `if not settings.X:` check that is NOT inside a
+    `def require_*_enabled(...)`-named function (e.g. JOBS_API_ENABLED in
+    api/control_api.py, UNIVERSE_SYNC_ENABLED's factory-built closure in
+    api/data_api.py) is invisible to this AST shape. Both of those are
+    curated into pilots/feature_flags.py's WRITE_GATE_REASONS by hand as a
+    result -- this scan is a floor on coverage, not a ceiling.
     """
     repo_root = Path(__file__).parent.parent
     files_to_check = [
         repo_root / "api" / "pilots_api.py",
         repo_root / "api" / "data_api.py",
+        repo_root / "api" / "control_api.py",
     ]
 
     for filepath in files_to_check:

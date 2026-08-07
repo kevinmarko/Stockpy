@@ -393,7 +393,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "settings-feature-flags": {
     title: "Feature Flags",
     description:
-      "Admin and execution capabilities. These 16 flags act as fail-safe kill switches to enable or disable writes, live trading execution, AI generation APIs, and critical automation loops. Toggling these flags requires strict security and confirmation measures because they can fundamentally change platform behavior from 'advisory-only' to 'live trading execution'.",
+      "Admin and execution capabilities, grouped into two kinds. Write & Execution Gates enable or disable writes, live trading execution, AI generation APIs, and critical automation loops — some require typed confirmation before toggling because they can fundamentally change platform behavior from 'advisory-only' to 'live trading execution'. Diagnostic & Data Features are read-only measurement/data-source switches with no execution risk of their own.",
     keyConcepts: ["advisory only", "kill switch"],
   },
   "symbol-detail": {

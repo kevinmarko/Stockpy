@@ -381,26 +381,6 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "Gates PUT /strategy/modules — signal weights and the "
         "disabled-module set, which changes WHAT THE PLATFORM RECOMMENDS."
     ),
-
-    "BROKERAGE_CONNECT_ENABLED": (
-        "Gates POST /brokerage/connect, a real live login against the operator’s actual brokerage account and therefore a critical operation."
-    ),
-    "UNIVERSE_SYNC_ENABLED": (
-        "Gates POST /universe/sync, which updates the tracked ticker universe and modifies the core evaluation set."
-    ),
-    "AGENTIC_DISCOVERY_ENABLED": (
-        "Gates POST /discovery/run, which executes the agentic candidate scan against the broker and requires tracking bounds."
-    ),
-    "JOBS_API_ENABLED": (
-        "Gates POST /jobs, which executes the job runner endpoints and triggers long-running background tasks."
-    ),
-    "PILOTS_API_ENABLED": (
-        "Gates POST /pilots, which executes pilot actions that can alter the system behavior and trigger new states."
-    ),
-
-    "RLHF_CALIBRATION_ENABLED": (
-        "Gates POST /rlhf/calibrate, which submits calibration feedback directly to the model registry and RLHF loop."
-    ),
 }
 
 SAFETY_CRITICAL_KEYS: frozenset[str] = frozenset(SAFETY_CRITICAL_KEY_REASONS)

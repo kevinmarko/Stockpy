@@ -200,7 +200,8 @@ from rlhf_calibration_store import (
 # restart, does nothing, or is pinned by a real shell export). Stdlib +
 # runtime_flags + settings_keysets only — see its module docstring.
 import pilots.settings_meta as settings_meta
-from pilots.feature_flags import FEATURE_FLAG_KEYS
+import pilots.feature_flags as feature_flags
+import settings_keysets
 
 # Execution / persistence — explicitly ALLOWED here (unlike state_api.py),
 # forbidden only for the heavy calculation engines (see this module's AST guard
@@ -4808,20 +4809,37 @@ def put_settings_cache_long_short(body: TunablesUpdateRequest) -> Dict[str, Any]
     """Update Cache Long/Short configuration in .env."""
     return _validate_and_write_payload(body.values, _CACHE_LONG_SHORT_INDEX, confirm=body.confirm)
 
+# A handful of the DANGEROUS_KEYS-tier fields are not plain booleans and
+# need the same enum/json treatment their OTHER editors already give them
+# (_FMP_GROUPS's own FMP_BARS_ADJUSTMENT entry, _TUNABLE_GROUPS's own
+# CORS_ALLOWED_ORIGINS entry) -- inferring kind from the pydantic type
+# annotation alone would render FMP_BARS_ADJUSTMENT and
+# ROBINHOOD_EXECUTION_MODE as free-text inputs with no options constraint,
+# which is precisely wrong for the two highest-risk string fields in the
+# whole registry. Every other feature-flag key is a plain bool.
+_FEATURE_FLAGS_NON_BOOL_SPECS: Dict[str, tuple] = {
+    "ROBINHOOD_EXECUTION_MODE": ("enum", {"options": ["off", "review", "live"]}),
+    "FMP_BARS_ADJUSTMENT": (
+        "enum",
+        {"options": ["dividend-adjusted", "light", "full", "non-split-adjusted"]},
+    ),
+    "CORS_ALLOWED_ORIGINS": ("json", {}),
+}
+
+
 def _build_feature_flags_index():
-    from settings import settings
-    specs = []
-    fields = type(settings).model_fields
-    for key in sorted(FEATURE_FLAG_KEYS):
-        anno = fields[key].annotation
-        if anno is bool:
-            kind = "bool"
-        elif anno is str:
-            kind = "str"
-        else:
-            kind = "json"
-        specs.append((key, kind, {}))
-    groups = [("Feature Flags", specs)]
+    dangerous_specs = [
+        (key, *_FEATURE_FLAGS_NON_BOOL_SPECS.get(key, ("bool", {})))
+        for key in sorted(settings_keysets.DANGEROUS_KEYS | set(feature_flags.WRITE_GATE_REASONS))
+    ]
+    diagnostic_specs = [
+        (key, *_FEATURE_FLAGS_NON_BOOL_SPECS.get(key, ("bool", {})))
+        for key in sorted(feature_flags.DIAGNOSTIC_FLAG_REASONS)
+    ]
+    groups = [
+        ("Write & Execution Gates", dangerous_specs),
+        ("Diagnostic & Data Features", diagnostic_specs),
+    ]
     index = {k: (knd, ext) for _, sps in groups for k, knd, ext in sps}
     return groups, index
 
@@ -4829,7 +4847,10 @@ _FEATURE_FLAGS_GROUPS, _FEATURE_FLAGS_INDEX = _build_feature_flags_index()
 
 @app.get("/settings/feature-flags", dependencies=[Depends(require_read_token)])
 def get_feature_flags_settings() -> Dict[str, Any]:
-    """Return current values and metadata for all feature flags."""
+    """Return current values and metadata for every admin/write/execution
+    gate and read-only diagnostic feature flag in one place -- the single,
+    clearly-labeled Feature Flags screen. See pilots/feature_flags.py's
+    module docstring for the three-tier registry this is built from."""
     return _settings_editor_payload(
         _FEATURE_FLAGS_GROUPS, _FEATURE_FLAGS_INDEX
     )
@@ -4838,23 +4859,23 @@ def get_feature_flags_settings() -> Dict[str, Any]:
     "/settings/feature-flags",
     dependencies=[
         Depends(require_command_token),
-        Depends(require_automation_writes_enabled),
+        Depends(require_general_settings_writes_enabled),
     ],
 )
-def put_feature_flags_settings(body: TunablesUpdateRequest) -> Dict[str, Any]:
-    """Validate and apply feature flag updates."""
-    return _validate_and_write_payload(body.values, _FEATURE_FLAGS_INDEX, confirm=body.confirm)
-
 @app.patch(
     "/settings/feature-flags",
     dependencies=[
         Depends(require_command_token),
-        Depends(require_automation_writes_enabled),
+        Depends(require_general_settings_writes_enabled),
     ],
 )
-def patch_feature_flags_settings(body: TunablesUpdateRequest) -> Dict[str, Any]:
-    """Dry-run validation for feature flags."""
-    return _validate_and_write_payload(body.values, _FEATURE_FLAGS_INDEX, confirm=body.confirm, dry_run=True)
+def put_feature_flags_settings(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Update feature flags in .env. Gated by
+    require_general_settings_writes_enabled -- matching every other
+    /settings/* editor's PUT (not require_automation_writes_enabled, whose
+    own docstring scopes it to the daemon interval and kill-switch resume
+    specifically and says every sibling flag must not ride in on it)."""
+    return _validate_and_write_payload(body.values, _FEATURE_FLAGS_INDEX, confirm=body.confirm)
 
 
 @app.get("/settings/fmp", dependencies=[Depends(require_read_token)])
