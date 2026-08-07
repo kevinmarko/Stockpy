@@ -106,7 +106,7 @@ class GlobalBackfillEngine:
 
             for horizon in horizons:
                 labeled_df = self._compute_triple_barriers(signals_df, horizon)
-                metrics = self._train_purged_meta_labeler(labeled_df, horizon)
+                metrics = self._train_purged_meta_labeler(labeled_df, horizon, strategy_id)
                 model_metrics.append(metrics)
 
             results[strategy_id] = model_metrics
@@ -135,12 +135,75 @@ class GlobalBackfillEngine:
             df[f'target_{horizon_days}d'] = (df['raw_signal'] * df['Close'].pct_change(horizon_days).shift(-horizon_days) > 0).astype(int)
         return df.dropna()
 
-    def _train_purged_meta_labeler(self, df: pd.DataFrame, horizon: int) -> Dict[str, Any]:
-        # Purged K-Fold Cross Validation stub
+    def _train_purged_meta_labeler(self, df: pd.DataFrame, horizon: int, strategy_id: str) -> Dict[str, Any]:
+        from validation.purged_cv import CombinatorialPurgedCV
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.metrics import accuracy_score, roc_auc_score
+        import os
+        import joblib
+        import settings
+
+        features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
+        target_col = f"target_{horizon}d"
+        
+        # Ensure we only use rows with all features and target
+        model_df = df.dropna(subset=features + [target_col])
+        if len(model_df) < 50:
+            return {"horizon": horizon, "accuracy": 0.0, "roc_auc": 0.0, "train_n": 0, "test_n": 0}
+
+        X = model_df[features]
+        y = model_df[target_col]
+
+        cv = CombinatorialPurgedCV(n_splits=5, n_test_splits=1)
+        
+        # Calculate OOS metrics using Purged CV
+        oos_preds = []
+        oos_true = []
+        
+        clf = RandomForestClassifier(
+            n_estimators=settings.FORECAST_BACKFILL_N_ESTIMATORS, 
+            max_depth=settings.FORECAST_BACKFILL_MAX_DEPTH, 
+            random_state=settings.FORECAST_BACKFILL_RANDOM_STATE
+        )
+
+        try:
+            for train_idx, test_idx, _ in cv.split(X, y):
+                X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
+                X_test, y_test = X.iloc[test_idx], y.iloc[test_idx]
+                
+                clf.fit(X_train, y_train)
+                preds = clf.predict(X_test)
+                
+                oos_preds.extend(preds)
+                oos_true.extend(y_test)
+        except ValueError as e:
+            # Fallback if too few samples for CV
+            oos_preds = [0]
+            oos_true = [0]
+
+        if len(oos_true) > 0 and len(set(oos_true)) > 1:
+            acc = accuracy_score(oos_true, oos_preds)
+            try:
+                roc_auc = roc_auc_score(oos_true, oos_preds)
+            except ValueError:
+                roc_auc = 0.5
+        else:
+            acc = 0.5
+            roc_auc = 0.5
+
+        # Final fit on full data
+        clf.fit(X, y)
+
+        # Save model
+        models_dir = os.path.join(os.path.dirname(__file__), "..", "models")
+        os.makedirs(models_dir, exist_ok=True)
+        model_path = os.path.join(models_dir, f"meta_{strategy_id}_{horizon}d.pkl")
+        joblib.dump(clf, model_path)
+
         return {
             "horizon": horizon,
-            "accuracy": 0.542,
-            "roc_auc": 0.561,
-            "train_n": len(df) * 4 // 5,
-            "test_n": len(df) // 5,
+            "accuracy": acc,
+            "roc_auc": roc_auc,
+            "train_n": len(X),
+            "test_n": len(oos_true),
         }
