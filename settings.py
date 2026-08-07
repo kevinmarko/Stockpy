@@ -240,6 +240,53 @@ class Settings(BaseSettings):
             "ORCHESTRATOR_DAEMON_TOKEN, or any other write surface's token."
         ),
     )
+    MCP_OAUTH_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Switches investyo_mcp_server.py --transport streamable-http from "
+            "static bearer-token auth (MCP_HTTP_BEARER_TOKEN) to a full OAuth "
+            "2.1 authorization server (mcp_oauth_provider.py), so claude.ai's "
+            "custom-connector UI — which has no static-bearer-token field — "
+            "can connect. RFC 7591 dynamic client registration is "
+            "unauthenticated by design, so this flag alone does not gate "
+            "access: MCP_OAUTH_PASSWORD, checked at the /login form, is the "
+            "real trust boundary once a client can register itself and start "
+            "an auth flow. False (default) preserves today's exact bearer-only "
+            "behavior — mcp_oauth_provider.py is never imported. Carries no "
+            "secret material, so per the 2026-08-08 operator decision (see "
+            "gui/env_io.py's ALLOWED_KEYS) it is GUI-writable; it decides "
+            "which authorization-server endpoints (/register, /authorize, "
+            "/token, /revoke) are live on the streamable-http transport, a "
+            "bigger risk than an ordinary GUI-writable tunable, so it is also "
+            "a settings_keysets.DANGEROUS_KEYS member requiring typed "
+            "confirmation on write regardless of which editor is used."
+        ),
+    )
+    MCP_OAUTH_ISSUER_URL: Optional[str] = Field(
+        default=None,
+        description=(
+            "The externally-reachable base URL (scheme + host, no path) that "
+            "investyo_mcp_server.py advertises as its OAuth issuer when "
+            "MCP_OAUTH_ENABLED is True — must match the stable/named tunnel "
+            "hostname the server is actually reached through, since OAuth has "
+            "an issuer-identity concept the plain bearer-token transport "
+            "doesn't. Not a secret — it's a public hostname, the same value "
+            "an operator would put in a browser address bar. Required "
+            "(construction fails) when MCP_OAUTH_ENABLED is True."
+        ),
+    )
+    MCP_OAUTH_PASSWORD: Optional[str] = Field(
+        default=None,
+        description=(
+            "Passphrase gating the OAuth /login form (investyo_mcp_server.py "
+            "--auth-mode oauth, MCP_OAUTH_ENABLED=True). SECRET — never "
+            "GUI-writable, never logged. This is the actual trust boundary "
+            "for the OAuth authorization flow, since dynamic client "
+            "registration (RFC 7591) itself is unauthenticated by design. "
+            "Required (fails closed) when MCP_OAUTH_ENABLED is True — an "
+            "empty/unset password is never treated as 'anything passes'."
+        ),
+    )
     PILOTS_API_ENABLED: bool = Field(
         default=False,
         description=(

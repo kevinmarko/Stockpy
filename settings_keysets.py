@@ -359,6 +359,14 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "MACRO_REGIME_GATE_ENABLED itself — the recession/credit-event "
         "BUY-veto bypass. A silent flip here silently removes that veto."
     ),
+    "MCP_OAUTH_ENABLED": (
+        "Decides whether investyo_mcp_server.py's OAuth authorization-server "
+        "endpoints (/register, /authorize, /token, /revoke) are live. RFC "
+        "7591 dynamic client registration is unauthenticated by design, so "
+        "the flag alone does not gate access — MCP_OAUTH_PASSWORD, checked "
+        "at the /login form, is the real trust boundary once a client can "
+        "register itself and start an auth flow."
+    ),
     "PROMPT_REGISTRY_WRITES_ENABLED": (
         "Gates PUT /prompts/pin, which changes WHICH PROMPT TEXT THE "
         "PLATFORM ACTUALLY RUNS — a real behavioral change, not a config "
