@@ -13,6 +13,14 @@ from mcp.server.fastmcp import FastMCP
 # Initialize the FastMCP server for the Investyo Platform
 mcp = FastMCP("InvestyoPlatform")
 
+import mcp_widget_resources
+
+_WIDGETS_AVAILABLE = mcp_widget_resources.register_widget_resources(mcp)
+
+_PILOT_PICKER_UI = {"ui": {"resourceUri": "ui://widgets/pilot-picker.html"}} if _WIDGETS_AVAILABLE else None
+_PILOT_DETAIL_UI = {"ui": {"resourceUri": "ui://widgets/pilot-detail.html"}} if _WIDGETS_AVAILABLE else None
+_FOLLOW_RESULT_UI = {"ui": {"resourceUri": "ui://widgets/follow-result.html"}} if _WIDGETS_AVAILABLE else None
+
 
 def _active_universe() -> list:
     """
@@ -2771,7 +2779,7 @@ def _unknown_pilot_message(pilot_id: str) -> str:
     return f"No such pilot '{pilot_id}'. Available pilot ids: {available}"
 
 
-@mcp.tool()
+@mcp.tool(meta=_PILOT_PICKER_UI)
 def list_pilots() -> str:
     """
     Lists every Stockpy "Pilot" (a copyable strategy = a named blend of
@@ -2779,7 +2787,9 @@ def list_pilots() -> str:
     (Sharpe, DSR, PBO, MaxDD, deployable), current holdings_count from the
     latest snapshot, and local follow proxies (aum_proxy/followers_proxy).
     Read-only; never fabricates a metric for a Pilot with no validated
-    backtest (those show "—").
+    backtest (those show "—"). In a host that renders MCP Apps (e.g.
+    Claude.ai via a custom connector), this opens an interactive
+    Pilot-picker card grid instead of only returning markdown.
     """
     try:
         from pilots import catalog, performance, scoring
@@ -2836,7 +2846,7 @@ def list_pilots() -> str:
         return f"Failed to list pilots: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(meta=_PILOT_DETAIL_UI)
 def get_pilot_detail(pilot_id: str) -> str:
     """
     Full detail for one Pilot: identity, signal weights, honest backtest
@@ -2847,6 +2857,9 @@ def get_pilot_detail(pilot_id: str) -> str:
 
     Args:
         pilot_id: A Pilot id from list_pilots (e.g. "trend-following").
+
+    In a host that renders MCP Apps, this opens an interactive detail panel
+    instead of only returning markdown.
     """
     try:
         from pilots import catalog, performance, scoring
@@ -3060,7 +3073,7 @@ def get_follows() -> str:
         return f"Failed to list follows: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(meta=_FOLLOW_RESULT_UI)
 def follow_pilot(pilot_id: str, amount: float) -> str:
     """
     Follows a Pilot with a dollar amount: persists the follow to
@@ -3081,6 +3094,9 @@ def follow_pilot(pilot_id: str, amount: float) -> str:
     Args:
         pilot_id: A Pilot id from list_pilots (e.g. "trend-following").
         amount: Dollar amount to allocate to this Pilot (must be > 0).
+
+    In a host that renders MCP Apps, the result renders as a confirmation
+    card instead of only returning markdown.
     """
     try:
         from pilots import catalog
@@ -3159,6 +3175,38 @@ def follow_pilot(pilot_id: str, amount: float) -> str:
         return f"Failed to follow pilot '{pilot_id}': {str(e)}"
 
 
+def _bearer_auth_asgi_middleware(app, token: str):
+    """Wrap a Starlette ASGI app with a bearer-token gate for the
+    streamable-http MCP transport. Rejects any 'http' scope request lacking
+    a matching 'Authorization: Bearer <token>' header with a 401 response.
+    Passes the 'lifespan' scope straight through untouched (FastMCP's own
+    session-manager lifecycle depends on receiving it unmodified). Uses
+    hmac.compare_digest for a constant-time comparison -- never `==` -- and
+    never logs the token or the presented credential, matching this repo's
+    api/auth.py posture (see that module's docstring)."""
+    import hmac
+
+    async def middleware(scope, receive, send):
+        if scope["type"] != "http":
+            await app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        auth_header = headers.get(b"authorization", b"").decode("latin-1")
+        presented = auth_header[len("Bearer "):] if auth_header.startswith("Bearer ") else ""
+        if not hmac.compare_digest(presented, token):
+            response_body = b'{"error": "Invalid or missing bearer token"}'
+            await send({
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [(b"content-type", b"application/json")],
+            })
+            await send({"type": "http.response.body", "body": response_body})
+            return
+        await app(scope, receive, send)
+
+    return middleware
+
+
 # ==========================================
 # [7] SERVER EXECUTION
 # ==========================================
@@ -3169,15 +3217,20 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="InvestYo MCP Server")
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio", "sse", "streamable-http"],
         default="stdio",
-        help="Transport protocol: 'stdio' for local IDE, 'sse' for cloud deployment (default: stdio)",
+        help="Transport protocol: 'stdio' for local IDE, 'sse' for legacy cloud deployment, 'streamable-http' for MCP Apps SDK / tunneled connector use (default: stdio)",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8080,
-        help="Port for SSE transport (default: 8080)",
+        help="Port for sse/streamable-http transport (default: 8080)",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind host for sse/streamable-http (default: 127.0.0.1; use 0.0.0.0 only behind a tunnel, e.g. cloudflared)",
     )
     args = parser.parse_args()
 
@@ -3185,6 +3238,43 @@ if __name__ == "__main__":
         print(f"Starting InvestYo MCP Server in SSE mode on port {args.port}...")
         mcp.settings.port = args.port
         mcp.run(transport="sse")
+    # Deliberately bypasses mcp.run() here -- FastMCP.run_streamable_http_async
+    # has no middleware injection hook, so this replicates its two-line
+    # uvicorn.Config/.serve() body by hand to wrap the bearer-auth middleware.
+    # Re-diff against that method if the mcp package is ever upgraded past
+    # the <2.0.0 pin (see requirements.txt).
+    elif args.transport == "streamable-http":
+        import sys
+        import uvicorn
+        from settings import settings as _settings
+
+        token = _settings.MCP_HTTP_BEARER_TOKEN
+        if not token:
+            print(
+                "Refusing to start --transport streamable-http: MCP_HTTP_BEARER_TOKEN is not set. "
+                "Set it in .env before running this transport (it gates the whole endpoint).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            from mcp.server.transport_security import TransportSecuritySettings
+            mcp.settings.transport_security = TransportSecuritySettings(
+                enable_dns_rebinding_protection=False
+            )
+            print(
+                "WARNING: --host is non-loopback -- the SDK's Host/Origin "
+                "allowlist has been disabled (it would otherwise reject every "
+                "request through a tunnel with a random hostname). "
+                "MCP_HTTP_BEARER_TOKEN is now the real perimeter for this server.",
+                file=sys.stderr,
+            )
+
+        print(f"Starting InvestYo MCP Server in streamable-http mode on {args.host}:{args.port}...")
+        app = _bearer_auth_asgi_middleware(mcp.streamable_http_app(), token)
+        uvicorn.run(app, host=args.host, port=args.port, log_level=mcp.settings.log_level.lower())
     else:
         mcp.run(transport="stdio")
 

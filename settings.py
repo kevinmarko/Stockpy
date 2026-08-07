@@ -227,6 +227,19 @@ class Settings(BaseSettings):
             "API use the fail-open STATE_API_TOKEN instead."
         ),
     )
+    MCP_HTTP_BEARER_TOKEN: Optional[str] = Field(
+        default=None,
+        description=(
+            "Bearer token gating the entire streamable-http MCP transport "
+            "(investyo_mcp_server.py --transport streamable-http). SECRET — "
+            "never GUI-writable, never logged. FAIL-CLOSED: the server refuses "
+            "to start in that transport mode without it — this transport is "
+            "meant for a tunneled/remote MCP Apps SDK connector, a materially "
+            "different exposure than the default local stdio transport. "
+            "Single-purpose — must never be reused for FOLLOW_API_TOKEN, "
+            "ORCHESTRATOR_DAEMON_TOKEN, or any other write surface's token."
+        ),
+    )
     PILOTS_API_ENABLED: bool = Field(
         default=False,
         description=(

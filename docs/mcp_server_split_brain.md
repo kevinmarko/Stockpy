@@ -116,3 +116,19 @@ pattern `investyo-platform`'s own Claude Code registration already uses for the
 local server. **Not fixed here** — editing a live Claude Desktop config is
 outside a code PR's blast radius and deserves its own explicit go-ahead from
 the operator, not a silent side effect of an unrelated MCP-tools PR.
+
+## Addendum: `streamable-http` is a third, separate deployment path (2026-08)
+
+`investyo_mcp_server.py` gained a `--transport streamable-http` option (see
+`docs/architecture/observability-and-apis.md`'s widget-resources entry) to give
+the new MCP Apps SDK Pilot-picker widgets a host that can actually render
+them — bearer-token gated via `settings.MCP_HTTP_BEARER_TOKEN`, typically run
+ad hoc from a developer's own machine behind a tunnel (e.g. for testing against
+claude.ai as a custom connector), not a long-lived service. This is
+**intentionally not a third registration competing with the two above**, and
+redeploying it is **not** a fix for the `stdio`/`sse` drift this file
+documents: it doesn't touch `~/.claude.json`, `claude_desktop_config.json`,
+`investyo-vm`, or `deploy/investyo-mcp.service`, and neither existing
+registration is expected to ever switch to it. Treat any `streamable-http`
+instance as ephemeral, developer-machine-local tooling, separate from the two
+production-ish stdio connections this document tracks.

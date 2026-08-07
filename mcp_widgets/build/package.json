@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5"
+  },
+  "scripts": {
+    "build": "node build_bundle.mjs"
+  }
+}

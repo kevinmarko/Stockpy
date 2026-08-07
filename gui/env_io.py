@@ -577,6 +577,10 @@ SECRET_KEYS: tuple[str, ...] = (
     # gap (present in neither list, so read_settings() would have echoed it in
     # cleartext if ever set in .env) rather than a deliberate omission.
     "FOLLOW_API_TOKEN",
+    # Bearer token gating the entire streamable-http MCP transport
+    # (investyo_mcp_server.py --transport streamable-http). Same secret
+    # treatment as STATE_API_TOKEN/ORCHESTRATOR_DAEMON_TOKEN/FOLLOW_API_TOKEN.
+    "MCP_HTTP_BEARER_TOKEN",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
     # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood

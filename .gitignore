@@ -155,6 +155,19 @@ webapp/.vite/
 # fresh checkout. Negation must come after `*.html` (last-match-wins).
 !webapp/index.html
 
+# MCP Apps SDK widget build tooling (mcp_widgets/build/) — npm dependency
+# artifacts, never committed; the vendored output (mcp_widgets/vendor/) IS
+# committed.
+mcp_widgets/build/node_modules/
+# The build manifest itself IS committed (reproducible builds) — the blanket
+# `*.json` rule above would otherwise swallow it. Negation must come after
+# `*.json` (last-match-wins), same reasoning as !webapp/index.html above.
+!mcp_widgets/build/package.json
+!mcp_widgets/build/package-lock.json
+# The three widget HTML templates ARE committed source (not generated debug
+# output) — the blanket `*.html` rule above would otherwise swallow them too.
+!mcp_widgets/templates/*.html
+
 # Claude Code transient agent worktrees (scratch, never commit)
 .claude/worktrees/
 
