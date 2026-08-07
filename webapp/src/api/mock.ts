@@ -7874,19 +7874,31 @@ function notFoundSymbol(sym: string) {
 }
 
 export function mockForecastBackfill(): ForecastBackfillSummary {
+  // Model keys mirror ml/forecast_backfill.py's real, registry-driven naming
+  // ("{signals.registry.global_registry strategy name}_{horizon}d") rather
+  // than the pre-refactor hardcoded "TSMOM"/"CSMOM" scheme -- keeping this
+  // mock in sync with what the live backend actually returns.
   return {
     status: "completed",
     timestamp: new Date().toISOString(),
     horizons: [10, 30, 60, 90],
     metrics: {
-      TSMOM_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 2370, split_date: "2024-01-15" },
-      TSMOM_30d: { accuracy: 0.5340, auc: 0.5580, n_train: 9416, n_test: 2354, split_date: "2024-01-15" },
-      TSMOM_60d: { accuracy: 0.5480, auc: 0.5720, n_train: 9320, n_test: 2330, split_date: "2024-01-15" },
-      TSMOM_90d: { accuracy: 0.5620, auc: 0.5910, n_train: 9224, n_test: 2306, split_date: "2024-01-15" },
-      CSMOM_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 9480, n_test: 2370, split_date: "2024-01-15" },
-      CSMOM_30d: { accuracy: 0.5410, auc: 0.5640, n_train: 9416, n_test: 2354, split_date: "2024-01-15" },
-      CSMOM_60d: { accuracy: 0.5590, auc: 0.5830, n_train: 9320, n_test: 2330, split_date: "2024-01-15" },
-      CSMOM_90d: { accuracy: 0.5740, auc: 0.6050, n_train: 9224, n_test: 2306, split_date: "2024-01-15" },
+      timeseries_momentum_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 0, split_date: "CPCV", is_active: true },
+      timeseries_momentum_30d: { accuracy: 0.5340, auc: 0.5580, n_train: 9416, n_test: 0, split_date: "CPCV", is_active: true },
+      timeseries_momentum_60d: { accuracy: 0.5480, auc: 0.5720, n_train: 9320, n_test: 0, split_date: "CPCV", is_active: true },
+      timeseries_momentum_90d: { accuracy: 0.5620, auc: 0.5910, n_train: 9224, n_test: 0, split_date: "CPCV", is_active: true },
+      rsi2_mean_reversion_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 6820, n_test: 0, split_date: "CPCV", is_active: true },
+      rsi2_mean_reversion_30d: { accuracy: 0.5410, auc: 0.5640, n_train: 6754, n_test: 0, split_date: "CPCV", is_active: true },
+      rsi2_mean_reversion_60d: { accuracy: 0.5590, auc: 0.5830, n_train: 6658, n_test: 0, split_date: "CPCV", is_active: true },
+      rsi2_mean_reversion_90d: { accuracy: 0.5740, auc: 0.6050, n_train: 6562, n_test: 0, split_date: "CPCV", is_active: true },
+      // Illustrative "Diagnostic" (is_active: false) row -- any registered
+      // SignalModule with meta_label_features declared can train here, but
+      // ml/forecast_backfill.py only marks the fixed
+      // timeseries_momentum/cross_sectional_momentum/rsi2_mean_reversion
+      // trio as `is_active: true`. Keeping a false-branch example in the
+      // mock exercises the "Diagnostic" badge and bottom-of-table sort in
+      // tests, rather than only ever rendering the all-Active happy path.
+      macd_momentum_10d: { accuracy: 0.5040, auc: 0.5080, n_train: 5210, n_test: 0, split_date: "CPCV", is_active: false },
     },
     tickers: ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"],
     total_rows: 11080,

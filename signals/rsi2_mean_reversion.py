@@ -46,6 +46,13 @@ _VIX_RISK_OFF_THRESHOLD = 30.0
 class RSI2MeanReversionSignal(SignalModule):
     name = "rsi2_mean_reversion"
     required_features = ["Close", "RSI_2", "SMA_5", "SMA_200"]
+    # Meta-labeling schema (ml/forecast_backfill.py): the inputs that
+    # actually drive this module's entry conviction (RSI_2, SMA_5 vs. SMA_200
+    # trend gate) plus the broader volatility/RSI(14) context an oversold
+    # reading's follow-through tends to depend on. All are already computed
+    # by AgenticForecastBackfiller.step_2_calculate_technical_features, so no
+    # backfiller changes are needed for this module to train/infer.
+    meta_label_features = ["RSI_2", "SMA_5", "SMA_200", "Close", "RSI_14", "Vol_20"]
 
     def __init__(self, oversold_threshold: float = 10.0):
         self.oversold_threshold = oversold_threshold

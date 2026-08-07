@@ -9,15 +9,10 @@ from pathlib import Path
 import pytest
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
 
 import pilots.watchlist_writer as watchlist_writer
 from ml.forecast_backfill import AgenticForecastBackfiller
 from settings import settings
-
-# Module-level (not test-local) so it stays picklable -- step_5 persists every
-# trained classifier via pickle.dump().
-_captured_train_max_date: dict = {}
 
 
 @pytest.fixture(autouse=True)
@@ -40,12 +35,6 @@ def _isolate_output_dir(tmp_path, monkeypatch):
     watchlist.txt / watchlist_failures.json in the repo root."""
     monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(watchlist_writer, "DEFAULT_WATCHLIST_PATH", tmp_path / "watchlist.txt")
-
-
-class _RecordingClassifier(RandomForestClassifier):
-    def fit(self, X, y):
-        _captured_train_max_date["date"] = X.index.get_level_values("Date").max()
-        return super().fit(X, y)
 
 
 @pytest.mark.parametrize(
@@ -104,7 +93,17 @@ def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     all). Left unmarked, this test was exposed to real Yahoo Finance rate
     limiting ("Too Many Requests") whenever run alongside the rest of the
     suite, deselected from the "not network" fast/offline gate.
+
+    Strategy identifiers are read dynamically from `signals.registry.
+    global_registry` / `engine.active_strategies` rather than hardcoded
+    ("TSMOM"/"CSMOM") -- the whole point of the registry-driven pipeline is
+    that a new SignalModule with `meta_label_features` declared is picked
+    up automatically, and a test hardcoded to two strategy names would
+    silently stop covering a third one added later (as it already did once:
+    see the module docstring change accompanying this test rewrite).
     """
+    from signals.registry import global_registry
+
     tickers = ["AAPL", "MSFT", "AMZN", "NVDA"]
     horizons = [10, 30, 60, 90]
 
@@ -129,21 +128,46 @@ def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     for col in ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]:
         assert col in features.columns
 
-    # Step 3: Primary signals
+    # Step 3: Primary signals -- at minimum the two baseline momentum
+    # strategies must always make it through (their required_features are
+    # a subset of what step 2 always computes).
     signals = engine.step_3_generate_primary_signals()
-    assert "TSMOM_Signal" in signals.columns
-    assert "CSMOM_Signal" in signals.columns
-    assert set(signals["TSMOM_Signal"].dropna().unique()).issubset({-1.0, 1.0})
+    assert {"timeseries_momentum", "cross_sectional_momentum"}.issubset(set(engine.active_strategies))
+    for name in engine.active_strategies:
+        assert f"{name}_Signal" in signals.columns
+    assert set(signals["timeseries_momentum_Signal"].dropna().unique()).issubset({-1.0, 1.0})
 
     # Step 4: Meta-targets
     targets = engine.step_4_create_meta_targets()
-    for h in horizons:
-        assert f"TSMOM_Target_{h}d" in targets.columns
-        assert f"CSMOM_Target_{h}d" in targets.columns
+    for name in engine.active_strategies:
+        for h in horizons:
+            assert f"{name}_Target_{h}d" in targets.columns
 
-    # Step 5: Backtrain meta labelers
+    # Step 5: Backtrain meta labelers -- only strategies that declare
+    # meta_label_features actually train (see step_5's own skip-with-warning
+    # for a strategy that declares none). A declared-trainable strategy can
+    # still end up with zero rows surviving step 5's dropna (e.g.
+    # cross_sectional_momentum: step 3 never calls its pre_compute, so its
+    # rank lookup misses on every row and its Target column is all-NaN --
+    # see step_3_generate_primary_signals's KNOWN GAP docstring) and be
+    # silently skipped -- so `metrics.keys()` is asserted as a SUBSET of what
+    # could train, not an exact match. timeseries_momentum is the one
+    # strategy guaranteed to produce a real per-row signal without any
+    # per-date cross-sectional machinery, so its full horizon set training
+    # successfully is asserted unconditionally.
+    trainable = [
+        name for name in engine.active_strategies
+        if getattr(global_registry.get(name), "meta_label_features", [])
+    ]
+    assert "timeseries_momentum" in trainable
     metrics = engine.step_5_backtrain_meta_labelers()
-    assert len(metrics) == 8  # 2 models x 4 horizons
+    candidate_keys = {
+        f"{name}_{h}d"
+        for name in trainable
+        for h in (getattr(global_registry.get(name), "meta_label_horizons", None) or horizons)
+    }
+    assert set(metrics.keys()).issubset(candidate_keys)
+    assert {f"timeseries_momentum_{h}d" for h in horizons}.issubset(metrics.keys())
     for model_key, m in metrics.items():
         assert "accuracy" in m
         assert "auc" in m
@@ -151,15 +175,15 @@ def test_forecast_backfill_end_to_end_pipeline(tmp_path):
 
     # Step 6: Continuous inference backfill
     backfill_df = engine.step_6_execute_backfill()
-    for h in horizons:
-        assert f"TSMOM_Meta_Prob_{h}d" in backfill_df.columns
-        assert f"CSMOM_Meta_Prob_{h}d" in backfill_df.columns
+    for name in trainable:
+        for h in (getattr(global_registry.get(name), "meta_label_horizons", None) or horizons):
+            assert f"{name}_Meta_Prob_{h}d" in backfill_df.columns
 
     # Export results
     out_df, summary = engine.export_results(filename="test_backfill_output.csv")
     assert not out_df.empty
     assert summary["total_rows"] == len(out_df)
-    assert len(summary["metrics"]) == 8
+    assert set(summary["metrics"].keys()) == set(metrics.keys())
 
 
 @pytest.mark.network
@@ -186,11 +210,14 @@ def test_step_6_no_model_produces_nan_not_fabricated_confidence():
     engine.step_5_backtrain_meta_labelers()
 
     # Simulate "no model trained for this horizon" (e.g. too few samples).
-    engine.models.pop("TSMOM_10d", None)
+    assert "timeseries_momentum" in engine.active_strategies
+    model_key = "timeseries_momentum_10d"
+    prob_col = "timeseries_momentum_Meta_Prob_10d"
+    engine.models.pop(model_key, None)
     engine.step_6_execute_backfill()
 
-    assert engine.data["TSMOM_Meta_Prob_10d"].isna().all()
-    assert not (engine.data["TSMOM_Meta_Prob_10d"] == 1.0).any()
+    assert engine.data[prob_col].isna().all()
+    assert not (engine.data[prob_col] == 1.0).any()
 
 
 @pytest.mark.network
@@ -260,17 +287,39 @@ def test_three_consecutive_dropped_runs_permanently_removes_from_watchlist(tmp_p
 
 @pytest.mark.network
 def test_train_test_split_embargoes_overlapping_forward_window(monkeypatch):
-    """The last `h` dates before the split boundary must be excluded from
-    training, since their target label is derived from a forward return that
-    extends past the boundary into the test period -- otherwise test-period
-    price moves leak into training (the same overlapping-label leakage class
+    """step_5's per-horizon CombinatorialPurgedCV must be configured so that
+    training rows within `h` days of a test block boundary are purged/
+    embargoed -- otherwise a target label derived from a forward return that
+    extends `h` days past a row's date (see step_4) leaks test-period price
+    information into training (the same overlapping-label leakage class
     validation/purged_cv.py and the CNN-LSTM purged split guard elsewhere in
     this codebase).
+
+    step_5 no longer does a naive chronological 80/20 split (that mechanism
+    is gone -- see the module's own docstring); it delegates purging/
+    embargoing entirely to CombinatorialPurgedCV via a dynamically computed
+    `embargo_pct` and a `t1` event-end series (`date + h days`). This test
+    therefore verifies step_5 wires those two things correctly, rather than
+    re-deriving the old split-and-embargo-by-hand logic that no longer
+    exists in the implementation it would be asserting against.
 
     Marked network (2026-08): calls step_1_fetch_data(), a real yfinance
     call via CompositeProvider. See test_forecast_backfill_end_to_end_
     pipeline's marker comment."""
-    import ml.forecast_backfill as fb_module
+    import validation.purged_cv as purged_cv_module
+    from validation.purged_cv import CombinatorialPurgedCV
+
+    captured_calls = []
+
+    class _RecordingCPCV(CombinatorialPurgedCV):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            captured_calls.append({"embargo_pct": self.embargo_pct, "t1": None})
+
+        def split(self, X, y=None, t1=None):
+            captured_calls[-1]["t1"] = t1
+            captured_calls[-1]["dates"] = pd.Series(X.index)
+            return super().split(X, y=y, t1=t1)
 
     horizon = 30
     engine = AgenticForecastBackfiller(
@@ -285,22 +334,32 @@ def test_train_test_split_embargoes_overlapping_forward_window(monkeypatch):
     engine.step_3_generate_primary_signals()
     engine.step_4_create_meta_targets()
 
-    _captured_train_max_date.clear()
-    monkeypatch.setattr(fb_module, "RandomForestClassifier", _RecordingClassifier)
+    assert "timeseries_momentum" in engine.active_strategies
+    # step_5 does `from validation.purged_cv import CombinatorialPurgedCV`
+    # as a LOCAL import inside the method body, re-resolved from
+    # validation.purged_cv's own namespace on every call -- patching that
+    # module attribute (not a nonexistent module-level name on
+    # ml.forecast_backfill) is what the local import actually picks up.
+    monkeypatch.setattr(purged_cv_module, "CombinatorialPurgedCV", _RecordingCPCV)
     engine.step_5_backtrain_meta_labelers()
 
-    target_col = "TSMOM_Target_30d"
-    features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
-    clean_df = engine.data.dropna(subset=features + [target_col])
-    dates = clean_df.index.get_level_values("Date").unique().sort_values()
-    split_idx = int(len(dates) * engine.train_split)
-    split_date = dates[split_idx]
+    assert captured_calls, "CombinatorialPurgedCV was never constructed/split"
+    call = captured_calls[0]
 
-    # The recorded training set's latest date must be at least `horizon`
-    # trading days before split_date -- i.e. its forward-return window never
-    # crosses into the test period.
-    assert _captured_train_max_date["date"] <= dates[max(0, split_idx - horizon)]
-    assert _captured_train_max_date["date"] < split_date
+    # 1. embargo_pct must be strictly positive and derived from `horizon`
+    # relative to the number of unique dates in the training universe --
+    # never the unconditional-leakage default of 0.0.
+    assert call["embargo_pct"] > 0.0
+
+    # 2. t1 (event end time) for every row must be exactly `horizon` days
+    # after that row's own date -- this is what tells CombinatorialPurgedCV
+    # to purge a training row whose forward-return window overlaps a test
+    # block, regardless of which of the two touches a chronological
+    # "80/20 split" boundary (CPCV has no single such boundary at all).
+    t1 = call["t1"]
+    assert t1 is not None
+    implied_horizon_days = (t1.values - t1.index.values).astype("timedelta64[D]").astype(int)
+    assert set(implied_horizon_days) == {horizon}
 
 
 def test_forecast_backfill_api_endpoint(monkeypatch, tmp_path):

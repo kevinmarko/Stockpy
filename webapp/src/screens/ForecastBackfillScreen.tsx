@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { ForecastBackfillSummary } from "../api/types";
@@ -18,8 +18,23 @@ export function ForecastBackfillScreen() {
   const [runMessage, setRunMessage] = useState<string | null>(null);
   const [selectedStrategies, setSelectedStrategies] = useState<string[]>([]);
   const [thetaC, setThetaC] = useState<number>(0.50);
-  
-  const allStrategies = ["timeseries_momentum", "cross_sectional_momentum", "rsi2_mean_reversion", "pairs_trading", "macro_regime_pit"];
+
+  // Strategy names are derived from the last run's own model_key set
+  // ("{strategy}_{horizon}d") rather than hardcoded here -- this backend
+  // (ml/forecast_backfill.py) reads its strategy list dynamically from
+  // signals.registry.global_registry, so a fixed frontend list drifts the
+  // moment a strategy is added/removed there, and can silently offer a
+  // name (e.g. one that was never actually a registered SignalModule) that
+  // strategy_ids would filter every real strategy out for, producing a
+  // silent zero-model run with no error surfaced.
+  const allStrategies = useMemo(() => {
+    const names = new Set<string>();
+    for (const key of Object.keys(data?.metrics ?? {})) {
+      const match = key.match(/^(.+)_\d+d$/);
+      if (match) names.add(match[1]);
+    }
+    return Array.from(names).sort();
+  }, [data?.metrics]);
 
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
@@ -235,7 +250,11 @@ export function ForecastBackfillScreen() {
               Primary models generate raw directional signals (+1 for Buy, -1 for Sell).
               Secondary Meta-Labelers learn market environment conditions (volatility regime, RSI, MACD, volume ratio)
               under which primary signals succeed or fail at each horizon, and report out-of-sample accuracy/AUC per
-              model above. These models are dynamically integrated into the platform's live position sizing pipeline, which uses their outputs as a confidence gate to scale or zero positions.
+              model above. This is a research &amp; backfill diagnostic — the models it trains and saves here are
+              a separate artifact from the ones that actually gate live position sizing. A model only reaches the
+              live signal aggregator's confidence gate via <code>scripts/train_meta_labelers.py</code> followed by
+              the deployability-gated <code>bootstrap_meta_registry()</code> startup step (PBO/DSR-checked against
+              <code>ml/registry.yaml</code>), which this screen's runs do not feed.
             </p>
           </section>
         </>

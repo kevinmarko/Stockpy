@@ -1020,7 +1020,11 @@ def test_garch_and_edge_scoring(monkeypatch):
         settings, "SIGNAL_WEIGHTS", type(settings)(_env_file=None).SIGNAL_WEIGHTS
     )
     
-    # Force meta-labeling to pass through during testing so it doesn't zero out the Kelly Target
+    # Pin the meta-labeler registry to a deterministic full-confidence stub so
+    # this test's hardcoded expected Score/Kelly values can't be perturbed by
+    # whatever real MetaLabelers happen to be registered on the process-global
+    # `global_meta_registry` singleton at test-run time (e.g. from another
+    # test module importing/training one earlier in the same pytest session).
     class DummyMetaRegistry:
         def has(self, name): return True
         def get_proba(self, name, df): return 1.0

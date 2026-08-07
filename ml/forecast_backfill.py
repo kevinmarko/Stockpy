@@ -1,14 +1,41 @@
 """
 InvestYo Quant Platform - Agentic Forecast Backfill & Meta-Labeling Engine
 ==========================================================================
-Executes a multi-horizon forecast backfill (10, 30, 60, 90 days) and meta-labeling
-pipeline for Time-Series Momentum (TSMOM) and Cross-Sectional Momentum (CSMOM).
+Executes a multi-horizon forecast backfill (default 10, 30, 60, 90 days) and
+meta-labeling pipeline for every ``SignalModule`` registered in
+``signals.registry.global_registry`` (dynamic, not hardcoded to any specific
+strategy) that (a) has all of its ``required_features`` present in the
+technical DataFrame this engine computes and (b) declares a non-empty
+``meta_label_features`` class attribute.
+
+Per-strategy feature/horizon schemas: a module opts into meta-labeling by
+declaring ``meta_label_features: List[str]`` (which of the engine's computed
+technical columns it trains/infers on) and, optionally, ``meta_label_horizons:
+List[int]`` (defaults to ``SignalModule``'s base-class default, currently
+[10, 30, 60, 90], when a module doesn't override it) on the class itself —
+see ``signals/base.py``. This engine reads both dynamically (steps 3-6 below)
+instead of special-casing any one strategy's feature list or horizon set, so
+a new SignalModule gains meta-labeling support just by declaring these two
+attributes, with no change needed here.
+
+Not every registered SignalModule is reachable from this pipeline. Two
+notable, deliberate exclusions: pairs-trading (``signals/pairs_trading.py``)
+operates on a *pair* of price series and produces its own multi-column
+output (spread, z-score, hedge ratio, ...) — it is a plain function, not a
+``SignalModule`` subclass, and is not registered in ``global_registry`` at
+all (see that module's own docstring: "Advisory analytics only — not wired
+into the per-ticker SignalAggregator"). Options-selling directives
+(``technical_options_engine.py``) are likewise not a per-ticker
+``SignalModule``. Wiring either into this per-ticker-row pipeline would need
+its own pair-selection / contract-selection plumbing, not just a features
+list — a real follow-up, not something a class-attribute declaration alone
+can cover.
 
 Key design features:
 - Zero hardcoded numbers: All parameters are sourced from `settings.py` or explicit arguments.
 - Sourced via Financial Modeling Prep (FMP) via `data/fmp_client.py` / `FMPProvider` / `CompositeProvider`.
 - Vectorized pandas/numpy technical feature engineering and signal calculation.
-- Chronological train/test split (default 80/20) preventing lookahead bias.
+- Combinatorial Purged Cross-Validation (`validation/purged_cv.py`) for the reported OOS accuracy/AUC.
 - Out-of-sample forecast confidence probability backfilling.
 - Model persistence to `ml/models/meta_<model>_<horizon>d.pkl`.
 """
@@ -277,7 +304,37 @@ class AgenticForecastBackfiller:
         return self.data
 
     def step_3_generate_primary_signals(self) -> pd.DataFrame:
-        """Step 3: Generate primary signals dynamically from global_registry."""
+        """Step 3: Generate primary signals dynamically from global_registry.
+
+        KNOWN GAP -- cross-sectional modules (currently only
+        ``cross_sectional_momentum``) never produce a usable signal here.
+        This loop calls each module's ``compute_vectorized(self.data,
+        context)`` directly; it never calls ``pre_compute(universe_df,
+        context)`` first. Per CLAUDE.md's two-phase hook pattern contract
+        (and ``signals/cross_sectional_momentum.py``'s own docstring),
+        ``pre_compute`` is what populates ``context.xsec_percentile_ranks``
+        -- without it, every row's rank lookup misses and
+        ``CrossSectionalMomentumSignal.compute()`` returns a flat
+        ``score=0.0`` for every row, unconditionally. `np.sign(0.0)` below
+        then collapses to NaN for every row, so this strategy's Target
+        columns are always all-NaN and step 5 always logs "Insufficient
+        samples (0)" and skips it -- a silent-but-honest no-op (CONSTRAINT
+        #4: no fabricated confidence), never a crash or a corrupted result,
+        but real coverage this dynamic pipeline claims to provide and
+        doesn't yet.
+        The pre-registry-refactor version of this step computed this
+        correctly (a direct, per-DATE `returns_252.rank(axis=1, pct=True)`
+        cross-sectional rank inline) -- that per-date grouping is exactly
+        what's missing here now. Restoring it generically (calling
+        `pre_compute` once per historical date, with a per-date `Symbol` +
+        `XSec_12_1M` slice of the universe) is real, scoped work, deliberately
+        left as a follow-up rather than rushed in alongside the
+        meta_label_features/meta_label_horizons schema work this pass
+        actually covers -- a wrong/naive shortcut here (e.g. ranking the full
+        stacked (ticker, date) frame in one shot) would rank rows from
+        different dates against each other, a methodological error worse
+        than today's honest zero-samples skip.
+        """
         logger.info("[*] Step 3: Generating primary signals from registry...")
         from signals.registry import global_registry
         from signals.base import SignalContext
@@ -286,9 +343,13 @@ class AgenticForecastBackfiller:
         
         self.active_strategies = []
         
-        # Build dummy context
+        # Build dummy context. Two independent construction bugs fixed here:
+        # `date` is a required positional arg on MarketBarDTO (no default),
+        # and SignalContext's field is `bar`, not `market_bar` -- both were
+        # a guaranteed TypeError on every call, not a degraded-but-working
+        # path (see signals/base.py's SignalContext dataclass).
         context = SignalContext(
-            market_bar=MarketBarDTO(ticker="DUMMY", open_price=0, high_price=0, low_price=0, close_price=0, volume=0),
+            bar=MarketBarDTO(date=datetime.now(timezone.utc), ticker="DUMMY", open_price=0, high_price=0, low_price=0, close_price=0, volume=0),
             fundamentals=FundamentalDataDTO(ticker="DUMMY", pe_ratio=0, pb_ratio=0, dividend_yield=0, book_value=0, eps_trailing=0, dividend_growth_rate=0, payout_ratio=0, sector="N/A", company_name="DUMMY", market_cap=0),
             macro=MacroEconomicDTO(yield_curve_10y_2y=0, high_yield_oas=0, inflation_rate=0, sahm_rule_indicator=0, vix_value=15, hmm_risk_on_probability=None)
         )
@@ -347,6 +408,33 @@ class AgenticForecastBackfiller:
         logger.info("[+] Step 4 complete. Meta-targets created.")
         return self.data
 
+    def _resolve_meta_features(self, model_type: str, features_raw: List[str]) -> List[str]:
+        """Resolve a module's declared ``meta_label_features`` against the
+        actual columns of ``self.data``.
+
+        A feature is preferentially resolved to its strategy-namespaced
+        column (``f"{model_type}_{feature}"``, written by step 3 for
+        module-specific outputs, e.g. a signal's own z-score) and otherwise
+        falls back to the shared/global technical column of the same name
+        (written by step 2). Any feature that resolves to neither is
+        dropped rather than raising -- a module free to declare features
+        this engine doesn't (yet) compute, and simply not train/infer on
+        the ones it can't resolve.
+
+        Called identically from both step 5 (training) and step 6
+        (inference) so the exact same column set/order is used for both --
+        a classifier fit on one feature set and queried with a different
+        one raises a hard sklearn feature-mismatch error at inference time.
+        """
+        resolved: List[str] = []
+        for f in features_raw:
+            namespaced = f"{model_type}_{f}"
+            if namespaced in self.data.columns:
+                resolved.append(namespaced)
+            elif f in self.data.columns:
+                resolved.append(f)
+        return resolved
+
     def step_5_backtrain_meta_labelers(self) -> Dict[str, Any]:
         """Step 5: Train multi-horizon Meta-Labeling models on chronological train/test split.
 
@@ -377,18 +465,13 @@ class AgenticForecastBackfiller:
                 logger.warning("Strategy %s has no meta_label_features defined, skipping training.", model_type)
                 continue
                 
-            resolved_features = []
-            for f in features_raw:
-                if f"{model_type}_{f}" in self.data.columns:
-                    resolved_features.append(f"{model_type}_{f}")
-                elif f in self.data.columns:
-                    resolved_features.append(f)
-                    
+            resolved_features = self._resolve_meta_features(model_type, features_raw)
+
             if not resolved_features:
                 logger.warning("Could not resolve any features for %s", model_type)
                 continue
                 
-            horizons_raw = getattr(module, "meta_label_horizons", self.horizons)
+            horizons_raw = getattr(module, "meta_label_horizons", None) or self.horizons
 
             for h in horizons_raw:
                 target_col = f"{model_type}_Target_{h}d"
@@ -470,18 +553,27 @@ class AgenticForecastBackfiller:
                     "is_active": model_type in ["timeseries_momentum", "cross_sectional_momentum", "rsi2_mean_reversion"],
                 }
 
-                # Save trained model artifact. model_key is built only from a
-                # hardcoded model_type ("TSMOM"/"CSMOM") and h, which
-                # _validate_horizons() (called in __init__) already
-                # constrains to a small positive int -- this containment
-                # check is a second, independent guard against the resolved
-                # path ever escaping _MODELS_DIR (defense in depth, not
-                # reliance on a single validation layer).
+                # Save trained model artifact. model_key is built from
+                # model_type (a signals.registry.global_registry strategy
+                # name -- a hardcoded string on the SignalModule subclass
+                # itself, never user input) and h, which _validate_horizons()
+                # (called in __init__) already constrains to a small positive
+                # int -- this containment check is a second, independent
+                # guard against the resolved path ever escaping _MODELS_DIR
+                # (defense in depth, not reliance on a single validation
+                # layer).
+                #
+                # Persist clf_final (fit on ALL data above), not the CV loop's
+                # per-fold `clf` local -- that variable holds whichever fold
+                # trained last (an evaluation-only model deliberately withheld
+                # from part of the data), and would be undefined entirely if
+                # every CPCV fold was skipped/failed, since it is never
+                # assigned outside the loop body.
                 model_path = (_MODELS_DIR / f"meta_{model_key}.pkl").resolve()
                 if not model_path.is_relative_to(_MODELS_DIR.resolve()):
                     raise ValueError(f"Refusing to write model artifact outside {_MODELS_DIR}: {model_path}")
                 with open(model_path, "wb") as f:
-                    pickle.dump(clf, f)
+                    pickle.dump(clf_final, f)
 
                 logger.info("   [✓] Trained %s. Accuracy: %.4f, AUC: %.4f", model_key, accuracy, auc)
 
@@ -489,16 +581,38 @@ class AgenticForecastBackfiller:
         return self.metrics
 
     def step_6_execute_backfill(self) -> pd.DataFrame:
-        """Step 6: Execute continuous out-of-sample forecast probability backfilling."""
-        logger.info("[*] Step 6: Executing continuous backfill inference...")
-        features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
+        """Step 6: Execute continuous out-of-sample forecast probability backfilling.
 
-        valid_mask = self.data[features].notna().all(axis=1)
-        inference_df = self.data[valid_mask]
-        X_infer = inference_df[features]
+        Per-strategy feature set and horizons are resolved exactly the same
+        way step_5 resolved them for training (same helper,
+        `_resolve_meta_features`, same `meta_label_horizons` attribute) —
+        a classifier queried with a different feature set than it was fit
+        on raises a hard sklearn feature-name/count mismatch error, so this
+        must never drift from step_5's resolution independently.
+        """
+        logger.info("[*] Step 6: Executing continuous backfill inference...")
+        from signals.registry import global_registry
 
         for model_type in self.active_strategies:
-            for h in self.horizons:
+            module = global_registry.get(model_type)
+            features_raw = getattr(module, "meta_label_features", []) if module else []
+            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
+            resolved_features = self._resolve_meta_features(model_type, features_raw)
+
+            if not resolved_features:
+                # Nothing to infer on for this strategy -- step_5 skipped
+                # training it for the same reason, so every probability
+                # column is honestly NaN (CONSTRAINT #4) rather than
+                # attempting inference against an empty feature frame.
+                for h in horizons_raw:
+                    self.data[f"{model_type}_Meta_Prob_{h}d"] = np.nan
+                continue
+
+            valid_mask = self.data[resolved_features].notna().all(axis=1)
+            inference_df = self.data[valid_mask]
+            X_infer = inference_df[resolved_features]
+
+            for h in horizons_raw:
                 model_key = f"{model_type}_{h}d"
                 clf = self.models.get(model_key)
 
@@ -532,9 +646,36 @@ class AgenticForecastBackfiller:
         out_csv = output_dir / filename
         out_json = output_dir / "agentic_forecast_summary.json"
 
-        export_cols = ["Close"] + [f"{m}_Signal" for m in self.active_strategies]
-        for model_type in self.active_strategies:
-            for h in self.horizons:
+        from signals.registry import global_registry
+
+        # Restrict the exported columns to strategies that actually produced
+        # at least one trained model, rather than every module that merely
+        # satisfied step 3's required_features check (or even declared
+        # meta_label_features -- see step_3_generate_primary_signals's KNOWN
+        # GAP docstring for cross_sectional_momentum, which declares features
+        # but never trains: its rank lookup misses on every row, so its
+        # Signal column is unconditionally NaN). Several registered modules
+        # pass step 3's check with an empty required_features list but
+        # actually score off SignalContext fields this backfiller's dummy
+        # context never populates (real dividend yield, sortino ratio, ...) --
+        # their Signal column is likewise unconditionally NaN. Including any
+        # such column in the mandatory `dropna()` subset below would zero out
+        # every exported row the moment one such module lands in
+        # self.active_strategies, silently producing an empty CSV/summary
+        # regardless of how much real, trainable data timeseries_momentum et
+        # al. actually have.
+        def _has_trained_model(name: str) -> bool:
+            module = global_registry.get(name)
+            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
+            return any(f"{name}_{h}d" in self.models for h in horizons_raw)
+
+        trainable_strategies = [name for name in self.active_strategies if _has_trained_model(name)]
+
+        export_cols = ["Close"] + [f"{m}_Signal" for m in trainable_strategies]
+        for model_type in trainable_strategies:
+            module = global_registry.get(model_type)
+            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
+            for h in horizons_raw:
                 prob_col = f"{model_type}_Meta_Prob_{h}d"
                 if prob_col in self.data.columns:
                     export_cols.append(prob_col)
