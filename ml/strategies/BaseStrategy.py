@@ -10,7 +10,7 @@ class BaseStrategy(ABC):
         self.name = name
 
     @abstractmethod
-    def generate_raw_signals(self, start_date: str, end_date: str) -> pd.DataFrame:
+    def generate_raw_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Must return DataFrame with standard schema:
         ['timestamp', 'ticker', 'raw_signal', 'volatility', 'rsi', 'macd', 'volume_ratio']
