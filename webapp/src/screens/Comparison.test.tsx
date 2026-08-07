@@ -23,7 +23,7 @@ describe("Comparison screen (R2)", () => {
   it("renders comparison screen and default checklist instructions", async () => {
     renderComparison();
     expect(await screen.findByTestId("comparison-title")).toBeInTheDocument();
-    expect(screen.getByText(/Select at least one pilot strategy above/i)).toBeInTheDocument();
+    expect(screen.getByText(/Select at least one pilot strategy in the left pane/i)).toBeInTheDocument();
   });
 
   it("renders the recommended-stocks list", async () => {
@@ -100,7 +100,7 @@ describe("Comparison screen (R2)", () => {
 
     const clearBtn = screen.getByText("Clear All");
     fireEvent.click(clearBtn);
-    expect(screen.getByText(/Select at least one pilot strategy above/i)).toBeInTheDocument();
+    expect(screen.getByText(/Select at least one pilot strategy in the left pane/i)).toBeInTheDocument();
   });
 
   // T2.1 (HONESTY): a null-curve pilot stays in the metrics table, renders an
