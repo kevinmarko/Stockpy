@@ -46,8 +46,11 @@ as Branch Workflow above: no per-agent carve-out.
   uncommitted changes is still failing, capped at 2 consecutive blocks per session before
   releasing itself with a warning instead, so a genuinely stuck check can't deadlock the
   session. `/verify` and `/verify-webapp` (`.claude/commands/`) run the fuller gate and the
-  browser check on demand.
-- **Antigravity has no equivalent automatic blocking gate.** Live validation confirms that its `Stop` hook does not expose "force continuation" semantics, and its `PreToolUse`/`PostToolUse` shell hooks do not natively intercept file-editing tools in the IDE runtime. Therefore, on the Antigravity side, "don't mark a task done until tests pass" remains strictly **policy-only**, enforced by prompt adherence rather than system-level blocking. This is a real, open gap, not a claimed equivalence.
+  browser check on demand. `.claude/hooks/block_env_write.sh` (`PreToolUse` on `Edit|Write`)
+  hard-denies any write to a file named exactly `.env`. `.claude/hooks/webapp_typecheck.sh`
+  (`PostToolUse` on `Edit|Write`) runs `npm run --prefix webapp -s typecheck` after any edit
+  under `webapp/src/**` — the mock/live API parity gate.
+- **Antigravity has no equivalent automatic blocking gate.** Live validation confirms that its `Stop` hook does not expose "force continuation" semantics, and its `PreToolUse`/`PostToolUse` shell hooks do not natively intercept file-editing tools in the IDE runtime. Therefore, on the Antigravity side, "don't mark a task done until tests pass" remains strictly **policy-only**, enforced by prompt adherence rather than system-level blocking. This is a real, open gap, not a claimed equivalence. `.agents/hooks/stop_test.sh` (`Stop`) is the advisory-only port of the Python check that does exist: it re-runs whichever mapped `tests/test_<module>.py` files correspond to uncommitted `.py` changes and surfaces a failure to stderr, but — unable to block — never enforces it. `.agents/hooks/block_env_write.sh` and `.agents/hooks/webapp_typecheck.sh` port the two hooks above to Antigravity's own I/O contract (`.agents/hooks.json`'s `PreToolUse`/`PostToolUse`, matching `default_api:write_to_file|default_api:replace_file_content|default_api:multi_replace_file_content`).
 - **Plan before building in the "Everything else" tier** (engines, signals, execution, sizing,
   validation, orchestrators — as scoped in the Start-of-session checklist above): produce an
   Implementation Plan and get it reviewed before writing code. Claude Code: `EnterPlanMode`.
