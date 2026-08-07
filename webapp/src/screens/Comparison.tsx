@@ -218,12 +218,14 @@ export function Comparison() {
             </div>
             
             <div style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}` }}>
-              <select 
-                className="input" 
-                value="" 
+              <select
+                className="input"
+                value=""
                 onChange={(e) => { if(e.target.value) toggleSelect(e.target.value); }}
                 disabled={selectedIds.length >= 5 || pilotsList.loading}
                 style={{ width: "100%", cursor: "pointer", fontSize: "var(--t-caption)" }}
+                aria-label="Quick add pilot"
+                data-testid="comparison-quick-add"
               >
                 <option value="" disabled>Quick add pilot...</option>
                 {pilotsList.data?.map(p => (
@@ -380,8 +382,12 @@ export function Comparison() {
                   const dsrs = selectedPilots.map(p => p.headline.dsr).filter((v): v is number => v != null);
                   const maxDsr = dsrs.length > 0 ? Math.max(...dsrs) : -Infinity;
 
+                  // max_drawdown is a positive-fraction magnitude (0.18 = 18% drawdown,
+                  // see Headline's doc comment) -- smaller is better, so the "best" value
+                  // to highlight is the MIN, not the max. (Using Math.max here would
+                  // highlight the worst drawdown as if it were the best.)
                   const dds = selectedPilots.map(p => p.headline.max_drawdown).filter((v): v is number => v != null);
-                  const bestDd = dds.length > 0 ? Math.max(...dds) : -Infinity; 
+                  const bestDd = dds.length > 0 ? Math.min(...dds) : Infinity;
 
                   const getHeatmap = (val: number | null | undefined, best: number) => {
                     if (val == null || best === Infinity || best === -Infinity) return {};
