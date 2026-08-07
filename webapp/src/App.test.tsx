@@ -20,6 +20,7 @@ import { api } from "./api/client";
 import type { LlmProviderName, LlmStatus } from "./api/types";
 import { writeOnboarding } from "./onboarding";
 import { ChatProvider } from "./chat/ChatContext";
+import { TaskProvider } from "./hooks/TaskContext";
 import { NAV_ITEMS } from "./navigation";
 
 const _noCall = (provider: LlmProviderName) => ({
@@ -92,11 +93,13 @@ vi.mock("virtual:pwa-register/react", () => ({
 
 function renderApp(initialPath = "/") {
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      <ChatProvider>
-        <App />
-      </ChatProvider>
-    </MemoryRouter>
+    <TaskProvider>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <ChatProvider>
+          <App />
+        </ChatProvider>
+      </MemoryRouter>
+    </TaskProvider>
   );
 }
 
@@ -392,16 +395,18 @@ describe("App — route table integrity (regression: 5 corrupted route paths)", 
     async (_label, to) => {
       let observedPathname: string | null = null;
       render(
-        <MemoryRouter initialEntries={[to]}>
-          <ChatProvider>
-            <App />
-            <LocationProbe
-              onLocation={(p) => {
-                observedPathname = p;
-              }}
-            />
-          </ChatProvider>
-        </MemoryRouter>
+        <TaskProvider>
+          <MemoryRouter initialEntries={[to]}>
+            <ChatProvider>
+              <App />
+              <LocationProbe
+                onLocation={(p) => {
+                  observedPathname = p;
+                }}
+              />
+            </ChatProvider>
+          </MemoryRouter>
+        </TaskProvider>
       );
 
       await waitFor(() => expect(observedPathname).not.toBeNull());
