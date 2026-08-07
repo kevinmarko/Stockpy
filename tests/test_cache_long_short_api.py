@@ -212,17 +212,23 @@ class TestApproveBulk:
 
 
 # ---------------------------------------------------------------------------
-# CACHE_LONG_SHORT_WRITES_ENABLED must never be GUI-writable
+# CACHE_LONG_SHORT_WRITES_ENABLED GUI-writability
 # ---------------------------------------------------------------------------
 
 
 class TestWritesEnabledInvariants:
-    def test_cache_long_short_writes_enabled_is_not_gui_writable(self):
-        """Mirrors test_strategy_writes_enabled_is_not_gui_writable: a GUI
-        bug must never flip this on. Neither allowlisted nor secret --
-        hand-set only."""
-        assert "CACHE_LONG_SHORT_WRITES_ENABLED" not in pilots_api.env_io.ALLOWED_KEYS
+    def test_cache_long_short_writes_enabled_is_gui_writable(self):
+        """2026-08-08 (PR #630 audit): reclassified into ALLOWED_KEYS by
+        explicit operator decision, generalizing PR #560's "not secret
+        information" bar for GUI-writability to the fail-closed write/
+        execution gates -- see gui/env_io.py's EXCLUDED_FROM_GUI docstring.
+        Not secret, and still a settings_keysets.DANGEROUS_KEYS member
+        (typed confirmation required on write); the
+        POST /pilots/cache-long-short/* endpoints it guards remain
+        independently gated by their own command token regardless."""
+        assert "CACHE_LONG_SHORT_WRITES_ENABLED" in pilots_api.env_io.ALLOWED_KEYS
         assert "CACHE_LONG_SHORT_WRITES_ENABLED" not in pilots_api.env_io.SECRET_KEYS
+        assert "CACHE_LONG_SHORT_WRITES_ENABLED" not in pilots_api.env_io.EXCLUDED_FROM_GUI
 
     def test_cache_long_short_enabled_stays_allowlisted(self):
         """The master feature switch (distinct from the writes-enabled

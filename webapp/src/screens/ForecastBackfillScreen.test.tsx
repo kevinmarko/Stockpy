@@ -1,14 +1,15 @@
 /**
- * ForecastBackfillScreen.test.tsx — multi-horizon TSMOM/CSMOM forecast
+ * ForecastBackfillScreen.test.tsx — multi-horizon, registry-driven forecast
  * backfill & meta-labeling research screen. Covers the populated mock status
  * (8 trained models), the never-run/empty-metrics honest state, triggering a
  * run (success + failure paths), and that a run reloads the status.
  */
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ForecastBackfillScreen } from "./ForecastBackfillScreen";
 import { api } from "../api/client";
+import { ApiError, ForecastBackfillConflictError } from "../api/types";
 
 function renderScreen() {
   return render(
@@ -19,13 +20,45 @@ function renderScreen() {
 }
 
 describe("ForecastBackfillScreen (real mock API)", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
-  it("renders the 8 trained meta-labeler rows from the mock summary", async () => {
+  it("renders the 9 trained meta-labeler rows from the mock summary", async () => {
     renderScreen();
-    expect(await screen.findByText("TSMOM_10d")).toBeInTheDocument();
-    expect(screen.getByText("CSMOM_90d")).toBeInTheDocument();
-    expect(screen.getAllByText(/^TSMOM_|^CSMOM_/).length).toBe(8);
+    expect(await screen.findByText("timeseries_momentum_10d")).toBeInTheDocument();
+    expect(screen.getByText("rsi2_mean_reversion_90d")).toBeInTheDocument();
+    expect(screen.getByText("macd_momentum_10d")).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/^timeseries_momentum_|^rsi2_mean_reversion_|^macd_momentum_/).length
+    ).toBe(9);
+  });
+
+  it("shows an 'Active' badge for is_active:true rows and a 'Diagnostic' badge for is_active:false, sorted Active-first", async () => {
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+    expect(screen.getAllByText("Active").length).toBe(8);
+    expect(screen.getAllByText("Diagnostic").length).toBe(1);
+
+    // Active-first sort: every row above the diagnostic one is Active.
+    const rows = screen.getAllByRole("row").slice(1); // drop header row
+    const diagnosticIdx = rows.findIndex((row) => row.textContent?.includes("macd_momentum_10d"));
+    expect(diagnosticIdx).toBeGreaterThan(-1);
+    for (const row of rows.slice(0, diagnosticIdx)) {
+      expect(row.textContent).toContain("Active");
+    }
+  });
+
+  it("the strategy multi-select is populated dynamically from the model_key set, not a hardcoded list", async () => {
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+    expect(screen.getByRole("option", { name: "timeseries_momentum" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "rsi2_mean_reversion" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "macd_momentum" })).toBeInTheDocument();
+    // Never offer a strategy name that isn't a real signals.registry.global_registry entry.
+    expect(screen.queryByRole("option", { name: "pairs_trading" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "macro_regime_pit" })).not.toBeInTheDocument();
   });
 
   it("shows the honest 'no trained models yet' state when metrics are empty", async () => {
@@ -43,17 +76,87 @@ describe("ForecastBackfillScreen (real mock API)", () => {
     ).toBeInTheDocument();
   });
 
-  it("running the backfill calls the API and shows a success message, then reloads status", async () => {
-    const runSpy = vi.spyOn(api, "runForecastBackfill");
+  it("running the backfill polls the job status and shows success, then reloads", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    
+    // Mock the job sequence so we don't hit the `delay()` calls in mock.ts
+    const runSpy = vi.spyOn(api, "runForecastBackfill").mockResolvedValueOnce({
+      job_id: "job-1",
+      state: "running",
+      phase: "fetching_data",
+      step: 1,
+      total_steps: 7,
+      error: null,
+      error_type: null,
+      summary: null,
+      sample_rows: null,
+      seconds_remaining: 14,
+    });
+    const jobStatusSpy = vi.spyOn(api, "getForecastBackfillJobStatus").mockResolvedValueOnce({
+      job_id: "job-1",
+      state: "succeeded",
+      phase: "exporting",
+      step: 7,
+      total_steps: 7,
+      error: null,
+      error_type: null,
+      summary: null,
+      sample_rows: 1200,
+      seconds_remaining: 0,
+    });
     const statusSpy = vi.spyOn(api, "getForecastBackfill");
+
     renderScreen();
-    await screen.findByText("TSMOM_10d");
+    await screen.findByText("timeseries_momentum_10d");
     statusSpy.mockClear();
 
     fireEvent.click(screen.getByText("🚀 Run Forecast Backfill"));
     await waitFor(() => expect(runSpy).toHaveBeenCalled());
+    expect(await screen.findByText(/Fetching data…/)).toBeInTheDocument();
+
+    // Advance timers to trigger the poll and resolve the mock job
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+
     expect(await screen.findByText(/Success! Processed/)).toBeInTheDocument();
+    expect(jobStatusSpy).toHaveBeenCalledWith("job-1");
+    vi.useRealTimers();
     await waitFor(() => expect(statusSpy).toHaveBeenCalled());
+  });
+
+  it("a 409 conflict on start shows an honest 'already in progress' notice and tracks the existing job", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    vi.spyOn(api, "runForecastBackfill").mockRejectedValueOnce(
+      new ForecastBackfillConflictError("A forecast backfill run is already in progress.", "job-existing")
+    );
+    const jobStatusSpy = vi.spyOn(api, "getForecastBackfillJobStatus").mockResolvedValueOnce({
+      job_id: "job-existing",
+      state: "running",
+      phase: "backtraining",
+      step: 5,
+      total_steps: 7,
+      error: null,
+      error_type: null,
+      summary: null,
+      sample_rows: null,
+      seconds_remaining: 20,
+    });
+
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+
+    fireEvent.click(screen.getByText("🚀 Run Forecast Backfill"));
+    expect(await screen.findByText(/already in progress/i)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+
+    expect(jobStatusSpy).toHaveBeenCalledWith("job-existing");
+    expect(await screen.findByText(/Backtraining meta labelers…/)).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   it("flags synthetic (non-real) fallback data instead of presenting it as a genuine backtest", async () => {
@@ -73,11 +176,11 @@ describe("ForecastBackfillScreen (real mock API)", () => {
   });
 
   it("a failed run renders the honest failure message, not a silent no-op", async () => {
-    vi.spyOn(api, "runForecastBackfill").mockRejectedValueOnce(new Error("backend unreachable"));
+    vi.spyOn(api, "runForecastBackfill").mockRejectedValueOnce(new ApiError("backend unreachable", 500));
     renderScreen();
-    await screen.findByText("TSMOM_10d");
+    await screen.findByText("timeseries_momentum_10d");
 
     fireEvent.click(screen.getByText("🚀 Run Forecast Backfill"));
-    expect(await screen.findByText(/Backfill failed: backend unreachable/)).toBeInTheDocument();
+    expect(await screen.findByText(/Error: backend unreachable/)).toBeInTheDocument();
   });
 });

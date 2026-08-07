@@ -118,13 +118,13 @@ def test_sentiment_attention_scaffolding_defaults(monkeypatch, tmp_path):
     s = Settings(_env_file=None)
 
     assert s.GOOGLE_NEWS_LOOKBACK_WINDOW == "7d"
-    assert s.EDGAR_FULLTEXT_ENABLED is False
+    assert s.EDGAR_FULLTEXT_ENABLED is True
     assert s.EDGAR_FULLTEXT_FORMS == "8-K,10-K,10-Q"
     assert s.EDGAR_FULLTEXT_CHUNK_TOKENS == 512
-    assert s.SECTOR_HEAT_ENABLED is False
+    assert s.SECTOR_HEAT_ENABLED is True
     assert s.SECTOR_HEAT_SMOOTHING_SIGMA == pytest.approx(1.0)
     assert s.SECTOR_HEAT_LOOKBACK_DAYS == 7
-    assert s.WIKIPEDIA_ATTENTION_ENABLED is False
+    assert s.WIKIPEDIA_ATTENTION_ENABLED is True
     assert s.WIKIPEDIA_ATTENTION_LOOKBACK_DAYS == 30
     assert s.PYTRENDS_ENABLED is False
 
@@ -141,6 +141,17 @@ def test_output_dir_created(monkeypatch, tmp_path):
 
     assert isinstance(s.OUTPUT_DIR, Path)
     assert s.OUTPUT_DIR.is_dir()
+
+
+def test_output_dir_read_only_graceful(monkeypatch, tmp_path):
+    from unittest.mock import patch
+    target = tmp_path / "read-only-dir"
+    monkeypatch.setenv("OUTPUT_DIR", str(target))
+
+    with patch.object(Path, "mkdir", side_effect=OSError("Read-only file system")):
+        s = Settings(_env_file=None)
+        assert s.OUTPUT_DIR == target
+
 
 
 # =============================================================================

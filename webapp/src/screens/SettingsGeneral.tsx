@@ -125,12 +125,14 @@ function ExecutionModeSection({
     ? "paper"
     : "live";
 
-  const modeMutation = useMutation((mode: "advisory" | "simulation" | "paper" | "live") =>
-    api.setExecutionMode({
-      mode: mode,
-      advisory_only: mode === "advisory",
-      confirm: buildConfirmMap(dangerousKeysFor(mode)),
-    })
+  const modeMutation = useMutation(
+    (mode: "advisory" | "simulation" | "paper" | "live") =>
+      api.setExecutionMode({
+        mode: mode,
+        advisory_only: mode === "advisory",
+        confirm: buildConfirmMap(dangerousKeysFor(mode)),
+      }),
+    { successMessage: (result) => `Execution mode changed to ${result.mode}` }
   );
 
   const pendingDangerous = selectedMode ? dangerousKeysFor(selectedMode) : [];

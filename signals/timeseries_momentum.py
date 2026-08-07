@@ -16,6 +16,7 @@ from settings import settings
 class TimeSeriesMomentumSignal(SignalModule):
     name = "timeseries_momentum"
     required_features = ["ROC_12M", "GARCH_Vol"]
+    meta_label_features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "MACD_Signal", "Vol_Ratio", "ROC_12M", "ROC_6M", "GARCH_Vol", "SMA_5", "SMA_200", "RSI_2"]
 
     def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
         roc_12m = df["ROC_12M"]

@@ -3,7 +3,7 @@ import { theme } from "../../theme";
 import { api } from "../../api/client";
 import { useMutation } from "../../hooks/useMutation";
 import { Input, Button, Notice } from "../ui";
-
+import { SymbolInput } from "../SymbolInput";
 export function ConfiguratorWizard() {
   const [ticker, setTicker] = useState("AAPL");
   const [allocation, setAllocation] = useState(10000);
@@ -30,10 +30,12 @@ export function ConfiguratorWizard() {
         <h2 style={{ margin: "0 0 16px" }}>Step 1: Set Goals</h2>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Input
+          <SymbolInput
             label="Concentrated Ticker"
-            value={ticker}
-            onChange={(e) => setTicker(e.target.value.toUpperCase())}
+            initial={ticker}
+            onChange={(val) => setTicker(val.toUpperCase())}
+            onSubmit={(val) => setTicker(val.toUpperCase())}
+            hideButton={true}
           />
           <Input
             label="Target Allocation ($)"

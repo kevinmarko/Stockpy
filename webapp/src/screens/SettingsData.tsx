@@ -274,7 +274,9 @@ function RestartDaemonControl({
 }) {
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState("");
-  const mutation = useMutation(() => api.restartDaemon());
+  const mutation = useMutation(() => api.restartDaemon(), {
+    successMessage: "Daemon restart initiated",
+  });
   const confirmed = typed.trim().toUpperCase() === "RESTART";
 
   const openConfirm = () => {
@@ -485,8 +487,9 @@ function IntervalEditor({
   onSaved: () => void;
 }) {
   const [value, setValue] = useState(String(schedule.interval.configured_value));
-  const { run, pending, error } = useMutation((seconds: number) =>
-    api.setAutomationInterval(seconds)
+  const { run, pending, error } = useMutation(
+    (seconds: number) => api.setAutomationInterval(seconds),
+    { successMessage: "Automation interval updated" }
   );
 
   const parsed = Number(value);
@@ -1023,7 +1026,10 @@ function RunNowButton({
   disabled: boolean;
   onTriggered: () => void;
 }) {
-  const { run, pending, result, error } = useMutation(() => api.triggerRun());
+  const { run, pending, result, error } = useMutation(
+    () => api.triggerRun(),
+    { successMessage: "Pipeline execution manually triggered" }
+  );
 
   const handleClick = async () => {
     await run();

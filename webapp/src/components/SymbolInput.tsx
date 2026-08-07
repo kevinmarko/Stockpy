@@ -70,12 +70,27 @@ export function SymbolInput({
   initial = "",
   onSubmit,
   label = "Symbol",
+  hint,
   pending,
+  hideButton,
+  buttonText,
+  onChange,
+  testId = "symbol-input",
 }: {
   initial?: string;
   onSubmit: (symbol: string) => void;
   label?: string;
+  hint?: React.ReactNode;
   pending?: boolean;
+  hideButton?: boolean;
+  buttonText?: string;
+  onChange?: (symbol: string) => void;
+  /** Override the default `data-testid` -- needed when more than one
+   * SymbolInput renders on the same screen (e.g. PairsRadar's Symbol Y/X),
+   * since `screen.getByTestId` requires a unique match. Defaults to
+   * "symbol-input" to stay compatible with every existing single-instance
+   * caller/test. */
+  testId?: string;
 }) {
   const [value, setValue] = useState(initial);
   const [universe, setUniverse] = useState<UniverseSymbol[]>(universeCache ?? []);
@@ -122,6 +137,7 @@ export function SymbolInput({
     const clean = sym.trim().toUpperCase();
     if (!clean) return;
     setValue(clean);
+    if (onChange) onChange(clean);
     setOpen(false);
     setActiveIndex(-1);
     onSubmit(clean);
@@ -177,7 +193,7 @@ export function SymbolInput({
         <input
           id={autoId}
           className="input"
-          data-testid="symbol-input"
+          data-testid={testId}
           role="combobox"
           aria-expanded={showDropdown}
           aria-controls={listId}
@@ -192,6 +208,7 @@ export function SymbolInput({
           value={value}
           onChange={(e) => {
             setValue(e.target.value);
+            if (onChange) onChange(e.target.value);
             setOpen(true);
             setActiveIndex(-1);
           }}
@@ -210,7 +227,9 @@ export function SymbolInput({
             color: "var(--text-muted)",
           }}
         >
-          Type to search tracked symbols, or enter any ticker and press Load.
+          {hideButton
+            ? "Type to search tracked symbols, or enter any ticker and press Enter."
+            : "Type to search tracked symbols, or enter any ticker and press Load."}
         </div>
 
         {showDropdown && (
@@ -241,10 +260,17 @@ export function SymbolInput({
             })}
           </ul>
         )}
+        {hint && (
+          <div style={{ marginTop: "var(--s-1)", fontSize: "var(--t-body)", color: "var(--text-muted)" }}>
+            {hint}
+          </div>
+        )}
       </div>
-      <Button type="submit" variant="primary" pending={pending}>
-        Load
-      </Button>
+      {!hideButton && (
+        <Button type="submit" variant="primary" pending={pending}>
+          {buttonText || "Load"}
+        </Button>
+      )}
     </form>
   );
 }

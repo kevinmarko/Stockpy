@@ -7,7 +7,7 @@
  *  - `value-quality` has curve:null ("no backtest series yet"), never a fake line.
  */
 
-import { ApiError } from "./types";
+import { ApiError, ForecastBackfillConflictError } from "./types";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -53,6 +53,8 @@ import type {
   FollowResult,
   ForecastSkill,
   ForecastBackfillSummary,
+  ForecastBackfillJob,
+  ForecastBackfillPhase,
   ForecastSkillBySymbol,
   ForecastSkillSymbolRow,
   LatencyHeatmap,
@@ -279,7 +281,7 @@ function h(
 }
 
 function holdings(
-  symbols: [string, number, number][] // [symbol, weight(raw), score]
+  symbols: [string, number, number, (number | null)?][] // [symbol, weight(raw), score, meta_label_composite_override?]
 ): Holding[] {
   const total = symbols.reduce((s, [, w]) => s + w, 0);
 
@@ -293,7 +295,7 @@ function holdings(
   const minScore = byScoreDesc[byScoreDesc.length - 1]?.[2] ?? 0;
   const scoreSpread = maxScore - minScore || 1;
 
-  return symbols.map(([symbol, w, score]) => {
+  return symbols.map(([symbol, w, score, metaOverride]) => {
     const price = +(50 + Math.random() * 400).toFixed(2);
     const isBuy = buySymbols.has(symbol);
     // Normalize this holding's score within its Pilot's own score range,
@@ -303,6 +305,14 @@ function holdings(
     const conviction = isBuy
       ? +(0.75 + normalized * 0.15).toFixed(2)
       : +(0.5 + normalized * 0.15).toFixed(2);
+    // Deterministic meta-label composite default, mirroring conviction's
+    // normalized-score derivation -- no Math.random(). `metaOverride ===
+    // undefined` means the tuple omitted the 4th slot (use the derived
+    // default); an explicit `null` override (trend-following's LMT) is
+    // passed through unchanged to exercise the honest "not computed" render
+    // path -- never fabricate a value where the real API would say null.
+    const metaLabelComposite =
+      metaOverride !== undefined ? metaOverride : +(0.55 + normalized * 0.35).toFixed(3);
 
     const buyLow = price * 0.94;
     const buyHigh = price * 0.98;
@@ -321,6 +331,7 @@ function holdings(
       buy_range: `Buy Zone: $${buyLow.toFixed(2)} - $${buyHigh.toFixed(2)}`,
       sell_range: `Sell Zone: $${sellLow.toFixed(2)} - $${sellHigh.toFixed(2)} | Stop @ $${stop.toFixed(2)}`,
       conviction,
+      meta_label_composite: metaLabelComposite,
     };
   });
 }
@@ -378,7 +389,7 @@ const RAW: Array<{
   hasCurve: boolean;
   drift: number;
   vol: number;
-  syms: [string, number, number][];
+  syms: [string, number, number, (number | null)?][];
   // Optional; defaults to true (a distinct SPY macro overlay is available).
   // Set false to model the honest redundancy case (underlying already IS SPY).
   macroBenchmark?: boolean;
@@ -401,7 +412,9 @@ const RAW: Array<{
       ["MSFT", 24, 0.61],
       ["AAPL", 20, 0.48],
       ["CAT", 14, 0.4],
-      ["LMT", 12, 0.33],
+      // Explicit null exercises the honest "not computed this cycle" render
+      // path for meta_label_composite (never fabricate a fallback value).
+      ["LMT", 12, 0.33, null],
     ],
   },
   {
@@ -1124,6 +1137,155 @@ function _mockLoginJobStatus(jobId: string, job: _MockLoginJob): BrokerageLoginJ
   };
 }
 
+interface _MockForecastBackfillJob {
+  mode: "run";
+  startedAt: number; // Date.now() at creation
+  cancelled: boolean;
+  // Deterministic "fails partway through" trigger -- same "flip it from
+  // devtools" convention as BROKERAGE_LOGIN_TIMEOUT_KEY below (there's no
+  // magic ticker/theta_c value here since a bad *value* would legitimately
+  // belong in a 422 the real backend's own request validation would catch
+  // before start_job() ever runs, not a mid-training failure):
+  //   localStorage.setItem("stockpy.mock.forecast_backfill_failure", "1")  // next run fails partway through instead of succeeding
+  //   localStorage.removeItem("stockpy.mock.forecast_backfill_failure")   // back to the happy path
+  simulateFailure: boolean;
+}
+
+const FORECAST_BACKFILL_FAILURE_KEY = "stockpy.mock.forecast_backfill_failure";
+
+function readForecastBackfillFailure(): boolean {
+  try {
+    return localStorage.getItem(FORECAST_BACKFILL_FAILURE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+let _mockForecastBackfillJobSeq = 0;
+const _mockForecastBackfillJobs: Record<string, _MockForecastBackfillJob> = {};
+
+/** The currently-`"running"` mock job's id, or `null` -- mirrors the real
+ *  backend's single-flight guard (`ml/forecast_backfill_job.py::start_job`
+ *  returns `None` when `_active_job_id` is still `"running"`) so the mock's
+ *  `runForecastBackfill` can 409 the same way, rather than always accepting
+ *  a second concurrent "run" and leaving that whole path untestable against
+ *  the mock/dev-server UI. */
+function _findRunningForecastBackfillJobId(): string | null {
+  for (const [jobId, job] of Object.entries(_mockForecastBackfillJobs)) {
+    if (_mockForecastBackfillJobStatus(jobId, job).state === "running") {
+      return jobId;
+    }
+  }
+  return null;
+}
+
+function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfillJob): ForecastBackfillJob {
+  const elapsedSeconds = (Date.now() - job.startedAt) / 1000;
+  const SECONDS_PER_PHASE = 2;
+  const TOTAL_STEPS = 7;
+  const TOTAL_SECONDS = TOTAL_STEPS * SECONDS_PER_PHASE;
+  const secondsRemaining = Math.max(0, Math.round(TOTAL_SECONDS - elapsedSeconds));
+
+  // Time-derived phase/step, shared by every branch below -- including the
+  // terminal ones -- so a cancelled/failed job honestly reports whatever
+  // phase it had actually reached rather than resetting to the first phase.
+  // Mirrors the real backend exactly: `cancel_job()` / the worker's own
+  // failure path only ever flip state/error/error_type, never phase/step
+  // (see `ml/forecast_backfill_job.py`). The real backend's initial 202
+  // response ALSO has `phase: null` (nothing has been drained off the
+  // child's events pipe yet) -- reproduced here as a brief `< 1s` window
+  // rather than assigning a real phase from the very first status response,
+  // which would hide the frontend's own `phase: null` handling from anyone
+  // testing against the mock.
+  let phase: ForecastBackfillPhase | null;
+  let step: number;
+  if (elapsedSeconds < 1) { phase = null; step = 0; }
+  else if (elapsedSeconds < 2) { phase = "fetching_data"; step = 1; }
+  else if (elapsedSeconds < 4) { phase = "technical_features"; step = 2; }
+  else if (elapsedSeconds < 6) { phase = "primary_signals"; step = 3; }
+  else if (elapsedSeconds < 8) { phase = "meta_targets"; step = 4; }
+  else if (elapsedSeconds < 10) { phase = "backtraining"; step = 5; }
+  else if (elapsedSeconds < 12) { phase = "backfilling"; step = 6; }
+  else if (elapsedSeconds < 14) { phase = "exporting"; step = 7; }
+  else { phase = "exporting"; step = TOTAL_STEPS; }
+
+  if (job.cancelled) {
+    return {
+      job_id: jobId,
+      state: "cancelled",
+      phase,
+      step,
+      total_steps: TOTAL_STEPS,
+      error: "Forecast backfill run was cancelled.",
+      error_type: "cancelled",
+      summary: null,
+      sample_rows: null,
+      seconds_remaining: secondsRemaining,
+    };
+  }
+
+  if (job.simulateFailure) {
+    // Fails partway through rather than at t=0 -- a job that fails is still
+    // a job, discovered through a status poll, matching both the real
+    // subprocess-isolated worker's shape and _mockLoginJobStatus's
+    // noCredentials precedent above (a believable "running" beat first).
+    if (elapsedSeconds < 3) {
+      return {
+        job_id: jobId,
+        state: "running",
+        phase,
+        step,
+        total_steps: TOTAL_STEPS,
+        error: null,
+        error_type: null,
+        summary: null,
+        sample_rows: null,
+        seconds_remaining: secondsRemaining,
+      };
+    }
+    return {
+      job_id: jobId,
+      state: "failed",
+      phase: "technical_features",
+      step: 2,
+      total_steps: TOTAL_STEPS,
+      error: "Training data contained fewer than the minimum required samples for one or more horizons.",
+      error_type: "value_error",
+      summary: null,
+      sample_rows: null,
+      seconds_remaining: 0,
+    };
+  }
+
+  if (elapsedSeconds >= TOTAL_SECONDS) {
+    return {
+      job_id: jobId,
+      state: "succeeded",
+      phase: "exporting",
+      step: TOTAL_STEPS,
+      total_steps: TOTAL_STEPS,
+      error: null,
+      error_type: null,
+      summary: mockForecastBackfill(),
+      sample_rows: 11080,
+      seconds_remaining: 0,
+    };
+  }
+
+  return {
+    job_id: jobId,
+    state: "running",
+    phase,
+    step,
+    total_steps: TOTAL_STEPS,
+    error: null,
+    error_type: null,
+    summary: null,
+    sample_rows: null,
+    seconds_remaining: secondsRemaining,
+  };
+}
+
 // ---- Local ROBINHOOD_AUTO_REFRESH_ENABLED server-gate simulation
 // (localStorage) -- mirrors the real settings.ROBINHOOD_AUTO_REFRESH_ENABLED
 // field GET /brokerage/status now echoes read-only (default True). No
@@ -1651,15 +1813,37 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["pipeline/production_steps.py:531"],
 };
 
-// `settings_keysets.DANGEROUS_KEYS` ∩ the keys these five editors serve. Copied
-// from the real set -- these are precisely the fields that were live-writable
-// with no confirmation before this feature existed.
+// `settings_keysets.DANGEROUS_KEYS`, in full -- copied from the real set.
+// All 20 real settings_keysets.DANGEROUS_KEYS members are now covered here,
+// since the Feature Flags screen (webapp/src/api/mock.ts's
+// FEATURE_FLAGS_TUNABLE_DEFS) serves every one of them, exercising the
+// typed-confirmation flow for all 20 in mock mode.
 const MOCK_DANGEROUS_KEYS = new Set([
   "ADVISORY_ONLY",
   "DRY_RUN",
+  "ROBINHOOD_EXECUTION_MODE",
   "CORS_ALLOWED_ORIGINS",
   "FMP_BARS_ENABLED",
   "FMP_BARS_ADJUSTMENT",
+  "CACHE_LONG_SHORT_WRITES_ENABLED",
+  // 2026-08-08: settings_keysets.SAFETY_CRITICAL_KEY_REASONS gained these 13
+  // fields (CACHE_LONG_SHORT_WRITES_ENABLED above being one of them) when the
+  // fail-closed write/execution gates were reclassified out of
+  // EXCLUDED_FROM_GUI into ALLOWED_KEYS -- now all exposed by the Feature
+  // Flags screen.
+  "MACRO_REGIME_GATE_ENABLED",
+  "AI_GENERATION_API_ENABLED",
+  "AUTOMATION_WRITES_ENABLED",
+  "BROKERAGE_REFRESH_ENABLED",
+  "COMMAND_EXECUTION_ENABLED",
+  "DEAD_LETTER_RETRY_ENABLED",
+  "GENERAL_SETTINGS_WRITES_ENABLED",
+  "LLM_WRITES_ENABLED",
+  "MACRO_GATE_WRITES_ENABLED",
+  "MCP_OAUTH_ENABLED",
+  "PROMPT_REGISTRY_WRITES_ENABLED",
+  "RAG_QUERY_API_ENABLED",
+  "STRATEGY_WRITES_ENABLED",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1989,11 +2173,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     group: "Advanced / Config", key: "ORCHESTRATOR_DAEMON_ENABLED", type: "boolean",
     value: false, default: false,
     description: "Route the desktop shell's always-on refresh loop and the Launcher tab's manual run trigger through the persistent orchestrator daemon instead of spawning a fresh subprocess per cycle. False (default) preserves today's exact subprocess behavior everywhere.",
-  },
-  {
-    group: "Advanced / Config", key: "PILOTS_API_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Host the Pilots API inside the persistent orchestrator daemon process, alongside the existing Control API. False (default) preserves today's exact behavior -- pilots_api.py remains a manually-launched standalone service.",
   },
   {
     group: "Advanced / Config", key: "CORS_ALLOWED_ORIGINS", type: "string",
@@ -2478,6 +2657,8 @@ const FMP_TUNABLES_KEY = "stockpy.mock.fmp_tunables";
 const FMP_TUNABLES_DRIFT_KEY = "stockpy.mock.fmp_tunables_drift";
 const ETF_TRANSMISSION_TUNABLES_KEY = "stockpy.mock.etf_transmission_tunables";
 const ETF_TRANSMISSION_TUNABLES_DRIFT_KEY = "stockpy.mock.etf_transmission_tunables_drift";
+const CACHE_LONG_SHORT_TUNABLES_KEY = "stockpy.mock.cache_long_short_tunables";
+const CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY = "stockpy.mock.cache_long_short_tunables_drift";
 
 const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   {
@@ -2702,6 +2883,223 @@ const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
   },
 ];
 
+const CACHE_LONG_SHORT_TUNABLE_DEFS: MockTunableDef[] = [
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for the Cache Long/Short tax-loss-harvesting advisory strategy.",
+  },
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_WRITES_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Dedicated fail-closed flag for the position-writing endpoints (start, approve-bulk).",
+  },
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_MIN_CORRELATION", type: "number",
+    value: 0.75, default: 0.75, min: 0.0, max: 1.0, step: 0.05,
+    description: "Min correlation to trigger drift alert.",
+  },
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT", type: "number",
+    value: 0.05, default: 0.05, min: 0.0, max: 1.0, step: 0.01,
+    description: "Percentage loss to trigger a tax-loss-harvesting recommendation.",
+  },
+  {
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS", type: "number",
+    value: 3600, default: 3600, min: 60, max: 86400, step: 60,
+    description: "Interval (seconds) for the Cache Long/Short background worker loop.",
+  },
+  {
+    // JSON-array field -- kept as a "string" type like every other JSON-blob
+    // tunable (ETF_HOLDINGS_TICKERS, SECTOR_FORECAST_CONFIGS, etc.); the
+    // frontend's TunableFieldType has no separate "json" member.
+    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_PROXY_CANDIDATES", type: "string",
+    value: '["SPY","QQQ","XLK","XLF","XLV","XLE"]', default: '["SPY","QQQ","XLK","XLF","XLV","XLE"]',
+    description: "JSON array of candidate proxy ETFs screened for a concentrated ticker's hedge leg.",
+  },
+];
+
+// Mirrors api/pilots_api.py's _FEATURE_FLAGS_GROUPS exactly: the 19
+// settings_keysets.DANGEROUS_KEYS + the 6 pilots/feature_flags.py
+// WRITE_GATE_REASONS keys in one group, the 7 DIAGNOSTIC_FLAG_REASONS keys
+// in the other. Values/defaults mirror the real settings.py defaults after
+// the 2026-08-07 admin-gate default flip.
+const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
+  // -- Write & Execution Gates (settings_keysets.DANGEROUS_KEYS -- typed
+  // confirmation required on write) --
+  {
+    group: "Write & Execution Gates", key: "ADVISORY_ONLY", type: "boolean",
+    value: true, default: true,
+    description: "The execution quarantine -- when True, ALL broker order submission is suppressed.",
+  },
+  {
+    group: "Write & Execution Gates", key: "DRY_RUN", type: "boolean",
+    value: false, default: false,
+    description: "The second execution quarantine -- turning it off is what makes logged orders become submitted orders.",
+  },
+  {
+    group: "Write & Execution Gates", key: "ROBINHOOD_EXECUTION_MODE", type: "enum",
+    value: "off", default: "off", options: ["off", "review", "live"],
+    description: "Moving this to 'live' is what lets the Robinhood execution bridge place real orders.",
+  },
+  {
+    group: "Write & Execution Gates", key: "MACRO_REGIME_GATE_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "The recession/credit-event BUY veto (Sahm Rule, VIX, HY OAS). Setting it False bypasses that veto entirely.",
+  },
+  {
+    group: "Write & Execution Gates", key: "FMP_BARS_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Read FMP_BARS_ADJUSTMENT before enabling -- an adjustment-convention mismatch corrupts every return series, indicator, and backtest.",
+  },
+  {
+    group: "Write & Execution Gates", key: "FMP_BARS_ADJUSTMENT", type: "enum",
+    value: "dividend-adjusted", default: "dividend-adjusted",
+    options: ["dividend-adjusted", "light", "full", "non-split-adjusted"],
+    description: "The single highest-risk value in the FMP integration -- 'full' looks like the obvious pick and is wrong (split-only, not dividend-adjusted).",
+  },
+  {
+    group: "Write & Execution Gates", key: "CORS_ALLOWED_ORIGINS", type: "string",
+    value: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    default: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    description: "Which browser origins the State API and Pilots API accept requests from.",
+  },
+  {
+    group: "Write & Execution Gates", key: "AI_GENERATION_API_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Master gate for the three paid Claude/Gemini/Opal generation endpoints on the Data API.",
+  },
+  {
+    group: "Write & Execution Gates", key: "AUTOMATION_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /automation/resume, which re-enables live order submission after ADVISORY_ONLY was previously engaged.",
+  },
+  {
+    group: "Write & Execution Gates", key: "BROKERAGE_REFRESH_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /brokerage/refresh -- a real live login against the operator's actual brokerage account, bypassing the daily cache.",
+  },
+  {
+    group: "Write & Execution Gates", key: "CACHE_LONG_SHORT_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates the Cache Long/Short position-writing endpoints (start, approve-bulk) -- changes what a trading strategy recommends.",
+  },
+  {
+    group: "Write & Execution Gates", key: "COMMAND_EXECUTION_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "The highest-risk flag in this group -- enables the 'command' job type, which can execute the kill switch or arbitrary orchestrator flags.",
+  },
+  {
+    group: "Write & Execution Gates", key: "DEAD_LETTER_RETRY_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /dead-letter/retry, which spawns a real main.py subprocess for one symbol.",
+  },
+  {
+    group: "Write & Execution Gates", key: "GENERAL_SETTINGS_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /settings/tunables -- Kelly sizing, risk-gate, and forecasting knobs.",
+  },
+  {
+    group: "Write & Execution Gates", key: "LLM_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /llm/setting -- which LLM provider narrates a rationale, and whether Gravity AI / Opal research can fire.",
+  },
+  {
+    group: "Write & Execution Gates", key: "MACRO_GATE_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /observability/macro-gate, the write path for MACRO_REGIME_GATE_ENABLED itself.",
+  },
+  {
+    group: "Write & Execution Gates", key: "MCP_OAUTH_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Whether investyo_mcp_server.py's OAuth authorization-server endpoints are live.",
+  },
+  {
+    group: "Write & Execution Gates", key: "PROMPT_REGISTRY_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /prompts/pin -- changes which prompt text the platform actually runs.",
+  },
+  {
+    group: "Write & Execution Gates", key: "RAG_QUERY_API_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /rag/query, a paid external LLM call.",
+  },
+  {
+    group: "Write & Execution Gates", key: "STRATEGY_WRITES_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /strategy/modules -- signal weights and the disabled-module set, which changes what the platform recommends.",
+  },
+  // -- Write gates NOT in DANGEROUS_KEYS (pilots/feature_flags.py's
+  // WRITE_GATE_REASONS -- visible, no typed confirmation required) --
+  {
+    group: "Write & Execution Gates", key: "BROKERAGE_CONNECT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /brokerage/connect and /disconnect -- real brokerage-credential intake.",
+  },
+  {
+    group: "Write & Execution Gates", key: "UNIVERSE_SYNC_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates POST /data/sync -- refreshes the tracked ticker universe from the configured sources.",
+  },
+  {
+    group: "Write & Execution Gates", key: "AGENTIC_DISCOVERY_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates PUT /agentic/scan-config -- the Robinhood broker-scan configuration for the agentic-discovery skill.",
+  },
+  {
+    group: "Write & Execution Gates", key: "JOBS_API_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates background job execution and SSE log-streaming endpoints on the orchestrator Control API.",
+  },
+  {
+    group: "Write & Execution Gates", key: "PILOTS_API_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Whether the Pilots API is hosted inside the persistent orchestrator daemon process at all -- a process-startup switch, not a per-request guard.",
+  },
+  {
+    group: "Write & Execution Gates", key: "RLHF_CALIBRATION_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Gates the RLHF Calibration Review Queue's write endpoints -- defaults on since every proposal is hypothetical/paper-only.",
+  },
+  // -- Diagnostic & Data Features (read-only measurement/data-source
+  // master switches, feed no scoring or sizing decision) --
+  {
+    group: "Diagnostic & Data Features", key: "SECTOR_HEAT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables Sector Heat Factor computation from GDELT article volume.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "WIKIPEDIA_ATTENTION_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables Attention Score computation from Wikipedia pageviews.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "ETF_HOLDINGS_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables fetching ETF constituent baskets for exposure analysis.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "ETF_TRANSMISSION_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables ETF volatility-transmission measurement columns (diagnostic only -- not read by scoring or sizing).",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "MARKET_DATA_LATENCY_TRACKING_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Tracks and surfaces real-time market data feed latency.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "SENTIMENT_INDEX_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Computes composite sentiment index from news and reviews.",
+  },
+  {
+    group: "Diagnostic & Data Features", key: "EDGAR_FULLTEXT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enables full-text ingestion of 10-K/10-Q SEC filings.",
+  },
+];
+
 function mockSentimentTunables(): TunablesResponse {
   return buildTunablesResponse(SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY);
 }
@@ -2762,6 +3160,51 @@ function applyEtfTransmissionTunables(
     ETF_TRANSMISSION_TUNABLE_DEFS,
     ETF_TRANSMISSION_TUNABLES_KEY,
     ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
+    confirm
+  );
+}
+
+function mockCacheLongShortTunables(): TunablesResponse {
+  return buildTunablesResponse(
+    CACHE_LONG_SHORT_TUNABLE_DEFS,
+    CACHE_LONG_SHORT_TUNABLES_KEY,
+    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY
+  );
+}
+
+function applyCacheLongShortTunables(
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
+): TunablesUpdateResult {
+  return applyTunablesGeneric(
+    values,
+    CACHE_LONG_SHORT_TUNABLE_DEFS,
+    CACHE_LONG_SHORT_TUNABLES_KEY,
+    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY,
+    confirm
+  );
+}
+
+const FEATURE_FLAGS_TUNABLES_KEY = "stockpy.mock.feature_flags_tunables";
+const FEATURE_FLAGS_TUNABLES_DRIFT_KEY = "stockpy.mock.feature_flags_tunables_drift";
+
+function mockFeatureFlagsTunables(): TunablesResponse {
+  return buildTunablesResponse(
+    FEATURE_FLAGS_TUNABLE_DEFS,
+    FEATURE_FLAGS_TUNABLES_KEY,
+    FEATURE_FLAGS_TUNABLES_DRIFT_KEY
+  );
+}
+
+function applyFeatureFlagsTunables(
+  values: Record<string, number | boolean | string>,
+  confirm: Record<string, string> = {}
+): TunablesUpdateResult {
+  return applyTunablesGeneric(
+    values,
+    FEATURE_FLAGS_TUNABLE_DEFS,
+    FEATURE_FLAGS_TUNABLES_KEY,
+    FEATURE_FLAGS_TUNABLES_DRIFT_KEY,
     confirm
   );
 }
@@ -6656,6 +7099,18 @@ export const mockApi = {
     return delay(applyFmpTunables(values, confirm));
   },
 
+
+  async getFeatureFlags(): Promise<TunablesResponse> {
+    return delay(mockFeatureFlagsTunables());
+  },
+
+  async updateFeatureFlags(
+    values: Record<string, any>,
+    confirm?: SettingsConfirmMap
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyFeatureFlagsTunables(values, confirm ?? {}));
+  },
+
   async getEtfTransmissionSettings(): Promise<TunablesResponse> {
     return delay(mockEtfTransmissionTunables());
   },
@@ -6665,6 +7120,17 @@ export const mockApi = {
     confirm: SettingsConfirmMap = {}
   ): Promise<TunablesUpdateResult> {
     return delay(applyEtfTransmissionTunables(values, confirm));
+  },
+
+  async getCacheLongShortSettings(): Promise<TunablesResponse> {
+    return delay(mockCacheLongShortTunables());
+  },
+
+  async updateCacheLongShortSettings(
+    values: Record<string, number | boolean | string>,
+    confirm: SettingsConfirmMap = {}
+  ): Promise<TunablesUpdateResult> {
+    return delay(applyCacheLongShortTunables(values, confirm));
   },
 
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----
@@ -7534,12 +8000,43 @@ export const mockApi = {
   async getForecastBackfill() {
     return delay(mockForecastBackfill());
   },
-  async runForecastBackfill() {
-    return delay({
-      status: "success",
-      summary: mockForecastBackfill(),
-      sample_rows: 11080,
-    });
+  async runForecastBackfill(_params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean; strategy_ids?: string[]; theta_c?: number }) {
+    // Single-flight, mirrors the real backend's ml/forecast_backfill_job.py
+    // guard: reject (409-equivalent) rather than silently starting a second
+    // concurrent run -- guarded synchronously (before any job mutation), so
+    // no timer advance is needed for the rejection itself to be observed.
+    const existingJobId = _findRunningForecastBackfillJobId();
+    if (existingJobId) {
+      throw new ForecastBackfillConflictError(
+        "A forecast backfill run is already in progress.",
+        existingJobId
+      );
+    }
+    _mockForecastBackfillJobSeq++;
+    const jobId = `fb-mock-${_mockForecastBackfillJobSeq}`;
+    const job: _MockForecastBackfillJob = {
+      mode: "run",
+      startedAt: Date.now(),
+      cancelled: false,
+      simulateFailure: readForecastBackfillFailure(),
+    };
+    _mockForecastBackfillJobs[jobId] = job;
+    return delay(_mockForecastBackfillJobStatus(jobId, job));
+  },
+  async getForecastBackfillJobStatus(jobId: string) {
+    const job = _mockForecastBackfillJobs[jobId];
+    if (!job) {
+      throw new ApiError(`Job not found: ${jobId}`, 404);
+    }
+    return delay(_mockForecastBackfillJobStatus(jobId, job));
+  },
+  async cancelForecastBackfillJob(jobId: string) {
+    const job = _mockForecastBackfillJobs[jobId];
+    if (!job) {
+      throw new ApiError(`Job not found: ${jobId}`, 404);
+    }
+    job.cancelled = true;
+    return delay(_mockForecastBackfillJobStatus(jobId, job));
   },
   
   // ---- Cache Long/Short ----
@@ -7798,19 +8295,31 @@ function notFoundSymbol(sym: string) {
 }
 
 export function mockForecastBackfill(): ForecastBackfillSummary {
+  // Model keys mirror ml/forecast_backfill.py's real, registry-driven naming
+  // ("{signals.registry.global_registry strategy name}_{horizon}d") rather
+  // than the pre-refactor hardcoded "TSMOM"/"CSMOM" scheme -- keeping this
+  // mock in sync with what the live backend actually returns.
   return {
     status: "completed",
     timestamp: new Date().toISOString(),
     horizons: [10, 30, 60, 90],
     metrics: {
-      TSMOM_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 2370, split_date: "2024-01-15" },
-      TSMOM_30d: { accuracy: 0.5340, auc: 0.5580, n_train: 9416, n_test: 2354, split_date: "2024-01-15" },
-      TSMOM_60d: { accuracy: 0.5480, auc: 0.5720, n_train: 9320, n_test: 2330, split_date: "2024-01-15" },
-      TSMOM_90d: { accuracy: 0.5620, auc: 0.5910, n_train: 9224, n_test: 2306, split_date: "2024-01-15" },
-      CSMOM_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 9480, n_test: 2370, split_date: "2024-01-15" },
-      CSMOM_30d: { accuracy: 0.5410, auc: 0.5640, n_train: 9416, n_test: 2354, split_date: "2024-01-15" },
-      CSMOM_60d: { accuracy: 0.5590, auc: 0.5830, n_train: 9320, n_test: 2330, split_date: "2024-01-15" },
-      CSMOM_90d: { accuracy: 0.5740, auc: 0.6050, n_train: 9224, n_test: 2306, split_date: "2024-01-15" },
+      timeseries_momentum_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 0, split_date: "CPCV", is_active: true },
+      timeseries_momentum_30d: { accuracy: 0.5340, auc: 0.5580, n_train: 9416, n_test: 0, split_date: "CPCV", is_active: true },
+      timeseries_momentum_60d: { accuracy: 0.5480, auc: 0.5720, n_train: 9320, n_test: 0, split_date: "CPCV", is_active: true },
+      timeseries_momentum_90d: { accuracy: 0.5620, auc: 0.5910, n_train: 9224, n_test: 0, split_date: "CPCV", is_active: true },
+      rsi2_mean_reversion_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 6820, n_test: 0, split_date: "CPCV", is_active: true },
+      rsi2_mean_reversion_30d: { accuracy: 0.5410, auc: 0.5640, n_train: 6754, n_test: 0, split_date: "CPCV", is_active: true },
+      rsi2_mean_reversion_60d: { accuracy: 0.5590, auc: 0.5830, n_train: 6658, n_test: 0, split_date: "CPCV", is_active: true },
+      rsi2_mean_reversion_90d: { accuracy: 0.5740, auc: 0.6050, n_train: 6562, n_test: 0, split_date: "CPCV", is_active: true },
+      // Illustrative "Diagnostic" (is_active: false) row -- any registered
+      // SignalModule with meta_label_features declared can train here, but
+      // ml/forecast_backfill.py only marks the fixed
+      // timeseries_momentum/cross_sectional_momentum/rsi2_mean_reversion
+      // trio as `is_active: true`. Keeping a false-branch example in the
+      // mock exercises the "Diagnostic" badge and bottom-of-table sort in
+      // tests, rather than only ever rendering the all-Active happy path.
+      macd_momentum_10d: { accuracy: 0.5040, auc: 0.5080, n_train: 5210, n_test: 0, split_date: "CPCV", is_active: false },
     },
     tickers: ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"],
     total_rows: 11080,

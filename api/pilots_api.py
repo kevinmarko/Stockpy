@@ -71,7 +71,7 @@ GUI-writable by operator decision; the endpoint remains gated by the command
 token and loopback check below regardless), ``require_automation_writes_enabled``
 (``PUT /automation/schedule/interval``, ``POST /automation/resume``,
 ``PUT /automation/execution-mode`` — deliberately kept out of
-``gui/env_io.py``'s ALLOWED_KEYS, hand-set in ``.env`` only),
+``gui/env_io.py``'s ALLOWED_KEYS, surfaced in the Feature Flags screen),
 ``require_strategy_writes_enabled`` (``PUT /strategy/modules`` — signal weights +
 disabled-module set to ``.env``; its own flag so signal tuning cannot ride in on
 the automation flag), ``require_llm_writes_enabled`` (``PUT /llm/setting`` —
@@ -102,7 +102,6 @@ import json
 import logging
 import math
 import re
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -200,6 +199,8 @@ from rlhf_calibration_store import (
 # restart, does nothing, or is pinned by a real shell export). Stdlib +
 # runtime_flags + settings_keysets only — see its module docstring.
 import pilots.settings_meta as settings_meta
+import pilots.feature_flags as feature_flags
+import settings_keysets
 
 # Execution / persistence — explicitly ALLOWED here (unlike state_api.py),
 # forbidden only for the heavy calculation engines (see this module's AST guard
@@ -244,6 +245,19 @@ import data.brokerage_credentials as brokerage_credentials
 # AST-guard deny-list. Imported at module top so tests can
 # `mock.patch.object(pilots_api, "rh_login", ...)`.
 import api._rh_login as rh_login
+
+# Forecast-backfill job primitive (start/poll/cancel a killable, isolated
+# training-worker subprocess) — see ml/forecast_backfill_job.py and
+# ml/forecast_backfill_worker.py. Mirrors the rh_login wiring immediately
+# above; unlike api._rh_login, no separate glue module is needed here (there
+# is no Pilots-API-specific side effect to own — export_results() already
+# writes its own output artifacts directly from inside the engine). Neither
+# ml.forecast_backfill_job nor ml.forecast_backfill_worker imports
+# AgenticForecastBackfiller itself (only the worker, in its own process,
+# does) or anything on this module's AST-guard deny-list, so this stays a
+# lightweight module-top import. Imported so tests can
+# `mock.patch.object(pilots_api, "forecast_backfill_job", ...)`.
+import ml.forecast_backfill_job as forecast_backfill_job
 
 # LLM configuration status (GET /llm/status). `gui.ai_control_center` is
 # stdlib-only + Streamlit-free (the headless status logic); `llm.status_store`
@@ -376,10 +390,9 @@ def require_brokerage_refresh_enabled() -> None:
     disconnect) — refresh receives no credential material and instead re-uses
     whatever is already configured, but it is still a real, live login against
     the operator's actual brokerage account and must not ride in on a flag
-    named for a different action. ``settings.BROKERAGE_REFRESH_ENABLED`` is
-    deliberately NOT GUI-writable (gui/env_io.py) — it must be hand-set in
-    ``.env``. ``/brokerage/status`` and ``GET /portfolio`` are read-only and NOT
-    gated by this flag."""
+    named for a different action. GUI-writable (as of 2026-08-08) (gui/env_io.py) —
+    surfaced in the Feature Flags screen. ``/brokerage/status`` and ``GET /portfolio``
+    are read-only and NOT gated by this flag."""
     if not settings.BROKERAGE_REFRESH_ENABLED:
         raise HTTPException(
             status_code=403,
@@ -392,7 +405,7 @@ def require_automation_writes_enabled() -> None:
     with a real persistence/rollback cost: ``PUT /automation/schedule/interval``
     (an ``.env`` edit) and ``POST /automation/resume`` (re-enabling live order
     submission when ``ADVISORY_ONLY=False``). ``settings.AUTOMATION_WRITES_ENABLED``
-    is deliberately NOT GUI-writable — hand-set in ``.env`` only.
+    is GUI-writable (as of 2026-08-08) — surfaced in the Feature Flags screen.
 
     ``POST /automation/run`` and ``POST /automation/pause`` are NOT gated by
     this — they sit behind ``require_command_token`` alone, matching
@@ -411,8 +424,8 @@ def require_strategy_writes_enabled() -> None:
     (``settings.STRATEGY_WRITES_ENABLED``), NOT ``AUTOMATION_WRITES_ENABLED``:
     that one was scoped to the daemon interval and kill-switch resume, and
     signal-weight tuning changes WHAT THE PLATFORM RECOMMENDS. Mirrors
-    ``require_brokerage_connect_enabled`` exactly — deliberately NOT GUI-writable,
-    hand-set in ``.env`` only. ``GET /strategy/matrix`` is read-only and NOT gated
+    ``require_brokerage_connect_enabled`` exactly — GUI-writable (as of 2026-08-08),
+    surfaced in the Feature Flags screen. ``GET /strategy/matrix`` is read-only and NOT gated
     by this flag (``require_read_token`` alone, matching ``/brokerage/status``)."""
     if not settings.STRATEGY_WRITES_ENABLED:
         raise HTTPException(
@@ -430,7 +443,7 @@ def require_llm_writes_enabled() -> None:
     which LLM provider narrates a rationale, or whether the Gravity AI runner
     / Opal research agent can fire, is its own risk class and must not ride
     in on either. Mirrors ``require_strategy_writes_enabled`` exactly —
-    deliberately NOT GUI-writable, hand-set in ``.env`` only. ``GET /llm/status``
+    GUI-writable (as of 2026-08-08), surfaced in the Feature Flags screen. ``GET /llm/status``
     is read-only and NOT gated by this flag (``require_read_token`` alone,
     matching ``/brokerage/status`` and ``GET /strategy/matrix``)."""
     if not settings.LLM_WRITES_ENABLED:
@@ -468,8 +481,8 @@ def require_general_settings_writes_enabled() -> None:
     ``LLM_WRITES_ENABLED``, or ``AGENTIC_DISCOVERY_ENABLED``: this changes sizing
     and risk-gate behavior (how large a position gets, when the risk gate blocks
     an order), its own risk class, and must not ride in on any of those. Mirrors
-    ``require_strategy_writes_enabled`` exactly — deliberately NOT GUI-writable,
-    hand-set in ``.env`` only. ``GET /settings/tunables`` is read-only and NOT
+    ``require_strategy_writes_enabled`` exactly — GUI-writable (as of 2026-08-08),
+    surfaced in the Feature Flags screen. ``GET /settings/tunables`` is read-only and NOT
     gated by this flag (``require_read_token`` alone, matching ``GET
     /strategy/matrix``, ``GET /llm/status``, and ``GET /agentic/status``)."""
     if not settings.GENERAL_SETTINGS_WRITES_ENABLED:
@@ -489,7 +502,7 @@ def require_macro_gate_writes_enabled() -> None:
     ``PreTradeRiskGate.macro_kill_switch_check`` (the recession/credit-event BUY
     veto), its own risk class, and must not ride in on any sibling flag. Mirrors
     ``require_general_settings_writes_enabled`` exactly — deliberately NOT
-    GUI-writable, hand-set in ``.env`` only. ``GET /observability/summary`` is
+    GUI-writable, surfaced in the Feature Flags screen. ``GET /observability/summary`` is
     read-only and NOT gated by this flag (``require_read_token`` alone, matching
     every other GET here)."""
     if not settings.MACRO_GATE_WRITES_ENABLED:
@@ -505,7 +518,7 @@ def require_cache_long_short_writes_enabled() -> None:
     (``settings.CACHE_LONG_SHORT_WRITES_ENABLED``), NOT
     ``AUTOMATION_WRITES_ENABLED`` or ``STRATEGY_WRITES_ENABLED``: this changes
     what a trading strategy recommends, its own risk class, and must not ride
-    in on any of those. Deliberately NOT GUI-writable, hand-set in ``.env``
+    in on any of those. GUI-writable (as of 2026-08-08), surfaced in the Feature Flags screen
     only. ``GET`` endpoints are read-only and NOT gated by this flag."""
     if not settings.CACHE_LONG_SHORT_WRITES_ENABLED:
         raise HTTPException(
@@ -524,7 +537,7 @@ def require_rag_query_enabled() -> None:
     call via ``llm/router.py::get_rationale_provider``, otherwise reachable
     behind ``require_command_token`` alone), so it gets the identical
     fail-closed treatment. Mirrors ``require_strategy_writes_enabled``
-    exactly — deliberately NOT GUI-writable, hand-set in ``.env`` only.
+    exactly — GUI-writable (as of 2026-08-08), surfaced in the Feature Flags screen.
     There is no read-only companion endpoint to exempt (this is the entry
     point being wired up for the first time)."""
     if not settings.RAG_QUERY_API_ENABLED:
@@ -562,6 +575,29 @@ def require_rlhf_calibration_enabled() -> None:
         raise HTTPException(
             status_code=403,
             detail="RLHF calibration writes are disabled (RLHF_CALIBRATION_ENABLED=false).",
+        )
+
+
+def require_forecast_backfill_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``POST /pilots/forecast_backfill/run``
+    and ``POST /pilots/forecast_backfill/cancel/{job_id}``. A DEDICATED flag
+    (``settings.FORECAST_BACKFILL_ENABLED``), default ``False``. GUI-writable
+    (``gui/env_io.py``'s ``ALLOWED_KEYS``) like every other non-secret
+    tunable, per explicit operator decision, but also a
+    ``settings_keysets.DANGEROUS_KEYS`` member (``SAFETY_CRITICAL_KEY_REASONS``),
+    requiring typed confirmation on write regardless of editor — see that
+    flag's own ``settings.py`` docstring for why: unlike an ordinary
+    config-toggle write, this spawns a CPU-bound subprocess that trains and
+    overwrites the meta-labeler model artifacts (``ml/models/meta_*.pkl``)
+    feeding the live ``meta_label_composite`` score, a materially heavier and
+    more consequential action. ``GET /pilots/forecast_backfill`` and
+    ``GET /pilots/forecast_backfill/status/{job_id}`` are read-only and NOT
+    gated by this flag (``require_read_token`` alone, matching every other
+    GET here)."""
+    if not settings.FORECAST_BACKFILL_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Forecast backfill runs are disabled (FORECAST_BACKFILL_ENABLED=false).",
         )
 
 
@@ -753,6 +789,8 @@ class ForecastBackfillRunRequest(BaseModel):
     end_date: Optional[str] = Field(default=None)
     use_fmp: bool = Field(default=True)
     horizons: Optional[list[int]] = Field(default=None)
+    strategy_ids: Optional[list[str]] = Field(default=None)
+    theta_c: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
     @field_validator("horizons")
     @classmethod
@@ -1023,54 +1061,99 @@ def get_forecast_backfill_status() -> Dict[str, Any]:
     }
 
 
-_forecast_backfill_lock = threading.Lock()
+@app.post(
+    "/pilots/forecast_backfill/run",
+    status_code=202,
+    dependencies=[
+        Depends(require_forecast_backfill_enabled),
+        Depends(require_command_token),
+    ],
+)
+def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Any:
+    """Start an asynchronous, on-demand forecast backfill cycle across
+    specified tickers & horizons, returning immediately (202) with the
+    job's initial status rather than blocking on the multi-minute,
+    CPU-bound training run itself.
 
+    ``AgenticForecastBackfiller``'s 6-step pipeline (fetch data -> technical
+    features -> primary signals -> meta targets -> backtrain meta-labelers
+    -> execute backfill -> export) now runs in an isolated, killable
+    subprocess (``ml.forecast_backfill_worker``, via
+    ``ml.forecast_backfill_job.start_job``) instead of this request handler
+    -- the previous implementation held the HTTP connection open for the
+    entire run. Poll ``GET /pilots/forecast_backfill/status/{job_id}`` for
+    ``phase``/``step``/``state`` until it reaches a terminal state
+    (``succeeded``/``failed``/``timeout``/``cancelled``).
 
-@app.post("/pilots/forecast_backfill/run", dependencies=[Depends(require_command_token)])
-def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Dict[str, Any]:
-    """Trigger an on-demand forecast backfill cycle across specified tickers & horizons.
+    Single-flight, same invariant the old in-process ``threading.Lock``
+    enforced: a second call while a run is already in progress would
+    otherwise race on the SAME shared output files (``ml/models/meta_*.pkl``,
+    ``output/agentic_forecast_backfill.csv``,
+    ``output/agentic_forecast_summary.json``) and could corrupt them via
+    interleaved writes. ``start_job`` returns ``None`` in that case; the
+    structured 409 body below carries the EXISTING job's id (mirrors
+    ``POST /automation/run``'s ``already_running`` response shape) so the
+    caller can poll it instead of hitting a dead end.
 
-    Runs synchronously (this is an occasional, manually-triggered research
-    action, not a hot path) but single-flight guarded: a second call while one
-    is already in progress would otherwise race on the SAME shared output
-    files (ml/models/meta_*.pkl, output/agentic_forecast_backfill.csv,
-    output/agentic_forecast_summary.json) and could corrupt them via
-    interleaved writes. A non-blocking lock acquire returns 409 instead.
+    Gated by two independent controls (see the dependencies above): the
+    dedicated ``FORECAST_BACKFILL_ENABLED`` flag (default ``False``,
+    GUI-writable but confirmation-required -- see
+    ``require_forecast_backfill_enabled``) and the fail-closed follow
+    command token.
+
+    ``req.horizons`` is still validated by ``ForecastBackfillRunRequest``'s
+    own ``@field_validator`` -- FastAPI resolves the route's ``dependencies``
+    (including the two guards above) BEFORE parsing/validating the request
+    body, so an invalid ``horizons`` value only reaches a 422 once both
+    guards already passed; it never reaches ``start_job`` (and therefore
+    never spawns a subprocess) either way.
     """
-    if not _forecast_backfill_lock.acquire(blocking=False):
-        raise HTTPException(
+    job = forecast_backfill_job.start_job(req.model_dump())
+    if job is None:
+        existing_job_id = forecast_backfill_job.get_active_job_id()
+        return JSONResponse(
             status_code=409,
-            detail="A forecast backfill run is already in progress.",
+            content={
+                "detail": {
+                    "detail": "A forecast backfill run is already in progress.",
+                    "job_id": existing_job_id,
+                }
+            },
         )
+    return forecast_backfill_job.serialize_job(job)
+
+
+@app.get(
+    "/pilots/forecast_backfill/status/{job_id}",
+    dependencies=[Depends(require_read_token)],
+)
+def get_forecast_backfill_job_status(job_id: str) -> Dict[str, Any]:
+    """Poll the state of a job started by
+    ``POST /pilots/forecast_backfill/run``. 404 if the job_id is unknown."""
+    job = forecast_backfill_job.get_job_state(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown forecast backfill job.")
+    return forecast_backfill_job.serialize_job(job)
+
+
+@app.post(
+    "/pilots/forecast_backfill/cancel/{job_id}",
+    dependencies=[
+        Depends(require_forecast_backfill_enabled),
+        Depends(require_command_token),
+    ],
+)
+def cancel_forecast_backfill_job(job_id: str) -> Dict[str, Any]:
+    """Cancel an in-flight forecast backfill job (SIGTERM -> SIGKILL the
+    isolated worker process). 404 if the job_id is unknown."""
     try:
-        from ml.forecast_backfill import AgenticForecastBackfiller
-
-        engine = AgenticForecastBackfiller(
-            tickers=req.tickers,
-            start_date=req.start_date,
-            end_date=req.end_date,
-            horizons=req.horizons,
-            use_fmp=req.use_fmp,
-        )
-
-        try:
-            engine.step_1_fetch_data()
-            engine.step_2_calculate_technical_features()
-            engine.step_3_generate_primary_signals()
-            engine.step_4_create_meta_targets()
-            metrics = engine.step_5_backtrain_meta_labelers()
-            engine.step_6_execute_backfill()
-            output_df, summary = engine.export_results()
-            return {
-                "status": "success",
-                "summary": summary,
-                "sample_rows": len(output_df),
-            }
-        except Exception as exc:
-            logger.error("Forecast backfill run API call failed: %s", exc, exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Forecast backfill failed: {exc}")
-    finally:
-        _forecast_backfill_lock.release()
+        cancelled = forecast_backfill_job.cancel_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown forecast backfill job.")
+    job = forecast_backfill_job.get_job_state(job_id)
+    payload = forecast_backfill_job.serialize_job(job) if job else {"job_id": job_id}
+    payload["cancelled"] = cancelled
+    return payload
 
 
 @app.get("/pilots/{pilot_id}", dependencies=[Depends(require_read_token)])
@@ -3965,7 +4048,6 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("PROMPT_REGISTRY_ENABLED", "bool", {}),
             ("PROMPT_REGISTRY_BACKEND", "str", {}),
             ("ORCHESTRATOR_DAEMON_ENABLED", "bool", {}),
-            ("PILOTS_API_ENABLED", "bool", {}),
             ("CORS_ALLOWED_ORIGINS", "json", {}),
         ],
     ),
@@ -4589,6 +4671,26 @@ _SENTIMENT_INDEX = {
     for key, kind, extras in _specs
 }
 
+_CACHE_LONG_SHORT_GROUPS = [
+    (
+        "Cache Long/Short Overlay",
+        [
+            ("CACHE_LONG_SHORT_ENABLED", "bool", {}),
+            ("CACHE_LONG_SHORT_WRITES_ENABLED", "bool", {}),
+            ("CACHE_LONG_SHORT_MIN_CORRELATION", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("CACHE_LONG_SHORT_TLH_THRESHOLD_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
+            ("CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS", "int", {"min": 60, "max": 86400, "step": 60}),
+            ("CACHE_LONG_SHORT_PROXY_CANDIDATES", "json", {}),
+        ],
+    ),
+]
+
+_CACHE_LONG_SHORT_INDEX = {
+    key: (kind, extras)
+    for _group, _specs in _CACHE_LONG_SHORT_GROUPS
+    for key, kind, extras in _specs
+}
+
 _SECTOR_SELECTION_GROUPS = [
     (
         "Related Sector Selection",
@@ -4761,6 +4863,99 @@ def put_settings_sector_selection(body: TunablesUpdateRequest) -> Dict[str, Any]
     return _validate_and_write_payload(body.values, _SECTOR_SELECTION_INDEX, confirm=body.confirm)
 
 
+@app.get("/settings/cache-long-short", dependencies=[Depends(require_read_token)])
+def get_settings_cache_long_short() -> Dict[str, Any]:
+    """Get Cache Long/Short configuration."""
+    return _settings_editor_payload(_CACHE_LONG_SHORT_GROUPS, _CACHE_LONG_SHORT_INDEX)
+
+
+@app.put(
+    "/settings/cache-long-short",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
+    "/settings/cache-long-short",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_cache_long_short(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Update Cache Long/Short configuration in .env."""
+    return _validate_and_write_payload(body.values, _CACHE_LONG_SHORT_INDEX, confirm=body.confirm)
+
+# A handful of the DANGEROUS_KEYS-tier fields are not plain booleans and
+# need the same enum/json treatment their OTHER editors already give them
+# (_FMP_GROUPS's own FMP_BARS_ADJUSTMENT entry, _TUNABLE_GROUPS's own
+# CORS_ALLOWED_ORIGINS entry) -- inferring kind from the pydantic type
+# annotation alone would render FMP_BARS_ADJUSTMENT and
+# ROBINHOOD_EXECUTION_MODE as free-text inputs with no options constraint,
+# which is precisely wrong for the two highest-risk string fields in the
+# whole registry. Every other feature-flag key is a plain bool.
+_FEATURE_FLAGS_NON_BOOL_SPECS: Dict[str, tuple] = {
+    "ROBINHOOD_EXECUTION_MODE": ("enum", {"options": ["off", "review", "live"]}),
+    "FMP_BARS_ADJUSTMENT": (
+        "enum",
+        {"options": ["dividend-adjusted", "light", "full", "non-split-adjusted"]},
+    ),
+    "CORS_ALLOWED_ORIGINS": ("json", {}),
+}
+
+
+def _build_feature_flags_index():
+    dangerous_specs = [
+        (key, *_FEATURE_FLAGS_NON_BOOL_SPECS.get(key, ("bool", {})))
+        for key in sorted(settings_keysets.DANGEROUS_KEYS | set(feature_flags.WRITE_GATE_REASONS))
+    ]
+    diagnostic_specs = [
+        (key, *_FEATURE_FLAGS_NON_BOOL_SPECS.get(key, ("bool", {})))
+        for key in sorted(feature_flags.DIAGNOSTIC_FLAG_REASONS)
+    ]
+    groups = [
+        ("Write & Execution Gates", dangerous_specs),
+        ("Diagnostic & Data Features", diagnostic_specs),
+    ]
+    index = {k: (knd, ext) for _, sps in groups for k, knd, ext in sps}
+    return groups, index
+
+_FEATURE_FLAGS_GROUPS, _FEATURE_FLAGS_INDEX = _build_feature_flags_index()
+
+@app.get("/settings/feature-flags", dependencies=[Depends(require_read_token)])
+def get_feature_flags_settings() -> Dict[str, Any]:
+    """Return current values and metadata for every admin/write/execution
+    gate and read-only diagnostic feature flag in one place -- the single,
+    clearly-labeled Feature Flags screen. See pilots/feature_flags.py's
+    module docstring for the three-tier registry this is built from."""
+    return _settings_editor_payload(
+        _FEATURE_FLAGS_GROUPS, _FEATURE_FLAGS_INDEX
+    )
+
+@app.put(
+    "/settings/feature-flags",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
+    "/settings/feature-flags",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_feature_flags_settings(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    """Update feature flags in .env. Gated by
+    require_general_settings_writes_enabled -- matching every other
+    /settings/* editor's PUT (not require_automation_writes_enabled, whose
+    own docstring scopes it to the daemon interval and kill-switch resume
+    specifically and says every sibling flag must not ride in on it)."""
+    return _validate_and_write_payload(body.values, _FEATURE_FLAGS_INDEX, confirm=body.confirm)
+
+
 @app.get("/settings/fmp", dependencies=[Depends(require_read_token)])
 def get_settings_fmp() -> Dict[str, Any]:
     """Get Financial Modeling Prep (FMP) configuration."""
@@ -4831,7 +5026,7 @@ def require_dead_letter_retry_enabled() -> None:
     ``main.py`` subprocess (network calls, a fresh data fetch, a real
     advisory evaluation) — a materially different cost/risk than any
     existing flag was scoped for. Mirrors ``require_automation_writes_enabled``
-    exactly — deliberately NOT GUI-writable (``gui/env_io.py``), hand-set in
+    exactly — GUI-writable (as of 2026-08-08) (``gui/env_io.py``), surfaced in the Feature Flags screen
     ``.env`` only. ``GET /dead-letter`` is read-only and NOT gated by this
     flag (``require_read_token`` alone, matching every other GET here)."""
     if not settings.DEAD_LETTER_RETRY_ENABLED:
@@ -5004,8 +5199,8 @@ def require_prompt_registry_writes_enabled() -> None:
     PLATFORM ACTUALLY RUNS, its own risk class distinct from a numeric
     tunable or a signal weight, and must not ride in on a flag scoped to a
     different concern. Mirrors ``require_strategy_writes_enabled`` exactly —
-    deliberately NOT GUI-writable (absent from BOTH ``gui/env_io.py``'s
-    ``ALLOWED_KEYS`` and ``SECRET_KEYS``), hand-set in ``.env`` only.
+    GUI-writable (as of 2026-08-08) (absent from BOTH ``gui/env_io.py``'s
+    ``ALLOWED_KEYS`` and ``SECRET_KEYS``), surfaced in the Feature Flags screen.
     ``GET /prompts`` and ``GET /prompts/{id}`` are read-only and NOT gated by
     this flag (``require_read_token`` alone, matching ``GET /strategy/matrix``
     and every other GET on this API)."""

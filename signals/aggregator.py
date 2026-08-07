@@ -419,7 +419,16 @@ class SignalAggregator:
                     meta_hard_gate = True
                     mlp = 0.0
             else:
-                # No MetaLabeler registered: use the SignalOutput placeholder (1.0)
+                # No MetaLabeler registered for this signal yet: fall back to
+                # the SignalOutput placeholder (default 1.0) — this is the
+                # documented pre-Stage-4 behavior (see module docstring: "When
+                # global_meta_registry is empty ... behavior is identical to
+                # the pre-Stage-4 code"). Failing closed here instead would
+                # silently zero the Kelly Target for every signal that has no
+                # trained meta-labeler yet, which today is most of them — a
+                # platform-wide sizing regression with no opt-in flag guarding
+                # it. The hard gate below still fires once a MetaLabeler IS
+                # registered for a signal and reports low confidence.
                 mlp = max(1e-9, min(1.0, float(output.meta_label_proba)))
 
             # Accumulate in log-space only when the hard gate has not triggered.
@@ -535,7 +544,12 @@ class SignalAggregator:
                         "MetaLabelerRegistry vectorized predict failed: %s — defaulting to 1.0.", exc
                     )
 
-            mlp_raw = df_out['meta_label_proba'].astype(float)
+            # `df_out['meta_label_proba']` already carries the SignalOutput
+            # placeholder default (1.0) for every ticker when no MetaLabeler
+            # is registered for `name` (see signals/base.py's vectorized
+            # DataFrame construction) — matching the row-wise `aggregate()`
+            # fallback above, not a fail-closed 0.0.
+            mlp_raw = df_out.get('meta_label_proba', pd.Series(1.0, index=universe_df.index)).astype(float)
             clamped_mlp_columns[name] = mlp_raw.clip(lower=1e-9, upper=1.0)
 
             # Per-ticker SignalOutput construction + explanation-line parsing.

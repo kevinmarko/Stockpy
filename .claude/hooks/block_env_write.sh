@@ -11,7 +11,12 @@
 # exact basename `.env` is.
 set -uo pipefail
 
-input="$(cat)"
+input=""
+if [ ! -t 0 ]; then
+  if IFS= read -r -t 1 first_line; then
+    input="$(printf '%s\n' "$first_line"; cat)"
+  fi
+fi
 file_path="$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty')"
 
 if [ -n "$file_path" ] && [ "$(basename -- "$file_path")" = ".env" ]; then

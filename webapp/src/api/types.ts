@@ -120,6 +120,13 @@ export interface Holding {
   buy_range: string | null;
   sell_range: string | null;
   conviction: number | null;
+  /**
+   * ML meta-labeler gate output (roughly [0,1]) this holding's position
+   * sizing was scaled by. `0` is a real, meaningful value (a hard gate can
+   * zero it); `null` means it wasn't computed this cycle — never a
+   * fabricated default.
+   */
+  meta_label_composite: number | null;
 }
 
 export interface SectorSlice {
@@ -3366,6 +3373,31 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Thrown by client.ts's `runForecastBackfill` (and mock.ts's equivalent)
+ * when `POST /pilots/forecast_backfill/run` 409s because a run is already
+ * in progress (`ml/forecast_backfill_job.py`'s single-flight guard,
+ * surfaced by `api/pilots_api.py`'s `run_forecast_backfill_endpoint` as a
+ * structured body: `{"detail": {"detail": "...", "job_id": "<id>"}}`).
+ * Carries the EXISTING job's id so `useBackfillJob`'s `start()` can seed
+ * `activeJobId` from it and poll that job's real progress instead of
+ * surfacing a dead-end error — the backend endpoint's own stated reason for
+ * including the id in the 409 body at all. A distinct subclass (rather than
+ * a generic `ApiError`) so callers can `instanceof`-branch on it exactly
+ * like `TriggerRunResult`'s `already_running` tag lets `RunNowButton`
+ * branch on `POST /automation/run`'s 409, without needing a second return
+ * shape for this endpoint's otherwise-`ForecastBackfillJob`-returning
+ * success path.
+ */
+export class ForecastBackfillConflictError extends ApiError {
+  existingJobId: string | null;
+  constructor(message: string, existingJobId: string | null) {
+    super(message, 409);
+    this.name = "ForecastBackfillConflictError";
+    this.existingJobId = existingJobId;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Report Library (GET /reports, GET /reports/{name}) + Dead-Letter Queue
 // (GET /dead-letter, POST /dead-letter/retry) — parity gaps G5/G6.
@@ -3561,6 +3593,7 @@ export interface ForecastBackfillModelMetrics {
   n_train: number;
   n_test: number;
   split_date: string;
+  is_active?: boolean;
 }
 
 export interface ForecastBackfillSummary {
@@ -3576,6 +3609,37 @@ export interface ForecastBackfillSummary {
    * dropped from the run. They are permanently removed from the watchlist after
    * 3 consecutive failures. */
   dropped_tickers?: string[];
+}
+
+export type ForecastBackfillJobState = "running" | "succeeded" | "failed" | "timeout" | "cancelled";
+
+export type ForecastBackfillPhase =
+  | "fetching_data"
+  | "technical_features"
+  | "primary_signals"
+  | "meta_targets"
+  | "backtraining"
+  | "backfilling"
+  | "exporting";
+
+/** Only meaningful once `state` is a terminal failure state -- mirrors
+ *  `ml/forecast_backfill_job.py`'s `BackfillErrorType` exactly. `"timeout"`/
+ *  `"cancelled"` only ever accompany their same-named `state`; a `state:
+ *  "failed"` job's `error_type` is always `"value_error"` (bad request
+ *  parameters) or `"unexpected"` (a genuine training-time exception). */
+export type ForecastBackfillErrorType = "value_error" | "unexpected" | "timeout" | "cancelled" | null;
+
+export interface ForecastBackfillJob {
+  job_id: string;
+  state: ForecastBackfillJobState;
+  phase: ForecastBackfillPhase | null;
+  step: number;
+  total_steps: number;
+  error: string | null;
+  error_type: ForecastBackfillErrorType;
+  summary: ForecastBackfillSummary | null;
+  sample_rows: number | null;
+  seconds_remaining: number;
 }
 
 export interface CacheLongShortConcentratedPosition {

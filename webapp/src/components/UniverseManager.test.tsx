@@ -49,6 +49,30 @@ describe("UniverseManager (real mock API)", () => {
     );
   });
 
+  it("clears the input after a successful add instead of leaving the added ticker behind", async () => {
+    // Regression test: SymbolInput only reads its `initial` prop on mount
+    // (it manages `value` internally), so passing `initial={draft}` alone
+    // and resetting `draft` to "" after a successful add did NOT visibly
+    // clear the field -- the just-added ticker silently lingered in the box.
+    render(
+      <MemoryRouter>
+        <UniverseManager />
+      </MemoryRouter>
+    );
+    await screen.findByTestId("universe-chip-AAPL");
+
+    const input = screen.getByLabelText("Add a stock") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "nvda" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("universe-chip-NVDA")).toBeInTheDocument()
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Add a stock")).toHaveValue("")
+    );
+  });
+
   it("removing a stock drops its chip", async () => {
     render(
       <MemoryRouter>

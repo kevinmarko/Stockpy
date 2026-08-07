@@ -15,6 +15,7 @@ vi.mock("../api/client", () => ({
     // resolving null exercises its documented non-fatal-failure path
     // rather than needing a full Thresholds fixture here.
     getThresholds: vi.fn().mockResolvedValue(null),
+    getUniverse: vi.fn().mockResolvedValue({ symbols: [] }),
   },
   apiMeta: { useMock: false },
 }));
@@ -136,4 +137,35 @@ test("configurator allows starting a strategy after a successful simulation", as
     });
   });
   expect(await screen.findByText(/Strategy started/i)).toBeInTheDocument();
+});
+
+test("configurator simulates the freshly typed ticker without requiring Enter first", async () => {
+  // Regression test: the Concentrated Ticker SymbolInput hides its submit
+  // button (hideButton), so a user's only visible affordance is typing then
+  // clicking "Simulate Strategy" directly. Before this fix, ConfiguratorWizard
+  // only wired SymbolInput's onSubmit (fires on Enter/suggestion-accept only)
+  // and not onChange, so clicking Simulate without pressing Enter first
+  // silently simulated the STALE default ticker ("AAPL") instead of whatever
+  // was actually typed.
+  mockDashboardEnabled();
+  vi.mocked(api.simulateCls).mockResolvedValue({
+    found: true,
+    reason: null,
+    beta: 0.9,
+    proxy_ticker: "XLE",
+    correlation_coefficient: 0.7,
+  });
+
+  render(<CacheLongShort />);
+  fireEvent.click(await screen.findByText("Configurator"));
+
+  const tickerInput = screen.getByLabelText("Concentrated Ticker");
+  fireEvent.change(tickerInput, { target: { value: "tsla" } });
+  // Deliberately no Enter/blur -- click straight through, matching how an
+  // operator actually interacts with a button-less field.
+  fireEvent.click(screen.getByText("Simulate Strategy"));
+
+  await waitFor(() => {
+    expect(api.simulateCls).toHaveBeenCalledWith({ ticker: "TSLA", allocation: 10000 });
+  });
 });

@@ -69,6 +69,7 @@ class CrossSectionalMomentumSignal(SignalModule):
 
     name = "cross_sectional_momentum"
     required_features: list[str] = []  # Cross-sectional data lives in context, not row
+    meta_label_features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "MACD_Signal", "Vol_Ratio", "ROC_12M", "ROC_6M", "GARCH_Vol", "SMA_5", "SMA_200", "RSI_2"]
 
     # ------------------------------------------------------------------ #
     # Phase 1: called once per cycle on the full universe DataFrame        #

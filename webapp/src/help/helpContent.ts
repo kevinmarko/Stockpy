@@ -390,6 +390,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "Entry points to every `.env`-write surface and sub-system: the Strategy Matrix (per-module signal weights), general runtime tunables, the scoped sentiment/sector-selection/FMP/ETF-transmission editors, the Prompt Registry, the AI Control Center, and your active Pilot follows.",
     keyConcepts: ["signal weight", "prompt registry"],
   },
+  "settings-feature-flags": {
+    title: "Feature Flags",
+    description:
+      "Admin and execution capabilities, grouped into two kinds. Write & Execution Gates enable or disable writes, live trading execution, AI generation APIs, and critical automation loops — some require typed confirmation before toggling because they can fundamentally change platform behavior from 'advisory-only' to 'live trading execution'. Diagnostic & Data Features are read-only measurement/data-source switches with no execution risk of their own.",
+    keyConcepts: ["advisory only", "kill switch"],
+  },
   "symbol-detail": {
     title: "Symbol Detail",
     description:

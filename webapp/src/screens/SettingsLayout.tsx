@@ -9,6 +9,7 @@ export function SettingsLayout() {
     { path: "/settings/universe", label: "🎯 Tracked Universe" },
     { path: "/settings/brokers", label: "🔑 Brokers & Keys" },
     { path: "/settings/modules", label: "🎛️ Tunables & Modules" },
+    { path: "/settings/feature-flags", label: "🚩 Feature Flags" },
   ];
 
   return (

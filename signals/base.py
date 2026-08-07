@@ -120,6 +120,25 @@ class SignalModule(ABC):
 
     name: str = ""
     required_features: List[str] = []
+    
+    # Meta-labeling schema definitions (read by ml/forecast_backfill.py).
+    # Subclasses should override these if they support meta-labeling training.
+    # meta_label_features: which of the engine's computed technical columns
+    # this strategy trains/infers its meta-labeler on. Empty (the default)
+    # means "not meta-labeling-enabled" -- the backfiller skips it entirely.
+    meta_label_features: List[str] = []
+    # meta_label_horizons: the specific horizon set this strategy predicts
+    # for, IF it needs one different from whatever horizons the caller
+    # requested (AgenticForecastBackfiller's own `horizons` param, itself
+    # sourced from settings.FORECAST_BACKFILL_HORIZONS). Default is None --
+    # "no override" -- not a concrete list, deliberately: a concrete default
+    # here would silently shadow every caller-requested horizon set for
+    # every module that doesn't customize it (which was, in practice, every
+    # module), since a present class attribute always wins over a caller's
+    # explicit request in the `getattr(module, "meta_label_horizons",
+    # self.horizons)` read pattern the backfiller uses. Only set this when a
+    # strategy genuinely needs specific horizons regardless of what's asked.
+    meta_label_horizons: Optional[List[int]] = None
 
     def is_active_in_regime(self, macro: MacroEconomicDTO) -> bool:
         """Whether this module should contribute to the aggregate score this cycle.

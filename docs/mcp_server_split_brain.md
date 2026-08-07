@@ -12,7 +12,7 @@ local disk and the other reads it off a remote VM that nobody has redeployed:
 
 | Registration | Config file | Transport | What it actually runs |
 |---|---|---|---|
-| `investyo-platform` | `~/.claude.json` (Claude Code project config, under both the `/Users/kevinlee/Desktop/Stockpy` and `/Users/kevinlee` project entries) | stdio, direct | `/Users/kevinlee/Desktop/Stockpy/.venv/bin/python3 /Users/kevinlee/Desktop/Stockpy/investyo_mcp_server.py` — whatever is checked out **locally**, currently `origin/main` tip |
+| `investyo-platform` | `~/.claude.json` (Claude Code project config, under both the `/Users/kevinlee/Stockpy-live` and `/Users/kevinlee` project entries) | stdio, direct | `/Users/kevinlee/Stockpy-live/.venv/bin/python3 /Users/kevinlee/Stockpy-live/investyo_mcp_server.py` — whatever is checked out **locally**, currently `origin/main` tip |
 | `investyo` | `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop) | stdio, via `gcloud compute ssh` | `sudo -u investyo bash -c 'cd /opt/investyo && exec .venv/bin/python investyo_mcp_server.py'` on the **`investyo-vm`** GCP VM (`us-east4-c` / `stock-data-engine`) — whatever was checked out at `/opt/investyo` the last time someone ran `deploy/setup_gcp_vm.sh` or manually pulled |
 
 `deploy/setup_gcp_vm.sh` is a **one-time bootstrap** script (creates the service
@@ -111,8 +111,52 @@ there won't propagate to this hand-rolled config unless someone remembers to
 port it by hand a second time).
 
 Worth switching this config entry to invoke `mcp_remote_adapter.py` directly
-(`python3 /Users/kevinlee/Desktop/Stockpy/mcp_remote_adapter.py`), matching the
+(`python3 /Users/kevinlee/Stockpy-live/mcp_remote_adapter.py`), matching the
 pattern `investyo-platform`'s own Claude Code registration already uses for the
 local server. **Not fixed here** — editing a live Claude Desktop config is
 outside a code PR's blast radius and deserves its own explicit go-ahead from
 the operator, not a silent side effect of an unrelated MCP-tools PR.
+
+## Addendum: `streamable-http` is a third, separate deployment path (2026-08)
+
+`investyo_mcp_server.py` gained a `--transport streamable-http` option (see
+`docs/architecture/observability-and-apis.md`'s widget-resources entry) to give
+the new MCP Apps SDK Pilot-picker widgets a host that can actually render
+them — bearer-token gated via `settings.MCP_HTTP_BEARER_TOKEN`, typically run
+ad hoc from a developer's own machine behind a tunnel (e.g. for testing against
+claude.ai as a custom connector), not a long-lived service. This is
+**intentionally not a third registration competing with the two above**, and
+redeploying it is **not** a fix for the `stdio`/`sse` drift this file
+documents: it doesn't touch `~/.claude.json`, `claude_desktop_config.json`,
+`investyo-vm`, or `deploy/investyo-mcp.service`, and neither existing
+registration is expected to ever switch to it. Treat any `streamable-http`
+instance as ephemeral, developer-machine-local tooling, separate from the two
+production-ish stdio connections this document tracks.
+
+## Addendum: `--auth-mode oauth` is an orthogonal choice within `streamable-http`, not a fourth path (2026-08)
+
+`--transport streamable-http` gained a further `--auth-mode {bearer,oauth}`
+flag (default `bearer`, preserving the behavior described above exactly).
+This is **not** a fourth deployment path competing with the three already
+documented in this file — it's a second axis *within* the same
+`streamable-http` transport, choosing how that one transport authenticates:
+
+- `--auth-mode bearer` (default): the existing `MCP_HTTP_BEARER_TOKEN`
+  perimeter described above, unchanged.
+- `--auth-mode oauth` (`settings.MCP_OAUTH_ENABLED=True`): a full OAuth 2.1
+  authorization server (`mcp_oauth_provider.py`) instead of a static token.
+  This exists because claude.ai's custom-connector UI has no field for a
+  static bearer token — it only speaks OAuth's dynamic-client-registration +
+  authorization-code flow — so a bearer-token instance cannot be added there
+  as a connector at all, only an oauth-mode one can.
+
+The same tunnel-stability reasoning already established for `streamable-http`
+above applies with one extra constraint for oauth mode specifically: OAuth has
+an issuer-identity concept (`MCP_OAUTH_ISSUER_URL`) that plain bearer-token
+auth doesn't, so oauth mode requires a **named/stable-hostname tunnel** —
+unlike bearer mode, which tolerates an ephemeral quick-tunnel URL, an
+oauth-mode server's issuer URL must stay constant across restarts for
+already-registered OAuth clients (and their issued tokens) to keep working.
+Both sub-modes remain ephemeral, developer-machine-local tooling in the same
+sense as the rest of this addendum — neither is wired into `~/.claude.json`,
+`claude_desktop_config.json`, `investyo-vm`, or `deploy/investyo-mcp.service`.

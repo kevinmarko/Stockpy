@@ -15,7 +15,7 @@
 
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { mockApi } from "./mock";
-import { ApiError } from "./types";
+import { ApiError, ForecastBackfillConflictError } from "./types";
 import type {
   CurvePoint,
   Headline,
@@ -61,6 +61,7 @@ function expectHolding(h: Holding) {
   expect(typeof h.weight).toBe("number");
   expect(typeof h.score).toBe("number");
   expect(h.price === null || typeof h.price === "number").toBe(true);
+  expect(h.meta_label_composite === null || typeof h.meta_label_composite === "number").toBe(true);
 }
 
 describe("mock API — /pilots list contract", () => {
@@ -658,6 +659,117 @@ describe("mock API — async device-approval-push brokerage login contract", () 
     const afterPromise = mockApi.getBrokerageStatus();
     await vi.advanceTimersByTimeAsync(100);
     expect((await afterPromise).connected).toBe(false);
+  });
+});
+
+describe("mock API — async forecast backfill job contract", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    localStorage.clear();
+    vi.useRealTimers();
+  });
+
+  // Every test below explicitly CANCELS whatever job it creates before
+  // finishing, rather than advancing past its natural ~14s completion --
+  // `cancelled` is a sticky flag on the job record itself, while "elapsed
+  // >= 14s -> succeeded" is re-derived from `Date.now() - startedAt` on
+  // every read. `vi.useRealTimers()` (afterEach) followed by the NEXT
+  // test's fresh `vi.useFakeTimers()` (beforeEach) re-seeds the fake clock
+  // at the real current wall-clock time, not where the previous test's
+  // virtual clock left off -- so a job "advanced" to success in one test
+  // reverts to looking freshly `"running"` (elapsed ~0) once a later test's
+  // clock resets, and would otherwise falsely trip
+  // `_findRunningForecastBackfillJobId()` for every subsequent test in this
+  // file. Cancelling sidesteps this entirely: the `cancelled` branch is
+  // checked before any elapsed-time math, so it can never revert.
+  //
+  // `cancelForecastBackfillJob` (like every other mock call here) resolves
+  // via a fake `setTimeout` internally (`delay()`) -- it must be paired
+  // with an explicit timer advance or the awaiting call hangs forever under
+  // `vi.useFakeTimers()`.
+  async function cancelJob(jobId: string) {
+    const p = mockApi.cancelForecastBackfillJob(jobId);
+    await vi.advanceTimersByTimeAsync(300);
+    return p;
+  }
+
+  it("runForecastBackfill() immediately returns a running job with phase: null, mirroring the real backend's initial 202 (nothing drained off the events pipe yet)", async () => {
+    const jobPromise = mockApi.runForecastBackfill();
+    await vi.advanceTimersByTimeAsync(300);
+    const initial = await jobPromise;
+
+    expect(initial.state).toBe("running");
+    expect(initial.phase).toBeNull();
+    expect(initial.step).toBe(0);
+    expect(typeof initial.job_id).toBe("string");
+
+    await cancelJob(initial.job_id);
+  });
+
+  it("runForecastBackfill() rejects with ForecastBackfillConflictError carrying the existing job_id when one is already running", async () => {
+    const firstPromise = mockApi.runForecastBackfill();
+    await vi.advanceTimersByTimeAsync(300);
+    const first = await firstPromise;
+    expect(first.state).toBe("running");
+
+    await expect(mockApi.runForecastBackfill()).rejects.toBeInstanceOf(ForecastBackfillConflictError);
+    await expect(mockApi.runForecastBackfill()).rejects.toMatchObject({
+      status: 409,
+      existingJobId: first.job_id,
+    });
+
+    await cancelJob(first.job_id);
+  });
+
+  it("cancelForecastBackfillJob() preserves whatever phase/step the job had already reached, not the first phase", async () => {
+    const jobPromise = mockApi.runForecastBackfill();
+    await vi.advanceTimersByTimeAsync(300);
+    const initial = await jobPromise;
+
+    // Advance into the "primary_signals" / step 3 window (see
+    // _mockForecastBackfillJobStatus's timeline: 4s <= elapsed < 6s).
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const cancelPromise = mockApi.cancelForecastBackfillJob(initial.job_id);
+    await vi.advanceTimersByTimeAsync(300);
+    const cancelled = await cancelPromise;
+
+    expect(cancelled.state).toBe("cancelled");
+    expect(cancelled.error_type).toBe("cancelled");
+    expect(cancelled.phase).toBe("primary_signals");
+    expect(cancelled.step).toBe(3);
+  });
+
+  it("the stockpy.mock.forecast_backfill_failure marker makes a job fail partway through with error_type: value_error", async () => {
+    localStorage.setItem("stockpy.mock.forecast_backfill_failure", "1");
+
+    const jobPromise = mockApi.runForecastBackfill();
+    await vi.advanceTimersByTimeAsync(300);
+    const initial = await jobPromise;
+    expect(initial.state).toBe("running");
+
+    await vi.advanceTimersByTimeAsync(3500);
+    const statusPromise = mockApi.getForecastBackfillJobStatus(initial.job_id);
+    await vi.advanceTimersByTimeAsync(300);
+    const finalStatus = await statusPromise;
+
+    expect(finalStatus.state).toBe("failed");
+    expect(finalStatus.error_type).toBe("value_error");
+    expect(finalStatus.error).toBeTruthy();
+
+    // A "failed" job is elapsed-time-derived too (simulateFailure persists,
+    // but the <3s/>=3s branch does not) -- cancel it for the same reason as
+    // every other test in this block.
+    await cancelJob(initial.job_id);
+  });
+
+  it("getForecastBackfillJobStatus() for an unknown job_id throws ApiError(404)", async () => {
+    await expect(mockApi.getForecastBackfillJobStatus("no-such-job")).rejects.toMatchObject({
+      status: 404,
+    });
   });
 });
 

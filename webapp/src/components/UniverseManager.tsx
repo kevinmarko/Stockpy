@@ -5,13 +5,17 @@ import type { UniverseListResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading } from "./ui";
+import { SymbolInput } from "./SymbolInput";
 import { theme } from "../theme";
 import { Modal } from "./Modal";
 
 export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => void }) {
   const nav = useNavigate();
   const loaded = useApi<UniverseListResponse>(() => api.getDataUniverse(), []);
-  const { run: save, pending, error: saveError } = useMutation(api.updateDataUniverse);
+  const { run: save, pending, error: saveError } = useMutation(
+    api.updateDataUniverse,
+    { successMessage: "Universe updated" }
+  );
   const [symbols, setSymbols] = useState<string[] | null>(null);
   const [draft, setDraft] = useState("");
   const [note, setNote] = useState<string | null>(null);
@@ -39,8 +43,8 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
     }
   };
 
-  const add = async () => {
-    const sym = draft.trim().toUpperCase();
+  const addSymbol = async (sym: string) => {
+    sym = sym.trim().toUpperCase();
     if (!sym) return;
     if (list.includes(sym)) {
       setNote(`${sym} is already tracked.`);
@@ -138,25 +142,23 @@ export function UniverseManager({ onSelect }: { onSelect?: (symbol: string) => v
             )}
           </div>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void add();
+          <SymbolInput
+            // SymbolInput only reads `initial` on mount (it's uncontrolled
+            // internally), so re-keying on `draft` forces a remount -- and
+            // therefore a visible clear of the typed text -- once addSymbol
+            // resets draft back to "" after a successful add. Without this
+            // the input silently kept showing the just-added ticker.
+            key={draft}
+            label="Add a stock"
+            initial={draft}
+            onSubmit={(sym) => {
+              setDraft(sym);
+              void addSymbol(sym);
             }}
-            style={{ display: "flex", gap: "var(--s-2)", alignItems: "flex-end" }}
-          >
-            <div style={{ flex: 1 }}>
-              <Input
-                label="Add a stock"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                hint="Enter any ticker and press Add — it joins your tracked universe."
-              />
-            </div>
-            <Button type="submit" variant="primary" pending={pending}>
-              Add
-            </Button>
-          </form>
+            hint="Enter any ticker and press Add — it joins your tracked universe."
+            buttonText="Add"
+            pending={pending}
+          />
           {(note || saveError) && (
             <div style={{ marginTop: "var(--s-2)", fontSize: "var(--t-body)", color: saveError ? theme.decline : theme.textMuted }}>
               {saveError ?? note}

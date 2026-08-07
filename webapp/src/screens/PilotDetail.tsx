@@ -194,7 +194,7 @@ export function PilotDetail() {
                     </div>
                   </div>
                 </div>
-                {(hd.action || hd.buy_range || hd.sell_range) && (
+                {(hd.action || hd.buy_range || hd.sell_range || hd.meta_label_composite != null) && (
                   <div style={{
                     width: "100%",
                     paddingTop: "var(--s-2)",
@@ -214,6 +214,12 @@ export function PilotDetail() {
                       <div style={{ display: "flex", gap: "var(--s-1)" }}>
                         <span style={{ fontWeight: 600 }}>Conviction:</span>
                         <span className="num">{fmtNum(hd.conviction, 2)}</span>
+                      </div>
+                    )}
+                    {hd.meta_label_composite != null && (
+                      <div style={{ display: "flex", gap: "var(--s-1)" }}>
+                        <span style={{ fontWeight: 600 }}>Meta-Label Conf:</span>
+                        <span className="num">{fmtNum(hd.meta_label_composite, 3)}</span>
                       </div>
                     )}
                     {hd.buy_range && (

@@ -221,4 +221,80 @@ describe("Comparison screen (R2)", () => {
     expect(header.style.whiteSpace).toBe("normal");
     expect(header.style.wordBreak).toBe("break-word");
   });
+
+  // T3.1: Category accordions group pilots and show a live, per-category
+  // selected count that updates as checkboxes inside that category toggle.
+  it("groups pilots into category accordions with a live per-category selected count", async () => {
+    const { container } = renderComparison();
+    await screen.findByTestId("comparison-checkbox-trend-following");
+
+    const momentumSummary = Array.from(container.querySelectorAll("summary")).find((el) =>
+      el.textContent?.startsWith("Momentum ")
+    );
+    expect(momentumSummary).toBeDefined();
+    expect(momentumSummary?.textContent).toMatch(/\(0\/5\)/);
+
+    fireEvent.click(screen.getByTestId("comparison-checkbox-trend-following"));
+    expect(momentumSummary?.textContent).toMatch(/\(1\/5\)/);
+
+    // A pilot in a different category (Mean Reversion) never bleeds into
+    // Momentum's count.
+    fireEvent.click(await screen.findByTestId("comparison-checkbox-dip-buyer"));
+    expect(momentumSummary?.textContent).toMatch(/\(1\/5\)/);
+  });
+
+  // T3.2: Quick-add dropdown is a second path to the same selection state as
+  // the checkboxes -- it must stay in sync both ways.
+  it("selecting a pilot from the quick-add dropdown checks it and removes it from the dropdown's own options", async () => {
+    renderComparison();
+    // Wait for the pilot list (and thus the dropdown's <option>s) to load --
+    // setting .value to an option that doesn't exist yet is a silent no-op.
+    await screen.findByTestId("comparison-checkbox-trend-following");
+    const dropdown = await screen.findByTestId("comparison-quick-add");
+    fireEvent.change(dropdown, { target: { value: "trend-following" } });
+
+    // Toggle renders `<button role="switch" aria-checked>`, not a native
+    // checkbox input -- see Toggle.tsx's own doc comment.
+    const toggle = await screen.findByTestId("comparison-checkbox-trend-following");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+
+    // The now-selected pilot's own <option> is disabled so it can't be
+    // "added" a second time from the dropdown.
+    const option = within(dropdown as HTMLSelectElement).getByText("Trend Follower") as HTMLOptionElement;
+    expect(option.disabled).toBe(true);
+
+    // The dropdown itself resets to its placeholder rather than sticking on
+    // the just-picked pilot (it's controlled with value="").
+    expect((dropdown as HTMLSelectElement).value).toBe("");
+  });
+
+  // T3.3: The quick-add dropdown enforces the same 5-pilot cap as the
+  // checkboxes, not a separate/forgotten limit.
+  it("disables the quick-add dropdown once 5 pilots are selected", async () => {
+    renderComparison();
+    const pilots = await api.listPilots();
+    for (let i = 0; i < 5; i++) {
+      const cb = await screen.findByTestId(`comparison-checkbox-${pilots[i].id}`);
+      fireEvent.click(cb);
+    }
+    const dropdown = (await screen.findByTestId("comparison-quick-add")) as HTMLSelectElement;
+    expect(dropdown.disabled).toBe(true);
+  });
+
+  // T3.4 (regression): the Max Drawdown heatmap must highlight the SMALLER
+  // (better) magnitude, never the larger one -- max_drawdown is a positive
+  // fraction (0.19 = 19% drawdown), so "best" is a min, not a max. Fixture:
+  // trend-following = 0.19, dip-buyer = 0.14 (dip-buyer is the honest best).
+  it("highlights the smaller (better) Max Drawdown value, never the larger one", async () => {
+    renderComparison();
+    fireEvent.click(await screen.findByTestId("comparison-checkbox-trend-following"));
+    fireEvent.click(await screen.findByTestId("comparison-checkbox-dip-buyer"));
+
+    expect(await screen.findByText("Key Metrics Comparison")).toBeInTheDocument();
+    const worseCell = screen.getByText("19%").closest('[role="cell"]') as HTMLElement;
+    const betterCell = screen.getByText("14%").closest('[role="cell"]') as HTMLElement;
+
+    expect(betterCell).toHaveStyle({ color: "rgb(16, 185, 129)" });
+    expect(worseCell).not.toHaveStyle({ color: "rgb(16, 185, 129)" });
+  });
 });

@@ -43,6 +43,11 @@ class BaseDaemonEntrypointTest(unittest.TestCase):
         self._load_dotenv_patcher.start()
         self.addCleanup(self._load_dotenv_patcher.stop)
 
+        self._pilots_api_enabled_patcher = patch("settings.settings.PILOTS_API_ENABLED", False)
+        self._pilots_api_enabled_patcher.start()
+        self.addCleanup(self._pilots_api_enabled_patcher.stop)
+
+
     def _make_mock_daemon_class(self, status=None):
         """Return a MagicMock standing in for OrchestratorDaemon, plus the
         instance it will return when constructed.
@@ -462,9 +467,10 @@ class TestPilotsAPIHosting(BaseDaemonEntrypointTest):
         self._sigmask_patcher.start()
         self.addCleanup(self._sigmask_patcher.stop)
 
-    def test_disabled_by_default_no_second_server_or_thread(self):
+    def test_enabled_by_default_starts_second_server(self):
         from settings import settings
-        self.assertFalse(settings.PILOTS_API_ENABLED)  # precondition: real default
+        self._pilots_api_enabled_patcher.stop() # unpatch to test real default
+        self.assertTrue(settings.PILOTS_API_ENABLED)  # precondition: real default
 
         daemon_cls, instance = self._make_mock_daemon_class()
         with self._patch_daemon_class(daemon_cls), \
@@ -472,11 +478,11 @@ class TestPilotsAPIHosting(BaseDaemonEntrypointTest):
              patch.object(self.mod, "_write_daemon_file") as mock_write:
             self.mod.run_forever(60)
 
-        self.assertEqual(len(_FakeWatcherThread.pilots_api_instances()), 0)
-        self.assertEqual(len(self._fake_api_server_holder["instances"]), 1)  # Control API only
+        self.assertEqual(len(_FakeWatcherThread.pilots_api_instances()), 1)
+        self.assertEqual(len(self._fake_api_server_holder["instances"]), 2)
         # call_args_list[0] -- the startup write, not the terminal one.
         _, kwargs = mock_write.call_args_list[0]
-        self.assertIsNone(kwargs.get("pilots_api_port"))
+        self.assertEqual(kwargs.get("pilots_api_port"), settings.PILOTS_API_PORT)
 
     def test_enabled_starts_second_server_and_thread_on_configured_port(self):
         from settings import settings

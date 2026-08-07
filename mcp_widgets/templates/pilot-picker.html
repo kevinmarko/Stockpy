@@ -1,0 +1,148 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+/*__WIDGET_COMMON_CSS__*/
+
+.picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+.pilot-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.pilot-card-header strong {
+  font-size: 14px;
+}
+
+.pilot-card-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.pilot-card-footer {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.view-details {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.detail-expansion {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+}
+</style>
+<body>
+  <div id="grid" class="picker-grid"></div>
+</body>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+/*__WIDGET_COMMON_JS__*/
+const { App } = globalThis.ExtApps;
+(async () => {
+  const app = new App({ name: "PilotPicker", version: "1.0.0" }, {}, { autoResize: true });
+
+  app.ontoolresult = ({ content }) => {
+    const rows = extractJsonPayload(content[0].text);
+    renderCardGrid(rows || []);
+  };
+
+  function renderCardGrid(rows) {
+    const grid = document.getElementById("grid");
+    grid.innerHTML = "";
+    for (const row of rows) {
+      const card = document.createElement("div");
+      card.className = "card pilot-card";
+
+      const header = document.createElement("div");
+      header.className = "pilot-card-header";
+      const nameEl = document.createElement("strong");
+      nameEl.textContent = row.name || "";
+      const idEl = document.createElement("span");
+      idEl.className = "pilot-card-id";
+      idEl.textContent = row.id || "";
+      header.appendChild(nameEl);
+      header.appendChild(idEl);
+      header.insertAdjacentHTML("beforeend", categoryChip(row.category));
+      header.insertAdjacentHTML("beforeend", deployableBadge(row.headline?.deployable));
+      card.appendChild(header);
+
+      const statRow = document.createElement("div");
+      statRow.className = "stat-row";
+      const headline = row.headline || {};
+      const stats = [
+        ["Sharpe", fmtMetric(headline.sharpe)],
+        ["DSR", fmtMetric(headline.dsr)],
+        ["PBO", fmtMetric(headline.pbo)],
+      ];
+      for (const [label, value] of stats) {
+        const cell = document.createElement("div");
+        const labelEl = document.createElement("div");
+        labelEl.className = "stat-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("div");
+        valueEl.className = "stat-value";
+        valueEl.textContent = value;
+        cell.appendChild(labelEl);
+        cell.appendChild(valueEl);
+        statRow.appendChild(cell);
+      }
+      card.appendChild(statRow);
+
+      const footer = document.createElement("div");
+      footer.className = "pilot-card-footer";
+      const holdingsEl = document.createElement("span");
+      holdingsEl.textContent = `Holdings: ${row.holdings_count ?? "—"}`;
+      const aumEl = document.createElement("span");
+      aumEl.textContent = `AUM: ${formatCurrency(row.aum_proxy)}`;
+      footer.appendChild(holdingsEl);
+      footer.appendChild(aumEl);
+      card.appendChild(footer);
+
+      const btn = document.createElement("button");
+      btn.className = "btn-secondary view-details";
+      btn.textContent = "View Details";
+      card.appendChild(btn);
+
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = "Loading…";
+        const result = await app.callServerTool({ name: "get_pilot_detail", arguments: { pilot_id: row.id } });
+        const detail = extractJsonPayload(result.content[0].text);
+        btn.remove();
+        let expansion = card.querySelector(".detail-expansion");
+        if (!expansion) {
+          expansion = document.createElement("div");
+          expansion.className = "detail-expansion";
+          card.appendChild(expansion);
+        }
+        renderDetailPanel(expansion, detail);
+        renderFollowForm(expansion, detail, app);
+      };
+
+      grid.appendChild(card);
+    }
+  }
+
+  await app.connect();
+  const ctx = app.getHostContext?.();
+  if (ctx) applyHostTheme(ctx.theme);
+  app.onhostcontextchanged = (c) => applyHostTheme(c.theme);
+})();
+</script>

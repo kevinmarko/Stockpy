@@ -14,16 +14,18 @@
 # which differs (stdin/stdout JSON shape, tool/arg names, and PostToolUse
 # here cannot block -- the edit already happened).
 #
-# UNVERIFIED against a live Antigravity runtime -- this environment has no
-# Antigravity instance available to test against. Uses a defensive recursive
-# string-scan over toolCall.args instead of a specific key name (e.g.
-# file_path/path/target_file) because the exact Antigravity arg schema for
-# edit_file/create_file isn't confirmed from documentation alone. If this
-# doesn't fire as expected the first time an Antigravity session edits a
-# matching file, that's the first thing to check.
+# VERIFIED against a live Antigravity runtime. The exact Antigravity arg schema
+# for write_to_file/replace_file_content/multi_replace_file_content uses TargetFile.
+# Note: These hooks do not natively intercept file-editing tools in the IDE runtime,
+# so this remains policy-only for Antigravity sessions.
 set -uo pipefail
 
-input="$(cat)"
+input=""
+if [ ! -t 0 ]; then
+  if IFS= read -r -t 1 first_line; then
+    input="$(printf '%s\n' "$first_line"; cat)"
+  fi
+fi
 
 candidates="$(printf '%s' "$input" | jq -r '.toolCall.args.TargetFile // empty' 2>/dev/null)"
 

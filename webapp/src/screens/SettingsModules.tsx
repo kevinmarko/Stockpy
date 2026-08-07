@@ -27,6 +27,7 @@ export function SettingsModules() {
       <SectorSelectionLink />
       <FmpLink />
       <EtfTransmissionLink />
+      <CacheLongShortLink />
       <PromptRegistryLink />
       <AiControlCenterLink />
       
@@ -191,6 +192,31 @@ function EtfTransmissionLink() {
             {fieldCount == null
               ? "Holdings ingestion, residualization & derates"
               : `${fieldCount} ETF transmission settings`}
+          </div>
+        </div>
+        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
+      </div>
+    </Link>
+  );
+}
+
+
+function CacheLongShortLink() {
+  const { data } = useApi<TunablesResponse>(() => api.getCacheLongShortSettings(), []);
+  const fieldCount = data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
+  return (
+    <Link
+      to="/settings/cache-long-short"
+      className="card card-pad"
+      style={{ display: "block", textDecoration: "none" }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Cache Long/Short Strategy</div>
+          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
+            {fieldCount == null
+              ? "Proxy modeling, correlation bounds & TLH"
+              : `${fieldCount} strategy settings`}
           </div>
         </div>
         <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
