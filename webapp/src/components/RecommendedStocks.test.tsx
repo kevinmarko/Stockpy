@@ -47,7 +47,7 @@ describe("RecommendedStocks (real mock API)", () => {
         <RecommendedStocks onSelect={onSelect} />
       </MemoryRouter>
     );
-    fireEvent.click(await screen.findByTestId("rec-row-AAPL"));
+    fireEvent.click(await screen.findByTestId("rec-btn-AAPL"));
     expect(onSelect).toHaveBeenCalledWith("AAPL");
   });
 
@@ -60,7 +60,7 @@ describe("RecommendedStocks (real mock API)", () => {
         </Routes>
       </MemoryRouter>
     );
-    fireEvent.click(await screen.findByTestId("rec-row-AAPL"));
+    fireEvent.click(await screen.findByTestId("rec-btn-AAPL"));
     await waitFor(() =>
       expect(screen.getByTestId("loc")).toHaveTextContent("/symbol/AAPL")
     );
@@ -139,6 +139,92 @@ describe("RecommendedStocks (real mock API)", () => {
       </MemoryRouter>
     );
     expect(await screen.findByText(/\(unknown\)/)).toBeInTheDocument();
+  });
+
+  it("the search box filters rows to matching symbols", async () => {
+    render(
+      <MemoryRouter>
+        <RecommendedStocks />
+      </MemoryRouter>
+    );
+    await screen.findByTestId("rec-row-NVDA");
+    fireEvent.change(screen.getByLabelText("Search Symbol"), { target: { value: "AAPL" } });
+
+    expect(await screen.findByTestId("rec-row-AAPL")).toBeInTheDocument();
+    expect(screen.queryByTestId("rec-row-NVDA")).not.toBeInTheDocument();
+  });
+
+  it("the sector filter narrows the table to the selected sector", async () => {
+    render(
+      <MemoryRouter>
+        <RecommendedStocks />
+      </MemoryRouter>
+    );
+    await screen.findByTestId("rec-row-XOM");
+    fireEvent.change(screen.getByLabelText("Sector"), { target: { value: "Energy" } });
+
+    expect(await screen.findByTestId("rec-row-XOM")).toBeInTheDocument();
+    expect(screen.queryByTestId("rec-row-NVDA")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("rec-row-AAPL")).not.toBeInTheDocument();
+  });
+
+  it("the min-conviction filter excludes rows below the threshold, including null-conviction rows", async () => {
+    render(
+      <MemoryRouter>
+        <RecommendedStocks />
+      </MemoryRouter>
+    );
+    await screen.findByTestId("rec-row-JPM");
+    // NVDA=88%, AAPL=72%, JPM=64%, XOM=58%, ZZ=null -- a 70% floor keeps
+    // only NVDA/AAPL.
+    fireEvent.change(screen.getByLabelText("Min Conviction (%)"), { target: { value: "70" } });
+
+    expect(await screen.findByTestId("rec-row-NVDA")).toBeInTheDocument();
+    expect(screen.getByTestId("rec-row-AAPL")).toBeInTheDocument();
+    expect(screen.queryByTestId("rec-row-JPM")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("rec-row-XOM")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("rec-row-ZZ")).not.toBeInTheDocument();
+  });
+
+  it("clicking the Conviction column header sorts the table, cycling desc -> asc -> unsorted", async () => {
+    render(
+      <MemoryRouter>
+        <RecommendedStocks />
+      </MemoryRouter>
+    );
+    await screen.findByTestId("rec-row-NVDA");
+    const rowOrder = () =>
+      screen.getAllByTestId(/^rec-row-/).map((r) => r.getAttribute("data-testid"));
+    const header = screen.getByText("Conviction").closest("th") as HTMLElement;
+
+    // Unsorted, the fixture is already conviction-descending (NVDA 88% first).
+    expect(rowOrder()[0]).toBe("rec-row-NVDA");
+
+    fireEvent.click(header); // -> descending (same visible order, but now an explicit sort)
+    await waitFor(() => expect(header.textContent).toContain("🔽"));
+    expect(rowOrder()).toEqual([
+      "rec-row-NVDA",
+      "rec-row-AAPL",
+      "rec-row-JPM",
+      "rec-row-XOM",
+      "rec-row-ZZ",
+    ]);
+
+    fireEvent.click(header); // -> ascending
+    await waitFor(() => expect(header.textContent).toContain("🔼"));
+    // ZZ's null conviction sorts first ascending -- never coerced to a
+    // fabricated 0 that would land it in the middle of the real values.
+    expect(rowOrder()).toEqual([
+      "rec-row-ZZ",
+      "rec-row-XOM",
+      "rec-row-JPM",
+      "rec-row-AAPL",
+      "rec-row-NVDA",
+    ]);
+
+    fireEvent.click(header); // -> back to unsorted
+    await waitFor(() => expect(header.textContent).not.toMatch(/🔼|🔽/));
+    expect(rowOrder()[0]).toBe("rec-row-NVDA");
   });
 
   it("renders the honest empty state (with reason) when there are no picks", async () => {
