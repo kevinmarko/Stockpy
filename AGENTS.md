@@ -191,7 +191,7 @@ The full per-module architecture reference (previously inlined here) is split by
 | [`docs/architecture/orchestration-entrypoints.md`](docs/architecture/orchestration-entrypoints.md) | `engine/__init__.py`, `engine/advisory.py`, the `.env` loading convention, `alerting.py`, `Makefile`, `verify.command`, `main.py`, `main_orchestrator.py` |
 
  ## Conventions enforced in this codebase
- 
+
  - **In-app help content (`gui/help_content.py`)**: All operator-facing explainer prose MUST live in `gui/help_content.py` — never hard-code tooltip/expander text directly in `gui/panels.py`. The single-source-of-truth is `GLOSSARY` (terms), `TAB_HELP` (10 tab descriptions), `SECTION_HELP` (section-level tooltips), and `METRIC_HELP` (KPI tooltips keyed by `"<tab>.<metric>"`).
  - **Help-key convention**: Metric tooltip keys follow the form `"<tab>.<metric_name>"` — looked up by `gui.help_content.metric_help(key)`. A missing key returns `""` and renders no tooltip; it **never raises** (CONSTRAINT #6). Never add a default-fallback value in `metric_help` — empty string is the correct sentinel.
  - **Anchor-contract invariant**: Every `GlossaryEntry.guide_anchor` and `TabHelp.guide_anchor` field **must** resolve to a real heading slug in `docs/HOW_TO_GUIDE.md`. Enforced by `tests/test_help_content.py::TestAnchorValidity` (CI) and `Gravity AI Review Suite.py`'s `step_77_help_explainers_audit` check 3. When renaming a heading in HOW_TO_GUIDE.md, grep `gui/help_content.py` for the old slug and update it.
