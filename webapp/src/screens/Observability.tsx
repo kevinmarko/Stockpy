@@ -1119,7 +1119,7 @@ export function Observability() {
 
   const attentionItems = useMemo(() => {
     if (!data || !thresholds) return [];
-    return deriveAttentionItems(data, thresholds);
+    return deriveAttentionItems(data);
   }, [data, thresholds]);
 
   if (loading && !data) {

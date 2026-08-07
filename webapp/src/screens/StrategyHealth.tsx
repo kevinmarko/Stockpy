@@ -17,6 +17,7 @@ import { DeployableBadge, ErrorState, InfoTip, Loading, Select, Table } from "..
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
 import { ValidationTrend } from "../components/ValidationTrend";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { loadThresholds } from "../help/thresholds";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -156,8 +157,8 @@ function HealthCard({
       : true;
 
   return (
-    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", wordBreak: "break-word" }}>
             {row.pilot_name}
@@ -169,6 +170,7 @@ function HealthCard({
         <DeployableBadge deployable={row.deployable} />
       </div>
 
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
       {hasGates ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "var(--s-2)", marginTop: "var(--s-3)", flex: 1 }}>
@@ -201,20 +203,10 @@ function HealthCard({
           {row.reason ?? "No validation data available for this pilot."}
         </p>
       )}
+      </div>
     </section>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Gravity Audit — read-only port of the retired Streamlit Command Center's
-// Safety tab (gui/panels/gravity_audit.py). Two independent sub-sections:
-// the AI Gravity audit runner (Claude auditor + Gemini cross-checker) and the
-// legacy, purely structural Gravity Review Suite. DELIBERATELY no "run a new
-// audit" trigger on either — both are real-cost/multi-minute operations with
-// no incremental-progress channel over this API's request/response shape.
-// See GET /gravity/audit-status's own docstring (api/pilots_api.py) for the
-// full reasoning.
-// ---------------------------------------------------------------------------
 
 const AI_HEALTH_STYLE: Record<
   GravityAuditStatus["ai_audit"]["health"],
@@ -299,22 +291,6 @@ function AiAuditStepTable({ steps }: { steps: GravityAiAuditStep[] }) {
   );
 }
 
-/**
- * AiDisagreementSection — G15: durable per-symbol Claude-vs-Gemini verdict
- * comparison (GET /data/ai/disagreements). Distinct from the AI Gravity
- * Audit card's `disagreements` chip above (a durably-computed AGGREGATE
- * COUNT from the STRUCTURAL Gravity audit's own Claude/Gemini cross-check)
- * -- this is a per-symbol table sourced from REAL analyst-note/chart-pattern
- * calls, a different question entirely ("where do the two AI features
- * disagree on a symbol's trend", not "did the audit steps disagree").
- *
- * This is the durable equivalent of the legacy Streamlit AI Insights tab's
- * "Aggregate Claude vs Gemini disagreement" table, which is built from two
- * st.session_state mirrors and has no cross-session durable form -- see
- * api/data_api.py::get_ai_disagreements's docstring for the full honesty
- * note. `claude_verdict`/`gemini_verdict` are `null` -- never fabricated --
- * whenever that side has never been generated for the symbol.
- */
 function DisagreementRowView({ row }: { row: AiDisagreementRow }) {
   return (
     <tr data-testid="ai-disagreement-row">
@@ -341,15 +317,14 @@ function AiDisagreementSection() {
   useAutoPoll(reload, "observability", { hasError: error != null });
 
   return (
-    <section style={{ marginTop: "var(--s-6)" }}>
-      <h2 style={{ fontSize: "var(--t-subhead)", fontWeight: 700, margin: "0 0 var(--s-1)" }}>
-        🔍 AI Verdict Disagreements
-      </h2>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>🔍 AI Verdict Disagreements</h2>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", lineHeight: 1.5, marginBottom: "var(--s-3)" }}>
         Per-symbol Claude analyst note vs. Gemini chart-pattern read, from
-        cached results in <code>output/llm_commentary_cache.json</code> — a
-        durable record, not a per-session snapshot. Generate notes/reads from
-        a symbol's detail page to populate this table.
+        cached results in <code>output/llm_commentary_cache.json</code>.
       </p>
 
       {loading && <Loading lines={3} />}
@@ -387,6 +362,7 @@ function AiDisagreementSection() {
           </>
         )
       )}
+      </div>
     </section>
   );
 }
@@ -399,20 +375,20 @@ function GravityAuditSection() {
   useAutoPoll(reload, "observability", { hasError: error != null });
 
   return (
-    <section style={{ marginTop: "var(--s-6)" }}>
-      <h2 style={{ fontSize: "var(--t-subhead)", fontWeight: 700, margin: "0 0 var(--s-1)" }}>🛡️ Gravity Audit</h2>
-      <p style={{ color: theme.textMuted, fontSize: "var(--t-label)", lineHeight: 1.5, marginBottom: "var(--s-3)" }}>
-        The platform's own structural + AI-cross-checked self-audit — read-only
-        here; a new run is triggered from the desktop Command Center's Safety
-        tab.
-      </p>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>🛡️ Gravity Audit</h2>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
+          The platform's structural + AI-cross-checked self-audit.
+        </p>
+      </div>
 
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
         <>
-          {/* ---- AI Gravity audit runner ---- */}
-          <div className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
+          <div className="card card-pad" style={{ marginBottom: "var(--s-3)", background: theme.surface2 }}>
             <div
               style={{
                 display: "flex",
@@ -451,15 +427,10 @@ function GravityAuditSection() {
             {data.ai_audit.steps.length > 0 && <AiAuditStepTable steps={data.ai_audit.steps} />}
           </div>
 
-          {/* ---- Legacy structural Gravity Review Suite ---- */}
-          <div className="card card-pad">
+          <div className="card card-pad" style={{ background: theme.surface2 }}>
             <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: "var(--s-2-5)" }}>
               Legacy Structural Audit
             </div>
-            <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", lineHeight: 1.5, marginBottom: "var(--s-2-5)" }}>
-              Pandera schema conformance, lookahead-bias perturbation,
-              signal-registry health, sizing/risk gates — no LLM calls.
-            </p>
             {data.legacy_audit.available ? (
               <>
                 <Banner
@@ -469,7 +440,7 @@ function GravityAuditSection() {
                 >
                   {data.legacy_audit.all_passed
                     ? "✅ All steps passed on the last run."
-                    : "❌ At least one step failed on the last run — not cleared for live."}
+                    : "❌ At least one step failed on the last run."}
                 </Banner>
                 <div style={{ overflowX: "auto", marginTop: "var(--s-2-5)" }}>
                   <Table style={{ fontSize: "var(--t-caption)", minWidth: 320 }}>
@@ -496,6 +467,7 @@ function GravityAuditSection() {
           </div>
         </>
       )}
+      </div>
     </section>
   );
 }
@@ -509,11 +481,6 @@ export function StrategyHealth() {
   useAutoPoll(reload, "observability", { hasError: error != null });
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/marketplace"));
 
-  // Live deployability-gate thresholds (GET /thresholds, session-cached) so the
-  // footer summary and the stress-gate tooltip quote the SAME numbers the
-  // per-row GateChip values are already compared against — never a hard-coded
-  // literal that could drift from an operator-tuned validation/thresholds.py
-  // gate. Mirrors TabGuide.tsx's own loadThresholds() usage pattern.
   const [thresholds, setThresholds] = useState<Thresholds | null>(null);
   useEffect(() => {
     let alive = true;
@@ -533,10 +500,6 @@ export function StrategyHealth() {
     return { total: data.length, evaluated: evaluated.length, deployableCount, noBacktestCount };
   }, [data]);
 
-  // Which metric every card's run-over-run sparkline plots — one screen-wide
-  // selector rather than a per-card control, so switching it re-plots every
-  // Pilot's trend at once. Defaults to DSR (the primary deployability metric,
-  // matching this screen's pre-existing behavior before this selector shipped).
   const [trendMetric, setTrendMetric] = useState<TrendMetricKey>("dsr");
   const hasAnyTrend = !!data?.some((r) => r.trend.length >= 2);
 
@@ -556,11 +519,18 @@ export function StrategyHealth() {
       >
         ← Pilots
       </button>
-      <h1 className="screen-title">Strategy health</h1>
-      <p className="screen-sub">
-        Every Pilot's underlying validated strategy, and the actual per-gate
-        value behind its deployable badge — never just the pass/fail verdict.
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--s-4)" }}>
+        <div>
+          <h1 className="screen-title" style={{ marginBottom: "var(--s-1)" }}>Strategy health</h1>
+          <p className="screen-sub">
+            Every Pilot's underlying validated strategy, and the actual per-gate
+            value behind its deployable badge.
+          </p>
+        </div>
+        <button className="reset-layout-btn" onClick={() => resetGridLayout("strategy-health-layout")} title="Reset grid layout">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+        </button>
+      </div>
 
       <TabGuide tabKey="strategy-health" />
 
@@ -607,25 +577,32 @@ export function StrategyHealth() {
                 </div>
               )}
             </div>
-            <div className="dashboard-grid">
+
+            <DynamicGrid layoutKey="strategy-health-layout" defaultLayouts={{ lg: [] }}>
               {data.map((row) => (
-                <HealthCard key={row.pilot_id} row={row} thresholds={thresholds} metric={trendMetric} />
+                <div key={row.pilot_id}>
+                  <HealthCard row={row} thresholds={thresholds} metric={trendMetric} />
+                </div>
               ))}
-            </div>
+              <div key="validation-trend">
+                <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                    <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Cross-strategy validation</h2>
+                  </div>
+                  <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+                    <ValidationTrend />
+                  </div>
+                </section>
+              </div>
+              <div key="gravity-audit">
+                <GravityAuditSection />
+              </div>
+              <div key="ai-disagreement">
+                <AiDisagreementSection />
+              </div>
+            </DynamicGrid>
           </>
         )
-      )}
-
-      {!loading && !error && data && data.length > 0 && (
-        <>
-          <h2 style={{ fontSize: "var(--t-subhead)", margin: "var(--s-6) 0 var(--s-1)" }}>Cross-strategy validation</h2>
-          <p style={{ margin: "0 0 var(--s-3-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
-            Every strategy <code>validation.harness</code> has validated, not just the
-            ones above wired to a Pilot — plus the run-over-run trend and macro-regime
-            timeline behind those numbers.
-          </p>
-          <ValidationTrend />
-        </>
       )}
 
       <p
@@ -645,8 +622,9 @@ export function StrategyHealth() {
         never loosened to force a green badge.
       </p>
 
-      <GravityAuditSection />
-      <AiDisagreementSection />
+      <div style={{ marginTop: "var(--s-5)", marginBottom: "var(--s-4)" }}>
+        {/* Intentionally keeping the footnote outside the grid as a footer */}
+      </div>
     </div>
   );
 }

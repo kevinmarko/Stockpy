@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 
 /**
  * TradingHub.tsx — landing screen for the "Trading Tools" nav section
@@ -29,9 +30,9 @@ const CARDS: HubCard[] = [
 function HubCardRow({ card, onOpen }: { card: HubCard; onOpen: () => void }) {
   return (
     <section
-      className="card card-pad"
-      style={{ marginBottom: "var(--s-3)", cursor: "pointer" }}
-      onClick={onOpen}
+      className="card card-pad drag-handle"
+      style={{ cursor: "grab", height: "100%" }}
+      onDoubleClick={onOpen} // changed to double click because single click is for dragging
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
@@ -81,13 +82,27 @@ export function TradingHub() {
       >
         ← Pilots
       </button>
-      <h1 className="screen-title">Trading Tools</h1>
-      <p className="screen-sub">Grading and acting on your own portfolio.</p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>Trading Tools</h1>
+          <p className="screen-sub">Grading and acting on your own portfolio.</p>
+        </div>
+        <button className="btn btn-neutral" onClick={() => resetGridLayout("tradingHub")}>Reset Layout</button>
+      </div>
 
       <div style={{ marginTop: "var(--s-3)" }}>
-        {CARDS.map((card) => (
-          <HubCardRow key={card.to} card={card} onOpen={() => nav(card.to)} />
-        ))}
+        <DynamicGrid
+          layoutKey="tradingHub"
+          defaultLayouts={{
+            lg: CARDS.map((card, i) => ({ i: card.to, x: (i % 3) * 4, y: Math.floor(i / 3) * 2, w: 4, h: 2, minW: 3, minH: 2 })),
+          }}
+        >
+          {CARDS.map((card) => (
+            <div key={card.to}>
+              <HubCardRow card={card} onOpen={() => nav(card.to)} />
+            </div>
+          ))}
+        </DynamicGrid>
       </div>
     </div>
   );

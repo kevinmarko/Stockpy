@@ -392,8 +392,6 @@ function DurableRunHistory({
         style={{
           display: "flex",
           alignItems: "center",
-          display: "flex",
-          alignItems: "center",
           justifyContent: "space-between",
           gap: "var(--s-2)",
           padding: "var(--s-3)",

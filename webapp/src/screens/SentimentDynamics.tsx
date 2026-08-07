@@ -22,6 +22,7 @@ import { ErrorState, Loading, Notice, Tile } from "../components/ui";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { fmtDate, fmtNum } from "../format";
 import { seriesColor, theme } from "../theme";
 
@@ -58,8 +59,11 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
         <Tile label="Vol Persistence" value={fmtNum(d.volatility_persistence, 2)} />
       </div>
 
-      <section className="card card-pad">
-        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-2)" }}>Interpretation</h2>
+      <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+        <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Interpretation</h2>
+        </div>
+        <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
         <p style={{ color: theme.textSecondary, fontSize: "var(--t-callout)", lineHeight: 1.5 }}>
           <strong>Score (-1 to 1):</strong> Positive means bullish news sentiment, negative means bearish.
           <br/>
@@ -69,6 +73,7 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
           <br/>
           <strong>Persistence:</strong> GJR-GARCH measure of how long volatility shocks endure.
         </p>
+        </div>
       </section>
     </>
   );
@@ -125,15 +130,15 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
   const error = vix.error || sentimentHist.error;
 
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }} data-testid="sentiment-vix-chart">
-      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Sentiment vs. VIX</h2>
-      <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "0 0 var(--s-2-5)", lineHeight: 1.5 }}>
-        Archived daily news sentiment for {symbol} alongside the CBOE Volatility
-        Index, on a shared date axis. No lead-lag relationship is computed or
-        implied here — the sentiment archive is new, and this is a raw trend view,
-        not a backtest.
-      </p>
-
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="sentiment-vix-chart">
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Sentiment vs. VIX</h2>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
+          Archived daily news sentiment for {symbol} alongside the CBOE Volatility
+          Index.
+        </p>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
       {loading && <Loading lines={4} />}
       {!loading && error && (
         <ErrorState
@@ -227,12 +232,13 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
               </LineChart>
             </ResponsiveContainer>
           </div>
-          <div style={{ color: theme.textMuted, fontSize: "var(--t-micro)" }}>
+          <div style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-2)" }}>
             Archived news sentiment (FinBERT/lexicon, daily) — gaps are honest: a real
             fetch failure or a day with zero headlines, never plotted as neutral 0.
           </div>
         </>
       )}
+      </div>
     </section>
   );
 }
@@ -263,32 +269,44 @@ export function SentimentDynamics() {
             driven by the Antigravity Agent and GJR-GARCH asymmetric volatility metrics.
           </p>
         </div>
-        <button
-          onClick={() => nav("/settings/sentiment")}
-          style={{
-            padding: "6px 12px",
-            borderRadius: "var(--r-sm)",
-            background: "transparent",
-            border: `1px solid ${theme.border}`,
-            color: theme.textSecondary,
-            fontSize: "var(--t-caption)",
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          Configure ingestion →
-        </button>
+        <div style={{ display: "flex", gap: "var(--s-2)" }}>
+          <button className="reset-layout-btn" onClick={() => resetGridLayout("sentiment-layout")} title="Reset grid layout">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          </button>
+          <button
+            onClick={() => nav("/settings/sentiment")}
+            style={{
+              padding: "6px 12px",
+              borderRadius: "var(--r-sm)",
+              background: "transparent",
+              border: `1px solid ${theme.border}`,
+              color: theme.textSecondary,
+              fontSize: "var(--t-caption)",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Configure ingestion →
+          </button>
+        </div>
       </div>
 
       <TabGuide tabKey="sentiment" />
 
       <SymbolInput initial={symbol} onSubmit={setSymbol} pending={loading} />
 
-      {loading && <Loading lines={3} />}
-      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
-      {!loading && !error && data && <Breakdown d={data} />}
-
-      <SentimentVixChart symbol={symbol} />
+      <div style={{ marginTop: "var(--s-4)" }}>
+        <DynamicGrid layoutKey="sentiment-layout" defaultLayouts={{}}>
+          <div key="breakdown">
+            {loading && <Loading lines={3} />}
+            {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+            {!loading && !error && data && <Breakdown d={data} />}
+          </div>
+          <div key="chart">
+            <SentimentVixChart symbol={symbol} />
+          </div>
+        </DynamicGrid>
+      </div>
     </div>
   );
 }

@@ -134,7 +134,7 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
   const ivr = effectiveIvr(d);
   return (
     <div
-      className="glass-card card-pad"
+      className="glass-card"
       role="button"
       tabIndex={0}
       onClick={onOpen}
@@ -144,7 +144,6 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
           onOpen();
         }
       }}
-      className="card card-pad"
       style={{
         display: "flex",
         flexDirection: "column",

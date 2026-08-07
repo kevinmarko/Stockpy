@@ -35,6 +35,8 @@ import { realizableTheta, effectiveIvr } from "../optionsHonesty";
 import { useState } from "react";
 import type { DecisionEntry } from "../api/types";
 import ActiveTraderLadder from "../components/ActiveTraderLadder";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+
 /** News sentiment (FinBERT, ~[-1,1]) → colored bullish/neutral/bearish badge. */
 function NewsBadge({ value }: { value: number | null }) {
   if (value == null) return <span style={{ color: theme.textMuted }}>—</span>;
@@ -108,13 +110,17 @@ function RegimeSizingCard({
 
   if (pre == null || post == null) {
     return (
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="regime-sizing-card">
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Regime sizing impact</h2>
-        <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginTop: "var(--s-2-5)" }}>
-          Pre/post-regime Kelly Target breakdown is not available for {symbol}{" "}
-          (missing from the latest snapshot, or the strategy engine didn't
-          run for this symbol this cycle).
-        </p>
+      <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="regime-sizing-card">
+        <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Regime sizing impact</h2>
+        </div>
+        <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+          <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginTop: "var(--s-2-5)" }}>
+            Pre/post-regime Kelly Target breakdown is not available for {symbol}{" "}
+            (missing from the latest snapshot, or the strategy engine didn't
+            run for this symbol this cycle).
+          </p>
+        </div>
       </section>
     );
   }
@@ -126,53 +132,57 @@ function RegimeSizingCard({
   ];
 
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="regime-sizing-card">
-      <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Regime sizing impact</h2>
-      <p style={{ margin: "0 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
-        Kelly Target before vs. after the HMM regime multiplier + meta-label
-        composite were applied.
-      </p>
-      <div className="list">
-        <StatRow label="Kelly Target (pre-regime)" value={fmtPct(pre, 2, { fromFraction: true })} />
-        <StatRow
-          label="Kelly Target (post-regime)"
-          value={
-            <span>
-              {fmtPct(post, 2, { fromFraction: true })}{" "}
-              <span style={{ color: deltaPp >= 0 ? theme.growth : theme.decline, fontSize: "var(--t-caption)" }}>
-                ({deltaPp >= 0 ? "+" : ""}
-                {deltaPp.toFixed(2)}pp)
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="regime-sizing-card">
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Regime sizing impact</h2>
+        <p style={{ margin: "var(--s-1) 0 0", fontSize: "var(--t-body)", color: theme.textMuted }}>
+          Kelly Target before vs. after the HMM regime multiplier + meta-label
+          composite were applied.
+        </p>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+        <div className="list">
+          <StatRow label="Kelly Target (pre-regime)" value={fmtPct(pre, 2, { fromFraction: true })} />
+          <StatRow
+            label="Kelly Target (post-regime)"
+            value={
+              <span>
+                {fmtPct(post, 2, { fromFraction: true })}{" "}
+                <span style={{ color: deltaPp >= 0 ? theme.growth : theme.decline, fontSize: "var(--t-caption)" }}>
+                  ({deltaPp >= 0 ? "+" : ""}
+                  {deltaPp.toFixed(2)}pp)
+                </span>
               </span>
-            </span>
-          }
-        />
-        <StatRow label="HMM regime multiplier" value={regime_multiplier == null ? "—" : regime_multiplier.toFixed(3)} />
-      </div>
+            }
+          />
+          <StatRow label="HMM regime multiplier" value={regime_multiplier == null ? "—" : regime_multiplier.toFixed(3)} />
+        </div>
 
-      <div style={{ height: 160, marginTop: "var(--s-3)" }} data-testid="regime-sizing-chart">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-            <CartesianGrid {...chartGridProps} />
-            <XAxis dataKey="label" tick={{ ...chartAxisTick, fontSize: "var(--t-micro)" }} {...chartAxisLine} />
-            <YAxis tick={chartAxisTick} {...chartAxisLine} unit="%" />
-            <Tooltip
-              contentStyle={chartTooltipStyle}
-              labelStyle={{ color: theme.textSecondary, fontSize: "var(--t-micro)" }}
-              itemStyle={{ fontSize: "var(--t-micro)" }}
-              formatter={(v) => `${Number(v).toFixed(2)}%`}
-            />
-            <Bar dataKey="value" fill={theme.accent} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+        <div style={{ height: 160, marginTop: "var(--s-3)" }} data-testid="regime-sizing-chart">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+              <CartesianGrid {...chartGridProps} />
+              <XAxis dataKey="label" tick={{ ...chartAxisTick, fontSize: "var(--t-micro)" }} {...chartAxisLine} />
+              <YAxis tick={chartAxisTick} {...chartAxisLine} unit="%" />
+              <Tooltip
+                contentStyle={chartTooltipStyle}
+                labelStyle={{ color: theme.textSecondary, fontSize: "var(--t-micro)" }}
+                itemStyle={{ fontSize: "var(--t-micro)" }}
+                formatter={(v) => `${Number(v).toFixed(2)}%`}
+              />
+              <Bar dataKey="value" fill={theme.accent} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
 
-      <p style={{ margin: "var(--s-2-5) 0 0", fontSize: "var(--t-caption)", color: theme.textMuted }} data-testid="regime-sizing-meta-label">
-        Meta-label composite currently{" "}
-        {meta_label_composite == null ? "—" : meta_label_composite.toFixed(3)}{" "}
-        (multiplied in alongside the regime multiplier, then re-clamped to{" "}
-        {fmtPct(sizing.max_position_weight, 0, { fromFraction: true })} max
-        position weight).
-      </p>
+        <p style={{ margin: "var(--s-2-5) 0 0", fontSize: "var(--t-caption)", color: theme.textMuted }} data-testid="regime-sizing-meta-label">
+          Meta-label composite currently{" "}
+          {meta_label_composite == null ? "—" : meta_label_composite.toFixed(3)}{" "}
+          (multiplied in alongside the regime multiplier, then re-clamped to{" "}
+          {fmtPct(sizing.max_position_weight, 0, { fromFraction: true })} max
+          position weight).
+        </p>
+      </div>
     </section>
   );
 }
@@ -313,8 +323,11 @@ export function SymbolDetail() {
             </span>
           </div>
         </div>
-        <div className="num" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
-          {fmtUsd(identity.price)}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--s-2)" }}>
+          <div className="num" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
+            {fmtUsd(identity.price)}
+          </div>
+          <Button variant="neutral" onClick={() => resetGridLayout("symbolDetail")}>Reset Layout</Button>
         </div>
       </div>
 
@@ -325,8 +338,33 @@ export function SymbolDetail() {
       <TabGuide tabKey="symbol-detail" />
 
       {/* Advisory */}
-      <section className="card card-pad" style={{ margin: "var(--s-4) 0" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Advisory</h2>
+      <DynamicGrid
+        layoutKey="symbolDetail"
+        defaultLayouts={{
+          lg: [
+            { i: "advisory", x: 0, y: 0, w: 4, h: 4, minW: 3, minH: 3 },
+            { i: "regime", x: 4, y: 0, w: 4, h: 4, minW: 3, minH: 3 },
+            { i: "snapshot", x: 8, y: 0, w: 4, h: 4, minW: 3, minH: 3 },
+            { i: "factors", x: 0, y: 4, w: 4, h: 4, minW: 3, minH: 3 },
+            { i: "risk", x: 4, y: 4, w: 4, h: 4, minW: 3, minH: 3 },
+            { i: "tactical", x: 8, y: 4, w: 4, h: 4, minW: 3, minH: 3 },
+            { i: "rolling_beta", x: 0, y: 8, w: 6, h: 4, minW: 4, minH: 3 },
+            { i: "forecast", x: 6, y: 8, w: 6, h: 4, minW: 4, minH: 3 },
+            { i: "options", x: 0, y: 12, w: 4, h: 4, minW: 3, minH: 3 },
+            { i: "decision", x: 4, y: 12, w: 8, h: 4, minW: 4, minH: 3 },
+            { i: "claude", x: 0, y: 16, w: 4, h: 5, minW: 3, minH: 4 },
+            { i: "gemini", x: 4, y: 16, w: 4, h: 5, minW: 3, minH: 4 },
+            { i: "opal", x: 8, y: 16, w: 4, h: 5, minW: 3, minH: 4 },
+            { i: "pilots", x: 0, y: 21, w: 4, h: 4, minW: 3, minH: 3 },
+          ],
+        }}
+      >
+        <div key="advisory">
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Advisory</h2>
+            </div>
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
         <div className="list">
           <StatRow label="Recommendation" value={<ActionBadge action={advisory.action} />} />
           <StatRow
@@ -343,27 +381,33 @@ export function SymbolDetail() {
           />
           <StatRow label="Score" value={fmtNum(advisory.score, 1)} />
         </div>
-        {advisory.rationale && (
-          <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: "var(--s-3)" }}>
-            {advisory.rationale}
-          </p>
-        )}
-      </section>
-
-      <RegimeSizingCard sizing={sizing} symbol={data.symbol} />
-
-      {/* Decision journal — per-symbol log of what the operator actually did
-          with this signal. Shared DecisionModal with the Calibration screen's
-          portfolio-wide journal (../components/DecisionModal); this section
-          is the standalone, symbol-scoped read (GET /decisions?symbol=...)
-          Calibration's bundled recent-decisions preview doesn't offer. */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Decision journal</h2>
-          <Button variant="neutral" onClick={() => setJournaling(true)}>
-            Log decision
-          </Button>
+            {advisory.rationale && (
+              <p style={{ color: theme.textSecondary, fontSize: 13.5, lineHeight: 1.5, marginTop: "var(--s-3)" }}>
+                {advisory.rationale}
+              </p>
+            )}
+            </div>
+          </section>
         </div>
+
+        <div key="regime">
+          <RegimeSizingCard sizing={sizing} symbol={data.symbol} />
+        </div>
+
+        <div key="decision">
+          {/* Decision journal — per-symbol log of what the operator actually did
+              with this signal. Shared DecisionModal with the Calibration screen's
+              portfolio-wide journal (../components/DecisionModal); this section
+              is the standalone, symbol-scoped read (GET /decisions?symbol=...)
+              Calibration's bundled recent-decisions preview doesn't offer. */}
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Decision journal</h2>
+              <Button variant="neutral" onClick={() => setJournaling(true)}>
+                Log decision
+              </Button>
+            </div>
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
         {decisions.loading && <Loading lines={2} />}
         {!decisions.loading && (!decisions.data || decisions.data.length === 0) && (
           <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginTop: "var(--s-2-5)" }}>
@@ -390,8 +434,10 @@ export function SymbolDetail() {
               </div>
             ))}
           </div>
-        )}
-      </section>
+            )}
+            </div>
+          </section>
+        </div>
 
       {journaling && (
         <DecisionModal
@@ -401,232 +447,286 @@ export function SymbolDetail() {
         />
       )}
 
-      {/* Identity */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Snapshot</h2>
-        <div className="list">
-          <StatRow label="Sector" value={identity.sector ?? "—"} />
-          <StatRow label="Price" value={fmtUsd(identity.price)} />
-          <StatRow label="Signal action" value={<ActionBadge action={identity.action} />} />
-          <StatRow
-            label="Shares held"
-            value={identity.shares == null ? "—" : fmtNum(identity.shares, 0)}
-          />
-        </div>
-      </section>
-
-      {/* Tactical ranges (pre-formatted strings, NOT tuples) */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Tactical ranges</h2>
-        <div className="list">
-          <StatRow label="Buy" value={ranges.buy_range ?? "—"} />
-          <StatRow label="Sell" value={ranges.sell_range ?? "—"} />
-        </div>
-      </section>
-
-      {/* Factors */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Factor exposure</h2>
-        <div className="list">
-          <StatRow label="Value (z)" value={fmtNum(factors.value_z, 2)} />
-          <StatRow label="Quality (z)" value={fmtNum(factors.quality_z, 2)} />
-          <StatRow label="Low-vol (z)" value={fmtNum(factors.lowvol_z, 2)} />
-          <StatRow label="Size (z)" value={fmtNum(factors.size_z, 2)} />
-          <StatRow
-            label="Multifactor composite"
-            value={fmtNum(factors.multifactor_composite, 2)}
-          />
-          <StatRow label="12-1m momentum" value={fmtNum(factors.xsec_12_1m, 2)} />
-          <StatRow
-            label="Momentum rank"
-            value={fmtPct(factors.xsec_momentum_rank, 0, { fromFraction: true })}
-          />
-        </div>
-        {hasComponents && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
-            {Object.entries(sc!).map(([k, v]) => (
-              <MetricBadge key={k} label={k} value={fmtNum(v, 2)} />
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Risk */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Risk & regime</h2>
-        <div className="list">
-          <StatRow
-            label="Regime"
-            value={
-              risk.hmm_risk_on == null ? (
-                <span style={{ color: theme.textMuted }}>—</span>
-              ) : (
-                <span
-                  className={`badge ${risk.hmm_risk_on >= 0.5 ? "badge-good" : "badge-bad"}`}
-                >
-                  {risk.hmm_risk_on >= 0.5 ? "Risk-on" : "Risk-off"}{" "}
-                  {fmtPct(risk.hmm_risk_on, 0, { fromFraction: true })}
-                </span>
-              )
-            }
-          />
-          <StatRow label="Macro status" value={risk.macro_status ?? "—"} />
-          <StatRow label="News sentiment" value={<NewsBadge value={risk.news_sentiment} />} />
-          <StatRow label="CoVaR proxy" value={fmtNum(risk.covar_proxy, 2)} />
-          <StatRow label="Realized slippage" value={fmtNum(risk.realized_slippage, 4)} />
-          <StatRow label="MFE" value={fmtNum(risk.mfe, 2)} />
-          <StatRow label="MAE" value={fmtNum(risk.mae, 2)} />
-          <StatRow label="Edge ratio" value={fmtNum(risk.edge_ratio, 2)} />
-        </div>
-      </section>
-
-      {/* Rolling beta vs SPY — time-varying, distinct from the static point-in-time beta */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Rolling beta vs SPY</h2>
-        {rollingBeta.loading ? (
-          <Loading lines={2} />
-        ) : !rollingBeta.data || rollingBeta.data.series.length === 0 ? (
-          <div className="empty" style={{ padding: "var(--s-4-5)" }}>
-            {rollingBeta.data?.reason ?? "No cached price history yet."}
-          </div>
-        ) : (
-          <>
-            <PerfLine
-              data={rollingBeta.data.series.map((p) => ({ date: p.date, value: p.beta }))}
-              valueLabel="Beta"
-              yTickDecimals={1}
-            />
-            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
-              {rollingBeta.data.window}-day rolling beta — latest:{" "}
-              <span className="num" style={{ fontWeight: 700, color: theme.textSecondary }}>
-                {fmtNum(
-                  rollingBeta.data.series[rollingBeta.data.series.length - 1].beta,
-                  2
-                )}
-              </span>
-            </p>
-          </>
-        )}
-      </section>
-
-      {/* Forecast reliability + model skill weights */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "baseline",
-            flexWrap: "wrap",
-            gap: "var(--s-2)",
-            marginBottom: "var(--s-1)",
-          }}
-        >
-          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Forecast skill</h2>
-          <div className="segmented" role="tablist" aria-label="Forecast horizon">
-            {[10, 30, 60, 90].map((h) => (
-              <button
-                key={h}
-                role="tab"
-                aria-selected={h === forecastHorizon}
-                className={h === forecastHorizon ? "on" : ""}
-                onClick={() => setForecastHorizon(h)}
-              >
-                {h}d
-              </button>
-            ))}
-          </div>
-        </div>
-        {forecast.loading ? (
-          <Loading lines={1} />
-        ) : !forecast.data || forecast.data.reason ? (
-          <div className="empty" style={{ padding: "var(--s-4-5)" }}>
-            {forecast.data?.reason ?? "No forecast history yet."}
-          </div>
-        ) : (
-          <>
-            <div className="list">
-              <StatRow label="Completed forecasts" value={forecast.data.completed} />
-              <StatRow label="Pending" value={forecast.data.pending} />
+        <div key="snapshot">
+          {/* Identity */}
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Snapshot</h2>
             </div>
-            {Object.keys(forecast.data.skill_weights).length > 0 && (
-              <>
-                <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-3) 0 var(--s-1-5)" }}>
-                  Model skill weights (inverse-RMSE)
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)" }}>
-                  {Object.entries(forecast.data.skill_weights).map(([m, w]) => (
-                    <MetricBadge
-                      key={m}
-                      label={m}
-                      value={fmtPct(w, 0, { fromFraction: true })}
-                    />
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+              <div className="list">
+                <StatRow label="Sector" value={identity.sector ?? "—"} />
+                <StatRow label="Price" value={fmtUsd(identity.price)} />
+                <StatRow label="Signal action" value={<ActionBadge action={identity.action} />} />
+                <StatRow
+                  label="Shares held"
+                  value={identity.shares == null ? "—" : fmtNum(identity.shares, 0)}
+                />
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div key="tactical">
+          {/* Tactical ranges (pre-formatted strings, NOT tuples) */}
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Tactical ranges</h2>
+            </div>
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+              <div className="list">
+                <StatRow label="Buy" value={ranges.buy_range ?? "—"} />
+                <StatRow label="Sell" value={ranges.sell_range ?? "—"} />
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div key="factors">
+          {/* Factors */}
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Factor exposure</h2>
+            </div>
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+              <div className="list">
+                <StatRow label="Value (z)" value={fmtNum(factors.value_z, 2)} />
+                <StatRow label="Quality (z)" value={fmtNum(factors.quality_z, 2)} />
+                <StatRow label="Low-vol (z)" value={fmtNum(factors.lowvol_z, 2)} />
+                <StatRow label="Size (z)" value={fmtNum(factors.size_z, 2)} />
+                <StatRow
+                  label="Multifactor composite"
+                  value={fmtNum(factors.multifactor_composite, 2)}
+                />
+                <StatRow label="12-1m momentum" value={fmtNum(factors.xsec_12_1m, 2)} />
+                <StatRow
+                  label="Momentum rank"
+                  value={fmtPct(factors.xsec_momentum_rank, 0, { fromFraction: true })}
+                />
+              </div>
+              {hasComponents && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+                  {Object.entries(sc!).map(([k, v]) => (
+                    <MetricBadge key={k} label={k} value={fmtNum(v, 2)} />
                   ))}
                 </div>
-              </>
-            )}
-            <ForecastErrorChart rows={forecast.data.error_by_model} />
-            {forecast.data.error_by_model.some((r) => r.model_name.startsWith("lstm_") || r.model_name === "bert_lla") && (
-              <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-1-5)", lineHeight: 1.5 }}>
-                lstm_baseline / lstm_attention / bert_lla are three ablations
-                of one architecture (dual-layer LSTM, with and without
-                self-attention and sentiment) — a direct comparison, not
-                three unrelated models.
-              </p>
-            )}
-          </>
-        )}
-      </section>
+              )}
+            </div>
+          </section>
+        </div>
 
-      {/* Options premium directive (persisted matrix; advisory) */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Options premium</h2>
-        {options.loading ? (
-          <Loading lines={1} />
-        ) : !options.data || !options.data.directive ? (
-          <div className="empty" style={{ padding: "var(--s-4-5)" }}>
-            {options.data?.reason ?? "No options directive for this symbol yet."}
-          </div>
-        ) : (
-          <OptionsDirectiveView d={options.data.directive} />
-        )}
-      </section>
+        <div key="risk">
+          {/* Risk */}
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Risk & regime</h2>
+            </div>
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+              <div className="list">
+                <StatRow
+                  label="Regime"
+                  value={
+                    risk.hmm_risk_on == null ? (
+                      <span style={{ color: theme.textMuted }}>—</span>
+                    ) : (
+                      <span
+                        className={`badge ${risk.hmm_risk_on >= 0.5 ? "badge-good" : "badge-bad"}`}
+                      >
+                        {risk.hmm_risk_on >= 0.5 ? "Risk-on" : "Risk-off"}{" "}
+                        {fmtPct(risk.hmm_risk_on, 0, { fromFraction: true })}
+                      </span>
+                    )
+                  }
+                />
+                <StatRow label="Macro status" value={risk.macro_status ?? "—"} />
+                <StatRow label="News sentiment" value={<NewsBadge value={risk.news_sentiment} />} />
+                <StatRow label="CoVaR proxy" value={fmtNum(risk.covar_proxy, 2)} />
+                <StatRow label="Realized slippage" value={fmtNum(risk.realized_slippage, 4)} />
+                <StatRow label="MFE" value={fmtNum(risk.mfe, 2)} />
+                <StatRow label="MAE" value={fmtNum(risk.mae, 2)} />
+                <StatRow label="Edge ratio" value={fmtNum(risk.edge_ratio, 2)} />
+              </div>
+            </div>
+          </section>
+        </div>
 
-      {/* On-demand AI generation — Claude analyst note, Gemini chart-pattern
-          read, Opal research brief. Each is operator-triggered only (never
-          generated automatically) and fully independent: one card failing or
-          being disabled never blocks the other two. */}
-      <CommentaryCard symbol={data.symbol} />
-      <ChartReadCard symbol={data.symbol} />
-      <ResearchBriefCard symbol={data.symbol} />
-
-      {/* Held by Pilots — the Stockpy reverse cross-link */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>
-          Held by Pilots{" "}
-          <span style={{ color: theme.textMuted }}>({held_by_pilots.length})</span>
-        </h2>
-        {held_by_pilots.length === 0 ? (
-          <div className="empty" style={{ padding: "var(--s-5)" }}>
-            No Pilots currently hold {data.symbol}.
-          </div>
-        ) : (
-          <div className="list">
-            {held_by_pilots.map((hp) => (
-              <Link className="row" key={hp.pilot_id} to={`/pilots/${hp.pilot_id}`}>
-                <div className="row-main">
-                  <span className="row-title">{hp.name}</span>
-                  <span className="row-sub">{hp.pilot_id}</span>
+        <div key="rolling_beta">
+          {/* Rolling beta vs SPY — time-varying, distinct from the static point-in-time beta */}
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Rolling beta vs SPY</h2>
+            </div>
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+              {rollingBeta.loading ? (
+                <Loading lines={2} />
+              ) : !rollingBeta.data || rollingBeta.data.series.length === 0 ? (
+                <div className="empty" style={{ padding: "var(--s-4-5)" }}>
+                  {rollingBeta.data?.reason ?? "No cached price history yet."}
                 </div>
-                <div className="row-end">
-                  <div className="num" style={{ fontWeight: 700 }}>
-                    {fmtPct(hp.weight, 1, { fromFraction: true })}
+              ) : (
+                <>
+                  <PerfLine
+                    data={rollingBeta.data.series.map((p) => ({ date: p.date, value: p.beta }))}
+                    valueLabel="Beta"
+                    yTickDecimals={1}
+                  />
+                  <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
+                    {rollingBeta.data.window}-day rolling beta — latest:{" "}
+                    <span className="num" style={{ fontWeight: 700, color: theme.textSecondary }}>
+                      {fmtNum(
+                        rollingBeta.data.series[rollingBeta.data.series.length - 1].beta,
+                        2
+                      )}
+                    </span>
+                  </p>
+                </>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div key="forecast">
+          {/* Forecast reliability + model skill weights */}
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                  flexWrap: "wrap",
+                  gap: "var(--s-2)",
+                }}
+              >
+                <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Forecast skill</h2>
+                <div className="segmented" role="tablist" aria-label="Forecast horizon">
+                  {[10, 30, 60, 90].map((h) => (
+                    <button
+                      key={h}
+                      role="tab"
+                      aria-selected={h === forecastHorizon}
+                      className={h === forecastHorizon ? "on" : ""}
+                      onClick={() => setForecastHorizon(h)}
+                    >
+                      {h}d
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+              {forecast.loading ? (
+                <Loading lines={1} />
+              ) : !forecast.data || forecast.data.reason ? (
+                <div className="empty" style={{ padding: "var(--s-4-5)" }}>
+                  {forecast.data?.reason ?? "No forecast history yet."}
+                </div>
+              ) : (
+                <>
+                  <div className="list">
+                    <StatRow label="Completed forecasts" value={forecast.data.completed} />
+                    <StatRow label="Pending" value={forecast.data.pending} />
                   </div>
+                  {Object.keys(forecast.data.skill_weights).length > 0 && (
+                    <>
+                      <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-3) 0 var(--s-1-5)" }}>
+                        Model skill weights (inverse-RMSE)
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)" }}>
+                        {Object.entries(forecast.data.skill_weights).map(([m, w]) => (
+                          <MetricBadge
+                            key={m}
+                            label={m}
+                            value={fmtPct(w, 0, { fromFraction: true })}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <ForecastErrorChart rows={forecast.data.error_by_model} />
+                  {forecast.data.error_by_model.some((r) => r.model_name.startsWith("lstm_") || r.model_name === "bert_lla") && (
+                    <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-1-5)", lineHeight: 1.5 }}>
+                      lstm_baseline / lstm_attention / bert_lla are three ablations
+                      of one architecture (dual-layer LSTM, with and without
+                      self-attention and sentiment) — a direct comparison, not
+                      three unrelated models.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div key="options">
+          {/* Options premium directive (persisted matrix; advisory) */}
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Options premium</h2>
+            </div>
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+              {options.loading ? (
+                <Loading lines={1} />
+              ) : !options.data || !options.data.directive ? (
+                <div className="empty" style={{ padding: "var(--s-4-5)" }}>
+                  {options.data?.reason ?? "No options directive for this symbol yet."}
                 </div>
-              </Link>
-            ))}
-          </div>
-        )}
-      </section>
+              ) : (
+                <OptionsDirectiveView d={options.data.directive} />
+              )}
+            </div>
+          </section>
+        </div>
+
+        {/* On-demand AI generation — Claude analyst note, Gemini chart-pattern
+            read, Opal research brief. Each is operator-triggered only (never
+            generated automatically) and fully independent: one card failing or
+            being disabled never blocks the other two. */}
+        <div key="claude">
+          <CommentaryCard symbol={data.symbol} />
+        </div>
+        <div key="gemini">
+          <ChartReadCard symbol={data.symbol} />
+        </div>
+        <div key="opal">
+          <ResearchBriefCard symbol={data.symbol} />
+        </div>
+
+        <div key="pilots">
+          {/* Held by Pilots — the Stockpy reverse cross-link */}
+          <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>
+                Held by Pilots{" "}
+                <span style={{ color: theme.textMuted }}>({held_by_pilots.length})</span>
+              </h2>
+            </div>
+            <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+              {held_by_pilots.length === 0 ? (
+                <div className="empty" style={{ padding: "var(--s-5)" }}>
+                  No Pilots currently hold {data.symbol}.
+                </div>
+              ) : (
+                <div className="list">
+                  {held_by_pilots.map((hp) => (
+                    <Link className="row" key={hp.pilot_id} to={`/pilots/${hp.pilot_id}`}>
+                      <div className="row-main">
+                        <span className="row-title">{hp.name}</span>
+                        <span className="row-sub">{hp.pilot_id}</span>
+                      </div>
+                      <div className="row-end">
+                        <div className="num" style={{ fontWeight: 700 }}>
+                          {fmtPct(hp.weight, 1, { fromFraction: true })}
+                        </div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      </DynamicGrid>
 
       <div style={{ marginTop: "var(--s-8)", marginBottom: "var(--s-4)" }}>
         <ActiveTraderLadder symbol={data.symbol} currentPrice={identity.price} />
@@ -761,13 +861,16 @@ function CommentaryCard({ symbol }: { symbol: string }) {
   const data = mutation.result;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-      <AiCardHeader
-        title="Claude analyst note"
-        subtitle={`On-demand Claude narrative for ${symbol} — not generated automatically.`}
-        pending={mutation.pending}
-        onGenerate={() => mutation.run()}
-      />
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <AiCardHeader
+          title="Claude analyst note"
+          subtitle={`On-demand Claude narrative for ${symbol} — not generated automatically.`}
+          pending={mutation.pending}
+          onGenerate={() => mutation.run()}
+        />
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       {mutation.error && (
         <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span>{mutation.error}</span>
@@ -795,6 +898,7 @@ function CommentaryCard({ symbol }: { symbol: string }) {
           </p>
         </div>
       )}
+      </div>
     </section>
   );
 }
@@ -807,13 +911,16 @@ function ChartReadCard({ symbol }: { symbol: string }) {
   const data = mutation.result;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-      <AiCardHeader
-        title="Gemini chart read"
-        subtitle={`On-demand chart-pattern read for ${symbol} — not generated automatically.`}
-        pending={mutation.pending}
-        onGenerate={() => mutation.run()}
-      />
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <AiCardHeader
+          title="Gemini chart read"
+          subtitle={`On-demand chart-pattern read for ${symbol} — not generated automatically.`}
+          pending={mutation.pending}
+          onGenerate={() => mutation.run()}
+        />
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       {mutation.error && (
         <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span>{mutation.error}</span>
@@ -849,6 +956,7 @@ function ChartReadCard({ symbol }: { symbol: string }) {
           }
         />
       )}
+      </div>
     </section>
   );
 }
@@ -860,13 +968,16 @@ function ResearchBriefCard({ symbol }: { symbol: string }) {
   const data = mutation.result;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-      <AiCardHeader
-        title="Opal research brief"
-        subtitle={`On-demand grounded research brief for ${symbol} — not generated automatically.`}
-        pending={mutation.pending}
-        onGenerate={() => mutation.run()}
-      />
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <AiCardHeader
+          title="Opal research brief"
+          subtitle={`On-demand grounded research brief for ${symbol} — not generated automatically.`}
+          pending={mutation.pending}
+          onGenerate={() => mutation.run()}
+        />
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       {mutation.error && (
         <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
           <span>{mutation.error}</span>
@@ -894,6 +1005,7 @@ function ResearchBriefCard({ symbol }: { symbol: string }) {
           </p>
         </div>
       )}
+      </div>
     </section>
   );
 }
