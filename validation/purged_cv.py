@@ -47,6 +47,11 @@ class CombinatorialPurgedCV:
         if n_samples < self.n_splits:
             raise ValueError("Number of samples is less than n_splits")
 
+        if isinstance(X.index, pd.MultiIndex):
+            idx_vals = X.index.get_level_values(0)
+        else:
+            idx_vals = X.index
+
         # Define default t1 if not provided
         if t1 is None:
             # Each event ends at the next index/timestamp.
@@ -55,10 +60,6 @@ class CombinatorialPurgedCV:
             # symbols) string + int would raise TypeError, so fall back to re-using
             # the final label itself — a zero-duration sentinel that is still the
             # correct type for the downstream string comparisons in the purge loop.
-            if isinstance(X.index, pd.MultiIndex):
-                idx_vals = X.index.get_level_values(0)
-            else:
-                idx_vals = X.index
                 
             t1_times = pd.Series(idx_vals).shift(-1)
             

@@ -2728,7 +2728,7 @@ class Settings(BaseSettings):
         ),
     )
     PYTRENDS_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Best-effort optional Google Trends overlay (via the unofficial "
             "'pytrends' library) on top of the Wikipedia-pageviews attention "

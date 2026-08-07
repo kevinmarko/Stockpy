@@ -287,7 +287,8 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
 
         from settings import settings
 
-        with self._patch_daemon_class(daemon_cls), \
+        with patch.object(settings, "PILOTS_API_ENABLED", False), \
+             self._patch_daemon_class(daemon_cls), \
              self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file"):
             self.mod.run_forever(60)
@@ -462,12 +463,12 @@ class TestPilotsAPIHosting(BaseDaemonEntrypointTest):
         self._sigmask_patcher.start()
         self.addCleanup(self._sigmask_patcher.stop)
 
-    def test_disabled_by_default_no_second_server_or_thread(self):
+    def test_disabled_explicitly_no_second_server_or_thread(self):
         from settings import settings
-        self.assertFalse(settings.PILOTS_API_ENABLED)  # precondition: real default
 
         daemon_cls, instance = self._make_mock_daemon_class()
-        with self._patch_daemon_class(daemon_cls), \
+        with patch.object(settings, "PILOTS_API_ENABLED", False), \
+             self._patch_daemon_class(daemon_cls), \
              self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file") as mock_write:
             self.mod.run_forever(60)
@@ -945,7 +946,8 @@ class TestSignalHandling(BaseDaemonEntrypointTest):
         def _join_side_effect(timeout=None):
             self._watcher_target()()
 
-        with self._patch_daemon_class(daemon_cls), \
+        with patch.object(settings, "PILOTS_API_ENABLED", False), \
+             self._patch_daemon_class(daemon_cls), \
              self._patch_uvicorn(), \
              patch.object(self.mod, "_write_daemon_file"), \
              patch.object(self.mod.signal, "pthread_sigmask"):

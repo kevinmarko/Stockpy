@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 259,
-    "no_op": 2,
-    "restart_required": 89,
+    "live_safe": 264,
+    "no_op": 11,
+    "restart_required": 75,
     "total": 350
   },
   "dynamic_sites": [
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3017,
+      "line": 3005,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4064,
+      "line": 4069,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4169,
+      "line": 4204,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 352,
+  "files_scanned": 359,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -243,6 +243,11 @@
     "FMP_SECTOR_SNAPSHOT_ENABLED",
     "FMP_TIMEOUT_SECONDS",
     "FOLLOW_MIN_AMOUNT",
+    "FORECAST_BACKFILL_HORIZONS",
+    "FORECAST_BACKFILL_LOOKBACK_YEARS",
+    "FORECAST_BACKFILL_MAX_DEPTH",
+    "FORECAST_BACKFILL_N_ESTIMATORS",
+    "FORECAST_BACKFILL_RANDOM_STATE",
     "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
     "FORECAST_MAX_CONCURRENCY",
     "FORECAST_MODEL_PERSISTENCE_ENABLED",
@@ -402,20 +407,29 @@
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS"
   ],
   "no_op": [
+    "FORECAST_BACKFILL_CLASSIFIER_TYPE",
+    "FORECAST_BACKFILL_MACD_FAST",
+    "FORECAST_BACKFILL_MACD_SLOW",
+    "FORECAST_BACKFILL_MOMENTUM_WINDOW",
+    "FORECAST_BACKFILL_RSI_WINDOW",
+    "FORECAST_BACKFILL_TRAIN_SPLIT",
+    "FORECAST_BACKFILL_VOL_LONG_WINDOW",
+    "FORECAST_BACKFILL_VOL_RATIO_WINDOW",
+    "FORECAST_BACKFILL_VOL_SHORT_WINDOW",
     "PROMPT_MAX_CHARS",
     "SENTIMENT_PIT_MIN_MONTHS"
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 723,
+    "attr": 727,
     "factory_param": 4,
-    "getattr_const": 247,
+    "getattr_const": 233,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 218,
+    "attr": 222,
     "factory_param": 4,
-    "getattr_const": 152,
+    "getattr_const": 139,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -619,7 +633,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:305",
+        "site": "api/pilots_api.py:306",
         "via": []
       },
       {
@@ -1245,9 +1259,9 @@
         "discarded": false,
         "form": "attr",
         "rules": [
-          "init_self_assign"
+          "method_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:81",
+        "site": "ml/backfill/GlobalBackfillEngine.py:40",
         "via": []
       }
     ],
@@ -1289,7 +1303,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4546",
+        "site": "api/pilots_api.py:4581",
         "via": []
       }
     ],
@@ -1300,7 +1314,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4545",
+        "site": "api/pilots_api.py:4580",
         "via": []
       }
     ],
@@ -1311,7 +1325,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4690",
+        "site": "api/pilots_api.py:4725",
         "via": []
       },
       {
@@ -1386,7 +1400,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4670",
+        "site": "api/pilots_api.py:4705",
         "via": []
       },
       {
@@ -1430,161 +1444,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:573",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_CLASSIFIER_TYPE": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:104",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_HORIZONS": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:91",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_LOOKBACK_YEARS": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_body"
-        ],
-        "site": "ml/forecast_backfill.py:86",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_MACD_FAST": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:97",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_MACD_SLOW": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:98",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_MAX_DEPTH": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:102",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_MOMENTUM_WINDOW": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:93",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_N_ESTIMATORS": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:101",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_RANDOM_STATE": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:103",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_RSI_WINDOW": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:96",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_TRAIN_SPLIT": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:100",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_VOL_LONG_WINDOW": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:95",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_VOL_RATIO_WINDOW": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:99",
-        "via": []
-      }
-    ],
-    "FORECAST_BACKFILL_VOL_SHORT_WINDOW": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "ml/forecast_backfill.py:94",
+        "site": "api/pilots_api.py:571",
         "via": []
       }
     ],
@@ -2434,7 +2294,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:568",
+        "site": "api/pilots_api.py:566",
         "via": []
       },
       {
@@ -2528,9 +2388,9 @@
     "decorator_arg": 13,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 11,
-    "init_body": 6,
-    "init_self_assign": 40,
-    "method_self_assign": 4,
+    "init_body": 5,
+    "init_self_assign": 26,
+    "method_self_assign": 5,
     "module_level": 56,
     "os_environ": 25
   },

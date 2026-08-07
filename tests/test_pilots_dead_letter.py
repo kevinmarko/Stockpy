@@ -109,7 +109,7 @@ def test_dead_letter_endpoint_shape(tmp_path: Path):
     assert resp.status_code == 200
     body = resp.json()
     assert body["is_clean"] is True
-    assert body["retry_enabled"] is False  # default off
+    assert body["retry_enabled"] is True  # default on
 
 
 def test_dead_letter_endpoint_reflects_retry_enabled_flag(tmp_path: Path):
