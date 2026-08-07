@@ -148,6 +148,17 @@ APPLESCRIPT
 # dialog. The handler is still worth keeping: it still legitimately catches
 # Terminal-automation-level failures (e.g. Automation/Apple-Events
 # permission for Terminal not yet granted).
+#
+# Deliberately does NOT `activate` Terminal: `do script` alone still creates
+# and shows the window (that's all EXIT/TERM/HUP-trap close-to-stop needs),
+# but `activate` additionally force-switches system-wide keyboard focus to
+# Terminal the instant the window appears. Confirmed live (2026-08-07) that
+# this can steal a keystroke actually meant for whatever app/window the
+# operator was already typing into — e.g. a real character can land in
+# launch_webapp.command's own Mock/Live `read` prompt without anyone having
+# clicked into that window at all. Dropping `activate` removes that failure
+# mode entirely; the window still opens and is visible, it just doesn't grab
+# the keyboard out from under you.
 _build_terminal_app() {
     local app_name="$1" flag="$2" verb="$3"
     local app_path="$REPO_DIR/$app_name"
@@ -158,7 +169,6 @@ on run
     set repoPath to "$REPO_DIR"
     try
         tell application "Terminal"
-            activate
             do script "cd " & quoted form of repoPath & " && ./launch_webapp.command $flag"
         end tell
     on error errMsg number errNum
