@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 259,
+    "live_safe": 258,
     "no_op": 2,
-    "restart_required": 89,
+    "restart_required": 90,
     "total": 350
   },
   "dynamic_sites": [
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3017,
+      "line": 3021,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4064,
+      "line": 4068,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4169,
+      "line": 4173,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -288,7 +288,6 @@
     "MAX_LEVERAGE",
     "MAX_PORTFOLIO_GROSS",
     "META_LABELING_ENABLED",
-    "META_LABEL_MIN_CONFIDENCE",
     "MULTIFACTOR_MICROCAP_THRESHOLD",
     "NEWS_EARNINGS_DAMPEN_DAYS",
     "NEWS_EARNINGS_SUPPRESS_HOURS",
@@ -409,7 +408,7 @@
   "read_forms": {
     "attr": 723,
     "factory_param": 4,
-    "getattr_const": 247,
+    "getattr_const": 248,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
@@ -1247,7 +1246,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:81",
+        "site": "ml/forecast_backfill.py:110",
         "via": []
       }
     ],
@@ -1289,7 +1288,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4546",
+        "site": "api/pilots_api.py:4550",
         "via": []
       }
     ],
@@ -1300,7 +1299,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4545",
+        "site": "api/pilots_api.py:4549",
         "via": []
       }
     ],
@@ -1311,7 +1310,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4690",
+        "site": "api/pilots_api.py:4694",
         "via": []
       },
       {
@@ -1386,7 +1385,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4670",
+        "site": "api/pilots_api.py:4674",
         "via": []
       },
       {
@@ -1441,7 +1440,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:104",
+        "site": "ml/forecast_backfill.py:133",
         "via": []
       }
     ],
@@ -1452,7 +1451,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:91",
+        "site": "ml/forecast_backfill.py:120",
         "via": []
       }
     ],
@@ -1463,7 +1462,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "ml/forecast_backfill.py:86",
+        "site": "ml/forecast_backfill.py:115",
         "via": []
       }
     ],
@@ -1474,7 +1473,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:97",
+        "site": "ml/forecast_backfill.py:126",
         "via": []
       }
     ],
@@ -1485,7 +1484,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:98",
+        "site": "ml/forecast_backfill.py:127",
         "via": []
       }
     ],
@@ -1496,7 +1495,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:102",
+        "site": "ml/forecast_backfill.py:131",
         "via": []
       }
     ],
@@ -1507,7 +1506,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:93",
+        "site": "ml/forecast_backfill.py:122",
         "via": []
       }
     ],
@@ -1518,7 +1517,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:101",
+        "site": "ml/forecast_backfill.py:130",
         "via": []
       }
     ],
@@ -1529,7 +1528,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:103",
+        "site": "ml/forecast_backfill.py:132",
         "via": []
       }
     ],
@@ -1540,7 +1539,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:96",
+        "site": "ml/forecast_backfill.py:125",
         "via": []
       }
     ],
@@ -1551,7 +1550,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:100",
+        "site": "ml/forecast_backfill.py:129",
         "via": []
       }
     ],
@@ -1562,7 +1561,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:95",
+        "site": "ml/forecast_backfill.py:124",
         "via": []
       }
     ],
@@ -1573,7 +1572,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:99",
+        "site": "ml/forecast_backfill.py:128",
         "via": []
       }
     ],
@@ -1584,7 +1583,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:94",
+        "site": "ml/forecast_backfill.py:123",
         "via": []
       }
     ],
@@ -2009,6 +2008,17 @@
           "module_level"
         ],
         "site": "investyo_mcp_server.py:3319",
+        "via": []
+      }
+    ],
+    "META_LABEL_MIN_CONFIDENCE": [
+      {
+        "discarded": false,
+        "form": "getattr_const",
+        "rules": [
+          "init_self_assign"
+        ],
+        "site": "ml/forecast_backfill.py:136",
         "via": []
       }
     ],
@@ -2529,7 +2539,7 @@
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 11,
     "init_body": 6,
-    "init_self_assign": 40,
+    "init_self_assign": 41,
     "method_self_assign": 4,
     "module_level": 56,
     "os_environ": 25

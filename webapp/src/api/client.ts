@@ -810,7 +810,7 @@ const liveApi = {
   getOptionsAnalytics: (symbol: string) =>
     http<OptionsAnalyticsSummaryResponse>(`/metrics/options/analytics/${encodeURIComponent(symbol)}`),
   getForecastBackfill: () => http<ForecastBackfillSummary>("/pilots/forecast_backfill"),
-  runForecastBackfill: (params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean }) =>
+  runForecastBackfill: (params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean; strategy_ids?: string[]; theta_c?: number }) =>
     http<{ status: string; summary: ForecastBackfillSummary; sample_rows: number }>("/pilots/forecast_backfill/run", {
       method: "POST",
       body: JSON.stringify(params ?? {}),

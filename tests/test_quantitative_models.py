@@ -1019,6 +1019,16 @@ def test_garch_and_edge_scoring(monkeypatch):
     monkeypatch.setattr(
         settings, "SIGNAL_WEIGHTS", type(settings)(_env_file=None).SIGNAL_WEIGHTS
     )
+    
+    # Pin the meta-labeler registry to a deterministic full-confidence stub so
+    # this test's hardcoded expected Score/Kelly values can't be perturbed by
+    # whatever real MetaLabelers happen to be registered on the process-global
+    # `global_meta_registry` singleton at test-run time (e.g. from another
+    # test module importing/training one earlier in the same pytest session).
+    class DummyMetaRegistry:
+        def has(self, name): return True
+        def get_proba(self, name, df): return 1.0
+    monkeypatch.setattr("ml.meta_labeling.global_meta_registry", DummyMetaRegistry())
 
     # Inject an in-memory store so this test's Kelly-sizing assertions are
     # deterministic regardless of how many real closed trades exist in the live

@@ -1,14 +1,41 @@
 """
 InvestYo Quant Platform - Agentic Forecast Backfill & Meta-Labeling Engine
 ==========================================================================
-Executes a multi-horizon forecast backfill (10, 30, 60, 90 days) and meta-labeling
-pipeline for Time-Series Momentum (TSMOM) and Cross-Sectional Momentum (CSMOM).
+Executes a multi-horizon forecast backfill (default 10, 30, 60, 90 days) and
+meta-labeling pipeline for every ``SignalModule`` registered in
+``signals.registry.global_registry`` (dynamic, not hardcoded to any specific
+strategy) that (a) has all of its ``required_features`` present in the
+technical DataFrame this engine computes and (b) declares a non-empty
+``meta_label_features`` class attribute.
+
+Per-strategy feature/horizon schemas: a module opts into meta-labeling by
+declaring ``meta_label_features: List[str]`` (which of the engine's computed
+technical columns it trains/infers on) and, optionally, ``meta_label_horizons:
+List[int]`` (defaults to ``SignalModule``'s base-class default, currently
+[10, 30, 60, 90], when a module doesn't override it) on the class itself —
+see ``signals/base.py``. This engine reads both dynamically (steps 3-6 below)
+instead of special-casing any one strategy's feature list or horizon set, so
+a new SignalModule gains meta-labeling support just by declaring these two
+attributes, with no change needed here.
+
+Not every registered SignalModule is reachable from this pipeline. Two
+notable, deliberate exclusions: pairs-trading (``signals/pairs_trading.py``)
+operates on a *pair* of price series and produces its own multi-column
+output (spread, z-score, hedge ratio, ...) — it is a plain function, not a
+``SignalModule`` subclass, and is not registered in ``global_registry`` at
+all (see that module's own docstring: "Advisory analytics only — not wired
+into the per-ticker SignalAggregator"). Options-selling directives
+(``technical_options_engine.py``) are likewise not a per-ticker
+``SignalModule``. Wiring either into this per-ticker-row pipeline would need
+its own pair-selection / contract-selection plumbing, not just a features
+list — a real follow-up, not something a class-attribute declaration alone
+can cover.
 
 Key design features:
 - Zero hardcoded numbers: All parameters are sourced from `settings.py` or explicit arguments.
 - Sourced via Financial Modeling Prep (FMP) via `data/fmp_client.py` / `FMPProvider` / `CompositeProvider`.
 - Vectorized pandas/numpy technical feature engineering and signal calculation.
-- Chronological train/test split (default 80/20) preventing lookahead bias.
+- Combinatorial Purged Cross-Validation (`validation/purged_cv.py`) for the reported OOS accuracy/AUC.
 - Out-of-sample forecast confidence probability backfilling.
 - Model persistence to `ml/models/meta_<model>_<horizon>d.pkl`.
 """
@@ -76,6 +103,8 @@ class AgenticForecastBackfiller:
         random_state: Optional[int] = None,
         classifier_type: Optional[str] = None,
         use_fmp: bool = True,
+        strategy_ids: Optional[List[str]] = None,
+        theta_c: Optional[float] = None,
     ):
         """Initialize backfill pipeline with parameters sourced from settings.py defaults."""
         self.tickers = tickers or settings.DEFAULT_TICKERS or ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"]
@@ -103,6 +132,8 @@ class AgenticForecastBackfiller:
         self.random_state = random_state or getattr(settings, "FORECAST_BACKFILL_RANDOM_STATE", 42)
         self.classifier_type = (classifier_type or getattr(settings, "FORECAST_BACKFILL_CLASSIFIER_TYPE", "random_forest")).lower()
         self.use_fmp = use_fmp
+        self.strategy_ids = strategy_ids
+        self.theta_c = theta_c if theta_c is not None else getattr(settings, "META_LABEL_MIN_CONFIDENCE", 0.5)
 
         self.prices: pd.DataFrame = pd.DataFrame()
         self.volumes: pd.DataFrame = pd.DataFrame()
@@ -238,10 +269,25 @@ class AgenticForecastBackfiller:
             ema_fast = df["Close"].ewm(span=self.macd_fast, adjust=False).mean()
             ema_slow = df["Close"].ewm(span=self.macd_slow, adjust=False).mean()
             df["MACD"] = ema_fast - ema_slow
+            df["MACD_Line"] = df["MACD"]
+            df["MACD_Signal"] = df["MACD_Line"].ewm(span=9, adjust=False).mean()
 
             # Volume Ratio (Current Volume / 20-day MA Volume)
             vol_ma = df["Volume"].rolling(window=self.vol_ratio_window).mean()
             df["Vol_Ratio"] = df["Volume"] / vol_ma.replace(0.0, np.nan)
+
+            # Additional features for various signals
+            df["ROC_12M"] = df["Close"].shift(1) / df["Close"].shift(253) - 1.0
+            df["ROC_6M"] = df["Close"].shift(1) / df["Close"].shift(127) - 1.0
+            daily_returns = df["Close"].pct_change().shift(1)
+            ewma_var = daily_returns.pow(2).ewm(alpha=0.06, adjust=False).mean()
+            df["GARCH_Vol"] = np.sqrt(ewma_var * 252.0)
+            df["SMA_5"] = df["Close"].rolling(5).mean()
+            df["SMA_200"] = df["Close"].rolling(200).mean()
+            delta = df["Close"].diff()
+            gain_2 = (delta.where(delta > 0, 0.0)).rolling(window=2).mean()
+            loss_2 = (-delta.where(delta < 0, 0.0)).rolling(window=2).mean()
+            df["RSI_2"] = 100.0 - (100.0 / (1.0 + gain_2 / loss_2.replace(0.0, np.nan)))
 
             df["Ticker"] = ticker
             features_list.append(df)
@@ -257,56 +303,223 @@ class AgenticForecastBackfiller:
         logger.info("[+] Step 2 complete. Features dataset shape: %s", self.data.shape)
         return self.data
 
-    def step_3_generate_primary_signals(self) -> pd.DataFrame:
-        """Step 3: Generate primary TSMOM and CSMOM signals."""
-        logger.info("[*] Step 3: Generating primary TSMOM and CSMOM signals...")
+    def _compute_xsec_12_1m_wide(self, skip_days: int = 22, lookback_days: int = 252) -> pd.DataFrame:
+        """Cross-sectional 12-1m momentum return, at EVERY historical date.
 
-        # 252-day return
-        returns_252 = self.prices.pct_change(periods=self.momentum_window)
+        Mirrors ``main_orchestrator.py::compute_xsec_momentum_ranks``'s
+        formula (``r = price[t-skip_days] / price[t-lookback_days] - 1``,
+        default skip=22≈1 month, lookback=252≈12 months) exactly, but
+        generalized from a single current-row snapshot to a full,
+        vectorized, per-date series via ``shift`` -- lookahead-free by
+        construction (every value at row t depends only on rows strictly
+        before t), matching this codebase's causal-shift convention.
 
-        # 1. TSMOM: +1 if 252d return > 0, else -1
-        tsmom_signals = np.sign(returns_252).replace(0, 1)
+        Returns
+        -------
+        pd.DataFrame
+            Wide (Date index x Ticker columns), same shape as ``self.prices``.
+            NaN wherever either shifted price is unavailable (insufficient
+            history for that ticker/date) -- never fabricated.
+        """
+        return self.prices.shift(skip_days) / self.prices.shift(lookback_days) - 1.0
 
-        # 2. CSMOM: Cross-sectional percentile rank daily. > 0.5 -> +1, <= 0.5 -> -1
-        csmom_ranks = returns_252.rank(axis=1, pct=True)
-        csmom_signals = pd.DataFrame(
-            np.where(csmom_ranks > 0.5, 1, -1),
-            index=returns_252.index,
-            columns=returns_252.columns
+    def _run_cross_sectional_module(
+        self, module, xsec_return_wide: pd.DataFrame, make_context,
+    ) -> pd.DataFrame:
+        """Run a module whose ``pre_compute`` is overridden across every
+        historical date in this backfill window, mirroring the real
+        two-phase hook pattern (``signals.registry.SignalRegistry.
+        run_pre_compute`` in production): once PER DATE, ``pre_compute()``
+        ranks that day's cross-section from a per-date ``Symbol`` +
+        ``XSec_12_1M`` universe slice, then ``compute()`` is called once per
+        ticker active on that date, exactly as the module itself defines it
+        -- this backfiller never bypasses or reimplements the module's own
+        ranking logic, only supplies the per-date input its pre_compute
+        contract expects.
+
+        A fresh ``SignalContext`` is constructed per date (via
+        ``make_context``) so ``context.xsec_percentile_ranks`` from one date
+        can never leak into another's rank lookup.
+        """
+        scores = pd.Series(np.nan, index=self.data.index, dtype=float)
+        confidences = pd.Series(0.0, index=self.data.index, dtype=float)
+        explanations = pd.Series("", index=self.data.index, dtype=object)
+
+        for date, group in self.data.groupby(level="Date"):
+            if date not in xsec_return_wide.index:
+                continue
+            day_returns = xsec_return_wide.loc[date]
+            # Ticker-indexed AND carrying an explicit "Symbol" column,
+            # matching main_orchestrator.py's dashboard_df convention that
+            # every pre_compute override in this codebase is actually
+            # written against. This matters beyond style:
+            # CrossSectionalMomentumSignal.pre_compute() re-derives its own
+            # index from the "Symbol" column (`.set_index(SYMBOL_COL)`), so
+            # it would tolerate a default RangeIndex fine -- but
+            # LGBMRankerSignal.pre_compute()'s neutral-fallback branch keys
+            # `context.lgbm_scores` off `universe_df.index` directly, with
+            # no "Symbol" involved. A plain RangeIndex there would produce
+            # integer-keyed scores that compute()'s ticker-string lookup can
+            # never match, silently degrading every row to the neutral 0.5
+            # rank for the life of the run.
+            universe_df = pd.DataFrame(
+                {
+                    "Symbol": day_returns.index,
+                    "XSec_12_1M": day_returns.values,
+                },
+                index=day_returns.index,
+            )
+            context = make_context()
+            module.pre_compute(universe_df, context)
+
+            for idx, row in group.iterrows():
+                ticker = idx[1]  # self.data's index is (Date, Ticker)
+                row_with_symbol = row.copy()
+                row_with_symbol["Symbol"] = ticker
+                out = module.compute(row_with_symbol, context)
+                scores[idx] = out.score
+                confidences[idx] = out.confidence
+                explanations[idx] = out.explanation
+
+        return pd.DataFrame(
+            {
+                "score": scores,
+                "confidence": confidences,
+                "explanation": explanations,
+                "meta_label_proba": 1.0,
+            },
+            index=self.data.index,
         )
 
-        tsmom_stacked = tsmom_signals.unstack().swaplevel()
-        csmom_stacked = csmom_signals.unstack().swaplevel()
+    def step_3_generate_primary_signals(self) -> pd.DataFrame:
+        """Step 3: Generate primary signals dynamically from global_registry.
 
-        self.data["TSMOM_Signal"] = tsmom_stacked.reindex(self.data.index)
-        self.data["CSMOM_Signal"] = csmom_stacked.reindex(self.data.index)
-        logger.info("[+] Step 3 complete. Primary signals generated.")
+        Cross-sectional modules (those overriding ``pre_compute`` -- e.g.
+        ``cross_sectional_momentum``; detected structurally via
+        ``type(module).pre_compute is not SignalModule.pre_compute``, never
+        by hardcoding a strategy name) go through
+        ``_run_cross_sectional_module``, which replays the real two-phase
+        hook pattern once per historical date (see that method's docstring
+        and ``_compute_xsec_12_1m_wide`` for the lookahead-free per-date
+        cross-sectional input). Every other module keeps the original
+        single-shot ``compute_vectorized(self.data, context)`` call --
+        unchanged, still the fast path for the common (non-cross-sectional)
+        case.
+        """
+        logger.info("[*] Step 3: Generating primary signals from registry...")
+        from signals.registry import global_registry
+        from signals.base import SignalContext, SignalModule
+        from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+        import numpy as np
+
+        self.active_strategies = []
+
+        # Build dummy context. Two independent construction bugs fixed here:
+        # `date` is a required positional arg on MarketBarDTO (no default),
+        # and SignalContext's field is `bar`, not `market_bar` -- both were
+        # a guaranteed TypeError on every call, not a degraded-but-working
+        # path (see signals/base.py's SignalContext dataclass).
+        dummy_bar = MarketBarDTO(date=datetime.now(timezone.utc), ticker="DUMMY", open_price=0, high_price=0, low_price=0, close_price=0, volume=0)
+        dummy_fundamentals = FundamentalDataDTO(ticker="DUMMY", pe_ratio=0, pb_ratio=0, dividend_yield=0, book_value=0, eps_trailing=0, dividend_growth_rate=0, payout_ratio=0, sector="N/A", company_name="DUMMY", market_cap=0)
+        dummy_macro = MacroEconomicDTO(yield_curve_10y_2y=0, high_yield_oas=0, inflation_rate=0, sahm_rule_indicator=0, vix_value=15, hmm_risk_on_probability=None)
+
+        def make_context() -> SignalContext:
+            # A fresh SignalContext per call -- xsec_percentile_ranks (and
+            # any other per-cycle field) must never be shared/mutated across
+            # unrelated calls (different dates, or a cross-sectional module
+            # vs. every other module in the same step_3 run).
+            return SignalContext(bar=dummy_bar, fundamentals=dummy_fundamentals, macro=dummy_macro)
+
+        context = make_context()
+        xsec_return_wide: Optional[pd.DataFrame] = None  # computed lazily, at most once
+
+        for name, module in global_registry.get_all().items():
+            if self.strategy_ids and name not in self.strategy_ids:
+                continue
+
+            missing = [f for f in module.required_features if f not in self.data.columns]
+            if missing:
+                logger.debug(f"Skipping {name} due to missing features: {missing}")
+                continue
+
+            try:
+                needs_precompute = type(module).pre_compute is not SignalModule.pre_compute
+                if needs_precompute:
+                    if xsec_return_wide is None:
+                        xsec_return_wide = self._compute_xsec_12_1m_wide()
+                    out_df = self._run_cross_sectional_module(module, xsec_return_wide, make_context)
+                else:
+                    out_df = module.compute_vectorized(self.data, context)
+
+                if "score" in out_df.columns:
+                    signal_col = np.sign(out_df["score"]).replace(0, np.nan)
+                    self.data[f"{name}_Signal"] = signal_col
+
+                    features_to_use = getattr(module, "meta_label_features", [])
+                    for feat in features_to_use:
+                        if feat in out_df.columns:
+                            self.data[f"{name}_{feat}"] = out_df[feat]
+
+                    self.active_strategies.append(name)
+            except Exception as e:
+                logger.warning(f"Error computing vectorized signal for {name}: {e}")
+
+        logger.info(f"[+] Step 3 complete. Primary signals generated for: {self.active_strategies}")
         return self.data
 
     def step_4_create_meta_targets(self) -> pd.DataFrame:
-        """Step 4: Create binary meta-labels for all configured horizons (10, 30, 60, 90d)."""
-        logger.info("[*] Step 4: Creating binary meta-labels for horizons: %s...", self.horizons)
+        """Step 4: Create binary meta-labels for all configured horizons."""
+        logger.info("[*] Step 4: Creating binary meta-labels for horizons...")
 
-        for h in self.horizons:
+        from signals.registry import global_registry
+        all_horizons = set(self.horizons)
+        for name in self.active_strategies:
+            module = global_registry.get(name)
+            if module and getattr(module, "meta_label_horizons", []):
+                all_horizons.update(module.meta_label_horizons)
+
+        for h in all_horizons:
             forward_returns = self.prices.shift(-h) / self.prices - 1.0
             forward_stacked = forward_returns.unstack().swaplevel()
 
             self.data[f"Fwd_Return_{h}d"] = forward_stacked.reindex(self.data.index)
 
-            # Target = 1 if primary signal sign matches forward return sign
-            tsmom_match = np.sign(self.data[f"Fwd_Return_{h}d"]) == np.sign(self.data["TSMOM_Signal"])
-            csmom_match = np.sign(self.data[f"Fwd_Return_{h}d"]) == np.sign(self.data["CSMOM_Signal"])
-
-            self.data[f"TSMOM_Target_{h}d"] = tsmom_match.astype(int)
-            self.data[f"CSMOM_Target_{h}d"] = csmom_match.astype(int)
-
-            # Future forward returns that are NaN are masked to NaN
-            isna_mask = self.data[f"Fwd_Return_{h}d"].isna()
-            self.data.loc[isna_mask, f"TSMOM_Target_{h}d"] = np.nan
-            self.data.loc[isna_mask, f"CSMOM_Target_{h}d"] = np.nan
+            for name in self.active_strategies:
+                match = np.sign(self.data[f"Fwd_Return_{h}d"]) == np.sign(self.data[f"{name}_Signal"])
+                self.data[f"{name}_Target_{h}d"] = match.astype(int)
+                
+                isna_mask = self.data[f"Fwd_Return_{h}d"].isna() | self.data[f"{name}_Signal"].isna()
+                self.data.loc[isna_mask, f"{name}_Target_{h}d"] = np.nan
 
         logger.info("[+] Step 4 complete. Meta-targets created.")
         return self.data
+
+    def _resolve_meta_features(self, model_type: str, features_raw: List[str]) -> List[str]:
+        """Resolve a module's declared ``meta_label_features`` against the
+        actual columns of ``self.data``.
+
+        A feature is preferentially resolved to its strategy-namespaced
+        column (``f"{model_type}_{feature}"``, written by step 3 for
+        module-specific outputs, e.g. a signal's own z-score) and otherwise
+        falls back to the shared/global technical column of the same name
+        (written by step 2). Any feature that resolves to neither is
+        dropped rather than raising -- a module free to declare features
+        this engine doesn't (yet) compute, and simply not train/infer on
+        the ones it can't resolve.
+
+        Called identically from both step 5 (training) and step 6
+        (inference) so the exact same column set/order is used for both --
+        a classifier fit on one feature set and queried with a different
+        one raises a hard sklearn feature-mismatch error at inference time.
+        """
+        resolved: List[str] = []
+        for f in features_raw:
+            namespaced = f"{model_type}_{f}"
+            if namespaced in self.data.columns:
+                resolved.append(namespaced)
+            elif f in self.data.columns:
+                resolved.append(f)
+        return resolved
 
     def step_5_backtrain_meta_labelers(self) -> Dict[str, Any]:
         """Step 5: Train multi-horizon Meta-Labeling models on chronological train/test split.
@@ -324,92 +537,129 @@ class AgenticForecastBackfiller:
         isn't inflated by boundary leakage.
         """
         logger.info("[*] Step 5: Training meta-labelers across models & horizons...")
-        features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
 
-        for model_type in ["TSMOM", "CSMOM"]:
-            for h in self.horizons:
+        from validation.purged_cv import CombinatorialPurgedCV
+        from signals.registry import global_registry
+
+        for model_type in self.active_strategies:
+            module = global_registry.get(model_type)
+            if not module:
+                continue
+                
+            features_raw = getattr(module, "meta_label_features", [])
+            if not features_raw:
+                logger.warning("Strategy %s has no meta_label_features defined, skipping training.", model_type)
+                continue
+                
+            resolved_features = self._resolve_meta_features(model_type, features_raw)
+
+            if not resolved_features:
+                logger.warning("Could not resolve any features for %s", model_type)
+                continue
+                
+            horizons_raw = getattr(module, "meta_label_horizons", None) or self.horizons
+
+            for h in horizons_raw:
                 target_col = f"{model_type}_Target_{h}d"
-                clean_df = self.data.dropna(subset=features + [target_col])
+                
+                if target_col not in self.data.columns:
+                    continue
+                    
+                clean_df = self.data.dropna(subset=resolved_features + [target_col]).copy()
+                
+                # Ensure it's sorted by Date chronologically so CPCV blocks are contiguous in time
+                clean_df.sort_index(level="Date", inplace=True)
 
                 if len(clean_df) < 30:
                     logger.warning("Insufficient samples (%d) for %s_%dd model. Skipping.", len(clean_df), model_type, h)
                     continue
+                    
+                X = clean_df[resolved_features]
+                y = clean_df[target_col].astype(int)
+                
+                # We need to drop MultiIndex for CombinatorialPurgedCV since it expects a single DateTimeIndex.
+                # CombinatorialPurgedCV groups sequentially. We will pass a daily index for purging.
+                dates_only = clean_df.index.get_level_values("Date")
+                X_dates = pd.DataFrame(X.values, index=dates_only, columns=X.columns)
 
-                dates = clean_df.index.get_level_values("Date").unique().sort_values()
-                split_idx = int(len(dates) * self.train_split)
-                split_date = dates[split_idx]
-                embargo_idx = max(0, split_idx - h)
-                train_cutoff_date = dates[embargo_idx]
+                # 1. Dynamic embargo percentage
+                unique_dates = len(np.unique(dates_only))
+                # embargo_pct = h / unique_dates ensures the index-based embargo size 
+                # (n_samples * pct) roughly equals h days of rows.
+                embargo_pct = min(0.10, h / unique_dates) if unique_dates > h else 0.01
+                cv = CombinatorialPurgedCV(n_splits=10, n_test_splits=2, embargo_pct=embargo_pct)
+                
+                # 2. Dynamic purge windows (t1): event ends h days in the future
+                t1 = pd.Series(dates_only + pd.Timedelta(days=h), index=dates_only)
 
-                train_df = clean_df[clean_df.index.get_level_values("Date") <= train_cutoff_date]
-                test_df = clean_df[clean_df.index.get_level_values("Date") > split_date]
-
-                if len(train_df) < 30 or len(test_df) < 30:
-                    logger.warning(
-                        "Insufficient post-embargo samples (train=%d, test=%d) for %s_%dd model. Skipping.",
-                        len(train_df), len(test_df), model_type, h,
-                    )
-                    continue
-
-                X_train, y_train = train_df[features], train_df[target_col].astype(int)
-                X_test, y_test = test_df[features], test_df[target_col].astype(int)
-
-                if self.classifier_type == "lightgbm":
-                    try:
-                        import lightgbm as lgb
-                        clf = lgb.LGBMClassifier(
-                            n_estimators=self.n_estimators,
-                            max_depth=self.max_depth,
-                            random_state=self.random_state,
-                            verbose=-1,
-                        )
-                    except ImportError:
-                        clf = RandomForestClassifier(
-                            n_estimators=self.n_estimators,
-                            max_depth=self.max_depth,
-                            random_state=self.random_state,
-                            n_jobs=-1,
-                        )
-                else:
-                    clf = RandomForestClassifier(
-                        n_estimators=self.n_estimators,
-                        max_depth=self.max_depth,
-                        random_state=self.random_state,
-                        n_jobs=-1,
-                    )
-
-                clf.fit(X_train, y_train)
-                y_pred = clf.predict(X_test)
-                accuracy = float(np.mean(y_pred == y_test))
-
+                accuracies = []
+                aucs = []
                 try:
-                    probas_test = clf.predict_proba(X_test)[:, 1]
-                    auc = float(roc_auc_score(y_test, probas_test))
-                except Exception:
-                    auc = 0.50
+                    for train_idx, test_idx, _ in cv.split(X_dates, y, t1=t1):
+                        if len(train_idx) < 10 or len(test_idx) < 10: continue
+                        X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
+                        X_test, y_test = X.iloc[test_idx], y.iloc[test_idx]
+
+                        clf = RandomForestClassifier(
+                            n_estimators=self.n_estimators, max_depth=self.max_depth,
+                            random_state=self.random_state, n_jobs=-1,
+                        )
+                        clf.fit(X_train, y_train)
+                        try:
+                            probas = clf.predict_proba(X_test)[:, 1]
+                            # Use theta_c threshold to determine predict success (1) vs block (0)
+                            y_pred_custom = (probas >= self.theta_c).astype(int)
+                            accuracies.append(float(np.mean(y_pred_custom == y_test)))
+                            aucs.append(float(roc_auc_score(y_test, probas)))
+                        except:
+                            y_pred = clf.predict(X_test)
+                            accuracies.append(float(np.mean(y_pred == y_test)))
+                            aucs.append(0.50)
+                except Exception as e:
+                    logger.warning(f"CPCV failed for {model_type}_{h}d, skipping CV evaluation. {e}")
+                
+                accuracy = np.mean(accuracies) if accuracies else 0.50
+                auc = np.mean(aucs) if aucs else 0.50
+
+                # Train final model on ALL data
+                clf_final = RandomForestClassifier(
+                    n_estimators=self.n_estimators, max_depth=self.max_depth,
+                    random_state=self.random_state, n_jobs=-1,
+                )
+                clf_final.fit(X, y)
 
                 model_key = f"{model_type}_{h}d"
-                self.models[model_key] = clf
+                self.models[model_key] = clf_final
                 self.metrics[model_key] = {
                     "accuracy": round(accuracy, 4),
                     "auc": round(auc, 4),
-                    "n_train": len(X_train),
-                    "n_test": len(X_test),
-                    "split_date": str(split_date)[:10],
+                    "n_train": len(X),
+                    "n_test": 0,
+                    "split_date": "CPCV",
+                    "is_active": model_type in ["timeseries_momentum", "cross_sectional_momentum", "rsi2_mean_reversion"],
                 }
 
-                # Save trained model artifact. model_key is built only from a
-                # hardcoded model_type ("TSMOM"/"CSMOM") and h, which
-                # _validate_horizons() (called in __init__) already
-                # constrains to a small positive int -- this containment
-                # check is a second, independent guard against the resolved
-                # path ever escaping _MODELS_DIR (defense in depth, not
-                # reliance on a single validation layer).
+                # Save trained model artifact. model_key is built from
+                # model_type (a signals.registry.global_registry strategy
+                # name -- a hardcoded string on the SignalModule subclass
+                # itself, never user input) and h, which _validate_horizons()
+                # (called in __init__) already constrains to a small positive
+                # int -- this containment check is a second, independent
+                # guard against the resolved path ever escaping _MODELS_DIR
+                # (defense in depth, not reliance on a single validation
+                # layer).
+                #
+                # Persist clf_final (fit on ALL data above), not the CV loop's
+                # per-fold `clf` local -- that variable holds whichever fold
+                # trained last (an evaluation-only model deliberately withheld
+                # from part of the data), and would be undefined entirely if
+                # every CPCV fold was skipped/failed, since it is never
+                # assigned outside the loop body.
                 model_path = (_MODELS_DIR / f"meta_{model_key}.pkl").resolve()
                 if not model_path.is_relative_to(_MODELS_DIR.resolve()):
                     raise ValueError(f"Refusing to write model artifact outside {_MODELS_DIR}: {model_path}")
                 with open(model_path, "wb") as f:
-                    pickle.dump(clf, f)
+                    pickle.dump(clf_final, f)
 
                 logger.info("   [✓] Trained %s. Accuracy: %.4f, AUC: %.4f", model_key, accuracy, auc)
 
@@ -417,16 +667,38 @@ class AgenticForecastBackfiller:
         return self.metrics
 
     def step_6_execute_backfill(self) -> pd.DataFrame:
-        """Step 6: Execute continuous out-of-sample forecast probability backfilling."""
+        """Step 6: Execute continuous out-of-sample forecast probability backfilling.
+
+        Per-strategy feature set and horizons are resolved exactly the same
+        way step_5 resolved them for training (same helper,
+        `_resolve_meta_features`, same `meta_label_horizons` attribute) —
+        a classifier queried with a different feature set than it was fit
+        on raises a hard sklearn feature-name/count mismatch error, so this
+        must never drift from step_5's resolution independently.
+        """
         logger.info("[*] Step 6: Executing continuous backfill inference...")
-        features = ["Vol_20", "Vol_50", "RSI_14", "MACD", "Vol_Ratio"]
+        from signals.registry import global_registry
 
-        valid_mask = self.data[features].notna().all(axis=1)
-        inference_df = self.data[valid_mask]
-        X_infer = inference_df[features]
+        for model_type in self.active_strategies:
+            module = global_registry.get(model_type)
+            features_raw = getattr(module, "meta_label_features", []) if module else []
+            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
+            resolved_features = self._resolve_meta_features(model_type, features_raw)
 
-        for model_type in ["TSMOM", "CSMOM"]:
-            for h in self.horizons:
+            if not resolved_features:
+                # Nothing to infer on for this strategy -- step_5 skipped
+                # training it for the same reason, so every probability
+                # column is honestly NaN (CONSTRAINT #4) rather than
+                # attempting inference against an empty feature frame.
+                for h in horizons_raw:
+                    self.data[f"{model_type}_Meta_Prob_{h}d"] = np.nan
+                continue
+
+            valid_mask = self.data[resolved_features].notna().all(axis=1)
+            inference_df = self.data[valid_mask]
+            X_infer = inference_df[resolved_features]
+
+            for h in horizons_raw:
                 model_key = f"{model_type}_{h}d"
                 clf = self.models.get(model_key)
 
@@ -460,9 +732,36 @@ class AgenticForecastBackfiller:
         out_csv = output_dir / filename
         out_json = output_dir / "agentic_forecast_summary.json"
 
-        export_cols = ["Close", "TSMOM_Signal", "CSMOM_Signal"]
-        for model_type in ["TSMOM", "CSMOM"]:
-            for h in self.horizons:
+        from signals.registry import global_registry
+
+        # Restrict the exported columns to strategies that actually produced
+        # at least one trained model, rather than every module that merely
+        # satisfied step 3's required_features check (or even declared
+        # meta_label_features -- see step_3_generate_primary_signals's KNOWN
+        # GAP docstring for cross_sectional_momentum, which declares features
+        # but never trains: its rank lookup misses on every row, so its
+        # Signal column is unconditionally NaN). Several registered modules
+        # pass step 3's check with an empty required_features list but
+        # actually score off SignalContext fields this backfiller's dummy
+        # context never populates (real dividend yield, sortino ratio, ...) --
+        # their Signal column is likewise unconditionally NaN. Including any
+        # such column in the mandatory `dropna()` subset below would zero out
+        # every exported row the moment one such module lands in
+        # self.active_strategies, silently producing an empty CSV/summary
+        # regardless of how much real, trainable data timeseries_momentum et
+        # al. actually have.
+        def _has_trained_model(name: str) -> bool:
+            module = global_registry.get(name)
+            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
+            return any(f"{name}_{h}d" in self.models for h in horizons_raw)
+
+        trainable_strategies = [name for name in self.active_strategies if _has_trained_model(name)]
+
+        export_cols = ["Close"] + [f"{m}_Signal" for m in trainable_strategies]
+        for model_type in trainable_strategies:
+            module = global_registry.get(model_type)
+            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
+            for h in horizons_raw:
                 prob_col = f"{model_type}_Meta_Prob_{h}d"
                 if prob_col in self.data.columns:
                     export_cols.append(prob_col)

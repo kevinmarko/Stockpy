@@ -3561,6 +3561,7 @@ export interface ForecastBackfillModelMetrics {
   n_train: number;
   n_test: number;
   split_date: string;
+  is_active?: boolean;
 }
 
 export interface ForecastBackfillSummary {
