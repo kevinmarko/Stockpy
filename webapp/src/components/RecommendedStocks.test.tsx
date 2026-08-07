@@ -47,7 +47,7 @@ describe("RecommendedStocks (real mock API)", () => {
         <RecommendedStocks onSelect={onSelect} />
       </MemoryRouter>
     );
-    fireEvent.click(await screen.findByTestId("rec-row-AAPL"));
+    fireEvent.click(await screen.findByTestId("rec-btn-AAPL"));
     expect(onSelect).toHaveBeenCalledWith("AAPL");
   });
 
@@ -60,7 +60,7 @@ describe("RecommendedStocks (real mock API)", () => {
         </Routes>
       </MemoryRouter>
     );
-    fireEvent.click(await screen.findByTestId("rec-row-AAPL"));
+    fireEvent.click(await screen.findByTestId("rec-btn-AAPL"));
     await waitFor(() =>
       expect(screen.getByTestId("loc")).toHaveTextContent("/symbol/AAPL")
     );
