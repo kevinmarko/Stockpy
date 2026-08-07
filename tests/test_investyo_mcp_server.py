@@ -1870,7 +1870,17 @@ class TestGetRegimeStatus:
         )
 
     def test_happy_path_renders_regime_and_json_block(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
+        # settings.OUTPUT_DIR is anchored to the repo root at Settings()
+        # construction time (settings.py, fixed for read-only-environment
+        # permission handling), not re-derived from the process CWD -- so
+        # monkeypatch.chdir(tmp_path) no longer redirects where
+        # get_regime_status() reads output/state_snapshot.json from.
+        # Patch the setting directly instead, matching
+        # tests/test_pilots_dead_letter.py's established pattern for the
+        # same reason.
+        from settings import settings
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
         self._write_snapshot(
             tmp_path,
             {
@@ -1895,7 +1905,12 @@ class TestGetRegimeStatus:
         assert "```json" in result
 
     def test_exception_degrades(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)  # no output/state_snapshot.json present
+        # No output/state_snapshot.json at this redirected OUTPUT_DIR (see
+        # the comment in test_happy_path_renders_regime_and_json_block
+        # above for why OUTPUT_DIR, not chdir, is what actually matters).
+        from settings import settings
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
         import execution.kill_switch as ks_mod
 
         def _raise(*a, **k):
