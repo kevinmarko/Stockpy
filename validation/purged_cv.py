@@ -49,6 +49,15 @@ class CombinatorialPurgedCV:
 
         # Define default t1 if not provided
         if t1 is None:
+            if isinstance(X.index, pd.MultiIndex):
+                raise ValueError(
+                    "CombinatorialPurgedCV.split(): a default t1 cannot be safely "
+                    "synthesized for a MultiIndex -- shifting the raw index by -1 "
+                    "would mix across the index's non-date levels (e.g. tickers) "
+                    "unless the frame is guaranteed sorted with each entity's rows "
+                    "contiguous, which this method cannot verify. Pass t1 "
+                    "explicitly (indexed the same way as X)."
+                )
             # Each event ends at the next index/timestamp.
             # The last element can't be shifted forward; we set it to one step
             # beyond the final index value.  For string/label indices (e.g. ticker
@@ -96,11 +105,14 @@ class CombinatorialPurgedCV:
             # 3. Purging and Embargo
             # For each test block, we find its time range and remove overlapping train samples
             purged_train_idx = set(train_idx)
+            _is_multi = isinstance(X.index, pd.MultiIndex)
             
             for b in combo:
                 block_indices = blocks[b]
                 test_start_time = X.index[block_indices[0]]
                 test_end_time = X.index[block_indices[-1]]
+                if _is_multi:
+                    test_start_time, test_end_time = test_start_time[0], test_end_time[0]
                 
                 # Get max t1 in the test block
                 test_t1 = t1.iloc[block_indices]
@@ -109,6 +121,8 @@ class CombinatorialPurgedCV:
                 # Purging and Embargo: we check each training index
                 for tr_idx in list(purged_train_idx):
                     tr_time = X.index[tr_idx]
+                    if _is_multi:
+                        tr_time = tr_time[0]
                     tr_t1 = t1.iloc[tr_idx]
                     
                     # Purge if training event overlaps with test block
