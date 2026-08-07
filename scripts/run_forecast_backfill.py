@@ -10,6 +10,7 @@ Usage
     python scripts/run_forecast_backfill.py
     python scripts/run_forecast_backfill.py --tickers AAPL,MSFT,NVDA,JPM --use-fmp
     python scripts/run_forecast_backfill.py --horizons 10,30,60,90 --start 2015-01-01
+    python scripts/run_forecast_backfill.py --strategy-ids timeseries_momentum,cross_sectional_momentum --theta-c 0.55
 """
 
 from __future__ import annotations
@@ -84,6 +85,25 @@ def parse_args() -> argparse.Namespace:
         help="Classifier type ('random_forest' or 'lightgbm').",
     )
     parser.add_argument(
+        "--strategy-ids",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated signals.registry module names to restrict step 3-6 "
+            "to (default: every registered module reachable from this pipeline, "
+            "see AgenticForecastBackfiller's own docstring)."
+        ),
+    )
+    parser.add_argument(
+        "--theta-c",
+        type=float,
+        default=None,
+        help=(
+            "Meta-label confidence threshold used by step 5's CPCV accuracy "
+            "evaluation (default: settings.META_LABEL_MIN_CONFIDENCE)."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default="agentic_forecast_backfill.csv",
@@ -97,6 +117,9 @@ def main() -> int:
 
     tickers_list = [t.strip().upper() for t in args.tickers.split(",") if t.strip()] if args.tickers else None
     horizons_list = [int(h.strip()) for h in args.horizons.split(",") if h.strip().isdigit()] if args.horizons else None
+    strategy_ids_list = (
+        [s.strip() for s in args.strategy_ids.split(",") if s.strip()] if args.strategy_ids else None
+    )
 
     logger.info("Initializing AgenticForecastBackfiller...")
     engine = AgenticForecastBackfiller(
@@ -106,6 +129,8 @@ def main() -> int:
         horizons=horizons_list,
         classifier_type=args.classifier or None,
         use_fmp=args.use_fmp,
+        strategy_ids=strategy_ids_list,
+        theta_c=args.theta_c,
     )
 
     try:

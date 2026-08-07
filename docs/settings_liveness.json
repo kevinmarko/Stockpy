@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 258,
+    "live_safe": 260,
     "no_op": 2,
     "restart_required": 90,
-    "total": 350
+    "total": 352
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3022,
+      "line": 3100,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4068,
+      "line": 4146,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4173,
+      "line": 4251,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 353,
+  "files_scanned": 355,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -243,6 +243,8 @@
     "FMP_SECTOR_SNAPSHOT_ENABLED",
     "FMP_TIMEOUT_SECONDS",
     "FOLLOW_MIN_AMOUNT",
+    "FORECAST_BACKFILL_DEADLINE_SECONDS",
+    "FORECAST_BACKFILL_ENABLED",
     "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
     "FORECAST_MAX_CONCURRENCY",
     "FORECAST_MODEL_PERSISTENCE_ENABLED",
@@ -406,13 +408,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 723,
+    "attr": 726,
     "factory_param": 4,
     "getattr_const": 248,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 218,
+    "attr": 220,
     "factory_param": 4,
     "getattr_const": 152,
     "os_environ": 18
@@ -618,7 +620,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:307",
+        "site": "api/pilots_api.py:319",
         "via": []
       },
       {
@@ -1288,7 +1290,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4550",
+        "site": "api/pilots_api.py:4628",
         "via": []
       }
     ],
@@ -1299,7 +1301,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4549",
+        "site": "api/pilots_api.py:4627",
         "via": []
       }
     ],
@@ -1310,7 +1312,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4694",
+        "site": "api/pilots_api.py:4772",
         "via": []
       },
       {
@@ -1385,7 +1387,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4674",
+        "site": "api/pilots_api.py:4752",
         "via": []
       },
       {
@@ -1429,7 +1431,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:574",
+        "site": "api/pilots_api.py:609",
         "via": []
       }
     ],
@@ -2444,7 +2446,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:569",
+        "site": "api/pilots_api.py:604",
         "via": []
       },
       {

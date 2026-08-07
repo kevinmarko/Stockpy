@@ -1,10 +1,10 @@
 {
   "meta": {
-    "git_commit": "736e662ee1b6e060304ff0dde2cf04e1eab8055b",
+    "git_commit": "e612f1b9a7d4f74c5f1fb0bb33c6bdb160993a0d",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
-    "total_fields": 350,
+    "total_fields": 352,
     "label_by_field": {
       "FRED_API_KEY": "str",
       "ALPACA_API_KEY": "Optional[str]",
@@ -345,6 +345,8 @@
       "FORECAST_BACKFILL_MAX_DEPTH": "int",
       "FORECAST_BACKFILL_RANDOM_STATE": "int",
       "FORECAST_BACKFILL_CLASSIFIER_TYPE": "str",
+      "FORECAST_BACKFILL_ENABLED": "bool",
+      "FORECAST_BACKFILL_DEADLINE_SECONDS": "int",
       "CACHE_LONG_SHORT_ENABLED": "bool",
       "CACHE_LONG_SHORT_WRITES_ENABLED": "bool",
       "CACHE_LONG_SHORT_MIN_CORRELATION": "float",
@@ -358,8 +360,8 @@
       "QDRANT_URL": "str"
     },
     "counts_by_label": {
-      "bool": 96,
-      "int": 95,
+      "bool": 97,
+      "int": 96,
       "float": 61,
       "Optional[str]": 45,
       "str": 39,
@@ -416,6 +418,7 @@
       "FMP_PEERS_ENABLED",
       "FMP_QUOTES_ENABLED",
       "FMP_SECTOR_SNAPSHOT_ENABLED",
+      "FORECAST_BACKFILL_ENABLED",
       "FORECAST_MODEL_PERSISTENCE_ENABLED",
       "FORECAST_SKILL_WEIGHTING_ENABLED",
       "GENERAL_SETTINGS_WRITES_ENABLED",
@@ -466,7 +469,7 @@
       "VALIDATION_HARNESS_OOS_GATE_ENABLED",
       "WIKIPEDIA_ATTENTION_ENABLED"
     ],
-    "enabled_suffix_count": 85
+    "enabled_suffix_count": 86
   },
   "settings_source": {
     "fields_without_source_line": [],
@@ -810,22 +813,24 @@
       "FORECAST_BACKFILL_MAX_DEPTH": 4173,
       "FORECAST_BACKFILL_RANDOM_STATE": 4177,
       "FORECAST_BACKFILL_CLASSIFIER_TYPE": 4181,
-      "CACHE_LONG_SHORT_ENABLED": 4246,
-      "CACHE_LONG_SHORT_WRITES_ENABLED": 4257,
-      "CACHE_LONG_SHORT_MIN_CORRELATION": 4270,
-      "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT": 4271,
-      "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS": 4272,
-      "CACHE_LONG_SHORT_PROXY_CANDIDATES": 4273,
-      "WATCHLIST": 4317,
-      "GCLOUD_BIN": 4321,
-      "GRAVITY_REQUIRE_NATIVE": 4325,
-      "QDRANT_COLLECTION": 4329,
-      "QDRANT_URL": 4333
+      "FORECAST_BACKFILL_ENABLED": 4200,
+      "FORECAST_BACKFILL_DEADLINE_SECONDS": 4215,
+      "CACHE_LONG_SHORT_ENABLED": 4288,
+      "CACHE_LONG_SHORT_WRITES_ENABLED": 4299,
+      "CACHE_LONG_SHORT_MIN_CORRELATION": 4312,
+      "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT": 4313,
+      "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS": 4314,
+      "CACHE_LONG_SHORT_PROXY_CANDIDATES": 4315,
+      "WATCHLIST": 4359,
+      "GCLOUD_BIN": 4363,
+      "GRAVITY_REQUIRE_NATIVE": 4367,
+      "QDRANT_COLLECTION": 4371,
+      "QDRANT_URL": 4375
     }
   },
   "env_io_lists": {
-    "allowed_keys_len": 302,
-    "allowed_keys_unique_len": 302,
+    "allowed_keys_len": 304,
+    "allowed_keys_unique_len": 304,
     "allowed_keys_duplicates": {},
     "allowed_keys_duplicate_total_extra": 0,
     "secret_keys_len": 42,
@@ -884,7 +889,7 @@
   "partition": {
     "counts": {
       "SECRET": 40,
-      "IN_ALLOWED_KEYS": 302,
+      "IN_ALLOWED_KEYS": 304,
       "UNCLASSIFIED": 8
     },
     "secret": [
@@ -1045,6 +1050,8 @@
       "FMP_TIMEOUT_SECONDS",
       "FOLLOW_MIN_AMOUNT",
       "FORECAST_BACKFILL_CLASSIFIER_TYPE",
+      "FORECAST_BACKFILL_DEADLINE_SECONDS",
+      "FORECAST_BACKFILL_ENABLED",
       "FORECAST_BACKFILL_HORIZONS",
       "FORECAST_BACKFILL_LOOKBACK_YEARS",
       "FORECAST_BACKFILL_MACD_FAST",
@@ -1253,7 +1260,7 @@
       {
         "field": "GCLOUD_BIN",
         "in_excluded_from_gui": true,
-        "settings_py_line": 4321,
+        "settings_py_line": 4363,
         "description": "Path to the gcloud binary for environment integrations."
       },
       {
@@ -1644,7 +1651,7 @@
   },
   "write_endpoints_pilots_api": {
     "file": "api/pilots_api.py",
-    "total_write_method_routes": 42,
+    "total_write_method_routes": 43,
     "mutating_settings_routes": 20,
     "env_writing_routes": 20,
     "live_setattr_routes": 0,
@@ -1659,7 +1666,24 @@
         "route": "/pilots/forecast_backfill/run",
         "method": "POST",
         "function": "run_forecast_backfill_endpoint",
-        "line": 1033,
+        "line": 1072,
+        "writes_env": false,
+        "env_write_calls_direct": [],
+        "env_write_calls_via_helper": [],
+        "live_setattr": false,
+        "live_setattr_sites": [],
+        "live_setattr_via_helper": [],
+        "live_daemon_push": false,
+        "live_daemon_push_calls": [],
+        "applies_values": [],
+        "applies_declared_directly": [],
+        "applies_declared_via_helper": []
+      },
+      {
+        "route": "/pilots/forecast_backfill/cancel/{job_id}",
+        "method": "POST",
+        "function": "cancel_forecast_backfill_job",
+        "line": 1146,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1676,7 +1700,7 @@
         "route": "/universe/{symbol}/reinclude",
         "method": "POST",
         "function": "reinclude_universe_symbol",
-        "line": 1194,
+        "line": 1272,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1693,7 +1717,7 @@
         "route": "/portfolio/attribution/brinson-fachler",
         "method": "POST",
         "function": "post_brinson_fachler_attribution",
-        "line": 1633,
+        "line": 1711,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1710,7 +1734,7 @@
         "route": "/observability/macro-gate",
         "method": "PUT",
         "function": "put_macro_gate",
-        "line": 1757,
+        "line": 1835,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -1733,7 +1757,7 @@
         "route": "/decisions",
         "method": "POST",
         "function": "create_decision",
-        "line": 2330,
+        "line": 2408,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1750,7 +1774,7 @@
         "route": "/follows",
         "method": "PUT",
         "function": "upsert_follow",
-        "line": 2404,
+        "line": 2482,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1767,7 +1791,7 @@
         "route": "/pilots/{pilot_id}/follow",
         "method": "POST",
         "function": "follow_pilot",
-        "line": 2415,
+        "line": 2493,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1784,7 +1808,7 @@
         "route": "/agentic/scan-config",
         "method": "PUT",
         "function": "put_agentic_scan_config",
-        "line": 2576,
+        "line": 2654,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1805,7 +1829,7 @@
         "route": "/agentic/watch",
         "method": "POST",
         "function": "post_agentic_watch",
-        "line": 2605,
+        "line": 2683,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1826,7 +1850,7 @@
         "route": "/rlhf/proposals",
         "method": "POST",
         "function": "create_rlhf_proposal",
-        "line": 2733,
+        "line": 2811,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1843,7 +1867,7 @@
         "route": "/rlhf/proposals/{proposal_id}/review",
         "method": "POST",
         "function": "review_rlhf_proposal",
-        "line": 2799,
+        "line": 2877,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1860,7 +1884,7 @@
         "route": "/rlhf/export-sft",
         "method": "POST",
         "function": "export_rlhf_sft",
-        "line": 2848,
+        "line": 2926,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1877,7 +1901,7 @@
         "route": "/llm/setting",
         "method": "PUT",
         "function": "set_llm_setting",
-        "line": 2953,
+        "line": 3031,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -1902,7 +1926,7 @@
         "route": "/brokerage/connect",
         "method": "POST",
         "function": "connect_brokerage",
-        "line": 3080,
+        "line": 3158,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1919,7 +1943,7 @@
         "route": "/brokerage/disconnect",
         "method": "POST",
         "function": "disconnect_brokerage",
-        "line": 3115,
+        "line": 3193,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1936,7 +1960,7 @@
         "route": "/brokerage/refresh",
         "method": "POST",
         "function": "refresh_brokerage",
-        "line": 3138,
+        "line": 3216,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1953,7 +1977,7 @@
         "route": "/brokerage/login/cancel/{job_id}",
         "method": "POST",
         "function": "cancel_brokerage_login",
-        "line": 3193,
+        "line": 3271,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1970,7 +1994,7 @@
         "route": "/automation/run",
         "method": "POST",
         "function": "trigger_automation_run",
-        "line": 3489,
+        "line": 3567,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -1987,7 +2011,7 @@
         "route": "/automation/pause",
         "method": "POST",
         "function": "pause_automation",
-        "line": 3529,
+        "line": 3607,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2004,7 +2028,7 @@
         "route": "/automation/resume",
         "method": "POST",
         "function": "resume_automation",
-        "line": 3555,
+        "line": 3633,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2021,7 +2045,7 @@
         "route": "/automation/schedule/interval",
         "method": "PUT",
         "function": "set_automation_interval",
-        "line": 3586,
+        "line": 3664,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2048,7 +2072,7 @@
         "route": "/strategy/modules",
         "method": "PUT",
         "function": "set_strategy_modules",
-        "line": 3669,
+        "line": 3747,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_many_atomic"
@@ -2071,7 +2095,7 @@
         "route": "/automation/execution-mode",
         "method": "PUT",
         "function": "update_execution_mode",
-        "line": 3756,
+        "line": 3834,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2094,7 +2118,7 @@
         "route": "/settings/tunables",
         "method": "PUT",
         "function": "put_settings_tunables",
-        "line": 4131,
+        "line": 4209,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2113,7 +2137,7 @@
         "route": "/settings/tunables",
         "method": "PATCH",
         "function": "put_settings_tunables",
-        "line": 4131,
+        "line": 4209,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2132,7 +2156,7 @@
         "route": "/settings/sentiment",
         "method": "PUT",
         "function": "put_settings_sentiment",
-        "line": 4758,
+        "line": 4836,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2151,7 +2175,7 @@
         "route": "/settings/sentiment",
         "method": "PATCH",
         "function": "put_settings_sentiment",
-        "line": 4758,
+        "line": 4836,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2170,7 +2194,7 @@
         "route": "/settings/sector-selection",
         "method": "PUT",
         "function": "put_settings_sector_selection",
-        "line": 4783,
+        "line": 4861,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2189,7 +2213,7 @@
         "route": "/settings/sector-selection",
         "method": "PATCH",
         "function": "put_settings_sector_selection",
-        "line": 4783,
+        "line": 4861,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2208,7 +2232,7 @@
         "route": "/settings/cache-long-short",
         "method": "PUT",
         "function": "put_settings_cache_long_short",
-        "line": 4808,
+        "line": 4886,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2227,7 +2251,7 @@
         "route": "/settings/cache-long-short",
         "method": "PATCH",
         "function": "put_settings_cache_long_short",
-        "line": 4808,
+        "line": 4886,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2246,7 +2270,7 @@
         "route": "/settings/feature-flags",
         "method": "PUT",
         "function": "put_feature_flags_settings",
-        "line": 4872,
+        "line": 4950,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2265,7 +2289,7 @@
         "route": "/settings/feature-flags",
         "method": "PATCH",
         "function": "put_feature_flags_settings",
-        "line": 4872,
+        "line": 4950,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2284,7 +2308,7 @@
         "route": "/settings/fmp",
         "method": "PUT",
         "function": "put_settings_fmp",
-        "line": 4901,
+        "line": 4979,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2303,7 +2327,7 @@
         "route": "/settings/fmp",
         "method": "PATCH",
         "function": "put_settings_fmp",
-        "line": 4901,
+        "line": 4979,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2322,7 +2346,7 @@
         "route": "/settings/etf-transmission",
         "method": "PUT",
         "function": "put_settings_etf_transmission",
-        "line": 4926,
+        "line": 5004,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2341,7 +2365,7 @@
         "route": "/settings/etf-transmission",
         "method": "PATCH",
         "function": "put_settings_etf_transmission",
-        "line": 4926,
+        "line": 5004,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2360,7 +2384,7 @@
         "route": "/dead-letter/retry",
         "method": "POST",
         "function": "post_dead_letter_retry",
-        "line": 5047,
+        "line": 5125,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2381,7 +2405,7 @@
         "route": "/prompts/pin",
         "method": "PUT",
         "function": "put_prompts_pin",
-        "line": 5197,
+        "line": 5275,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2404,7 +2428,7 @@
         "route": "/rag/query",
         "method": "POST",
         "function": "post_rag_query",
-        "line": 5274,
+        "line": 5352,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2421,7 +2445,7 @@
         "route": "/pilots/cache-long-short/start",
         "method": "POST",
         "function": "start_cls_strategy",
-        "line": 5355,
+        "line": 5433,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2438,7 +2462,7 @@
         "route": "/pilots/cache-long-short/approve-bulk",
         "method": "POST",
         "function": "approve_cls_bulk",
-        "line": 5367,
+        "line": 5445,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2801,7 +2825,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 353,
+    "files_scanned": 355,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2826,8 +2850,8 @@
     ],
     "distinct_settings_alias_count": 18,
     "form_a_attribute": {
-      "total_reads": 664,
-      "distinct_fields": 215,
+      "total_reads": 667,
+      "distinct_fields": 217,
       "counts": {
         "OUTPUT_DIR": 119,
         "SIGNAL_WEIGHTS": 20,
@@ -2916,6 +2940,7 @@
         "ETF_TRANSMISSION_MIN_MULTIPLIER": 2,
         "ETF_TRANSMISSION_OWNERSHIP_REFERENCE": 2,
         "FOLLOW_MIN_AMOUNT": 2,
+        "FORECAST_BACKFILL_DEADLINE_SECONDS": 2,
         "FUNDAMENTALS_CACHE_TTL_SECONDS": 2,
         "GRAVITY_AI_RUNNER_OUTPUT_PATH": 2,
         "LLM_COMMENTARY_ALERT_PROVIDER": 2,
@@ -2977,6 +3002,7 @@
         "FMP_BARS_ADJUSTMENT": 1,
         "FMP_PAPER_STARTING_CASH": 1,
         "FOLLOW_API_TOKEN": 1,
+        "FORECAST_BACKFILL_ENABLED": 1,
         "FORECAST_MODEL_RETRAIN_DAYS": 1,
         "FORECAST_USE_GARCH_SIGMA": 1,
         "FUNDAMENTALS_SOURCE": 1,
@@ -3229,17 +3255,17 @@
         },
         {
           "file": "api/pilots_api.py",
-          "line": 3022,
+          "line": 3100,
           "expr": "getattr(settings, body.key)"
         },
         {
           "file": "api/pilots_api.py",
-          "line": 4068,
+          "line": 4146,
           "expr": "getattr(settings, key, None)"
         },
         {
           "file": "api/pilots_api.py",
-          "line": 4173,
+          "line": 4251,
           "expr": "getattr(settings, key, None)"
         },
         {
@@ -3322,7 +3348,7 @@
         "os.getenv()": 8
       }
     },
-    "fields_reached_by_any_form": 341,
+    "fields_reached_by_any_form": 343,
     "fields_only_via_b_or_d": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3607,7 +3633,7 @@
       {
         "field": "EDGAR_FULLTEXT_CHUNK_TOKENS",
         "name_literal_sites": [
-          "api/pilots_api.py:4550"
+          "api/pilots_api.py:4628"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -3615,7 +3641,7 @@
       {
         "field": "EDGAR_FULLTEXT_FORMS",
         "name_literal_sites": [
-          "api/pilots_api.py:4549"
+          "api/pilots_api.py:4627"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -3623,7 +3649,7 @@
       {
         "field": "ETF_HOLDINGS_TICKERS",
         "name_literal_sites": [
-          "api/pilots_api.py:4694",
+          "api/pilots_api.py:4772",
           "gui/panels/settings_manager.py:126"
         ],
         "name_literal_site_count": 2,
@@ -3632,7 +3658,7 @@
       {
         "field": "FMP_ECON_INDICATORS",
         "name_literal_sites": [
-          "api/pilots_api.py:4674",
+          "api/pilots_api.py:4752",
           "gui/panels/settings_manager.py:162"
         ],
         "name_literal_site_count": 2,

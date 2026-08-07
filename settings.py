@@ -4182,6 +4182,48 @@ class Settings(BaseSettings):
         default="random_forest",
         description="Classifier algorithm for forecast backfilling ('random_forest' or 'lightgbm').",
     )
+    # Master switch for the async, job-based forecast-backfill endpoints
+    # (POST /pilots/forecast_backfill/run, POST /pilots/forecast_backfill/
+    # cancel/{job_id} -- see ml/forecast_backfill_job.py / api/pilots_api.py).
+    # False by default: this spawns an isolated, CPU-bound subprocess
+    # (ml/forecast_backfill_worker.py) that trains and OVERWRITES the
+    # meta-labeler model artifacts (ml/models/meta_*.pkl) feeding the live
+    # meta_label_composite score -- a materially heavier and more
+    # consequential action than an ordinary config-toggle write. GUI-writable
+    # (gui/env_io.py's ALLOWED_KEYS) like every other non-secret tunable, per
+    # explicit operator decision, but also a settings_keysets.DANGEROUS_KEYS
+    # member (SAFETY_CRITICAL_KEY_REASONS), requiring typed confirmation on
+    # write regardless of editor -- the same treatment as the other
+    # 2026-08-08 "moved here from HAND_SET_ONLY_KEYS" flags in that module.
+    # The endpoints remain independently gated by the FOLLOW_API_TOKEN
+    # command token regardless of this flag's own value.
+    FORECAST_BACKFILL_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Enables POST /pilots/forecast_backfill/run and "
+            "POST /pilots/forecast_backfill/cancel/{job_id} on the Pilots "
+            "API. False by default. GUI-writable like any other non-secret "
+            "tunable, but requires typed confirmation on write (a "
+            "settings_keysets.DANGEROUS_KEYS member) because flipping it "
+            "spawns a subprocess that retrains and overwrites production "
+            "ml/models/meta_*.pkl artifacts read by live inference. "
+            "GET /pilots/forecast_backfill and "
+            "GET /pilots/forecast_backfill/status/{job_id} remain read-only "
+            "and are NOT gated by this flag."
+        ),
+    )
+    FORECAST_BACKFILL_DEADLINE_SECONDS: int = Field(
+        default=1800,
+        description=(
+            "Hard wall-clock deadline for one forecast-backfill run, from "
+            "worker start to a terminal result. The worker process group is "
+            "SIGKILLed if it hasn't produced a result by then. Generous "
+            "relative to data/robinhood_login.py's RH_LOGIN_DEADLINE_SECONDS "
+            "(180s, bounded by how long a human will wait for a push "
+            "notification) -- this job is a CPU-bound multi-ticker, "
+            "multi-horizon model training run, not a human-approval wait."
+        ),
+    )
 
     @field_validator("OUTPUT_DIR")
     @classmethod

@@ -1,11 +1,13 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client";
 import type { ForecastBackfillSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
+import { useBackfillJob } from "../hooks/useBackfillJob";
 import { ErrorState, Loading, MetricBadge } from "../components/ui";
 import { fmtDate, fmtNum } from "../format";
 import { theme } from "../theme";
+import { PHASE_LABEL, formatBackfillCountdown, backfillFailureMessage } from "../forecastBackfillCopy";
 
 export function ForecastBackfillScreen() {
   const nav = useNavigate();
@@ -14,8 +16,21 @@ export function ForecastBackfillScreen() {
     []
   );
 
-  const [running, setRunning] = useState(false);
-  const [runMessage, setRunMessage] = useState<string | null>(null);
+  const { job, starting, error: jobError, notice, start, cancel, reset } = useBackfillJob();
+  // "Tracking" covers the brief window after a 409-resumed start() where we
+  // know we're polling an existing job (notice is set) but haven't received
+  // its first real status yet (job is still null) -- treated the same as
+  // job?.state === "running" for disabling the controls and offering Cancel,
+  // since there genuinely IS an active job being tracked either way.
+  const tracking = job?.state === "running" || (notice !== null && job === null);
+  const running = starting || tracking;
+
+  useEffect(() => {
+    if (job?.state === "succeeded") {
+      void reload();
+    }
+  }, [job?.state, reload]);
+
   const [selectedStrategies, setSelectedStrategies] = useState<string[]>([]);
   const [thetaC, setThetaC] = useState<number>(0.50);
 
@@ -40,21 +55,12 @@ export function ForecastBackfillScreen() {
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
   const handleRunBackfill = async () => {
-    setRunning(true);
-    setRunMessage("Running forecast backfill & meta-labeling training cycle...");
-    try {
-      const params = {
-        strategy_ids: selectedStrategies.length > 0 ? selectedStrategies : undefined,
-        theta_c: thetaC
-      };
-      const res = await api.runForecastBackfill(params);
-      setRunMessage(`Success! Processed ${res.sample_rows} historical rows across horizons.`);
-      await reload();
-    } catch (err: any) {
-      setRunMessage(`Backfill failed: ${err?.message || String(err)}`);
-    } finally {
-      setRunning(false);
-    }
+    reset();
+    const params = {
+      strategy_ids: selectedStrategies.length > 0 ? selectedStrategies : undefined,
+      theta_c: thetaC
+    };
+    await start(params);
   };
 
   const metrics = data?.metrics || {};
@@ -109,16 +115,43 @@ export function ForecastBackfillScreen() {
         </p>
       </header>
 
-      {runMessage && (
+      {(job || jobError || starting || notice) && (
         <div
           className="card card-pad"
           style={{
             marginBottom: "var(--s-4)",
-            borderColor: running ? theme.accent : theme.growth,
+            borderColor: (job?.state === "failed" || job?.state === "timeout" || job?.state === "cancelled" || jobError) ? theme.decline : running ? theme.accent : theme.growth,
             color: theme.textPrimary,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center"
           }}
         >
-          {runMessage}
+          <div>
+            {starting
+              ? "Starting…"
+              : jobError
+              ? `Error: ${jobError}`
+              : job?.state === "running"
+              ? `${job.phase ? PHASE_LABEL[job.phase] : "Starting…"} (Step ${job.step} of ${job.total_steps}) - ${formatBackfillCountdown(job.seconds_remaining)} remaining`
+              : job?.state === "succeeded"
+              ? `Success! Processed ${job.sample_rows} historical rows across horizons.`
+              : job
+              ? backfillFailureMessage(job)
+              : notice}
+          </div>
+          <div>
+            {tracking && (
+              <button className="btn btn-ghost" style={{ color: theme.decline }} onClick={() => void cancel()} type="button">
+                Cancel
+              </button>
+            )}
+            {(job?.state === "failed" || job?.state === "timeout" || job?.state === "cancelled" || job?.state === "succeeded" || jobError) && (
+              <button className="btn btn-ghost" onClick={() => { reset(); if (job?.state === "succeeded") void reload(); }} type="button">
+                Dismiss
+              </button>
+            )}
+          </div>
         </div>
       )}
 
