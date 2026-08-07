@@ -146,20 +146,20 @@ def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     # Step 5: Backtrain meta labelers -- only strategies that declare
     # meta_label_features actually train (see step_5's own skip-with-warning
     # for a strategy that declares none). A declared-trainable strategy can
-    # still end up with zero rows surviving step 5's dropna (e.g.
-    # cross_sectional_momentum: step 3 never calls its pre_compute, so its
-    # rank lookup misses on every row and its Target column is all-NaN --
-    # see step_3_generate_primary_signals's KNOWN GAP docstring) and be
-    # silently skipped -- so `metrics.keys()` is asserted as a SUBSET of what
-    # could train, not an exact match. timeseries_momentum is the one
-    # strategy guaranteed to produce a real per-row signal without any
-    # per-date cross-sectional machinery, so its full horizon set training
-    # successfully is asserted unconditionally.
+    # still legitimately end up with zero rows surviving step 5's dropna
+    # (insufficient real market-data history for some registered-but-
+    # untested module), so `metrics.keys()` is asserted as a SUBSET of what
+    # could train, not an exact match -- but timeseries_momentum (a plain
+    # per-row signal) AND cross_sectional_momentum (the two-phase,
+    # per-date-pre_compute signal _run_cross_sectional_module exists for --
+    # see step_3_generate_primary_signals) are both asserted to train
+    # successfully across every horizon unconditionally, since both are
+    # known-reliable given this test's real tickers/date range.
     trainable = [
         name for name in engine.active_strategies
         if getattr(global_registry.get(name), "meta_label_features", [])
     ]
-    assert "timeseries_momentum" in trainable
+    assert {"timeseries_momentum", "cross_sectional_momentum"}.issubset(trainable)
     metrics = engine.step_5_backtrain_meta_labelers()
     candidate_keys = {
         f"{name}_{h}d"
@@ -168,10 +168,12 @@ def test_forecast_backfill_end_to_end_pipeline(tmp_path):
     }
     assert set(metrics.keys()).issubset(candidate_keys)
     assert {f"timeseries_momentum_{h}d" for h in horizons}.issubset(metrics.keys())
+    assert {f"cross_sectional_momentum_{h}d" for h in horizons}.issubset(metrics.keys())
     for model_key, m in metrics.items():
         assert "accuracy" in m
         assert "auc" in m
         assert "n_train" in m
+        assert m["n_train"] > 0
 
     # Step 6: Continuous inference backfill
     backfill_df = engine.step_6_execute_backfill()
@@ -360,6 +362,92 @@ def test_train_test_split_embargoes_overlapping_forward_window(monkeypatch):
     assert t1 is not None
     implied_horizon_days = (t1.values - t1.index.values).astype("timedelta64[D]").astype(int)
     assert set(implied_horizon_days) == {horizon}
+
+
+def _synthetic_engine(tickers, n_days=400, seed=42):
+    """A fully offline AgenticForecastBackfiller -- synthetic price/volume
+    data assigned directly to engine.prices/engine.volumes, bypassing
+    step_1_fetch_data() (and its real network call) entirely. step_2 onward
+    only ever reads self.prices/self.volumes, never start_date/end_date, so
+    this is a faithful substitute for network-marked construction."""
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range("2018-01-01", periods=n_days)
+    prices = pd.DataFrame(
+        {
+            t: 100.0 * np.cumprod(1.0 + rng.normal(0.0002 * (i + 1), 0.01, n_days))
+            for i, t in enumerate(tickers)
+        },
+        index=dates,
+    )
+    volumes = pd.DataFrame({t: 1_000_000.0 for t in tickers}, index=dates)
+    engine = AgenticForecastBackfiller(tickers=list(tickers), horizons=[10], use_fmp=False)
+    engine.prices = prices
+    engine.volumes = volumes
+    return engine
+
+
+def test_cross_sectional_module_wiring_produces_real_differentiated_per_date_ranks():
+    """_run_cross_sectional_module (step 3's per-date two-phase hook replay)
+    must actually invoke cross_sectional_momentum's real pre_compute/compute
+    -- not silently no-op it. Regression coverage for the bug this was
+    introduced to fix: previously, calling compute_vectorized() directly
+    with no pre_compute() call left context.xsec_percentile_ranks
+    permanently empty, so every ticker's score was flatly 0.0 regardless of
+    its actual relative momentum -- indistinguishable from "this signal
+    doesn't work" rather than "this signal was never actually invoked
+    correctly." A genuinely-differentiated rank -- not just non-null -- is
+    what proves pre_compute really ran with real per-ticker return data."""
+    tickers = ["AAA", "BBB", "CCC", "DDD"]
+    engine = _synthetic_engine(tickers)
+    engine.step_2_calculate_technical_features()
+    engine.step_3_generate_primary_signals()
+
+    assert "cross_sectional_momentum" in engine.active_strategies
+    sig = engine.data["cross_sectional_momentum_Signal"]
+    assert sig.notna().any()
+
+    valid_dates = sig.dropna().index.get_level_values("Date").unique().sort_values()
+    assert len(valid_dates) > 20
+    sample_date = valid_dates[10]
+    day_scores = sig.xs(sample_date, level="Date")
+    assert len(day_scores) == len(tickers)
+    # The four synthetic tickers were constructed with strictly different
+    # drift rates, so their cross-sectional rank on any shared date must be
+    # differentiated, not a flat constant (which is what the pre-fix no-op
+    # produced for every ticker on every date).
+    assert day_scores.nunique() > 1
+
+
+def test_cross_sectional_module_wiring_is_lookahead_free():
+    """Perturbing a price strictly AFTER a given date must never change
+    that date's cross-sectional rank/score -- the standard no-lookahead
+    perturbation test this codebase requires for every indicator/forecaster
+    (see CLAUDE.md's 'Every indicator and forecaster must be verified to
+    have zero lookahead bias' convention). _compute_xsec_12_1m_wide is
+    shift-based (causal by construction); this test verifies step 3's
+    per-date pre_compute/compute replay doesn't reintroduce a leak on top
+    of that (e.g. by accidentally sharing state across dates)."""
+    tickers = ["AAA", "BBB", "CCC", "DDD"]
+
+    baseline = _synthetic_engine(tickers)
+    baseline.step_2_calculate_technical_features()
+    baseline.step_3_generate_primary_signals()
+    sig_before = baseline.data["cross_sectional_momentum_Signal"]
+
+    valid_dates = sig_before.dropna().index.get_level_values("Date").unique().sort_values()
+    cutoff_date = valid_dates[10]  # early in the valid range -- leaves room to perturb "the future"
+
+    perturbed = _synthetic_engine(tickers)
+    cutoff_pos = perturbed.prices.index.get_loc(cutoff_date)
+    # Blow up AAA's price for every date strictly after the cutoff.
+    perturbed.prices.iloc[cutoff_pos + 1 :, perturbed.prices.columns.get_loc("AAA")] *= 5.0
+    perturbed.step_2_calculate_technical_features()
+    perturbed.step_3_generate_primary_signals()
+    sig_after = perturbed.data["cross_sectional_momentum_Signal"]
+
+    before_day = sig_before.xs(cutoff_date, level="Date").sort_index()
+    after_day = sig_after.xs(cutoff_date, level="Date").sort_index()
+    pd.testing.assert_series_equal(before_day, after_day)
 
 
 def test_forecast_backfill_api_endpoint(monkeypatch, tmp_path):

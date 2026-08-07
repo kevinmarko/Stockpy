@@ -303,81 +303,167 @@ class AgenticForecastBackfiller:
         logger.info("[+] Step 2 complete. Features dataset shape: %s", self.data.shape)
         return self.data
 
+    def _compute_xsec_12_1m_wide(self, skip_days: int = 22, lookback_days: int = 252) -> pd.DataFrame:
+        """Cross-sectional 12-1m momentum return, at EVERY historical date.
+
+        Mirrors ``main_orchestrator.py::compute_xsec_momentum_ranks``'s
+        formula (``r = price[t-skip_days] / price[t-lookback_days] - 1``,
+        default skip=22≈1 month, lookback=252≈12 months) exactly, but
+        generalized from a single current-row snapshot to a full,
+        vectorized, per-date series via ``shift`` -- lookahead-free by
+        construction (every value at row t depends only on rows strictly
+        before t), matching this codebase's causal-shift convention.
+
+        Returns
+        -------
+        pd.DataFrame
+            Wide (Date index x Ticker columns), same shape as ``self.prices``.
+            NaN wherever either shifted price is unavailable (insufficient
+            history for that ticker/date) -- never fabricated.
+        """
+        return self.prices.shift(skip_days) / self.prices.shift(lookback_days) - 1.0
+
+    def _run_cross_sectional_module(
+        self, module, xsec_return_wide: pd.DataFrame, make_context,
+    ) -> pd.DataFrame:
+        """Run a module whose ``pre_compute`` is overridden across every
+        historical date in this backfill window, mirroring the real
+        two-phase hook pattern (``signals.registry.SignalRegistry.
+        run_pre_compute`` in production): once PER DATE, ``pre_compute()``
+        ranks that day's cross-section from a per-date ``Symbol`` +
+        ``XSec_12_1M`` universe slice, then ``compute()`` is called once per
+        ticker active on that date, exactly as the module itself defines it
+        -- this backfiller never bypasses or reimplements the module's own
+        ranking logic, only supplies the per-date input its pre_compute
+        contract expects.
+
+        A fresh ``SignalContext`` is constructed per date (via
+        ``make_context``) so ``context.xsec_percentile_ranks`` from one date
+        can never leak into another's rank lookup.
+        """
+        scores = pd.Series(np.nan, index=self.data.index, dtype=float)
+        confidences = pd.Series(0.0, index=self.data.index, dtype=float)
+        explanations = pd.Series("", index=self.data.index, dtype=object)
+
+        for date, group in self.data.groupby(level="Date"):
+            if date not in xsec_return_wide.index:
+                continue
+            day_returns = xsec_return_wide.loc[date]
+            # Ticker-indexed AND carrying an explicit "Symbol" column,
+            # matching main_orchestrator.py's dashboard_df convention that
+            # every pre_compute override in this codebase is actually
+            # written against. This matters beyond style:
+            # CrossSectionalMomentumSignal.pre_compute() re-derives its own
+            # index from the "Symbol" column (`.set_index(SYMBOL_COL)`), so
+            # it would tolerate a default RangeIndex fine -- but
+            # LGBMRankerSignal.pre_compute()'s neutral-fallback branch keys
+            # `context.lgbm_scores` off `universe_df.index` directly, with
+            # no "Symbol" involved. A plain RangeIndex there would produce
+            # integer-keyed scores that compute()'s ticker-string lookup can
+            # never match, silently degrading every row to the neutral 0.5
+            # rank for the life of the run.
+            universe_df = pd.DataFrame(
+                {
+                    "Symbol": day_returns.index,
+                    "XSec_12_1M": day_returns.values,
+                },
+                index=day_returns.index,
+            )
+            context = make_context()
+            module.pre_compute(universe_df, context)
+
+            for idx, row in group.iterrows():
+                ticker = idx[1]  # self.data's index is (Date, Ticker)
+                row_with_symbol = row.copy()
+                row_with_symbol["Symbol"] = ticker
+                out = module.compute(row_with_symbol, context)
+                scores[idx] = out.score
+                confidences[idx] = out.confidence
+                explanations[idx] = out.explanation
+
+        return pd.DataFrame(
+            {
+                "score": scores,
+                "confidence": confidences,
+                "explanation": explanations,
+                "meta_label_proba": 1.0,
+            },
+            index=self.data.index,
+        )
+
     def step_3_generate_primary_signals(self) -> pd.DataFrame:
         """Step 3: Generate primary signals dynamically from global_registry.
 
-        KNOWN GAP -- cross-sectional modules (currently only
-        ``cross_sectional_momentum``) never produce a usable signal here.
-        This loop calls each module's ``compute_vectorized(self.data,
-        context)`` directly; it never calls ``pre_compute(universe_df,
-        context)`` first. Per CLAUDE.md's two-phase hook pattern contract
-        (and ``signals/cross_sectional_momentum.py``'s own docstring),
-        ``pre_compute`` is what populates ``context.xsec_percentile_ranks``
-        -- without it, every row's rank lookup misses and
-        ``CrossSectionalMomentumSignal.compute()`` returns a flat
-        ``score=0.0`` for every row, unconditionally. `np.sign(0.0)` below
-        then collapses to NaN for every row, so this strategy's Target
-        columns are always all-NaN and step 5 always logs "Insufficient
-        samples (0)" and skips it -- a silent-but-honest no-op (CONSTRAINT
-        #4: no fabricated confidence), never a crash or a corrupted result,
-        but real coverage this dynamic pipeline claims to provide and
-        doesn't yet.
-        The pre-registry-refactor version of this step computed this
-        correctly (a direct, per-DATE `returns_252.rank(axis=1, pct=True)`
-        cross-sectional rank inline) -- that per-date grouping is exactly
-        what's missing here now. Restoring it generically (calling
-        `pre_compute` once per historical date, with a per-date `Symbol` +
-        `XSec_12_1M` slice of the universe) is real, scoped work, deliberately
-        left as a follow-up rather than rushed in alongside the
-        meta_label_features/meta_label_horizons schema work this pass
-        actually covers -- a wrong/naive shortcut here (e.g. ranking the full
-        stacked (ticker, date) frame in one shot) would rank rows from
-        different dates against each other, a methodological error worse
-        than today's honest zero-samples skip.
+        Cross-sectional modules (those overriding ``pre_compute`` -- e.g.
+        ``cross_sectional_momentum``; detected structurally via
+        ``type(module).pre_compute is not SignalModule.pre_compute``, never
+        by hardcoding a strategy name) go through
+        ``_run_cross_sectional_module``, which replays the real two-phase
+        hook pattern once per historical date (see that method's docstring
+        and ``_compute_xsec_12_1m_wide`` for the lookahead-free per-date
+        cross-sectional input). Every other module keeps the original
+        single-shot ``compute_vectorized(self.data, context)`` call --
+        unchanged, still the fast path for the common (non-cross-sectional)
+        case.
         """
         logger.info("[*] Step 3: Generating primary signals from registry...")
         from signals.registry import global_registry
-        from signals.base import SignalContext
+        from signals.base import SignalContext, SignalModule
         from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
         import numpy as np
-        
+
         self.active_strategies = []
-        
+
         # Build dummy context. Two independent construction bugs fixed here:
         # `date` is a required positional arg on MarketBarDTO (no default),
         # and SignalContext's field is `bar`, not `market_bar` -- both were
         # a guaranteed TypeError on every call, not a degraded-but-working
         # path (see signals/base.py's SignalContext dataclass).
-        context = SignalContext(
-            bar=MarketBarDTO(date=datetime.now(timezone.utc), ticker="DUMMY", open_price=0, high_price=0, low_price=0, close_price=0, volume=0),
-            fundamentals=FundamentalDataDTO(ticker="DUMMY", pe_ratio=0, pb_ratio=0, dividend_yield=0, book_value=0, eps_trailing=0, dividend_growth_rate=0, payout_ratio=0, sector="N/A", company_name="DUMMY", market_cap=0),
-            macro=MacroEconomicDTO(yield_curve_10y_2y=0, high_yield_oas=0, inflation_rate=0, sahm_rule_indicator=0, vix_value=15, hmm_risk_on_probability=None)
-        )
+        dummy_bar = MarketBarDTO(date=datetime.now(timezone.utc), ticker="DUMMY", open_price=0, high_price=0, low_price=0, close_price=0, volume=0)
+        dummy_fundamentals = FundamentalDataDTO(ticker="DUMMY", pe_ratio=0, pb_ratio=0, dividend_yield=0, book_value=0, eps_trailing=0, dividend_growth_rate=0, payout_ratio=0, sector="N/A", company_name="DUMMY", market_cap=0)
+        dummy_macro = MacroEconomicDTO(yield_curve_10y_2y=0, high_yield_oas=0, inflation_rate=0, sahm_rule_indicator=0, vix_value=15, hmm_risk_on_probability=None)
+
+        def make_context() -> SignalContext:
+            # A fresh SignalContext per call -- xsec_percentile_ranks (and
+            # any other per-cycle field) must never be shared/mutated across
+            # unrelated calls (different dates, or a cross-sectional module
+            # vs. every other module in the same step_3 run).
+            return SignalContext(bar=dummy_bar, fundamentals=dummy_fundamentals, macro=dummy_macro)
+
+        context = make_context()
+        xsec_return_wide: Optional[pd.DataFrame] = None  # computed lazily, at most once
 
         for name, module in global_registry.get_all().items():
             if self.strategy_ids and name not in self.strategy_ids:
                 continue
-                
+
             missing = [f for f in module.required_features if f not in self.data.columns]
             if missing:
                 logger.debug(f"Skipping {name} due to missing features: {missing}")
                 continue
 
             try:
-                out_df = module.compute_vectorized(self.data, context)
+                needs_precompute = type(module).pre_compute is not SignalModule.pre_compute
+                if needs_precompute:
+                    if xsec_return_wide is None:
+                        xsec_return_wide = self._compute_xsec_12_1m_wide()
+                    out_df = self._run_cross_sectional_module(module, xsec_return_wide, make_context)
+                else:
+                    out_df = module.compute_vectorized(self.data, context)
+
                 if "score" in out_df.columns:
                     signal_col = np.sign(out_df["score"]).replace(0, np.nan)
                     self.data[f"{name}_Signal"] = signal_col
-                    
+
                     features_to_use = getattr(module, "meta_label_features", [])
                     for feat in features_to_use:
                         if feat in out_df.columns:
                             self.data[f"{name}_{feat}"] = out_df[feat]
-                            
+
                     self.active_strategies.append(name)
             except Exception as e:
                 logger.warning(f"Error computing vectorized signal for {name}: {e}")
-                
+
         logger.info(f"[+] Step 3 complete. Primary signals generated for: {self.active_strategies}")
         return self.data
 
