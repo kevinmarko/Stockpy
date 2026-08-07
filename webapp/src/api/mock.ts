@@ -6667,6 +6667,17 @@ export const mockApi = {
     return delay(applyEtfTransmissionTunables(values, confirm));
   },
 
+  async getCacheLongShortSettings(): Promise<TunablesResponse> {
+    return delay({ applies: "immediately" as const, env_drift: { detected: false, keys: [], note: "" }, groups: [] });
+  },
+
+  async updateCacheLongShortSettings(
+    values: Record<string, number | boolean | string>,
+    _confirm: SettingsConfirmMap = {}
+  ): Promise<TunablesUpdateResult> {
+    return delay({ applied: 0, requested: Object.keys(values).length, pending: 0, requires_restart: false, written: {}, rejected: {}, applies: "immediately" as const });
+  },
+
   // ---- Phase-4 Data Explorer / Signal Breakdown / Forecast Viewer ----
   // "ZZZZ" is the honest cold-start / no-coverage fixture symbol across all
   // three: [] bars, 404 fundamentals/forecast, all-null signal breakdown.

@@ -194,13 +194,15 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
 function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () => void }) {
   const [edit, setEdit] = useState<EditState>(() => initEdit(data.modules, data.disabled));
   const [confirming, setConfirming] = useState(false);
-  const mutation = useMutation(() =>
-    api.setStrategyModules({
-      weights: Object.fromEntries(
-        Object.entries(edit.weights).map(([k, v]) => [k, Number(v)]),
-      ),
-      disabled: [...edit.disabled].sort(),
-    }),
+  const mutation = useMutation(
+    () =>
+      api.setStrategyModules({
+        weights: Object.fromEntries(
+          Object.entries(edit.weights).map(([k, v]) => [k, Number(v)]),
+        ),
+        disabled: [...edit.disabled].sort(),
+      }),
+    { successMessage: "Strategy weights updated" },
   );
   const saved = mutation.result != null && mutation.error == null;
 

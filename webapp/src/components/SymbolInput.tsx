@@ -70,12 +70,20 @@ export function SymbolInput({
   initial = "",
   onSubmit,
   label = "Symbol",
+  hint,
   pending,
+  hideButton,
+  buttonText,
+  onChange,
 }: {
   initial?: string;
   onSubmit: (symbol: string) => void;
   label?: string;
+  hint?: React.ReactNode;
   pending?: boolean;
+  hideButton?: boolean;
+  buttonText?: string;
+  onChange?: (symbol: string) => void;
 }) {
   const [value, setValue] = useState(initial);
   const [universe, setUniverse] = useState<UniverseSymbol[]>(universeCache ?? []);
@@ -122,6 +130,7 @@ export function SymbolInput({
     const clean = sym.trim().toUpperCase();
     if (!clean) return;
     setValue(clean);
+    if (onChange) onChange(clean);
     setOpen(false);
     setActiveIndex(-1);
     onSubmit(clean);
@@ -192,6 +201,7 @@ export function SymbolInput({
           value={value}
           onChange={(e) => {
             setValue(e.target.value);
+            if (onChange) onChange(e.target.value);
             setOpen(true);
             setActiveIndex(-1);
           }}
@@ -241,10 +251,17 @@ export function SymbolInput({
             })}
           </ul>
         )}
+        {hint && (
+          <div style={{ marginTop: "var(--s-1)", fontSize: "var(--t-body)", color: "var(--text-muted)" }}>
+            {hint}
+          </div>
+        )}
       </div>
-      <Button type="submit" variant="primary" pending={pending}>
-        Load
-      </Button>
+      {!hideButton && (
+        <Button type="submit" variant="primary" pending={pending}>
+          {buttonText || "Load"}
+        </Button>
+      )}
     </form>
   );
 }

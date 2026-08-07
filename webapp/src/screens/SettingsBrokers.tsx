@@ -87,7 +87,9 @@ function BrokerageSection({
   reload: () => void;
 }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  const disconnect = useMutation(() => api.disconnectBrokerage());
+  const disconnect = useMutation(() => api.disconnectBrokerage(), {
+    successMessage: "Brokerage disconnected",
+  });
   const refresh = useBrokerageLoginJob();
   const refreshRunning = refresh.starting || refresh.job?.state === "running";
 

@@ -20,6 +20,7 @@ import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, Notice } from "../components/ui";
+import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, timeAgo } from "../format";
@@ -77,8 +78,9 @@ function Metric({ label, value }: { label: string; value: string }) {
 function PairAnalyzeSection() {
   const [symY, setSymY] = useState("");
   const [symX, setSymX] = useState("");
-  const mutation = useMutation((y: string, x: string) =>
-    api.analyzePairs({ symbol_y: y, symbol_x: x })
+  const mutation = useMutation(
+    (y: string, x: string) => api.analyzePairs({ symbol_y: y, symbol_x: x }),
+    { successMessage: "Pair analysis complete" }
   );
   const result: PairsAnalyzeResult | null = mutation.result ?? null;
 
@@ -96,17 +98,21 @@ function PairAnalyzeSection() {
       </p>
       <div style={{ display: "flex", gap: "var(--s-2-5)", flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 120px" }}>
-          <Input
+          <SymbolInput
             label="Symbol Y (dependent)"
-            value={symY}
-            onChange={(e) => setSymY(e.target.value.toUpperCase())}
+            initial={symY}
+            onChange={(sym) => setSymY(sym.toUpperCase())}
+            onSubmit={(sym) => setSymY(sym.toUpperCase())}
+            hideButton
           />
         </div>
         <div style={{ flex: "1 1 120px" }}>
-          <Input
+          <SymbolInput
             label="Symbol X (hedge)"
-            value={symX}
-            onChange={(e) => setSymX(e.target.value.toUpperCase())}
+            initial={symX}
+            onChange={(sym) => setSymX(sym.toUpperCase())}
+            onSubmit={(sym) => setSymX(sym.toUpperCase())}
+            hideButton
           />
         </div>
       </div>
@@ -213,7 +219,10 @@ function PairAnalyzeSection() {
  */
 function PairScanSection() {
   const [symbolsText, setSymbolsText] = useState("");
-  const mutation = useMutation((symbols: string[]) => api.scanPairs({ symbols }));
+  const mutation = useMutation(
+    (symbols: string[]) => api.scanPairs({ symbols }),
+    { successMessage: "Pairs scan complete" }
+  );
   const result = mutation.result ?? null;
 
   const parsed = symbolsText

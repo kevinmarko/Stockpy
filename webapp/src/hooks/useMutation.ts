@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import toast from "react-hot-toast";
+
 /**
  * Codifies the hand-rolled write-path shape used by FollowModal.tsx (the
  * only mutation in the app before this): local pending/result/error state,
@@ -10,7 +12,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * hand-roll that ~12-line block five times.
  */
 export function useMutation<TArgs extends unknown[], TResult>(
-  fn: (...args: TArgs) => Promise<TResult>
+  fn: (...args: TArgs) => Promise<TResult>,
+  options?: {
+    successMessage?: string | ((result: TResult) => string);
+  }
 ) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +40,16 @@ export function useMutation<TArgs extends unknown[], TResult>(
       setError(null);
       try {
         const r = await fn(...args);
-        if (alive.current) setResult(r);
+        if (alive.current) {
+          setResult(r);
+          if (options?.successMessage) {
+            toast.success(
+              typeof options.successMessage === "function"
+                ? options.successMessage(r)
+                : options.successMessage
+            );
+          }
+        }
         return r;
       } catch (e) {
         if (alive.current) {

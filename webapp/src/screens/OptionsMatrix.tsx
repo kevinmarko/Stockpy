@@ -760,19 +760,22 @@ function OptionsRecomputeSection() {
   const [deltaTolerance, setDeltaTolerance] = useState(0.05);
   const [openSymbol, setOpenSymbol] = useState<string | null>(null);
 
-  const mutation = useMutation(() => {
-    const rfr = parseFloat(riskFreeRatePct);
-    return api.recomputeOptions({
-      symbols: parsedSymbols,
-      target_dte: targetDte,
-      delta_target_scale: deltaScale,
-      ivr_sell_threshold: ivrSell,
-      ivr_buy_threshold: ivrBuy,
-      risk_free_rate_pct: Number.isFinite(rfr) ? rfr : null,
-      strike_grid: strikeGrid,
-      delta_tolerance: deltaTolerance,
-    });
-  });
+  const mutation = useMutation(
+    () => {
+      const rfr = parseFloat(riskFreeRatePct);
+      return api.recomputeOptions({
+        symbols: parsedSymbols,
+        target_dte: targetDte,
+        delta_target_scale: deltaScale,
+        ivr_sell_threshold: ivrSell,
+        ivr_buy_threshold: ivrBuy,
+        risk_free_rate_pct: Number.isFinite(rfr) ? rfr : null,
+        strike_grid: strikeGrid,
+        delta_tolerance: deltaTolerance,
+      });
+    },
+    { successMessage: "Options matrix recomputed" }
+  );
   const result: OptionsRecomputeResult | null = mutation.result ?? null;
 
   const parsedSymbols = symbolsText

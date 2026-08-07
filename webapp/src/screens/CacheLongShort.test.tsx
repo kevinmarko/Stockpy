@@ -15,6 +15,7 @@ vi.mock("../api/client", () => ({
     // resolving null exercises its documented non-fatal-failure path
     // rather than needing a full Thresholds fixture here.
     getThresholds: vi.fn().mockResolvedValue(null),
+    getUniverse: vi.fn().mockResolvedValue({ symbols: [] }),
   },
   apiMeta: { useMock: false },
 }));
