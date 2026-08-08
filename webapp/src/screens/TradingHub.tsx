@@ -13,6 +13,15 @@ import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
  * tapped to navigate. Every description is sourced live from `TAB_HELP`
  * (`help/helpContent.ts`) rather than hand-copied, so it can never drift
  * from the real in-app help content.
+ *
+ * Each card splits a `.drag-handle` header (icon + label, grabbed to
+ * reorder) from a separately-clickable `role="button"` body (the
+ * description, tapped to navigate) -- matching OperationsHub.tsx's and
+ * ResearchHub.tsx's pattern, so all three hub screens resolve the
+ * click-vs-drag conflict the same way. This replaces an earlier
+ * onDoubleClick-to-navigate workaround (single click was reserved for
+ * dragging the whole card) that made this screen's tap gesture inconsistent
+ * with its two sibling hubs.
  */
 interface HubCard {
   to: string;
@@ -29,36 +38,42 @@ const CARDS: HubCard[] = [
 
 function HubCardRow({ card, onOpen }: { card: HubCard; onOpen: () => void }) {
   return (
-    <section
-      className="card card-pad drag-handle"
-      style={{ cursor: "grab", height: "100%" }}
-      onDoubleClick={onOpen} // changed to double click because single click is for dragging
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--s-3)" }}>
-        <span style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>{card.icon}</span>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{card.label}</div>
-          <p
-            style={{
-              color: theme.textSecondary,
-              fontSize: "var(--t-label)",
-              lineHeight: 1.5,
-              marginTop: "var(--s-1)",
-            }}
-          >
-            {card.description}
-          </p>
-        </div>
+    <div className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div
+        className="drag-handle"
+        style={{
+          padding: "var(--s-3)",
+          borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
+          cursor: "grab",
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--s-2)"
+        }}
+      >
+        <span aria-hidden style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>
+          {card.icon}
+        </span>
+        <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{card.label}</div>
       </div>
-    </section>
+      <div
+        role="button"
+        aria-label={card.label}
+        tabIndex={0}
+        onClick={onOpen}
+        onKeyDown={(e) => e.key === "Enter" && onOpen()}
+        style={{
+          padding: "var(--s-3)",
+          flex: 1,
+          overflow: "auto",
+          color: theme.textMuted,
+          fontSize: "var(--t-label)",
+          lineHeight: 1.5,
+          cursor: "pointer"
+        }}
+      >
+        {card.description}
+      </div>
+    </div>
   );
 }
 

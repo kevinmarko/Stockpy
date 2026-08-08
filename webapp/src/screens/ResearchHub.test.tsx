@@ -4,15 +4,31 @@
  * Sector Selection closing parity gap G2 — the hub previously listed only 9
  * of the 11 screens the nav actually carries), the TAB_HELP-sourced
  * descriptions read live off help/helpContent.ts (never a hard-coded
- * duplicate, so the test would catch drift), and clicking a card navigates
- * to that screen's route.
+ * duplicate, so the test would catch drift), and clicking a card's
+ * click-to-navigate body (role="button", separate from its `.drag-handle`
+ * header) navigates to that screen's route.
+ *
+ * The last test below directly protects the G2 invariant itself (card
+ * order == NAV_ITEMS' research-section order) against a *new* class of
+ * regression this file's docstring couldn't have anticipated when G2 was
+ * first fixed: DynamicGrid drag-and-drop persists a reordered layout to
+ * localStorage, and if this hub's rendered card order were ever sourced
+ * from that persisted state instead of the static, NAV_ITEMS-mirroring
+ * `CARDS` array, a drag could silently reintroduce drift.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ResearchHub } from "./ResearchHub";
 import { TAB_HELP } from "../help/helpContent";
+import { NAV_ITEMS } from "../navigation";
+
+const GRID_LOCAL_STORAGE_KEY = "grid-layout-research-hub";
+
+afterEach(() => {
+  localStorage.removeItem(GRID_LOCAL_STORAGE_KEY);
+});
 
 /** Stub landing screens, same pattern App.test.tsx uses to assert navigation. */
 function Stub({ marker }: { marker: string }) {
@@ -104,15 +120,68 @@ describe("ResearchHub screen", () => {
     ["Sector Selection", "landed:sector-selection"],
     ["Forecast Viewer", "landed:forecast"],
     ["Data Explorer", "landed:data-explorer"],
-  ])("clicking the %s card navigates to its route", async (label, marker) => {
+  ])("clicking the %s card's body navigates to its route", async (label, marker) => {
     const user = userEvent.setup();
     renderHub();
-    // getByText(label) exact-matches the card's own label div (a leaf node
-    // whose normalized text is exactly the label) -- NOT a regex/substring
-    // match, which would ambiguously hit e.g. "Compare"'s description
-    // ("...Pilots you're considering following.") when looking for "Pilots".
-    // The click bubbles up from the label div to the enclosing card <button>.
-    await user.click(screen.getByText(label));
+    // The card's clickable target is its description body (role="button",
+    // accessible name == the card label) -- separate from the `.drag-handle`
+    // header (icon + label) that exists only to be grabbed for reordering.
+    await user.click(screen.getByRole("button", { name: label }));
     expect(await screen.findByText(marker)).toBeInTheDocument();
+  });
+
+  it("clicking a card's drag-handle header (icon + label) does NOT navigate -- only the body does", async () => {
+    const user = userEvent.setup();
+    renderHub();
+    // "Pilots" text lives in the .drag-handle header now, not the
+    // clickable body -- clicking it must be a no-op navigation-wise, since
+    // it's the grab affordance for react-grid-layout's drag config.
+    await user.click(screen.getByText("Pilots"));
+    expect(screen.queryByText("landed:marketplace")).not.toBeInTheDocument();
+  });
+
+  it("renders cards in NAV_ITEMS' canonical research-section order, immune to a stale drag-reordered layout in localStorage (parity gap G2 invariant)", () => {
+    // Simulate what localStorage would hold after a user previously dragged
+    // cards into a different visual arrangement -- DynamicGrid persists
+    // react-grid-layout x/y coordinates under this key. If this hub's
+    // rendered card order were ever derived from that persisted state
+    // instead of the static CARDS array (which mirrors NAV_ITEMS), a drag
+    // could silently reintroduce the exact drift parity gap G2 already
+    // fixed once (see this file's top docstring and ResearchHub.tsx's own).
+    localStorage.setItem(
+      GRID_LOCAL_STORAGE_KEY,
+      JSON.stringify({
+        lg: [
+          { i: "/data-explorer", x: 0, y: 0, w: 4, h: 3 },
+          { i: "/forecast", x: 4, y: 0, w: 4, h: 3 },
+          { i: "/marketplace", x: 8, y: 0, w: 4, h: 3 },
+          { i: "/sector-selection", x: 0, y: 3, w: 4, h: 3 },
+          { i: "/sentiment", x: 4, y: 3, w: 4, h: 3 },
+          { i: "/signals", x: 8, y: 3, w: 4, h: 3 },
+          { i: "/options", x: 0, y: 6, w: 4, h: 3 },
+          { i: "/pairs", x: 4, y: 6, w: 4, h: 3 },
+          { i: "/strategy-health", x: 8, y: 6, w: 4, h: 3 },
+          { i: "/models", x: 0, y: 9, w: 4, h: 3 },
+          { i: "/compare", x: 4, y: 9, w: 4, h: 3 },
+        ],
+      })
+    );
+
+    renderHub();
+
+    const grid = screen.getByTestId("grid-research-hub");
+    const renderedLabels = within(grid)
+      .getAllByRole("button")
+      .map((el) => el.getAttribute("aria-label"));
+
+    const expectedOrder = NAV_ITEMS.filter(
+      (item) => item.section === "research" && renderedLabels.includes(item.label)
+    ).map((item) => item.label);
+
+    // Every rendered card's accessible name, read off the DOM in the exact
+    // order it was mounted, must equal NAV_ITEMS' research-section order --
+    // NOT the scrambled localStorage layout set up above.
+    expect(renderedLabels).toEqual(expectedOrder);
+    expect(renderedLabels).toHaveLength(11);
   });
 });

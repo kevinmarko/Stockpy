@@ -1,6 +1,7 @@
 /**
  * TradingHub.test.tsx — the "Trading Tools" nav-section hub renders one card
- * per screen (icon, label, description) and each card navigates to its
+ * per screen (icon, label, description) and each card's clickable body
+ * (role="button", separate from its `.drag-handle` header) navigates to its
  * route. Descriptions are asserted against the LIVE TAB_HELP text (not a
  * hard-coded duplicate) so the test catches drift.
  */
@@ -48,24 +49,34 @@ describe("TradingHub screen", () => {
     expect(screen.getByText(TAB_HELP.commands.description)).toBeInTheDocument();
   });
 
-  it("clicking the Attribution card navigates to /attribution", async () => {
+  it("clicking the Attribution card's body navigates to /attribution", async () => {
     const user = userEvent.setup();
     renderHub();
-    await user.click(screen.getByText("Attribution"));
+    await user.click(screen.getByRole("button", { name: /Attribution/ }));
     expect(await screen.findByText("Attribution landing")).toBeInTheDocument();
   });
 
-  it("clicking the Calibration card navigates to /calibration", async () => {
+  it("clicking the Calibration card's body navigates to /calibration", async () => {
     const user = userEvent.setup();
     renderHub();
-    await user.click(screen.getByText("Calibration"));
+    await user.click(screen.getByRole("button", { name: /Calibration/ }));
     expect(await screen.findByText("Calibration landing")).toBeInTheDocument();
   });
 
-  it("clicking the Commands card navigates to /commands", async () => {
+  it("clicking the Commands card's body navigates to /commands", async () => {
     const user = userEvent.setup();
     renderHub();
-    await user.click(screen.getByText("Commands"));
+    await user.click(screen.getByRole("button", { name: /Commands/ }));
     expect(await screen.findByText("Commands landing")).toBeInTheDocument();
+  });
+
+  it("clicking the card's drag-handle header (icon + label) does NOT navigate -- only the body does", async () => {
+    const user = userEvent.setup();
+    renderHub();
+    // The label text lives in the .drag-handle header now, not the
+    // clickable body -- clicking it must be a no-op navigation-wise, since
+    // it's the grab affordance for react-grid-layout's drag config.
+    await user.click(screen.getByText("Attribution"));
+    expect(screen.queryByText("Attribution landing")).not.toBeInTheDocument();
   });
 });
