@@ -442,7 +442,7 @@ function GravityAuditSection() {
                 >
                   {data.legacy_audit.all_passed
                     ? "✅ All steps passed on the last run."
-                    : "❌ At least one step failed on the last run."}
+                    : "❌ At least one step failed on the last run — not cleared for live."}
                 </Banner>
                 <div style={{ overflowX: "auto", marginTop: "var(--s-2-5)" }}>
                   <Table style={{ fontSize: "var(--t-caption)", minWidth: 320 }}>
