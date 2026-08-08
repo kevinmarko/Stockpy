@@ -424,3 +424,236 @@ def test_trained_model_is_loadable_and_non_neutral(trained_model_fixture):
     assert scores.notna().all()
     # Not all neutral 0.5 — the model is actually discriminating.
     assert (scores - 0.5).abs().max() > 1e-6
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# settings.LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED -- t1 threading through
+# compute_cpcv_metrics() (PR #648 / #650's remaining scope)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# These tests stub run_cpcv_evaluation / LGBMCrossSectionalRanker.train to
+# capture *what compute_cpcv_metrics passes*, rather than running the full
+# real CPCV + LightGBM fit -- fast, deterministic, and isolates exactly the
+# threading contract the task requires:
+#   * flag on  -> run_cpcv_evaluation gets a real (non-None) t1, and the
+#                 MultiIndex panel is handed through un-flattened;
+#   * flag off -> run_cpcv_evaluation gets t1=None and a flattened,
+#                 date-indexed X carrying the legacy "_ticker" column --
+#                 byte-identical to the pre-existing behavior;
+#   * flag on  -> the fold-level strategy_fn's inner ranker.train() call
+#                 receives a non-None t1 and use_native_multiindex_cv=True;
+#   * flag off -> the inner ranker.train() call receives no t1 / no
+#                 use_native_multiindex_cv kwarg at all (matches the
+#                 pre-existing `ranker.train(X_tr_mi, y_tr_al)` call shape).
+
+
+def _make_multiindex_training_panel(
+    n_dates: int = 10, n_tickers: int = 6, seed: int = 0
+) -> "train_lgbm.TrainingPanel":
+    """Small synthetic (date, ticker) TrainingPanel with a real forward-window t1."""
+    from ml.feature_engineering import FEATURE_COLUMNS
+
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2022-01-03", periods=n_dates, freq="B")
+    tickers = [f"T{i}" for i in range(n_tickers)]
+
+    rows, y_rows, t1_rows = [], [], []
+    for i, dt in enumerate(dates):
+        idx = pd.MultiIndex.from_tuples([(dt, t) for t in tickers], names=["date", "ticker"])
+        feat = pd.DataFrame(
+            rng.normal(0, 1, size=(n_tickers, len(FEATURE_COLUMNS))),
+            index=idx, columns=FEATURE_COLUMNS,
+        )
+        rows.append(feat)
+        y_rows.append(pd.Series(rng.uniform(0, 1, n_tickers), index=idx))
+        # Real forward-window end time, not a synthesized "next row".
+        end_dt = dates[min(i + 3, n_dates - 1)]
+        t1_rows.append(pd.Series([end_dt] * n_tickers, index=idx))
+
+    X = pd.concat(rows)
+    y = pd.concat(y_rows)
+    t1 = pd.concat(t1_rows)
+    return train_lgbm.TrainingPanel(X=X, y=y, t1=t1, n_dates=n_dates)
+
+
+class TestNativeMultiIndexT1Threading:
+    def test_flag_on_passes_real_t1_to_run_cpcv_evaluation(self, monkeypatch):
+        panel = _make_multiindex_training_panel()
+        monkeypatch.setattr(
+            "settings.settings.LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED", True
+        )
+        captured = {}
+
+        def _fake_run_cpcv_evaluation(*, strategy_fn, X, y, t1, n_splits, n_test_splits):
+            captured["X"], captured["y"], captured["t1"] = X, y, t1
+            return {"paths": []}
+
+        monkeypatch.setattr(train_lgbm, "run_cpcv_evaluation", _fake_run_cpcv_evaluation)
+        result = train_lgbm.compute_cpcv_metrics(panel)
+
+        assert result == {
+            "dsr": None, "pbo": None, "mean_oos_sharpe": None, "mean_oos_max_dd": None,
+        }  # empty "paths" -> honest null, unrelated to what we're asserting below
+        assert captured["t1"] is not None
+        assert isinstance(captured["t1"], pd.Series)
+        assert isinstance(captured["X"].index, pd.MultiIndex)
+        assert "_ticker" not in captured["X"].columns
+        # t1 is exactly panel.t1, realigned/sorted to X's (date, ticker) index
+        # -- not a synthesized default.
+        pd.testing.assert_series_equal(
+            captured["t1"].sort_index(), panel.t1.sort_index(), check_names=False,
+        )
+
+    def test_flag_off_passes_t1_none_to_run_cpcv_evaluation(self, monkeypatch):
+        panel = _make_multiindex_training_panel()
+        monkeypatch.setattr(
+            "settings.settings.LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED", False
+        )
+        captured = {}
+
+        def _fake_run_cpcv_evaluation(*, strategy_fn, X, y, t1, n_splits, n_test_splits):
+            captured["X"], captured["t1"] = X, t1
+            return {"paths": []}
+
+        monkeypatch.setattr(train_lgbm, "run_cpcv_evaluation", _fake_run_cpcv_evaluation)
+        train_lgbm.compute_cpcv_metrics(panel)
+
+        assert captured["t1"] is None
+        # Flatten path -- date-only index, legacy "_ticker" column present,
+        # exactly the pre-existing construction.
+        assert not isinstance(captured["X"].index, pd.MultiIndex)
+        assert "_ticker" in captured["X"].columns
+
+    def test_flag_on_threads_t1_into_inner_ranker_train_call(self, monkeypatch):
+        """The fold-level strategy_fn's inner ranker.train() call receives a
+        non-None t1 and use_native_multiindex_cv=True when the flag is on."""
+        panel = _make_multiindex_training_panel()
+        monkeypatch.setattr(
+            "settings.settings.LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED", True
+        )
+        captured = {}
+
+        def _fake_run_cpcv_evaluation(*, strategy_fn, X, y, t1, n_splits, n_test_splits):
+            captured["fn"], captured["X"], captured["y"] = strategy_fn, X, y
+            return {"paths": []}
+
+        monkeypatch.setattr(train_lgbm, "run_cpcv_evaluation", _fake_run_cpcv_evaluation)
+        train_lgbm.compute_cpcv_metrics(panel)
+
+        X_for_cv, y_for_cv = captured["X"], captured["y"]
+        split = len(X_for_cv) // 2
+        X_tr, y_tr = X_for_cv.iloc[:split], y_for_cv.iloc[:split]
+        X_te, y_te = X_for_cv.iloc[split:], y_for_cv.iloc[split:]
+
+        train_calls = []
+
+        def _spy_train(self, X, y, t1=None, use_native_multiindex_cv=None):
+            train_calls.append({"t1": t1, "use_native_multiindex_cv": use_native_multiindex_cv})
+            self._model = None  # skip real LightGBM fit -- only the call shape matters here
+            return self
+
+        monkeypatch.setattr(train_lgbm.LGBMCrossSectionalRanker, "train", _spy_train)
+        captured["fn"](X_tr, y_tr, X_te, y_te)
+
+        assert train_calls, "strategy_fn never invoked ranker.train()"
+        for call in train_calls:
+            assert call["t1"] is not None
+            assert call["use_native_multiindex_cv"] is True
+
+    def test_flag_off_inner_ranker_train_call_has_no_t1(self, monkeypatch):
+        """Byte-identical-when-off contract: the inner ranker.train() call
+        keeps the exact pre-existing shape -- no t1, no
+        use_native_multiindex_cv kwarg -- when the flag is off."""
+        panel = _make_multiindex_training_panel()
+        monkeypatch.setattr(
+            "settings.settings.LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED", False
+        )
+        captured = {}
+
+        def _fake_run_cpcv_evaluation(*, strategy_fn, X, y, t1, n_splits, n_test_splits):
+            captured["fn"], captured["X"], captured["y"] = strategy_fn, X, y
+            return {"paths": []}
+
+        monkeypatch.setattr(train_lgbm, "run_cpcv_evaluation", _fake_run_cpcv_evaluation)
+        train_lgbm.compute_cpcv_metrics(panel)
+
+        X_for_cv, y_for_cv = captured["X"], captured["y"]
+        split = len(X_for_cv) // 2
+        X_tr, y_tr = X_for_cv.iloc[:split], y_for_cv.iloc[:split]
+        X_te, y_te = X_for_cv.iloc[split:], y_for_cv.iloc[split:]
+
+        train_calls = []
+
+        def _spy_train(self, X, y, t1=None, use_native_multiindex_cv=None):
+            train_calls.append({"t1": t1, "use_native_multiindex_cv": use_native_multiindex_cv})
+            self._model = None
+            return self
+
+        monkeypatch.setattr(train_lgbm.LGBMCrossSectionalRanker, "train", _spy_train)
+        captured["fn"](X_tr, y_tr, X_te, y_te)
+
+        assert train_calls, "strategy_fn never invoked ranker.train()"
+        for call in train_calls:
+            assert call["t1"] is None
+            assert call["use_native_multiindex_cv"] is None
+
+
+class TestLongShortReturnsMultiIndexDateGrouping:
+    """_long_short_returns must group by the MultiIndex's "date" level, not
+    the raw (date, ticker) tuples, when handed a still-MultiIndex slice
+    (the native-CV path) -- otherwise every group collapses to size 1 and
+    every date is silently skipped (< 2 rows per group)."""
+
+    def test_multiindex_slice_groups_by_date_level(self):
+        from ml.feature_engineering import FEATURE_COLUMNS
+
+        n_dates, n_tickers = 4, 6
+        dates = pd.date_range("2022-02-01", periods=n_dates, freq="B")
+        tickers = [f"T{i}" for i in range(n_tickers)]
+        idx = pd.MultiIndex.from_product([dates, tickers], names=["date", "ticker"])
+        feat_cols = list(FEATURE_COLUMNS)[:2]
+        X_slice = pd.DataFrame(
+            np.random.default_rng(1).normal(size=(len(idx), len(feat_cols))),
+            index=idx, columns=feat_cols,
+        )
+        y_slice = pd.Series(
+            np.random.default_rng(2).uniform(size=len(idx)), index=idx,
+        )
+
+        class _StubRanker:
+            def predict(self, X):
+                return np.arange(len(X), dtype=float)
+
+        result = train_lgbm._long_short_returns(_StubRanker(), X_slice, y_slice, feat_cols)
+
+        # One return per date -- proves grouping collapsed to n_dates groups,
+        # not n_dates * n_tickers groups of size 1 (which would yield an
+        # empty Series since every group would be skipped as len(grp) < 2).
+        assert len(result) == n_dates
+        assert not result.empty
+
+    def test_flat_index_slice_still_groups_by_date(self):
+        """Regression guard: the pre-existing flat-index behavior (used by
+        both the flag-off path here and scripts/refresh_validations.py's
+        _build_lgbm_ranker_adapter) is unaffected."""
+        from ml.feature_engineering import FEATURE_COLUMNS
+
+        n_dates, n_tickers = 4, 6
+        dates = pd.date_range("2022-02-01", periods=n_dates, freq="B")
+        flat_dates = np.repeat(dates.values, n_tickers)
+        feat_cols = list(FEATURE_COLUMNS)[:2]
+        X_slice = pd.DataFrame(
+            np.random.default_rng(3).normal(size=(len(flat_dates), len(feat_cols))),
+            index=pd.Index(flat_dates), columns=feat_cols,
+        )
+        y_slice = pd.Series(
+            np.random.default_rng(4).uniform(size=len(flat_dates)), index=X_slice.index,
+        )
+
+        class _StubRanker:
+            def predict(self, X):
+                return np.arange(len(X), dtype=float)
+
+        result = train_lgbm._long_short_returns(_StubRanker(), X_slice, y_slice, feat_cols)
+        assert len(result) == n_dates
+        assert not result.empty
