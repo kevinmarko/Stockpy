@@ -1127,7 +1127,7 @@ export function Observability() {
   }
 
   return (
-    <div className="screen" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+    <div className="screen">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)" }}>
           <button className="btn btn-neutral" onClick={back} aria-label="Go back">
@@ -1154,252 +1154,204 @@ export function Observability() {
           Failed to load observability data.
         </div>
       ) : (
-        <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-4)" }}>
-          <DynamicGrid
-            layoutKey="observability"
-            defaultLayouts={{
-              lg: [
-                                { i: "attention", x: 0, y: 0, w: 12, h: 4, minW: 6, minH: 3 },
-                { i: "regime", x: 0, y: 4, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "portfolioRisk", x: 6, y: 4, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "equity", x: 0, y: 10, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "forecastSkill", x: 6, y: 10, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "forecastSkillSymbol", x: 0, y: 16, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "circuitBreakers", x: 6, y: 16, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "riskGate", x: 0, y: 22, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "telemetry", x: 6, y: 22, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "dataLatency", x: 0, y: 28, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "sizingAudit", x: 6, y: 28, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "etfVolatility", x: 0, y: 34, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "heartbeat", x: 6, y: 34, w: 6, h: 4, minW: 4, minH: 3 },
-                { i: "strategyPnl", x: 0, y: 40, w: 6, h: 6, minW: 4, minH: 4 },
-                { i: "logs", x: 6, y: 40, w: 12, h: 8, minW: 6, minH: 4 },
-                { i: "macroSentiment", x: 0, y: 48, w: 12, h: 10, minW: 6, minH: 6 },
-              ],
-            }}
-          >
-            <div key="attention">
-              <div style={{ height: "100%" }}>
-                <AttentionStripSection items={attentionItems} />
+        <div style={{ marginTop: "var(--s-4)" }}>
+          {/* Fixed, non-draggable, rendered above the fold and OUTSIDE the
+              DynamicGrid entirely -- the screen's one "does anything need a
+              look right now" answer plus its one real control (the macro-
+              gate toggle; the ETF-transmission config link below is the
+              other) must never be draggable, resizable, or hidden behind the
+              collapsed disclosure below. See AttentionStripSection's and
+              MacroGateControl's doc comments for the full rationale. */}
+          <AttentionStripSection items={attentionItems} />
+
+          <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} id="macro-gate">
+            <SectionHeading title="Control · Macro regime gate" />
+            <RegimeBadgeRow regime={data.regime} onChanged={reload} />
+          </section>
+
+          {/* Portfolio risk + equity stay genuinely draggable/resizable
+              DynamicGrid tiles -- the one part of the redesign worth keeping,
+              since these two are the sections an operator plausibly wants to
+              rearrange or resize relative to each other. */}
+          <div style={{ marginBottom: "var(--s-4)" }}>
+            <DynamicGrid
+              layoutKey="observability"
+              defaultLayouts={{
+                lg: [
+                  { i: "portfolioRisk", x: 0, y: 0, w: 6, h: 6, minW: 4, minH: 4 },
+                  { i: "equity", x: 6, y: 0, w: 6, h: 6, minW: 4, minH: 4 },
+                ],
+              }}
+            >
+              <div key="portfolioRisk">
+                <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+                  <div className="drag-handle" style={{ cursor: "grab" }}>
+                    <SectionHeading id="portfolio-risk" title="Portfolio risk" sub="Over the full account equity history" />
+                  </div>
+                  <div style={{ padding: "0 var(--s-3) var(--s-3)", flex: 1, overflow: "auto" }}>
+                    <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
+                      <Tile label="Sharpe" value={fmtNum(data.portfolio_risk.sharpe_ratio, 2)} />
+                      <Tile label="Calmar" value={fmtNum(data.portfolio_risk.calmar_ratio, 2)} />
+                      <Tile
+                        label="Max drawdown"
+                        value={fmtPct(data.portfolio_risk.max_drawdown, 1, { fromFraction: true })}
+                        tone={
+                          data.portfolio_risk.max_drawdown != null && data.portfolio_risk.max_drawdown < 0
+                            ? "neg"
+                            : undefined
+                        }
+                      />
+                      <Tile
+                        label="Max DD duration"
+                        value={
+                          data.portfolio_risk.max_drawdown_duration_days == null
+                            ? "—"
+                            : `${fmtNum(data.portfolio_risk.max_drawdown_duration_days, 0)}d`
+                        }
+                      />
+                      <Tile label="CAGR" value={fmtPct(data.portfolio_risk.cagr, 1, { fromFraction: true })} />
+                      <Tile
+                        label="Portfolio heat"
+                        value={
+                          data.portfolio_heat.heat_pct == null
+                            ? "—"
+                            : `${fmtPct(data.portfolio_heat.heat_pct, 1, { fromFraction: true })} / ${
+                                data.portfolio_heat.max_portfolio_heat == null
+                                  ? "—"
+                                  : fmtPct(data.portfolio_heat.max_portfolio_heat, 0, { fromFraction: true })
+                              }`
+                        }
+                        tone={data.portfolio_heat.over_limit ? "neg" : undefined}
+                      />
+                    </div>
+                    {data.portfolio_risk.reason && (
+                      <p style={{ color: "var(--text-muted)", fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
+                        {data.portfolio_risk.reason}
+                      </p>
+                    )}
+                    {data.portfolio_heat.reason && (
+                      <p style={{ color: "var(--text-muted)", fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
+                        Portfolio heat: {data.portfolio_heat.reason}
+                      </p>
+                    )}
+                  </div>
+                </section>
+              </div>
+
+              <div key="equity">
+                <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+                  <div className="drag-handle" style={{ cursor: "grab" }}>
+                    <SectionHeading title="Equity & drawdown" />
+                  </div>
+                  <div style={{ padding: "0 var(--s-3) var(--s-3)", flex: 1, overflow: "auto" }}>
+                    <div style={{ marginBottom: "var(--s-2-5)" }}>
+                      <RangeToggle value={range} onChange={setRange} />
+                    </div>
+                    {data.equity_curve.points.length === 0 ? (
+                      <div className="empty" style={{ padding: "var(--s-5)" }}>
+                        {data.equity_curve.reason ?? "No account equity history yet."}
+                      </div>
+                    ) : (
+                      <>
+                        <PerfLine
+                          data={data.equity_curve.points.map((p) => ({ date: p.date, value: p.equity }))}
+                        />
+                        <DrawdownArea data={data.equity_curve.points} />
+                      </>
+                    )}
+                  </div>
+                </section>
+              </div>
+            </DynamicGrid>
+          </div>
+
+          {/* Everything below is detail, not "does anything need a look" --
+              AttentionStripSection above already answers that. Collapsed by
+              default and kept entirely OUTSIDE the DynamicGrid (not a grid
+              item at all) -- matching this screen's pre-DynamicGrid
+              structure. A native <details> (this codebase's own established
+              collapsible idiom) rather than a bespoke component or a grid
+              tile: keyboard/screen-reader support for free, and dragging or
+              resizing an accordion of eleven-plus sections adds no value
+              over just collapsing it. */}
+          <details className="card" style={{ marginTop: "var(--s-4)" }} data-testid="background-telemetry">
+            <summary
+              style={{
+                cursor: "pointer",
+                userSelect: "none",
+                padding: "var(--s-3) var(--s-4)",
+                fontWeight: 700,
+                fontSize: "var(--t-label)",
+                color: theme.textSecondary,
+              }}
+            >
+              Background telemetry — forecast detail, circuit breakers, sizing &amp; ETF risk, system health, and logs
+            </summary>
+            <div style={{ padding: "0 var(--s-4) var(--s-4)" }}>
+              <SectionHeading title="Forecast skill" sub="Portfolio-wide reliability and weights" />
+              <div style={{ marginBottom: "var(--s-2-5)" }}>
+                <HorizonToggle value={horizon} onChange={setHorizon} />
+              </div>
+              <ForecastSkillSection skill={data.forecast_skill} />
+
+              <SectionHeading title="Forecast skill by symbol" sub="Leading model per symbol" />
+              <ForecastSkillBySymbolSection bySymbol={data.forecast_skill_by_symbol} />
+
+              <SectionHeading id="circuit-breakers" title="Circuit breakers" sub="Kill switch + risk-gate blocks" helpKey="circuit breaker" thresholds={thresholds} />
+              <CircuitBreakerSection breakers={data.circuit_breakers} />
+
+              <SectionHeading id="risk-gate-blocks" title="Risk gate block log" sub="Blocked orders" />
+              {data.risk_gate_blocks.entries.length === 0 ? (
+                <div className="empty" style={{ padding: "var(--s-5)" }}>
+                  {data.risk_gate_blocks.reason ?? "No blocked orders in the log."}
+                </div>
+              ) : (
+                <div>
+                  {data.risk_gate_blocks.entries.map((e, i) => (
+                    <BlockLogRow key={`${e.ts ?? i}-${i}`} entry={e} />
+                  ))}
+                </div>
+              )}
+
+              <SectionHeading title="System telemetry" sub="Host & process resource usage" />
+              <SystemTelemetrySection telemetry={data.system_telemetry} />
+
+              <SectionHeading title="Data latency" sub="Fetch-to-ingestion latency" />
+              <LatencyHeatmapSection latency={data.latency_heatmap} />
+
+              <SectionHeading id="sizing-cap-audit" title="Sizing cap-event audit trail" helpKey="sizing cap" thresholds={thresholds} />
+              <SizingCapAuditSection audit={data.sizing_cap_audit} />
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: "var(--s-2)" }}>
+                <SectionHeading title="ETF volatility transmission" helpKey="etf transmission" thresholds={thresholds} />
+                <Button
+                  variant="primary"
+                  onClick={() => nav("/settings/etf-transmission")}
+                  style={{ marginBottom: "var(--s-2-5)", fontSize: "var(--t-caption)" }}
+                >
+                  ⚙ Configure
+                </Button>
+              </div>
+              <EtfTransmissionSection etf={data.etf_transmission} />
+
+              <SectionHeading id="heartbeat" title="Heartbeat" sub="Orchestrator liveness" />
+              <HeartbeatSection heartbeat={data.heartbeat} />
+
+              <SectionHeading title="Strategy P&L" />
+              <StrategyPnlSection pnl={data.strategy_pnl} />
+
+              <SectionHeading title="Logs" sub="investyo.log tail" />
+              {logsLoading && <Loading lines={2} />}
+              {!logsLoading && logsError && (
+                <ErrorState message={logsError} status={logsStatus} onRetry={logsReload} />
+              )}
+              {!logsLoading && !logsError && logsData && <LogAggregationSection logs={logsData} />}
+
+              <div style={{ marginTop: "var(--s-8)", marginBottom: "var(--s-4)" }}>
+                <MacroSentimentDashboard />
               </div>
             </div>
-
-            <div key="regime">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading title="Control · Macro regime gate" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <RegimeBadgeRow regime={data.regime} onChanged={reload} />
-                </div>
-              </section>
-            </div>
-
-                        <div key="portfolioRisk">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading id="portfolio-risk" title="Portfolio risk" sub="Over the full account equity history" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
-                    <Tile label="Sharpe" value={fmtNum(data.portfolio_risk.sharpe_ratio, 2)} />
-                    <Tile label="Calmar" value={fmtNum(data.portfolio_risk.calmar_ratio, 2)} />
-                    <Tile
-                      label="Max drawdown"
-                      value={fmtPct(data.portfolio_risk.max_drawdown, 1, { fromFraction: true })}
-                      tone={
-                        data.portfolio_risk.max_drawdown != null && data.portfolio_risk.max_drawdown < 0
-                          ? "neg"
-                          : undefined
-                      }
-                    />
-                    <Tile
-                      label="Max DD duration"
-                      value={
-                        data.portfolio_risk.max_drawdown_duration_days == null
-                          ? "—"
-                          : `${fmtNum(data.portfolio_risk.max_drawdown_duration_days, 0)}d`
-                      }
-                    />
-                    <Tile label="CAGR" value={fmtPct(data.portfolio_risk.cagr, 1, { fromFraction: true })} />
-                    <Tile
-                      label="Portfolio heat"
-                      value={
-                        data.portfolio_heat.heat_pct == null
-                          ? "—"
-                          : `${fmtPct(data.portfolio_heat.heat_pct, 1, { fromFraction: true })} / ${
-                              data.portfolio_heat.max_portfolio_heat == null
-                                ? "—"
-                                : fmtPct(data.portfolio_heat.max_portfolio_heat, 0, { fromFraction: true })
-                            }`
-                      }
-                      tone={data.portfolio_heat.over_limit ? "neg" : undefined}
-                    />
-                  </div>
-                  {data.portfolio_risk.reason && (
-                    <p style={{ color: "var(--text-muted)", fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
-                      {data.portfolio_risk.reason}
-                    </p>
-                  )}
-                  {data.portfolio_heat.reason && (
-                    <p style={{ color: "var(--text-muted)", fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
-                      Portfolio heat: {data.portfolio_heat.reason}
-                    </p>
-                  )}
-                </div>
-              </section>
-            </div>
-
-            <div key="equity">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading title="Equity & drawdown" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <div style={{ marginBottom: "var(--s-2-5)" }}>
-                    <RangeToggle value={range} onChange={setRange} />
-                  </div>
-                  {data.equity_curve.points.length === 0 ? (
-                    <div className="empty" style={{ padding: "var(--s-5)" }}>
-                      {data.equity_curve.reason ?? "No account equity history yet."}
-                    </div>
-                  ) : (
-                    <>
-                      <PerfLine
-                        data={data.equity_curve.points.map((p) => ({ date: p.date, value: p.equity }))}
-                      />
-                      <DrawdownArea data={data.equity_curve.points} />
-                    </>
-                  )}
-                </div>
-              </section>
-            </div>
-
-            <div key="forecastSkill">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading title="Forecast skill" sub="Portfolio-wide reliability and weights" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <div style={{ marginBottom: "var(--s-2-5)" }}>
-                    <HorizonToggle value={horizon} onChange={setHorizon} />
-                  </div>
-                  <ForecastSkillSection skill={data.forecast_skill} />
-                </div>
-              </section>
-            </div>
-
-            <div key="forecastSkillSymbol">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading title="Forecast skill by symbol" sub="Leading model per symbol" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <ForecastSkillBySymbolSection bySymbol={data.forecast_skill_by_symbol} />
-                </div>
-              </section>
-            </div>
-
-            <div key="circuitBreakers">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading id="circuit-breakers" title="Circuit breakers" sub="Kill switch + risk-gate blocks" helpKey="circuit breaker" thresholds={thresholds} />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <CircuitBreakerSection breakers={data.circuit_breakers} />
-                </div>
-              </section>
-            </div>
-
-            <div key="riskGate">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading id="risk-gate-blocks" title="Risk gate block log" sub="Blocked orders" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  {data.risk_gate_blocks.entries.length === 0 ? (
-                    <div className="empty" style={{ padding: "var(--s-5)" }}>
-                      {data.risk_gate_blocks.reason ?? "No blocked orders in the log."}
-                    </div>
-                  ) : (
-                    <div>
-                      {data.risk_gate_blocks.entries.map((e, i) => (
-                        <BlockLogRow key={`${e.ts ?? i}-${i}`} entry={e} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </section>
-            </div>
-
-            <div key="telemetry">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading title="System telemetry" sub="Host & process resource usage" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <SystemTelemetrySection telemetry={data.system_telemetry} />
-                </div>
-              </section>
-            </div>
-
-            <div key="dataLatency">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading title="Data latency" sub="Fetch-to-ingestion latency" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <LatencyHeatmapSection latency={data.latency_heatmap} />
-                </div>
-              </section>
-            </div>
-
-            <div key="sizingAudit">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading id="sizing-cap-audit" title="Sizing cap-event audit trail" helpKey="sizing cap" thresholds={thresholds} />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <SizingCapAuditSection audit={data.sizing_cap_audit} />
-                </div>
-              </section>
-            </div>
-
-            <div key="etfVolatility">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading title="ETF volatility transmission" helpKey="etf transmission" thresholds={thresholds} />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
-                  <Button variant="primary" onClick={() => nav("/settings/etf-transmission")} style={{ marginBottom: "var(--s-2-5)", fontSize: "var(--t-caption)", alignSelf: "flex-end" }}>
-                    ⚙ Configure
-                  </Button>
-                  <EtfTransmissionSection etf={data.etf_transmission} />
-                </div>
-              </section>
-            </div>
-
-            <div key="heartbeat">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading id="heartbeat" title="Heartbeat" sub="Orchestrator liveness" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <HeartbeatSection heartbeat={data.heartbeat} />
-                </div>
-              </section>
-            </div>
-
-            <div key="strategyPnl">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading title="Strategy P&L" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <StrategyPnlSection pnl={data.strategy_pnl} />
-                </div>
-              </section>
-            </div>
-
-            <div key="logs">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <SectionHeading title="Logs" sub="investyo.log tail" />
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
-                  {logsLoading && <Loading lines={2} />}
-                  {!logsLoading && logsError && (
-                    <ErrorState message={logsError} status={logsStatus} onRetry={logsReload} />
-                  )}
-                  {!logsLoading && !logsError && logsData && <LogAggregationSection logs={logsData} />}
-                </div>
-              </section>
-            </div>
-
-            <div key="macroSentiment">
-              <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
-                  <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Macro Sentiment</h2>
-                </div>
-                <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-                  <MacroSentimentDashboard />
-                </div>
-              </section>
-            </div>
-
-          </DynamicGrid>
+          </details>
         </div>
       )}
     </div>
