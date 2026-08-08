@@ -77,7 +77,11 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
         <span style={{ fontWeight: 700, color: theme.textSecondary, fontSize: "var(--t-callout)" }}>
           Live Console Output
         </span>
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
+        <div
+          style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+        >
           <Toggle
             label="Auto-scroll"
             checked={autoScroll}

@@ -116,6 +116,8 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
                 )
               }
               data-testid="export-signal-breakdown-csv"
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
             >
               ⬇️ Export CSV
             </Button>

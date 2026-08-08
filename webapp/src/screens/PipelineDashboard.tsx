@@ -411,6 +411,8 @@ function DurableRunHistory({
           onClick={onReload}
           disabled={loading}
           data-testid="refresh-run-history"
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
         >
           Refresh
         </Button>

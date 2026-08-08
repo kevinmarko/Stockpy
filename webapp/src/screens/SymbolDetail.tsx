@@ -403,7 +403,12 @@ export function SymbolDetail() {
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
             <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Decision journal</h2>
-              <Button variant="neutral" onClick={() => setJournaling(true)}>
+              <Button
+                variant="neutral"
+                onClick={() => setJournaling(true)}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+              >
                 Log decision
               </Button>
             </div>
@@ -599,7 +604,13 @@ export function SymbolDetail() {
                 }}
               >
                 <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Forecast skill</h2>
-                <div className="segmented" role="tablist" aria-label="Forecast horizon">
+                <div
+                  className="segmented"
+                  role="tablist"
+                  aria-label="Forecast horizon"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                >
                   {[10, 30, 60, 90].map((h) => (
                     <button
                       key={h}
@@ -846,7 +857,13 @@ function AiCardHeader({
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "var(--s-3)" }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>{title}</h2>
-        <Button variant="neutral" pending={pending} onClick={onGenerate}>
+        <Button
+          variant="neutral"
+          pending={pending}
+          onClick={onGenerate}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+        >
           Generate
         </Button>
       </div>
