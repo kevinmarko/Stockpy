@@ -49,9 +49,10 @@ class GrahamValueSignal(SignalModule):
         graham_val = context.fundamentals.graham_number
         points = 0.0
         exps = []
-        
         if graham_val > 0:
-            if graham_val > current_price:
+            if pd.isna(current_price):
+                pass
+            elif graham_val > current_price:
                 exps.append(f"+15pts: Undervalued vs Graham (${graham_val:.2f})")
                 exps.append("DETAIL: Value Anchor Met")
                 points += 15.0
