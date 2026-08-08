@@ -5,6 +5,7 @@ export function FeatureFlagsScreen() {
   return (
     <GenericSettingsEditor
       title="Feature Flags"
+      settingsKey="feature-flags"
       subtitle="Configure admin, write, and execution gates, along with diagnostic and data features."
       backTo="/settings"
       fetchSettings={() => api.getFeatureFlags()}
