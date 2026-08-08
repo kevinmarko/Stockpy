@@ -387,13 +387,15 @@ export function Models() {
                   { i: "comparison-chart", x: 0, y: 0, w: 6, h: 10 },
                   { i: "signal-weights", x: 6, y: 0, w: 6, h: 10 },
                   { i: "filters", x: 0, y: 10, w: 12, h: 3, isResizable: false },
-                  ...visibleModels.map((m, idx) => ({
-                    i: `model-${m.name}`,
-                    x: (idx % 3) * 4,
-                    y: 13 + Math.floor(idx / 3) * 6,
-                    w: 4,
-                    h: 6
-                  }))
+                  ...(visibleModels.length === 0
+                    ? [{ i: "empty-models", x: 0, y: 13, w: 12, h: 4, isResizable: false }]
+                    : visibleModels.map((m, idx) => ({
+                        i: `model-${m.name}`,
+                        x: (idx % 3) * 4,
+                        y: 13 + Math.floor(idx / 3) * 6,
+                        w: 4,
+                        h: 6
+                      })))
                 ]}}
               >
                 <div key="comparison-chart" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
@@ -425,6 +427,8 @@ export function Models() {
                           padding: "var(--s-1-5) var(--s-3)",
                           whiteSpace: "nowrap",
                         }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
                         onClick={() => setFilterKey(f.value)}
                       >
                         {f.label}
@@ -442,17 +446,23 @@ export function Models() {
                   </div>
                 </div>
 
-                {visibleModels.map((m) => (
-                  <div key={`model-${m.name}`}>
-                    <ModelCard
-                      m={m}
-                      thresholds={thresholds}
-                      isTraining={Boolean(submitting[m.name]) || trainingJobs[m.name] != null}
-                      retrainError={retrainErrors[m.name]}
-                      onRetrain={handleRetrain}
-                    />
+                {visibleModels.length === 0 ? (
+                  <div key="empty-models" className="empty" style={{ padding: "var(--s-7-5)" }}>
+                    No models match the selected filter.
                   </div>
-                ))}
+                ) : (
+                  visibleModels.map((m) => (
+                    <div key={`model-${m.name}`}>
+                      <ModelCard
+                        m={m}
+                        thresholds={thresholds}
+                        isTraining={Boolean(submitting[m.name]) || trainingJobs[m.name] != null}
+                        retrainError={retrainErrors[m.name]}
+                        onRetrain={handleRetrain}
+                      />
+                    </div>
+                  ))
+                )}
               </DynamicGrid>
             </div>
           )

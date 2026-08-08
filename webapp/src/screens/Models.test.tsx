@@ -123,6 +123,26 @@ describe("Models screen (real mock API)", () => {
     expect(screen.getByText("cnn_lstm_price_forecaster")).toBeInTheDocument();
   });
 
+  it("renders the honest empty-filter message when a filter matches zero models, never a blank grid", async () => {
+    renderModels();
+    await screen.findByText("lgbm_ranker");
+    // Every fixture model is deployable: false -- the "Deployable" filter
+    // narrows to zero rows, exercising the DynamicGrid-era empty-state
+    // branch that a prior rewrite silently dropped.
+    fireEvent.click(screen.getByText("Deployable"));
+    expect(
+      await screen.findByText("No models match the selected filter.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText("lgbm_ranker")).not.toBeInTheDocument();
+
+    // Back to "All" restores the rows and clears the empty-state message.
+    fireEvent.click(screen.getByText("All"));
+    await screen.findByText("lgbm_ranker");
+    expect(
+      screen.queryByText("No models match the selected filter.")
+    ).not.toBeInTheDocument();
+  });
+
   it("the sort dropdown reorders the list by DSR (descending)", async () => {
     const rows: ModelRow[] = [
       {
