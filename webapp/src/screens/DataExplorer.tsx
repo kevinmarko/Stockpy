@@ -146,7 +146,7 @@ export function DataExplorer() {
             Manage which stocks are tracked in <Link to="/settings">Settings</Link>.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("dataExplorer")}>Reset Layout</Button>
+        <Button variant="neutral" onClick={() => resetGridLayout("data-explorer")}>Reset Layout</Button>
       </div>
 
       <TabGuide tabKey="data-explorer" />
@@ -155,7 +155,7 @@ export function DataExplorer() {
 
       <div style={{ flex: 1, minHeight: 0 }}>
         <DynamicGrid
-          layoutKey="dataExplorer"
+          layoutKey="data-explorer"
           defaultLayouts={{
             lg: [
               { i: "recommended", x: 0, y: 0, w: 12, h: 4, minW: 6, minH: 3 },

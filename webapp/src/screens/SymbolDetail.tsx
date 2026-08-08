@@ -327,7 +327,7 @@ export function SymbolDetail() {
           <div className="num" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
             {fmtUsd(identity.price)}
           </div>
-          <Button variant="neutral" onClick={() => resetGridLayout("symbolDetail")}>Reset Layout</Button>
+          <Button variant="neutral" onClick={() => resetGridLayout("symbol-detail")}>Reset Layout</Button>
         </div>
       </div>
 
@@ -339,7 +339,7 @@ export function SymbolDetail() {
 
       {/* Advisory */}
       <DynamicGrid
-        layoutKey="symbolDetail"
+        layoutKey="symbol-detail"
         defaultLayouts={{
           lg: [
             { i: "advisory", x: 0, y: 0, w: 4, h: 4, minW: 3, minH: 3 },

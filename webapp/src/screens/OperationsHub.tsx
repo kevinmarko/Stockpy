@@ -61,12 +61,12 @@ export function OperationsHub() {
             The platform and pipeline itself, not a symbol or your money.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("operationsHub")}>Reset Layout</Button>
+        <Button variant="neutral" onClick={() => resetGridLayout("operations-hub")}>Reset Layout</Button>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-3)" }}>
         <DynamicGrid
-          layoutKey="operationsHub"
+          layoutKey="operations-hub"
           defaultLayouts={{
             lg: CARDS.map((c, i) => ({
               i: c.to,

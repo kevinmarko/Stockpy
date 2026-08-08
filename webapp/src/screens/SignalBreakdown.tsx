@@ -278,7 +278,7 @@ export function SignalBreakdown() {
             advisory engine; the module split from the signal aggregator.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("signalBreakdown")}>Reset Layout</Button>
+        <Button variant="neutral" onClick={() => resetGridLayout("signal-breakdown")}>Reset Layout</Button>
       </div>
 
       <TabGuide tabKey="signals" />
@@ -290,7 +290,7 @@ export function SignalBreakdown() {
       {!loading && !error && data && (
         <div style={{ flex: 1, minHeight: 0 }}>
           <DynamicGrid
-            layoutKey="signalBreakdown"
+            layoutKey="signal-breakdown"
             defaultLayouts={{
               lg: [
                 { i: "breakdown", x: 0, y: 0, w: 7, h: 6, minW: 5, minH: 4 },

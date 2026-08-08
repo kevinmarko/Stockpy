@@ -155,7 +155,7 @@ function ForecastView({
 
       <div style={{ flex: 1, minHeight: 0 }}>
         <DynamicGrid
-          layoutKey="forecastViewer"
+          layoutKey="forecast-viewer"
           defaultLayouts={{
             lg: [
               { i: "summary", x: 0, y: 0, w: 12, h: 4, minW: 6, minH: 3 },
@@ -365,7 +365,7 @@ export function ForecastViewer() {
             Multi-horizon price forecast for a symbol — 10/30/60/90-day blended levels, model weighting, drivers, and Monte-Carlo confidence bands.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("forecastViewer")}>Reset Layout</Button>
+        <Button variant="neutral" onClick={() => resetGridLayout("forecast-viewer")}>Reset Layout</Button>
       </div>
 
       <TabGuide tabKey="forecast" />

@@ -102,12 +102,12 @@ export function TradingHub() {
           <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>Trading Tools</h1>
           <p className="screen-sub">Grading and acting on your own portfolio.</p>
         </div>
-        <button className="btn btn-neutral" onClick={() => resetGridLayout("tradingHub")}>Reset Layout</button>
+        <button className="btn btn-neutral" onClick={() => resetGridLayout("trading-hub")}>Reset Layout</button>
       </div>
 
       <div style={{ marginTop: "var(--s-3)" }}>
         <DynamicGrid
-          layoutKey="tradingHub"
+          layoutKey="trading-hub"
           defaultLayouts={{
             lg: CARDS.map((card, i) => ({ i: card.to, x: (i % 3) * 4, y: Math.floor(i / 3) * 2, w: 4, h: 2, minW: 3, minH: 2 })),
           }}
