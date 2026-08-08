@@ -48,7 +48,9 @@ class MACDMomentumSignal(SignalModule):
             macd_line = row["macd_line"]
             macd_signal = row["macd_signal"]
             
-            if macd_line > macd_signal:
+            if pd.isna(macd_line) or pd.isna(macd_signal):
+                pass
+            elif macd_line > macd_signal:
                 exps.append("+10pts: MACD Bullish")
                 points += 10.0
             else:

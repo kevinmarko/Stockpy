@@ -171,16 +171,11 @@ class TestAroonTrend:
         out = self._score(aroon_osc=float("nan"), trend_strength=55.0)
         assert out.score == pytest.approx(10.0 / 15.0)
 
-    def test_nan_trend_strength_with_no_aroon_fabricates_bearish_score(self):
-        """KNOWN GAP (see module docstring): trend_strength has NO pd.isna()
-        guard. NaN >= 50.0 and 30.0 <= NaN are both False in Python, so
-        execution falls through to the final else branch and fabricates a
-        confident -15pts 'Bearish pricing structure' reading from a missing
-        value -- never a neutral 0.0. This test pins the actual current
-        behavior; it is not asserting this is correct."""
+    def test_nan_trend_strength_with_no_aroon_is_neutral(self):
+        """Fixed: trend_strength now has pd.isna() guard. A missing
+        value correctly returns a neutral 0.0."""
         out = self._score(trend_strength=float("nan"))
-        assert out.score == pytest.approx(-1.0)
-        assert "Bearish pricing structure" in out.explanation
+        assert out.score == 0.0
 
 
 class TestGrahamValue:
@@ -205,14 +200,11 @@ class TestGrahamValue:
         assert out.score == pytest.approx(-5.0 / 15.0)
         assert "No Intrinsic Graham Value possible" in out.explanation
 
-    def test_nan_current_price_fabricates_overvalued_score(self):
-        """KNOWN GAP (see module docstring): current_price has NO pd.isna()
-        guard. `graham_val > NaN` is False, so a real, positive graham_val
-        falls through to the 'Overvalued' branch on a NaN price -- never a
-        neutral 0.0. Pinning actual behavior, not asserting correctness."""
+    def test_nan_current_price_is_neutral(self):
+        """Fixed: current_price now has pd.isna() guard. A missing
+        value correctly returns a neutral 0.0."""
         out = self._score(current_price=float("nan"), graham_eps=5.0, graham_book_value=50.0)
-        assert out.score == pytest.approx(-10.0 / 15.0)
-        assert "Overvalued vs Graham" in out.explanation
+        assert out.score == 0.0
 
 
 class TestMacdMomentum:
@@ -246,14 +238,11 @@ class TestMacdMomentum:
         out = self._score(aroon_osc=float("nan"), macd_line=10.0, macd_signal=1.0)
         assert out.score == 0.0
 
-    def test_nan_macd_values_with_aroon_present_fabricates_bearish_score(self):
-        """KNOWN GAP (see module docstring): once the aroon gate is open,
-        macd_line/macd_signal have NO pd.isna() guard. `NaN > x` is False,
-        so a NaN macd_line falls through to the bearish branch -- a
-        confidently negative score from missing data."""
+    def test_nan_macd_values_with_aroon_present_is_neutral(self):
+        """Fixed: macd_line/macd_signal now have pd.isna() guard. A missing
+        value correctly returns a neutral 0.0."""
         out = self._score(aroon_osc=60.0, macd_line=float("nan"), macd_signal=0.5)
-        assert out.score == pytest.approx(-1.0)
-        assert "MACD Bearish Crossover" in out.explanation
+        assert out.score == 0.0
 
 
 class TestMacroRegime:
@@ -314,10 +303,9 @@ class TestMacroRegime:
         out = self._score(market_regime_inputs=(-0.5, 7.0, 0.02))
         assert out.score == pytest.approx(-15.0 / 45.0)
 
-    def test_none_macro_context_raises_attribute_error(self):
-        """KNOWN GAP (see module docstring): context.macro is accessed
-        unconditionally as context.macro.market_regime -- a None macro
-        context crashes with AttributeError rather than degrading."""
+    def test_none_macro_context_is_neutral(self):
+        """Fixed: context.macro is now guarded. A None macro
+        context gracefully returns a neutral 0.0."""
         bar = MarketBarDTO(datetime.now(), "TEST", 100.0, 101.0, 99.0, 100.0, 1_000)
         fund = FundamentalDataDTO(
             ticker="TEST", pe_ratio=15.0, pb_ratio=2.0, dividend_yield=0.0,
@@ -325,8 +313,8 @@ class TestMacroRegime:
             payout_ratio=0.0, sector="Technology", company_name="Test Co",
         )
         broken_ctx = SignalContext(bar=bar, fundamentals=fund, macro=None)
-        with pytest.raises(AttributeError):
-            MacroRegimeSignal().compute(pd.Series({"sector": "Technology"}), broken_ctx)
+        out = MacroRegimeSignal().compute(pd.Series({"sector": "Technology"}), broken_ctx)
+        assert out.score == 0.0
 
 
 class TestRelativeStrength:
@@ -369,15 +357,14 @@ class TestDividendQualityMissingContext:
     exercises context.fundamentals being None or carrying a NaN
     dividend_yield. This class closes that gap."""
 
-    def test_none_fundamentals_raises_attribute_error(self):
-        """KNOWN GAP (see module docstring): context.fundamentals is
-        accessed unconditionally -- a None fundamentals object crashes with
-        AttributeError rather than degrading to a neutral score."""
+    def test_none_fundamentals_is_neutral(self):
+        """Fixed: context.fundamentals is now guarded. A None fundamentals
+        object gracefully returns a neutral 0.0."""
         bar = MarketBarDTO(datetime.now(), "TEST", 100.0, 101.0, 99.0, 100.0, 1_000)
         macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=0.02)
         broken_ctx = SignalContext(bar=bar, fundamentals=None, macro=macro)
-        with pytest.raises(AttributeError):
-            DividendQualitySignal().compute(pd.Series({}), broken_ctx)
+        out = DividendQualitySignal().compute(pd.Series({}), broken_ctx)
+        assert out.score == 0.0
 
     def test_nan_dividend_yield_safely_no_ops_to_zero(self):
         """Unlike the modules in Section 1, this one is accidentally safe:
@@ -411,35 +398,24 @@ class TestForecastAlignmentMissingPriceData:
         macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=0.02)
         return SignalContext(bar=bar, fundamentals=fund, macro=macro)
 
-    def test_nan_forecast_price_fabricates_erosion_score(self):
-        """KNOWN GAP (see module docstring): `forecast_price > current_price`
-        is False when forecast_price is NaN, so execution falls to the
-        'structural price erosion' branch -- a confidently bearish -10pts
-        reading from a missing forecast, never neutral."""
+    def test_nan_forecast_price_is_neutral(self):
+        """Fixed: forecast_price now has a pd.isna() guard. A missing
+        forecast correctly returns a neutral 0.0."""
         row = pd.Series({"current_price": 100.0, "forecast_price": float("nan")})
         out = ForecastAlignmentSignal().compute(row, self._ctx())
-        assert out.score == pytest.approx(-1.0)
-        assert "structural price erosion" in out.explanation
+        assert out.score == 0.0
 
-    def test_nan_current_price_fabricates_erosion_score(self):
+    def test_nan_current_price_is_neutral(self):
         row = pd.Series({"current_price": float("nan"), "forecast_price": 105.0})
         out = ForecastAlignmentSignal().compute(row, self._ctx())
-        assert out.score == pytest.approx(-1.0)
+        assert out.score == 0.0
 
-    def test_zero_current_price_fabricates_maximal_bullish_score(self):
-        """KNOWN GAP (see module docstring), verified by direct execution
-        (not just source-reading): a real current_price of exactly 0.0 with
-        forecast_price > 0 does NOT raise ZeroDivisionError -- Python float
-        division by zero produces `inf`, not an exception (only int
-        division raises). `expected_gain` becomes `inf`, which is `>= 1.5`,
-        so this fabricates the single MOST CONFIDENT bullish reading the
-        module can produce (+1.0, "Strong forecast projection (+inf%)") from
-        a degenerate zero price -- arguably worse than the bearish-fabrication
-        pattern elsewhere in this file, since it actively encourages a BUY."""
+    def test_zero_current_price_is_neutral(self):
+        """Fixed: current_price == 0 is now guarded to avoid DivisionByZero.
+        A degenerate zero price gracefully returns a neutral 0.0."""
         row = pd.Series({"current_price": 0.0, "forecast_price": 10.0})
         out = ForecastAlignmentSignal().compute(row, self._ctx())
-        assert out.score == pytest.approx(1.0)
-        assert "+inf%" in out.explanation
+        assert out.score == 0.0
 
 
 # ============================================================================

@@ -44,7 +44,7 @@ class DividendQualitySignal(SignalModule):
         points = 0.0
         exps = []
         
-        if fundamentals.dividend_yield > 0:
+        if fundamentals is not None and fundamentals.dividend_yield > 0:
             if fundamentals.is_dividend_sustainable:
                 exps.append("+10pts: Sustainable Dividend")
                 points += 10.0
