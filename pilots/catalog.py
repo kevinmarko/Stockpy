@@ -79,6 +79,13 @@ honest caveats baked into the catalog below:
 * ``coppock_momentum`` exists in ``STRATEGY_REGISTRY`` but has no corresponding
   signal module in ``SIGNAL_WEIGHTS``, so it is deliberately NOT surfaced as a
   Pilot (a Pilot's weights must be real signal-module ids).
+* ``ml-cross-sectional-rank`` joins ``lgbm_ranker`` (2026-08) — the first
+  ``STRATEGY_REGISTRY`` adapter that genuinely RETRAINS a fresh model per CPCV
+  fold (native (date, ticker) MultiIndex CPCV, PR #648) rather than replaying
+  a static precomputed return series. This validates the METHODOLOGY, not the
+  exact currently-deployed ``ml/models/lgbm_latest.pkl`` artifact the live
+  signal module actually loads — see the Pilot's own inline comment and
+  ``docs/signals/lgbm_ranker.md``'s Backtest Validation section.
 """
 from __future__ import annotations
 
@@ -422,6 +429,35 @@ PILOTS: List[Pilot] = [
         long_only=False,
         # Honest price-only rolling-Sortino/drawdown-gate backtest on SPY.
         validation_strategy_id="sortino_drawdown",
+    ),
+    Pilot(
+        id="ml-cross-sectional-rank",
+        name="ML Cross-Sectional Rank",
+        category="Blend",
+        description=(
+            "A LightGBM ranking model that learns cross-sectional patterns across "
+            "momentum, volatility, mean-reversion and fundamental features — a "
+            "machine-learned complement to the platform's rules-based factor tilts."
+        ),
+        weights={"lgbm_ranker": 1.0},
+        long_only=False,
+        # Real backtest (2026-08): lgbm_ranker (scripts/refresh_validations.py::
+        # _build_lgbm_ranker_adapter) genuinely RETRAINS a fresh
+        # LGBMCrossSectionalRanker PER CPCV FOLD on real point-in-time
+        # features, using native (date, ticker) MultiIndex CPCV
+        # (PR #648 / use_native_multiindex_cv=True) with a real ~21-day
+        # forward-return t1 -- not a static precomputed return series like
+        # every other adapter in this registry. This validates the
+        # METHODOLOGY (does a freshly-trained ranker generalize OOS on this
+        # universe?), NOT the exact currently-deployed model: it does not
+        # replay the single persisted ml/models/lgbm_latest.pkl artifact the
+        # live signal module actually loads via LGBMCrossSectionalRanker.
+        # load_latest() -- a materially different, weaker guarantee than
+        # e.g. "cross-sectional-momentum"'s literal price-only
+        # reimplementation. See docs/signals/lgbm_ranker.md's Backtest
+        # Validation section for the honest before/after numbers and the
+        # bounded 6-year feature-panel window / proxy-OHLCV caveats.
+        validation_strategy_id="lgbm_ranker",
     ),
 ]
 
