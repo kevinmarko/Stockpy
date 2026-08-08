@@ -580,7 +580,25 @@ export function StrategyHealth() {
               )}
             </div>
 
-            <DynamicGrid layoutKey="strategy-health-layout" defaultLayouts={{ lg: [] }}>
+            <DynamicGrid
+              layoutKey="strategy-health-layout"
+              defaultLayouts={{
+                lg: [
+                  ...data.map((row, i) => ({
+                    i: row.pilot_id,
+                    x: (i % 3) * 4,
+                    y: Math.floor(i / 3) * 6,
+                    w: 4,
+                    h: 6,
+                    minW: 3,
+                    minH: 4,
+                  })),
+                  { i: "validation-trend", x: 0, y: Math.ceil(data.length / 3) * 6, w: 12, h: 8 },
+                  { i: "gravity-audit", x: 0, y: Math.ceil(data.length / 3) * 6 + 8, w: 12, h: 10 },
+                  { i: "ai-disagreement", x: 0, y: Math.ceil(data.length / 3) * 6 + 18, w: 12, h: 8 },
+                ],
+              }}
+            >
               {data.map((row) => (
                 <div key={row.pilot_id}>
                   <HealthCard row={row} thresholds={thresholds} metric={trendMetric} />
