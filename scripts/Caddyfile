@@ -1,6 +1,9 @@
-:8888 {
+{
     admin off
     auto_https off
+}
+
+:8888 {
 
     encode gzip
 
