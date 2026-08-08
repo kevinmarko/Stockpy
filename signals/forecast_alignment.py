@@ -20,7 +20,9 @@ class ForecastAlignmentSignal(SignalModule):
         score = pd.Series(0.0, index=df.index)
         exps = pd.Series("", index=df.index)
         
-        up = forecast_price > current_price
+        valid = current_price.notna() & forecast_price.notna() & (current_price > 0)
+        
+        up = valid & (forecast_price > current_price)
         expected_gain = ((forecast_price[up] - current_price[up]) / current_price[up]) * 100
         
         strong = expected_gain >= 1.5
@@ -35,7 +37,7 @@ class ForecastAlignmentSignal(SignalModule):
         score[expected_gain.index[mod]] = 5.0
         exps[expected_gain.index[mod]] = "+5pts: Moderate positive forecast (+" + expected_gain[mod].round(1).astype(str) + "%)"
         
-        down = forecast_price <= current_price
+        down = valid & (forecast_price <= current_price)
         score[down] = -10.0
         exps[down] = "-10pts: Forecast suggests structural price erosion"
         
@@ -54,7 +56,9 @@ class ForecastAlignmentSignal(SignalModule):
         points = 0.0
         exps = []
 
-        if forecast_price > current_price:
+        if pd.isna(forecast_price) or pd.isna(current_price) or current_price == 0:
+            pass
+        elif forecast_price > current_price:
             expected_gain = ((forecast_price - current_price) / current_price) * 100
             if expected_gain >= 1.5:
                 exps.append(f"+10pts: Strong forecast projection (+{expected_gain:.1f}%)")
