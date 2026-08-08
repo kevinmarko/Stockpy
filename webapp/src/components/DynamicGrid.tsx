@@ -193,35 +193,45 @@ export function DynamicGrid({
   }, []);
 
   // react-grid-layout calls onLayoutChange not only on a real user drag/
-  // resize, but also whenever it recomputes layout from a new `layouts`
-  // prop (e.g. right after our own reconciliation effect calls setLayouts
-  // in response to the grid's child-key set changing) -- and the object it
-  // reports back is never reference- or JSON-identical to what we passed
-  // in, since RGL enriches every item with its own bookkeeping fields
-  // (`moved`, `static`, etc.) that aren't present on our plain layout
-  // objects. Unconditionally calling setLayouts back from onLayoutChange
-  // can therefore ping-pong indefinitely: state changes -> layouts prop
-  // changes -> RGL recomputes/compacts and re-enriches -> onLayoutChange
-  // fires again with a "new" object -> state changes again, forever.
-  // Compare only the fields that actually matter for positioning (i, x, y,
-  // w, h) rather than every RGL-internal field, so a real user-driven
-  // change is still detected and persisted, but RGL's own re-enrichment of
-  // an otherwise-unchanged layout doesn't restart the cycle.
-  const layoutsRef = useRef(layouts);
-  layoutsRef.current = layouts;
-  const layoutSignature = (l: ResponsiveLayouts): string =>
-    JSON.stringify(
-      Object.keys(l)
-        .sort()
-        .map((bp) => [
-          bp,
-          [...(l[bp] ?? [])]
-            .map((item) => ({ i: item.i, x: item.x, y: item.y, w: item.w, h: item.h }))
-            .sort((a, b) => (a.i < b.i ? -1 : a.i > b.i ? 1 : 0)),
-        ])
-    );
+  // resize, but also whenever it recomputes layout for ANY reason --
+  // mounting, a width change as `useContainerWidth`'s ResizeObserver
+  // settles, our own reconciliation effect calling setLayouts, internal
+  // compaction, etc. Measured directly: under real-world timing/CPU
+  // variance, this recomputation can genuinely fail to converge within
+  // React's re-render safety budget on mount, throwing "Maximum update
+  // depth exceeded" -- confirmed to still happen intermittently (varies
+  // run to run, machine to machine) even after excluding onLayoutChange
+  // calls that are merely RGL re-reporting an unchanged layout (that
+  // exact-value dedup alone isn't sufficient, since a width that's
+  // genuinely still settling produces genuinely different x/y values on
+  // each pass, not just re-enriched-but-equal ones).
+  //
+  // The robust fix is to stop treating onLayoutChange as a general
+  // "layout changed, please persist" signal at all. Instead, only ever
+  // write back to `layouts` state (and localStorage) while a real user
+  // drag or resize gesture is actively in progress -- tracked via
+  // onDragStart/onDragStop/onResizeStart/onResizeStop, which fire only
+  // for genuine pointer-driven interaction, never for mount/width/
+  // reconciliation-driven recomputation. This makes a feedback loop
+  // through onLayoutChange structurally impossible regardless of *why*
+  // RGL recomputes outside of that window, rather than trying to
+  // out-guess every possible non-user-driven trigger.
+  const isInteractingRef = useRef(false);
+  const beginInteraction = () => {
+    isInteractingRef.current = true;
+  };
+  // Deferred (not synchronous) so that a same-tick onLayoutChange firing
+  // as part of the same drag/resize-stop event batch still observes
+  // isInteractingRef as true -- RGL's own onDragStop/onResizeStop vs.
+  // onLayoutChange firing order isn't a contract this component can rely
+  // on, so the flag is cleared one tick later instead of immediately.
+  const endInteraction = () => {
+    setTimeout(() => {
+      isInteractingRef.current = false;
+    }, 0);
+  };
   const onLayoutChange = (_currentLayout: any, allLayouts: ResponsiveLayouts) => {
-    if (layoutSignature(allLayouts) === layoutSignature(layoutsRef.current ?? {})) return;
+    if (!isInteractingRef.current) return;
     setLayouts(allLayouts);
     localStorage.setItem(`grid-layout-${layoutKey}`, JSON.stringify(allLayouts));
   };
@@ -247,6 +257,10 @@ export function DynamicGrid({
           dragConfig={{ enabled: !isMobile, handle: draggableHandle }}
           resizeConfig={{ enabled: !isMobile && isResizable }}
           compactor={verticalCompactor}
+          onDragStart={beginInteraction}
+          onDragStop={endInteraction}
+          onResizeStart={beginInteraction}
+          onResizeStop={endInteraction}
         >
           {children}
         </ResponsiveGridLayout>
