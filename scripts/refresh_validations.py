@@ -88,10 +88,10 @@ Real SignalAggregator replay (Balanced Blend)
 -------------------------------------------------
 ``signal_replay_balanced_blend`` is the first adapter here to replay the
 REAL ``SignalAggregator``/``SignalRegistry`` weighted-sum code path across
-history rather than hand-writing a standalone formula. 3 of the 17 signal
+history rather than hand-writing a standalone formula. 4 of the 18 signal
 modules are excluded for the whole backtest window (``news_catalyst``,
-``lgbm_ranker``, ``forecast_alignment``) and their weight mass is
-renormalized to the 14 survivors; 2 of the survivors (``graham_value``,
+``lgbm_ranker``, ``forecast_alignment``, ``sector_quality_rank``) and their
+weight mass is renormalized to the 14 survivors; 2 of the survivors (``graham_value``,
 ``dividend_quality``) genuinely degrade to their own real "no data" branches
 because EDGAR PIT fundamentals don't safely carry a dollar book-value-per-
 share or payout ratio. See ``_build_signal_replay_adapter``'s own docstring
@@ -1684,10 +1684,26 @@ def _build_forecast_direction_adapter(
 #                         same forward-safety + weight-redistribution reasons.
 #   forecast_alignment -- only backtestable within forecast_direction_arima_hw's
 #                         bounded 5yr window; excluded here to keep ONE
-#                         consistent 14/17-module composition across the whole
+#                         consistent 14/18-module composition across the whole
 #                         window rather than a signal set that silently
 #                         changes mid-history.
-_REPLAY_EXCLUDED_MODULES = {"news_catalyst", "lgbm_ranker", "forecast_alignment"}
+#   sector_quality_rank -- identical situation to news_catalyst/lgbm_ranker:
+#                         its real signal lives entirely in pre_compute()
+#                         (accrual_ratio/gross_profitability z-scored within
+#                         sector), which this adapter never calls for it
+#                         (only multifactor/cross_sectional_momentum get a
+#                         pre_compute call here). Even if a future refactor
+#                         added that call, EDGAR PIT's raw_json shape (see
+#                         _pit_row_to_fundamentals_dto's docstring) does not
+#                         carry either raw input, so pre_compute would still
+#                         degrade to empty ranks. Excluded for the same
+#                         forward-safety + weight-redistribution reasons —
+#                         without a real contribution, keeping it in the
+#                         "surviving" set would just waste weight mass on a
+#                         module that is a constant 0.0 for the whole replay.
+_REPLAY_EXCLUDED_MODULES = {
+    "news_catalyst", "lgbm_ranker", "forecast_alignment", "sector_quality_rank",
+}
 
 _AROON_LENGTH = 25
 _EWMA_VOL_ALPHA = 0.06  # RiskMetrics lambda=0.94, same as _build_garch_voltarget_adapter
@@ -1820,7 +1836,7 @@ def _build_signal_replay_adapter(
     method ``StrategyEngine.evaluate_security()`` calls live.
 
     NOT a literal reconstruction of ``settings.SIGNAL_WEIGHTS``'s full
-    17-module blend — 3 modules are excluded for the whole window (see
+    18-module blend — 4 modules are excluded for the whole window (see
     ``_REPLAY_EXCLUDED_MODULES``), and 2 of the 14 survivors
     (``graham_value``, ``dividend_quality``) genuinely degrade to their own
     "no data" branches because EDGAR PIT fundamentals don't safely carry the
@@ -2304,7 +2320,7 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     ),
     # Real SignalAggregator/SignalRegistry replay across history (see
     # _build_signal_replay_adapter's docstring for the full honesty contract:
-    # 14/17 modules replayed, real weight renormalization, real DTO reuse).
+    # 14/18 modules replayed, real weight renormalization, real DTO reuse).
     # SPY required as benchmark for relative_strength/cross_sectional_momentum.
     "signal_replay_balanced_blend": (
         _build_signal_replay_adapter,
