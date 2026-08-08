@@ -173,6 +173,8 @@ function ForecastView({
                     to={`/symbol/${symbol}`}
                     className="btn"
                     style={{ fontSize: "var(--t-caption)", background: "var(--surface-3)", color: "var(--accent)" }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
                   >
                     📊 View Model Skill & Historical Accuracy
                   </Link>
@@ -236,7 +238,9 @@ function ForecastView({
               <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
                   <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Price & forecast</h2>
-                  <LookbackToggle value={lookbackDays} onChange={onLookbackChange} />
+                  <div onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+                    <LookbackToggle value={lookbackDays} onChange={onLookbackChange} />
+                  </div>
                 </div>
               </div>
 

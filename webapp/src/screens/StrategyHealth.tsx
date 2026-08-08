@@ -167,7 +167,9 @@ function HealthCard({
             {row.strategy_id ? `backtest: ${row.strategy_id}` : "no backtest joined"}
           </div>
         </div>
-        <DeployableBadge deployable={row.deployable} />
+        <div onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+          <DeployableBadge deployable={row.deployable} />
+        </div>
       </div>
 
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
