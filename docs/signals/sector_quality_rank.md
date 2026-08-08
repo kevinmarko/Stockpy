@@ -200,10 +200,89 @@ sweep — that sweep is deferred until real data makes it possible to run one ho
 
 ## Backtest Validation
 
-Not yet available — the module is currently dormant (see "Data Availability Gap"
-above); a `STRATEGY_REGISTRY` adapter cannot honestly replay a signal whose inputs
-don't exist anywhere in the historical data this codebase can reconstruct. This
-section will be filled in via the `strategy-validation` skill's workflow once the
-follow-up data-plumbing task wires real `accrual_ratio`/`gross_profitability` values
-into the live pipeline (and, ideally, into a point-in-time historical source suitable
-for backtesting — EDGAR PIT, per the Data Availability Gap section above).
+**2026-08-08 (native MultiIndex CPCV validation, `STRATEGY_REGISTRY["sector_quality_rank"]`)**
+
+The live pipeline (`processing_engine.calculate_fundamental_metrics()`) still does not
+compute `accrual_ratio`/`gross_profitability` — the module remains dormant in
+production exactly as the "Data Availability Gap" section above describes. This entry
+validates the SIGNAL ITSELF (not the live wiring) by sourcing both raw inputs directly
+from real SEC EDGAR XBRL company facts — `data/edgar_fundamentals.py`'s
+`get_cik`/`fetch_companyfacts`/`extract_latest_fact`, called directly from a new
+adapter (`scripts/refresh_validations.py::_build_sector_quality_rank_adapter`) rather
+than through `HistoricalStore` (verified: neither ratio exists in
+`fundamentals_history`'s typed columns or `raw_json` — see that adapter's own
+"CONSTRAINT #7 EXCEPTION" docstring for the full reasoning). This is also the first
+`STRATEGY_REGISTRY` adapter to build a genuine `(Date, Ticker)` `pd.MultiIndex` panel
+and an explicit `t1` Series, exercising `CombinatorialPurgedCV`'s native MultiIndex
+support (PR #648) end-to-end through `StrategyValidationHarness.run(..., t1=...)`
+(that harness parameter is new — added by this change, threaded through to
+`run_cpcv_evaluation`).
+
+**Universe (deliberately narrow, not the 10-ticker EDGAR-PIT universe the sibling
+dividend/deep-value/value-quality adapters share):** SNEQR's entire mechanism is
+WITHIN-SECTOR ranking, gated by `MIN_SECTOR_SIZE = 5`. The 10-ticker EDGAR-PIT
+universe has at most 2 names per sector — every ticker would be thin-sector-excluded,
+producing a vacuous, always-flat backtest. 12 tickers were hand-picked from names this
+file already vets, chosen because they contain the two sectors that clear
+`MIN_SECTOR_SIZE` (per `forecasting/data/ticker_sectors.csv`): **Technology** (7:
+AAPL/CSCO/IBM/INTC/MSFT/ORCL/TXN) and **Consumer Defensive** (5: COST/KO/MO/PG/WMT).
+
+**Book construction (documented choice, not a literal top-decile):** long-only,
+equal-weighted, **top-half within sector** (percentile ≥ 0.5) rather than a literal
+top-decile — a strict decile within a 5–7-name sector degenerates to picking exactly
+the single best-ranked name per sector (percentile ranks for n=5 are
+0.2/0.4/0.6/0.8/1.0 — only 1.0 clears 0.9), concentrating the whole book into 2 names
+and testing idiosyncratic single-stock risk rather than the factor tilt. Top-half
+matches the SAME choice every EDGAR-PIT sibling adapter already makes
+(`dividend_yield_edgar_pit`/`deep_value_edgar_pit`/`value_quality_edgar_pit`), applied
+here within each sector's own sub-cross-section rather than market-wide. `.shift(1)`
+enforces no lookahead. Rebalance/embargo horizon (`t1`) is 63 calendar days
+(~1 fiscal quarter — accrual/gross-profitability only refresh on a new 10-Q/10-K
+filing, so a shorter horizon would purge/embargo more aggressively than the signal's
+real information-refresh rate warrants).
+
+**Real, measured numbers** (`python -m scripts.refresh_validations --strategies
+sector_quality_rank --start 2010-01-01 --json`, live SEC EDGAR + yfinance, backtest
+window 2010-01-01 → 2026-08-08, `n_cpcv_splits=10`/`n_test_splits=2`, single book
+variant):
+
+| Metric | Value | Gate | Result |
+|---|---|---|---|
+| Sharpe (net of cost) | 1.100 | > 0.5 | ✅ |
+| PBO | 0.000 | < 0.5 | ✅ |
+| DSR | 1.000 | > 0.95 | ✅ |
+| Max Drawdown | 28.4% | < 30% | ✅ (narrow margin) |
+| **Deployable** | **True** | | |
+
+**PBO = 0.0 / DSR = 1.0 is expected, not a red flag** — this adapter has exactly ONE
+book variant (`SNEQR_TopHalfWithinSector`), and PBO/DSR are measuring *selection bias
+across candidates*; with only one candidate there is nothing to overfit a selection
+to. This is the same "structurally cannot suffer selection bias" situation this file's
+own `rsi2_mean_reversion` entry documents for the identical reason (a single-variant
+adapter, deliberately, after that entry's own history of removing near-duplicate
+variants specifically because CPCV's argmax selection over near-identical candidates
+behaved as noise). It is not evidence the signal itself is robust in the AFML "PBO
+across many candidate strategies" sense — only that *this* backtest doesn't introduce
+selection-bias risk on top of whatever the signal's real edge (or lack of one) is.
+
+**Max Drawdown passes by a narrow margin (28.4% vs. the 30% gate)** — worth flagging
+honestly rather than glossing over: a 12-name, 2-sector universe concentrated further
+into a ~6-name top-half book is meaningfully less diversified than this file's 30-name
+cross-sectional adapters, so a wider future universe (once EDGAR PIT accrual/GP data
+is wired through `HistoricalStore` for more names) would be expected to reduce this
+drawdown via broader diversification, not because today's number is unreliable.
+
+**What this DOES and DOES NOT validate:** this confirms the SNEQR mechanism (real
+Sloan accrual quality + Novy-Marx gross profitability, ranked within-sector) produces
+a real, net-of-cost, out-of-sample edge over this 12-ticker/2-sector universe and
+2010–2026 window. It does NOT validate the live, in-production signal module as
+currently shipped — that module is still dormant (contributes `0.0` every cycle) until
+a separate data-plumbing task wires `accrual_ratio`/`gross_profitability` into
+`processing_engine.calculate_fundamental_metrics()`. See the "Data Availability Gap"
+section above for that remaining gap.
+
+Tests: `tests/test_refresh_validations.py::TestBuildSectorQualityRankAdapter` (9
+hermetic tests — MultiIndex shape, thin-sector exclusion, no-lookahead, per-fold
+slicing, missing-EDGAR-data dead-letter), `tests/test_validation_sector_quality_rank.py`
+(network-marked, the real end-to-end run above), `tests/test_harness_multiindex_t1.py`
+(the new `StrategyValidationHarness.run(t1=...)` plumbing, hermetic).

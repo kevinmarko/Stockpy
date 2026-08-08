@@ -58,6 +58,7 @@ def _noop_harness_run(
     X: pd.DataFrame,
     y: pd.Series,
     strategy_name: str,
+    t1=None,
 ) -> MagicMock:
     """Fake ``StrategyValidationHarness.run()`` returning a deployable report."""
     report = MagicMock()
@@ -772,6 +773,214 @@ class TestLoadTickerSectors:
 
 
 # ---------------------------------------------------------------------------
+# TestBuildSectorQualityRankAdapter -- native MultiIndex CPCV adapter
+# ---------------------------------------------------------------------------
+# Fully hermetic: _fetch_sneqr_quality_facts (the one function in this
+# adapter that hits the network -- real SEC EDGAR company facts) is
+# monkeypatched with a deterministic synthetic quarterly series for every
+# ticker. The end-to-end REAL-EDGAR + REAL-harness path is covered instead
+# by tests/test_validation_sector_quality_rank.py (network-marked).
+
+def _fake_sneqr_quality_facts(ticker: str, start: str = "2015-01-01", end: str = "2020-01-01") -> pd.DataFrame:
+    """Deterministic (seeded by ticker name) synthetic quarterly
+    accrual_ratio/gross_profitability history -- stands in for a real EDGAR
+    fetch in every hermetic test in this class."""
+    dates = pd.date_range(start, end, freq="QS")
+    rng = np.random.RandomState(abs(hash(ticker)) % (2**31))
+    return pd.DataFrame(
+        {
+            "accrual_ratio": rng.normal(0.0, 1.0, len(dates)),
+            "gross_profitability": rng.normal(0.3, 0.1, len(dates)),
+        },
+        index=dates,
+    )
+
+
+class TestBuildSectorQualityRankAdapter:
+    def _closes(self, n: int = 500) -> pd.DataFrame:
+        from scripts.refresh_validations import SNEQR_UNIVERSE
+
+        return _synthetic_closes(SNEQR_UNIVERSE, n=n)
+
+    def test_returns_three_items(self) -> None:
+        import scripts.refresh_validations as rv
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts):
+            result = rv._build_sector_quality_rank_adapter(self._closes(), {})
+        assert len(result) == 3
+
+    def test_X_is_a_multiindex_panel_sorted_by_date(self) -> None:
+        import scripts.refresh_validations as rv
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts):
+            X, y, (strategy_fn, t1) = rv._build_sector_quality_rank_adapter(self._closes(), {})
+
+        assert isinstance(X.index, pd.MultiIndex)
+        assert list(X.index.names) == ["Date", "Ticker"]
+        assert X.index.get_level_values(0).is_monotonic_increasing
+        for col in ("accrual_ratio", "gross_profitability", "sector", "forward_return"):
+            assert col in X.columns, f"missing column {col!r}"
+        assert isinstance(y.index, pd.MultiIndex)
+        assert y.index.equals(X.index)
+
+    def test_precomputed_is_strategy_fn_and_t1_tuple(self) -> None:
+        """Structurally different contract from every sibling adapter (see
+        _build_sector_quality_rank_adapter's own docstring) -- the third
+        tuple element is (Callable, pd.Series), NOT Dict[str, pd.Series]."""
+        import scripts.refresh_validations as rv
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts):
+            X, y, precomputed = rv._build_sector_quality_rank_adapter(self._closes(), {})
+
+        assert isinstance(precomputed, tuple) and len(precomputed) == 2
+        strategy_fn, t1 = precomputed
+        assert callable(strategy_fn)
+        assert isinstance(t1, pd.Series)
+        assert t1.index.equals(X.index)
+        # t1 must be strictly AFTER its own row's Date (a real forward event
+        # end time), by exactly the documented rebalance horizon.
+        date_level = X.index.get_level_values("Date")
+        expected = date_level + pd.Timedelta(days=rv.SNEQR_REBALANCE_HORIZON_DAYS)
+        assert (t1.values == expected.values).all()
+
+    def test_only_eligible_sectors_get_a_real_percentile(self) -> None:
+        """Technology (7 names) and Consumer Defensive (5 names) both clear
+        MIN_SECTOR_SIZE=5 in SNEQR_UNIVERSE -- every ticker should get a
+        non-NaN accrual_ratio/gross_profitability at some point (thin-sector
+        exclusion only applies when a sector has too FEW members, which does
+        not happen for this deliberately-chosen 12-ticker universe -- see the
+        adapter's module-level comment)."""
+        import scripts.refresh_validations as rv
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts):
+            X, y, _ = rv._build_sector_quality_rank_adapter(self._closes(), {})
+
+        sectors_present = set(X["sector"].unique())
+        assert sectors_present == {"Technology", "Consumer Defensive"}
+
+    def test_thin_sector_excluded_from_ranking(self) -> None:
+        """A ticker whose sector has FEWER than MIN_SECTOR_SIZE members in
+        the adapter's OWN universe must be excluded from ranking/weighting
+        entirely -- never force-ranked against too small a peer group
+        (matches the live SectorNeutralQualitySignal.pre_compute()'s own
+        guard). Verified indirectly: XOM's raw inputs ARE still populated
+        (real per-ticker EDGAR data, unaffected by peer-group size -- X
+        always carries the raw facts regardless of eligibility), but since
+        XOM (Energy, alone -- thin) can never receive a nonzero book weight,
+        scrambling its inputs to WILDLY different values must not change the
+        book-return series at all."""
+        import scripts.refresh_validations as rv
+
+        # A 6-ticker universe: 5 Technology (clears MIN_SECTOR_SIZE) + 1
+        # Energy (XOM alone -- thin).
+        universe = ["AAPL", "CSCO", "IBM", "INTC", "MSFT", "XOM"]
+        closes = _synthetic_closes(universe, n=400)
+
+        def _xom_extreme(ticker: str) -> pd.DataFrame:
+            facts = _fake_sneqr_quality_facts(ticker)
+            if ticker == "XOM":
+                facts = facts.copy()
+                facts["accrual_ratio"] = 999.0
+                facts["gross_profitability"] = 999.0
+            return facts
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts), \
+             patch.object(rv, "SNEQR_UNIVERSE", universe):
+            X_base, y_base, (fn_base, _) = rv._build_sector_quality_rank_adapter(closes, {})
+            trials_base = fn_base(X_base, y_base, X_base, y_base)
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_xom_extreme), \
+             patch.object(rv, "SNEQR_UNIVERSE", universe):
+            X_ext, y_ext, (fn_ext, _) = rv._build_sector_quality_rank_adapter(closes, {})
+            trials_ext = fn_ext(X_ext, y_ext, X_ext, y_ext)
+
+        xom_rows = X_base.xs("XOM", level="Ticker")
+        assert not xom_rows.empty
+        assert xom_rows["sector"].eq("Energy").all()
+        pd.testing.assert_series_equal(
+            trials_base[0]["test_returns"], trials_ext[0]["test_returns"]
+        )
+
+    def test_no_lookahead_shift1_on_book_returns(self) -> None:
+        """Perturbing PRICES strictly after date t must not change the
+        precomputed book-return series' value AT date t (weights are
+        .shift(1)-ed, matching every sibling adapter's convention)."""
+        import scripts.refresh_validations as rv
+
+        closes = self._closes(n=400)
+        cutoff = closes.index[250]
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts):
+            X_orig, y_orig, (strategy_fn_orig, t1_orig) = rv._build_sector_quality_rank_adapter(closes, {})
+            trials_orig = strategy_fn_orig(X_orig, y_orig, X_orig, y_orig)
+            val_orig = trials_orig[0]["test_returns"].loc[cutoff]
+
+            perturbed = closes.copy()
+            perturbed.loc[perturbed.index > cutoff] *= 5.0
+            X_pert, y_pert, (strategy_fn_pert, t1_pert) = rv._build_sector_quality_rank_adapter(perturbed, {})
+            trials_pert = strategy_fn_pert(X_pert, y_pert, X_pert, y_pert)
+            val_pert = trials_pert[0]["test_returns"].loc[cutoff]
+
+        assert val_orig == pytest.approx(val_pert)
+
+    def test_strategy_fn_slices_book_returns_to_fold_dates(self) -> None:
+        """strategy_fn's real per-fold job: given a MultiIndex train/test
+        subset, return the book-return series restricted to exactly the
+        dates present in that subset (see the adapter docstring's step 5)."""
+        import scripts.refresh_validations as rv
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts):
+            X, y, (strategy_fn, t1) = rv._build_sector_quality_rank_adapter(self._closes(n=400), {})
+
+        n_universe = len(set(X.index.get_level_values("Ticker")))
+        cut = n_universe * 100  # first 100 dates' worth of rows
+        X_train, y_train = X.iloc[:cut], y.iloc[:cut]
+        X_test, y_test = X.iloc[cut:], y.iloc[cut:]
+
+        trials = strategy_fn(X_train, y_train, X_test, y_test)
+        assert len(trials) == 1
+        trial = trials[0]
+        assert set(trial.keys()) >= {"params", "train_returns", "test_returns", "turnover"}
+
+        train_dates = set(X_train.index.get_level_values("Date"))
+        test_dates = set(X_test.index.get_level_values("Date"))
+        assert set(trial["train_returns"].index) <= train_dates
+        assert set(trial["test_returns"].index) <= test_dates
+        # No date leaks across the fold boundary.
+        assert not (set(trial["train_returns"].index) & test_dates)
+        assert not (set(trial["test_returns"].index) & train_dates)
+
+    def test_missing_edgar_data_degrades_to_nan_not_fabricated(self) -> None:
+        """A ticker whose EDGAR fetch fails entirely (no CIK, no facts) must
+        degrade to NaN inputs -- never fabricated (CONSTRAINT #4), never
+        raises (CONSTRAINT #6)."""
+        import scripts.refresh_validations as rv
+
+        def _all_empty(ticker: str) -> pd.DataFrame:
+            return pd.DataFrame(columns=["accrual_ratio", "gross_profitability"])
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_all_empty):
+            X, y, (strategy_fn, t1) = rv._build_sector_quality_rank_adapter(self._closes(), {})
+
+        assert not X.empty
+        assert X["accrual_ratio"].isna().all()
+        assert X["gross_profitability"].isna().all()
+        # Book return degrades to flat (0.0), never a fabricated nonzero
+        # exposure, when there is nothing real to rank.
+        trials = strategy_fn(X, y, X, y)
+        assert (trials[0]["test_returns"] == 0.0).all()
+
+    def test_registered_in_strategy_registry(self) -> None:
+        import scripts.refresh_validations as rv
+
+        assert "sector_quality_rank" in rv.STRATEGY_REGISTRY
+        adapter_fn, turnover, universe = rv.STRATEGY_REGISTRY["sector_quality_rank"]
+        assert adapter_fn is rv._build_sector_quality_rank_adapter
+        assert isinstance(turnover, float) and turnover > 0
+        assert universe == rv.SNEQR_UNIVERSE
+
+
+# ---------------------------------------------------------------------------
 # TestMakeStrategyFn
 # ---------------------------------------------------------------------------
 
@@ -901,17 +1110,25 @@ class TestRunValidations:
         assert set(results) == {"rsi2_mean_reversion", "timeseries_momentum"}
 
     @pytest.mark.slow
+    @pytest.mark.network
     def test_all_registered_adapters_run_end_to_end(self, tmp_path: Path) -> None:
         """Full real-adapter sweep across the entire ``STRATEGY_REGISTRY``
-        (17 entries, ``strategies=None``). The harness class itself is
+        (18 entries, ``strategies=None``). The harness class itself is
         mocked, but every adapter's REAL computation runs — real ARIMA/
         Holt-Winters MLE fits (10 tickers x weekly rebalances), a real
         31-ticker signal replay, real 30-ticker macro-regime reconstruction,
-        and a real GARCH fit. This is the exact original body of
+        a real GARCH fit, and (as of ``sector_quality_rank``) 12 real,
+        directly-fetched SEC EDGAR company-facts calls (see
+        ``_build_sector_quality_rank_adapter``'s own CONSTRAINT #7 exception
+        docstring — this is the one adapter in the registry that hits the
+        network directly rather than through a local, pre-seeded
+        ``HistoricalStore``). ``network``-marked (in addition to the
+        pre-existing ``slow`` marker) for exactly that reason — CI deselects
+        it via ``-m \"not network\"``. This is the exact original body of
         ``test_returns_dict_for_each_strategy`` before it was narrowed to two
         cheap strategies above — kept here, ``slow``-marked, so a nightly job
         can still exercise the full real-adapter sweep without paying its
-        ~320s cost on every CI run."""
+        cost on every CI run."""
         from scripts.refresh_validations import run_validations
 
         with self._patch_closes(), self._patch_shares(), self._patch_harness(), self._patch_cost():
