@@ -2502,8 +2502,17 @@ def _build_sector_quality_rank_adapter(
         g_sub = gp_df[members]
         a_mean, a_std = a_sub.mean(axis=1), a_sub.std(axis=1)
         g_mean, g_std = g_sub.mean(axis=1), g_sub.std(axis=1)
-        a_z = a_sub.sub(a_mean, axis=0).div(a_std.replace(0.0, np.nan), axis=0).clip(-3.0, 3.0)
-        g_z = g_sub.sub(g_mean, axis=0).div(g_std.replace(0.0, np.nan), axis=0).clip(-3.0, 3.0)
+        # Degenerate-std guard: a near-zero (but not exactly zero) std is
+        # floating-point noise from a near-constant within-sector
+        # cross-section, not real dispersion -- the same 1e-12 threshold
+        # CLAUDE.md's "Degenerate-std guard convention" documents (and the
+        # one signals/multifactor.py::_zscore_winsorize itself already
+        # uses -- this loop is a vectorized-over-time reproduction of that
+        # exact function). An exact `== 0.0` guard would let a near-zero std
+        # explode into a confident, arbitrary-sign +/-3.0 z-score instead of
+        # the honest NaN a genuinely degenerate cross-section should produce.
+        a_z = a_sub.sub(a_mean, axis=0).div(a_std.mask(a_std < 1e-12), axis=0).clip(-3.0, 3.0)
+        g_z = g_sub.sub(g_mean, axis=0).div(g_std.mask(g_std < 1e-12), axis=0).clip(-3.0, 3.0)
         accrual_z[members] = a_z
         gp_z[members] = g_z
 
