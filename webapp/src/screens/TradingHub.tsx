@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 
 /**
  * TradingHub.tsx — landing screen for the "Trading Tools" nav section
@@ -12,6 +13,15 @@ import { theme } from "../theme";
  * tapped to navigate. Every description is sourced live from `TAB_HELP`
  * (`help/helpContent.ts`) rather than hand-copied, so it can never drift
  * from the real in-app help content.
+ *
+ * Each card splits a `.drag-handle` header (icon + label, grabbed to
+ * reorder) from a separately-clickable `role="button"` body (the
+ * description, tapped to navigate) -- matching OperationsHub.tsx's and
+ * ResearchHub.tsx's pattern, so all three hub screens resolve the
+ * click-vs-drag conflict the same way. This replaces an earlier
+ * onDoubleClick-to-navigate workaround (single click was reserved for
+ * dragging the whole card) that made this screen's tap gesture inconsistent
+ * with its two sibling hubs.
  */
 interface HubCard {
   to: string;
@@ -28,36 +38,42 @@ const CARDS: HubCard[] = [
 
 function HubCardRow({ card, onOpen }: { card: HubCard; onOpen: () => void }) {
   return (
-    <section
-      className="card card-pad"
-      style={{ marginBottom: "var(--s-3)", cursor: "pointer" }}
-      onClick={onOpen}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--s-3)" }}>
-        <span style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>{card.icon}</span>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{card.label}</div>
-          <p
-            style={{
-              color: theme.textSecondary,
-              fontSize: "var(--t-label)",
-              lineHeight: 1.5,
-              marginTop: "var(--s-1)",
-            }}
-          >
-            {card.description}
-          </p>
-        </div>
+    <div className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div
+        className="drag-handle"
+        style={{
+          padding: "var(--s-3)",
+          borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
+          cursor: "grab",
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--s-2)"
+        }}
+      >
+        <span aria-hidden style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>
+          {card.icon}
+        </span>
+        <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{card.label}</div>
       </div>
-    </section>
+      <div
+        role="button"
+        aria-label={card.label}
+        tabIndex={0}
+        onClick={onOpen}
+        onKeyDown={(e) => e.key === "Enter" && onOpen()}
+        style={{
+          padding: "var(--s-3)",
+          flex: 1,
+          overflow: "auto",
+          color: theme.textMuted,
+          fontSize: "var(--t-label)",
+          lineHeight: 1.5,
+          cursor: "pointer"
+        }}
+      >
+        {card.description}
+      </div>
+    </div>
   );
 }
 
@@ -81,13 +97,27 @@ export function TradingHub() {
       >
         ← Pilots
       </button>
-      <h1 className="screen-title">Trading Tools</h1>
-      <p className="screen-sub">Grading and acting on your own portfolio.</p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>Trading Tools</h1>
+          <p className="screen-sub">Grading and acting on your own portfolio.</p>
+        </div>
+        <button className="btn btn-neutral" onClick={() => resetGridLayout("trading-hub")}>Reset Layout</button>
+      </div>
 
       <div style={{ marginTop: "var(--s-3)" }}>
-        {CARDS.map((card) => (
-          <HubCardRow key={card.to} card={card} onOpen={() => nav(card.to)} />
-        ))}
+        <DynamicGrid
+          layoutKey="trading-hub"
+          defaultLayouts={{
+            lg: CARDS.map((card, i) => ({ i: card.to, x: (i % 3) * 4, y: Math.floor(i / 3) * 2, w: 4, h: 2, minW: 3, minH: 2 })),
+          }}
+        >
+          {CARDS.map((card) => (
+            <div key={card.to}>
+              <HubCardRow card={card} onOpen={() => nav(card.to)} />
+            </div>
+          ))}
+        </DynamicGrid>
       </div>
     </div>
   );

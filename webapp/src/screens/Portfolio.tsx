@@ -12,10 +12,12 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import type { ResponsiveLayouts } from "react-grid-layout";
 import { PerfLine } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
 import { TabGuide } from "../components/TabGuide";
-import { ErrorState, Loading, Tile, InfoTip } from "../components/ui";
+import { ErrorState, Loading, Tile, InfoTip, Button } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { fmtNum, fmtPct, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -61,8 +63,7 @@ function ReconciliationSection({
   if (!universe) return null;
 
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-      <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Reconciliation</h2>
+    <section style={{ marginBottom: "var(--s-4)" }}>
       <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", margin: "0 0 var(--s-3)" }}>
         Held positions with no tracked signal, and BUY-signalled symbols you don't hold.
       </p>
@@ -107,6 +108,33 @@ function ReconciliationSection({
     </section>
   );
 }
+
+const PORTFOLIO_LAYOUTS: ResponsiveLayouts = {
+  lg: [
+    { i: "summary", x: 0, y: 0, w: 12, h: 5 },
+    { i: "equity", x: 0, y: 5, w: 12, h: 12 },
+    { i: "reconciliation", x: 0, y: 17, w: 12, h: 7 },
+    { i: "realized", x: 0, y: 24, w: 7, h: 10 },
+    { i: "follows", x: 7, y: 24, w: 5, h: 10 },
+    { i: "positions", x: 0, y: 34, w: 12, h: 10 },
+  ],
+  md: [
+    { i: "summary", x: 0, y: 0, w: 10, h: 5 },
+    { i: "equity", x: 0, y: 5, w: 10, h: 12 },
+    { i: "reconciliation", x: 0, y: 17, w: 10, h: 7 },
+    { i: "realized", x: 0, y: 24, w: 5, h: 10 },
+    { i: "follows", x: 5, y: 24, w: 5, h: 10 },
+    { i: "positions", x: 0, y: 34, w: 10, h: 10 },
+  ],
+  sm: [
+    { i: "summary", x: 0, y: 0, w: 6, h: 7 },
+    { i: "equity", x: 0, y: 7, w: 6, h: 12 },
+    { i: "reconciliation", x: 0, y: 19, w: 6, h: 8 },
+    { i: "realized", x: 0, y: 27, w: 6, h: 10 },
+    { i: "follows", x: 0, y: 37, w: 6, h: 10 },
+    { i: "positions", x: 0, y: 47, w: 6, h: 10 },
+  ],
+};
 
 export function Portfolio() {
   const [range, setRange] = useState<PerfRange>("3M");
@@ -159,72 +187,89 @@ export function Portfolio() {
 
   return (
     <div className="screen">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 className="screen-title">Portfolio</h1>
-        <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted, display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
-          {p.source} · {timeAgo(p.fetched_at)}
-          {p.is_stale === true &&
-            (p.age_hours != null ? (
-              <InfoTip triggerClassName="badge badge-warn" content={`${fmtNum(p.age_hours, 1)}h old`}>
-                stale
-              </InfoTip>
-            ) : (
-              <span className="badge badge-warn">stale</span>
-            ))}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)" }}>
+          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted, display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+            {p.source} · {timeAgo(p.fetched_at)}
+            {p.is_stale === true &&
+              (p.age_hours != null ? (
+                <InfoTip triggerClassName="badge badge-warn" content={`${fmtNum(p.age_hours, 1)}h old`}>
+                  stale
+                </InfoTip>
+              ) : (
+                <span className="badge badge-warn">stale</span>
+              ))}
+          </span>
+          <Button variant="neutral" onClick={() => resetGridLayout("portfolio")}>
+            Reset Layout
+          </Button>
+        </div>
       </div>
 
       <TabGuide tabKey="portfolio" />
 
-      <div style={{ marginBottom: "var(--s-1)" }}>
-        <div className="tile-label">Total equity</div>
-        <div
-          className="num"
-          style={{ fontSize: 34, fontWeight: 800, letterSpacing: "-0.02em" }}
-        >
-          {fmtUsd(p.total_equity)}
-        </div>
-        <div
-          className="num"
-          style={{
-            color: p.total_unrealized_pl >= 0 ? theme.growth : theme.decline,
-            fontWeight: 700,
-            fontSize: "var(--t-subhead)",
-            marginTop: "var(--s-0-5)",
-          }}
-        >
-          {fmtSignedUsd(p.total_unrealized_pl)} unrealized
-        </div>
-      </div>
-
-      <div className="tiles" style={{ margin: "var(--s-4) 0" }}>
-        <Tile label="Buying power" value={fmtUsd(p.buying_power)} />
-        <Tile
-          label="Unrealized P&L"
-          value={fmtSignedUsd(p.total_unrealized_pl)}
-          tone={p.total_unrealized_pl >= 0 ? "pos" : "neg"}
-        />
-        <Tile label="Dividends" value={fmtUsd(p.total_dividends)} />
-        <Tile label="Positions" value={p.position_count} />
-      </div>
-
-      {/* Equity curve */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Account value</h2>
-        {equity.loading ? (
-          <div className="skeleton" style={{ height: 200 }} />
-        ) : equity.data?.curve && equity.data.curve.length > 1 ? (
-          <PerfLine
-            data={equity.data.curve}
-            macroBenchmark={showBuyingPower ? equity.data.buying_power_curve : null}
-            macroLabel="Buying power"
-            macroSecondaryAxis
-          />
-        ) : (
-          <div className="empty" style={{ padding: "var(--s-7-5)" }}>
-            Not enough account history yet.
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <DynamicGrid layoutKey="portfolio" defaultLayouts={PORTFOLIO_LAYOUTS}>
+          {/* Summary */}
+          <div key="summary" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Summary</h2>
+            </div>
+            <div style={{ display: "flex", gap: "var(--s-4)", alignItems: "center", marginBottom: "var(--s-3)" }}>
+              <div>
+                <div className="tile-label">Total equity</div>
+                <div
+                  className="num"
+                  style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em" }}
+                >
+                  {fmtUsd(p.total_equity)}
+                </div>
+                <div
+                  className="num"
+                  style={{
+                    color: p.total_unrealized_pl >= 0 ? theme.growth : theme.decline,
+                    fontWeight: 700,
+                    fontSize: "var(--t-body)",
+                  }}
+                >
+                  {fmtSignedUsd(p.total_unrealized_pl)} unrealized
+                </div>
+              </div>
+            </div>
+            <div className="tiles" style={{ marginTop: "auto" }}>
+              <Tile label="Buying power" value={fmtUsd(p.buying_power)} />
+              <Tile
+                label="Unrealized P&L"
+                value={fmtSignedUsd(p.total_unrealized_pl)}
+                tone={p.total_unrealized_pl >= 0 ? "pos" : "neg"}
+              />
+              <Tile label="Dividends" value={fmtUsd(p.total_dividends)} />
+              <Tile label="Positions" value={p.position_count} />
+            </div>
           </div>
-        )}
+
+          {/* Equity curve */}
+          <section key="equity" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-3)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+              <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Account value</h2>
+            </div>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              {equity.loading ? (
+                <div className="skeleton" style={{ height: "100%" }} />
+              ) : equity.data?.curve && equity.data.curve.length > 1 ? (
+                <PerfLine
+                  data={equity.data.curve}
+                  macroBenchmark={showBuyingPower ? equity.data.buying_power_curve : null}
+                  macroLabel="Buying power"
+                  macroSecondaryAxis
+                />
+              ) : (
+                <div className="empty" style={{ padding: "var(--s-7-5)", height: "100%" }}>
+                  Not enough account history yet.
+                </div>
+              )}
+            </div>
         <div style={{ marginTop: "var(--s-3)", display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: "var(--s-3)" }}>
           <RangeToggle value={range} onChange={setRange} />
           <Toggle
@@ -242,11 +287,19 @@ export function Portfolio() {
         )}
       </section>
 
-      <ReconciliationSection positions={p.positions} universe={universe.data ?? null} />
+      {/* Reconciliation */}
+      <div key="reconciliation" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Reconciliation</h2>
+        </div>
+        <ReconciliationSection positions={p.positions} universe={universe.data ?? null} />
+      </div>
 
       {/* Realized performance (broker order history, FIFO round-trips) */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Realized performance</h2>
+      <section key="realized" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Realized performance</h2>
+        </div>
         <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", margin: "0 0 var(--s-3)" }}>
           Reconstructed from your Robinhood filled-order history (closed round-trips).
         </p>
@@ -308,8 +361,10 @@ export function Portfolio() {
       </section>
 
       {/* Active follows */}
-      <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Active follows</h2>
+      <section key="follows" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Active follows</h2>
+        </div>
         {follows.loading ? (
           <Loading lines={2} />
         ) : (follows.data ?? []).length === 0 ? (
@@ -354,9 +409,11 @@ export function Portfolio() {
       </section>
 
       {/* Positions */}
-      <section className="card card-pad">
-        <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-1)" }}>Positions</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "var(--s-3)" }}>
+      <section key="positions" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Positions</h2>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gridAutoRows: "max-content", gap: "var(--s-3)" }}>
           {p.positions.map((pos) => {
             const isPositive = (pos.unrealized_pl ?? 0) >= 0;
             const bgColor = isPositive ? "rgba(16, 185, 129, 0.05)" : "rgba(239, 68, 68, 0.05)";
@@ -396,8 +453,10 @@ export function Portfolio() {
               </Link>
             );
           })}
-        </div>
-      </section>
+            </div>
+          </section>
+        </DynamicGrid>
+      </div>
     </div>
   );
 }

@@ -22,6 +22,7 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, Notice } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -36,8 +37,8 @@ function signalColor(signal: string): string {
 
 function PairCard({ p }: { p: PairRow }) {
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab", borderBottom: `1px solid ${theme.border}`, padding: "var(--s-3)" }}>
         <div style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>
           {p.ticker1} <span style={{ color: theme.textMuted }}>/</span> {p.ticker2}
         </div>
@@ -48,7 +49,7 @@ function PairCard({ p }: { p: PairRow }) {
           {p.signal}
         </span>
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-4)", marginTop: "var(--s-3)" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-4)", padding: "var(--s-3)", flex: 1, overflow: "auto", alignContent: "flex-start" }}>
         <Metric label="z-score" value={fmtNum(p.z_score, 2)} />
         <Metric label="Half-life" value={p.half_life == null ? "—" : `${fmtNum(p.half_life, 0)}d`} />
         <Metric label="p-value" value={fmtNum(p.p_value, 4)} />
@@ -296,78 +297,108 @@ export function PairsRadar() {
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
 
   return (
-    <div className="screen">
-      <button
-        onClick={back}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          color: theme.textSecondary,
-          fontSize: "var(--t-callout)",
-          marginBottom: "var(--s-2)",
-        }}
-      >
-        ← Pilots
-      </button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1 className="screen-title">Pairs radar</h1>
-        {data?.as_of && (
-          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
-        )}
+    <div className="screen" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <div>
+          <button
+            onClick={back}
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              color: theme.textSecondary,
+              fontSize: "var(--t-callout)",
+              marginBottom: "var(--s-2)",
+            }}
+          >
+            ← Pilots
+          </button>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
+            <h1 className="screen-title" style={{ margin: 0 }}>Pairs radar</h1>
+            {data?.as_of && (
+              <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
+            )}
+          </div>
+          <p className="screen-sub" style={{ marginTop: "var(--s-1)", marginBottom: 0 }}>
+            Cointegrated stat-arb candidates and their current spread state. Advisory
+            only — no orders are placed.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
+          <Button variant="neutral" onClick={() => resetGridLayout("pairs-radar")}>Reset Layout</Button>
+        </div>
       </div>
-      <p className="screen-sub">
-        Cointegrated stat-arb candidates and their current spread state. Advisory
-        only — no orders are placed.
-      </p>
 
       <TabGuide tabKey="pairs" />
 
-      {loading && <Loading lines={3} />}
+      {loading && !data && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
-      {!loading && !error && data && (
-        data.pairs.length === 0 ? (
-          <div className="empty" style={{ padding: "var(--s-7-5)" }}>
-            {data.reason ?? "No cointegrated pairs found yet."}
-          </div>
-        ) : (
-          <div style={{ marginTop: "var(--s-3)" }}>
-            {data.pairs.map((p) => (
-              <PairCard key={`${p.ticker1}-${p.ticker2}`} p={p} />
-            ))}
-          </div>
-        )
-      )}
-      <p
-        style={{
-          color: theme.textMuted,
-          fontSize: "var(--t-footnote)",
-          marginTop: "var(--s-5)",
-          textAlign: "center",
-          lineHeight: 1.5,
-        }}
-      >
-        Entry at |z| &gt; 2, exit on a 0-cross, stop at |z| &gt; 4. Cointegration
-        breaks when the rolling ADF p-value exceeds 0.10.
-      </p>
-
-      <button
-        type="button"
-        onClick={() => setShowRecompute((v) => !v)}
-        aria-expanded={showRecompute}
-        className="btn btn-neutral"
-        style={{ marginTop: "var(--s-5)", width: "100%" }}
-      >
-        {showRecompute ? "▲ Hide" : "▼"} Recompute with custom symbols
-      </button>
-
-      {showRecompute && (
-        <div style={{ marginTop: "var(--s-4)" }}>
-          <PairAnalyzeSection />
-          <PairScanSection />
+      
+      <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-4)", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, minHeight: 0 }}>
+          {!loading && !error && data && (
+            data.pairs.length === 0 ? (
+              <div className="empty" style={{ padding: "var(--s-7-5)" }}>
+                {data.reason ?? "No cointegrated pairs found yet."}
+              </div>
+            ) : (
+              <DynamicGrid
+                layoutKey="pairs-radar"
+                defaultLayouts={{
+                  lg: data.pairs.map((p, i) => ({
+                    i: `${p.ticker1}-${p.ticker2}`,
+                    x: (i % 3) * 4,
+                    y: Math.floor(i / 3) * 3,
+                    w: 4,
+                    h: 3,
+                    minW: 3,
+                    minH: 3,
+                  })),
+                }}
+              >
+                {data.pairs.map((p) => (
+                  <div key={`${p.ticker1}-${p.ticker2}`}>
+                    <PairCard p={p} />
+                  </div>
+                ))}
+              </DynamicGrid>
+            )
+          )}
         </div>
-      )}
+
+        <div style={{ flexShrink: 0, paddingBottom: "var(--s-4)" }}>
+          <p
+            style={{
+              color: theme.textMuted,
+              fontSize: "var(--t-footnote)",
+              marginTop: "var(--s-5)",
+              textAlign: "center",
+              lineHeight: 1.5,
+            }}
+          >
+            Entry at |z| &gt; 2, exit on a 0-cross, stop at |z| &gt; 4. Cointegration
+            breaks when the rolling ADF p-value exceeds 0.10.
+          </p>
+
+          <button
+            type="button"
+            onClick={() => setShowRecompute((v) => !v)}
+            aria-expanded={showRecompute}
+            className="btn btn-neutral"
+            style={{ marginTop: "var(--s-3)", width: "100%" }}
+          >
+            {showRecompute ? "▲ Hide" : "▼"} Recompute with custom symbols
+          </button>
+
+          {showRecompute && (
+            <div style={{ marginTop: "var(--s-4)" }}>
+              <PairAnalyzeSection />
+              <PairScanSection />
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

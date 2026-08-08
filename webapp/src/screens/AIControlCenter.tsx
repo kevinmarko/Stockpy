@@ -7,6 +7,7 @@ import { ErrorState, Loading, MetricBadge, Notice, Select, StaleDataNotice } fro
 import { Toggle } from "../components/Toggle";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 
 /**
  * AI Control Center — the write path over GET/PUT /llm/setting for the 5 AI
@@ -54,19 +55,32 @@ export function AIControlCenter() {
       >
         ← Settings
       </button>
-      <h1 className="screen-title">AI Control Center</h1>
-      <p className="screen-sub">
-        Which LLM capabilities are on, which provider serves each one, and what
-        happened on the last real call.
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--s-4)" }}>
+        <div>
+          <h1 className="screen-title" style={{ marginBottom: "var(--s-1)" }}>AI Control Center</h1>
+          <p className="screen-sub">
+            Which LLM capabilities are on, which provider serves each one, and what
+            happened on the last real call.
+          </p>
+        </div>
+        <button className="reset-layout-btn" onClick={() => resetGridLayout("ai-control-layout")} title="Reset grid layout">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+        </button>
+      </div>
 
       {loading && <Loading lines={5} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
         <>
           {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
-          <CapabilityToggles data={data} onSaved={reload} />
-          <TelemetrySection data={data} />
+          <DynamicGrid layoutKey="ai-control-layout" defaultLayouts={{ lg: [{ i: "toggles", x: 0, y: 0, w: 8, h: 4 }, { i: "telemetry", x: 8, y: 0, w: 4, h: 4 }] }}>
+            <div key="toggles">
+              <CapabilityToggles data={data} onSaved={reload} />
+            </div>
+            <div key="telemetry">
+              <TelemetrySection data={data} />
+            </div>
+          </DynamicGrid>
         </>
       )}
     </div>
@@ -118,7 +132,11 @@ function CapabilityToggles({ data, onSaved }: { data: LlmStatus; onSaved: () => 
   const groups = groupByToggleKey(data.capabilities);
 
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Capabilities</h2>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       {!data.writable && (
         <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
           <span aria-hidden>⚠️</span>
@@ -129,6 +147,7 @@ function CapabilityToggles({ data, onSaved }: { data: LlmStatus; onSaved: () => 
         {groups.map((g) => (
           <ToggleGroupRow key={g.toggleKey} toggleKey={g.toggleKey} rows={g.rows} writable={data.writable} onSaved={onSaved} />
         ))}
+      </div>
       </div>
     </section>
   );
@@ -271,12 +290,15 @@ const LLM_BADGE_LABEL: Record<LlmCapabilityRow["status"], string> = {
  */
 function TelemetrySection({ data }: { data: LlmStatus }) {
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
-      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Provider telemetry</h2>
-      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
-        What happened on the last real call to each provider.
-      </p>
-      <div className="list">
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Provider telemetry</h2>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
+          What happened on the last real call to each provider.
+        </p>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+        <div className="list">
         {data.capabilities.map((c) => {
           const tel = c.active_provider ? data.providers[c.active_provider] : null;
           // disabled / not_built are a deliberate "off" -> neutral, never a warning.
@@ -341,6 +363,7 @@ function TelemetrySection({ data }: { data: LlmStatus }) {
         >
           {data.telemetry_note}
         </p>
+      </div>
       </div>
     </section>
   );

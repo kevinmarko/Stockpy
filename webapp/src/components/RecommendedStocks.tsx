@@ -227,13 +227,16 @@ export function RecommendedStocks({
   });
 
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="recommended-stocks">
-      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Recommended stocks</h2>
-      <p style={{ margin: "0 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
-        The platform's current BUY picks, ranked by conviction. From the latest pipeline run
-        {data && ` (${timeAgo(data.as_of)})`}.
-      </p>
-
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="recommended-stocks">
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Recommended stocks</h2>
+        <p style={{ margin: "0", fontSize: "var(--t-body)", color: theme.textMuted }}>
+          The platform's current BUY picks, ranked by conviction. From the latest pipeline run
+          {data && ` (${timeAgo(data.as_of)})`}.
+        </p>
+      </div>
+      
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       {loading && <Loading lines={3} />}
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && data.recommendations.length === 0 && (
@@ -339,6 +342,7 @@ export function RecommendedStocks({
           </div>
         </>
       )}
+      </div>
     </section>
   );
 }

@@ -7,6 +7,7 @@ import { Button, EmptyState, ErrorState, Loading, Notice, Select, Table } from "
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 
 /**
  * Prompt Registry — version control for every AI-facing instruction. Ports
@@ -38,83 +39,105 @@ export function PromptRegistry() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   return (
-    <div className="screen">
-      <button
-        onClick={back}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          color: theme.textSecondary,
-          fontSize: "var(--t-callout)",
-          marginBottom: "var(--s-2)",
-        }}
-      >
-        ← Settings
-      </button>
-      <h1 className="screen-title">Prompt Registry</h1>
+    <div className="screen" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <div>
+          <button
+            onClick={back}
+            style={{ background: "none", padding: 0, cursor: "pointer", color: "var(--text-secondary)", fontSize: "var(--t-callout)", marginBottom: "var(--s-2)", border: "none" }}
+          >
+            ← Settings
+          </button>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
+            <h1 className="screen-title" style={{ margin: 0 }}>Prompt Registry</h1>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
+          <button type="button" className="btn btn-neutral" onClick={() => resetGridLayout("prompt-registry")}>
+            Reset Layout
+          </button>
+        </div>
+      </div>
       <p className="screen-sub">
         Version control for every AI-facing instruction — resolved version, source,
         and pin state for each registered prompt.
       </p>
 
       <TabGuide tabKey="prompts" />
+      <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
+        {loading && <Loading lines={4} />}
+        {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+        {!loading && !error && data && (
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <DynamicGrid
+              layoutKey="prompt-registry"
+              defaultLayouts={{
+                lg: [
+                  { i: "notices", x: 0, y: 0, w: 12, h: data.enabled ? 3 : 4, isResizable: false },
+                  { i: "sync", x: 0, y: 4, w: 12, h: 2, isResizable: false },
+                  { i: "table", x: 0, y: 6, w: 12, h: 14 }
+                ]
+              }}
+            >
+              <div key="notices" className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)", overflow: "auto", cursor: "grab" }}>
+                <Notice variant="info" data-testid="prompt-security-banner">
+                  <span aria-hidden>🛡️</span>
+                  <span>
+                    Prompts are advisory text. The registry changes what the AI is <em>told</em> —
+                    it cannot change what the platform is <em>permitted to do</em>. Order submission,
+                    the advisory quarantine, the risk gate, and the kill switch are enforced in
+                    Python and are not registry-controlled.
+                  </span>
+                </Notice>
+                {!data.enabled && (
+                  <Notice variant="warn" data-testid="prompt-registry-disabled-notice">
+                    <span aria-hidden>📦</span>
+                    <span>
+                      Registry is disabled (<code>PROMPT_REGISTRY_ENABLED=false</code>). All
+                      prompts resolve from the committed baseline — zero network calls.
+                    </span>
+                  </Notice>
+                )}
+              </div>
 
-      <Notice variant="info" style={{ marginBottom: "var(--s-3)" }} data-testid="prompt-security-banner">
-        <span aria-hidden>🛡️</span>
-        <span>
-          Prompts are advisory text. The registry changes what the AI is <em>told</em> —
-          it cannot change what the platform is <em>permitted to do</em>. Order submission,
-          the advisory quarantine, the risk gate, and the kill switch are enforced in
-          Python and are not registry-controlled.
-        </span>
-      </Notice>
+              <div key="sync" className="card card-pad drag-handle" style={{ display: "flex", alignItems: "center", cursor: "grab", overflow: "hidden" }}>
+                <div onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+                  <SyncNowControl registryEnabled={data.enabled} onSynced={reload} />
+                </div>
+              </div>
 
-      {loading && <Loading lines={4} />}
-      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
-      {!loading && !error && data && (
-        <>
-          {!data.enabled && (
-            <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }} data-testid="prompt-registry-disabled-notice">
-              <span aria-hidden>📦</span>
-              <span>
-                Registry is disabled (<code>PROMPT_REGISTRY_ENABLED=false</code>). All
-                prompts resolve from the committed baseline — zero network calls.
-              </span>
-            </Notice>
-          )}
-
-          <SyncNowControl registryEnabled={data.enabled} onSynced={reload} />
-
-          {data.prompts.length === 0 ? (
-            <EmptyState
-              title="No prompt IDs found"
-              hint={data.reason ?? "Run a sync or check that prompt_registry/baseline/ is intact."}
-            />
-          ) : (
-            <div className="card card-pad" style={{ marginTop: "var(--s-3)", overflowX: "auto" }}>
-              <Table>
-                <thead>
-                  <tr>
-                    <th>Prompt ID</th>
-                    <th>Resolved version</th>
-                    <th>Source</th>
-                    <th>Pinned</th>
-                    <th className="num">Cached</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.prompts.map((p) => (
-                    <PromptRow key={p.id} entry={p} onSelect={() => setSelectedId(p.id)} />
-                  ))}
-                </tbody>
-              </Table>
-            </div>
-          )}
-        </>
-      )}
-
+              <div key="table" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)", cursor: "grab" }}>Registered Prompts</div>
+                <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                  {data.prompts.length === 0 ? (
+                    <EmptyState
+                      title="No prompt IDs found"
+                      hint={data.reason ?? "Run a sync or check that prompt_registry/baseline/ is intact."}
+                    />
+                  ) : (
+                    <Table>
+                      <thead>
+                        <tr>
+                          <th>Prompt ID</th>
+                          <th>Resolved version</th>
+                          <th>Source</th>
+                          <th>Pinned</th>
+                          <th className="num">Cached</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.prompts.map((p) => (
+                          <PromptRow key={p.id} entry={p} onSelect={() => setSelectedId(p.id)} />
+                        ))}
+                      </tbody>
+                    </Table>
+                  )}
+                </div>
+              </div>
+            </DynamicGrid>
+          </div>
+        )}
+      </div>
       {selectedId && data && (
         <PromptDetailModal
           id={selectedId}

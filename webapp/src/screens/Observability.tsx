@@ -18,6 +18,7 @@ import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, InfoTip, Input, Loading, Notice, Select, Table, Tile } from "../components/ui";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { TabGuide } from "../components/TabGuide";
 import { glossaryDef } from "../help/helpContent";
 import { loadThresholds } from "../help/thresholds";
@@ -1089,182 +1090,190 @@ export function Observability() {
   const [range, setRange] = useState<PerfRange>("1Y");
   const [horizon, setHorizon] = useState<number>(30);
 
-  // Backs the per-section "?" InfoTips (see SectionHeading's helpKey prop) —
-  // the same GET /thresholds fetch TabGuide loads below; loadThresholds()'s
-  // module-level cache dedups this to zero extra network requests.
-  const [thresholds, setThresholds] = useState<Thresholds | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void loadThresholds().then((t) => {
-      if (alive) setThresholds(t);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
+  // The composite /observability read: attention items, equity, risk-gate
+  // blocks, etc.
   const { data, loading, error, status, reload } = useApi<ObservabilitySummary>(
     () => api.getObservabilitySummary(range, horizon),
     [range, horizon]
   );
+  useAutoPoll(reload, "observability", { hasError: error != null });
 
-  const attentionItems = useMemo(() => (data ? deriveAttentionItems(data) : []), [data]);
-
-  // Kept as a SEPARATE fetch (not folded into `data` above) — mirrors the
-  // backend's own GET /observability/logs split: a log tail is a heavier,
-  // independently-loading payload, not one of the cheap composite sections.
+  // The bounded log tail (GET /observability/logs). Kept separate from the
+  // main /observability endpoint (which polls) because logs are relatively
+  // heavy and usually only needed for ad-hoc forensic drilling, not for
+  // driving an always-on dashboard's KPI strip.
   const {
     data: logsData,
     loading: logsLoading,
     error: logsError,
     status: logsStatus,
     reload: logsReload,
-  } = useApi<LogAggregation>(() => api.getObservabilityLogs(300), []);
+  } = useApi<LogAggregation>(api.getObservabilityLogs, []);
 
-  useAutoPoll(
-    () => {
-      reload();
-      logsReload();
-    },
-    "observability",
-    { hasError: error != null }
-  );
+  // Sync with loadThresholds so the definitions loaded below match the LIVE
+  // config, not some hard-coded value.
+  const [thresholds, setThresholds] = useState<Thresholds | null>(null);
+  useEffect(() => {
+    loadThresholds().then(setThresholds).catch(console.error);
+  }, []);
+
+  const attentionItems = useMemo(() => {
+    if (!data || !thresholds) return [];
+    return deriveAttentionItems(data);
+  }, [data, thresholds]);
+
+  if (loading && !data) {
+    return <Loading />;
+  }
 
   return (
     <div className="screen">
-      <button
-        onClick={back}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          color: theme.textSecondary,
-          fontSize: "var(--t-callout)",
-          marginBottom: "var(--s-2)",
-        }}
-      >
-        ← Pilots
-      </button>
-      <h1 className="screen-title">Mission Control</h1>
-      <p className="screen-sub">
-        Account risk stats, the equity curve, the macro regime, forecast
-        skill, circuit breakers, blocked orders, host telemetry, and the log
-        tail — one read-only view over what the engine already computed.
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-3)" }}>
+          <button className="btn btn-neutral" onClick={back} aria-label="Go back">
+            ←
+          </button>
+          <div>
+            <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>Mission Control</h1>
+            <p className="screen-sub" style={{ marginBottom: 0 }}>
+              Portfolio risk, guardrail events, and system telemetry.
+            </p>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)" }}>
+          <Button variant="neutral" onClick={() => resetGridLayout("observability")}>Reset Layout</Button>
+        </div>
+      </div>
 
       <TabGuide tabKey="observability" />
 
-      {loading && <Loading lines={4} />}
-      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
-
-      {!loading && !error && data && (
-        <>
+      {error ? (
+        <ErrorState message={error} status={status} onRetry={reload} />
+      ) : !data ? (
+        <div className="empty" style={{ padding: "var(--s-5)" }}>
+          Failed to load observability data.
+        </div>
+      ) : (
+        <div style={{ marginTop: "var(--s-4)" }}>
+          {/* Fixed, non-draggable, rendered above the fold and OUTSIDE the
+              DynamicGrid entirely -- the screen's one "does anything need a
+              look right now" answer plus its one real control (the macro-
+              gate toggle; the ETF-transmission config link below is the
+              other) must never be draggable, resizable, or hidden behind the
+              collapsed disclosure below. See AttentionStripSection's and
+              MacroGateControl's doc comments for the full rationale. */}
           <AttentionStripSection items={attentionItems} />
 
-          {/* The page's only two real levers (this toggle + the ETF-config
-              link further down) get a visually distinct "control" treatment
-              and top billing — see AttentionStripSection's doc comment and
-              CLAUDE.md's MACRO_REGIME_GATE_ENABLED section for why this one
-              in particular belongs above the fold. */}
-          <div
-            id="macro-gate"
-            className="card card-pad"
-            data-testid="macro-gate-control-card"
-            style={{ borderLeft: `3px solid ${theme.accent}`, marginBottom: "var(--s-4)" }}
-          >
-            <div
-              style={{
-                fontSize: "var(--t-footnote)",
-                color: theme.accent,
-                marginBottom: "var(--s-1)",
-                fontWeight: 700,
-                textTransform: "uppercase",
-                letterSpacing: "0.04em",
+          <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} id="macro-gate">
+            <SectionHeading title="Control · Macro regime gate" />
+            <RegimeBadgeRow regime={data.regime} onChanged={reload} />
+          </section>
+
+          {/* Portfolio risk + equity stay genuinely draggable/resizable
+              DynamicGrid tiles -- the one part of the redesign worth keeping,
+              since these two are the sections an operator plausibly wants to
+              rearrange or resize relative to each other. */}
+          <div style={{ marginBottom: "var(--s-4)" }}>
+            <DynamicGrid
+              layoutKey="observability"
+              defaultLayouts={{
+                lg: [
+                  { i: "portfolioRisk", x: 0, y: 0, w: 6, h: 6, minW: 4, minH: 4 },
+                  { i: "equity", x: 6, y: 0, w: 6, h: 6, minW: 4, minH: 4 },
+                ],
               }}
             >
-              ⚙ Control · Macro regime gate
-            </div>
-            <RegimeBadgeRow regime={data.regime} onChanged={reload} />
+              <div key="portfolioRisk">
+                <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+                  <div className="drag-handle" style={{ cursor: "grab" }}>
+                    <SectionHeading id="portfolio-risk" title="Portfolio risk" sub="Over the full account equity history" />
+                  </div>
+                  <div style={{ padding: "0 var(--s-3) var(--s-3)", flex: 1, overflow: "auto" }}>
+                    <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
+                      <Tile label="Sharpe" value={fmtNum(data.portfolio_risk.sharpe_ratio, 2)} />
+                      <Tile label="Calmar" value={fmtNum(data.portfolio_risk.calmar_ratio, 2)} />
+                      <Tile
+                        label="Max drawdown"
+                        value={fmtPct(data.portfolio_risk.max_drawdown, 1, { fromFraction: true })}
+                        tone={
+                          data.portfolio_risk.max_drawdown != null && data.portfolio_risk.max_drawdown < 0
+                            ? "neg"
+                            : undefined
+                        }
+                      />
+                      <Tile
+                        label="Max DD duration"
+                        value={
+                          data.portfolio_risk.max_drawdown_duration_days == null
+                            ? "—"
+                            : `${fmtNum(data.portfolio_risk.max_drawdown_duration_days, 0)}d`
+                        }
+                      />
+                      <Tile label="CAGR" value={fmtPct(data.portfolio_risk.cagr, 1, { fromFraction: true })} />
+                      <Tile
+                        label="Portfolio heat"
+                        value={
+                          data.portfolio_heat.heat_pct == null
+                            ? "—"
+                            : `${fmtPct(data.portfolio_heat.heat_pct, 1, { fromFraction: true })} / ${
+                                data.portfolio_heat.max_portfolio_heat == null
+                                  ? "—"
+                                  : fmtPct(data.portfolio_heat.max_portfolio_heat, 0, { fromFraction: true })
+                              }`
+                        }
+                        tone={data.portfolio_heat.over_limit ? "neg" : undefined}
+                      />
+                    </div>
+                    {data.portfolio_risk.reason && (
+                      <p style={{ color: "var(--text-muted)", fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
+                        {data.portfolio_risk.reason}
+                      </p>
+                    )}
+                    {data.portfolio_heat.reason && (
+                      <p style={{ color: "var(--text-muted)", fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
+                        Portfolio heat: {data.portfolio_heat.reason}
+                      </p>
+                    )}
+                  </div>
+                </section>
+              </div>
+
+              <div key="equity">
+                <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+                  <div className="drag-handle" style={{ cursor: "grab" }}>
+                    <SectionHeading title="Equity & drawdown" />
+                  </div>
+                  <div style={{ padding: "0 var(--s-3) var(--s-3)", flex: 1, overflow: "auto" }}>
+                    <div style={{ marginBottom: "var(--s-2-5)" }}>
+                      <RangeToggle value={range} onChange={setRange} />
+                    </div>
+                    {data.equity_curve.points.length === 0 ? (
+                      <div className="empty" style={{ padding: "var(--s-5)" }}>
+                        {data.equity_curve.reason ?? "No account equity history yet."}
+                      </div>
+                    ) : (
+                      <>
+                        <PerfLine
+                          data={data.equity_curve.points.map((p) => ({ date: p.date, value: p.equity }))}
+                        />
+                        <DrawdownArea data={data.equity_curve.points} />
+                      </>
+                    )}
+                  </div>
+                </section>
+              </div>
+            </DynamicGrid>
           </div>
 
-          {/* 1. Portfolio risk metrics */}
-          <SectionHeading id="portfolio-risk" title="Portfolio risk" sub="Over the full account equity history" />
-          <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
-            <Tile label="Sharpe" value={fmtNum(data.portfolio_risk.sharpe_ratio, 2)} />
-            <Tile label="Calmar" value={fmtNum(data.portfolio_risk.calmar_ratio, 2)} />
-            <Tile
-              label="Max drawdown"
-              value={fmtPct(data.portfolio_risk.max_drawdown, 1, { fromFraction: true })}
-              tone={
-                data.portfolio_risk.max_drawdown != null && data.portfolio_risk.max_drawdown < 0
-                  ? "neg"
-                  : undefined
-              }
-            />
-            <Tile
-              label="Max DD duration"
-              value={
-                data.portfolio_risk.max_drawdown_duration_days == null
-                  ? "—"
-                  : `${fmtNum(data.portfolio_risk.max_drawdown_duration_days, 0)}d`
-              }
-            />
-            <Tile label="CAGR" value={fmtPct(data.portfolio_risk.cagr, 1, { fromFraction: true })} />
-            <Tile
-              label="Portfolio heat"
-              value={
-                data.portfolio_heat.heat_pct == null
-                  ? "—"
-                  : `${fmtPct(data.portfolio_heat.heat_pct, 1, { fromFraction: true })} / ${
-                      data.portfolio_heat.max_portfolio_heat == null
-                        ? "—"
-                        : fmtPct(data.portfolio_heat.max_portfolio_heat, 0, { fromFraction: true })
-                    }`
-              }
-              tone={data.portfolio_heat.over_limit ? "neg" : undefined}
-            />
-          </div>
-          {data.portfolio_risk.reason && (
-            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
-              {data.portfolio_risk.reason}
-            </p>
-          )}
-          {data.portfolio_heat.reason && (
-            <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
-              Portfolio heat: {data.portfolio_heat.reason}
-            </p>
-          )}
-
-          {/* 2. Equity + drawdown (regime overlay moved into the "Control ·
-              Macro regime gate" card above, next to the toggle it actually
-              informs) */}
-          <SectionHeading title="Equity &amp; drawdown" />
-          <div style={{ marginBottom: "var(--s-2-5)" }}>
-            <RangeToggle value={range} onChange={setRange} />
-          </div>
-          {data.equity_curve.points.length === 0 ? (
-            <div className="empty" style={{ padding: "var(--s-5)" }}>
-              {data.equity_curve.reason ?? "No account equity history yet."}
-            </div>
-          ) : (
-            <>
-              <PerfLine
-                data={data.equity_curve.points.map((p) => ({ date: p.date, value: p.equity }))}
-              />
-              <DrawdownArea data={data.equity_curve.points} />
-            </>
-          )}
-
-          {/* Everything below is detail, not "does anything need a look" —
+          {/* Everything below is detail, not "does anything need a look" --
               AttentionStripSection above already answers that. Collapsed by
-              default so the always-visible page is four things (attention,
-              the macro-gate control, portfolio risk, equity & drawdown)
-              instead of the previous eleven-plus-section, always-expanded
-              scroll. A native <details> (this codebase's own established
-              collapsible idiom — see components/ui.tsx's "More info" hints)
-              rather than a bespoke component: keyboard/screen-reader support
-              for free, no extra open/close state to wire up. */}
+              default and kept entirely OUTSIDE the DynamicGrid (not a grid
+              item at all) -- matching this screen's pre-DynamicGrid
+              structure. A native <details> (this codebase's own established
+              collapsible idiom) rather than a bespoke component or a grid
+              tile: keyboard/screen-reader support for free, and dragging or
+              resizing an accordion of eleven-plus sections adds no value
+              over just collapsing it. */}
           <details className="card" style={{ marginTop: "var(--s-4)" }} data-testid="background-telemetry">
             <summary
               style={{
@@ -1279,127 +1288,71 @@ export function Observability() {
               Background telemetry — forecast detail, circuit breakers, sizing &amp; ETF risk, system health, and logs
             </summary>
             <div style={{ padding: "0 var(--s-4) var(--s-4)" }}>
-          {/* 3. Forecast skill (portfolio-wide) */}
-          <SectionHeading
-            title="Forecast skill"
-            sub="Portfolio-wide reliability and inverse-RMSE model weights"
-          />
-          <div style={{ marginBottom: "var(--s-2-5)" }}>
-            <HorizonToggle value={horizon} onChange={setHorizon} />
-          </div>
-          <ForecastSkillSection skill={data.forecast_skill} />
+              <SectionHeading title="Forecast skill" sub="Portfolio-wide reliability and weights" />
+              <div style={{ marginBottom: "var(--s-2-5)" }}>
+                <HorizonToggle value={horizon} onChange={setHorizon} />
+              </div>
+              <ForecastSkillSection skill={data.forecast_skill} />
 
-          {/* Per-symbol forecast skill — the granular breakdown the
-              portfolio-wide section above doesn't carry. */}
-          <SectionHeading
-            title="Forecast skill by symbol"
-            sub="Pending/completed forecasts and the leading model per symbol, at the horizon above"
-          />
-          <ForecastSkillBySymbolSection bySymbol={data.forecast_skill_by_symbol} />
+              <SectionHeading title="Forecast skill by symbol" sub="Leading model per symbol" />
+              <ForecastSkillBySymbolSection bySymbol={data.forecast_skill_by_symbol} />
 
-          {/* 4. Circuit breakers — merged kill-switch + risk-gate-block
-              severity dashboard: deduped within a rolling window, classified
-              CRITICAL/WARNING, with a KPI strip up top. */}
-          <SectionHeading
-            id="circuit-breakers"
-            title="Circuit breakers"
-            sub={`Deduped trips in the last ${data.circuit_breakers.window_hours}h — kill switch + risk-gate blocks, by severity`}
-            helpKey="circuit breaker"
-            thresholds={thresholds}
-          />
-          <CircuitBreakerSection breakers={data.circuit_breakers} />
+              <SectionHeading id="circuit-breakers" title="Circuit breakers" sub="Kill switch + risk-gate blocks" helpKey="circuit breaker" thresholds={thresholds} />
+              <CircuitBreakerSection breakers={data.circuit_breakers} />
 
-          {/* 5. Risk gate block log (raw, undeduped JSONL tail) */}
-          <SectionHeading
-            id="risk-gate-blocks"
-            title="Risk gate block log"
-            sub={`Last ${data.risk_gate_blocks.count} blocked order(s), raw log`}
-          />
-          {data.risk_gate_blocks.entries.length === 0 ? (
-            <div className="empty" style={{ padding: "var(--s-5)" }}>
-              {data.risk_gate_blocks.reason ?? "No blocked orders in the log."}
-            </div>
-          ) : (
-            <div style={{ maxHeight: 340, overflowY: "auto" }}>
-              {data.risk_gate_blocks.entries.map((e, i) => (
-                <BlockLogRow key={`${e.ts ?? i}-${i}`} entry={e} />
-              ))}
-            </div>
-          )}
+              <SectionHeading id="risk-gate-blocks" title="Risk gate block log" sub="Blocked orders" />
+              {data.risk_gate_blocks.entries.length === 0 ? (
+                <div className="empty" style={{ padding: "var(--s-5)" }}>
+                  {data.risk_gate_blocks.reason ?? "No blocked orders in the log."}
+                </div>
+              ) : (
+                <div>
+                  {data.risk_gate_blocks.entries.map((e, i) => (
+                    <BlockLogRow key={`${e.ts ?? i}-${i}`} entry={e} />
+                  ))}
+                </div>
+              )}
 
-          {/* 6. System telemetry — host + current-process CPU/memory/disk.
-              Point-in-time only, re-sampled on every load (no history). */}
-          <SectionHeading
-            title="System telemetry"
-            sub="Host and process resource usage — reload the screen to re-sample"
-          />
-          <SystemTelemetrySection telemetry={data.system_telemetry} />
+              <SectionHeading title="System telemetry" sub="Host & process resource usage" />
+              <SystemTelemetrySection telemetry={data.system_telemetry} />
 
-          {/* Data latency heatmap — per-symbol quote fetch-to-ingestion
-              latency. In-process only (see LatencyHeatmapSection's doc
-              comment); off by default (MARKET_DATA_LATENCY_TRACKING_ENABLED). */}
-          <SectionHeading
-            title="Data latency"
-            sub="Per-symbol quote fetch-to-ingestion latency, since this process last started"
-          />
-          <LatencyHeatmapSection latency={data.latency_heatmap} />
+              <SectionHeading title="Data latency" sub="Fetch-to-ingestion latency" />
+              <LatencyHeatmapSection latency={data.latency_heatmap} />
 
-          {/* Sizing cap-event audit trail — durable cross-cycle guardrail
-              history from sizing/cap_audit_store.py. */}
-          <SectionHeading
-            id="sizing-cap-audit"
-            title="Sizing cap-event audit trail"
-            sub="Durable position-sizing guardrail events, newest first"
-            helpKey="sizing cap"
-            thresholds={thresholds}
-          />
-          <SizingCapAuditSection audit={data.sizing_cap_audit} />
+              <SectionHeading id="sizing-cap-audit" title="Sizing cap-event audit trail" helpKey="sizing cap" thresholds={thresholds} />
+              <SizingCapAuditSection audit={data.sizing_cap_audit} />
 
-          {/* ETF volatility transmission — per-symbol diagnostic view. */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: "var(--s-2)" }}>
-            <SectionHeading
-              title="ETF volatility transmission"
-              sub="Ben-David, Franzoni &amp; Moussawi (2018) — non-diversifiable variance from heavy ETF wrapping"
-              helpKey="etf transmission"
-              thresholds={thresholds}
-            />
-            <Button
-              variant="primary"
-              onClick={() => nav("/settings/etf-transmission")}
-              style={{ marginBottom: "var(--s-2-5)", fontSize: "var(--t-caption)" }}
-            >
-              ⚙ Configure ETF transmission →
-            </Button>
-          </div>
-          <EtfTransmissionSection etf={data.etf_transmission} />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: "var(--s-2)" }}>
+                <SectionHeading title="ETF volatility transmission" helpKey="etf transmission" thresholds={thresholds} />
+                <Button
+                  variant="primary"
+                  onClick={() => nav("/settings/etf-transmission")}
+                  style={{ marginBottom: "var(--s-2-5)", fontSize: "var(--t-caption)" }}
+                >
+                  ⚙ Configure
+                </Button>
+              </div>
+              <EtfTransmissionSection etf={data.etf_transmission} />
 
-          {/* Heartbeat age — current sample only, no fabricated trend. */}
-          <SectionHeading id="heartbeat" title="Heartbeat" sub="Orchestrator liveness — current sample only" />
-          <HeartbeatSection heartbeat={data.heartbeat} />
+              <SectionHeading id="heartbeat" title="Heartbeat" sub="Orchestrator liveness" />
+              <HeartbeatSection heartbeat={data.heartbeat} />
 
-          {/* Strategy P&L — realized P&L grouped by strategy. */}
-          <SectionHeading title="Strategy P&amp;L" sub="Realized P&amp;L by strategy, from closed trades" />
-          <StrategyPnlSection pnl={data.strategy_pnl} />
+              <SectionHeading title="Strategy P&L" />
+              <StrategyPnlSection pnl={data.strategy_pnl} />
 
-          {/* 7. Log aggregation — bounded, parsed tail of logs/investyo.log.
-              Its own fetch (GET /observability/logs), independent of the
-              composite above — see LogAggregationSection's doc comment. */}
-          <SectionHeading
-            title="Logs"
-            sub="Tail of logs/investyo.log — filter by level and free text below"
-          />
-          {logsLoading && <Loading lines={2} />}
-          {!logsLoading && logsError && (
-            <ErrorState message={logsError} status={logsStatus} onRetry={logsReload} />
-          )}
-          {!logsLoading && !logsError && logsData && <LogAggregationSection logs={logsData} />}
+              <SectionHeading title="Logs" sub="investyo.log tail" />
+              {logsLoading && <Loading lines={2} />}
+              {!logsLoading && logsError && (
+                <ErrorState message={logsError} status={logsStatus} onRetry={logsReload} />
+              )}
+              {!logsLoading && !logsError && logsData && <LogAggregationSection logs={logsData} />}
 
-          <div style={{ marginTop: "var(--s-8)", marginBottom: "var(--s-4)" }}>
-            <MacroSentimentDashboard />
-          </div>
+              <div style={{ marginTop: "var(--s-8)", marginBottom: "var(--s-4)" }}>
+                <MacroSentimentDashboard />
+              </div>
             </div>
           </details>
-        </>
+        </div>
       )}
     </div>
   );

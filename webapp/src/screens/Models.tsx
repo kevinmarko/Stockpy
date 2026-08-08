@@ -7,6 +7,7 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useTrainingStatus } from "../hooks/useTrainingStatus";
 import { Button, DeployableBadge, ErrorState, Loading, MetricBadge, InfoTip, Notice, Select } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
@@ -88,8 +89,8 @@ function ModelCard({
 }) {
   const canRetrain = m.role === "cross_sectional_ranker" || m.role === "meta_labeler";
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-3)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
+    <section className="card card-pad" style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", padding: 0 }}>
+      <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)", padding: "var(--s-3)", borderBottom: "1px solid var(--border)", cursor: "grab" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", wordBreak: "break-word" }}>{m.name}</div>
           {m.role && (
@@ -98,6 +99,7 @@ function ModelCard({
         </div>
         <DeployableBadge deployable={m.deployable} />
       </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
         <MetricBadge
           label="DSR"
@@ -156,6 +158,7 @@ function ModelCard({
           )}
         </div>
       )}
+    </div>
     </section>
   );
 }
@@ -333,134 +336,155 @@ export function Models() {
   }, [data, filterKey, sortKey]);
 
   return (
-    <div className="screen">
-      <button
-        onClick={back}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          color: theme.textSecondary,
-          fontSize: "var(--t-callout)",
-          marginBottom: "var(--s-2)",
-        }}
-      >
-        ← Pilots
-      </button>
-      <h1 className="screen-title">The models</h1>
+    <div className="screen" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <div>
+          <button
+            onClick={back}
+            style={{ background: "none", padding: 0, cursor: "pointer", color: "var(--text-secondary)", fontSize: "var(--t-callout)", marginBottom: "var(--s-2)", border: "none" }}
+          >
+            ← Pilots
+          </button>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
+            <h1 className="screen-title" style={{ margin: 0 }}>The models</h1>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
+          <button type="button" className="btn btn-neutral" onClick={() => resetGridLayout("models")}>
+            Reset Layout
+          </button>
+        </div>
+      </div>
       <p className="screen-sub">
         The ML models behind the platform, with their honest CPCV validation
         metrics. A model that fails a gate is shown as not deployable.
       </p>
 
       <TabGuide tabKey="models" />
+      <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
+        {macroGatePaused && (
+          <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
+            <span>
+              New buy orders are paused by the macro regime gate — the macro
+              kill-switch is active.
+            </span>
+          </Notice>
+        )}
 
-      {macroGatePaused && (
-        <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
-          <span>
-            New buy orders are paused by the macro regime gate — the macro
-            kill-switch is active.
-          </span>
-        </Notice>
-      )}
+        {loading && <Loading lines={3} />}
+        {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+        {!loading && !error && data && (
+          data.length === 0 ? (
+            <div className="empty" style={{ padding: "var(--s-7-5)" }}>
+              No model registry available yet.
+            </div>
+          ) : (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <DynamicGrid
+                layoutKey="models"
+                defaultLayouts={{
+                  lg: [
+                  { i: "comparison-chart", x: 0, y: 0, w: 6, h: 10 },
+                  { i: "signal-weights", x: 6, y: 0, w: 6, h: 10 },
+                  { i: "filters", x: 0, y: 10, w: 12, h: 3, isResizable: false },
+                  ...(visibleModels.length === 0
+                    ? [{ i: "empty-models", x: 0, y: 13, w: 12, h: 4, isResizable: false }]
+                    : visibleModels.map((m, idx) => ({
+                        i: `model-${m.name}`,
+                        x: (idx % 3) * 4,
+                        y: 13 + Math.floor(idx / 3) * 6,
+                        w: 4,
+                        h: 6
+                      })))
+                ]}}
+              >
+                <div key="comparison-chart" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)", cursor: "grab" }}>Model Comparison</div>
+                  <div style={{ flex: 1, minHeight: 0, padding: "var(--s-3)" }}>
+                    <ModelComparisonChart />
+                  </div>
+                </div>
 
-      <div className="chart-grid-2">
-        <div style={{ height: 400 }}>
-          <ModelComparisonChart />
-        </div>
-        <div style={{ height: 400 }}>
-          <SignalDriverWeights />
-        </div>
+                <div key="signal-weights" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)", cursor: "grab" }}>Signal Drivers</div>
+                  <div style={{ flex: 1, minHeight: 0, padding: "var(--s-3)" }}>
+                    <SignalDriverWeights />
+                  </div>
+                </div>
+
+                <div key="filters" className="card card-pad drag-handle" style={{ display: "flex", alignItems: "center", gap: "var(--s-4)", cursor: "grab", height: "100%" }}>
+                  <div style={{ display: "flex", gap: "var(--s-2)", overflowX: "auto", scrollbarWidth: "none", flex: 1 }}>
+                    {FILTERS.map((f) => (
+                      <button
+                        key={f.value}
+                        className="chip"
+                        style={{
+                          background: filterKey === f.value ? "var(--accent)" : "transparent",
+                          color: filterKey === f.value ? "#fff" : "var(--text-primary)",
+                          border: `1px solid ${filterKey === f.value ? "var(--accent)" : "var(--border-strong)"}`,
+                          cursor: "pointer",
+                          fontSize: "var(--t-label)",
+                          padding: "var(--s-1-5) var(--s-3)",
+                          whiteSpace: "nowrap",
+                        }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onClick={() => setFilterKey(f.value)}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ width: 220, flexShrink: 0 }} onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+                    <Select
+                      label="Sort by"
+                      value={sortKey}
+                      onChange={(e) => setSortKey(e.target.value as SortKey)}
+                      options={SORT_OPTIONS}
+                      testId="models-sort-select"
+                    />
+                  </div>
+                </div>
+
+                {visibleModels.length === 0 ? (
+                  <div key="empty-models" className="empty" style={{ padding: "var(--s-7-5)" }}>
+                    No models match the selected filter.
+                  </div>
+                ) : (
+                  visibleModels.map((m) => (
+                    <div key={`model-${m.name}`}>
+                      <ModelCard
+                        m={m}
+                        thresholds={thresholds}
+                        isTraining={Boolean(submitting[m.name]) || trainingJobs[m.name] != null}
+                        retrainError={retrainErrors[m.name]}
+                        onRetrain={handleRetrain}
+                      />
+                    </div>
+                  ))
+                )}
+              </DynamicGrid>
+            </div>
+          )
+        )}
+        <p
+          style={{
+            color: "var(--text-muted)",
+            fontSize: "var(--t-footnote)",
+            marginTop: "var(--s-5)",
+            textAlign: "center",
+            lineHeight: 1.5,
+          }}
+        >
+          Deployable = CPCV-DSR &gt; {fmtNum(thresholds?.dsr_min, 2)} AND PBO &lt;{" "}
+          {fmtNum(thresholds?.pbo_max, 2)}. Metrics are never loosened to force a
+          green badge.
+          <br />
+          Needs retrain = trained more than{" "}
+          {thresholds?.retrain_window_days == null ? "—" : thresholds.retrain_window_days}{" "}
+          days ago.
+        </p>
       </div>
-
-      {loading && <Loading lines={3} />}
-      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
-      {!loading && !error && data && (
-        data.length === 0 ? (
-          <div className="empty" style={{ padding: "var(--s-7-5)" }}>
-            No model registry available yet.
-          </div>
-        ) : (
-          <>
-            <div
-              style={{
-                display: "flex",
-                gap: "var(--s-2)",
-                overflowX: "auto",
-                paddingBottom: "var(--s-2)",
-                marginTop: "var(--s-4)",
-                scrollbarWidth: "none",
-              }}
-            >
-              {FILTERS.map((f) => (
-                <button
-                  key={f.value}
-                  className="chip"
-                  style={{
-                    background: filterKey === f.value ? theme.accent : "transparent",
-                    color: filterKey === f.value ? "#fff" : theme.textPrimary,
-                    border: `1px solid ${filterKey === f.value ? theme.accent : theme.borderStrong}`,
-                    cursor: "pointer",
-                    fontSize: "var(--t-label)",
-                    padding: "var(--s-1-5) var(--s-3)",
-                    whiteSpace: "nowrap",
-                  }}
-                  onClick={() => setFilterKey(f.value)}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            <div style={{ marginTop: "var(--s-3)", maxWidth: 220 }}>
-              <Select
-                label="Sort by"
-                value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as SortKey)}
-                options={SORT_OPTIONS}
-                testId="models-sort-select"
-              />
-            </div>
-
-            {visibleModels.length === 0 ? (
-              <div className="empty" style={{ padding: "var(--s-7-5)" }}>
-                No models match the selected filter.
-              </div>
-            ) : (
-              <div style={{ marginTop: "var(--s-3)" }}>
-                {visibleModels.map((m) => (
-                  <ModelCard
-                    key={m.name}
-                    m={m}
-                    thresholds={thresholds}
-                    isTraining={Boolean(submitting[m.name]) || trainingJobs[m.name] != null}
-                    retrainError={retrainErrors[m.name]}
-                    onRetrain={handleRetrain}
-                  />
-                ))}
-              </div>
-            )}
-          </>
-        )
-      )}
-      <p
-        style={{
-          color: theme.textMuted,
-          fontSize: "var(--t-footnote)",
-          marginTop: "var(--s-5)",
-          textAlign: "center",
-          lineHeight: 1.5,
-        }}
-      >
-        Deployable = CPCV-DSR &gt; {fmtNum(thresholds?.dsr_min, 2)} AND PBO &lt;{" "}
-        {fmtNum(thresholds?.pbo_max, 2)}. Metrics are never loosened to force a
-        green badge.
-        <br />
-        Needs retrain = trained more than{" "}
-        {thresholds?.retrain_window_days == null ? "—" : thresholds.retrain_window_days}{" "}
-        days ago.
-      </p>
     </div>
   );
 }

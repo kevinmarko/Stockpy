@@ -46,7 +46,16 @@ export function ExecutionQueueSection() {
 
   return (
     <div style={{ marginTop: 40 }} className="card card-pad">
-      <div className="rail-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      {/*
+        "drag-handle" (a marker class with no CSS attached anywhere in this
+        codebase -- see components/DynamicGrid.tsx's `draggableHandle`
+        prop) is a no-op everywhere this component renders OUTSIDE a
+        DynamicGrid (e.g. Commands.tsx). It only takes effect for the
+        "execution" tile in AgenticTrading.tsx's DynamicGrid, which had no
+        drag-handle at all before this. The minimize button below is
+        guarded against the drag capture this class enables.
+      */}
+      <div className="rail-head drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <h2 style={{ margin: 0, fontSize: "var(--t-title)" }}>Robinhood execution queue</h2>
         </div>
@@ -55,6 +64,8 @@ export function ExecutionQueueSection() {
           className="btn btn-neutral"
           style={{ padding: "4px 10px", fontSize: "var(--t-caption)" }}
           title={isQueueMinimized ? "Expand Queue" : "Minimize Queue"}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
         >
           {isQueueMinimized ? "Expand ▲" : "Minimize ▼"}
         </button>

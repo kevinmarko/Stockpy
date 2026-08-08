@@ -41,41 +41,30 @@ export function TunableGroupCard({
     <section
       className="card"
       style={{
-        marginBottom: "var(--s-3)",
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
         overflow: "hidden",
         border: `1px solid ${rejectedCount > 0 ? theme.decline : dirtyCount > 0 ? theme.accent : theme.border}`,
+        margin: 0,
       }}
     >
-      <button
-        type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
+      <div
+        className="drag-handle"
         style={{
           width: "100%",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           padding: "var(--s-3) var(--s-4)",
-          background: isOpen ? theme.surface2 : "transparent",
-          border: "none",
-          cursor: "pointer",
+          background: theme.surface2,
+          borderBottom: `1px solid ${theme.border}`,
+          cursor: "grab",
           textAlign: "left",
           color: theme.textPrimary,
-          transition: "background 0.15s ease",
         }}
-        data-testid={`group-header-${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
-          <span
-            style={{
-              fontSize: 12,
-              color: theme.textMuted,
-              transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
-              transition: "transform 0.15s ease",
-              display: "inline-block",
-            }}
-          >
-            ▶
-          </span>
           <h2 style={{ margin: 0, fontSize: "var(--t-title)", fontWeight: 700 }}>
             {name}
           </h2>
@@ -120,10 +109,47 @@ export function TunableGroupCard({
             </span>
           )}
         </div>
-        <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>
+
+        {/*
+          This button lives inside the `.drag-handle` region that
+          react-grid-layout (see DynamicGrid.tsx's `draggableHandle`) wires up
+          for mousedown/touchstart-driven tile dragging. Without stopping
+          propagation here, a click on this toggle would also be interpreted
+          as the start of a tile drag -- the same guard used for interactive
+          controls placed inside a drag-handle elsewhere in this codebase,
+          see webapp/src/screens/PromptRegistry.tsx's SyncNowControl wrapper.
+        */}
+        <button
+          type="button"
+          onClick={() => setIsOpen((prev) => !prev)}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--s-1)",
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            color: theme.textMuted,
+            fontSize: "var(--t-caption)",
+            padding: "2px 6px",
+          }}
+          data-testid={`group-header-${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
+              transition: "transform 0.15s ease",
+              display: "inline-block",
+            }}
+          >
+            ▶
+          </span>
           {isOpen ? "Collapse" : "Expand"}
-        </span>
-      </button>
+        </button>
+      </div>
 
       <AnimatePresence initial={false}>
         {isOpen && (
@@ -133,7 +159,7 @@ export function TunableGroupCard({
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={contentTransition}
-            style={{ overflow: "hidden" }}
+            style={{ overflow: "auto", minHeight: 0, flex: 1 }}
           >
             <div style={{ padding: "var(--s-4)" }}>{children}</div>
           </motion.div>

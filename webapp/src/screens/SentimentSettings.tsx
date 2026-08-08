@@ -5,6 +5,7 @@ export function SentimentSettings() {
   return (
     <GenericSettingsEditor
       title="Sentiment & News Ingestion"
+      settingsKey="sentiment"
       subtitle="Configure ingestion pipelines, sources (StockTwits, Reddit, Google News, EDGAR, GDELT), FinBERT scoring, and attention proxies."
       backTo="/settings"
       fetchSettings={() => api.getSentimentSettings()}

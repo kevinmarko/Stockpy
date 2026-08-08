@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { TabGuide } from "../components/TabGuide";
 import { LogStream } from "../components/LogStream";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { DataTable, type Column } from "../components/DataTable";
 import { Button } from "../components/ui";
 import { api } from "../api/client";
@@ -131,7 +132,6 @@ const JOB_COLUMNS: Column<JobRecord>[] = [
 ];
 
 export function Console() {
-  const [activeTab, setActiveTab] = useState<"logs" | "resources">("logs");
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null);
   const [jobHistory, setJobHistory] = useState<JobRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -278,24 +278,43 @@ export function Console() {
     <div className="screen">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
         <div>
-          <h1 className="screen-title">One-Click Command Center</h1>
+          <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>One-Click Command Center</h1>
           <p className="screen-sub" style={{ marginBottom: 0 }}>
             Launch background execution tasks, monitor real-time logs, and watch host resource usage.
           </p>
         </div>
+        <div style={{ display: "flex", gap: "var(--s-2)" }}>
+          <Button variant="neutral" onClick={() => resetGridLayout("console")}>Reset Layout</Button>
         {activeJob && activeJob.cancellable && activeJob.is_running !== false && (
           <Button variant="neutral" onClick={handleCancel} data-testid="console-cancel-job">
             Cancel Active Job
           </Button>
         )}
+        </div>
       </div>
 
       <TabGuide tabKey="console" />
 
-      {/* Quick Launchers */}
-      <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
-        <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-3)" }}>Quick Launchers</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "var(--s-2-5)" }}>
+      <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-4)" }}>
+        <DynamicGrid
+          layoutKey="console"
+          defaultLayouts={{
+            lg: [
+              { i: "quickLaunchers", x: 0, y: 0, w: 12, h: 4, minW: 6, minH: 3 },
+              { i: "systemResources", x: 0, y: 4, w: 6, h: 6, minW: 4, minH: 4 },
+              { i: "logStream", x: 6, y: 4, w: 6, h: 6, minW: 4, minH: 4 },
+              { i: "jobHistory", x: 0, y: 10, w: 12, h: 4, minW: 6, minH: 3 },
+            ],
+          }}
+        >
+          <div key="quickLaunchers">
+            {/* Quick Launchers */}
+            <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Quick Launchers</h2>
+              </div>
+              <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "var(--s-2-5)" }}>
           {QUICK_ACTIONS.map((a) => (
             <button
               key={a.key}
@@ -363,47 +382,53 @@ export function Console() {
           </div>
         )}
 
-        {activeJob && (
-          <div style={{ marginTop: "var(--s-3)", padding: "var(--s-3)", background: "var(--surface-2)", borderRadius: "var(--r-sm)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
-            <div>
-              <span style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>Active Job: </span>
-              <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 600, color: "var(--accent)" }}>
-                {activeJob.job_id}
-              </span>{" "}
-              <span style={{ color: "var(--text-muted)" }}>({activeJob.job_type})</span>
-            </div>
-            <span className="badge badge-neutral">{activeJob.status}</span>
-          </div>
-        )}
-      </section>
-
-      {/* View Selector Tabs */}
-      <div style={{ display: "flex", gap: "var(--s-2)", margin: "var(--s-4) 0" }}>
-        <button className={activeTab === "logs" ? "btn btn-primary" : "btn"} onClick={() => setActiveTab("logs")}>
-          💻 Live Terminal Stream
-        </button>
-        <button className={activeTab === "resources" ? "btn btn-primary" : "btn"} onClick={() => setActiveTab("resources")}>
-          ⚙️ System Resources
-        </button>
-      </div>
-
-      {activeTab === "logs" ? (
-        <>
-          <LogStream jobId={activeJob?.job_id} isStreaming={Boolean(activeJob)} />
-
-          {jobHistory.length > 0 && (
-            <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
-              <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-3)" }}>Jobs launched this session</h2>
-              <DataTable data={jobHistory} columns={JOB_COLUMNS} groupByKey="job_type" />
+                {activeJob && (
+                  <div style={{ marginTop: "var(--s-3)", padding: "var(--s-3)", background: "var(--surface-2)", borderRadius: "var(--r-sm)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
+                    <div>
+                      <span style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>Active Job: </span>
+                      <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", fontWeight: 600, color: "var(--accent)" }}>
+                        {activeJob.job_id}
+                      </span>{" "}
+                      <span style={{ color: "var(--text-muted)" }}>({activeJob.job_type})</span>
+                    </div>
+                    <span className="badge badge-neutral">{activeJob.status}</span>
+                  </div>
+                )}
+              </div>
             </section>
-          )}
-        </>
-      ) : (
-        <section className="card card-pad">
-          <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-3)" }}>System Resources</h2>
-          <SystemResourcesPanel />
-        </section>
-      )}
+          </div>
+
+          <div key="systemResources">
+            <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>System Resources</h2>
+              </div>
+              <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+                <SystemResourcesPanel />
+              </div>
+            </section>
+          </div>
+
+          <div key="logStream">
+            <LogStream jobId={activeJob?.job_id} isStreaming={Boolean(activeJob)} />
+          </div>
+
+          <div key="jobHistory">
+            <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Jobs launched this session</h2>
+              </div>
+              <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+                {jobHistory.length > 0 ? (
+                  <DataTable data={jobHistory} columns={JOB_COLUMNS} groupByKey="job_type" />
+                ) : (
+                  <div className="empty" style={{ padding: "var(--s-4)" }}>No jobs launched in this session.</div>
+                )}
+              </div>
+            </section>
+          </div>
+        </DynamicGrid>
+      </div>
     </div>
   );
 }
