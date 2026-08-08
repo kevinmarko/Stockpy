@@ -78,6 +78,7 @@ class LGBMCrossSectionalRanker(Model):
         X: pd.DataFrame,
         y: pd.Series,
         t1: Optional[pd.Series] = None,
+        use_native_multiindex_cv: Optional[bool] = None,
     ) -> "LGBMCrossSectionalRanker":
         """Train on a panel of (date × ticker) observations.
 
@@ -91,8 +92,21 @@ class LGBMCrossSectionalRanker(Model):
             Must be integer-convertible for LambdaRank (we scale to [0, 99]).
         t1:
             Event end times aligned to X's index.  Passed to
-            CombinatorialPurgedCV.split() for purging.  If None, defaults to
-            index-position + 1.
+            CombinatorialPurgedCV.split() for purging.  If None, the flatten
+            path (see ``use_native_multiindex_cv``) synthesizes a default
+            "next row" t1 -- exactly as before this parameter existed. The
+            native path REQUIRES an explicit t1 and raises ValueError
+            otherwise (see ``use_native_multiindex_cv``).
+        use_native_multiindex_cv:
+            When True and X has a (date, ticker) MultiIndex, calls
+            ``CombinatorialPurgedCV.split()`` directly on the MultiIndex panel
+            (PR #648's native support) instead of flattening to a date-only
+            index first. When None (default), resolved from
+            ``settings.LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED`` (itself
+            default False) -- so every existing caller that never passes this
+            kwarg keeps today's exact flatten-path behavior unless the
+            settings flag is explicitly enabled. Ignored (no effect) when X
+            is not a MultiIndex.
         """
         try:
             import lightgbm as lgb
@@ -105,6 +119,15 @@ class LGBMCrossSectionalRanker(Model):
             logger.warning("LGBMCrossSectionalRanker.train: empty X or y — skipping.")
             return self
 
+        if use_native_multiindex_cv is None:
+            try:
+                from settings import settings as _settings
+                use_native_multiindex_cv = bool(
+                    getattr(_settings, "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED", False)
+                )
+            except Exception:
+                use_native_multiindex_cv = False
+
         common_idx = X.index.intersection(y.index)
         X = X.loc[common_idx].copy()
         y = y.loc[common_idx].copy()
@@ -113,14 +136,33 @@ class LGBMCrossSectionalRanker(Model):
         valid_mask = X.notna().any(axis=1) & y.notna()
         X = X.loc[valid_mask]
         y = y.loc[valid_mask]
+        if t1 is not None:
+            # Realign to the filtered X.index (also covers the common_idx
+            # intersection above in one step) -- NaN for any row t1 doesn't
+            # cover, surfaced honestly by the native path's own t1-required
+            # check below rather than silently dropped.
+            t1 = t1.reindex(X.index)
 
         if len(X) < max(10, self.purged_kfold_splits * 2):
             logger.warning("LGBMCrossSectionalRanker.train: too few samples (%d). Skipping.", len(X))
             return self
 
+        is_multi = isinstance(X.index, pd.MultiIndex)
+
+        if is_multi:
+            # CPCV's contiguous block partitioning assumes positional order
+            # matches chronological order (validation/purged_cv.py raises on
+            # this too, but sorting defensively here means the row-filtering
+            # above can never desync X/y/t1 from a caller-supplied panel that
+            # wasn't already sorted, e.g. one built via per-ticker pd.concat).
+            X = X.sort_index(level=0)
+            y = y.reindex(X.index)
+            if t1 is not None:
+                t1 = t1.reindex(X.index)
+
         # LambdaRank needs a group array: # tickers per date (query).
         # If MultiIndex, group by first level (date); else treat all as one group.
-        if isinstance(X.index, pd.MultiIndex):
+        if is_multi:
             groups = X.index.get_level_values(0).value_counts().sort_index().values
         else:
             groups = np.array([len(X)])
@@ -133,15 +175,39 @@ class LGBMCrossSectionalRanker(Model):
 
         self._feature_names = list(X.columns)
 
-        # For purged CV: flatten MultiIndex to a DatetimeIndex (CV splitter
-        # doesn't support MultiIndex natively).
-        if isinstance(X.index, pd.MultiIndex):
-            cv_index = X.index.get_level_values(0)
-            X_for_cv = X.set_axis(cv_index)
-            y_for_cv = y.set_axis(cv_index)
-        else:
+        if use_native_multiindex_cv and is_multi:
+            if t1 is None:
+                raise ValueError(
+                    "LGBMCrossSectionalRanker.train(): t1 is required when "
+                    "use_native_multiindex_cv=True and X has a (date, ticker) "
+                    "MultiIndex -- CombinatorialPurgedCV.split() cannot safely "
+                    "synthesize a default t1 across a MultiIndex (see "
+                    "validation/purged_cv.py, PR #648). Pass t1 explicitly, "
+                    "aligned to X.index, with plain Date-comparable scalar "
+                    "values (not MultiIndex tuples)."
+                )
+            # Native path: hand CombinatorialPurgedCV.split() the MultiIndex
+            # panel directly -- no flatten.
             X_for_cv = X
             y_for_cv = y
+            t1_for_cv = t1
+        else:
+            # Flatten path (default / legacy): CV splitter historically didn't
+            # support MultiIndex natively, so a (date, ticker) panel is
+            # relabeled to a date-only index first. Purely a relabeling for
+            # cv.split()'s own index reads -- row order/positions are
+            # untouched, so X_arr/y_arr below (built from the ORIGINAL X/y)
+            # stay correctly aligned with cv.split()'s positional train/test
+            # indices either way.
+            if is_multi:
+                cv_index = X.index.get_level_values(0)
+                X_for_cv = X.set_axis(cv_index)
+                y_for_cv = y.set_axis(cv_index)
+                t1_for_cv = t1.set_axis(cv_index) if t1 is not None else None
+            else:
+                X_for_cv = X
+                y_for_cv = y
+                t1_for_cv = t1
 
         # Purged k-fold CV to evaluate generalisation (single final model on all data)
         cv = CombinatorialPurgedCV(
@@ -154,7 +220,7 @@ class LGBMCrossSectionalRanker(Model):
         X_arr = X.fillna(0.0).values
         y_arr = y_int.values
 
-        for train_idx, test_idx, _ in cv.split(X_for_cv, y_for_cv, t1):
+        for train_idx, test_idx, _ in cv.split(X_for_cv, y_for_cv, t1_for_cv):
             if len(train_idx) < 5 or len(test_idx) < 1:
                 continue
             X_tr, X_te = X_arr[train_idx], X_arr[test_idx]

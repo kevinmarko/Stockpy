@@ -234,6 +234,9 @@ class TestHeldByPilots:
             # scores each of these positively for AAPL.
             "forecast-aligned", "news-catalyst", "regime-navigator",
             "relative-strength", "risk-adjusted",
+            # ml-cross-sectional-rank (lgbm_ranker) — the fixture's lgbm_scores
+            # entry for AAPL is positive.
+            "ml-cross-sectional-rank",
         }
         # deep-value (graham_value −3.0) and dip-buyer (holds nothing) excluded.
         assert "deep-value" not in self._ids("AAPL", snapshot)
@@ -248,6 +251,9 @@ class TestHeldByPilots:
             # Newly-covered single-module Pilots that score NVDA positively.
             "forecast-aligned", "news-catalyst", "regime-navigator",
             "relative-strength", "risk-adjusted",
+            # ml-cross-sectional-rank (lgbm_ranker) — the fixture's lgbm_scores
+            # entry for NVDA is positive.
+            "ml-cross-sectional-rank",
         }
         assert "dividend-income" not in ids
 
