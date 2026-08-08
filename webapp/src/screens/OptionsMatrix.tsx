@@ -156,7 +156,12 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
         cursor: "pointer",
       }}
     >
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "baseline", cursor: "grab" }}>
+      <div
+        className="drag-handle"
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
+        style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "baseline", cursor: "grab" }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <span style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>{d.Symbol}</span>
           {d.Stale === true && (
