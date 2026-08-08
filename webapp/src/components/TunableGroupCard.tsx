@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import type { TunableField } from "../api/types";
 import { theme } from "../theme";
 
@@ -14,11 +15,27 @@ interface TunableGroupCardProps {
 export function TunableGroupCard({
   name,
   fields,
+  defaultOpen = false,
   dirtyCount = 0,
   rejectedCount = 0,
   children,
 }: TunableGroupCardProps) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  // Hooks must run unconditionally on every render of this instance -- called
+  // ahead of the `fields.length === 0` early return below so the hook
+  // count/order never varies across renders.
+  const shouldReduceMotion = useReducedMotion();
+
   if (fields.length === 0) return null;
+
+  // Snappy by design: this is a UI density control the operator may toggle
+  // repeatedly while scanning a settings screen, not a slow reveal.
+  // Collapses to near-instant when the OS reports a reduced-motion
+  // preference (no local precedent for this elsewhere in webapp/src, so this
+  // follows framer-motion's own `useReducedMotion` recommendation directly).
+  const contentTransition = shouldReduceMotion
+    ? { duration: 0.01 }
+    : { duration: 0.2, ease: [0.4, 0, 0.2, 1] as const };
 
   return (
     <section
@@ -29,7 +46,7 @@ export function TunableGroupCard({
         height: "100%",
         overflow: "hidden",
         border: `1px solid ${rejectedCount > 0 ? theme.decline : dirtyCount > 0 ? theme.accent : theme.border}`,
-        margin: 0
+        margin: 0,
       }}
     >
       <div
@@ -46,7 +63,6 @@ export function TunableGroupCard({
           textAlign: "left",
           color: theme.textPrimary,
         }}
-        data-testid={`group-header-${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <h2 style={{ margin: 0, fontSize: "var(--t-title)", fontWeight: 700 }}>
@@ -93,11 +109,62 @@ export function TunableGroupCard({
             </span>
           )}
         </div>
+
+        {/*
+          This button lives inside the `.drag-handle` region that
+          react-grid-layout (see DynamicGrid.tsx's `draggableHandle`) wires up
+          for mousedown/touchstart-driven tile dragging. Without stopping
+          propagation here, a click on this toggle would also be interpreted
+          as the start of a tile drag -- the same guard used for interactive
+          controls placed inside a drag-handle elsewhere in this codebase,
+          see webapp/src/screens/PromptRegistry.tsx's SyncNowControl wrapper.
+        */}
+        <button
+          type="button"
+          onClick={() => setIsOpen((prev) => !prev)}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--s-1)",
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            color: theme.textMuted,
+            fontSize: "var(--t-caption)",
+            padding: "2px 6px",
+          }}
+          data-testid={`group-header-${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
+              transition: "transform 0.15s ease",
+              display: "inline-block",
+            }}
+          >
+            ▶
+          </span>
+          {isOpen ? "Collapse" : "Expand"}
+        </button>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "var(--s-4)" }}>
-        {children}
-      </div>
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            key="content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={contentTransition}
+            style={{ overflow: "auto", minHeight: 0, flex: 1 }}
+          >
+            <div style={{ padding: "var(--s-4)" }}>{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </section>
   );
 }

@@ -1,7 +1,15 @@
 /**
- * TunableGroupCard.test.tsx — the per-group wrapper every
+ * TunableGroupCard.test.tsx — the per-group collapsible wrapper every
  * settings screen (via GenericSettingsEditor) renders one of per tunable
- * group. Covers the rendering logic (the dirty/rejected badges, the fields.length===0 early return).
+ * group. Covers the open/close LOGIC only (defaultOpen, the header toggle,
+ * the dirty/rejected badges, the fields.length===0 early return) -- the
+ * framer-motion expand/collapse wrapper around the content is a purely
+ * visual addition and isn't itself asserted on here (jsdom doesn't run real
+ * animations), only that the content ends up present/absent as expected
+ * once the state settles. The toggle button (`group-header-<name>`) is
+ * distinct from the card's outer `.drag-handle` region used by DynamicGrid
+ * to drag the tile around the grid -- see TunableGroupCard.tsx's
+ * onMouseDown/onTouchStart stopPropagation guard on that button.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -20,15 +28,48 @@ function field(key: string): TunableField {
 }
 
 describe("TunableGroupCard", () => {
-  it("renders the content immediately", async () => {
+  it("renders closed by default (content absent) unless defaultOpen is true", async () => {
     render(
       <TunableGroupCard name="Sizing" fields={[field("KELLY_FRACTION")]}>
         <div>Field content</div>
       </TunableGroupCard>
     );
 
-    expect(screen.getByText("Field content")).toBeInTheDocument();
-    expect(screen.getByTestId("group-header-sizing")).toHaveTextContent("Sizing");
+    expect(screen.queryByText("Field content")).not.toBeInTheDocument();
+    expect(screen.getByTestId("group-header-sizing")).toHaveTextContent("Expand");
+  });
+
+  it("defaultOpen renders the content immediately", async () => {
+    render(
+      <TunableGroupCard name="Sizing" fields={[field("KELLY_FRACTION")]} defaultOpen>
+        <div>Field content</div>
+      </TunableGroupCard>
+    );
+
+    expect(await screen.findByText("Field content")).toBeInTheDocument();
+    expect(screen.getByTestId("group-header-sizing")).toHaveTextContent("Collapse");
+  });
+
+  it("clicking the toggle button toggles open/closed", async () => {
+    const user = userEvent.setup();
+    render(
+      <TunableGroupCard name="Sizing" fields={[field("KELLY_FRACTION")]}>
+        <div>Field content</div>
+      </TunableGroupCard>
+    );
+
+    const toggle = screen.getByTestId("group-header-sizing");
+    expect(screen.queryByText("Field content")).not.toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(await screen.findByText("Field content")).toBeInTheDocument();
+    expect(toggle).toHaveTextContent("Collapse");
+
+    await user.click(toggle);
+    await waitFor(() =>
+      expect(screen.queryByText("Field content")).not.toBeInTheDocument()
+    );
+    expect(toggle).toHaveTextContent("Expand");
   });
 
   it("renders the dirtyCount badge only when > 0", () => {
@@ -71,5 +112,36 @@ describe("TunableGroupCard", () => {
     );
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByText("Field content")).not.toBeInTheDocument();
+  });
+
+  it("reduced-motion preference does not change the open/close logic", async () => {
+    // matchMedia is stubbed globally in test-setup.ts to always report
+    // matches:false; override it here for this one test only, then restore,
+    // to prove useReducedMotion's branch doesn't affect toggle correctness.
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      const user = userEvent.setup();
+      render(
+        <TunableGroupCard name="Sizing" fields={[field("KELLY_FRACTION")]}>
+          <div>Field content</div>
+        </TunableGroupCard>
+      );
+
+      await user.click(screen.getByTestId("group-header-sizing"));
+      expect(await screen.findByText("Field content")).toBeInTheDocument();
+    } finally {
+      window.matchMedia = original;
+    }
   });
 });
