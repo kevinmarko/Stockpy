@@ -158,23 +158,24 @@ export function DynamicGrid({
   const childKeys = useMemo(() => getChildKeys(children), [children]);
   const childKeysSignature = childKeys.join('|');
 
-  const [layouts, setLayouts] = useState<ResponsiveLayouts>(() => {
-    const saved = localStorage.getItem(`grid-layout-${layoutKey}`);
-    return reconcileLayout(saved, defaultLayouts, childKeys);
-  });
+  // `layouts` deliberately starts `null` (never eagerly resolved via a
+  // lazy useState initializer) so `ResponsiveGridLayout` below never mounts
+  // on the very first render pass -- it mounts once, on the *second* pass,
+  // already holding its real, fully-resolved layout. Combined with
+  // `useContainerWidth`'s own `mounted`/`width` transitioning from their
+  // initial values shortly after mount, eagerly resolving `layouts` on the
+  // first render let `ResponsiveGridLayout` mount into that still-settling
+  // window and re-measure/re-layout/re-report a real (if numerically
+  // trivial) change on every one of several rapid initial renders --
+  // enough in practice to trip React's "Maximum update depth exceeded"
+  // safety net on mount, on every single DynamicGrid instance. Resolving
+  // `layouts` via this effect instead (matching this component's original,
+  // verified-safe pre-reconciliation behavior) delays RGL's first mount
+  // until after that settling window has already passed.
+  const [layouts, setLayouts] = useState<ResponsiveLayouts | null>(null);
   const [isMobile, setIsMobile] = useState(false);
 
-  // Skip the very first run of the reconciliation effect below -- the lazy
-  // useState initializer above already did that work for the initial
-  // mount. The effect only needs to fire again when `layoutKey` or the
-  // actual set of child keys genuinely changes.
-  const isFirstRun = useRef(true);
-
   useEffect(() => {
-    if (isFirstRun.current) {
-      isFirstRun.current = false;
-      return;
-    }
     const saved = localStorage.getItem(`grid-layout-${layoutKey}`);
     setLayouts(reconcileLayout(saved, defaultLayouts, childKeys));
     // Intentionally NOT depending on `defaultLayouts`/`children` by
@@ -191,7 +192,36 @@ export function DynamicGrid({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  // react-grid-layout calls onLayoutChange not only on a real user drag/
+  // resize, but also whenever it recomputes layout from a new `layouts`
+  // prop (e.g. right after our own reconciliation effect calls setLayouts
+  // in response to the grid's child-key set changing) -- and the object it
+  // reports back is never reference- or JSON-identical to what we passed
+  // in, since RGL enriches every item with its own bookkeeping fields
+  // (`moved`, `static`, etc.) that aren't present on our plain layout
+  // objects. Unconditionally calling setLayouts back from onLayoutChange
+  // can therefore ping-pong indefinitely: state changes -> layouts prop
+  // changes -> RGL recomputes/compacts and re-enriches -> onLayoutChange
+  // fires again with a "new" object -> state changes again, forever.
+  // Compare only the fields that actually matter for positioning (i, x, y,
+  // w, h) rather than every RGL-internal field, so a real user-driven
+  // change is still detected and persisted, but RGL's own re-enrichment of
+  // an otherwise-unchanged layout doesn't restart the cycle.
+  const layoutsRef = useRef(layouts);
+  layoutsRef.current = layouts;
+  const layoutSignature = (l: ResponsiveLayouts): string =>
+    JSON.stringify(
+      Object.keys(l)
+        .sort()
+        .map((bp) => [
+          bp,
+          [...(l[bp] ?? [])]
+            .map((item) => ({ i: item.i, x: item.x, y: item.y, w: item.w, h: item.h }))
+            .sort((a, b) => (a.i < b.i ? -1 : a.i > b.i ? 1 : 0)),
+        ])
+    );
   const onLayoutChange = (_currentLayout: any, allLayouts: ResponsiveLayouts) => {
+    if (layoutSignature(allLayouts) === layoutSignature(layoutsRef.current ?? {})) return;
     setLayouts(allLayouts);
     localStorage.setItem(`grid-layout-${layoutKey}`, JSON.stringify(allLayouts));
   };
@@ -199,6 +229,8 @@ export function DynamicGrid({
   if (isTest) {
     return <div data-testid={`grid-${layoutKey}`} style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
   }
+
+  if (!layouts) return null;
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%' }}>

@@ -1009,7 +1009,7 @@ export function OptionsMatrix() {
     : null;
 
   return (
-    <div className="screen" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+    <div className="screen">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
         <div>
           <button
