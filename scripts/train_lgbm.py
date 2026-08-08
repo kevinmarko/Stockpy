@@ -177,21 +177,53 @@ def compute_cpcv_metrics(panel: TrainingPanel) -> dict:
 
     Returns metrics as ``None`` (honest) when the panel is too small to yield
     any CPCV path.
+
+    ``settings.LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED`` (default ``False``)
+    gates a second, opt-in path (PR #648 / #650): instead of flattening the
+    panel to a date-only index before ``CombinatorialPurgedCV.split()`` --
+    which discards ``panel.t1`` (the real per-event forward-window end
+    timestamp ``ml/training_data.py`` already computed) in favour of the
+    splitter's own synthesized "next row" default -- the (date, ticker)
+    MultiIndex panel and its real ``t1`` are handed to the splitter directly,
+    and threaded into each fold's inner ``ranker.train(..., t1=...,
+    use_native_multiindex_cv=True)`` call too. Flag OFF reproduces today's
+    exact flatten-path behavior byte-for-byte (t1 stays discarded, exactly as
+    before this flag existed).
     """
     empty = {"dsr": None, "pbo": None, "mean_oos_sharpe": None, "mean_oos_max_dd": None}
     if panel.X.empty or panel.n_dates < 6:
         logger.warning("CPCV skipped: too few dates (%d) for path evaluation.", panel.n_dates)
         return empty
 
-    # Flatten to a date-indexed frame the CPCV splitter understands.
+    from settings import settings as _settings
+    use_native_multiindex_cv = bool(
+        getattr(_settings, "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED", False)
+    )
+
     X = panel.X.copy()
     y = panel.y.copy()
-    date_index = X.index.get_level_values(0)
-    ticker_index = X.index.get_level_values(1)
-    X_flat = X.set_axis(date_index)
-    y_flat = pd.Series(y.values, index=date_index)
-    # Keep ticker labels available for grouping inside strategy_fn.
-    X_flat = X_flat.assign(_ticker=ticker_index.values)
+
+    if use_native_multiindex_cv:
+        # Native path: hand CombinatorialPurgedCV.split() the (date, ticker)
+        # MultiIndex panel directly, with the real t1 threaded through --
+        # no flatten, no synthesized "next row" t1. CPCV's contiguous block
+        # partitioning requires the Date level sorted (validation/purged_cv.py
+        # raises ValueError otherwise).
+        X_for_cv = X.sort_index(level=0)
+        y_for_cv = y.reindex(X_for_cv.index)
+        t1_for_cv = panel.t1.reindex(X_for_cv.index)
+    else:
+        # Flatten path (default / legacy): relabel the (date, ticker)
+        # MultiIndex panel to a date-only index the CV splitter understands --
+        # exactly as before this flag existed. t1 is never threaded on this
+        # path; CombinatorialPurgedCV synthesizes its own default.
+        date_index = X.index.get_level_values(0)
+        ticker_index = X.index.get_level_values(1)
+        X_for_cv = X.set_axis(date_index)
+        y_for_cv = pd.Series(y.values, index=date_index)
+        # Keep ticker labels available for grouping inside strategy_fn.
+        X_for_cv = X_for_cv.assign(_ticker=ticker_index.values)
+        t1_for_cv = None
 
     # Multiple candidate hyper-parameter configs per fold so DSR/PBO actually
     # measure SELECTION BIAS (with a single candidate, n_trials=1 and DSR
@@ -209,15 +241,29 @@ def compute_cpcv_metrics(panel: TrainingPanel) -> dict:
             if not feat_cols or len(X_tr) < 10 or len(X_te) < 4:
                 return []
 
-            X_tr_mi = _restore_multiindex(X_tr, feat_cols)
-            y_tr_al = pd.Series(y_tr.values, index=X_tr_mi.index)
+            if use_native_multiindex_cv:
+                # X_tr/X_te are already (date, ticker)-MultiIndex slices of
+                # X_for_cv (run_cpcv_evaluation's own X.iloc[...] preserves
+                # whatever index X_for_cv carries) -- no rebuild needed. Slice
+                # the closed-over fold t1 down to this fold's training rows by
+                # index label (unique per (date, ticker) pair).
+                X_tr_mi = X_tr[feat_cols]
+                y_tr_al = y_tr
+                t1_tr = t1_for_cv.reindex(X_tr_mi.index)
+            else:
+                X_tr_mi = _restore_multiindex(X_tr, feat_cols)
+                y_tr_al = pd.Series(y_tr.values, index=X_tr_mi.index)
+                t1_tr = None
 
             trials = []
             for params in _CANDIDATE_PARAMS:
                 ranker = LGBMCrossSectionalRanker(
                     params=params, purged_kfold_splits=3, embargo_pct=0.0,
                 )
-                ranker.train(X_tr_mi, y_tr_al)
+                if use_native_multiindex_cv:
+                    ranker.train(X_tr_mi, y_tr_al, t1=t1_tr, use_native_multiindex_cv=True)
+                else:
+                    ranker.train(X_tr_mi, y_tr_al)
                 if ranker._model is None:
                     continue
                 train_ret = _long_short_returns(ranker, X_tr, y_tr, feat_cols)
@@ -236,9 +282,9 @@ def compute_cpcv_metrics(panel: TrainingPanel) -> dict:
 
     result = run_cpcv_evaluation(
         strategy_fn=strategy_fn,
-        X=X_flat,
-        y=y_flat,
-        t1=None,
+        X=X_for_cv,
+        y=y_for_cv,
+        t1=t1_for_cv,
         n_splits=6,
         n_test_splits=2,
     )
@@ -277,9 +323,23 @@ def _long_short_returns(
     ``y`` is the forward-return RANK, so the realized long-short spread of a
     ranker that agrees with the true ranking is positive.  Grouped by date to
     yield a return time series for Sharpe computation.
+
+    ``X_slice`` is normally a flat, repeated-date index (one row per
+    (date, ticker), values aligned 1:1 to a features frame) -- the shape both
+    the flatten path above and ``scripts/refresh_validations.py``'s
+    ``_build_lgbm_ranker_adapter`` explicitly reproduce before calling this
+    helper. Under the native-MultiIndex-CV path, ``X_slice`` is instead still
+    a genuine (date, ticker) MultiIndex slice -- grouping on the raw index in
+    that case would group by (date, ticker) tuples (one row per group) rather
+    than by date, silently degenerating every group to size 1 and skipping
+    every date. Extract the "date" level explicitly whenever a MultiIndex is
+    still present; the flat-index path is unaffected.
     """
     df = X_slice[feat_cols].copy()
-    df["_date"] = X_slice.index
+    if isinstance(X_slice.index, pd.MultiIndex):
+        df["_date"] = X_slice.index.get_level_values("date")
+    else:
+        df["_date"] = X_slice.index
     df["_y"] = np.asarray(y_slice.values, dtype=float)
     rets = []
     idx = []
