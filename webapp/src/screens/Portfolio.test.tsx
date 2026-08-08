@@ -76,7 +76,13 @@ describe("Portfolio screen (real mock API)", () => {
   it("renders the realized-performance section from broker order history", async () => {
     renderPortfolio();
     expect(await screen.findByText("Realized performance")).toBeInTheDocument();
-    expect(screen.getByText("Win rate")).toBeInTheDocument();
+    // "Realized performance" is a static heading, always present -- but the
+    // Win rate/Profit factor tiles only render once the async getRealized()
+    // fetch resolves (realized.loading -> false), a strictly later point in
+    // time. A synchronous getByText() right after the awaited heading races
+    // that still-pending promise -- reliable on a fast local machine, flaky
+    // under CI's slower/contended runners. findByText waits for it properly.
+    expect(await screen.findByText("Win rate")).toBeInTheDocument();
     expect(screen.getByText("Profit factor")).toBeInTheDocument();
   });
 
