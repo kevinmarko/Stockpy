@@ -979,6 +979,26 @@ class TestBuildSectorQualityRankAdapter:
         assert isinstance(turnover, float) and turnover > 0
         assert universe == rv.SNEQR_UNIVERSE
 
+    def test_ticker_missing_from_sector_map_degrades_to_nan_not_string_literal(self) -> None:
+        """A ticker absent from _load_ticker_sectors()'s mapping must produce
+        a genuine null in X["sector"] -- never the literal 4-char string
+        "nan" a blanket `.astype(str)` would fabricate (CONSTRAINT #4). Not
+        reachable with today's hand-verified SNEQR_UNIVERSE (every member has
+        a real sector), so this is exercised directly against a stubbed
+        sector map with one ticker deliberately omitted."""
+        import scripts.refresh_validations as rv
+
+        base_sectors = rv._load_ticker_sectors()
+        stubbed = {t: s for t, s in base_sectors.items() if t != "IBM"}
+
+        with patch.object(rv, "_fetch_sneqr_quality_facts", side_effect=_fake_sneqr_quality_facts), \
+             patch.object(rv, "_load_ticker_sectors", return_value=stubbed):
+            X, y, _ = rv._build_sector_quality_rank_adapter(self._closes(), {})
+
+        ibm_sector = X.xs("IBM", level="Ticker")["sector"]
+        assert not ibm_sector.empty
+        assert ibm_sector.isna().all()
+
 
 # ---------------------------------------------------------------------------
 # TestMakeStrategyFn

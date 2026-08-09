@@ -2545,7 +2545,12 @@ def _build_sector_quality_rank_adapter(
     })
     X.index = X.index.set_names(["Date", "Ticker"])
     X = X.sort_index(level=0)
-    X["sector"] = X.index.get_level_values("Ticker").map(sector_of).astype(str)
+    # Deliberately NOT `.astype(str)` here: a ticker missing from sector_of
+    # (not the case for today's hand-verified SNEQR_UNIVERSE, but a real risk
+    # for a future universe expansion) maps to a genuine NaN via .map() --
+    # forcing that to str would silently rewrite it as the literal 4-char
+    # string "nan" instead of an honestly-missing value (CONSTRAINT #4).
+    X["sector"] = X.index.get_level_values("Ticker").map(sector_of)
 
     y = X["forward_return"].copy()
     y.name = None
