@@ -34,8 +34,8 @@ describe("Adversarial Robustness and Edge Case Suite", () => {
 
   // --- 1. Dashboard Widget Layout Failures ---
 
-  it("handles completely null layout array in localStorage by falling back to DEFAULT_LAYOUT", async () => {
-    localStorage.setItem("dashboard_layout", JSON.stringify([null]));
+  it("does not crash when layout is non-JSON or corrupted", async () => {
+    localStorage.setItem("grid-layout-dashboard", JSON.stringify([null]));
     
     // If it throws an uncaught error, this test fails.
     renderDashboard();
@@ -46,7 +46,7 @@ describe("Adversarial Robustness and Edge Case Suite", () => {
 
   it("handles layout array with invalid object structures (missing size and title) gracefully", async () => {
     const corruptLayout = [{ id: "portfolio-summary" }];
-    localStorage.setItem("dashboard_layout", JSON.stringify(corruptLayout));
+    localStorage.setItem("grid-layout-dashboard", JSON.stringify(corruptLayout));
 
     renderDashboard();
     expect(await screen.findByTestId("dashboard-title")).toBeInTheDocument();
@@ -60,7 +60,7 @@ describe("Adversarial Robustness and Edge Case Suite", () => {
       { id: "portfolio-summary", title: "Portfolio 1", size: "M" as const },
       { id: "portfolio-summary", title: "Portfolio 2", size: "M" as const }
     ];
-    localStorage.setItem("dashboard_layout", JSON.stringify(dupLayout));
+    localStorage.setItem("grid-layout-dashboard", JSON.stringify(dupLayout));
 
     renderDashboard();
     expect(await screen.findByTestId("dashboard-title")).toBeInTheDocument();

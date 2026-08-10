@@ -69,9 +69,14 @@
 
 set -o pipefail
 
-# Repo root = parent of this scripts/ dir.
+# Repo root = parent of this scripts/ dir. Exported (not just a local shell
+# var) because scripts/Caddyfile's `root * {$REPO_ROOT}/webapp/dist` resolves
+# this via Caddy's own environment-variable substitution at config-load time
+# -- it needs to see this in caddy's process environment, not just this
+# script's.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export REPO_ROOT
 cd "$REPO_ROOT" || exit 1
 
 PYTHON="$REPO_ROOT/.venv/bin/python3"

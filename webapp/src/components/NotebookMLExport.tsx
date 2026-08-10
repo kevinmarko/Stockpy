@@ -41,7 +41,7 @@ export function NotebookMLExport({
 
     let layoutMetadata: unknown = null;
     try {
-      const savedLayout = localStorage.getItem("dashboard_layout");
+      const savedLayout = localStorage.getItem("grid-layout-dashboard");
       if (savedLayout) layoutMetadata = JSON.parse(savedLayout);
     } catch {
       /* corrupt/absent layout — omit rather than fabricate */

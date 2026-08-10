@@ -70,6 +70,33 @@ const AGENTIC_LAYOUTS: ResponsiveLayouts = {
     { i: "decision", x: 0, y: 54, w: 10, h: 12 },
     { i: "controls", x: 0, y: 66, w: 10, h: 12 },
   ],
+  sm: [
+    { i: "agent_status", x: 0, y: 0, w: 6, h: 8 },
+    { i: "discovery", x: 0, y: 8, w: 6, h: 12 },
+    { i: "execution", x: 0, y: 20, w: 6, h: 10 },
+    { i: "advanced_visuals", x: 0, y: 30, w: 6, h: 14 },
+    { i: "rlhf", x: 0, y: 44, w: 6, h: 10 },
+    { i: "decision", x: 0, y: 54, w: 6, h: 12 },
+    { i: "controls", x: 0, y: 66, w: 6, h: 12 },
+  ],
+  xs: [
+    { i: "agent_status", x: 0, y: 0, w: 4, h: 8 },
+    { i: "discovery", x: 0, y: 8, w: 4, h: 12 },
+    { i: "execution", x: 0, y: 20, w: 4, h: 10 },
+    { i: "advanced_visuals", x: 0, y: 30, w: 4, h: 14 },
+    { i: "rlhf", x: 0, y: 44, w: 4, h: 10 },
+    { i: "decision", x: 0, y: 54, w: 4, h: 12 },
+    { i: "controls", x: 0, y: 66, w: 4, h: 12 },
+  ],
+  xxs: [
+    { i: "agent_status", x: 0, y: 0, w: 2, h: 8 },
+    { i: "discovery", x: 0, y: 8, w: 2, h: 12 },
+    { i: "execution", x: 0, y: 20, w: 2, h: 10 },
+    { i: "advanced_visuals", x: 0, y: 30, w: 2, h: 14 },
+    { i: "rlhf", x: 0, y: 44, w: 2, h: 10 },
+    { i: "decision", x: 0, y: 54, w: 2, h: 12 },
+    { i: "controls", x: 0, y: 66, w: 2, h: 12 },
+  ],
 };
 
 export function AgenticTrading() {
@@ -169,15 +196,25 @@ export function AgenticTrading() {
             <Button
               variant="neutral"
               onClick={async () => {
-                await api.disconnectBrokerage();
-                brokerageStatus.reload();
+                try {
+                  await api.disconnectBrokerage();
+                  brokerageStatus.reload();
+                } catch (e) {
+                  console.error("Failed to disconnect:", e);
+                }
               }}
               style={{ color: theme.decline, borderColor: theme.decline }}
+              disabled={brokerageStatus.loading || !!brokerageStatus.error}
             >
               Disconnect Robinhood 🔓
             </Button>
           ) : (
-            <Button variant="primary" onClick={() => setShowAuthModal(true)}>
+            <Button 
+              variant="primary" 
+              onClick={() => setShowAuthModal(true)}
+              disabled={brokerageStatus.loading || !!brokerageStatus.error}
+              title={brokerageStatus.error ? "Brokerage service unavailable" : undefined}
+            >
               Login to Robinhood 🔒
             </Button>
           )}
@@ -716,13 +753,25 @@ function ScanConfigModal({
   const [minPrice, setMinPrice] = useState("5");
   const [minVolume, setMinVolume] = useState("1000000");
 
+  // Reject invalid input rather than silently coercing it to 0
+  // (`Number(x) || 0` would turn a cleared/garbage field into a fabricated
+  // "no minimum" filter with no indication to the operator that their input
+  // was discarded -- a materially different, unrequested scan query. Honesty
+  // invariant: an uncomputable/invalid value must block submission, never
+  // silently become a plausible-looking 0.)
+  const minPriceNum = Number(minPrice);
+  const minVolumeNum = Number(minVolume);
+  const minPriceValid = minPrice.trim() !== "" && Number.isFinite(minPriceNum) && minPriceNum >= 0;
+  const minVolumeValid = minVolume.trim() !== "" && Number.isFinite(minVolumeNum) && minVolumeNum >= 0;
+  const filtersValid = minPriceValid && minVolumeValid;
+
   const mutation = useMutation(() =>
     api.putScanConfig({
       name: name.trim(),
       filters: {
         sector: sector !== "ALL" ? sector : undefined,
-        min_price: Number(minPrice),
-        min_volume: Number(minVolume),
+        min_price: minPriceNum,
+        min_volume: minVolumeNum,
       },
       enabled: true,
     })
@@ -773,12 +822,16 @@ function ScanConfigModal({
         type="number"
         value={minPrice}
         onChange={(e) => setMinPrice(e.target.value)}
+        invalid={!minPriceValid}
+        hint={!minPriceValid ? "Enter a valid non-negative number" : undefined}
       />
       <Input
         label="Min volume"
         type="number"
         value={minVolume}
         onChange={(e) => setMinVolume(e.target.value)}
+        invalid={!minVolumeValid}
+        hint={!minVolumeValid ? "Enter a valid non-negative number" : undefined}
       />
       {mutation.error && (
         <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
@@ -793,7 +846,7 @@ function ScanConfigModal({
         <Button
           variant="primary"
           onClick={submit}
-          disabled={!name.trim()}
+          disabled={!name.trim() || !filtersValid}
           pending={mutation.pending}
           style={{ flex: 2 }}
         >

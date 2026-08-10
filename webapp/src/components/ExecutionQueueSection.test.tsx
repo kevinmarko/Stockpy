@@ -122,4 +122,43 @@ describe("ExecutionQueueSection (real mock API)", () => {
     // the row underneath it.
     expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
+
+  it("filters out items below a partial/fractional conviction value", async () => {
+    const querySpy = vi.spyOn(api, "getExecutionQueue");
+    renderSection();
+    await screen.findAllByTestId("execution-intent-row");
+
+    // AAPL has conviction 0.8, TSLA has conviction 0.6.
+    // Setting to 70% (0.7) should filter out TSLA and keep AAPL.
+    fireEvent.change(screen.getByLabelText(/Min Conviction/i), { target: { value: "70" } });
+
+    await waitFor(() => {
+      const rows = screen.getAllByTestId("execution-intent-row");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].textContent).toContain("AAPL");
+    });
+    
+    expect(querySpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ min_conviction: 0.7 })
+    );
+  });
+
+  it("filters correctly by Strategy (follow_type) selection", async () => {
+    const querySpy = vi.spyOn(api, "getExecutionQueue");
+    renderSection();
+    await screen.findAllByTestId("execution-intent-row");
+
+    // Setting Strategy to "trend-following" (which maps to "Trend Following" label)
+    fireEvent.change(screen.getByLabelText(/Strategy:/i), { target: { value: "trend-following" } });
+
+    await waitFor(() => {
+      const rows = screen.getAllByTestId("execution-intent-row");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].textContent).toContain("TSLA");
+    });
+
+    expect(querySpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ follow_type: "trend-following" })
+    );
+  });
 });

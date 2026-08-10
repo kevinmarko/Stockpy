@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+/*__WIDGET_COMMON_CSS__*/
+</style>
+<body>
+  <div id="root" class="compare-root"></div>
+</body>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+/*__WIDGET_COMMON_JS__*/
+const { App } = globalThis.ExtApps;
+(async () => {
+  const app = new App({ name: "PilotCompare", version: "1.0.0" }, {}, { autoResize: true });
+
+  app.ontoolresult = ({ content }) => {
+    const pilots = extractJsonPayload(content[0].text);
+    const root = document.getElementById("root");
+    root.innerHTML = "";
+    renderComparePanel(root, pilots || []);
+  };
+
+  await app.connect();
+  const ctx = app.getHostContext?.();
+  if (ctx) applyHostTheme(ctx.theme);
+  app.onhostcontextchanged = (c) => applyHostTheme(c.theme);
+})();
+</script>
