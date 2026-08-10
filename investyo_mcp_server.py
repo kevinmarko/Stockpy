@@ -9,6 +9,7 @@ import json
 from functools import lru_cache
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from settings import settings as _settings
 
 # Initialize the FastMCP server for the Investyo Platform. When
@@ -2821,7 +2822,7 @@ def _unknown_pilot_message(pilot_id: str) -> str:
     return f"No such pilot '{pilot_id}'. Available pilot ids: {available}"
 
 
-@mcp.tool(meta=_PILOT_PICKER_UI)
+@mcp.tool(meta=_PILOT_PICKER_UI, annotations=ToolAnnotations(readOnlyHint=True))
 def list_pilots() -> str:
     """
     Lists every Stockpy "Pilot" (a copyable strategy = a named blend of
@@ -2888,7 +2889,7 @@ def list_pilots() -> str:
         return f"Failed to list pilots: {str(e)}"
 
 
-@mcp.tool(meta=_PILOT_DETAIL_UI)
+@mcp.tool(meta=_PILOT_DETAIL_UI, annotations=ToolAnnotations(readOnlyHint=True))
 def get_pilot_detail(pilot_id: str) -> str:
     """
     Full detail for one Pilot: identity, signal weights, honest backtest
