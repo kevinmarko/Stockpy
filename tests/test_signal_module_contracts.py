@@ -434,7 +434,7 @@ _RSI2_NAME = "rsi2_mean_reversion"  # documented long-only [0, 1] exception
 class TestUniversalSignalModuleContract:
     def test_at_least_seventeen_modules_registered(self, name, module):
         # Sanity check the parametrization itself isn't silently empty.
-        assert len(_ALL_REGISTERED) == 18
+        assert len(_ALL_REGISTERED) == 19
 
     def test_abc_conformance(self, name, module):
         assert isinstance(module, SignalModule)

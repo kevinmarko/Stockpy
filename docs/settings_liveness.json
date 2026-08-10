@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 358,
+  "files_scanned": 360,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
