@@ -327,6 +327,27 @@ export function Portfolio() {
               />
               <Tile label="Trades" value={realized.data.summary.n_trades} />
             </div>
+            <div className="tiles" style={{ marginTop: "var(--s-2)" }}>
+              <Tile 
+                label="Avg return" 
+                value={fmtPct(realized.data.summary.avg_return_pct, 1, { signed: true })}
+                tone={(realized.data.summary.avg_return_pct ?? 0) >= 0 ? "pos" : "neg"}
+              />
+              <Tile 
+                label="Avg win" 
+                value={fmtSignedUsd(realized.data.summary.avg_win)} 
+                tone="pos"
+              />
+              <Tile 
+                label="Avg loss" 
+                value={fmtSignedUsd(realized.data.summary.avg_loss)} 
+                tone="neg"
+              />
+              <Tile 
+                label="Avg hold" 
+                value={realized.data.summary.avg_holding_days != null ? `${fmtNum(realized.data.summary.avg_holding_days, 0)}d` : "—"} 
+              />
+            </div>
             {realized.data.trades.length > 0 && (
               <div className="list" style={{ marginTop: "var(--s-3)" }}>
                 {realized.data.trades.slice(0, 8).map((t, i) => (
@@ -439,7 +460,10 @@ export function Portfolio() {
                   </span>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", color: theme.textMuted, fontSize: "var(--t-body)" }}>
-                  <span>{pos.qty} sh @ {fmtUsd(pos.avg_cost)}</span>
+                  <span>
+                    {pos.qty} sh @ {fmtUsd(pos.avg_cost)}
+                    {pos.current_price != null ? ` (now ${fmtUsd(pos.current_price)})` : ""}
+                  </span>
                   <div
                     className="num"
                     style={{
