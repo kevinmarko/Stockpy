@@ -1950,7 +1950,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3353",
+        "site": "investyo_mcp_server.py:3354",
         "via": []
       }
     ],
@@ -1961,7 +1961,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:24",
+        "site": "investyo_mcp_server.py:25",
         "via": []
       },
       {
@@ -1970,7 +1970,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3311",
+        "site": "investyo_mcp_server.py:3312",
         "via": []
       }
     ],
@@ -1981,16 +1981,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:32",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "investyo_mcp_server.py:44",
+        "site": "investyo_mcp_server.py:33",
         "via": []
       },
       {
@@ -2001,6 +1992,15 @@
         ],
         "site": "investyo_mcp_server.py:45",
         "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "investyo_mcp_server.py:46",
+        "via": []
       }
     ],
     "MCP_OAUTH_PASSWORD": [
@@ -2010,7 +2010,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3319",
+        "site": "investyo_mcp_server.py:3320",
         "via": []
       }
     ],
