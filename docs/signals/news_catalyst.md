@@ -205,6 +205,69 @@ unavailable.
 
 ---
 
+## On-Demand Detail Bundle (`get_symbol_news_catalyst_details`)
+
+`get_symbol_news_catalyst_details(symbol, lookback_days=7, max_headlines=5)` is a separate,
+synchronous, single-symbol helper — distinct from `NewsCatalystSignal.pre_compute()`'s
+once-per-cycle, whole-universe batch path above. It exists for API consumers that need a
+detailed, per-request view of a symbol's news catalyst (e.g. `api/metrics_api.py`'s
+`GET /metrics/sentiment/{symbol}`, which runs it alongside `SentimentRiskEngine.get_live_sentiment`
+via `asyncio.gather` — wrapped in `asyncio.to_thread` since it does blocking network I/O + FinBERT
+inference and must never stall the event loop).
+
+It reuses the exact same building blocks as the per-cycle path — `fetch_company_headlines`/
+`fetch_next_earnings_any` (FMP-first, Finnhub-fallback), `score_headlines()` (respecting
+`settings.FINBERT_ENABLED`, so an operator's explicit lexicon-only override is honored here too,
+not silently bypassed), and `_earnings_proximity_multiplier()` — so the two paths cannot silently
+drift apart on earnings-window thresholds or provider selection.
+
+Return shape:
+
+```python
+{
+  "symbol": str,
+  "headlines": [
+    {"title": str, "publisher": str, "url": str | None, "published_at": str | None,
+     "score": float, "probabilities": {"positive": float, "neutral": float, "negative": float}},
+    ...
+  ],
+  "earnings_catalyst": {
+      "next_earnings_date": str | None, "hours_to_earnings": float | None,
+      "status": "normal" | "suppressed" | "dampened", "multiplier": float,
+  },
+  "provider_used": "fmp" | "finnhub" | "none",
+  "source_breakdown": {"<publisher>": int, ...},
+  "raw_sentiment_avg": float | None,
+  "dampened_sentiment_score": float | None,
+}
+```
+
+Notes:
+- `headlines` is capped to the `max_headlines` most-recent items (by the raw provider's own
+  `datetime` field), not the full lookback-window batch.
+- `probabilities` is the full FinBERT 3-class softmax per headline (`positive`/`neutral`/
+  `negative`), not a single collapsed scalar — the lexicon fallback represents its signed score
+  in the same shape via `_lexicon_softmax()` for API uniformity (exactly one of
+  `positive`/`negative` nonzero, remaining mass as `neutral`).
+- `provider_used` is derived from an internal `"_provider"` tag (`"fmp"` or `"finnhub"`) that
+  `fetch_company_headlines()` now stamps onto each returned item — `"none"` when zero headlines
+  were returned by either provider.
+- `source_breakdown` counts headlines per publisher string (from each item's `source`/
+  `publisher`/`site` field) — always present, even when empty (`{}` for zero headlines).
+- `raw_sentiment_avg`/`dampened_sentiment_score` are `None` (never a fabricated `0.0` —
+  CONSTRAINT #4) when there were zero headlines to score this call. When headlines exist,
+  `dampened_sentiment_score = raw_sentiment_avg * earnings_catalyst["multiplier"]`.
+- `earnings_catalyst.status` is derived directly from the multiplier's own return value
+  (`0.0` → `"suppressed"`, `0.5` → `"dampened"`, `1.0` → `"normal"`) rather than a second,
+  independently-thresholded comparison against `NEWS_EARNINGS_SUPPRESS_HOURS`/
+  `NEWS_EARNINGS_DAMPEN_DAYS` — one implementation of the threshold logic, not two that could
+  drift apart.
+- Never raises (CONSTRAINT #6): any unexpected failure degrades to the honest empty-headlines
+  shape (`provider_used="none"`, `earnings_catalyst.status="normal"`, `multiplier=1.0`,
+  both averages `None`), logged at DEBUG.
+
+---
+
 ## Failure Modes
 
 | Failure | Behaviour |

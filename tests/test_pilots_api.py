@@ -153,6 +153,43 @@ def test_pilot_detail_shape(monkeypatch):
     assert body["reason"] is None
 
 
+def test_pilot_detail_news_coverage_null_for_non_news_pilot(monkeypatch):
+    # trend-following carries no `news_catalyst` weight -> news_coverage must
+    # be null, never a fabricated/borrowed value (CONSTRAINT #4).
+    _point_reports_at_fixtures(monkeypatch)
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/pilots/trend-following")
+    assert resp.status_code == 200
+    assert resp.json()["news_coverage"] is None
+
+
+def test_pilot_detail_news_coverage_populated_for_news_catalyst_pilot(monkeypatch):
+    _point_reports_at_fixtures(monkeypatch)
+    fake_coverage = {
+        "archived_score_count": 412,
+        "headline_volume_7d": 18,
+        "universe_score_distribution": {"positive": 9, "neutral": 21, "negative": 4},
+    }
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES), mock.patch(
+        "pilots.news_catalyst.get_news_catalyst_coverage", return_value=fake_coverage
+    ):
+        resp = client.get("/pilots/news-catalyst")
+    assert resp.status_code == 200
+    assert resp.json()["news_coverage"] == fake_coverage
+
+
+def test_pilot_detail_news_coverage_degrades_to_none_on_failure(monkeypatch):
+    # get_news_catalyst_coverage itself never raises (CONSTRAINT #6) — but the
+    # detail endpoint must also survive a None return honestly, not 500.
+    _point_reports_at_fixtures(monkeypatch)
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES), mock.patch(
+        "pilots.news_catalyst.get_news_catalyst_coverage", return_value=None
+    ):
+        resp = client.get("/pilots/news-catalyst")
+    assert resp.status_code == 200
+    assert resp.json()["news_coverage"] is None
+
+
 def test_pilot_detail_unknown_404():
     resp = client.get("/pilots/does-not-exist")
     assert resp.status_code == 404

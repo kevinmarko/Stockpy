@@ -2225,6 +2225,35 @@ class HistoricalStore:
         except Exception as exc:
             logger.warning("HistoricalStore.save_finbert_scores failed: %s", exc)
 
+    def count_finbert_scores(self, since: Optional[datetime] = None) -> int:
+        """Return the number of rows in ``finbert_score_cache``, optionally
+        restricted to ``scored_at >= since``.
+
+        Uses the exact same raw-connection read pattern as
+        :meth:`get_finbert_score` (``session_scope`` + ``get_dbapi_connection``,
+        under ``self._lock``). Dead-letter resilient (CONSTRAINT #6): returns
+        ``0`` and logs a WARNING on any DB error, never raises.
+        """
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    if since is not None:
+                        row = conn.execute(
+                            "SELECT COUNT(*) FROM finbert_score_cache WHERE scored_at >= ?",
+                            (since.isoformat(),),
+                        ).fetchone()
+                    else:
+                        row = conn.execute(
+                            "SELECT COUNT(*) FROM finbert_score_cache"
+                        ).fetchone()
+            return int(row[0]) if row is not None and row[0] is not None else 0
+        except Exception as exc:
+            logger.warning("HistoricalStore.count_finbert_scores failed: %s", exc)
+            return 0
+
     # ─────────────────────────────────────────────────────────────────────────
     # Public API — etf_holdings (ETF constituent-holdings cache)
     # ─────────────────────────────────────────────────────────────────────────
