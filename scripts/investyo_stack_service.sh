@@ -98,7 +98,27 @@ echo "$(date '+%F %T')  Starting InvestYo stack (daemon + data_api + metrics_api
 
 # Caddy reverse proxy (:8888) — OPTIONAL, warn-and-skip (see the header
 # comment above for why this is not a hard `exit 1` like $PYTHON below).
-CADDY="$(command -v caddy || true)"
+#
+# `command -v` alone is NOT enough here: launchd runs this job with a
+# minimal PATH (confirmed via `launchctl print gui/<uid>/com.investyo.stack`
+# -- "default environment = { PATH => /usr/bin:/bin:/usr/sbin:/sbin }"),
+# which never includes Homebrew's bin dir on either architecture. `caddy`
+# genuinely being installed (`brew install caddy`, per docs/RUNBOOK.md §0.2)
+# was silently invisible to this exact check every time the real launchd-
+# managed service started, from the day this guard was introduced -- it only
+# ever "worked" when this script was run interactively (a real shell's PATH
+# does include Homebrew), which is not how it actually runs in production.
+# Falls back to checking both Homebrew prefixes directly, same as $PYTHON/
+# $UVICORN above already use absolute .venv paths rather than trusting PATH.
+CADDY="$(command -v caddy 2>/dev/null || true)"
+if [ -z "$CADDY" ]; then
+    for _candidate in /opt/homebrew/bin/caddy /usr/local/bin/caddy; do
+        if [ -x "$_candidate" ]; then
+            CADDY="$_candidate"
+            break
+        fi
+    done
+fi
 if [ -z "$CADDY" ]; then
     echo "$(date '+%F %T')  WARNING: caddy binary not found on PATH — Pilots PWA reverse proxy (:8888) will NOT start. Install via 'brew install caddy'; see docs/RUNBOOK.md §0.2. Continuing without it (data collection and the APIs are unaffected)." >&2
 elif [ ! -f "$REPO_ROOT/webapp/dist/index.html" ]; then

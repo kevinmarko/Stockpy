@@ -33,14 +33,30 @@ cd "$WEBAPP_DIR"
 if [ ! -f "$ENV_FILE" ]; then
     echo "$(date '+%F %T')  $ENV_FILE not found -- generating it from 'tailscale status' (see docs/RUNBOOK.md §0.2)."
 
-    if ! command -v tailscale >/dev/null 2>&1; then
+    # `command -v` alone can miss a real Homebrew install if this script is
+    # ever invoked with a stripped-down PATH (e.g. from another tool, not a
+    # login shell) -- see the identical issue and fix in
+    # investyo_stack_service.sh's caddy lookup, which hit this for real
+    # under launchd. This script is documented as an interactive/manual
+    # step (docs/RUNBOOK.md §0.2), so it's not actually broken today, but
+    # there's no reason to leave the same trap for whoever automates it next.
+    TAILSCALE="$(command -v tailscale 2>/dev/null || true)"
+    if [ -z "$TAILSCALE" ]; then
+        for _candidate in /opt/homebrew/bin/tailscale /usr/local/bin/tailscale; do
+            if [ -x "$_candidate" ]; then
+                TAILSCALE="$_candidate"
+                break
+            fi
+        done
+    fi
+    if [ -z "$TAILSCALE" ]; then
         echo "FATAL: tailscale is not installed. Install it (brew install tailscale), sign in" >&2
         echo "('sudo tailscale up'), then re-run this script -- or hand-write $ENV_FILE" >&2
         echo "yourself (see webapp/.env.example for every key) and re-run." >&2
         exit 1
     fi
 
-    TAILNET_HOST="$(tailscale status --json 2>/dev/null | python3 -c '
+    TAILNET_HOST="$("$TAILSCALE" status --json 2>/dev/null | python3 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
