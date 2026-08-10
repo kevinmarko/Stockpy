@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 262,
+    "live_safe": 263,
     "no_op": 2,
     "restart_required": 90,
-    "total": 354
+    "total": 355
   },
   "dynamic_sites": [
     {
@@ -398,6 +398,7 @@
     "SYNC_WATCHLIST_FILES",
     "UNIVERSE_SYNC_ENABLED",
     "USE_DUAL_MOMENTUM_OVERLAY",
+    "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
     "VOL_TARGET",
     "WATCH_RULES_FILE",
@@ -412,13 +413,13 @@
   "read_forms": {
     "attr": 729,
     "factory_param": 4,
-    "getattr_const": 250,
+    "getattr_const": 251,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 221,
     "factory_param": 4,
-    "getattr_const": 153,
+    "getattr_const": 154,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
