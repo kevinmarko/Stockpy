@@ -6,57 +6,23 @@ import toast from "react-hot-toast";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  LineChart,
   Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ComposedChart,
+  BarChart,
+  Bar,
+  Scatter,
+  Legend
 } from "recharts";
 import {
   flexRender,
   useTable,
 } from "@tanstack/react-table";
-
-const chartData = [
-  { name: "Jan", revenue: 4000, users: 2400 },
-  { name: "Feb", revenue: 3000, users: 1398 },
-  { name: "Mar", revenue: 2000, users: 9800 },
-  { name: "Apr", revenue: 2780, users: 3908 },
-  { name: "May", revenue: 1890, users: 4800 },
-  { name: "Jun", revenue: 2390, users: 3800 },
-];
-
-type MetricRow = {
-  metric: string;
-  value: number;
-  growth: string;
-};
-
-const tableData: MetricRow[] = [
-  { metric: "Total Revenue", value: 16060, growth: "+12%" },
-  { metric: "Active Users", value: 24206, growth: "+5%" },
-  { metric: "Avg Session", value: 120, growth: "-2%" },
-];
-
-const columns: any[] = [
-  {
-    accessorKey: "metric",
-    header: "Metric",
-    cell: (info: any) => info.getValue(),
-  },
-  {
-    accessorKey: "value",
-    header: "Value",
-    cell: (info: any) => (info.getValue() as number).toLocaleString(),
-  },
-  {
-    accessorKey: "growth",
-    header: "Growth",
-    cell: (info: any) => info.getValue(),
-  },
-];
+import { EdgeByStrategyRow, CalibrationBin } from "../api/types";
 
 export function CreateDataApp() {
   const [appName, setAppName] = useState("");
@@ -71,8 +37,64 @@ export function CreateDataApp() {
   
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // New data states
+  const [edgeData, setEdgeData] = useState<EdgeByStrategyRow[]>([]);
+  const [calibBins, setCalibBins] = useState<CalibrationBin[]>([]);
+  const [priceHistory, setPriceHistory] = useState<{date: string; price: number | null; buyAction?: number; sellAction?: number}[]>([]);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const edgeRes = await api.getEdgeByStrategy();
+        setEdgeData(edgeRes.rows || []);
+        
+        const calibRes = await api.getCalibrationSummary();
+        setCalibBins(calibRes.calibration?.bins || []);
+        
+        const bars = await api.getDataBars("AAPL", 252);
+        const decisions = await api.getDecisions({ symbol: "AAPL" });
+        
+        const merged = bars.map(b => {
+          const dt = b.date.split("T")[0];
+          const matchingDecision = decisions.find(d => (d.timestamp || d.signal_ts || "").startsWith(dt));
+          const action = matchingDecision?.action_taken || matchingDecision?.signal_action;
+          
+          return {
+            date: dt,
+            price: b.Close,
+            buyAction: action === "BUY" && b.Close != null ? b.Close : undefined,
+            sellAction: action === "SELL" && b.Close != null ? b.Close : undefined,
+          };
+        });
+        setPriceHistory(merged);
+        
+      } catch(e) {
+        console.error("Failed to load charts data", e);
+      }
+    }
+    loadData();
+  }, []);
+
+  const columns: any[] = [
+    {
+      accessorKey: "bin_center",
+      header: "Conviction",
+      cell: (info: any) => info.getValue()?.toFixed(2) ?? "—",
+    },
+    {
+      accessorKey: "win_rate",
+      header: "Win Rate",
+      cell: (info: any) => info.getValue() != null ? `${(info.getValue() * 100).toFixed(1)}%` : "—",
+    },
+    {
+      accessorKey: "count",
+      header: "Trades",
+      cell: (info: any) => info.getValue(),
+    },
+  ];
+
   const table = useTable({
-    data: tableData,
+    data: calibBins,
     columns,
   } as any);
 
@@ -269,30 +291,57 @@ export function CreateDataApp() {
         </div>
 
         {/* Bottom row: Data Visualizations */}
-        <div style={{ display: 'flex', gap: 24 }}>
-          {/* Chart container */}
-          <div style={{ flex: 1, background: theme.surface, padding: 16, borderRadius: 8, border: `1px solid ${theme.border}` }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Revenue Overview</h3>
-            <div style={{ width: '100%', height: 300 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
-                  <XAxis dataKey="name" stroke={theme.textSecondary} />
-                  <YAxis stroke={theme.textSecondary} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: theme.surface, borderColor: theme.border, color: theme.textPrimary }} 
-                    itemStyle={{ color: theme.textPrimary }}
-                  />
-                  <Line type="monotone" dataKey="revenue" stroke={theme.accent} strokeWidth={2} />
-                  <Line type="monotone" dataKey="users" stroke={theme.growth} strokeWidth={2} />
-                </LineChart>
-              </ResponsiveContainer>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+          {/* Top of Bottom Row: Two charts side-by-side */}
+          <div style={{ display: 'flex', gap: 24 }}>
+            {/* Chart 1 container */}
+            <div style={{ flex: 1, background: theme.surface, padding: 16, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+              <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Edge per Strategy</h3>
+              <div style={{ width: '100%', height: 300 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={edgeData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                    <XAxis dataKey="strategy" stroke={theme.textSecondary} fontSize={12} />
+                    <YAxis yAxisId="left" orientation="left" stroke={theme.textSecondary} />
+                    <YAxis yAxisId="right" orientation="right" stroke={theme.textSecondary} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: theme.surface, borderColor: theme.border, color: theme.textPrimary }} 
+                      itemStyle={{ color: theme.textPrimary }}
+                    />
+                    <Legend />
+                    <Bar yAxisId="left" dataKey="mean_edge_ratio" fill={theme.accent} name="Mean Edge Ratio" />
+                    <Bar yAxisId="right" dataKey="n_trades" fill={theme.growth} name="Trades" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Chart 2 container */}
+            <div style={{ flex: 1, background: theme.surface, padding: 16, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+              <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Symbol Price History (AAPL)</h3>
+              <div style={{ width: '100%', height: 300 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={priceHistory}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                    <XAxis dataKey="date" stroke={theme.textSecondary} fontSize={12} tickFormatter={(val) => val.split('-').slice(1).join('/')} />
+                    <YAxis stroke={theme.textSecondary} domain={['auto', 'auto']} />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: theme.surface, borderColor: theme.border, color: theme.textPrimary }} 
+                      itemStyle={{ color: theme.textPrimary }}
+                    />
+                    <Legend />
+                    <Line type="monotone" dataKey="price" stroke={theme.textPrimary} dot={false} strokeWidth={2} name="Price" />
+                    <Scatter name="BUY" dataKey="buyAction" fill={theme.growth} shape="triangle" />
+                    <Scatter name="SELL" dataKey="sellAction" fill={theme.accent} shape="cross" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           </div>
 
           {/* Table container */}
-          <div style={{ flex: 1, background: theme.surface, padding: 16, borderRadius: 8, border: `1px solid ${theme.border}` }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Key Metrics</h3>
+          <div style={{ background: theme.surface, padding: 16, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Signal Accuracy (Calibration)</h3>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
                 {(table as any).getHeaderGroups().map((headerGroup: any) => (
