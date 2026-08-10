@@ -1,65 +1,91 @@
 {
-    admin off
-    auto_https off
+	admin off
+	auto_https off
 }
 
+# 127.0.0.1-ONLY -- deliberate. Tailscale-only access means `tailscale serve`
+# is the sole thing publishing this beyond the machine (over the encrypted
+# tailnet, not a literal open TCP port). The `bind` directive below is what
+# actually enforces that -- putting `127.0.0.1` in the site address ABOVE
+# (e.g. `127.0.0.1:8888 { ... }`) looks like it would do the same thing but
+# does NOT: Caddy treats an IP literal in a site address as an HTTP Host-
+# match filter on a shared `:8888` (all-interfaces) listener, not as a
+# socket-level bind restriction -- verified via `caddy adapt`, whose JSON
+# output showed `"listen": [":8888"]` plus a `Host: 127.0.0.1` request
+# matcher even with that syntax, i.e. still reachable from the LAN by any
+# client that simply doesn't spoof/omit the Host header check. `bind` is the
+# only directive that actually changes the OS-level `listen()` address
+# (confirmed via `lsof` showing `127.0.0.1:8888 (LISTEN)`, not `*:8888`). Do
+# not widen this without also reconsidering the whole "Tailscale-only, never
+# public/LAN" design this deployment is built around.
 :8888 {
+	bind 127.0.0.1
 
-    encode gzip
+	encode gzip
 
-    # Pilots API (:8602)
-    # The frontend uses VITE_API_BASE_URL=https://<tailnet>/svc
-    # Caddy strips /svc before forwarding to 8602
-    handle_path /svc/* {
-        reverse_proxy 127.0.0.1:8602
-    }
+	# Pilots API (:8602)
+	# The frontend uses VITE_API_BASE_URL=https://<tailnet>/svc
+	# Caddy strips /svc before forwarding to 8602
+	handle_path /svc/* {
+		reverse_proxy 127.0.0.1:8602
+	}
 
-    # Data API (:8603)
-    handle /data/* {
-        reverse_proxy 127.0.0.1:8603
-    }
-    handle /api/chat* {
-        reverse_proxy 127.0.0.1:8603
-    }
-    handle /ws/ticks/* {
-        reverse_proxy 127.0.0.1:8603
-    }
+	# Data API (:8603)
+	handle /data/* {
+		reverse_proxy 127.0.0.1:8603
+	}
+	# Exact match -- mirrors webapp/src/api/client.ts's baseFor(), which
+	# checks `path === "/api/chat"` exactly, not a prefix. A wildcard here
+	# would also (harmlessly, today) match any future /api/chat* route that
+	# isn't actually this one.
+	handle /api/chat {
+		reverse_proxy 127.0.0.1:8603
+	}
+	handle /ws/ticks/* {
+		reverse_proxy 127.0.0.1:8603
+	}
 
-    # Metrics API (:8604)
-    handle /metrics/* {
-        reverse_proxy 127.0.0.1:8604
-    }
+	# Metrics API (:8604)
+	handle /metrics/* {
+		reverse_proxy 127.0.0.1:8604
+	}
 
-    # Control API (:8601)
-    handle /status {
-        reverse_proxy 127.0.0.1:8601
-    }
-    handle /run* {
-        reverse_proxy 127.0.0.1:8601
-    }
-    handle /pipeline/* {
-        reverse_proxy 127.0.0.1:8601
-    }
-    handle /jobs* {
-        reverse_proxy 127.0.0.1:8601
-    }
-    handle /daemon/* {
-        reverse_proxy 127.0.0.1:8601
-    }
-    handle /ws/training/* {
-        reverse_proxy 127.0.0.1:8601
-    }
+	# Control API (:8601)
+	handle /status {
+		reverse_proxy 127.0.0.1:8601
+	}
+	handle /run* {
+		reverse_proxy 127.0.0.1:8601
+	}
+	handle /pipeline/* {
+		reverse_proxy 127.0.0.1:8601
+	}
+	handle /jobs* {
+		reverse_proxy 127.0.0.1:8601
+	}
+	handle /daemon/* {
+		reverse_proxy 127.0.0.1:8601
+	}
+	handle /ws/training/* {
+		reverse_proxy 127.0.0.1:8601
+	}
 
-    # Static Assets (Pilots PWA)
-    handle {
-        root * webapp/dist
-        file_server
+	# Static Assets (Pilots PWA)
+	handle {
+		# Absolute path via Caddy's {$VAR} env-var substitution (REPO_ROOT is
+		# exported by scripts/investyo_stack_service.sh before launching
+		# caddy) rather than the relative "webapp/dist" this used to be --
+		# a relative root only resolved correctly by accident, because the
+		# launcher happens to `cd` to the repo root first; this is explicit
+		# and survives caddy ever being started a different way.
+		root * {$REPO_ROOT}/webapp/dist
+		file_server
 
-        # SPA fallback
-        try_files {path} /index.html
+		# SPA fallback
+		try_files {path} /index.html
 
-        # Static asset caching
-        @assets path /assets/*
-        header @assets Cache-Control "max-age=31536000"
-    }
+		# Static asset caching
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+	}
 }

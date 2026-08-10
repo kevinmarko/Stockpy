@@ -196,19 +196,33 @@ is no further backend or webapp work outstanding to go webapp-only.
 ### 0.2 Caddy + Tailscale (Remote/Production Access)
 
 Once the always-on backend stack from §0.1 is running, `investyo_stack_service.sh` also starts
-a **Caddy** reverse proxy on `:8888` (`scripts/Caddyfile`) that fronts all four backend ports
+a **Caddy** reverse proxy on **`127.0.0.1:8888`** (`scripts/Caddyfile`, deliberately
+loopback-only — see the comment at the top of that file) that fronts all four backend ports
 (Pilots API `:8602` under `/svc/*`, Data API `:8603`, Metrics API `:8604`, Control API `:8601`)
 plus the built Pilots PWA static bundle (`webapp/dist`) — a single port to reach the whole
 platform from a phone or another machine on your **Tailscale** tailnet, over HTTPS, without
-opening anything to the public internet.
+opening anything to the public internet **or your local LAN** (Caddy itself never listens on
+anything but loopback; `tailscale serve` in step 3 below is the only thing that publishes it,
+and only to devices signed into your own tailnet).
 
-1. **Install Caddy** (one-time): `brew install caddy`. Verify: `caddy version`.
-2. **Build the webapp bundle** (whenever `webapp/` source has changed): `./scripts/build_webapp_prod.sh`.
+1. **Sign in to Tailscale** (one-time, if not already): `sudo brew services start tailscale &&
+   sudo tailscale up`, then confirm with `tailscale status` (note the MagicDNS hostname it
+   prints, e.g. `your-machine.your-tailnet.ts.net` — you'll need it in step 6). Also install and
+   sign in to the Tailscale app on your phone/other device.
+2. **Install Caddy** (one-time): `brew install caddy`. Verify: `caddy version`.
+3. **Build the webapp bundle** (whenever `webapp/` source has changed): `./scripts/build_webapp_prod.sh`.
    This is a manual/pre-deploy step, not run automatically by the stack service (mirrors how
    `.venv` is built once by `setup.sh`, not rebuilt on every service start) — if `webapp/dist`
    is missing, the stack service now warns and skips starting Caddy rather than serving a 404
    (see the guard in `scripts/investyo_stack_service.sh`).
-3. **Expose the proxy over Tailscale** (**one-time, per machine** — not a per-start step):
+   **This script also owns `webapp/.env.production.local`** (the build-time config that points
+   the built bundle at your Tailscale origin instead of `localhost` — see `webapp/.env.example`)
+   — on first run it auto-generates that file from `tailscale status` (step 1 must already be
+   done), and on every run it refuses to build at all if `VITE_USE_MOCK` isn't explicitly
+   `false` in it, so this can never silently ship a build that fabricates mock data instead of
+   showing your live backend. The file is gitignored (`*.local`) and safe to hand-edit; delete
+   it to force regeneration against the current Tailscale hostname.
+4. **Expose the proxy over Tailscale** (**one-time, per machine** — not a per-start step):
    ```bash
    tailscale serve --bg --https=443 / http://127.0.0.1:8888
    ```
@@ -219,11 +233,16 @@ opening anything to the public internet.
    # https://<your-machine>.<your-tailnet>.ts.net (tailnet only)
    # |-- / proxy http://127.0.0.1:8888
    ```
-4. **Restart (or just confirm) the stack service** so Caddy picks up a freshly-built `webapp/dist`
+5. **Restart (or just confirm) the stack service** so Caddy picks up a freshly-built `webapp/dist`
    — same restart sequence as §0.1 step 3. Caddy itself starts/stops automatically as part of
    `investyo_stack_service.sh`; there is no separate launchd job for it.
-5. **Reach it**: `https://<your-machine>.<your-tailnet>.ts.net/` from any device signed into the
+6. **Reach it**: `https://<your-machine>.<your-tailnet>.ts.net/` from any device signed into the
    same tailnet (phone, laptop, etc.) — no VPN config, no port-forwarding, no public exposure.
+   **The first load from a new device shows a `TokenGate` prompt** — this is a non-loopback
+   origin, so the webapp asks for the backend's `STATE_API_TOKEN` once (stored only in
+   `sessionStorage`, never baked into the build — see `webapp/src/components/TokenGate.tsx`).
+   Get the value from `.env`'s `STATE_API_TOKEN` on this machine (not from a chat transcript or
+   any tool that might echo it) and enter it there.
 
 **Troubleshooting**:
 ```bash
@@ -238,7 +257,10 @@ rest of the stack came up fine, check for a `WARNING: caddy binary not found` or
 → check the job's `StandardErrorPath`, or `output/` if using the older foreground launcher) —
 Caddy is deliberately optional and skips itself rather than crash-looping the whole stack over
 a missing binary or an unbuilt bundle (see the guard comment in
-`scripts/investyo_stack_service.sh`).
+`scripts/investyo_stack_service.sh`). If the page loads but shows stale/fabricated-looking data,
+check `webapp/.env.production.local`'s `VITE_USE_MOCK` — `scripts/build_webapp_prod.sh` refuses
+to build with it unset/true, but a build produced before that guard existed could still be
+sitting in `webapp/dist`; rebuild.
 
 ---
 
