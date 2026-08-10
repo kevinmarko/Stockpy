@@ -60,6 +60,12 @@ class TestReadOnlyPilotToolAnnotations:
         assert isinstance(tool.annotations, ToolAnnotations)
         assert tool.annotations.readOnlyHint is True
 
+    def test_compare_pilots_is_marked_read_only(self):
+        tool = _get_tool("compare_pilots")
+        assert tool.annotations is not None
+        assert isinstance(tool.annotations, ToolAnnotations)
+        assert tool.annotations.readOnlyHint is True
+
     def test_follow_pilot_is_not_marked_read_only(self):
         """follow_pilot writes state (persists a follow, builds an
         order-queue preview) -- it must never carry readOnlyHint=True.

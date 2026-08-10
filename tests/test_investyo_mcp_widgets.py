@@ -120,7 +120,7 @@ class TestRegisterWidgetResourcesDegrade:
         monkeypatch.setattr(mcp_widget_resources, "BUNDLE_PATH", tmp_path / "does-not-exist.js")
         monkeypatch.setattr(mcp_widget_resources, "TEMPLATES_DIR", tmp_path)
         _write_common_assets(tmp_path)
-        for name in ("pilot-picker.html", "pilot-detail.html", "follow-result.html"):
+        for name in ("pilot-picker.html", "pilot-detail.html", "follow-result.html", "pilot-compare.html"):
             (tmp_path / name).write_text("<p>placeholder</p>")
 
         fake_mcp = Mock()
@@ -138,7 +138,7 @@ class TestRegisterWidgetResourcesSuccess:
         bundle_path = tmp_path / "fake-bundle.js"
         bundle_path.write_text("globalThis.ExtApps={FAKE:1};")
         _write_common_assets(tmp_path)
-        for name in ("pilot-picker.html", "pilot-detail.html", "follow-result.html"):
+        for name in ("pilot-picker.html", "pilot-detail.html", "follow-result.html", "pilot-compare.html"):
             (tmp_path / name).write_text(
                 "<!doctype html>\n"
                 "<style>/*__WIDGET_COMMON_CSS__*/</style>\n"
@@ -150,7 +150,7 @@ class TestRegisterWidgetResourcesSuccess:
             )
         return bundle_path
 
-    def test_all_three_registered_with_correct_uris_and_mime_type(self, monkeypatch, tmp_path):
+    def test_all_four_registered_with_correct_uris_and_mime_type(self, monkeypatch, tmp_path):
         bundle_path = self._build_full_fixture(tmp_path)
         monkeypatch.setattr(mcp_widget_resources, "BUNDLE_PATH", bundle_path)
         monkeypatch.setattr(mcp_widget_resources, "TEMPLATES_DIR", tmp_path)
@@ -161,12 +161,13 @@ class TestRegisterWidgetResourcesSuccess:
         result = mcp_widget_resources.register_widget_resources(fake_mcp)
 
         assert result is True
-        assert fake_mcp.resource.call_count == 3
+        assert fake_mcp.resource.call_count == 4
 
         expected_uris = {
             "ui://widgets/pilot-picker.html",
             "ui://widgets/pilot-detail.html",
             "ui://widgets/follow-result.html",
+            "ui://widgets/pilot-compare.html",
         }
         seen_uris = set()
         for call in fake_mcp.resource.call_args_list:
@@ -186,6 +187,7 @@ _EXPECTED_UI_URIS = {
     "_PILOT_PICKER_UI": "ui://widgets/pilot-picker.html",
     "_PILOT_DETAIL_UI": "ui://widgets/pilot-detail.html",
     "_FOLLOW_RESULT_UI": "ui://widgets/follow-result.html",
+    "_PILOT_COMPARE_UI": "ui://widgets/pilot-compare.html",
 }
 
 
@@ -220,6 +222,60 @@ class TestRealBundleIfPresent:
         assert result is not None
         assert "globalThis.ExtApps=" in result
         assert srv._WIDGETS_AVAILABLE is True
+
+
+class TestPilotCompareWidgetSmoke:
+    """Mirrors ``tests/test_mcp_oauth_flow_smoke.py``'s pattern of exercising
+    the real flow headlessly rather than only unit-testing pieces -- runs the
+    real vendored bundle (skipped, same condition as TestRealBundleIfPresent,
+    when it hasn't been built locally) instead of a synthetic tmp_path
+    fixture."""
+
+    @pytest.mark.skipif(
+        not mcp_widget_resources.BUNDLE_PATH.exists(),
+        reason=(
+            "vendored ext-apps bundle not built locally; run: "
+            "cd mcp_widgets/build && npm install && npm run build"
+        ),
+    )
+    def test_pilot_compare_renders_with_no_leftover_placeholders(self):
+        result = mcp_widget_resources.render_widget_html("pilot-compare.html")
+        assert result is not None
+        assert "__EXT_APPS_BUNDLE__" not in result
+        assert "__WIDGET_COMMON_CSS__" not in result
+        assert "__WIDGET_COMMON_JS__" not in result
+        assert "globalThis.ExtApps=" in result
+
+    @pytest.mark.skipif(
+        not mcp_widget_resources.BUNDLE_PATH.exists(),
+        reason=(
+            "vendored ext-apps bundle not built locally; run: "
+            "cd mcp_widgets/build && npm install && npm run build"
+        ),
+    )
+    def test_pilot_compare_bundle_contains_new_render_functions(self):
+        result = mcp_widget_resources.render_widget_html("pilot-compare.html")
+        assert result is not None
+        assert "function renderComparePanel" in result
+        assert "function renderEquityOverlaySvg" in result
+        # Also reuses the existing shared helpers verbatim (not re-implemented).
+        assert "function deployableBadge" in result
+        assert "function categoryChip" in result
+
+    def test_pilot_compare_ui_wiring_consistent_with_widgets_available(self):
+        import investyo_mcp_server as srv
+
+        if srv._WIDGETS_AVAILABLE:
+            assert srv._PILOT_COMPARE_UI == {"ui": {"resourceUri": "ui://widgets/pilot-compare.html"}}
+        else:
+            assert srv._PILOT_COMPARE_UI is None
+
+    def test_compare_pilots_tool_meta_matches_constant(self):
+        import investyo_mcp_server as srv
+
+        tool = srv.mcp._tool_manager.get_tool("compare_pilots")
+        assert tool is not None
+        assert tool.meta == srv._PILOT_COMPARE_UI
 
 
 # ---------------------------------------------------------------------------

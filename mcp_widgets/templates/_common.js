@@ -255,6 +255,175 @@ function renderFollowForm(container, detail, app) {
   return form;
 }
 
+const COMPARE_ORDINAL_COLORS = ["var(--compare-1)", "var(--compare-2)", "var(--compare-3)"];
+
+function renderComparePanel(container, pilots) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "compare-panel";
+
+  if (!pilots || pilots.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No pilots to compare.";
+    wrapper.appendChild(empty);
+    container.appendChild(wrapper);
+    return wrapper;
+  }
+
+  // Stat-card grid: up to 3 cards, side by side.
+  const grid = document.createElement("div");
+  grid.className = "compare-grid";
+  const series = [];
+
+  pilots.forEach((pilot, i) => {
+    const color = COMPARE_ORDINAL_COLORS[i % COMPARE_ORDINAL_COLORS.length];
+
+    const card = document.createElement("div");
+    card.className = "card compare-card";
+    card.style.setProperty("--compare-accent", color);
+
+    const header = document.createElement("div");
+    header.className = "compare-card-header";
+    const swatch = document.createElement("span");
+    swatch.className = "compare-swatch";
+    swatch.style.backgroundColor = color;
+    const nameEl = document.createElement("strong");
+    nameEl.textContent = pilot.name || "";
+    const idEl = document.createElement("span");
+    idEl.className = "pilot-card-id";
+    idEl.textContent = pilot.id || "";
+    header.appendChild(swatch);
+    header.appendChild(nameEl);
+    header.appendChild(idEl);
+    header.insertAdjacentHTML("beforeend", categoryChip(pilot.category));
+    const headline = pilot.headline || {};
+    header.insertAdjacentHTML("beforeend", deployableBadge(headline.deployable));
+    card.appendChild(header);
+
+    const statRow = document.createElement("div");
+    statRow.className = "stat-row";
+    const stats = [
+      ["Sharpe", fmtMetric(headline.sharpe)],
+      ["DSR", fmtMetric(headline.dsr)],
+      ["PBO", fmtMetric(headline.pbo)],
+      ["Max Drawdown", fmtMetric(headline.max_drawdown)],
+    ];
+    for (const [label, value] of stats) {
+      const cell = document.createElement("div");
+      const labelEl = document.createElement("div");
+      labelEl.className = "stat-label";
+      labelEl.textContent = label;
+      const valueEl = document.createElement("div");
+      valueEl.className = "stat-value";
+      valueEl.textContent = value;
+      cell.appendChild(labelEl);
+      cell.appendChild(valueEl);
+      statRow.appendChild(cell);
+    }
+    card.appendChild(statRow);
+
+    const footer = document.createElement("div");
+    footer.className = "pilot-card-footer";
+    const holdingsEl = document.createElement("span");
+    holdingsEl.textContent = `Holdings: ${pilot.holdings_count ?? "—"}`;
+    footer.appendChild(holdingsEl);
+    card.appendChild(footer);
+
+    const perf = pilot.performance || {};
+    if (!perf.curve) {
+      const empty = document.createElement("p");
+      empty.className = "empty-state compare-no-curve";
+      empty.textContent = perf.reason ? `— (${perf.reason})` : "— (no validated backtest)";
+      card.appendChild(empty);
+    } else {
+      series.push({ label: pilot.name || pilot.id, color, points: perf.curve });
+    }
+
+    grid.appendChild(card);
+  });
+
+  wrapper.appendChild(grid);
+
+  const chartTitle = document.createElement("h4");
+  chartTitle.textContent = "Equity Curve Overlay (base-100)";
+  wrapper.appendChild(chartTitle);
+
+  const chartContainer = document.createElement("div");
+  chartContainer.className = "compare-chart-container";
+  renderEquityOverlaySvg(chartContainer, series);
+  wrapper.appendChild(chartContainer);
+
+  container.appendChild(wrapper);
+  return wrapper;
+}
+
+function renderEquityOverlaySvg(container, series) {
+  const W = 600, H = 200, PAD = 8;
+
+  const nonEmptySeries = (series || []).filter((s) => s.points && s.points.length > 0);
+  const allDates = [...new Set(nonEmptySeries.flatMap((s) => s.points.map((p) => p.date)))].sort();
+  const allValues = nonEmptySeries.flatMap((s) => s.points.map((p) => p.value));
+
+  if (!allDates.length || !allValues.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No validated equity curves available to overlay.";
+    container.appendChild(empty);
+    return;
+  }
+
+  const xIdx = new Map(allDates.map((d, i) => [d, i]));
+  const xScale = (i) => PAD + (i / Math.max(1, allDates.length - 1)) * (W - 2 * PAD);
+  const yMin = Math.min(...allValues, 100);
+  const yMax = Math.max(...allValues, 100);
+  const yScale = (v) => H - PAD - ((v - yMin) / Math.max(1e-9, yMax - yMin)) * (H - 2 * PAD);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("class", "compare-equity-svg");
+
+  // Baseline at value=100 (the shared starting point every base-100 curve begins at).
+  const baseline = document.createElementNS(svg.namespaceURI, "line");
+  baseline.setAttribute("x1", PAD);
+  baseline.setAttribute("x2", W - PAD);
+  baseline.setAttribute("y1", yScale(100));
+  baseline.setAttribute("y2", yScale(100));
+  baseline.setAttribute("class", "compare-equity-baseline");
+  svg.appendChild(baseline);
+
+  for (const s of nonEmptySeries) {
+    const pts = s.points
+      .filter((p) => xIdx.has(p.date) && typeof p.value === "number")
+      .map((p) => `${xScale(xIdx.get(p.date))},${yScale(p.value)}`)
+      .join(" ");
+    if (!pts) continue;
+    const poly = document.createElementNS(svg.namespaceURI, "polyline");
+    poly.setAttribute("points", pts);
+    poly.setAttribute("fill", "none");
+    poly.setAttribute("stroke", s.color);
+    poly.setAttribute("stroke-width", "2");
+    svg.appendChild(poly);
+  }
+
+  container.appendChild(svg);
+
+  const legend = document.createElement("div");
+  legend.className = "compare-legend";
+  for (const s of nonEmptySeries) {
+    const item = document.createElement("span");
+    item.className = "compare-legend-item";
+    const swatch = document.createElement("span");
+    swatch.className = "compare-swatch";
+    swatch.style.backgroundColor = s.color;
+    const label = document.createElement("span");
+    label.textContent = s.label;
+    item.appendChild(swatch);
+    item.appendChild(label);
+    legend.appendChild(item);
+  }
+  container.appendChild(legend);
+}
+
 function renderFollowResultCard(container, payload) {
   const wrapper = document.createElement("div");
   wrapper.className = "follow-result";

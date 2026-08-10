@@ -2786,6 +2786,169 @@ class TestGetPilotDetail:
         assert "Failed to get pilot detail" in result
 
 
+class TestComparePilots:
+    def test_too_few_rejected(self):
+        result = srv.compare_pilots(["trend-following"])
+        assert "compare_pilots needs 2-3 distinct pilot ids" in result
+        assert "(got 1)" in result
+
+    def test_empty_rejected(self):
+        result = srv.compare_pilots([])
+        assert "compare_pilots needs 2-3 distinct pilot ids" in result
+        assert "(got 0)" in result
+
+    def test_too_many_rejected(self):
+        result = srv.compare_pilots(
+            ["trend-following", "dip-buyer", "macd-trend", "multifactor"]
+        )
+        assert "compare_pilots needs 2-3 distinct pilot ids" in result
+        assert "(got 4)" in result
+
+    def test_duplicates_deduped_then_rejected_if_below_min(self):
+        # Two duplicate ids of the SAME pilot dedupe to 1, below the 2-pilot floor.
+        result = srv.compare_pilots(["trend-following", "trend-following"])
+        assert "(got 1)" in result
+
+    def test_unknown_pilot_id(self):
+        result = srv.compare_pilots(["trend-following", "does-not-exist"])
+        assert "No such pilot 'does-not-exist'" in result
+
+    def test_invalid_range(self):
+        result = srv.compare_pilots(["trend-following", "dip-buyer"], range="5Y")
+        assert "Invalid range '5Y'" in result
+
+    def test_two_pilot_happy_path_with_curves(self, monkeypatch):
+        import pilots.performance as performance_mod
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_headline",
+            lambda pilot, **k: {
+                "sharpe": 1.2,
+                "dsr": 0.99,
+                "pbo": 0.1,
+                "max_drawdown": 0.2,
+                "deployable": True,
+            },
+        )
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_performance",
+            lambda pilot, range="1M", **k: {
+                "metrics": {"sharpe": 1.2},
+                "curve": [
+                    {"date": "2026-01-01", "value": 100.0},
+                    {"date": "2026-01-02", "value": 101.0},
+                ],
+                "benchmark": None,
+                "macro_benchmark": None,
+                "reason": None,
+                "range": range,
+            },
+        )
+
+        result = srv.compare_pilots(["trend-following", "dip-buyer"], range="1m")
+
+        assert "# Compare Pilots — 1M" in result
+        assert "trend-following" in result
+        assert "dip-buyer" in result
+        assert "2 points" in result
+        assert "```json" in result
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert len(payload) == 2
+        assert payload[0]["id"] == "trend-following"
+        assert payload[0]["performance"]["curve"] == [
+            {"date": "2026-01-01", "value": 100.0},
+            {"date": "2026-01-02", "value": 101.0},
+        ]
+
+    def test_three_pilot_happy_path(self, monkeypatch):
+        import pilots.performance as performance_mod
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_headline",
+            lambda pilot, **k: {
+                "sharpe": None,
+                "dsr": None,
+                "pbo": None,
+                "max_drawdown": None,
+                "deployable": None,
+            },
+        )
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_performance",
+            lambda pilot, range="1M", **k: {
+                "metrics": None,
+                "curve": None,
+                "benchmark": None,
+                "macro_benchmark": None,
+                "reason": "no validated backtest for this pilot",
+                "range": range,
+            },
+        )
+
+        result = srv.compare_pilots(["trend-following", "dip-buyer", "macd-trend"])
+
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert len(payload) == 3
+        for row in payload:
+            assert row["performance"]["curve"] is None
+            assert row["headline"]["deployable"] is None
+        assert "No validated backtest available." in result
+
+    def test_missing_curve_degrades_honestly_not_fabricated(self, monkeypatch):
+        import pilots.performance as performance_mod
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_headline",
+            lambda pilot, **k: {
+                "sharpe": None,
+                "dsr": None,
+                "pbo": None,
+                "max_drawdown": None,
+                "deployable": None,
+            },
+        )
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_performance",
+            lambda pilot, range="1M", **k: {
+                "metrics": None,
+                "curve": None,
+                "benchmark": None,
+                "macro_benchmark": None,
+                "reason": "no validation summary found",
+                "range": range,
+            },
+        )
+
+        result = srv.compare_pilots(["trend-following", "dip-buyer"])
+
+        assert "unavailable (no validation summary found)" in result
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert all(row["performance"]["curve"] is None for row in payload)
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.catalog as catalog_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(catalog_mod, "get_pilot", _raise)
+
+        result = srv.compare_pilots(["trend-following", "dip-buyer"])
+        assert "Failed to compare pilots" in result
+
+
 class TestGetPilotPerformance:
     def test_unknown_pilot(self):
         assert "No such pilot" in srv.get_pilot_performance("nope", "1M")

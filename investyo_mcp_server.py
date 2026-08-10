@@ -64,6 +64,7 @@ _WIDGETS_AVAILABLE = mcp_widget_resources.register_widget_resources(mcp)
 _PILOT_PICKER_UI = {"ui": {"resourceUri": "ui://widgets/pilot-picker.html"}} if _WIDGETS_AVAILABLE else None
 _PILOT_DETAIL_UI = {"ui": {"resourceUri": "ui://widgets/pilot-detail.html"}} if _WIDGETS_AVAILABLE else None
 _FOLLOW_RESULT_UI = {"ui": {"resourceUri": "ui://widgets/follow-result.html"}} if _WIDGETS_AVAILABLE else None
+_PILOT_COMPARE_UI = {"ui": {"resourceUri": "ui://widgets/pilot-compare.html"}} if _WIDGETS_AVAILABLE else None
 
 
 def _active_universe() -> list:
@@ -3063,6 +3064,107 @@ def get_pilot_detail(pilot_id: str) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Failed to get pilot detail for '{pilot_id}': {str(e)}"
+
+
+_COMPARE_PILOTS_MIN = 2
+_COMPARE_PILOTS_MAX = 3
+
+
+@mcp.tool(meta=_PILOT_COMPARE_UI, annotations=ToolAnnotations(readOnlyHint=True))
+def compare_pilots(pilot_ids: list[str], range: str = "1M") -> str:
+    """
+    Side-by-side comparison of 2-3 Pilots: honest PBO/DSR-gated backtest
+    headline (Sharpe/DSR/PBO/MaxDD/deployable), current holdings_count, and
+    the REAL downsampled base-100 OOS equity curve (tail-sliced to `range`)
+    for each — reusing pilots.performance.pilot_headline/pilot_performance
+    and pilots.scoring.pilot_holdings/load_snapshot directly, per pilot, in a
+    loop. A Pilot with no validated backtest shows "—" and is simply omitted
+    from the equity-curve overlay rather than fabricating a flat line.
+
+    Args:
+        pilot_ids: 2-3 distinct Pilot ids from list_pilots (e.g.
+            ["trend-following", "dip-buyer"]). Duplicates are deduped while
+            preserving order; anything outside 2-3 distinct ids is rejected.
+        range: One of "1W","1M","3M","6M","1Y","2Y" (default "1M").
+
+    In a host that renders MCP Apps, this opens an interactive comparison
+    panel — up to 3 stat cards plus a shared equity-curve SVG overlay —
+    instead of only returning markdown.
+    """
+    try:
+        from pilots import catalog, performance, scoring
+
+        deduped: list[str] = []
+        for pid in pilot_ids or []:
+            if pid not in deduped:
+                deduped.append(pid)
+
+        if not (_COMPARE_PILOTS_MIN <= len(deduped) <= _COMPARE_PILOTS_MAX):
+            return (
+                f"compare_pilots needs {_COMPARE_PILOTS_MIN}-{_COMPARE_PILOTS_MAX} "
+                f"distinct pilot ids (got {len(deduped)})."
+            )
+
+        range_norm = (range or "1M").upper()
+        if range_norm not in _PILOT_RANGES:
+            return f"Invalid range '{range}'. Allowed: {', '.join(_PILOT_RANGES)}"
+
+        for pid in deduped:
+            if catalog.get_pilot(pid) is None:
+                return _unknown_pilot_message(pid)
+
+        snapshot = scoring.load_snapshot()
+
+        lines = [f"# Compare Pilots — {range_norm}\n"]
+        json_pilots = []
+        for pid in deduped:
+            pilot = catalog.get_pilot(pid)
+            headline = performance.pilot_headline(pilot)
+            holdings_count = len(scoring.pilot_holdings(pilot, snapshot)) if snapshot else 0
+            perf = performance.pilot_performance(pilot, range=range_norm)
+
+            lines.append(f"## {pilot.name} (`{pilot.id}`)")
+            lines.append(f"**Category**: {pilot.category}")
+            if headline.get("deployable") is None:
+                lines.append("_No validated backtest available._")
+            else:
+                lines.append(f"- **Deployable**: {'✅' if headline['deployable'] else '❌'}")
+                lines.append(f"- **Sharpe**: {headline.get('sharpe')}")
+                lines.append(f"- **DSR**: {headline.get('dsr')}")
+                lines.append(f"- **PBO**: {headline.get('pbo')}")
+                lines.append(f"- **Max Drawdown**: {headline.get('max_drawdown')}")
+            lines.append(f"- **Holdings**: {holdings_count}")
+            if perf.get("curve"):
+                lines.append(f"- **Equity Curve**: {len(perf['curve'])} points, base-100 OOS, real (not synthesized)")
+            else:
+                lines.append(f"- **Equity Curve**: unavailable ({perf.get('reason')})")
+            lines.append("")
+
+            json_pilots.append({
+                "id": pilot.id,
+                "name": pilot.name,
+                "category": pilot.category,
+                "headline": headline,
+                "holdings_count": holdings_count,
+                "performance": {
+                    "curve": perf.get("curve"),
+                    "benchmark": perf.get("benchmark"),
+                    "reason": perf.get("reason"),
+                    "range": perf.get("range"),
+                },
+            })
+
+        lines.append(
+            "_In a host that renders MCP Apps, this comparison also opens an "
+            "interactive panel with a shared equity-curve overlay chart._"
+        )
+
+        lines.append("\n```json")
+        lines.append(json.dumps(json_pilots, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to compare pilots {pilot_ids!r}: {str(e)}"
 
 
 @mcp.tool()
