@@ -22,6 +22,12 @@
   --cat-risk: #a16207;
   --cat-sentiment: #c026d3;
   --cat-forecast: #65a30d;
+
+  /* compare_pilots ordinal series colors — reuse existing tokens rather
+     than inventing new hex values (up to 3 pilots, one color each). */
+  --compare-1: var(--growth);
+  --compare-2: var(--cat-momentum);
+  --compare-3: var(--caution);
 }
 
 :root.light {
@@ -320,4 +326,84 @@ body {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* compare_pilots widget (pilot-compare.html) */
+
+.compare-panel {
+  padding: 12px;
+}
+
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.compare-card {
+  border-top: 3px solid var(--compare-accent, var(--border-strong));
+}
+
+.compare-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.compare-card-header strong {
+  font-size: 14px;
+}
+
+.compare-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.compare-no-curve {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+.compare-panel h4 {
+  margin: 16px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+
+.compare-chart-container {
+  padding: 8px 0;
+}
+
+.compare-equity-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.compare-equity-baseline {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+
+.compare-legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.compare-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }

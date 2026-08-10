@@ -327,6 +327,79 @@ byte-for-byte reproduction of the pre-existing in-sample fit, equity-curve scope
 
 ---
 
+## 2026-08-08: new strategy, `sector_quality_rank` — first native MultiIndex CPCV adapter
+
+**New `STRATEGY_REGISTRY` entry, not a fix to an existing one.** Validates
+`signals/sector_quality_rank.py::SectorNeutralQualitySignal` (SNEQR — Sloan 1996
+accrual quality + Novy-Marx 2013 gross profitability, ranked *within sector*), joined
+to the new `sector-quality-rank` Pilot. Also the first adapter in this file to build a
+genuine `(Date, Ticker)` `pd.MultiIndex` panel with an explicit `t1` Series and
+exercise `CombinatorialPurgedCV`'s native MultiIndex support (PR #648) end-to-end via
+`StrategyValidationHarness.run(..., t1=...)` — a new, backward-compatible parameter
+added to `validation/harness.py::StrategyValidationHarness.run()` by this change
+(default `t1=None` reproduces every pre-existing flat-index adapter's behavior
+byte-for-byte; threaded straight through to `run_cpcv_evaluation`). A second small
+harness fix landed alongside it: `y.reindex(full_returns.index)` (the benchmark-curve
+alignment step) raises `ValueError` for a MultiIndex `y` — verified directly, not
+assumed — so it is now wrapped to degrade to no benchmark overlay rather than crash
+(CONSTRAINT #6).
+
+**Why this needed its own real-data sourcing path (CONSTRAINT #7 exception):**
+verified that neither `accrual_ratio` nor `gross_profitability` exists anywhere in
+`HistoricalStore`'s `fundamentals_history` table (typed columns OR `raw_json` —
+`scripts/backfill_edgar_fundamentals.py` persists only `data/edgar_fundamentals.py`'s
+computed 9-key PIT ratio dict, explicitly not the raw XBRL payload). Every EDGAR-PIT
+sibling adapter in this file reads only through `HistoricalStore`; this one is a
+documented, narrow exception that calls `data.edgar_fundamentals.get_cik`/
+`fetch_companyfacts`/`extract_latest_fact` directly (same already-shipped module every
+sibling adapter's own backfill depends on — not a new provider) because the honest
+alternative was not validating the signal at all (CONSTRAINT #4 forbids fabricating
+the two inputs).
+
+**Universe:** 12 hand-picked tickers (not the 10-ticker EDGAR-PIT universe the
+dividend/deep-value/value-quality siblings share) — chosen because SNEQR's mechanism
+is WITHIN-SECTOR ranking (`MIN_SECTOR_SIZE=5`), and the 10-ticker universe has at most
+2 names per sector (every ticker would be thin-sector-excluded, testing nothing).
+Technology (7: AAPL/CSCO/IBM/INTC/MSFT/ORCL/TXN) and Consumer Defensive (5:
+COST/KO/MO/PG/WMT) are the two sectors that clear the threshold among this file's
+already-vetted large-cap names.
+
+**Real, measured numbers** (`python -m scripts.refresh_validations --strategies
+sector_quality_rank --start 2010-01-01 --json`, live SEC EDGAR + yfinance,
+2010-01-01 → 2026-08-08, `n_cpcv_splits=10`/`n_test_splits=2`):
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | Deployable |
+|---|---|---|---|---|---|
+| `sector_quality_rank` | 1.100 | 0.000 | 1.000 | 28.4% | ✅ True |
+
+Re-run a second time (89 seconds later, same day) to confirm reproducibility:
+Sharpe 1.1004753 / MaxDD 0.2837052 — matched to 6 decimal places (the negligible
+residual is intraday price-bar drift between the two fetches, not run-to-run
+instability). Single book variant (`SNEQR_TopHalfWithinSector` — top-half,
+equal-weighted, WITHIN SECTOR, `.shift(1)`-lagged), so PBO=0.0/DSR=1.0 is expected by
+construction (no selection-bias risk with only one candidate to select among) — same
+situation this log's `rsi2_mean_reversion` entry already documents for the identical
+reason, not evidence of a broader-sense-robust edge. MaxDD passes with a narrow
+margin (28.4% vs. the 30% gate) — flagged honestly rather than glossed over; a
+12-name/2-sector book is meaningfully less diversified than this file's 30-name
+cross-sectional adapters.
+
+**Scope, honestly stated:** this validates the SNEQR mechanism itself over a real,
+if narrow, universe and window. It does NOT validate the live, in-production signal
+module as currently shipped — `SectorNeutralQualitySignal` remains dormant
+(contributes `0.0` every cycle) until a separate data-plumbing task wires real
+`accrual_ratio`/`gross_profitability` into
+`processing_engine.calculate_fundamental_metrics()`. See
+`docs/signals/sector_quality_rank.md`'s "Data Availability Gap" section.
+
+Tests: `tests/test_refresh_validations.py::TestBuildSectorQualityRankAdapter` (9
+hermetic tests), `tests/test_validation_sector_quality_rank.py` (network-marked, the
+real run above), `tests/test_harness_multiindex_t1.py` (the new `t1` parameter,
+hermetic — default-off byte-for-byte reproduction, MultiIndex-without-t1 raises,
+MultiIndex-with-t1 runs end-to-end, benchmark-reindex-never-crashes guard).
+
+---
+
 ## 2026-08-08 — `lgbm_ranker`: new `STRATEGY_REGISTRY` entry (genuine per-fold retraining)
 
 **New entry, not a fix to an existing one.** `scripts/refresh_validations.py::
@@ -388,6 +461,61 @@ Tests: `tests/test_lgbm_ranker_native_cv.py` (the `train()` signature change —
 `ValueError`-if-missing-t1, flatten-path unchanged, settings-flag fallback),
 `tests/test_validation_lgbm_ranker_registry.py` (network-marked, the production adapter end-to-end
 through the real harness), plus the seven pre-existing lgbm test files listed above (regression).
+
+---
+
+## 2026-08-10 — `macro_regime_pit` and `forecast_direction_arima_hw`: closing a documentation gap
+(no code change)
+
+Both `STRATEGY_REGISTRY` adapters (`scripts/refresh_validations.py:1416`/`:1550`) and their
+`pilots/catalog.py` Pilot entries (`regime-navigator`, `forecast-aligned`) were already merged
+2026-07-17, but neither had ever been run and documented per this log's own required convention —
+a compliance gap, not a code gap. This entry closes it with real, measured numbers; no adapter or
+catalog code changed.
+
+**`macro_regime_pit`** — `python -m scripts.refresh_validations --strategies macro_regime_pit
+--start 2023-08-08 --end 2026-08-06 --json`, run 2026-08-10. `--start` was set to
+`BAMLH0A0HYM2`'s real FRED-history floor in this platform's `HistoricalStore` (2023-08-08) rather
+than the log's usual `2005-01-01` default, since any earlier date degrades to an honestly
+unscored `market_regime=None` row (CONSTRAINT #4) and would only pad the sample with
+uninformative dates, not add real signal.
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | `deployable` |
+|---|---|---|---|---|---|
+| `macro_regime_pit` | **1.556** | 0.000 | **0.000** | 15.4% | **False** |
+
+Honest reason: PBO and MaxDD pass comfortably and the raw Sharpe is strong, but DSR fails hard —
+not a bug, but DSR's own well-known small-sample penalty. Real HY-OAS coverage only reaches back
+to 2023-08-08, leaving ~2.5 years (~650 trading days) of usable history, too short for DSR to
+statistically separate a Sharpe of 1.556 from chance regardless of how strong it looks
+in-sample. See `docs/signals/macro_regime.md`'s Backtest Validation section for the full
+statistical writeup, including why the doubled-checked `family_multiple_testing.family_dsr`
+figure (0.849) tells the same short-sample story through a different formula and is *not* the
+number the gate actually reads.
+
+**`forecast_direction_arima_hw`** — `python -m scripts.refresh_validations --strategies
+forecast_direction_arima_hw --start 2015-01-01 --end 2026-08-06 --json`, run 2026-08-10.
+Self-bounded effective window (by the adapter's own documented design): **2021-08-05 →
+2026-08-05**.
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | `deployable` |
+|---|---|---|---|---|---|
+| `forecast_direction_arima_hw` | **−0.128** | 0.000 | 1.000 | **31.7%** | **False** |
+
+Honest reason: two independent gates fail — negative net Sharpe and MaxDD clearing the 30%
+ceiling by 1.7 points — while PBO and DSR both pass cleanly (n_trials=1, so little overfitting-
+by-selection risk to begin with). The self-bounded 2021-2026 window spans the 2021 growth peak,
+the sharp 2022 rate-hike bear market, and a multi-year recovery — a whipsaw-heavy period that is
+close to a worst case for ARIMA/Holt-Winters, both fundamentally trend/level-extrapolation
+methods by design. See `docs/signals/forecast_alignment.md`'s Backtest Validation section for
+the full result table, the plausible-but-unverified contributing factors, and why this does not
+change `signals/forecast_alignment.py`'s live dormant/active status (weight 10.0, unaffected).
+
+**Per this log's own stated rule**: no threshold was loosened, no filter was date-snooped, and
+both genuinely-measured results are recorded as-is — including the honest `deployable=False` for
+both `macro_regime_pit` and `forecast_direction_arima_hw`. Neither Pilot's catalog entry
+changed; both were already correctly joined to their `validation_strategy_id` and are unaffected
+by this documentation-only pass.
 
 ---
 

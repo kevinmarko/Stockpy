@@ -6,9 +6,9 @@
   macOS launchd job: the ALWAYS-ON backend stack for the Pilots PWA. Runs
   scripts/investyo_stack_service.sh at login (RunAtLoad) and restarts it on
   crash (KeepAlive). That wrapper starts the orchestrator daemon (5-min warm
-  refresh cycles + Control API :8601 + Pilots API :8602) plus data_api :8603
-  and metrics_api :8604 — so data keeps being collected and the webapp can
-  reconnect to live data any time, no app window required.
+  refresh cycles + Control API :8601 + Pilots API :8602) plus data_api :8603,
+  metrics_api :8604, and caddy :8888 — so data keeps being collected and the
+  webapp can reconnect to live data any time, no app window required.
 
   INSTALL (recommended): double-click scripts/install_stack_service.command.
 

@@ -39,5 +39,6 @@ def _register_all():
     import signals.regime_multiplier
     import signals.lgbm_ranker
     import signals.news_catalyst
+    import signals.sector_quality_rank
 
 _register_all()

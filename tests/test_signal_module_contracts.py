@@ -6,7 +6,7 @@ compute()-level coverage (aroon_trend, graham_value, macd_momentum,
 macro_regime, relative_strength), gap-closing tests for two modules whose
 existing tests (tests/test_scoring_signals.py) never exercise their
 unguarded code paths (dividend_quality, forecast_alignment), and a
-cross-cutting contract sweep across all 17 modules registered in
+cross-cutting contract sweep across all 18 modules registered in
 signals.registry.global_registry.
 
 Excluded (already covered, not duplicated): signals/edge_garch.py,
@@ -14,25 +14,26 @@ signals/rsi_extremes.py, signals/sortino_drawdown.py (fully covered by
 tests/test_scoring_signals.py); signals/regime_multiplier.py,
 signals/lgbm_ranker.py, signals/timeseries_momentum.py,
 signals/rsi2_mean_reversion.py, signals/cross_sectional_momentum.py,
-signals/multifactor.py, signals/news_catalyst.py (each has a dedicated test
-file); signals/pairs_trading.py (a plain function, not a registered
-SignalModule -- covered in tests/test_no_fabricated_metrics.py).
+signals/multifactor.py, signals/news_catalyst.py, signals/sector_quality_rank.py
+(each has a dedicated test file); signals/pairs_trading.py (a plain function,
+not a registered SignalModule -- covered in tests/test_no_fabricated_metrics.py).
 
-A SIGNIFICANT FINDING, pinned (not silently fixed) throughout this file:
-signals/registry.py's compute_all() validates only that each
-required_features KEY exists on the row -- never that its VALUE is non-NaN
--- before calling compute(). In Python, `NaN > x` and `NaN < x` are always
-False. Several modules below are written as
-`if condition: <bullish> else: <bearish>` -- so a NaN required value falls
-through to the else/bearish branch and produces a confidently NEGATIVE score
-from missing data, not a neutral one. This is a real, multi-module,
-consistent pattern (not a one-off bug), but per the precedent set by the
-prior two items in this initiative, this PR is test-only: it pins and
-documents the actual verified behavior rather than silently patching the
-signal-scoring production code. A follow-up to add pd.isna() guards
+A SIGNIFICANT FINDING, originally pinned (not silently fixed) by an earlier
+test-only pass through this file, and since CLOSED by production-code
+changes to the affected modules: signals/registry.py's compute_all()
+validates only that each required_features KEY exists on the row -- never
+that its VALUE is non-NaN -- before calling compute(). In Python,
+`NaN > x` and `NaN < x` are always False. Several modules below were
+written as `if condition: <bullish> else: <bearish>` -- so a NaN required
+value fell through to the else/bearish branch and produced a confidently
+NEGATIVE score from missing data, not a neutral one. This was a real,
+multi-module, consistent pattern (not a one-off bug). aroon_trend.py,
+graham_value.py, macd_momentum.py, macro_regime.py, dividend_quality.py,
+and forecast_alignment.py now each carry an explicit pd.isna()/None guard
 (matching the pattern signals/edge_garch.py, signals/rsi_extremes.py,
-signals/sortino_drawdown.py, signals/relative_strength.py already use) is a
-natural next step, intentionally left for the user to decide on separately.
+signals/sortino_drawdown.py, signals/relative_strength.py already used) --
+the tests below assert the honest neutral score=0.0 the guard produces,
+not the previously-fabricated directional score.
 """
 
 from __future__ import annotations
@@ -92,7 +93,7 @@ def _signal_context(
 def _realistic_row() -> pd.Series:
     """A fully-populated row mirroring strategy_engine.py's
     StrategyEngine.evaluate_security() row construction (lines 240-265) --
-    every key all 17 registered modules read, with valid non-NaN values
+    every key all 18 registered modules read, with valid non-NaN values
     representative of a healthy, liquid stock. Used by the cross-cutting
     sweep so the 6 unguarded modules in the module docstring above don't
     spuriously fail a sweep that isn't testing their missing-input path."""
@@ -171,16 +172,11 @@ class TestAroonTrend:
         out = self._score(aroon_osc=float("nan"), trend_strength=55.0)
         assert out.score == pytest.approx(10.0 / 15.0)
 
-    def test_nan_trend_strength_with_no_aroon_fabricates_bearish_score(self):
-        """KNOWN GAP (see module docstring): trend_strength has NO pd.isna()
-        guard. NaN >= 50.0 and 30.0 <= NaN are both False in Python, so
-        execution falls through to the final else branch and fabricates a
-        confident -15pts 'Bearish pricing structure' reading from a missing
-        value -- never a neutral 0.0. This test pins the actual current
-        behavior; it is not asserting this is correct."""
+    def test_nan_trend_strength_with_no_aroon_is_neutral(self):
+        """Fixed: trend_strength now has pd.isna() guard. A missing
+        value correctly returns a neutral 0.0."""
         out = self._score(trend_strength=float("nan"))
-        assert out.score == pytest.approx(-1.0)
-        assert "Bearish pricing structure" in out.explanation
+        assert out.score == 0.0
 
 
 class TestGrahamValue:
@@ -205,14 +201,11 @@ class TestGrahamValue:
         assert out.score == pytest.approx(-5.0 / 15.0)
         assert "No Intrinsic Graham Value possible" in out.explanation
 
-    def test_nan_current_price_fabricates_overvalued_score(self):
-        """KNOWN GAP (see module docstring): current_price has NO pd.isna()
-        guard. `graham_val > NaN` is False, so a real, positive graham_val
-        falls through to the 'Overvalued' branch on a NaN price -- never a
-        neutral 0.0. Pinning actual behavior, not asserting correctness."""
+    def test_nan_current_price_is_neutral(self):
+        """Fixed: current_price now has pd.isna() guard. A missing
+        value correctly returns a neutral 0.0."""
         out = self._score(current_price=float("nan"), graham_eps=5.0, graham_book_value=50.0)
-        assert out.score == pytest.approx(-10.0 / 15.0)
-        assert "Overvalued vs Graham" in out.explanation
+        assert out.score == 0.0
 
 
 class TestMacdMomentum:
@@ -246,14 +239,11 @@ class TestMacdMomentum:
         out = self._score(aroon_osc=float("nan"), macd_line=10.0, macd_signal=1.0)
         assert out.score == 0.0
 
-    def test_nan_macd_values_with_aroon_present_fabricates_bearish_score(self):
-        """KNOWN GAP (see module docstring): once the aroon gate is open,
-        macd_line/macd_signal have NO pd.isna() guard. `NaN > x` is False,
-        so a NaN macd_line falls through to the bearish branch -- a
-        confidently negative score from missing data."""
+    def test_nan_macd_values_with_aroon_present_is_neutral(self):
+        """Fixed: macd_line/macd_signal now have pd.isna() guard. A missing
+        value correctly returns a neutral 0.0."""
         out = self._score(aroon_osc=60.0, macd_line=float("nan"), macd_signal=0.5)
-        assert out.score == pytest.approx(-1.0)
-        assert "MACD Bearish Crossover" in out.explanation
+        assert out.score == 0.0
 
 
 class TestMacroRegime:
@@ -314,10 +304,9 @@ class TestMacroRegime:
         out = self._score(market_regime_inputs=(-0.5, 7.0, 0.02))
         assert out.score == pytest.approx(-15.0 / 45.0)
 
-    def test_none_macro_context_raises_attribute_error(self):
-        """KNOWN GAP (see module docstring): context.macro is accessed
-        unconditionally as context.macro.market_regime -- a None macro
-        context crashes with AttributeError rather than degrading."""
+    def test_none_macro_context_is_neutral(self):
+        """Fixed: context.macro is now guarded. A None macro
+        context gracefully returns a neutral 0.0."""
         bar = MarketBarDTO(datetime.now(), "TEST", 100.0, 101.0, 99.0, 100.0, 1_000)
         fund = FundamentalDataDTO(
             ticker="TEST", pe_ratio=15.0, pb_ratio=2.0, dividend_yield=0.0,
@@ -325,8 +314,8 @@ class TestMacroRegime:
             payout_ratio=0.0, sector="Technology", company_name="Test Co",
         )
         broken_ctx = SignalContext(bar=bar, fundamentals=fund, macro=None)
-        with pytest.raises(AttributeError):
-            MacroRegimeSignal().compute(pd.Series({"sector": "Technology"}), broken_ctx)
+        out = MacroRegimeSignal().compute(pd.Series({"sector": "Technology"}), broken_ctx)
+        assert out.score == 0.0
 
 
 class TestRelativeStrength:
@@ -369,15 +358,14 @@ class TestDividendQualityMissingContext:
     exercises context.fundamentals being None or carrying a NaN
     dividend_yield. This class closes that gap."""
 
-    def test_none_fundamentals_raises_attribute_error(self):
-        """KNOWN GAP (see module docstring): context.fundamentals is
-        accessed unconditionally -- a None fundamentals object crashes with
-        AttributeError rather than degrading to a neutral score."""
+    def test_none_fundamentals_is_neutral(self):
+        """Fixed: context.fundamentals is now guarded. A None fundamentals
+        object gracefully returns a neutral 0.0."""
         bar = MarketBarDTO(datetime.now(), "TEST", 100.0, 101.0, 99.0, 100.0, 1_000)
         macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=0.02)
         broken_ctx = SignalContext(bar=bar, fundamentals=None, macro=macro)
-        with pytest.raises(AttributeError):
-            DividendQualitySignal().compute(pd.Series({}), broken_ctx)
+        out = DividendQualitySignal().compute(pd.Series({}), broken_ctx)
+        assert out.score == 0.0
 
     def test_nan_dividend_yield_safely_no_ops_to_zero(self):
         """Unlike the modules in Section 1, this one is accidentally safe:
@@ -411,39 +399,28 @@ class TestForecastAlignmentMissingPriceData:
         macro = MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=0.02)
         return SignalContext(bar=bar, fundamentals=fund, macro=macro)
 
-    def test_nan_forecast_price_fabricates_erosion_score(self):
-        """KNOWN GAP (see module docstring): `forecast_price > current_price`
-        is False when forecast_price is NaN, so execution falls to the
-        'structural price erosion' branch -- a confidently bearish -10pts
-        reading from a missing forecast, never neutral."""
+    def test_nan_forecast_price_is_neutral(self):
+        """Fixed: forecast_price now has a pd.isna() guard. A missing
+        forecast correctly returns a neutral 0.0."""
         row = pd.Series({"current_price": 100.0, "forecast_price": float("nan")})
         out = ForecastAlignmentSignal().compute(row, self._ctx())
-        assert out.score == pytest.approx(-1.0)
-        assert "structural price erosion" in out.explanation
+        assert out.score == 0.0
 
-    def test_nan_current_price_fabricates_erosion_score(self):
+    def test_nan_current_price_is_neutral(self):
         row = pd.Series({"current_price": float("nan"), "forecast_price": 105.0})
         out = ForecastAlignmentSignal().compute(row, self._ctx())
-        assert out.score == pytest.approx(-1.0)
+        assert out.score == 0.0
 
-    def test_zero_current_price_fabricates_maximal_bullish_score(self):
-        """KNOWN GAP (see module docstring), verified by direct execution
-        (not just source-reading): a real current_price of exactly 0.0 with
-        forecast_price > 0 does NOT raise ZeroDivisionError -- Python float
-        division by zero produces `inf`, not an exception (only int
-        division raises). `expected_gain` becomes `inf`, which is `>= 1.5`,
-        so this fabricates the single MOST CONFIDENT bullish reading the
-        module can produce (+1.0, "Strong forecast projection (+inf%)") from
-        a degenerate zero price -- arguably worse than the bearish-fabrication
-        pattern elsewhere in this file, since it actively encourages a BUY."""
+    def test_zero_current_price_is_neutral(self):
+        """Fixed: current_price == 0 is now guarded to avoid DivisionByZero.
+        A degenerate zero price gracefully returns a neutral 0.0."""
         row = pd.Series({"current_price": 0.0, "forecast_price": 10.0})
         out = ForecastAlignmentSignal().compute(row, self._ctx())
-        assert out.score == pytest.approx(1.0)
-        assert "+inf%" in out.explanation
+        assert out.score == 0.0
 
 
 # ============================================================================
-# Section 3 — Cross-cutting universal-contract sweep over all 17 registered
+# Section 3 — Cross-cutting universal-contract sweep over all 18 registered
 # modules (signals/__init__.py eagerly imports every signals/*.py file, so
 # global_registry.get_all() is fully populated by the time this module is
 # collected by pytest).
@@ -457,7 +434,7 @@ _RSI2_NAME = "rsi2_mean_reversion"  # documented long-only [0, 1] exception
 class TestUniversalSignalModuleContract:
     def test_at_least_seventeen_modules_registered(self, name, module):
         # Sanity check the parametrization itself isn't silently empty.
-        assert len(_ALL_REGISTERED) == 17
+        assert len(_ALL_REGISTERED) == 18
 
     def test_abc_conformance(self, name, module):
         assert isinstance(module, SignalModule)

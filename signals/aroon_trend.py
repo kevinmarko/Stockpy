@@ -90,7 +90,9 @@ class AroonTrendSignal(SignalModule):
                 points -= 15.0
         else:
             # Fallback to legacy Trend Strength
-            if trend_strength >= 50.0:
+            if pd.isna(trend_strength):
+                pass
+            elif trend_strength >= 50.0:
                 exps.append("+10pts: Bullish technical trend (Aroon >= 50)")
                 points += 10.0
             elif 30.0 <= trend_strength < 50.0:

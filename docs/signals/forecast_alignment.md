@@ -95,3 +95,63 @@ this module are more likely to be correct.
   inherently limited (~55–60% directional accuracy for the best quantitative models).
   A 10-weight module contributes at most ±10 pts — meaningful as a tiebreaker, not
   as a primary driver.
+
+---
+
+## Backtest Validation (`STRATEGY_REGISTRY["forecast_direction_arima_hw"]`, 2026-08)
+
+**Real, measured result** (live yfinance data, `python -m scripts.refresh_validations
+--strategies forecast_direction_arima_hw --start 2015-01-01 --end 2026-08-06 --json`, run
+2026-08-10):
+
+| Metric | Value | Gate | Result |
+|---|---|---|---|
+| Sharpe | **−0.128** | > 0.50 | ❌ FAIL |
+| PBO | 0.000 | < 0.50 | ✅ |
+| DSR | 1.000 | > 0.95 | ✅ |
+| MaxDD | **31.7%** | < 30% | ❌ FAIL |
+| `deployable` | **False** | | |
+
+Actual window used: **2021-08-05 → 2026-08-05** — the CLI was asked for 2015-2026, but the
+adapter self-bounds to the trailing `FORECAST_DIRECTION_WINDOW_YEARS` (5) years of the requested
+range, exactly as documented above ("Bounded scope, deliberate, not a data-availability gap").
+`n_trials=1` (a single ARIMA+HW proxy, no variant strategies tried).
+
+**Honest read**: PBO and DSR both pass — there's no overfitting-by-selection artifact here
+(unsurprising with only one trial) — but the strategy fails on two independent, real gates:
+negative net Sharpe and a max drawdown that clears the 30% ceiling by 1.7 points. Both are
+measured, not fabricated (the adapter reuses the live `ForecastAlignmentSignal().compute()`
+scoring and the real `ForecastingEngine.run_arima_fit`/`run_holt_winters_fit` methods — see the
+docstring above). A few honest, evidence-adjacent factors likely contributing (not verified as
+THE cause — no counterfactual re-run was performed to isolate any one of them individually,
+stated as plausible, not proven):
+
+* **The window is unusually hostile to trend-extrapolating models.** 2021-08 → 2026-08 spans the
+  2021 speculative-growth peak, the sharp 2022 rate-hike bear market, and a multi-year recovery —
+  several sharp regime reversals in five years. ARIMA and Holt-Winters are both fundamentally
+  trend/level-extrapolation methods (see the Rationale table above: "Misses regime changes" /
+  "Slow to react to sudden moves" are their documented weaknesses); a window this whipsaw-heavy
+  is close to a worst case for exactly those two methods.
+* **Narrower proxy, by design.** This adapter deliberately omits Monte Carlo, CNN-LSTM, and
+  Prophet — the live signal's other three ensemble members — which could plausibly have
+  dampened ARIMA/HW's trend-chasing behavior during the 2022 reversal. This is a documented,
+  intentional scope limit (re-fitting the full 5-model ensemble at every historical rebalance
+  date is computationally infeasible), not an oversight — but it does mean this result answers
+  "does the cheap ARIMA+HW proxy alone have edge?", not "does the live 5-model signal have
+  edge?".
+* **Simple-averaged, not skill-weighted.** The live signal's `FORECAST_SKILL_WEIGHTING_ENABLED`
+  path down-weights a model with a recent poor track record; no historical `ForecastTracker`
+  skill weights exist this far back, so this adapter equal-weights ARIMA and HW throughout,
+  giving each full say even in periods where one was clearly wrong.
+* **Weekly, not daily, refits.** Each week's forecast score is held constant (ffill) between
+  Monday-of-week fits while exposure still marks-to-market daily — a real signal could go stale
+  for up to 5 trading days during a fast reversal, a documented computational-cost trade-off
+  (~7,800 total statsmodels fits for this one run), not a bug.
+
+**Not a contradiction of the module's live status**: `signals/forecast_alignment.py` remains
+active in `settings.SIGNAL_WEIGHTS` (weight 10.0) and contributes to every symbol's composite
+score exactly as before — this backtest exercises a narrower, deliberately-scoped proxy of one
+piece of that signal's methodology, not the full live ensemble, and answers honestly: on this
+measurement, the cheap proxy alone does not clear the deployability bar. No threshold was
+loosened and no window was cherry-picked to avoid this result. See
+`docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-10 entry for the full writeup.

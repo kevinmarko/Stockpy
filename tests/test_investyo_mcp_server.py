@@ -2786,6 +2786,169 @@ class TestGetPilotDetail:
         assert "Failed to get pilot detail" in result
 
 
+class TestComparePilots:
+    def test_too_few_rejected(self):
+        result = srv.compare_pilots(["trend-following"])
+        assert "compare_pilots needs 2-3 distinct pilot ids" in result
+        assert "(got 1)" in result
+
+    def test_empty_rejected(self):
+        result = srv.compare_pilots([])
+        assert "compare_pilots needs 2-3 distinct pilot ids" in result
+        assert "(got 0)" in result
+
+    def test_too_many_rejected(self):
+        result = srv.compare_pilots(
+            ["trend-following", "dip-buyer", "macd-trend", "multifactor"]
+        )
+        assert "compare_pilots needs 2-3 distinct pilot ids" in result
+        assert "(got 4)" in result
+
+    def test_duplicates_deduped_then_rejected_if_below_min(self):
+        # Two duplicate ids of the SAME pilot dedupe to 1, below the 2-pilot floor.
+        result = srv.compare_pilots(["trend-following", "trend-following"])
+        assert "(got 1)" in result
+
+    def test_unknown_pilot_id(self):
+        result = srv.compare_pilots(["trend-following", "does-not-exist"])
+        assert "No such pilot 'does-not-exist'" in result
+
+    def test_invalid_range(self):
+        result = srv.compare_pilots(["trend-following", "dip-buyer"], range="5Y")
+        assert "Invalid range '5Y'" in result
+
+    def test_two_pilot_happy_path_with_curves(self, monkeypatch):
+        import pilots.performance as performance_mod
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_headline",
+            lambda pilot, **k: {
+                "sharpe": 1.2,
+                "dsr": 0.99,
+                "pbo": 0.1,
+                "max_drawdown": 0.2,
+                "deployable": True,
+            },
+        )
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_performance",
+            lambda pilot, range="1M", **k: {
+                "metrics": {"sharpe": 1.2},
+                "curve": [
+                    {"date": "2026-01-01", "value": 100.0},
+                    {"date": "2026-01-02", "value": 101.0},
+                ],
+                "benchmark": None,
+                "macro_benchmark": None,
+                "reason": None,
+                "range": range,
+            },
+        )
+
+        result = srv.compare_pilots(["trend-following", "dip-buyer"], range="1m")
+
+        assert "# Compare Pilots — 1M" in result
+        assert "trend-following" in result
+        assert "dip-buyer" in result
+        assert "2 points" in result
+        assert "```json" in result
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert len(payload) == 2
+        assert payload[0]["id"] == "trend-following"
+        assert payload[0]["performance"]["curve"] == [
+            {"date": "2026-01-01", "value": 100.0},
+            {"date": "2026-01-02", "value": 101.0},
+        ]
+
+    def test_three_pilot_happy_path(self, monkeypatch):
+        import pilots.performance as performance_mod
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_headline",
+            lambda pilot, **k: {
+                "sharpe": None,
+                "dsr": None,
+                "pbo": None,
+                "max_drawdown": None,
+                "deployable": None,
+            },
+        )
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_performance",
+            lambda pilot, range="1M", **k: {
+                "metrics": None,
+                "curve": None,
+                "benchmark": None,
+                "macro_benchmark": None,
+                "reason": "no validated backtest for this pilot",
+                "range": range,
+            },
+        )
+
+        result = srv.compare_pilots(["trend-following", "dip-buyer", "macd-trend"])
+
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert len(payload) == 3
+        for row in payload:
+            assert row["performance"]["curve"] is None
+            assert row["headline"]["deployable"] is None
+        assert "No validated backtest available." in result
+
+    def test_missing_curve_degrades_honestly_not_fabricated(self, monkeypatch):
+        import pilots.performance as performance_mod
+        import pilots.scoring as scoring_mod
+
+        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_headline",
+            lambda pilot, **k: {
+                "sharpe": None,
+                "dsr": None,
+                "pbo": None,
+                "max_drawdown": None,
+                "deployable": None,
+            },
+        )
+        monkeypatch.setattr(
+            performance_mod,
+            "pilot_performance",
+            lambda pilot, range="1M", **k: {
+                "metrics": None,
+                "curve": None,
+                "benchmark": None,
+                "macro_benchmark": None,
+                "reason": "no validation summary found",
+                "range": range,
+            },
+        )
+
+        result = srv.compare_pilots(["trend-following", "dip-buyer"])
+
+        assert "unavailable (no validation summary found)" in result
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert all(row["performance"]["curve"] is None for row in payload)
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.catalog as catalog_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(catalog_mod, "get_pilot", _raise)
+
+        result = srv.compare_pilots(["trend-following", "dip-buyer"])
+        assert "Failed to compare pilots" in result
+
+
 class TestGetPilotPerformance:
     def test_unknown_pilot(self):
         assert "No such pilot" in srv.get_pilot_performance("nope", "1M")
@@ -3013,6 +3176,287 @@ class TestFollowPilot:
 
         result = srv.follow_pilot("trend-following", 500)
         assert "Failed to follow pilot" in result
+
+
+# ---------------------------------------------------------------------------
+# unfollow_pilot -- Tool 1 of the "PR A" Pilot marketplace batch. Cancels a
+# follow via FollowsStore.upsert(pilot_id, 0.0), NOT .remove() (would delete
+# the mirrored attribution). No widget, never gated on the kill switch, no
+# ToolAnnotations(readOnlyHint=True) (it writes state).
+# ---------------------------------------------------------------------------
+
+
+class TestUnfollowPilot:
+    def test_unknown_pilot(self):
+        result = srv.unfollow_pilot("does-not-exist")
+        assert "No such pilot 'does-not-exist'" in result
+
+    def test_not_currently_following_short_circuits(self, monkeypatch):
+        import pilots.follows_store as fs_mod
+
+        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: None)
+
+        result = srv.unfollow_pilot("trend-following")
+        assert "Not currently following" in result
+        assert "trend-following" in result
+
+    def test_happy_path_reports_residual_mirrored(self, monkeypatch):
+        import pilots.follows_store as fs_mod
+
+        row = {"pilot_id": "trend-following", "amount": 500.0, "status": "active"}
+        mirrored = [{"symbol": "AAPL", "weight": 1.0, "target_notional": 500.0}]
+
+        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
+        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: mirrored)
+        captured = {}
+        monkeypatch.setattr(
+            fs_mod.FollowsStore,
+            "upsert",
+            lambda self, pid, amt: captured.update(pid=pid, amt=amt) or row,
+        )
+
+        result = srv.unfollow_pilot("trend-following")
+
+        assert captured == {"pid": "trend-following", "amt": 0.0}
+        assert "Follow cancelled (was $500.00)" in result
+        assert "Still Held (not automatically sold)" in result
+        assert "will not be automatically sold" in result
+        assert "AAPL" in result
+        assert "$500.00" in result
+        assert '"was_following": true' in result
+
+    def test_happy_path_no_residual_mirrored(self, monkeypatch):
+        import pilots.follows_store as fs_mod
+
+        row = {"pilot_id": "trend-following", "amount": 100.0, "status": "active"}
+        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
+        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: [])
+        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: row)
+
+        result = srv.unfollow_pilot("trend-following")
+
+        assert "Follow cancelled" in result
+        assert "No attributed positions on record" in result
+
+    def test_already_cancelled_is_idempotent(self, monkeypatch):
+        import pilots.follows_store as fs_mod
+
+        row = {"pilot_id": "trend-following", "amount": 0.0, "status": "cancelled"}
+        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
+        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: [])
+        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: row)
+
+        result = srv.unfollow_pilot("trend-following")
+
+        assert "Already not actively following" in result
+        assert '"was_following": false' in result
+
+    def test_not_gated_on_kill_switch(self, monkeypatch):
+        """Unlike follow_pilot, unfollow_pilot must succeed even when the
+        global kill switch is active -- it takes on no new risk."""
+        import execution.kill_switch as ks_mod
+        import pilots.follows_store as fs_mod
+
+        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: True)
+        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "reason", lambda self: "VIX spike")
+        row = {"pilot_id": "trend-following", "amount": 500.0, "status": "active"}
+        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
+        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: [])
+        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: row)
+
+        result = srv.unfollow_pilot("trend-following")
+
+        assert "Kill switch" not in result
+        assert "Follow cancelled" in result
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.catalog as catalog_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(catalog_mod, "get_pilot", _raise)
+
+        result = srv.unfollow_pilot("trend-following")
+        assert "Failed to unfollow pilot" in result
+
+
+# ---------------------------------------------------------------------------
+# get_quote -- Tool 3 of the "PR A" Pilot marketplace batch. Thin wrapper
+# over data.market_data.CompositeProvider.get_latest_quote via get_provider(),
+# matching api/data_api.py's GET /data/quotes error-handling convention. No
+# widget; readOnlyHint=True.
+# ---------------------------------------------------------------------------
+
+
+class TestGetQuote:
+    def test_happy_path_live_quote(self, monkeypatch):
+        import data.market_data as md_mod
+
+        ts = datetime(2026, 8, 10, 14, 30, tzinfo=None)
+        quote = md_mod.Quote(
+            symbol="AAPL", price=150.25, bid=150.20, ask=150.30,
+            timestamp=ts, is_stale=False, source="alpaca",
+        )
+        fake_provider = MagicMock()
+        fake_provider.get_latest_quote.return_value = quote
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        result = srv.get_quote("aapl")
+
+        assert "# Quote: AAPL" in result
+        assert "$150.25" in result
+        assert "🟢 Live" in result
+        assert "alpaca" in result
+        assert '"is_stale": false' in result
+        fake_provider.get_latest_quote.assert_called_once_with("AAPL")
+
+    def test_stale_quote_rendered_honestly(self, monkeypatch):
+        import data.market_data as md_mod
+
+        quote = md_mod.Quote(
+            symbol="MSFT", price=300.0, bid=299.9, ask=300.1,
+            timestamp=datetime(2026, 8, 10), is_stale=True, source="yfinance",
+        )
+        fake_provider = MagicMock()
+        fake_provider.get_latest_quote.return_value = quote
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        result = srv.get_quote("MSFT")
+
+        assert "🟡 Delayed" in result
+        assert '"is_stale": true' in result
+
+    def test_nan_bid_ask_coerced_to_null(self, monkeypatch):
+        import math
+
+        import data.market_data as md_mod
+
+        quote = md_mod.Quote(
+            symbol="ILLQ", price=10.0, bid=float("nan"), ask=float("nan"),
+            timestamp=datetime(2026, 8, 10), is_stale=True, source="yfinance",
+        )
+        fake_provider = MagicMock()
+        fake_provider.get_latest_quote.return_value = quote
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        result = srv.get_quote("ILLQ")
+
+        assert "N/A" in result
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert payload["bid"] is None
+        assert payload["ask"] is None
+        assert not math.isnan(payload["price"])
+
+    def test_market_data_error_degrades_honestly(self, monkeypatch):
+        import data.market_data as md_mod
+
+        fake_provider = MagicMock()
+        fake_provider.get_latest_quote.side_effect = md_mod.MarketDataError("no data for symbol")
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        result = srv.get_quote("ZZZZ")
+
+        assert "No quote available for 'ZZZZ'" in result
+        assert "Failed to get quote" not in result
+
+    def test_generic_exception_degrades(self, monkeypatch):
+        import data.market_data as md_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(md_mod, "get_provider", _raise, raising=False)
+
+        result = srv.get_quote("AAPL")
+        assert "Failed to get quote for 'AAPL'" in result
+
+
+# ---------------------------------------------------------------------------
+# get_portfolio_by_pilot -- Tool 4 of the "PR A" Pilot marketplace batch.
+# Thin MCP-tool wrapper over the pure pilots.portfolio_attribution algorithm
+# (see tests/test_pilots_portfolio_attribution.py for the math itself). Tests
+# here focus on tool wiring: account-snapshot sourcing, follows/catalog
+# threading, markdown rendering, dead-letter degradation.
+# ---------------------------------------------------------------------------
+
+
+class TestGetPortfolioByPilot:
+    def test_no_account_snapshot(self, monkeypatch):
+        import data.historical_store as hs_mod
+        import pilots.follows_store as fs_mod
+
+        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: None)
+        monkeypatch.setattr(fs_mod.FollowsStore, "list_all", lambda self: [])
+
+        result = srv.get_portfolio_by_pilot()
+
+        assert "# Portfolio by Pilot (proxy attribution)" in result
+        assert "no account snapshot on record" in result
+        assert "NOT per-lot cost-basis P&L tracking" in result
+
+    def test_happy_path_renders_attribution_and_unattributed(self, monkeypatch):
+        import data.historical_store as hs_mod
+        import pilots.follows_store as fs_mod
+
+        position = SimpleNamespace(market_value=1000.0, unrealized_pl=100.0)
+        other_position = SimpleNamespace(market_value=200.0, unrealized_pl=-10.0)
+        fake_snapshot = SimpleNamespace(
+            positions={"AAPL": position, "MSFT": other_position},
+            fetched_at=datetime(2026, 8, 1, tzinfo=None),
+        )
+        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: fake_snapshot)
+        follows = [
+            {
+                "pilot_id": "trend-following",
+                "status": "active",
+                "mirrored": [{"symbol": "AAPL", "weight": 1.0, "target_notional": 600.0}],
+                "mirrored_updated_at": "2026-07-30T00:00:00+00:00",
+            }
+        ]
+        monkeypatch.setattr(fs_mod.FollowsStore, "list_all", lambda self: follows)
+
+        result = srv.get_portfolio_by_pilot()
+
+        assert "By Pilot" in result
+        assert "`trend-following`" in result
+        assert "$600.00" in result
+        assert "Unattributed" in result
+        assert "MSFT" in result  # fully unclaimed -> in the unattributed bucket
+        assert "$200.00" in result
+        payload = json.loads(result.split("```json")[1].split("```")[0])
+        assert payload["pilots"][0]["pilot_id"] == "trend-following"
+        # AAPL: $400 of the $1000 held is unclaimed (target_notional=600 < market_value=1000);
+        # MSFT: fully unclaimed.
+        assert payload["unattributed"] == [
+            {"symbol": "AAPL", "value": 400.0},
+            {"symbol": "MSFT", "value": 200.0},
+        ]
+
+    def test_account_snapshot_fetch_exception_degrades_to_no_data(self, monkeypatch):
+        import data.historical_store as hs_mod
+        import pilots.follows_store as fs_mod
+
+        def _raise(self):
+            raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", _raise)
+        monkeypatch.setattr(fs_mod.FollowsStore, "list_all", lambda self: [])
+
+        result = srv.get_portfolio_by_pilot()
+
+        assert "no account snapshot on record" in result
+
+    def test_exception_degrades(self, monkeypatch):
+        import pilots.catalog as catalog_mod
+
+        def _raise(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(catalog_mod, "list_pilots", _raise)
+
+        result = srv.get_portfolio_by_pilot()
+        assert "Failed to build portfolio-by-pilot attribution" in result
 
 
 # ---------------------------------------------------------------------------

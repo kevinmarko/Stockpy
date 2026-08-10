@@ -131,6 +131,33 @@ def test_scalar_and_vectorized_agree_on_bearish_variant(module):
     )
 
 
+def test_macd_momentum_nan_inputs_stay_neutral_in_both_paths():
+    """Regression for a real divergence: compute()'s NaN guard (added
+    alongside the KNOWN-GAP fixes in signals/macd_momentum.py) has no
+    equivalent in compute_vectorized() -- `~is_bullish` (a negation, rather
+    than an explicit macd_line <= macd_signal comparison) turns a NaN
+    macd_line/macd_signal's False `is_bullish` into a True "bearish" branch,
+    fabricating the exact confident -15pts reading compute()'s own fix was
+    written to eliminate. Verified directly (not assumed) before the fix:
+    compute() returned 0.0 while compute_vectorized() returned -1.0 for an
+    identical NaN input."""
+    ctx = _signal_context()
+    module = MACDMomentumSignal()
+
+    row = _realistic_row().copy()
+    row["aroon_osc"] = 60.0
+    row["macd_line"] = float("nan")
+    row["macd_signal"] = 0.5
+
+    scalar_out = module.compute(row, ctx)
+    vec_out = module.compute_vectorized(pd.DataFrame([row]), ctx)
+
+    assert scalar_out.score == 0.0
+    assert math.isclose(scalar_out.score, vec_out["score"].iloc[0], abs_tol=ABS_TOL), (
+        f"scalar={scalar_out.score} vs vectorized={vec_out['score'].iloc[0]}"
+    )
+
+
 class TestDividendQualityParity:
     """compute() reads context.fundamentals.{dividend_yield,is_dividend_sustainable};
     compute_vectorized() reads the same-named DataFrame columns -- bridged here."""

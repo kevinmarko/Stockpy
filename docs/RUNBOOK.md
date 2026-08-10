@@ -193,6 +193,53 @@ launchd service that already ships in this repo, and the two webapp env vars
 `webapp/README.md` already documents for its own mock↔live switch — as of this writing there
 is no further backend or webapp work outstanding to go webapp-only.
 
+### 0.2 Caddy + Tailscale (Remote/Production Access)
+
+Once the always-on backend stack from §0.1 is running, `investyo_stack_service.sh` also starts
+a **Caddy** reverse proxy on `:8888` (`scripts/Caddyfile`) that fronts all four backend ports
+(Pilots API `:8602` under `/svc/*`, Data API `:8603`, Metrics API `:8604`, Control API `:8601`)
+plus the built Pilots PWA static bundle (`webapp/dist`) — a single port to reach the whole
+platform from a phone or another machine on your **Tailscale** tailnet, over HTTPS, without
+opening anything to the public internet.
+
+1. **Install Caddy** (one-time): `brew install caddy`. Verify: `caddy version`.
+2. **Build the webapp bundle** (whenever `webapp/` source has changed): `./scripts/build_webapp_prod.sh`.
+   This is a manual/pre-deploy step, not run automatically by the stack service (mirrors how
+   `.venv` is built once by `setup.sh`, not rebuilt on every service start) — if `webapp/dist`
+   is missing, the stack service now warns and skips starting Caddy rather than serving a 404
+   (see the guard in `scripts/investyo_stack_service.sh`).
+3. **Expose the proxy over Tailscale** (**one-time, per machine** — not a per-start step):
+   ```bash
+   tailscale serve --bg --https=443 / http://127.0.0.1:8888
+   ```
+   This config is **persistent**: it survives reboots and `tailscale down`/`up` cycles, and is
+   only cleared by `tailscale serve reset` or a full `tailscale logout`. Verify anytime with:
+   ```bash
+   tailscale serve status
+   # https://<your-machine>.<your-tailnet>.ts.net (tailnet only)
+   # |-- / proxy http://127.0.0.1:8888
+   ```
+4. **Restart (or just confirm) the stack service** so Caddy picks up a freshly-built `webapp/dist`
+   — same restart sequence as §0.1 step 3. Caddy itself starts/stops automatically as part of
+   `investyo_stack_service.sh`; there is no separate launchd job for it.
+5. **Reach it**: `https://<your-machine>.<your-tailnet>.ts.net/` from any device signed into the
+   same tailnet (phone, laptop, etc.) — no VPN config, no port-forwarding, no public exposure.
+
+**Troubleshooting**:
+```bash
+tail -f output/stack_caddy.log            # Caddy's own stdout/stderr
+tailscale serve status                    # confirm the tailnet mapping is still active
+curl -sf http://localhost:8888/           # confirm Caddy itself is serving locally
+curl -sf https://<tailnet-hostname>/      # confirm the Tailscale path end-to-end
+```
+If `output/stack_caddy.log` doesn't exist and `stack_daemon.log`/the other two logs show the
+rest of the stack came up fine, check for a `WARNING: caddy binary not found` or
+`WARNING: webapp/dist/index.html not found` line in the service's own stderr (`launchctl list`
+→ check the job's `StandardErrorPath`, or `output/` if using the older foreground launcher) —
+Caddy is deliberately optional and skips itself rather than crash-looping the whole stack over
+a missing binary or an unbuilt bundle (see the guard comment in
+`scripts/investyo_stack_service.sh`).
+
 ---
 
 ## 1. ⚠ N/A in Advisory Mode — Paper → Live Switch

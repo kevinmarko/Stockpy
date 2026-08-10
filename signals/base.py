@@ -65,6 +65,15 @@ class SignalContext:
     # multi-source social documents exist for this trading day (distinct from
     # news_sentiment_scores, which is Finnhub-headline-only).
     sentiment_credibility_scores: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    # Sector-Neutral Earnings-Quality Rank (SNEQR) percentiles, keyed by
+    # ticker (float in [0, 1], a within-sector-standardized composite of
+    # accrual quality + gross profitability, ranked cross-sectionally).
+    # Populated once per cycle by
+    # SectorNeutralQualitySignal.pre_compute(); empty dict when the module
+    # hasn't run pre_compute yet this cycle, when Symbol/sector columns are
+    # missing, or when the accrual/gross-profitability raw inputs aren't yet
+    # present in universe_df (see signals/sector_quality_rank.py).
+    sector_quality_ranks: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

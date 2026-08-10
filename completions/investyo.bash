@@ -17,9 +17,10 @@ _investyo_complete() {
         validation.harness) [[ "$prevw" == "-m" ]] && cmd='validation.harness' ;;
         prompt_registry) [[ "$prevw" == "-m" ]] && cmd='prompt_registry' ;;
         preflight_check.py|*/preflight_check.py) cmd='preflight_check.py' ;;
-        refresh_validations.py|*/refresh_validations.py) cmd='refresh_validations.py' ;;
+        scripts.refresh_validations) [[ "$prevw" == "-m" ]] && cmd='scripts.refresh_validations' ;;
         daily_briefing.py|*/daily_briefing.py) cmd='daily_briefing.py' ;;
         track_record_status.py|*/track_record_status.py) cmd='track_record_status.py' ;;
+        database_setup.py|*/database_setup.py) cmd='database_setup.py' ;;
       esac
     else
       case "$cmd" in
@@ -61,10 +62,11 @@ _investyo_complete() {
     prompt_registry/diff) kind='opts'; cands=() ;;
     prompt_registry/verify) kind='opts'; cands=() ;;
     prompt_registry/publish) kind='opts'; cands=(--version -v --author --notes) ;;
-    preflight_check.py) kind='opts'; cands=(--json --skip --fire-alerts) ;;
-    refresh_validations.py) kind='opts'; cands=(--strategies --start --end --output-dir --n-cpcv-splits --n-test-splits --json) ;;
+    preflight_check.py) kind='opts'; cands=(--json --skip --fire-alerts --validation-staleness-only) ;;
+    scripts.refresh_validations) kind='opts'; cands=(--strategies --start --end --output-dir --n-cpcv-splits --n-test-splits --json) ;;
     daily_briefing.py) kind='opts'; cands=(--output-dir --print) ;;
     track_record_status.py) kind='opts'; cands=(--output-dir --json) ;;
+    database_setup.py) kind='opts'; cands=() ;;
   esac
 
   if [[ "$kind" == "opts" ]]; then
