@@ -110,6 +110,17 @@ def test_estimate_win_rate_and_payoff_no_losses_returns_nan_b():
     assert math.isnan(b)
 
 
+def test_estimate_win_rate_and_payoff_near_zero_avg_loss_returns_nan_b():
+    """Finding 31 regression: a near-zero (not bit-identical zero) average
+    loss must be treated as degenerate via the repo's `< 1e-12` convention,
+    not an exact `== 0.0` check -- which would let a near-zero-but-nonzero
+    avg_loss through and explode the payoff ratio b (avg_win / avg_loss)."""
+    df = _make_closed_trades(n_wins=20, n_losses=20, win_ret=0.10, loss_ret=-1e-15)
+    p, b, n = estimate_win_rate_and_payoff(df, lookback_trades=100)
+    assert n == 40
+    assert math.isnan(b)
+
+
 def test_estimate_win_rate_and_payoff_empty_returns_nan():
     p, b, n = estimate_win_rate_and_payoff(pd.DataFrame())
     assert n == 0

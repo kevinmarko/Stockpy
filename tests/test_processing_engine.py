@@ -313,6 +313,24 @@ class TestMomentumMetricsLookahead:
 
         assert verify_no_lookahead(calc, df, t=350)
 
+    def test_momentum_vol_scaled_is_nan_not_fabricated_when_roc_12m_unavailable(self, engine):
+        """Finding 17 regression: the np.where(...) fallback previously
+        fabricated 0.0 whenever the vol-scaling inputs weren't ready (e.g.
+        ROC_12M still NaN before its 253-day lookback fills, even though the
+        realized_vol_60d leg is already valid by then) -- must be NaN, never
+        a fabricated "flat momentum" 0.0 (CONSTRAINT #4)."""
+        df = _ohlcv(400, seed=11)
+        out = engine.calculate_momentum_metrics(df)
+
+        # ROC_12M requires 253 rows of lookback (shift(253)), so rows before
+        # index 253 are NaN there while realized_vol_60d (needs only ~61
+        # rows) is already valid -- this window is exactly the fallback
+        # branch under test.
+        window = out.iloc[100:253]
+        assert window["ROC_12M"].isna().all()
+        assert window["Realized_Vol_60D"].notna().all()
+        assert window["Momentum_Vol_Scaled"].isna().all()
+
 
 # ============================================================================
 # calculate_fundamental_metrics
@@ -406,6 +424,41 @@ class TestCalculateFundamentalMetrics:
         dto = _fund_dto(market_cap=0.0)
         result = engine.calculate_fundamental_metrics({"AAPL": dto})
         assert math.isnan(result["AAPL"]["log_market_cap"])
+
+    def test_institutional_velocity_preserves_genuine_zero_change(self, engine):
+        """Finding 26 regression: a genuine 0.0 institutional-change reading
+        was previously conflated with 'missing' (`if not inst_change or
+        inst_change == 0.0`) and silently overwritten by the short-interest
+        fallback proxy. Construct short-interest data that WOULD produce a
+        non-zero proxy if (wrongly) applied on top of a genuine 0.0 net
+        change, and prove the genuine reading survives instead."""
+        dto = _fund_dto(extra_info={
+            "heldPercentInstitutions": 0.60,
+            "netPercentInstitutionsSharesOut": 0.0,  # genuine 0.0 net change
+            "sharesShortPriorMonth": 2_000_000.0,
+            "sharesShort": 1_000_000.0,
+            "sharesOutstanding": 100_000_000.0,
+        })
+        result = engine.calculate_fundamental_metrics({"AAPL": dto})
+        # calculate_institutional_velocity itself treats a 0.0 quarterly
+        # change as "no signal" (returns 0.0) -- the point under test is
+        # that this 0.0 is the genuinely PRESERVED reading, not the proxy's
+        # 0.01 non-zero value ((2,000,000-1,000,000)/100,000,000) that would
+        # have overwritten it before the fix.
+        assert result["AAPL"]["Institutional Velocity"] == pytest.approx(0.0)
+
+    def test_institutional_velocity_proxy_still_fires_when_genuinely_absent(self, engine):
+        """Symmetry check: when the institutional-change field is genuinely
+        ABSENT (None), the short-interest fallback proxy must still apply."""
+        dto = _fund_dto(extra_info={
+            "heldPercentInstitutions": 0.60,
+            # no netPercentInsiderShares / netPercentInstitutionsSharesOut key at all
+            "sharesShortPriorMonth": 2_000_000.0,
+            "sharesShort": 1_000_000.0,
+            "sharesOutstanding": 100_000_000.0,
+        })
+        result = engine.calculate_fundamental_metrics({"AAPL": dto})
+        assert result["AAPL"]["Institutional Velocity"] != 0.0
 
     def test_one_bad_dto_does_not_abort_others(self, engine):
         """A dto that raises mid-calculation must not prevent other tickers
@@ -548,3 +601,26 @@ class TestCalculateRollingBeta:
         # a fabricated finite number that pretends to be a real beta.
         tail = beta.iloc[20:]
         assert tail.apply(lambda v: pd.isna(v) or np.isinf(v)).all()
+
+    def test_near_constant_spy_window_yields_nan_not_exploded_beta(self):
+        """Finding 16 regression: a near-constant (not bit-identical) SPY
+        window produces a rolling_var that is near-zero but not exactly 0.0
+        due to floating-point noise -- the degenerate-std guard (< 1e-12)
+        must catch this and yield NaN, not an exploded beta."""
+        from processing_engine import calculate_rolling_beta
+
+        n = 80
+        price_df = self._mk_price_df(
+            100.0 + np.random.RandomState(1).normal(0, 1, n).cumsum()
+        )
+        rng = np.random.RandomState(2)
+        # SPY closes near-constant with floating-point-scale noise (~1e-10),
+        # NOT bit-identical -- an exact `<= 0.0` check would not catch this.
+        spy_closes = 400.0 + rng.normal(0, 1e-10, n)
+        spy_df = self._mk_price_df(spy_closes)
+
+        beta = calculate_rolling_beta(price_df, spy_df, window=20)
+        assert not beta.empty
+        tail = beta.iloc[20:]
+        # Never a fabricated huge/finite value masquerading as a real beta.
+        assert tail.apply(lambda v: pd.isna(v)).all()

@@ -45,7 +45,12 @@ def apply_tactical_ranges(signal: str, current_price: float, safe_atr: float, ch
         resistance = current_price - (0.5 * safe_atr)
         if graham_val > 0 and resistance > graham_val:
             resistance = graham_val
-        if support > resistance:
+        # A large ATR relative to current_price can drive support (or even
+        # resistance) negative even when support <= resistance still holds
+        # numerically (e.g. current_price=5.0, safe_atr=12.0) — the existing
+        # support > resistance guard alone doesn't catch that case, so also
+        # floor on a negative support using the same fallback pair.
+        if support > resistance or support < 0:
             support = current_price * 0.95
             resistance = current_price
         tactical_range = f"Buy Zone: ${support:.2f} - ${resistance:.2f}"
@@ -54,6 +59,10 @@ def apply_tactical_ranges(signal: str, current_price: float, safe_atr: float, ch
         # Uses Chandelier Exit for dynamic trailing
         # Instead of static boundaries, we anchor to the Chandelier Long value
         support = chandelier_long if chandelier_long > 0 else current_price - (2.0 * safe_atr)
+        # Same floor as the Buy Zone above: a large ATR relative to
+        # current_price can drive the ATR-derived support negative.
+        if support < 0:
+            support = current_price * 0.95
         resistance = current_price + (2.0 * safe_atr)
         tactical_range = f"Hold Range: ${support:.2f} - ${resistance:.2f}"
 
@@ -61,7 +70,10 @@ def apply_tactical_ranges(signal: str, current_price: float, safe_atr: float, ch
         # Tighten stops aggressively
         trim_point = current_price + (0.5 * safe_atr)
         # Hard stop tied directly to Chandelier Short for bearish trades, or Chandelier Long failure
-        stop_loss = max(0.01, chandelier_long) if chandelier_long > 0 else max(0.01, current_price - (1.0 * safe_atr))
+        # A stale chandelier_long can sit above current_price (e.g. a price that
+        # dropped hard since the trailing high was set); clamp so the stop never
+        # sits above where the position could actually be exited.
+        stop_loss = max(0.01, min(chandelier_long, current_price)) if chandelier_long > 0 else max(0.01, current_price - (1.0 * safe_atr))
         tactical_range = f"Trim @ ${trim_point:.2f} | Stop @ ${stop_loss:.2f}"
 
     return tactical_range
@@ -94,9 +106,11 @@ def apply_sell_side_range(
           (the forecast wins when fair-value upside exceeds 3 σ — captures
            the bullish-forecast scenario without fabricating a price level
            when forecast_price is zero / unavailable)
-        - trailing stop      = chandelier_long if > 0 else current_price - 2.5 * ATR
-          (looser than the RISK REDUCE 1.0 ATR stop because this leg is for a
-           healthy long that we are NOT trying to flatten)
+        - trailing stop      = min(chandelier_long, current_price) if chandelier_long > 0
+          else current_price - 2.5 * ATR (looser than the RISK REDUCE 1.0 ATR stop
+          because this leg is for a healthy long that we are NOT trying to flatten;
+          clamped to current_price so a stale chandelier_long above the live price
+          never produces a nonsensical stop)
         Returned as: ``"Sell Zone: $LO - $HI | Stop @ $STOP"``.
 
     * RISK REDUCE / AVOID — the take-profit envelope is no longer the
@@ -150,7 +164,9 @@ def apply_sell_side_range(
         take_profit_hi = max(atr_resistance, forecast_price) if forecast_price > 0 else atr_resistance
 
         if chandelier_long > 0:
-            trailing_stop = chandelier_long
+            # Clamp: a stale chandelier_long above current_price is not a
+            # sane trailing stop for a resting sell order.
+            trailing_stop = min(chandelier_long, current_price)
         else:
             trailing_stop = max(0.01, current_price - (2.5 * safe_atr))
 
@@ -161,7 +177,9 @@ def apply_sell_side_range(
 
     # RISK REDUCE / AVOID / unknown — fail-closed to immediate-exit instruction
     if chandelier_long > 0:
-        stop_loss = chandelier_long
+        # Clamp: a stale chandelier_long above current_price is not a sane
+        # exit stop for a market-now sell.
+        stop_loss = min(chandelier_long, current_price)
     else:
         stop_loss = max(0.01, current_price - (1.0 * safe_atr))
     return f"Sell Now @ market | Stop @ ${stop_loss:.2f}"

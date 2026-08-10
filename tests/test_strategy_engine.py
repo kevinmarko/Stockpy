@@ -410,6 +410,32 @@ class TestApplyTacticalRanges:
         _, stop = map(float, _TRIM_RE.match(out).groups())
         assert stop >= 0.01
 
+    def test_risk_reduce_stale_chandelier_above_price_clamped_to_price(self):
+        # Finding 9: a stale chandelier_long sitting ABOVE current_price is
+        # not a sane hard stop -- clamp to current_price.
+        out = apply_tactical_ranges("RISK REDUCE", 100.00, 2.00, 150.00, 0.0)
+        _, stop = map(float, _TRIM_RE.match(out).groups())
+        assert stop == pytest.approx(100.00)
+
+    def test_buy_zone_negative_support_falls_back(self):
+        # Finding 13: a large ATR relative to current_price drives support
+        # (and even resistance) negative WITHOUT tripping the pre-existing
+        # support > resistance guard (both are negative but support < resistance
+        # numerically) -- must still fall back to the sane S=price*0.95, R=price pair.
+        out = apply_tactical_ranges("BUY", 5.00, 12.00, 0.0, 0.0)
+        support, resistance = map(float, _BUY_ZONE_RE.match(out).groups())
+        assert support >= 0.0
+        assert support == pytest.approx(5.00 * 0.95)
+        assert resistance == pytest.approx(5.00)
+
+    def test_hold_range_negative_support_falls_back(self):
+        # Finding 14: same floor treatment applied to the HOLD branch's support.
+        out = apply_tactical_ranges("HOLD", 5.00, 4.00, 0.0, 0.0)
+        support, resistance = map(float, _HOLD_RANGE_RE.match(out).groups())
+        assert support >= 0.0
+        assert support == pytest.approx(5.00 * 0.95)
+        assert resistance == pytest.approx(5.00 + 2 * 4.00)
+
 
 # ===========================================================================
 # 5. _generate_robinhood_advice (holding-aware helper)

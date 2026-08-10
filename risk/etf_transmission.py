@@ -390,12 +390,23 @@ def compute_market_residual_r2(
         window = max(2, int(window))
         required = max(window, max(2, int(min_obs)))
 
+        # Difference the stock/market PRICE legs into returns BEFORE the inner
+        # join with the already-differenced composite return column -- aligning
+        # three genuine return series, not two price levels plus one
+        # pre-differenced return. Joining on prices first (then differencing
+        # after) let a single date missing from the composite series drop a
+        # stock/market price row too, corrupting the pct_change() computed for
+        # the row immediately after the gap (it would span more than one day)
+        # and shifting that return's date correspondence with the composite.
+        stock_returns_full = stock_bars["Close"].pct_change()
+        market_returns_full = market_bars["Close"].pct_change()
+
         # Contemporaneous inner join, never forward-filled -- identical
         # alignment contract to processing_engine.calculate_rolling_beta.
         aligned = pd.concat(
             [
-                stock_bars["Close"].rename("stock"),
-                market_bars["Close"].rename("market"),
+                stock_returns_full.rename("stock"),
+                market_returns_full.rename("market"),
                 pd.Series(composite_returns).rename("composite"),
             ],
             axis=1,
@@ -404,11 +415,7 @@ def compute_market_residual_r2(
         if aligned.empty:
             return float("nan")
 
-        returns = pd.DataFrame({
-            "stock": aligned["stock"].pct_change(),
-            "market": aligned["market"].pct_change(),
-            "composite": aligned["composite"],
-        }).replace([np.inf, -np.inf], np.nan).dropna()
+        returns = aligned.replace([np.inf, -np.inf], np.nan).dropna()
 
         if len(returns) < required:
             return float("nan")
@@ -418,7 +425,12 @@ def compute_market_residual_r2(
         r_e = returns["composite"]
 
         var_m = r_m.rolling(window).var().iloc[-1]
-        if not _finite(var_m) or float(var_m) <= 0.0:
+        # Degenerate-std guard (repo convention): mirrors the `_DEGENERATE_STD`
+        # (1e-12) threshold used 3 lines below for u.std()/e.std() -- a
+        # near-flat market-proxy window produces a var_m that is near-zero but
+        # not exactly <= 0.0 due to floating-point noise, which would
+        # otherwise corrupt beta_i/beta_e and, downstream, R2.
+        if not _finite(var_m) or float(var_m) < _DEGENERATE_STD:
             return float("nan")
 
         beta_i = r_i.rolling(window).cov(r_m).iloc[-1] / float(var_m)

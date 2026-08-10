@@ -129,7 +129,7 @@ def estimate_win_rate_and_payoff(
         return p, float("nan"), n_trades
 
     avg_loss = float(abs(losses.mean()))
-    if avg_loss == 0.0:
+    if avg_loss < 1e-12:
         logger.warning(
             "estimate_win_rate_and_payoff: average loss is exactly 0; payoff ratio b is undefined."
         )
@@ -225,7 +225,7 @@ def estimate_win_rate_and_payoff_per_strategy(
         return p, float("nan"), n_trades
 
     avg_loss = float(abs(losses.mean()))
-    if avg_loss == 0.0:
+    if avg_loss < 1e-12:
         return p, float("nan"), n_trades
 
     avg_win = float(wins.mean())
@@ -272,7 +272,7 @@ def bootstrap_kelly_confidence(
             b_boot = float("nan")
         else:
             avg_loss = abs(losses.mean())
-            if avg_loss == 0.0:
+            if avg_loss < 1e-12:
                 b_boot = float("nan")
             else:
                 avg_win = wins.mean() if len(wins) > 0 else 0.0
@@ -453,7 +453,11 @@ def kelly_sizing_for_strategy(
             )
             return 0.0, "cold_start_no_vol"
         weight = volatility_target_weight(realized_vol, target_vol=target_vol, max_leverage=max_leverage)
-        scale_in = min(1.0, max(0, n_trades_for_scalein) / MIN_TRADES_REQUIRED)
+        # Ramp against the caller-supplied `min_trades` (not the module
+        # constant) so a caller passing a non-default min_trades sees the
+        # cold-start ramp actually respect it. `max(1, ...)` guards against a
+        # non-positive min_trades causing a ZeroDivisionError (CONSTRAINT #6).
+        scale_in = min(1.0, max(0, n_trades_for_scalein) / max(1, min_trades))
         weight *= scale_in
         logger.warning(
             "kelly_sizing_for_strategy: %s. Falling back to vol-target weight=%.4f "
