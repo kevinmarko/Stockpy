@@ -176,3 +176,65 @@ def test_post_login_missing_password_setting_raises(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(Exception):
         client.post("/login?req=nonce-1", data={"req": "nonce-1", "password": "anything"})
+
+
+# ---------------------------------------------------------------------------
+# Multi-user form rendering (settings.MCP_OAUTH_MULTI_USER_ENABLED)
+# ---------------------------------------------------------------------------
+
+
+def _set_multi_user_enabled(monkeypatch: pytest.MonkeyPatch, value: bool):
+    from settings import settings
+
+    monkeypatch.setitem(settings.__dict__, "MCP_OAUTH_MULTI_USER_ENABLED", value)
+
+
+def test_legacy_login_form_is_byte_identical_when_multi_user_flag_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """The concrete backward-compat proof: MCP_OAUTH_MULTI_USER_ENABLED at
+    its default False must render EXACTLY the same HTML as before this
+    module supported multi-user logins at all -- captured as a literal
+    baseline string (not re-derived from the template), so a future edit to
+    _LOGIN_FORM_TEMPLATE can't silently drift both the code and the
+    assertion together.
+    """
+    client, store = _make_client(monkeypatch, tmp_path)
+    _set_multi_user_enabled(monkeypatch, False)
+    _save_pending(store, "nonce-1")
+
+    resp = client.get("/login?req=nonce-1")
+
+    expected = (
+        "<!doctype html>\n"
+        "<html>\n"
+        "<head><title>InvestYo MCP — Sign in</title></head>\n"
+        "<body>\n"
+        "<h1>InvestYo MCP</h1>\n"
+        "\n"
+        "\n"
+        '<form method="post" action="/login?req=nonce-1">\n'
+        '  <input type="hidden" name="req" value="nonce-1">\n'
+        '  <label for="password">Password</label>\n'
+        '  <input type="password" id="password" name="password" autofocus>\n'
+        '  <button type="submit">Sign in</button>\n'
+        "</form>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+    assert resp.text == expected
+    assert "name=\"username\"" not in resp.text
+
+
+def test_multi_user_login_form_gains_username_field_when_flag_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    client, store = _make_client(monkeypatch, tmp_path)
+    _set_multi_user_enabled(monkeypatch, True)
+    _save_pending(store, "nonce-1")
+
+    resp = client.get("/login?req=nonce-1")
+
+    assert resp.status_code == 200
+    assert 'name="username"' in resp.text
+    assert 'name="password"' in resp.text

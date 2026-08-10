@@ -9,17 +9,40 @@ store class with ``__init__(self, db_url=None)`` -> ``create_db_engine`` ->
 ``Base.metadata.create_all`` -> ``sessionmaker`` -> ``session_scope`` for
 every write).
 
-Backs six concerns of a minimal OAuth 2.1 authorization server:
+Backs seven concerns of a minimal OAuth 2.1 authorization server:
 
 - ``oauth_clients``: RFC 7591 dynamic client registration records.
 - ``oauth_pending_authorizations``: the short-lived nonce created by
   ``authorize()`` while the human completes the ``/login`` form.
 - ``oauth_authorization_codes``: single-use RFC 6749 authorization codes.
 - ``oauth_access_tokens`` / ``oauth_refresh_tokens``: issued token pairs.
-- ``oauth_login_state``: a singleton row (``id=1``) tracking consecutive
-  ``/login`` password failures for a simple lockout, mirroring
-  ``data/paper_account_store.py``'s ``PaperAccount.id==1`` singleton-row
-  pattern.
+- ``oauth_users``: named login credentials (Scrypt password hash via
+  ``mcp_oauth_password.py``) for the opt-in multi-user login path
+  (``settings.MCP_OAUTH_MULTI_USER_ENABLED``), provisioned via
+  ``scripts/manage_oauth_users.py``. Every user still reaches the exact
+  same single trading account/follows/paper account/kill switch as today
+  (Option A from ``oauth_multi_user_plan.md`` -- named credentials, not
+  genuine multi-tenancy) -- ``subject`` on an issued token is set to the
+  authenticated ``username``, a pure identity label nothing downstream
+  reads yet.
+- ``oauth_login_state``: **per-username** row tracking consecutive
+  ``/login`` password failures for a simple lockout. This was originally a
+  singleton row (``id=1``), mirroring ``data/paper_account_store.py``'s
+  ``PaperAccount.id==1`` pattern, back when there was only ever one
+  password to guess against. With N named credentials a single global
+  lockout would be wrong on two counts -- one user's mistyped password
+  would lock out everyone else, and an attacker would get
+  ``LOGIN_LOCKOUT_THRESHOLD`` guesses total across every account rather
+  than per account -- so the table is now keyed by ``username``. The
+  legacy single-password path (``MCP_OAUTH_MULTI_USER_ENABLED=False``,
+  still the default) keeps working unchanged: it always addresses the
+  reserved sentinel row ``LEGACY_SINGLE_PASSWORD_USERNAME`` rather than a
+  real username, so its lockout semantics are identical to the old
+  singleton row's, just renamed. A pre-existing DB whose
+  ``oauth_login_state`` table predates this redesign is migrated
+  additively (an idempotent ``ALTER TABLE ... ADD COLUMN username``, see
+  ``McpOAuthStore._ensure_login_state_schema``) rather than dropped and
+  recreated -- its old ``id`` column is left in place, unused.
 
 All JSON-shaped columns (``redirect_uris``, ``grant_types``,
 ``response_types``, ``contacts``, ``jwks``, ``scopes``, ``claims``) are
@@ -47,7 +70,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Boolean, Column, Float, Integer, String, Text
+from sqlalchemy import Boolean, Column, Float, Integer, String, Text, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import create_db_engine, resolve_database_url, session_scope
@@ -60,6 +83,12 @@ ACCESS_TOKEN_TTL_SECONDS = 3600
 REFRESH_TOKEN_TTL_SECONDS = 90 * 24 * 3600
 LOGIN_LOCKOUT_THRESHOLD = 5
 LOGIN_LOCKOUT_SECONDS = 900
+
+# Reserved ``oauth_login_state.username`` value for the legacy single-password
+# path (``settings.MCP_OAUTH_MULTI_USER_ENABLED=False``, the default). Real
+# usernames can never collide with this -- ``McpOAuthStore.create_user``
+# refuses to provision a real account under this name (see its docstring).
+LEGACY_SINGLE_PASSWORD_USERNAME = "__single_password__"
 
 Base = declarative_base()
 
@@ -143,10 +172,24 @@ class OAuthRefreshToken(Base):
     expires_at = Column(Float, nullable=True)
 
 
+class OAuthUser(Base):
+    __tablename__ = "oauth_users"
+
+    username = Column(String(255), primary_key=True)
+    password_hash = Column(String(255), nullable=False)  # Scrypt KDF output, see mcp_oauth_password.py
+    display_name = Column(String(255), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(Float, nullable=False)
+    updated_at = Column(Float, nullable=False)
+
+
 class OAuthLoginState(Base):
     __tablename__ = "oauth_login_state"
 
-    id = Column(Integer, primary_key=True)  # always 1
+    # Per-username row (was a singleton `id=1` row before the multi-user
+    # redesign -- see this module's docstring). The legacy single-password
+    # path always addresses LEGACY_SINGLE_PASSWORD_USERNAME.
+    username = Column(String(255), primary_key=True)
     fail_count = Column(Integer, nullable=False, default=0)
     locked_until = Column(Float, nullable=True)
 
@@ -242,6 +285,17 @@ def _refresh_token_row_to_dict(row: OAuthRefreshToken) -> Dict[str, Any]:
     }
 
 
+def _user_row_to_dict(row: OAuthUser) -> Dict[str, Any]:
+    return {
+        "username": row.username,
+        "password_hash": row.password_hash,
+        "display_name": row.display_name,
+        "is_active": bool(row.is_active),
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
 class McpOAuthStore:
     """Durable persistence for the InvestYo MCP OAuth 2.1 authorization server.
 
@@ -255,7 +309,48 @@ class McpOAuthStore:
         db_url = db_url or resolve_database_url()
         self.engine = create_db_engine(db_url)
         Base.metadata.create_all(self.engine)
+        self._ensure_login_state_schema()
         self.Session = sessionmaker(bind=self.engine)
+
+    def _ensure_login_state_schema(self) -> None:
+        """Additive migration for a pre-existing DB whose ``oauth_login_state``
+        table predates the per-username redesign (was a singleton ``id=1``
+        row -- see this module's docstring). SQLite/Postgres both lack
+        ``ADD COLUMN IF NOT EXISTS``, so this probes the column list via
+        ``sqlalchemy.inspect`` first and only issues the ``ALTER`` when
+        ``username`` is genuinely missing -- idempotent, safe to run on
+        every construction, mirrors ``data/historical_store.py``'s
+        ``_migrate_add_report_date_column`` convention (probe-then-ALTER,
+        never raises -- CONSTRAINT #6).
+
+        A fresh DB's ``CREATE TABLE`` (via ``Base.metadata.create_all``
+        above) already matches the current ``OAuthLoginState`` model, so
+        ``username`` is already present and this is a no-op.
+        """
+        try:
+            inspector = inspect(self.engine)
+            if "oauth_login_state" not in inspector.get_table_names():
+                return
+            cols = {c["name"] for c in inspector.get_columns("oauth_login_state")}
+            if "username" in cols:
+                return
+            with self.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE oauth_login_state ADD COLUMN username VARCHAR(255)"))
+                if "id" in cols:
+                    conn.execute(
+                        text(
+                            "UPDATE oauth_login_state SET username = :sentinel "
+                            "WHERE id = 1 AND username IS NULL"
+                        ),
+                        {"sentinel": LEGACY_SINGLE_PASSWORD_USERNAME},
+                    )
+            logger.info(
+                "McpOAuthStore: migrated oauth_login_state -- added username column "
+                "(pre-existing singleton row backfilled to %r).",
+                LEGACY_SINGLE_PASSWORD_USERNAME,
+            )
+        except Exception as exc:
+            logger.warning("McpOAuthStore._ensure_login_state_schema failed (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
     # Clients
@@ -441,40 +536,121 @@ class McpOAuthStore:
             session.query(OAuthRefreshToken).filter_by(token=token).delete()
 
     # ------------------------------------------------------------------
-    # Login lockout -- singleton row (id=1), lazily get-or-create.
+    # OAuth users -- multi-user login credentials (settings.MCP_OAUTH_
+    # MULTI_USER_ENABLED). Every user reaches the exact same single
+    # trading account as today (Option A) -- this table exists purely to
+    # label WHO logged in, not to isolate WHAT they can see/do.
     # ------------------------------------------------------------------
 
-    def _get_or_create_login_state(self, session) -> OAuthLoginState:
-        row = session.query(OAuthLoginState).filter_by(id=1).first()
+    def create_user(
+        self, username: str, password_hash: str, *, display_name: Optional[str] = None
+    ) -> None:
+        """Provisions a new named credential. Raises ``ValueError`` if
+        ``username`` is the reserved legacy sentinel (a real account can
+        never collide with the singleton legacy-password lockout row) or if
+        a user with this username already exists (use
+        ``update_user_password``/``set_user_active`` to modify one).
+        """
+        if username == LEGACY_SINGLE_PASSWORD_USERNAME:
+            raise ValueError(
+                f"{username!r} is reserved for the legacy single-password login "
+                "path and cannot be provisioned as a real oauth_users username."
+            )
+        if not username:
+            raise ValueError("username must be non-empty.")
+
+        now = time.time()
+        with session_scope(self.Session) as session:
+            existing = session.query(OAuthUser).filter_by(username=username).first()
+            if existing is not None:
+                raise ValueError(f"OAuth user {username!r} already exists.")
+            row = OAuthUser(
+                username=username,
+                password_hash=password_hash,
+                display_name=display_name,
+                is_active=True,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+
+    def get_user(self, username: str) -> Optional[Dict[str, Any]]:
+        with session_scope(self.Session) as session:
+            row = session.query(OAuthUser).filter_by(username=username).first()
+            if row is None:
+                return None
+            return _user_row_to_dict(row)
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        with session_scope(self.Session) as session:
+            rows = session.query(OAuthUser).order_by(OAuthUser.username).all()
+            return [_user_row_to_dict(row) for row in rows]
+
+    def set_user_active(self, username: str, is_active: bool) -> bool:
+        """Returns ``True`` if ``username`` exists (and was updated), ``False``
+        if no such user is provisioned. Never hard-deletes -- deactivation
+        is reversible and preserves the audit trail on already-issued
+        tokens' ``subject``.
+        """
+        with session_scope(self.Session) as session:
+            row = session.query(OAuthUser).filter_by(username=username).first()
+            if row is None:
+                return False
+            row.is_active = is_active
+            row.updated_at = time.time()
+            return True
+
+    def update_user_password(self, username: str, password_hash: str) -> bool:
+        """Returns ``True`` if ``username`` exists (and was updated), ``False``
+        if no such user is provisioned."""
+        with session_scope(self.Session) as session:
+            row = session.query(OAuthUser).filter_by(username=username).first()
+            if row is None:
+                return False
+            row.password_hash = password_hash
+            row.updated_at = time.time()
+            return True
+
+    # ------------------------------------------------------------------
+    # Login lockout -- per-username row, lazily get-or-create. The legacy
+    # single-password path always addresses LEGACY_SINGLE_PASSWORD_USERNAME
+    # (the default for every parameter below), reproducing the old
+    # singleton row's exact semantics under a new key.
+    # ------------------------------------------------------------------
+
+    def _get_or_create_login_state(self, session, username: str) -> OAuthLoginState:
+        row = session.query(OAuthLoginState).filter_by(username=username).first()
         if row is None:
-            row = OAuthLoginState(id=1, fail_count=0, locked_until=None)
+            row = OAuthLoginState(username=username, fail_count=0, locked_until=None)
             session.add(row)
             session.flush()
         return row
 
-    def record_login_failure(self) -> bool:
-        """Increments the failure count; sets ``locked_until`` the moment
-        ``fail_count`` first reaches ``LOGIN_LOCKOUT_THRESHOLD``.
+    def record_login_failure(self, username: str = LEGACY_SINGLE_PASSWORD_USERNAME) -> bool:
+        """Increments ``username``'s failure count; sets ``locked_until`` the
+        moment ``fail_count`` first reaches ``LOGIN_LOCKOUT_THRESHOLD``.
 
         Returns ``True`` only on the call that crosses the threshold (so a
         caller can e.g. log a distinct "account locked" event exactly once).
+        Independent per ``username`` -- one user's failures never affect
+        another's lockout state.
         """
         with session_scope(self.Session) as session:
-            row = self._get_or_create_login_state(session)
+            row = self._get_or_create_login_state(session, username)
             row.fail_count = (row.fail_count or 0) + 1
             if row.fail_count == LOGIN_LOCKOUT_THRESHOLD:
                 row.locked_until = time.time() + LOGIN_LOCKOUT_SECONDS
                 return True
             return False
 
-    def is_locked_out(self) -> bool:
+    def is_locked_out(self, username: str = LEGACY_SINGLE_PASSWORD_USERNAME) -> bool:
         with session_scope(self.Session) as session:
-            row = self._get_or_create_login_state(session)
+            row = self._get_or_create_login_state(session, username)
             return row.locked_until is not None and row.locked_until > time.time()
 
-    def reset_login_state(self) -> None:
+    def reset_login_state(self, username: str = LEGACY_SINGLE_PASSWORD_USERNAME) -> None:
         with session_scope(self.Session) as session:
-            row = self._get_or_create_login_state(session)
+            row = self._get_or_create_login_state(session, username)
             row.fail_count = 0
             row.locked_until = None
 

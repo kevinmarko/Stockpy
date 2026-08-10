@@ -367,6 +367,13 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "at the /login form, is the real trust boundary once a client can "
         "register itself and start an auth flow."
     ),
+    "MCP_OAUTH_MULTI_USER_ENABLED": (
+        "Switches the OAuth /login form from the single-passphrase check "
+        "(MCP_OAUTH_PASSWORD) to per-user credentials in oauth_users "
+        "(mcp_oauth_store.py). Flipping it changes WHICH AUTHENTICATION "
+        "MECHANISM governs the whole OAuth server — the same risk class "
+        "MCP_OAUTH_ENABLED itself already carries."
+    ),
     "PROMPT_REGISTRY_WRITES_ENABLED": (
         "Gates PUT /prompts/pin, which changes WHICH PROMPT TEXT THE "
         "PLATFORM ACTUALLY RUNS — a real behavioral change, not a config "

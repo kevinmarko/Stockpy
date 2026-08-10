@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 261,
+    "live_safe": 262,
     "no_op": 2,
     "restart_required": 90,
-    "total": 353
+    "total": 354
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 360,
+  "files_scanned": 362,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -290,6 +290,7 @@
     "MARKET_DATA_WS_SYMBOLS",
     "MAX_LEVERAGE",
     "MAX_PORTFOLIO_GROSS",
+    "MCP_OAUTH_MULTI_USER_ENABLED",
     "META_LABELING_ENABLED",
     "MULTIFACTOR_MICROCAP_THRESHOLD",
     "NEWS_EARNINGS_DAMPEN_DAYS",
@@ -409,13 +410,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 727,
+    "attr": 729,
     "factory_param": 4,
     "getattr_const": 250,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 220,
+    "attr": 221,
     "factory_param": 4,
     "getattr_const": 153,
     "os_environ": 18
@@ -829,7 +830,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "mcp_oauth_store.py:255",
+        "site": "mcp_oauth_store.py:309",
         "via": []
       },
       {
@@ -975,7 +976,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "mcp_oauth_store.py:256",
+        "site": "mcp_oauth_store.py:310",
         "via": []
       },
       {
@@ -1157,7 +1158,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "mcp_oauth_store.py:256",
+        "site": "mcp_oauth_store.py:310",
         "via": []
       },
       {

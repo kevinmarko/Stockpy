@@ -160,3 +160,34 @@ already-registered OAuth clients (and their issued tokens) to keep working.
 Both sub-modes remain ephemeral, developer-machine-local tooling in the same
 sense as the rest of this addendum — neither is wired into `~/.claude.json`,
 `claude_desktop_config.json`, `investyo-vm`, or `deploy/investyo-mcp.service`.
+
+## Addendum: `--auth-mode oauth` gained an opt-in multi-user login (2026-08)
+
+`--auth-mode oauth`'s `/login` password form gained a second, opt-in mode:
+`settings.MCP_OAUTH_MULTI_USER_ENABLED` (default `False`, preserving the
+single-passphrase `MCP_OAUTH_PASSWORD` behavior described above exactly)
+switches the form to per-user named credentials (`mcp_oauth_store.OAuthUser`,
+Scrypt-hashed via `mcp_oauth_password.py`), provisioned with the new
+`scripts/manage_oauth_users.py` CLI (`add`/`deactivate`/`reactivate`/
+`list`/`reset-password`, password always via `getpass`, never a CLI arg).
+
+**This is Option A, not genuine multi-tenancy** (see
+`oauth_multi_user_plan.md`'s §0 scope resolution): every named user still
+reaches the exact same single trading account, follows, paper account, and
+kill switch as today. The only observable difference per user is which
+`subject` (the authenticated username) lands on their issued OAuth token —
+a pure identity label that nothing downstream currently reads. Per-user
+lockout (`oauth_login_state`, now keyed by `username` instead of a
+singleton `id=1` row) is the one genuinely new security property: one
+user's mistyped password can no longer lock out every other user, and an
+attacker no longer gets one shared budget of `LOGIN_LOCKOUT_THRESHOLD`
+guesses across every account. The legacy single-password path is
+unaffected either way — it addresses its own reserved sentinel row
+(`mcp_oauth_store.LEGACY_SINGLE_PASSWORD_USERNAME`) under the hood, so a
+pre-existing deployment's lockout state survives the upgrade via an
+additive migration rather than being reset or dropped.
+
+Same ephemeral, developer-machine-local framing as the rest of this
+addendum applies — multi-user mode changes who can pass the `/login` gate
+on one already-ephemeral instance, not the instance's own deployment
+model.
