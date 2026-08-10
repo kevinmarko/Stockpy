@@ -753,13 +753,25 @@ function ScanConfigModal({
   const [minPrice, setMinPrice] = useState("5");
   const [minVolume, setMinVolume] = useState("1000000");
 
+  // Reject invalid input rather than silently coercing it to 0
+  // (`Number(x) || 0` would turn a cleared/garbage field into a fabricated
+  // "no minimum" filter with no indication to the operator that their input
+  // was discarded -- a materially different, unrequested scan query. Honesty
+  // invariant: an uncomputable/invalid value must block submission, never
+  // silently become a plausible-looking 0.)
+  const minPriceNum = Number(minPrice);
+  const minVolumeNum = Number(minVolume);
+  const minPriceValid = minPrice.trim() !== "" && Number.isFinite(minPriceNum) && minPriceNum >= 0;
+  const minVolumeValid = minVolume.trim() !== "" && Number.isFinite(minVolumeNum) && minVolumeNum >= 0;
+  const filtersValid = minPriceValid && minVolumeValid;
+
   const mutation = useMutation(() =>
     api.putScanConfig({
       name: name.trim(),
       filters: {
         sector: sector !== "ALL" ? sector : undefined,
-        min_price: Number(minPrice) || 0,
-        min_volume: Number(minVolume) || 0,
+        min_price: minPriceNum,
+        min_volume: minVolumeNum,
       },
       enabled: true,
     })
@@ -810,12 +822,16 @@ function ScanConfigModal({
         type="number"
         value={minPrice}
         onChange={(e) => setMinPrice(e.target.value)}
+        invalid={!minPriceValid}
+        hint={!minPriceValid ? "Enter a valid non-negative number" : undefined}
       />
       <Input
         label="Min volume"
         type="number"
         value={minVolume}
         onChange={(e) => setMinVolume(e.target.value)}
+        invalid={!minVolumeValid}
+        hint={!minVolumeValid ? "Enter a valid non-negative number" : undefined}
       />
       {mutation.error && (
         <Notice variant="warn" style={{ marginTop: "var(--s-2-5)" }}>
@@ -830,7 +846,7 @@ function ScanConfigModal({
         <Button
           variant="primary"
           onClick={submit}
-          disabled={!name.trim()}
+          disabled={!name.trim() || !filtersValid}
           pending={mutation.pending}
           style={{ flex: 2 }}
         >

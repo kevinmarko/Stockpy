@@ -319,7 +319,7 @@ export function DynamicGrid({
                       position: 'absolute', inset: 0, zIndex: 50, 
                       background: 'rgba(0,0,0,0.7)', 
                       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16,
-                      borderRadius: 'var(--radius-md)'
+                      borderRadius: 'var(--r-md)'
                     }}
                   >
                     <button 

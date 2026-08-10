@@ -256,6 +256,30 @@ describe("Agentic Trading screen (real mock API)", () => {
     );
   });
 
+  it("clearing min price/volume rejects the input instead of silently coercing to 0", async () => {
+    const user = userEvent.setup();
+    const putSpy = vi.spyOn(api, "putScanConfig");
+    renderScreen();
+
+    const addBtn = await screen.findByRole("button", { name: "Add scan config" });
+    await user.click(addBtn);
+
+    await user.type(screen.getByLabelText("Name"), "earnings_pop");
+    const minPrice = screen.getByLabelText("Min price");
+    await user.clear(minPrice);
+    const minVolume = screen.getByLabelText("Min volume");
+    await user.clear(minVolume);
+
+    // An empty (NaN-producing) filter must block submission -- never
+    // silently fabricate a "min_price: 0" / "min_volume: 0" filter the
+    // operator never actually entered.
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getAllByText("Enter a valid non-negative number").length).toBe(2);
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(putSpy).not.toHaveBeenCalled();
+  });
+
   it("toggling off opens a confirm dialog and pauses with the typed reason", async () => {
     const user = userEvent.setup();
     vi.spyOn(api, "getAgenticStatus").mockResolvedValue(BASE_STATUS);
