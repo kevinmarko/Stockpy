@@ -86,6 +86,17 @@ honest caveats baked into the catalog below:
   exact currently-deployed ``ml/models/lgbm_latest.pkl`` artifact the live
   signal module actually loads — see the Pilot's own inline comment and
   ``docs/signals/lgbm_ranker.md``'s Backtest Validation section.
+* ``vrp-premium-selling`` joins ``vrp_premium_selling`` (2026-08) — the
+  first OPTIONS-SELLING ``STRATEGY_REGISTRY`` entry, gated by the 4-scenario
+  tail-risk stress gate (``validation/stress_scenarios.py``,
+  ``StrategyValidationHarness(is_options_selling=True, ...)``) on top of the
+  usual PBO/DSR/Sharpe/MaxDD gates. No historical options-chain data exists
+  anywhere in this codebase, so True_IVR/VRP are documented, real-price-driven
+  proxies, and CREDIT-EVENT detection is only real from 2023-08-08 onward
+  (``BAMLH0A0HYM2``'s real FRED coverage start) — VIX gating is real across
+  the full history. See ``docs/signals/vrp_premium_selling.md``'s Backtest
+  Validation section and ``validation/options_selling_backtest.py``'s module
+  docstring for the full honesty contract.
 """
 from __future__ import annotations
 
@@ -499,6 +510,32 @@ PILOTS: List[Pilot] = [
         # Validation section for the honest before/after numbers and the
         # bounded 6-year feature-panel window / proxy-OHLCV caveats.
         validation_strategy_id="lgbm_ranker",
+    ),
+    Pilot(
+        id="vrp-premium-selling",
+        name="Volatility Premium Seller",
+        category="Factor",
+        description=(
+            "Sells options premium only when the Volatility Risk Premium regime "
+            "gate clears (True IVR > 50, VRP > 2%, VIX < 30, no Credit Event); "
+            "otherwise stays in Cash/Wait."
+        ),
+        weights={"vrp_premium_selling": 1.0},
+        long_only=False,
+        # Real backtest (2026-08): validation/options_selling_backtest.py's
+        # simulate_vrp_iron_condor_returns genuinely constructs and marks to
+        # market a real Black-Scholes Iron Condor via the SAME
+        # OptionsPricingRecommender the live pipeline uses -- not a
+        # closed-form approximation. HONEST SCOPE: no historical
+        # options-chain data exists anywhere in this codebase, so True_IVR/
+        # VRP are documented, real-price-driven proxies (the identical
+        # fallback tier build_premium_directive itself uses absent a live
+        # chain), and CREDIT-EVENT detection is only real from 2023-08-08
+        # onward (BAMLH0A0HYM2's real FRED coverage start) -- VIX gating is
+        # real across the full history. See
+        # docs/signals/vrp_premium_selling.md's Backtest Validation section
+        # for the full honesty contract and measured numbers.
+        validation_strategy_id="vrp_premium_selling",
     ),
 ]
 

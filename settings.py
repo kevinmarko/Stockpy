@@ -2026,6 +2026,13 @@ class Settings(BaseSettings):
             # follow-up data-plumbing task wires them in — see
             # docs/signals/sector_quality_rank.md's Data Availability Gap.
             "sector_quality_rank": 15.0,
+            # VRP options-premium-selling regime gate (True_IVR > 50, VRP >
+            # 2%, VIX < 30, no CREDIT EVENT) -- modest starting weight,
+            # matching the convention for a module still building a track
+            # record (lgbm_ranker: 0.10, news_catalyst: 10.0). Only scores
+            # WHETHER the regime favors selling premium; does not price or
+            # select strikes itself.
+            "vrp_premium_selling": 10.0,
         },
         description="Weights for individual quantitative signal modules."
     )

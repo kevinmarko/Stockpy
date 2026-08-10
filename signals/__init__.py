@@ -40,5 +40,6 @@ def _register_all():
     import signals.lgbm_ranker
     import signals.news_catalyst
     import signals.sector_quality_rank
+    import signals.vrp_premium_selling
 
 _register_all()

@@ -1702,8 +1702,23 @@ def _build_forecast_direction_adapter(
 #                         without a real contribution, keeping it in the
 #                         "surviving" set would just waste weight mass on a
 #                         module that is a constant 0.0 for the whole replay.
+#   vrp_premium_selling -- this adapter's historical DataFrame never
+#                         computes True_IVR/VRP (that's OptionsAnalysisStep's
+#                         job, not run here) — signals/vrp_premium_selling.py
+#                         degrades honestly to score=0.0/confidence=0.0 on
+#                         every row when those columns are absent (verified:
+#                         tests/test_vrp_premium_selling.py::
+#                         test_columns_entirely_absent_degrades_honestly), so
+#                         it would never crash the replay, only waste its
+#                         weight mass — same forward-safety +
+#                         weight-redistribution reasoning as the three
+#                         entries above. Has its own dedicated,
+#                         non-price-only real backtest instead
+#                         (validation/options_selling_backtest.py — see
+#                         docs/signals/vrp_premium_selling.md).
 _REPLAY_EXCLUDED_MODULES = {
     "news_catalyst", "lgbm_ranker", "forecast_alignment", "sector_quality_rank",
+    "vrp_premium_selling",
 }
 
 _AROON_LENGTH = 25
@@ -2876,6 +2891,56 @@ def _make_strategy_fn(
 # New strategies: add an entry here and implement the adapter above.
 # ---------------------------------------------------------------------------
 
+def _build_vrp_premium_selling_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """VRP Iron Condor premium-selling proxy on SPY (``vrp_premium_selling``
+    Pilot, ``vrp-premium-selling`` in ``pilots/catalog.py``).
+
+    See ``validation/options_selling_backtest.py``'s module docstring for the
+    full honesty contract: no historical options-chain data exists anywhere
+    in this codebase, so True_IVR/VRP are honestly-labeled real-price-driven
+    proxies (the same fallback tier ``build_premium_directive`` itself uses
+    in production absent a live chain), real macro (VIX/CREDIT EVENT) gating
+    via ``HistoricalStore``-backed FRED history, constant entry-sigma per
+    cycle, and gross (pre-cost) returns.
+
+    Unlike every other adapter in this registry, this one's ``precomputed``
+    return series comes from a REAL options-selling simulation — genuine
+    Black-Scholes leg pricing via the SAME ``OptionsPricingRecommender`` the
+    live pipeline uses, marked to market daily against the real historical
+    spot path — not a closed-form formula applied to the underlying's own
+    returns. No further ``.shift(1)`` is applied here: the simulator is
+    already point-in-time correct by construction (every day's mark uses
+    only that day's spot price, the cycle's fixed entry-day sigma, and legs
+    constructed using only data up to and including the cycle's entry date).
+    """
+    from validation.options_selling_backtest import simulate_vrp_iron_condor_returns
+
+    daily_ret = spy_close.pct_change()
+    valid_idx = spy_close.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    strategy_returns = simulate_vrp_iron_condor_returns(
+        str(valid_idx[0].date()), str(valid_idx[-1].date()),
+        ticker="SPY", closes=spy_close,
+    )
+    if strategy_returns.empty:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    common_idx = valid_idx.intersection(strategy_returns.index)
+    if len(common_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[common_idx].fillna(0.0)
+    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
+    precomputed = {
+        "VRP_IronCondor": strategy_returns.loc[common_idx].fillna(0.0),
+    }
+    return X, y, precomputed
+
+
 # 30 liquid, large-cap tickers with full pre-2005 trading history under their
 # current symbol — a wide enough cross-section for cross_sectional_momentum /
 # relative_strength_xsec to produce meaningfully fine-grained ranks (a 16-name
@@ -3015,7 +3080,40 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     # estimate) — the 0.03 here is unused by run_validations' dispatch for a
     # callable adapter but kept non-zero/documented rather than a misleading 0.
     "lgbm_ranker": (_build_lgbm_ranker_adapter, 0.03, _XSEC_UNIVERSE_30),
+    # Real Black-Scholes Iron Condor simulation (see
+    # _build_vrp_premium_selling_adapter's docstring and
+    # validation/options_selling_backtest.py's module docstring for the full
+    # honesty contract). turnover=0.05: a full position rolls roughly every
+    # CYCLE_TRADING_DAYS=21 trading days ~= 1/21 ~= 4.8%/day -- a reasoned
+    # estimate matching the sibling weekly-cadence adapters
+    # (forecast_direction_arima_hw), not an independent measurement of this
+    # adapter's own weight series. This is the first (and, as of this entry,
+    # only) options-selling STRATEGY_REGISTRY entry -- see
+    # _resolve_options_selling_stress_fn() below for the tail-scenario
+    # stress-gate wiring this triggers in run_validations().
+    "vrp_premium_selling": (_build_vrp_premium_selling_adapter, 0.05, ["SPY"]),
 }
+
+
+def _resolve_options_selling_stress_fn(name: str) -> Optional[Callable[[str, str], pd.Series]]:
+    """Returns the ``stress_returns_fn`` (``validation.stress_scenarios.ReturnsFn``)
+    for options-selling ``STRATEGY_REGISTRY`` entries, or ``None`` for every
+    other entry — today's exact ``is_options_selling=False`` behavior for all
+    18 pre-existing entries, unchanged.
+
+    A plain ``if name == ...`` dispatch (not a module-level dict literal) so
+    the ``validation.options_selling_backtest`` import stays fully lazy —
+    matching this module's own convention of keeping heavy business-logic
+    imports out of the module-parse-time top-level block (see
+    ``StrategyValidationHarness``'s own lazy import inside
+    ``run_validations()`` for the precedent) — and imposes zero import cost
+    on every strategy that isn't options-selling.
+    """
+    if name == "vrp_premium_selling":
+        from validation.options_selling_backtest import simulate_vrp_iron_condor_returns
+
+        return simulate_vrp_iron_condor_returns
+    return None
 
 
 # =============================================================================
@@ -3272,6 +3370,7 @@ def run_validations(
                 start_date_str = str(X.index[0].date())
                 end_date_str = str(X.index[-1].date())
 
+            stress_fn = _resolve_options_selling_stress_fn(name)
             harness = StrategyValidationHarness(
                 strategy_fn=strategy_fn,
                 universe_fn=lambda _, u=available: u,
@@ -3279,6 +3378,8 @@ def run_validations(
                 n_cpcv_splits=n_cpcv_splits,
                 n_test_splits=n_test_splits,
                 reports_dir=str(output_dir),
+                is_options_selling=stress_fn is not None,
+                stress_returns_fn=stress_fn,
             )
 
             report = harness.run(

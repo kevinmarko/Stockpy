@@ -519,6 +519,62 @@ by this documentation-only pass.
 
 ---
 
+## 2026-08-10 — `vrp_premium_selling`: new strategy, first options-selling `STRATEGY_REGISTRY` entry
+
+**New entry, not a fix to an existing one.** Adds the "Volatility Premium Seller" Pilot
+(`vrp-premium-selling`, `pilots/catalog.py`) — the first genuinely NEW pilot this session,
+distinct from the existing `edge-garch` Pilot (a different mechanism: GARCH vol-timing +
+edge-ratio veto, not options premium selling). New signal module
+(`signals/vrp_premium_selling.py`, weight 10.0), new simulator
+(`validation/options_selling_backtest.py::simulate_vrp_iron_condor_returns` — a REAL Black-
+Scholes Iron Condor construction via the SAME `OptionsPricingRecommender` the live pipeline
+uses, marked to market daily against real historical SPY prices), and new non-breaking
+`STRATEGY_REGISTRY`/harness plumbing: `_resolve_options_selling_stress_fn()` routes
+`is_options_selling=True`/`stress_returns_fn` into `StrategyValidationHarness` for this ONE
+entry only — the harness itself already supported both kwargs, but no prior entry ever
+passed them; zero changes to any of the 18 pre-existing entries.
+
+**Real, measured result** (live yfinance + FRED data, `python -m scripts.refresh_validations
+--strategies vrp_premium_selling --start 2005-01-01 --end 2026-08-06 --json`, run 2026-08-10;
+actual window 2005-01-03 → 2026-08-05):
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | Stress gate | `deployable` |
+|---|---|---|---|---|---|---|
+| `vrp_premium_selling` | **−0.010** | 0.000 | 1.000 | **47.0%** | PASS (see caveat) | **False** |
+
+**Honest reason for the `deployable=False`**: the VRP regime gate is genuinely selective —
+across 21 years it opened only twice (2007-09-05..10-03, −4.8%; 2022-04-08..04-26, **−60.4%**,
+stop-loss hit). The single 2022 trade dominates the entire measured result: a real Iron Condor
+sold into an apparently-rich setup (True_IVR-proxy ≈64, VRP-proxy ≈+2.3%) immediately ran into
+the sharp mid-April 2022 selloff. `n_trials=1` — too few realized trades for PBO/DSR to be a
+statistically strong statement despite passing cleanly.
+
+**Stress gate "PASS" — real, but not "survived a real trade."** All four dated shock windows
+(OCT_2008/FEB_2018/MAR_2020/AUG_2024) show 0.0% drawdown because the gate never opened a
+position in any of them — traced directly: OCT_2008 (VIX already 39.8 at window start),
+FEB_2018 (VRP-proxy +0.08%, just under the 2% floor), MAR_2020 (window starts pre-spike,
+True_IVR-proxy only 23.0), AUG_2024 (True_IVR-proxy 92.4 but VRP-proxy −5.5%, negative). A
+genuinely-run, non-fabricated result (`passes_stress_gate` fails closed on any error/gap and
+none occurred), but it means "the gate correctly stayed out of all four historical shocks,"
+not "a hedged position survived all four." See `docs/signals/vrp_premium_selling.md`'s Backtest
+Validation section for the full per-scenario trace and the complete honesty contract
+(documented proxy True_IVR/VRP, real VIX gating, CREDIT-EVENT detection only real from
+2023-08-08 onward).
+
+**Per this log's own stated rule**: no threshold was loosened, no window was cherry-picked, and
+this genuinely-measured `deployable=False` — including the stress-gate vacuous-pass nuance
+above — is recorded as-is, an honest outcome rather than a failure to hide.
+`vrp-premium-selling` is still surfaced as a Pilot joined to this `validation_strategy_id`, with
+inline comments in `pilots/catalog.py` stating the full scope caveat.
+
+Tests: `tests/test_vrp_premium_selling.py` (signal module: gate branches, regime suppression,
+lookahead perturbation), `tests/test_validation_vrp_premium_selling_registry.py` (network-marked,
+the production adapter + `is_options_selling`/`stress_returns_fn` wiring end-to-end through the
+real harness), `tests/test_options_selling_backtest_stress.py` (network-marked, the real
+simulator sliced to each of the four `STRESS_SCENARIOS` windows).
+
+---
+
 ## Verification methodology
 
 Every fix in this log was independently re-run through the real walk-forward harness
