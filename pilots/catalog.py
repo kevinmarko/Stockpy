@@ -431,6 +431,47 @@ PILOTS: List[Pilot] = [
         validation_strategy_id="sortino_drawdown",
     ),
     Pilot(
+        id="sector-quality-rank",
+        name="Sector Quality Rank",
+        category="Factor",
+        description=(
+            "Screens for durable earnings quality — cash-backed profits over "
+            "accounting accruals, and strong gross margins — ranked against "
+            "peers in the SAME sector so a bank isn't judged on a software "
+            "company's scale."
+        ),
+        weights={"sector_quality_rank": 15.0},
+        # Real backtest (2026-08): long-only, equal-weighted, TOP-HALF WITHIN
+        # SECTOR (not a literal top-decile -- see
+        # scripts/refresh_validations.py's _build_sector_quality_rank_adapter
+        # docstring for why a strict decile degenerates to ~1 name per sector
+        # in a small peer group).
+        long_only=True,
+        # Real point-in-time backtest (2026-08): the first STRATEGY_REGISTRY
+        # adapter to build a genuine (Date, Ticker) MultiIndex panel and
+        # exercise CombinatorialPurgedCV's native MultiIndex support (PR
+        # #648) end-to-end. Sources REAL accrual_ratio/gross_profitability
+        # directly from SEC EDGAR company facts (a documented exception to
+        # this file's usual "read only through HistoricalStore" EDGAR-PIT
+        # convention -- neither field exists there yet). Measured 2010-01-01
+        # -> 2026-08-08 over a deliberately narrow 12-ticker/2-sector
+        # universe (Technology + Consumer Defensive -- the only two sectors
+        # among this file's vetted names that clear SNEQR's own
+        # MIN_SECTOR_SIZE=5 within-sector-ranking floor): Sharpe 1.10, PBO
+        # 0.0, DSR 1.0, MaxDD 28.4% -- deployable=True, though MaxDD clears
+        # the 30% gate by a narrow margin on this small a universe. The
+        # LIVE signal module (signals/sector_quality_rank.py) remains
+        # dormant in production (contributes 0.0 every cycle) until a
+        # separate data-plumbing task wires these two inputs into
+        # processing_engine.calculate_fundamental_metrics() -- surfaced
+        # here regardless of that gap, matching the "news-catalyst" Pilot's
+        # own precedent of shipping a Pilot ahead of full live wiring. See
+        # docs/signals/sector_quality_rank.md's Backtest Validation section
+        # and docs/VALIDATION_STRATEGY_FIX_LOG.md's 2026-08-08 entry for the
+        # full construction and honesty caveats.
+        validation_strategy_id="sector_quality_rank",
+    ),
+    Pilot(
         id="ml-cross-sectional-rank",
         name="ML Cross-Sectional Rank",
         category="Blend",

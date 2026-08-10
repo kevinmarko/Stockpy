@@ -327,6 +327,79 @@ byte-for-byte reproduction of the pre-existing in-sample fit, equity-curve scope
 
 ---
 
+## 2026-08-08: new strategy, `sector_quality_rank` — first native MultiIndex CPCV adapter
+
+**New `STRATEGY_REGISTRY` entry, not a fix to an existing one.** Validates
+`signals/sector_quality_rank.py::SectorNeutralQualitySignal` (SNEQR — Sloan 1996
+accrual quality + Novy-Marx 2013 gross profitability, ranked *within sector*), joined
+to the new `sector-quality-rank` Pilot. Also the first adapter in this file to build a
+genuine `(Date, Ticker)` `pd.MultiIndex` panel with an explicit `t1` Series and
+exercise `CombinatorialPurgedCV`'s native MultiIndex support (PR #648) end-to-end via
+`StrategyValidationHarness.run(..., t1=...)` — a new, backward-compatible parameter
+added to `validation/harness.py::StrategyValidationHarness.run()` by this change
+(default `t1=None` reproduces every pre-existing flat-index adapter's behavior
+byte-for-byte; threaded straight through to `run_cpcv_evaluation`). A second small
+harness fix landed alongside it: `y.reindex(full_returns.index)` (the benchmark-curve
+alignment step) raises `ValueError` for a MultiIndex `y` — verified directly, not
+assumed — so it is now wrapped to degrade to no benchmark overlay rather than crash
+(CONSTRAINT #6).
+
+**Why this needed its own real-data sourcing path (CONSTRAINT #7 exception):**
+verified that neither `accrual_ratio` nor `gross_profitability` exists anywhere in
+`HistoricalStore`'s `fundamentals_history` table (typed columns OR `raw_json` —
+`scripts/backfill_edgar_fundamentals.py` persists only `data/edgar_fundamentals.py`'s
+computed 9-key PIT ratio dict, explicitly not the raw XBRL payload). Every EDGAR-PIT
+sibling adapter in this file reads only through `HistoricalStore`; this one is a
+documented, narrow exception that calls `data.edgar_fundamentals.get_cik`/
+`fetch_companyfacts`/`extract_latest_fact` directly (same already-shipped module every
+sibling adapter's own backfill depends on — not a new provider) because the honest
+alternative was not validating the signal at all (CONSTRAINT #4 forbids fabricating
+the two inputs).
+
+**Universe:** 12 hand-picked tickers (not the 10-ticker EDGAR-PIT universe the
+dividend/deep-value/value-quality siblings share) — chosen because SNEQR's mechanism
+is WITHIN-SECTOR ranking (`MIN_SECTOR_SIZE=5`), and the 10-ticker universe has at most
+2 names per sector (every ticker would be thin-sector-excluded, testing nothing).
+Technology (7: AAPL/CSCO/IBM/INTC/MSFT/ORCL/TXN) and Consumer Defensive (5:
+COST/KO/MO/PG/WMT) are the two sectors that clear the threshold among this file's
+already-vetted large-cap names.
+
+**Real, measured numbers** (`python -m scripts.refresh_validations --strategies
+sector_quality_rank --start 2010-01-01 --json`, live SEC EDGAR + yfinance,
+2010-01-01 → 2026-08-08, `n_cpcv_splits=10`/`n_test_splits=2`):
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | Deployable |
+|---|---|---|---|---|---|
+| `sector_quality_rank` | 1.100 | 0.000 | 1.000 | 28.4% | ✅ True |
+
+Re-run a second time (89 seconds later, same day) to confirm reproducibility:
+Sharpe 1.1004753 / MaxDD 0.2837052 — matched to 6 decimal places (the negligible
+residual is intraday price-bar drift between the two fetches, not run-to-run
+instability). Single book variant (`SNEQR_TopHalfWithinSector` — top-half,
+equal-weighted, WITHIN SECTOR, `.shift(1)`-lagged), so PBO=0.0/DSR=1.0 is expected by
+construction (no selection-bias risk with only one candidate to select among) — same
+situation this log's `rsi2_mean_reversion` entry already documents for the identical
+reason, not evidence of a broader-sense-robust edge. MaxDD passes with a narrow
+margin (28.4% vs. the 30% gate) — flagged honestly rather than glossed over; a
+12-name/2-sector book is meaningfully less diversified than this file's 30-name
+cross-sectional adapters.
+
+**Scope, honestly stated:** this validates the SNEQR mechanism itself over a real,
+if narrow, universe and window. It does NOT validate the live, in-production signal
+module as currently shipped — `SectorNeutralQualitySignal` remains dormant
+(contributes `0.0` every cycle) until a separate data-plumbing task wires real
+`accrual_ratio`/`gross_profitability` into
+`processing_engine.calculate_fundamental_metrics()`. See
+`docs/signals/sector_quality_rank.md`'s "Data Availability Gap" section.
+
+Tests: `tests/test_refresh_validations.py::TestBuildSectorQualityRankAdapter` (9
+hermetic tests), `tests/test_validation_sector_quality_rank.py` (network-marked, the
+real run above), `tests/test_harness_multiindex_t1.py` (the new `t1` parameter,
+hermetic — default-off byte-for-byte reproduction, MultiIndex-without-t1 raises,
+MultiIndex-with-t1 runs end-to-end, benchmark-reindex-never-crashes guard).
+
+---
+
 ## 2026-08-08 — `lgbm_ranker`: new `STRATEGY_REGISTRY` entry (genuine per-fold retraining)
 
 **New entry, not a fix to an existing one.** `scripts/refresh_validations.py::

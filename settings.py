@@ -2015,6 +2015,17 @@ class Settings(BaseSettings):
             # News / earnings catalyst (Tier 2.4) — modest weight until the
             # module accumulates a track record (FinBERT or lexicon fallback).
             "news_catalyst": 10.0,
+            # Sector-Neutral Earnings-Quality Rank (accrual quality +
+            # gross profitability, ranked within sector) — 15.0 matches the
+            # magnitude convention used by the other multi-input
+            # cross-sectional modules (cross_sectional_momentum, multifactor).
+            # NOTE: as of introduction, its raw inputs (accrual_ratio,
+            # gross_profitability) are not yet populated anywhere in the live
+            # per-cycle data path, so this module contributes 0.0 (neutral,
+            # via its own WARNING-logged missing-column guard) until a
+            # follow-up data-plumbing task wires them in — see
+            # docs/signals/sector_quality_rank.md's Data Availability Gap.
+            "sector_quality_rank": 15.0,
         },
         description="Weights for individual quantitative signal modules."
     )

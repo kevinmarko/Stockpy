@@ -6,7 +6,7 @@ compute()-level coverage (aroon_trend, graham_value, macd_momentum,
 macro_regime, relative_strength), gap-closing tests for two modules whose
 existing tests (tests/test_scoring_signals.py) never exercise their
 unguarded code paths (dividend_quality, forecast_alignment), and a
-cross-cutting contract sweep across all 17 modules registered in
+cross-cutting contract sweep across all 18 modules registered in
 signals.registry.global_registry.
 
 Excluded (already covered, not duplicated): signals/edge_garch.py,
@@ -14,9 +14,9 @@ signals/rsi_extremes.py, signals/sortino_drawdown.py (fully covered by
 tests/test_scoring_signals.py); signals/regime_multiplier.py,
 signals/lgbm_ranker.py, signals/timeseries_momentum.py,
 signals/rsi2_mean_reversion.py, signals/cross_sectional_momentum.py,
-signals/multifactor.py, signals/news_catalyst.py (each has a dedicated test
-file); signals/pairs_trading.py (a plain function, not a registered
-SignalModule -- covered in tests/test_no_fabricated_metrics.py).
+signals/multifactor.py, signals/news_catalyst.py, signals/sector_quality_rank.py
+(each has a dedicated test file); signals/pairs_trading.py (a plain function,
+not a registered SignalModule -- covered in tests/test_no_fabricated_metrics.py).
 
 A SIGNIFICANT FINDING, pinned (not silently fixed) throughout this file:
 signals/registry.py's compute_all() validates only that each
@@ -92,7 +92,7 @@ def _signal_context(
 def _realistic_row() -> pd.Series:
     """A fully-populated row mirroring strategy_engine.py's
     StrategyEngine.evaluate_security() row construction (lines 240-265) --
-    every key all 17 registered modules read, with valid non-NaN values
+    every key all 18 registered modules read, with valid non-NaN values
     representative of a healthy, liquid stock. Used by the cross-cutting
     sweep so the 6 unguarded modules in the module docstring above don't
     spuriously fail a sweep that isn't testing their missing-input path."""
@@ -443,7 +443,7 @@ class TestForecastAlignmentMissingPriceData:
 
 
 # ============================================================================
-# Section 3 — Cross-cutting universal-contract sweep over all 17 registered
+# Section 3 — Cross-cutting universal-contract sweep over all 18 registered
 # modules (signals/__init__.py eagerly imports every signals/*.py file, so
 # global_registry.get_all() is fully populated by the time this module is
 # collected by pytest).
@@ -457,7 +457,7 @@ _RSI2_NAME = "rsi2_mean_reversion"  # documented long-only [0, 1] exception
 class TestUniversalSignalModuleContract:
     def test_at_least_seventeen_modules_registered(self, name, module):
         # Sanity check the parametrization itself isn't silently empty.
-        assert len(_ALL_REGISTERED) == 17
+        assert len(_ALL_REGISTERED) == 18
 
     def test_abc_conformance(self, name, module):
         assert isinstance(module, SignalModule)
