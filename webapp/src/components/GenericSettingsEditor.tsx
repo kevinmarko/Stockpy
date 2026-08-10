@@ -27,6 +27,7 @@ import { TunableGroupCard } from "./TunableGroupCard";
 import { Modal } from "./Modal";
 import { theme } from "../theme";
 import { TagInput } from "./TagInput";
+import { DynamicGrid, resetGridLayout } from "./DynamicGrid";
 import {
   buildConfirmMap,
   dangerousKeysIn,
@@ -95,9 +96,42 @@ function buildBaseline(groups: TunablesResponse["groups"]): Record<string, EditV
   return out;
 }
 
+/**
+ * Grid-row height for a settings group's card, scaled to its actual field
+ * count instead of a flat constant. Every group used to get the same `h: 4`
+ * (4 grid rows) regardless of how many fields it held — the underlying grid
+ * library does not auto-grow an item to fit its content, so a group with more
+ * than a couple of fields was a real content-clipping risk. `TunableGroupCard`'s
+ * own body already scrolls internally (`overflow: "auto"`) as a floor, but a
+ * two-line internal scrollbar for a dozen fields is still bad UX — sizing the
+ * card itself to roughly fit its fields is the actual fix. Base rows cover the
+ * header + card padding; two rows per field is a rough fit for a labeled
+ * input/toggle plus its hint/description text at `DynamicGrid`'s default
+ * `rowHeight` (30px). Capped so one outsized group can't push every other card
+ * off-screen — the internal scroll floor still catches the rest.
+ */
+const GROUP_BASE_ROWS = 2;
+const GROUP_ROWS_PER_FIELD = 2;
+const GROUP_MAX_ROWS = 16;
+
+function computeGroupHeight(fieldCount: number): number {
+  return Math.min(GROUP_BASE_ROWS + fieldCount * GROUP_ROWS_PER_FIELD, GROUP_MAX_ROWS);
+}
+
 export interface GenericSettingsEditorProps {
   title: string;
   subtitle: ReactNode;
+  /**
+   * Stable, unique, kebab-case identifier for this screen's saved grid
+   * layout (`grid-layout-settings-<settingsKey>` in localStorage). Deliberately
+   * separate from `title` — the human-readable display title is expected to
+   * change over time (copy edits, rebranding), and deriving the persistence
+   * key from it meant a title rename silently orphaned every operator's saved
+   * layout for that screen. Callers pass their route segment under
+   * `/settings/*` (e.g. "sentiment", "etf-transmission", "tunables") so the
+   * key tracks the screen's identity, not its copy.
+   */
+  settingsKey: string;
   backTo?: string;
   fetchSettings: () => Promise<TunablesResponse>;
   updateSettings: (
@@ -126,6 +160,7 @@ export interface GenericSettingsEditorProps {
 export function GenericSettingsEditor({
   title,
   subtitle,
+  settingsKey,
   backTo = "/settings",
   fetchSettings,
   updateSettings,
@@ -157,23 +192,26 @@ export function GenericSettingsEditor({
   const appliesNotice = data ? screenAppliesNotice(data.applies, data.applies_counts) : null;
 
   return (
-    <div className="screen">
-      <button
-        onClick={back}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          color: theme.textSecondary,
-          fontSize: "var(--t-callout)",
-          marginBottom: "var(--s-2)",
-        }}
-      >
-        ← Settings
-      </button>
-      <h1 className="screen-title">{title}</h1>
-      <p className="screen-sub">{subtitle}</p>
+    <div className="screen" style={{ display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <div>
+          <button
+            onClick={back}
+            style={{ background: "none", padding: 0, cursor: "pointer", color: "var(--text-secondary)", fontSize: "var(--t-callout)", marginBottom: "var(--s-2)", border: "none" }}
+          >
+            ← Settings
+          </button>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
+            <h1 className="screen-title" style={{ margin: 0 }}>{title}</h1>
+          </div>
+          <p className="screen-sub" style={{ marginTop: "var(--s-1)" }}>{subtitle}</p>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
+          <button type="button" className="btn btn-neutral" onClick={() => resetGridLayout(`settings-${settingsKey}`)}>
+            Reset Layout
+          </button>
+        </div>
+      </div>
 
       {appliesNotice && (
         <Notice
@@ -222,6 +260,7 @@ export function GenericSettingsEditor({
       )}
       {!loading && !error && data && hasFields && (
         <SettingsForm
+          settingsKey={settingsKey}
           data={data}
           onReload={reload}
           updateSettings={updateSettings}
@@ -236,6 +275,7 @@ export function GenericSettingsEditor({
 }
 
 function SettingsForm({
+  settingsKey,
   data,
   onReload,
   updateSettings,
@@ -244,6 +284,7 @@ function SettingsForm({
   lastResult,
   onResult,
 }: {
+  settingsKey: string;
   data: TunablesResponse;
   onReload: () => void;
   updateSettings: (
@@ -338,6 +379,29 @@ function SettingsForm({
   );
   const [confirmOpen, setConfirmOpen] = useState(false);
 
+  // Two-column masonry-style packing: each group's height is sized to its own
+  // field count (see `computeGroupHeight`) rather than a flat constant, so the
+  // running per-column `y` offset has to be tracked explicitly instead of the
+  // old `Math.floor(idx / 2) * 4` (which only worked because every item was
+  // the same fixed height). `DynamicGrid`'s vertical compactor still resolves
+  // any remaining slack once real content mounts; this is only the sane
+  // starting point used the first time a screen renders (before an operator's
+  // own dragged/resized layout takes over from localStorage).
+  const groupLayouts = useMemo(() => {
+    const colHeights = [0, 0];
+    const groups = data.groups.map((g, idx) => {
+      const col = idx % 2;
+      const h = computeGroupHeight(g.fields.length);
+      const y = colHeights[col];
+      colHeights[col] += h;
+      return { i: `group-${idx}`, x: col * 6, y, w: 6, h };
+    });
+    const danger = dangerZone
+      ? [{ i: "danger-zone", x: 0, y: Math.max(colHeights[0], colHeights[1]), w: 12, h: 4 }]
+      : [];
+    return [...groups, ...danger];
+  }, [data.groups, dangerZone]);
+
   const buildPayload = () => {
     const payload: Record<string, number | boolean | string> = {};
     for (const f of flatFields) {
@@ -426,37 +490,53 @@ function SettingsForm({
         </Notice>
       )}
 
-      {data.groups.map((group, idx) => {
-        if (group.fields.length === 0) return null;
-        const groupDirtyCount = group.fields.filter((f) => edited[f.key] !== baseline[f.key]).length;
-        const groupRejectedCount = group.fields.filter((f) => Boolean(rejected[f.key])).length;
-        return (
-          <TunableGroupCard
-            key={group.name}
-            name={group.name}
-            fields={group.fields}
-            defaultOpen={data.groups.length <= 3 || idx === 0}
-            dirtyCount={groupDirtyCount}
-            rejectedCount={groupRejectedCount}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
-              {group.fields.map((f) => (
-                <FieldRow
-                  key={f.key}
-                  field={f}
-                  value={edited[f.key]}
-                  onChange={(v) => setVal(f.key, v)}
-                  invalid={invalidKeys.has(f.key)}
-                  rejectedReason={rejected[f.key] ?? null}
-                  labelMap={labelMap}
-                />
-              ))}
+      <div style={{ minHeight: 320 }}>
+        <DynamicGrid
+          layoutKey={`settings-${settingsKey}`}
+          defaultLayouts={{ lg: groupLayouts }}
+        >
+          {data.groups.map((group, idx) => {
+            if (group.fields.length === 0) return null;
+            const groupDirtyCount = group.fields.filter((f) => edited[f.key] !== baseline[f.key]).length;
+            const groupRejectedCount = group.fields.filter((f) => Boolean(rejected[f.key])).length;
+            return (
+              <div key={`group-${idx}`}>
+                <TunableGroupCard
+                  name={group.name}
+                  fields={group.fields}
+                  defaultOpen={data.groups.length <= 3 || idx === 0}
+                  dirtyCount={groupDirtyCount}
+                  rejectedCount={groupRejectedCount}
+                >
+                  <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
+                    {group.fields.map((f) => (
+                      <FieldRow
+                        key={f.key}
+                        field={f}
+                        value={edited[f.key]}
+                        onChange={(v) => setVal(f.key, v)}
+                        invalid={invalidKeys.has(f.key)}
+                        rejectedReason={rejected[f.key] ?? null}
+                        labelMap={labelMap}
+                      />
+                    ))}
+                  </div>
+                </TunableGroupCard>
+              </div>
+            );
+          })}
+          {dangerZone && (
+            <div key="danger-zone" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+              <div className="drag-handle" style={{ background: "transparent", cursor: "grab", height: "20px", display: "flex", justifyContent: "center", alignItems: "center" }}>
+                <div style={{ width: "40px", height: "4px", background: "var(--border)", borderRadius: "2px" }} />
+              </div>
+              <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                {dangerZone}
+              </div>
             </div>
-          </TunableGroupCard>
-        );
-      })}
-
-      {dangerZone}
+          )}
+        </DynamicGrid>
+      </div>
 
       <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)", padding: "var(--s-3)", background: "var(--surface-glass)", backdropFilter: "blur(12px)", borderTop: "1px solid var(--border)", zIndex: 10, borderRadius: "var(--r-md)" }}>
         <Button variant="primary" block disabled={!canSave} pending={mutation.pending} onClick={doSave}>

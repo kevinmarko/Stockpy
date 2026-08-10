@@ -60,23 +60,28 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
   );
 
   return (
-    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: 384 }}>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
       <div
+        className="drag-handle"
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
           flexWrap: "wrap",
           gap: "var(--s-2)",
-          marginBottom: "var(--s-2-5)",
-          paddingBottom: "var(--s-2-5)",
+          padding: "var(--s-3)",
           borderBottom: `1px solid ${theme.border}`,
+          cursor: "grab",
         }}
       >
         <span style={{ fontWeight: 700, color: theme.textSecondary, fontSize: "var(--t-callout)" }}>
           Live Console Output
         </span>
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
+        <div
+          style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+        >
           <Toggle
             label="Auto-scroll"
             checked={autoScroll}

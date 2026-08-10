@@ -88,10 +88,10 @@ Real SignalAggregator replay (Balanced Blend)
 -------------------------------------------------
 ``signal_replay_balanced_blend`` is the first adapter here to replay the
 REAL ``SignalAggregator``/``SignalRegistry`` weighted-sum code path across
-history rather than hand-writing a standalone formula. 3 of the 17 signal
+history rather than hand-writing a standalone formula. 4 of the 18 signal
 modules are excluded for the whole backtest window (``news_catalyst``,
-``lgbm_ranker``, ``forecast_alignment``) and their weight mass is
-renormalized to the 14 survivors; 2 of the survivors (``graham_value``,
+``lgbm_ranker``, ``forecast_alignment``, ``sector_quality_rank``) and their
+weight mass is renormalized to the 14 survivors; 2 of the survivors (``graham_value``,
 ``dividend_quality``) genuinely degrade to their own real "no data" branches
 because EDGAR PIT fundamentals don't safely carry a dollar book-value-per-
 share or payout ratio. See ``_build_signal_replay_adapter``'s own docstring
@@ -122,6 +122,7 @@ import json
 import logging
 import math
 import sys
+import warnings
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -1684,10 +1685,26 @@ def _build_forecast_direction_adapter(
 #                         same forward-safety + weight-redistribution reasons.
 #   forecast_alignment -- only backtestable within forecast_direction_arima_hw's
 #                         bounded 5yr window; excluded here to keep ONE
-#                         consistent 14/17-module composition across the whole
+#                         consistent 14/18-module composition across the whole
 #                         window rather than a signal set that silently
 #                         changes mid-history.
-_REPLAY_EXCLUDED_MODULES = {"news_catalyst", "lgbm_ranker", "forecast_alignment"}
+#   sector_quality_rank -- identical situation to news_catalyst/lgbm_ranker:
+#                         its real signal lives entirely in pre_compute()
+#                         (accrual_ratio/gross_profitability z-scored within
+#                         sector), which this adapter never calls for it
+#                         (only multifactor/cross_sectional_momentum get a
+#                         pre_compute call here). Even if a future refactor
+#                         added that call, EDGAR PIT's raw_json shape (see
+#                         _pit_row_to_fundamentals_dto's docstring) does not
+#                         carry either raw input, so pre_compute would still
+#                         degrade to empty ranks. Excluded for the same
+#                         forward-safety + weight-redistribution reasons —
+#                         without a real contribution, keeping it in the
+#                         "surviving" set would just waste weight mass on a
+#                         module that is a constant 0.0 for the whole replay.
+_REPLAY_EXCLUDED_MODULES = {
+    "news_catalyst", "lgbm_ranker", "forecast_alignment", "sector_quality_rank",
+}
 
 _AROON_LENGTH = 25
 _EWMA_VOL_ALPHA = 0.06  # RiskMetrics lambda=0.94, same as _build_garch_voltarget_adapter
@@ -1820,7 +1837,7 @@ def _build_signal_replay_adapter(
     method ``StrategyEngine.evaluate_security()`` calls live.
 
     NOT a literal reconstruction of ``settings.SIGNAL_WEIGHTS``'s full
-    17-module blend — 3 modules are excluded for the whole window (see
+    18-module blend — 4 modules are excluded for the whole window (see
     ``_REPLAY_EXCLUDED_MODULES``), and 2 of the 14 survivors
     (``graham_value``, ``dividend_quality``) genuinely degrade to their own
     "no data" branches because EDGAR PIT fundamentals don't safely carry the
@@ -2142,6 +2159,655 @@ def _build_signal_replay_adapter(
     return X, y, precomputed
 
 
+# ---------------------------------------------------------------------------
+# Sector Quality Rank (sector_quality_rank) -- native MultiIndex CPCV
+# ---------------------------------------------------------------------------
+#
+# The honest backtest for the ``sector-quality-rank`` Pilot
+# (``signals/sector_quality_rank.py::SectorNeutralQualitySignal``). Unlike
+# every other adapter in this module, this one builds a genuine (Date,
+# Ticker) ``pd.MultiIndex`` panel and an explicit ``t1`` Series, exercising
+# ``CombinatorialPurgedCV``'s native MultiIndex support (PR #648) end-to-end
+# via ``StrategyValidationHarness.run(..., t1=...)`` rather than the flat
+# single-DatetimeIndex convention every sibling adapter uses.
+#
+# CONSTRAINT #7 EXCEPTION (read before touching this adapter): every EDGAR-PIT
+# sibling adapter above (``_build_dividend_yield_adapter`` etc.) reads ONLY
+# through ``HistoricalStore.get_fundamentals_history`` -- this file's module
+# docstring documents that as a deliberate constraint ("the EDGAR-PIT adapters
+# add no new network call here"). This adapter is a documented, narrow
+# exception: it calls ``data.edgar_fundamentals.get_cik``/``fetch_companyfacts``
+# DIRECTLY (see ``_fetch_sneqr_quality_facts``'s own docstring for why this is
+# unavoidable -- verified, not assumed, that neither an accrual ratio nor a
+# gross-profitability ratio exists anywhere in ``HistoricalStore``'s
+# ``fundamentals_history`` table, typed columns OR ``raw_json``). This is the
+# SAME already-shipped ``data/edgar_fundamentals.py`` module every sibling
+# adapter's own backfill ultimately depends on -- not a new data provider,
+# just a second, read-only, rate-limited (module's own built-in ~10 req/s
+# throttle) consumer of it. The alternative was fabricating the two raw
+# inputs, which CONSTRAINT #4 forbids outright.
+
+# Deliberately NARROW, hand-picked universe (NOT the 10-ticker EDGAR-PIT
+# universe shared by the dividend/deep-value/value-quality siblings above,
+# and NOT the full 30-name _XSEC_UNIVERSE_30): SNEQR's entire mechanism is
+# WITHIN-SECTOR ranking (see signals/sector_quality_rank.py's
+# MIN_SECTOR_SIZE=5 thin-sector guard, imported below rather than
+# re-typed). Verified against forecasting/data/ticker_sectors.csv: the
+# 10-ticker EDGAR-PIT universe has (at most) 2 names per sector -- EVERY
+# ticker would be excluded as a thin sector, producing a vacuous, always-flat
+# backtest that tests nothing. This 12-ticker universe was chosen because it
+# contains exactly the two sectors that clear MIN_SECTOR_SIZE among this
+# file's already-vetted large-cap names: Technology (7: AAPL/CSCO/IBM/INTC/
+# MSFT/ORCL/TXN) and Consumer Defensive (5: COST/KO/MO/PG/WMT) -- confirmed
+# via the same ticker_sectors.csv lookup _load_ticker_sectors() already uses.
+# Kept to these 12 (not the full 30) to bound both the EDGAR companyfacts
+# fetch cost (12 direct network calls, ~0.5s each measured) and the CPCV
+# purge-loop cost (row count = trading_days * len(universe)).
+SNEQR_UNIVERSE: List[str] = [
+    "AAPL", "CSCO", "IBM", "INTC", "MSFT", "ORCL", "TXN",  # Technology (7)
+    "COST", "KO", "MO", "PG", "WMT",                        # Consumer Defensive (5)
+]
+
+# accrual_ratio/gross_profitability only refresh on a NEW 10-Q/10-K filing --
+# a quarterly cadence -- so a rebalance-horizon t1 shorter than roughly one
+# fiscal quarter would purge/embargo far more aggressively around each test
+# block than the signal's own real information-refresh rate warrants (every
+# row's "event" -- its z-score/decile assignment -- stays informationally
+# live until the NEXT filing, not just the next trading day).
+SNEQR_REBALANCE_HORIZON_DAYS = 63
+
+# SEC's structured XBRL company-facts data is unreliable before ~2009 (mandated
+# in phases through 2009-2011); starting in 2010 avoids backfilling years of
+# NaN inputs for a start date the data genuinely can't cover.
+SNEQR_BACKTEST_START = "2010-01-01"
+
+# Same conservative, quarterly-SEC-filing-driven-cadence default already
+# established for this adapter family (see deep_value_edgar_pit/
+# value_quality_edgar_pit's STRATEGY_REGISTRY comments for the empirical
+# turnover measurements that produced this exact number) -- no equivalent
+# empirical measurement exists yet for THIS adapter (first pass), so the
+# already-vetted conservative default is reused rather than guessed fresh.
+SNEQR_TURNOVER = 0.01
+
+
+def _fetch_sneqr_quality_facts(ticker: str) -> pd.DataFrame:
+    """Real point-in-time accrual_ratio / gross_profitability history for
+    *ticker*, sourced directly from SEC EDGAR XBRL company facts.
+
+    See this section's module-level "CONSTRAINT #7 EXCEPTION" comment for why
+    this reads EDGAR directly rather than through ``HistoricalStore``.
+
+    accrual_ratio = -((NetIncomeLoss - OperatingCashFlow) / Assets) -- Sloan
+    (1996), sign-flipped so higher = better (matches
+    signals/sector_quality_rank.py's own documented sign convention).
+    OperatingCashFlow prefers ``NetCashProvidedByUsedInOperatingActivities``,
+    falling back to the ...ContinuingOperations variant some filers use
+    instead.
+
+    gross_profitability = GrossProfit / Assets -- Novy-Marx (2013). Prefers
+    the filer's own ``GrossProfit`` tag; when absent, derives it as
+    ``Revenues - CostOfRevenue`` (both with their own documented fallback
+    tags) rather than leaving it NaN outright, since Revenue and Cost-of-
+    Revenue are near-universally reported even by filers that don't tag
+    ``GrossProfit`` itself.
+
+    Each ratio is computed independently per SEC ``filed`` date (the SEC's
+    own point-in-time availability timestamp -- the same PIT convention
+    ``scripts/backfill_edgar_fundamentals.py`` already uses, there called
+    ``report_date``) using ``extract_latest_fact(..., max_date=filed)``, so a
+    date where only ONE of the two ratios' underlying facts happened to be
+    refiled still gets a real, non-lookahead value for the other from
+    whatever was filed most recently as of that date.
+
+    Returns a DataFrame indexed by ``filed`` date (as ``pd.Timestamp``) with
+    columns ``accrual_ratio``/``gross_profitability`` (NaN where the
+    underlying facts are unavailable -- never fabricated, CONSTRAINT #4).
+    Empty DataFrame (never raises -- CONSTRAINT #6) when the ticker's CIK
+    can't be resolved or EDGAR returns no us-gaap facts at all.
+    """
+    from data import edgar_fundamentals as ef
+
+    cik = ef.get_cik(ticker)
+    if not cik:
+        logger.warning("_fetch_sneqr_quality_facts: no CIK for %s", ticker)
+        return pd.DataFrame(columns=["accrual_ratio", "gross_profitability"])
+
+    facts = ef.fetch_companyfacts(cik)
+    us_gaap = facts.get("facts", {}).get("us-gaap", {})
+    if not us_gaap:
+        logger.warning("_fetch_sneqr_quality_facts: no us-gaap facts for %s", ticker)
+        return pd.DataFrame(columns=["accrual_ratio", "gross_profitability"])
+
+    accrual_tags = [
+        "NetIncomeLoss",
+        "NetCashProvidedByUsedInOperatingActivities",
+        "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+        "Assets",
+    ]
+    gp_tags = [
+        "GrossProfit", "Revenues", "SalesRevenueNet",
+        "CostOfRevenue", "CostOfGoodsAndServicesSold",
+    ]
+    filed_dates: set = set()
+    for tag in set(accrual_tags + gp_tags):
+        fact = us_gaap.get(tag)
+        if not fact:
+            continue
+        for unit_arr in fact.get("units", {}).values():
+            for point in unit_arr:
+                filed = point.get("filed")
+                if filed and filed >= SNEQR_BACKTEST_START:
+                    filed_dates.add(filed)
+
+    rows: Dict[str, Dict[str, float]] = {}
+    for filed in sorted(filed_dates):
+        net_income = ef.extract_latest_fact(us_gaap, "NetIncomeLoss", filed)
+        cfo = ef.extract_latest_fact(
+            us_gaap, "NetCashProvidedByUsedInOperatingActivities", filed
+        )
+        if cfo is None:
+            cfo = ef.extract_latest_fact(
+                us_gaap,
+                "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+                filed,
+            )
+        assets = ef.extract_latest_fact(us_gaap, "Assets", filed)
+
+        accrual_ratio = float("nan")
+        if net_income is not None and cfo is not None and assets and float(assets) != 0.0:
+            accruals = (float(net_income) - float(cfo)) / float(assets)
+            accrual_ratio = -accruals
+
+        gross_profit = ef.extract_latest_fact(us_gaap, "GrossProfit", filed)
+        if gross_profit is None:
+            revenue = ef.extract_latest_fact(us_gaap, "Revenues", filed)
+            if revenue is None:
+                revenue = ef.extract_latest_fact(us_gaap, "SalesRevenueNet", filed)
+            cost_of_revenue = ef.extract_latest_fact(us_gaap, "CostOfRevenue", filed)
+            if cost_of_revenue is None:
+                cost_of_revenue = ef.extract_latest_fact(
+                    us_gaap, "CostOfGoodsAndServicesSold", filed
+                )
+            if revenue is not None and cost_of_revenue is not None:
+                gross_profit = float(revenue) - float(cost_of_revenue)
+
+        gross_profitability = float("nan")
+        if gross_profit is not None and assets and float(assets) != 0.0:
+            gross_profitability = float(gross_profit) / float(assets)
+
+        rows[filed] = {
+            "accrual_ratio": accrual_ratio,
+            "gross_profitability": gross_profitability,
+        }
+
+    if not rows:
+        return pd.DataFrame(columns=["accrual_ratio", "gross_profitability"])
+
+    out = pd.DataFrame.from_dict(rows, orient="index")
+    out.index = pd.to_datetime(out.index)
+    out = out.sort_index()
+    return out
+
+
+def _build_sector_quality_rank_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Tuple[Callable, pd.Series]]:
+    """Real point-in-time, sector-neutral earnings-quality backtest -- the
+    honest validation for the ``sector-quality-rank`` Pilot.
+
+    Structurally DIFFERENT return shape from every sibling adapter above:
+    the third tuple element is ``(strategy_fn, t1)`` -- a ready-made
+    ``StrategyValidationHarness``-compatible callable plus an explicit
+    event-end-times Series -- rather than a ``Dict[str, pd.Series]`` of
+    precomputed book returns. ``run_validations()`` detects this via
+    ``isinstance(X.index, pd.MultiIndex)`` (a structural check, not a
+    name-based special case) and threads ``t1`` into
+    ``StrategyValidationHarness.run()`` instead of building a strategy_fn via
+    ``_make_strategy_fn``. See that function's own comment for the exact
+    branch.
+
+    CONSTRUCTION (real math, not mocked):
+      1. Fetch real per-ticker accrual_ratio/gross_profitability history
+         directly from SEC EDGAR (``_fetch_sneqr_quality_facts``) for
+         ``SNEQR_UNIVERSE``, forward-filled (PIT, ``merge_asof(direction=
+         "backward")`` -- identical mechanism to ``_pit_asof_frame`` above)
+         onto every trading date in ``closes``.
+      2. Real sector labels via ``_load_ticker_sectors()`` (the same CURRENT-
+         snapshot-applied-across-history approximation already documented
+         and accepted for ``macro_regime_pit``/``signal_replay_balanced_blend``
+         above).
+      3. Faithful reproduction of ``SectorNeutralQualitySignal.pre_compute()``'s
+         real math, vectorized over TIME instead of a single date: within each
+         of the two sectors that clear ``MIN_SECTOR_SIZE`` in this universe
+         (Technology, Consumer Defensive -- see the module-level comment
+         above), z-score accrual_ratio and gross_profitability SEPARATELY
+         within that sector's own cross-section on each date (mirrors
+         ``groupby(sector).transform(_zscore_winsorize)`` exactly, just
+         vectorized across all dates at once for performance -- same
+         mean/std-over-non-NaN-values semantics), average into a composite,
+         then rank WITHIN SECTOR to a percentile (mirrors
+         ``composite_z.groupby(eligible_sector).rank(pct=True)`` exactly --
+         a Technology name is ranked ONLY against other Technology names,
+         never against Consumer Defensive names, which is the entire
+         sector-neutral point).
+      4. BOOK CONSTRUCTION CHOICE (documented, per the task's own "your call"):
+         long-only, equal-weighted, TOP-HALF WITHIN SECTOR (percentile >=
+         0.5) -- NOT a literal top-decile. A strict top-decile within a
+         5-7-name sector group degenerates to picking exactly the single
+         best-ranked name per sector (percentile ranks for n=5 are
+         0.2/0.4/0.6/0.8/1.0 -- only 1.0 clears 0.9), concentrating the whole
+         book into 2 names and testing idiosyncratic single-stock risk
+         instead of the factor tilt. Top-half matches the SAME choice every
+         EDGAR-PIT sibling adapter above already makes
+         (``_build_dividend_yield_adapter``/``_build_deep_value_adapter``/
+         ``_build_value_quality_adapter`` all use
+         ``composite.rank(axis=1, pct=True).ge(0.5)``), applied HERE within
+         each sector's own sub-cross-section rather than market-wide.
+         ``.shift(1)`` enforces no lookahead.
+      5. The book-return computation happens ONCE, causally, across the full
+         date range (step 3-4) -- NOT re-derived inside ``strategy_fn`` per
+         fold. This matches every sibling adapter's own convention (their
+         precomputed book returns are likewise computed once and merely
+         SLICED per fold by ``_make_strategy_fn``): the composite/rank/weight
+         computation at date D depends only on that date's own cross-section,
+         so re-deriving it from a CPCV fold's possibly-gapped (purged)
+         date subset would either reproduce the identical number or, worse,
+         introduce a shift-across-a-purge-gap artifact (holding a stale
+         weight computed from a date on the OTHER side of a purge gap).
+         ``strategy_fn`` still performs a genuine per-fold operation: it
+         determines which DATES belong to that fold's MultiIndex train/test
+         subset and slices the precomputed book-return series to exactly
+         those dates -- this is the real "re-aggregate that fold's
+         cross-section into a book return" step for a rules-based (no
+         fitted parameters) signal, where CPCV's purpose is testing
+         genuine OOS robustness via purge+embargo, not selecting among
+         trained variants.
+
+    X (MultiIndex (Date, Ticker)) columns: ``accrual_ratio``,
+    ``gross_profitability``, ``sector``, ``forward_return`` (the next trading
+    day's return, included as an X column purely for panel completeness/
+    documentation -- the SAME values are what ``y`` carries as the row
+    label). ``y`` is a MultiIndex Series of each row's forward 1-day return.
+    ``t1`` is ``Date + SNEQR_REBALANCE_HORIZON_DAYS`` calendar days per row.
+
+    A ticker whose EDGAR fetch fails entirely (no CIK resolved, no facts
+    returned) degrades to all-NaN accrual_ratio/gross_profitability for that
+    ticker -- excluded from ranking at every date, never fabricated
+    (CONSTRAINT #4), never raises (CONSTRAINT #6).
+    """
+    from signals.sector_quality_rank import MIN_SECTOR_SIZE as SNEQR_MIN_SECTOR_SIZE
+
+    universe = [t for t in SNEQR_UNIVERSE if t in closes.columns]
+    if len(universe) < len(SNEQR_UNIVERSE):
+        logger.warning(
+            "_build_sector_quality_rank_adapter: missing price data for %s",
+            sorted(set(SNEQR_UNIVERSE) - set(universe)),
+        )
+    if not universe:
+        return pd.DataFrame(), pd.Series(dtype=float), (lambda *a, **k: [], pd.Series(dtype="datetime64[ns]"))
+
+    common_index = closes[universe].dropna(how="all").index
+    sector_of = _load_ticker_sectors()
+
+    # Real sector-size count within OUR OWN universe (not the live platform's
+    # full universe) -- deliberately, since MIN_SECTOR_SIZE's whole purpose is
+    # "enough peers in THIS cycle's cross-section", and this backtest's
+    # cross-section IS the 12-ticker SNEQR_UNIVERSE.
+    sector_counts: Dict[str, List[str]] = {}
+    for t in universe:
+        s = sector_of.get(t)
+        if s:
+            sector_counts.setdefault(s, []).append(t)
+    eligible_sectors = {
+        s: members for s, members in sector_counts.items()
+        if len(members) >= SNEQR_MIN_SECTOR_SIZE
+    }
+
+    quality_facts = {t: _fetch_sneqr_quality_facts(t) for t in universe}
+
+    accrual_cols: Dict[str, pd.Series] = {}
+    gp_cols: Dict[str, pd.Series] = {}
+    ret_cols: Dict[str, pd.Series] = {}
+    for ticker in universe:
+        close = closes[ticker].reindex(common_index)
+        ret_cols[ticker] = close.pct_change()
+
+        facts_df = quality_facts.get(ticker)
+        if facts_df is not None and not facts_df.empty:
+            daily = pd.merge_asof(
+                pd.DataFrame(index=common_index),
+                facts_df,
+                left_index=True,
+                right_index=True,
+                direction="backward",
+            )
+            daily.index = common_index
+            accrual_cols[ticker] = pd.to_numeric(daily["accrual_ratio"], errors="coerce")
+            gp_cols[ticker] = pd.to_numeric(daily["gross_profitability"], errors="coerce")
+        else:
+            accrual_cols[ticker] = pd.Series(np.nan, index=common_index)
+            gp_cols[ticker] = pd.Series(np.nan, index=common_index)
+
+    accrual_df = pd.DataFrame(accrual_cols)[universe]
+    gp_df = pd.DataFrame(gp_cols)[universe]
+    rets_df = pd.DataFrame(ret_cols)[universe]
+
+    # Step 3: within-sector z-score, per date, vectorized (see docstring).
+    accrual_z = pd.DataFrame(np.nan, index=common_index, columns=universe)
+    gp_z = pd.DataFrame(np.nan, index=common_index, columns=universe)
+    percentile_df = pd.DataFrame(np.nan, index=common_index, columns=universe)
+    for sector, members in eligible_sectors.items():
+        a_sub = accrual_df[members]
+        g_sub = gp_df[members]
+        a_mean, a_std = a_sub.mean(axis=1), a_sub.std(axis=1)
+        g_mean, g_std = g_sub.mean(axis=1), g_sub.std(axis=1)
+        # Degenerate-std guard: a near-zero (but not exactly zero) std is
+        # floating-point noise from a near-constant within-sector
+        # cross-section, not real dispersion -- the same 1e-12 threshold
+        # CLAUDE.md's "Degenerate-std guard convention" documents (and the
+        # one signals/multifactor.py::_zscore_winsorize itself already
+        # uses -- this loop is a vectorized-over-time reproduction of that
+        # exact function). An exact `== 0.0` guard would let a near-zero std
+        # explode into a confident, arbitrary-sign +/-3.0 z-score instead of
+        # the honest NaN a genuinely degenerate cross-section should produce.
+        a_z = a_sub.sub(a_mean, axis=0).div(a_std.mask(a_std < 1e-12), axis=0).clip(-3.0, 3.0)
+        g_z = g_sub.sub(g_mean, axis=0).div(g_std.mask(g_std < 1e-12), axis=0).clip(-3.0, 3.0)
+        accrual_z[members] = a_z
+        gp_z[members] = g_z
+
+        # A row where BOTH inputs are NaN for a given ticker (e.g. that
+        # ticker's EDGAR fetch never returned a value as-of this date) makes
+        # that one (row, column) an all-NaN slice -- expected and harmless
+        # (np.nanmean correctly returns NaN for it), but numpy warns
+        # "Mean of empty slice" by default; suppressed the same way
+        # validation/metrics.py's own _nanmean_or already documents for the
+        # identical situation.
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Mean of empty slice")
+            composite = np.nanmean(np.stack([a_z.to_numpy(), g_z.to_numpy()]), axis=0)
+        composite_df = pd.DataFrame(composite, index=common_index, columns=members)
+        percentile_df[members] = composite_df.rank(axis=1, pct=True)
+
+    # Step 4: long-only, equal-weighted, top-half WITHIN SECTOR (see docstring
+    # for why not a literal top-decile).
+    selected = percentile_df.ge(0.5)
+    weights = selected.astype(float)
+    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    book_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+
+    # X/y: genuine (Date, Ticker) MultiIndex panel.
+    forward_return = rets_df.shift(-1)
+    X = pd.DataFrame({
+        "accrual_ratio": accrual_df.stack(future_stack=True),
+        "gross_profitability": gp_df.stack(future_stack=True),
+        "forward_return": forward_return.stack(future_stack=True),
+    })
+    X.index = X.index.set_names(["Date", "Ticker"])
+    X = X.sort_index(level=0)
+    # Deliberately NOT `.astype(str)` here: a ticker missing from sector_of
+    # (not the case for today's hand-verified SNEQR_UNIVERSE, but a real risk
+    # for a future universe expansion) maps to a genuine NaN via .map() --
+    # forcing that to str would silently rewrite it as the literal 4-char
+    # string "nan" instead of an honestly-missing value (CONSTRAINT #4).
+    X["sector"] = X.index.get_level_values("Ticker").map(sector_of)
+
+    y = X["forward_return"].copy()
+    y.name = None
+
+    date_level = X.index.get_level_values("Date")
+    t1 = pd.Series(
+        date_level + pd.Timedelta(days=SNEQR_REBALANCE_HORIZON_DAYS),
+        index=X.index,
+    )
+
+    def _sneqr_strategy_fn(
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+    ) -> List[Dict[str, Any]]:
+        """Re-aggregate this fold's cross-section into a flat, date-indexed
+        book-return series -- see the adapter's own docstring (step 5) for
+        why the book RETURNS are precomputed once (causally) and this
+        function's real job is determining which dates belong to this fold
+        and slicing to exactly those.
+        """
+        train_dates = X_train.index.get_level_values("Date").unique().sort_values()
+        test_dates = X_test.index.get_level_values("Date").unique().sort_values()
+        return [{
+            "params": "SNEQR_TopHalfWithinSector",
+            "train_returns": book_returns.reindex(train_dates).fillna(0.0),
+            "test_returns": book_returns.reindex(test_dates).fillna(0.0),
+            "turnover": SNEQR_TURNOVER,
+        }]
+
+    return X, y, (_sneqr_strategy_fn, t1)
+
+
+class _ClosesOnlyDataEngine:
+    """Wraps an already-downloaded real ``closes`` DataFrame into the
+    ``IDataProvider.fetch_technical_raw(tickers) -> {ticker: OHLCV df}``
+    contract ``ml.training_data.build_training_panel`` needs.
+
+    Reuses the GENUINE downloaded Close prices this module already fetched
+    for the strategy (CONSTRAINT #4 — no fabricated prices); only
+    ``High``/``Low``/``Volume`` are synthetic proxies (a tight ±0.1% band
+    around Close / a flat 1e6 share count) since ``_download_closes`` only
+    ever carries adjusted Close — the SAME shape simplification
+    ``scripts/train_lgbm.py``'s own ``_SyntheticDataEngine`` makes for its
+    offline/test path. No ``FEATURE_COLUMNS`` entry currently depends on real
+    intraday range or real volume (verified against
+    ``ml/feature_engineering.py``), so this proxy never silently degrades a
+    feature that matters.
+    """
+
+    def __init__(self, closes: pd.DataFrame):
+        self._closes = closes
+
+    def fetch_technical_raw(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
+        out: Dict[str, pd.DataFrame] = {}
+        for t in tickers:
+            if t not in self._closes.columns:
+                continue
+            c = self._closes[t].dropna()
+            if c.empty:
+                continue
+            out[t] = pd.DataFrame(
+                {
+                    "Open": c, "High": c * 1.001, "Low": c * 0.999,
+                    "Close": c, "Volume": 1_000_000.0,
+                },
+                index=c.index,
+            )
+        return out
+
+
+def _build_lgbm_ranker_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Any]:
+    """LightGBM cross-sectional ranker (``lgbm_ranker``), validated by
+    GENUINELY RETRAINING a fresh model per CPCV fold on real point-in-time
+    features — not replaying a single fixed formula precomputed once, which
+    is what every other adapter in this registry does and what would leak
+    look-ahead here (a model fit once on the FULL history and then "OOS"-
+    evaluated on slices of that same history has already seen every fold's
+    test data during training).
+
+    Two-layer CPCV, both exercising real code, deliberately kept distinct:
+
+    * OUTER (this adapter's contract with ``StrategyValidationHarness``):
+      ``X``/``y`` are DATE-indexed (one row per unique trading date, exactly
+      like every other multi-ticker adapter here) — ``harness.py``'s
+      ``benchmark_curve`` does ``y.reindex(full_returns.index)``, which
+      raises ``InvalidIndexError`` on a non-unique index, so the raw
+      (date, ticker) panel itself can never be handed to the harness
+      directly. ``y`` is the equal-weight daily return of the tradeable
+      universe (the same "honest real underlying return" convention
+      ``cross_sectional_momentum`` uses for ITS benchmark curve) — never
+      used for training, only for the outer walk-forward/CPCV row count and
+      the report's benchmark overlay.
+    * INNER (this function's own ``strategy_fn``, closed over the REAL
+      (date, ticker) MultiIndex training panel): each fold call receives
+      ``(X_train, y_train, X_test, y_test)`` from the harness — all
+      date-indexed — and uses ONLY their ``.index`` (the dates belonging to
+      this fold) to filter the closed-over panel down to the matching
+      (date, ticker) rows, then trains a FRESH
+      ``LGBMCrossSectionalRanker`` on exactly that fold's training rows via
+      ``ranker.train(X_tr_mi, y_tr_mi, t1=t1_tr, use_native_multiindex_cv=True)``
+      — genuinely exercising PR #648's native MultiIndex CPCV path (nested
+      inside this fold's own early-stopping sub-CV), not merely a flag
+      flipped with nothing behind it.
+
+    Long-short returns are computed via ``scripts.train_lgbm._long_short_returns``
+    (imported, NOT duplicated, per this module's reuse convention) — top-half
+    minus bottom-half mean forward-return rank, grouped by date.  That helper
+    expects a FLAT (repeated-date, one row per (date, ticker)) index with
+    values aligned 1:1 to a features frame, exactly what
+    ``scripts/train_lgbm.py::compute_cpcv_metrics`` already feeds it — this
+    adapter reproduces that same flat shape for its fold slices rather than
+    reimplementing the grouping logic.
+
+    HONEST SCOPE (CONSTRAINT #4):
+
+    * Universe: ``_XSEC_UNIVERSE_30`` (same as ``cross_sectional_momentum`` /
+      ``relative_strength_xsec``), no SPY trend-gate benchmark used here.
+    * Feature panel window is BOUNDED to the last ~6 years of ``closes``'s
+      own date range (not the full requested backtest window, which for the
+      CLI default 2005-2024 span would mean building 20 years × 30 tickers of
+      point-in-time features per validation run) — the SAME "computationally
+      infeasible to re-fit at every historical date across the full 20-year
+      window" reasoning ``forecast_direction_arima_hw``'s own docstring
+      already documents for its bounded 5-year window. This is a real,
+      documented scope-narrowing choice, not a silent one.
+    * ``historical_store=False`` skips point-in-time fundamentals (SEC EDGAR)
+      entirely — ``_FUNDAMENTAL_COLS`` degrade to honest NaN, never a
+      fabricated derivation (the ranker's own ``.fillna(0.0)`` at train/
+      predict time handles NaN features the same way it already does for a
+      genuinely untrained/missing model).
+    * ``turnover=0.03`` (see ``STRATEGY_REGISTRY`` entry below) is a REASONED
+      estimate matching this registry's other daily-rebalanced cross-sectional
+      top/bottom-half adapters (``cross_sectional_momentum`` /
+      ``relative_strength_xsec``, also 0.03) — not an empirical measurement
+      specific to this adapter's own weight series (see
+      ``docs/signals/lgbm_ranker.md``'s Backtest Validation section for
+      whether a live run was able to measure it directly).
+
+    Returns ``(X, y, {})`` on an empty/insufficient panel — the standard
+    dead-letter shape every adapter here uses (``run_validations`` raises a
+    per-strategy ``RuntimeError``, never crashes the whole sweep).
+    """
+    from ml.feature_engineering import FEATURE_COLUMNS
+    from ml.lgbm_ranker import LGBMCrossSectionalRanker
+    from ml.training_data import build_training_panel
+    from scripts.train_lgbm import _long_short_returns
+
+    universe = [t for t in _XSEC_UNIVERSE_30 if t in closes.columns]
+    if len(universe) < 5:
+        logger.warning(
+            "_build_lgbm_ranker_adapter: only %d/%d universe names present in "
+            "`closes` — insufficient for a cross-sectional ranker.", len(universe),
+            len(_XSEC_UNIVERSE_30),
+        )
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    full_index = closes.index.sort_values()
+    BOUND_YEARS = 6
+    bounded_start = max(full_index[0], full_index[-1] - pd.Timedelta(days=365 * BOUND_YEARS))
+    start = pd.Timestamp(bounded_start)
+    end = pd.Timestamp(full_index[-1])
+
+    data_engine = _ClosesOnlyDataEngine(closes[universe])
+    X_panel, y_panel, t1_panel, _price_history = build_training_panel(
+        start, end, universe,
+        data_engine=data_engine, horizon_days=21, step_days=5,
+        historical_store=False,
+    )
+    if X_panel.empty:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    feat_cols = [c for c in FEATURE_COLUMNS if c in X_panel.columns]
+    # Same two honesty filters scripts/train_lgbm.py::build_training_panel
+    # already applies: drop rows whose forward-return rank or momentum
+    # feature is NaN (forward-window ran off the end of history / warm-up
+    # not satisfied yet) rather than fabricate a value for either.
+    valid = y_panel.notna()
+    if "ROC_12M" in X_panel.columns:
+        valid &= X_panel["ROC_12M"].notna()
+    X_panel = X_panel.loc[valid, feat_cols]
+    y_panel = y_panel.loc[valid]
+    t1_panel = t1_panel.reindex(X_panel.index)
+
+    dates = X_panel.index.get_level_values(0).unique().sort_values()
+    if len(dates) < 15:
+        logger.warning(
+            "_build_lgbm_ranker_adapter: only %d panel dates after filtering "
+            "— insufficient for CPCV.", len(dates),
+        )
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    # Outer, date-indexed contract with the harness. y is the equal-weight
+    # daily return of the tradeable universe (real, honest — used only for
+    # the outer row-count/CPCV date range and the report's benchmark curve,
+    # never for training). X is a minimal diagnostic frame the harness never
+    # reads the values of (only its length/index).
+    rets = closes[universe].pct_change()
+    y_outer = rets.mean(axis=1).reindex(dates).fillna(0.0)
+    coverage = X_panel.groupby(level=0).size()
+    X_outer = pd.DataFrame({"Panel_Ticker_Coverage": coverage.reindex(dates).fillna(0.0)}, index=dates)
+
+    def strategy_fn(
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+    ) -> List[Dict[str, Any]]:
+        try:
+            train_dates = pd.DatetimeIndex(X_train.index).unique()
+            test_dates = pd.DatetimeIndex(X_test.index).unique()
+            panel_dates = X_panel.index.get_level_values(0)
+
+            mask_tr = panel_dates.isin(train_dates)
+            mask_te = panel_dates.isin(test_dates)
+            X_tr_mi, y_tr_mi, t1_tr = X_panel.loc[mask_tr], y_panel.loc[mask_tr], t1_panel.loc[mask_tr]
+            X_te_mi, y_te_mi = X_panel.loc[mask_te], y_panel.loc[mask_te]
+
+            if len(X_tr_mi) < 20 or len(X_te_mi) < 4:
+                return []
+
+            ranker = LGBMCrossSectionalRanker(purged_kfold_splits=3, embargo_pct=0.0)
+            ranker.train(X_tr_mi, y_tr_mi, t1=t1_tr, use_native_multiindex_cv=True)
+            if ranker._model is None:
+                return []
+
+            # Flatten to the repeated-date shape _long_short_returns expects
+            # (one row per (date, ticker), values unchanged) — reused, not
+            # duplicated, exactly the calling convention
+            # scripts/train_lgbm.py::compute_cpcv_metrics already establishes.
+            X_tr_flat = X_tr_mi.set_axis(X_tr_mi.index.get_level_values(0))
+            y_tr_flat = pd.Series(y_tr_mi.values, index=X_tr_flat.index)
+            X_te_flat = X_te_mi.set_axis(X_te_mi.index.get_level_values(0))
+            y_te_flat = pd.Series(y_te_mi.values, index=X_te_flat.index)
+
+            train_ret = _long_short_returns(ranker, X_tr_flat, y_tr_flat, feat_cols)
+            test_ret = _long_short_returns(ranker, X_te_flat, y_te_flat, feat_cols)
+            if train_ret.empty or test_ret.empty:
+                return []
+
+            return [{
+                "params": "LGBM_Ranker",
+                "train_returns": train_ret,
+                "test_returns": test_ret,
+                "turnover": 0.03,
+            }]
+        except Exception as exc:  # CONSTRAINT #6 — a bad fold must not abort CPCV
+            logger.debug("lgbm_ranker strategy_fn fold failed: %s", exc)
+            return []
+
+    return X_outer, y_outer, strategy_fn
+
+
 def _make_strategy_fn(
     precomputed: Dict[str, pd.Series],
     turnover: float = 0.01,
@@ -2178,8 +2844,26 @@ def _make_strategy_fn(
 # Format: strategy_id → (adapter_fn, turnover, universe)
 #
 #   * ``adapter_fn`` returns ``(X, y, precomputed)`` — the feature matrix, the
-#     daily return series, and a dict of pre-computed strategy return series.
+#     daily return series, and ``precomputed`` in one of THREE shapes:
+#       1. ``Dict[str, pd.Series]`` (every adapter except the two below) — a
+#          dict of pre-computed strategy return series, wrapped via
+#          ``_make_strategy_fn``.
+#       2. A ready-made ``strategy_fn`` callable (``lgbm_ranker`` only — see
+#          ``_build_lgbm_ranker_adapter``'s docstring for why a static
+#          precomputed dict can't honestly validate a TRAINED model: it would
+#          let every CPCV "OOS" fold evaluate a model that already saw that
+#          fold's data during a single full-history fit). Used as-is.
+#       3. A ``(strategy_fn, t1)`` tuple for a genuine ``(Date, Ticker)``
+#          ``pd.MultiIndex`` adapter (``sector_quality_rank`` only — see
+#          ``_build_sector_quality_rank_adapter``'s docstring). Detected
+#          structurally via ``isinstance(X.index, pd.MultiIndex)``, not by
+#          name, and checked BEFORE the callable check since shape 3 is also
+#          callable.
+#     ``run_validations`` dispatches on ``isinstance(X.index, pd.MultiIndex)``
+#     first, then ``callable(precomputed)``, falling back to
+#     ``_make_strategy_fn`` for a plain dict.
 #   * ``turnover`` — average daily turnover fed to the harness cost model.
+#     Unused (baked into the adapter's own returned trials) for shapes 2/3.
 #   * ``universe``  — list of tickers the adapter needs.  A SINGLE-name universe
 #     (``["SPY"]``) means the adapter is invoked with the SPY close ``pd.Series``;
 #     a MULTI-name universe means it is invoked with
@@ -2304,13 +2988,33 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     ),
     # Real SignalAggregator/SignalRegistry replay across history (see
     # _build_signal_replay_adapter's docstring for the full honesty contract:
-    # 14/17 modules replayed, real weight renormalization, real DTO reuse).
+    # 14/18 modules replayed, real weight renormalization, real DTO reuse).
     # SPY required as benchmark for relative_strength/cross_sectional_momentum.
     "signal_replay_balanced_blend": (
         _build_signal_replay_adapter,
         0.06,
         ["SPY", *_XSEC_UNIVERSE_30],
     ),
+    # Real point-in-time, sector-neutral earnings-quality backtest -- native
+    # MultiIndex CPCV (see _build_sector_quality_rank_adapter's own docstring
+    # for the full construction, the CONSTRAINT #7 direct-EDGAR exception,
+    # and the top-half-within-sector book-construction rationale). Turnover
+    # matches the sibling quarterly-EDGAR-filing-driven adapters
+    # (deep_value_edgar_pit/value_quality_edgar_pit) -- no independent
+    # empirical measurement exists yet for this first pass.
+    "sector_quality_rank": (
+        _build_sector_quality_rank_adapter,
+        SNEQR_TURNOVER,
+        SNEQR_UNIVERSE,
+    ),
+    # Genuine per-fold retraining (see _build_lgbm_ranker_adapter's docstring
+    # for the two-layer CPCV design and why this is the one adapter here that
+    # returns a ready-made strategy_fn callable instead of a precomputed dict).
+    # turnover=0.03 is baked into the adapter's own returned trials (matches
+    # cross_sectional_momentum/relative_strength_xsec's daily-rebalance
+    # estimate) — the 0.03 here is unused by run_validations' dispatch for a
+    # callable adapter but kept non-zero/documented rather than a misleading 0.
+    "lgbm_ranker": (_build_lgbm_ranker_adapter, 0.03, _XSEC_UNIVERSE_30),
 }
 
 
@@ -2530,7 +3234,43 @@ def run_validations(
                     "insufficient history for this start/end range."
                 )
 
-            strategy_fn = _make_strategy_fn(precomputed, turnover=turnover)
+            # Structural (not name-based) adapter-shape dispatch — see the
+            # "Format: strategy_id → (adapter_fn, turnover, universe)"
+            # comment above for the full three-shape contract.
+            #
+            # 1. X's index is a genuine (Date, Ticker) pd.MultiIndex
+            #    (currently only _build_sector_quality_rank_adapter): the
+            #    third tuple element is (strategy_fn, t1) instead of the flat
+            #    Dict[str, pd.Series] every other adapter returns — see that
+            #    adapter's own docstring. start_date/end_date must be derived
+            #    from the MultiIndex's Date level (X.index[0] is a tuple for
+            #    a MultiIndex, so `.date()` would raise AttributeError).
+            #    Checked FIRST since this shape is also callable.
+            # 2. precomputed is itself a ready-made strategy_fn callable
+            #    (currently only _build_lgbm_ranker_adapter — see its own
+            #    docstring for why a static precomputed dict can't honestly
+            #    validate a trained model). X stays flat-indexed for this
+            #    adapter, so the plain X.index[0].date() derivation applies;
+            #    no t1 override (CombinatorialPurgedCV synthesizes its own
+            #    default for a flat index).
+            # 3. Otherwise, the pre-existing Dict[str, pd.Series] convention
+            #    every other adapter uses, wrapped via _make_strategy_fn.
+            is_multiindex = isinstance(X.index, pd.MultiIndex)
+            if is_multiindex:
+                strategy_fn, t1 = precomputed
+                date_level = X.index.get_level_values(0)
+                start_date_str = str(pd.Timestamp(date_level.min()).date())
+                end_date_str = str(pd.Timestamp(date_level.max()).date())
+            elif callable(precomputed):
+                strategy_fn = precomputed
+                t1 = None
+                start_date_str = str(X.index[0].date())
+                end_date_str = str(X.index[-1].date())
+            else:
+                strategy_fn = _make_strategy_fn(precomputed, turnover=turnover)
+                t1 = None
+                start_date_str = str(X.index[0].date())
+                end_date_str = str(X.index[-1].date())
 
             harness = StrategyValidationHarness(
                 strategy_fn=strategy_fn,
@@ -2542,11 +3282,12 @@ def run_validations(
             )
 
             report = harness.run(
-                start_date=str(X.index[0].date()),
-                end_date=str(X.index[-1].date()),
+                start_date=start_date_str,
+                end_date=end_date_str,
                 X=X,
                 y=y,
                 strategy_name=name,
+                t1=t1,
             )
 
             summary = report.to_summary_dict()

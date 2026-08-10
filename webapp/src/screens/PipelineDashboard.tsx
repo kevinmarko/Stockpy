@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import toast from "react-hot-toast";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { api, ApiError } from "../api/client";
 import type {
   ControlStatus,
@@ -76,8 +77,8 @@ function StateBadge({ state }: { state: RunRecord["state"] }) {
 function StatusBanner({ status }: { status: ControlStatusOnline }) {
   const running = status.is_running;
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)", padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
         <span
           aria-hidden
           style={{
@@ -97,36 +98,38 @@ function StatusBanner({ status }: { status: ControlStatusOnline }) {
         </div>
       </div>
 
-      {running && status.current_run_id && (
-        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", margin: "var(--s-2) 0 0" }}>
-          Current run:{" "}
-          <span className="num" style={{ fontFamily: "monospace" }}>
-            {status.current_run_id}
-          </span>
-        </p>
-      )}
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+        {running && status.current_run_id && (
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", margin: "0 0 var(--s-3)" }}>
+            Current run:{" "}
+            <span className="num" style={{ fontFamily: "monospace" }}>
+              {status.current_run_id}
+            </span>
+          </p>
+        )}
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
-        <span className={status.engines_warm ? "badge badge-good" : "badge badge-neutral"}>
-          Engines {status.engines_warm ? "warm" : "cold"}
-        </span>
-        <span className="badge badge-neutral">
-          Interval {status.interval_seconds == null ? "—" : `${status.interval_seconds}s`}
-        </span>
-        {status.advisory_only && <span className="badge badge-neutral">Advisory only</span>}
-        {status.dry_run && <span className="badge badge-warn">Dry run</span>}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)" }}>
+          <span className={status.engines_warm ? "badge badge-good" : "badge badge-neutral"}>
+            Engines {status.engines_warm ? "warm" : "cold"}
+          </span>
+          <span className="badge badge-neutral">
+            Interval {status.interval_seconds == null ? "—" : `${status.interval_seconds}s`}
+          </span>
+          {status.advisory_only && <span className="badge badge-neutral">Advisory only</span>}
+          {status.dry_run && <span className="badge badge-warn">Dry run</span>}
+        </div>
+
+        {status.kill_switch_active && (
+          <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
+            <span aria-hidden>⚠️</span>
+            <span>
+              Kill switch active
+              {status.kill_switch_reason ? `: ${status.kill_switch_reason}` : ""}. New
+              runs are paused.
+            </span>
+          </Notice>
+        )}
       </div>
-
-      {status.kill_switch_active && (
-        <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
-          <span aria-hidden>⚠️</span>
-          <span>
-            Kill switch active
-            {status.kill_switch_reason ? `: ${status.kill_switch_reason}` : ""}. New
-            runs are paused.
-          </span>
-        </Notice>
-      )}
     </section>
   );
 }
@@ -141,19 +144,21 @@ function StatusBanner({ status }: { status: ControlStatusOnline }) {
  */
 function DaemonOfflineNotice() {
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)", padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
         <span
           aria-hidden
           style={{ width: 12, height: 12, borderRadius: "50%", flex: "0 0 auto", background: theme.textMuted }}
         />
         <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Daemon offline</div>
       </div>
-      <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", margin: "var(--s-2) 0 0" }}>
-        No orchestrator daemon is attached to the Control API right now, so
-        live status, run triggers, and run history are unavailable until it
-        reconnects.
-      </p>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+        <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", margin: "0" }}>
+          No orchestrator daemon is attached to the Control API right now, so
+          live status, run triggers, and run history are unavailable until it
+          reconnects.
+        </p>
+      </div>
     </section>
   );
 }
@@ -218,8 +223,11 @@ function Controls({
   const busy = disabled || trigger.pending;
 
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
-      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Trigger a run</h2>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ margin: "0", fontSize: "var(--t-title)" }}>Trigger a run</h2>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Runs are handled by the daemon; this page reflects whatever the daemon
         actually accepted.
@@ -280,6 +288,7 @@ function Controls({
           </span>
         </Notice>
       )}
+      </div>
     </section>
   );
 }
@@ -335,16 +344,20 @@ function RunsTable({ runs }: { runs: RunRecord[] }) {
 
 function RunHistory({ runs }: { runs: RunRecord[] }) {
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)", overflowX: "auto" }}>
-      <h2 style={{ margin: "0 0 var(--s-3)", fontSize: "var(--t-title)" }}>Run history</h2>
-      {runs.length === 0 ? (
-        <EmptyState
-          title="No recent runs"
-          hint="Trigger a run above, or wait for the daemon's next scheduled cycle."
-        />
-      ) : (
-        <RunsTable runs={runs} />
-      )}
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ margin: "0", fontSize: "var(--t-title)" }}>Run history</h2>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflowX: "auto" }}>
+        {runs.length === 0 ? (
+          <EmptyState
+            title="No recent runs"
+            hint="Trigger a run above, or wait for the daemon's next scheduled cycle."
+          />
+        ) : (
+          <RunsTable runs={runs} />
+        )}
+      </div>
     </section>
   );
 }
@@ -373,13 +386,17 @@ function DurableRunHistory({
   onReload: () => void;
 }) {
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)", overflowX: "auto" }}>
+    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
       <div
+        className="drag-handle"
         style={{
           display: "flex",
-          alignItems: "flex-start",
+          alignItems: "center",
           justifyContent: "space-between",
           gap: "var(--s-2)",
+          padding: "var(--s-3)",
+          borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
+          cursor: "grab",
         }}
       >
         <div>
@@ -394,12 +411,15 @@ function DurableRunHistory({
           onClick={onReload}
           disabled={loading}
           data-testid="refresh-run-history"
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
         >
           Refresh
         </Button>
       </div>
 
-      {loading && !runs ? (
+      <div style={{ padding: "var(--s-3)", flex: 1, overflowX: "auto" }}>
+        {loading && !runs ? (
         <div style={{ marginTop: "var(--s-3)" }}>
           <Loading />
         </div>
@@ -415,10 +435,9 @@ function DurableRunHistory({
           />
         </div>
       ) : (
-        <div style={{ marginTop: "var(--s-3)" }}>
-          <RunsTable runs={runs} />
-        </div>
+        <RunsTable runs={runs} />
       )}
+      </div>
     </section>
   );
 }
@@ -525,8 +544,11 @@ function DeadLetterQueueSection() {
   );
 
   return (
-    <section className="card card-pad" style={{ marginTop: "var(--s-4)" }} data-testid="dead-letter-section">
-      <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Dead-letter queue</h2>
+    <section className="card card-pad" data-testid="dead-letter-section" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <h2 style={{ margin: "0", fontSize: "var(--t-title)" }}>Dead-letter queue</h2>
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
       <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", margin: "0 0 var(--s-3)" }}>
         Symbols that failed during the last pipeline run. Each failure is
         isolated — the rest of the run was unaffected.
@@ -571,6 +593,7 @@ function DeadLetterQueueSection() {
           </>
         )
       )}
+      </div>
     </section>
   );
 }
@@ -631,10 +654,15 @@ export function PipelineDashboard() {
       >
         ‹ Back
       </button>
-      <h1 className="screen-title">Pipeline</h1>
-      <p className="screen-sub">
-        The orchestrator daemon's live status and stage-scoped run triggers.
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>Pipeline</h1>
+          <p className="screen-sub">
+            The orchestrator daemon's live status and stage-scoped run triggers.
+          </p>
+        </div>
+        <Button variant="neutral" onClick={() => resetGridLayout("pipeline")}>Reset Layout</Button>
+      </div>
 
       <TabGuide tabKey="pipeline" />
 
@@ -645,25 +673,42 @@ export function PipelineDashboard() {
       ) : error && !data ? (
         <ErrorState message={error} status={httpStatus} onRetry={reload} />
       ) : data ? (
-        <>
-          {data.daemon_alive ? (
-            <>
-              <StatusBanner status={data} />
-              <Controls disabled={data.is_running} onTriggered={reload} />
-              <RunHistory runs={data.run_history} />
-            </>
-          ) : (
-            <DaemonOfflineNotice />
-          )}
-          <DurableRunHistory
-            runs={history}
-            loading={historyLoading}
-            error={historyError}
-            httpStatus={historyStatus}
-            onReload={reloadHistory}
-          />
-          <DeadLetterQueueSection />
-        </>
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <DynamicGrid
+            layoutKey="pipeline"
+            defaultLayouts={{
+              lg: [
+                { i: "status", x: 0, y: 0, w: 6, h: 2, minW: 4, minH: 2 },
+                { i: "controls", x: 6, y: 0, w: 6, h: 2, minW: 4, minH: 2 },
+                { i: "history", x: 0, y: 2, w: 6, h: 4, minW: 4, minH: 3 },
+                { i: "durableHistory", x: 6, y: 2, w: 6, h: 4, minW: 4, minH: 3 },
+                { i: "deadLetter", x: 0, y: 6, w: 12, h: 4, minW: 6, minH: 3 },
+              ],
+            }}
+          >
+            {data.daemon_alive ? (
+              <div key="status"><StatusBanner status={data} /></div>
+            ) : (
+              <div key="status"><DaemonOfflineNotice /></div>
+            )}
+            {data.daemon_alive && <div key="controls"><Controls disabled={data.is_running} onTriggered={reload} /></div>}
+            {data.daemon_alive && <div key="history"><RunHistory runs={data.run_history} /></div>}
+
+            <div key="durableHistory">
+              <DurableRunHistory
+                runs={history}
+                loading={historyLoading}
+                error={historyError}
+                httpStatus={historyStatus}
+                onReload={reloadHistory}
+              />
+            </div>
+            
+            <div key="deadLetter">
+              <DeadLetterQueueSection />
+            </div>
+          </DynamicGrid>
+        </div>
       ) : null}
     </div>
   );

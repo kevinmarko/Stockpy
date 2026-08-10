@@ -102,7 +102,6 @@ import json
 import logging
 import math
 import re
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -246,6 +245,19 @@ import data.brokerage_credentials as brokerage_credentials
 # AST-guard deny-list. Imported at module top so tests can
 # `mock.patch.object(pilots_api, "rh_login", ...)`.
 import api._rh_login as rh_login
+
+# Forecast-backfill job primitive (start/poll/cancel a killable, isolated
+# training-worker subprocess) — see ml/forecast_backfill_job.py and
+# ml/forecast_backfill_worker.py. Mirrors the rh_login wiring immediately
+# above; unlike api._rh_login, no separate glue module is needed here (there
+# is no Pilots-API-specific side effect to own — export_results() already
+# writes its own output artifacts directly from inside the engine). Neither
+# ml.forecast_backfill_job nor ml.forecast_backfill_worker imports
+# AgenticForecastBackfiller itself (only the worker, in its own process,
+# does) or anything on this module's AST-guard deny-list, so this stays a
+# lightweight module-top import. Imported so tests can
+# `mock.patch.object(pilots_api, "forecast_backfill_job", ...)`.
+import ml.forecast_backfill_job as forecast_backfill_job
 
 # LLM configuration status (GET /llm/status). `gui.ai_control_center` is
 # stdlib-only + Streamlit-free (the headless status logic); `llm.status_store`
@@ -563,6 +575,29 @@ def require_rlhf_calibration_enabled() -> None:
         raise HTTPException(
             status_code=403,
             detail="RLHF calibration writes are disabled (RLHF_CALIBRATION_ENABLED=false).",
+        )
+
+
+def require_forecast_backfill_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``POST /pilots/forecast_backfill/run``
+    and ``POST /pilots/forecast_backfill/cancel/{job_id}``. A DEDICATED flag
+    (``settings.FORECAST_BACKFILL_ENABLED``), default ``False``. GUI-writable
+    (``gui/env_io.py``'s ``ALLOWED_KEYS``) like every other non-secret
+    tunable, per explicit operator decision, but also a
+    ``settings_keysets.DANGEROUS_KEYS`` member (``SAFETY_CRITICAL_KEY_REASONS``),
+    requiring typed confirmation on write regardless of editor — see that
+    flag's own ``settings.py`` docstring for why: unlike an ordinary
+    config-toggle write, this spawns a CPU-bound subprocess that trains and
+    overwrites the meta-labeler model artifacts (``ml/models/meta_*.pkl``)
+    feeding the live ``meta_label_composite`` score, a materially heavier and
+    more consequential action. ``GET /pilots/forecast_backfill`` and
+    ``GET /pilots/forecast_backfill/status/{job_id}`` are read-only and NOT
+    gated by this flag (``require_read_token`` alone, matching every other
+    GET here)."""
+    if not settings.FORECAST_BACKFILL_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Forecast backfill runs are disabled (FORECAST_BACKFILL_ENABLED=false).",
         )
 
 
@@ -1026,56 +1061,99 @@ def get_forecast_backfill_status() -> Dict[str, Any]:
     }
 
 
-_forecast_backfill_lock = threading.Lock()
+@app.post(
+    "/pilots/forecast_backfill/run",
+    status_code=202,
+    dependencies=[
+        Depends(require_forecast_backfill_enabled),
+        Depends(require_command_token),
+    ],
+)
+def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Any:
+    """Start an asynchronous, on-demand forecast backfill cycle across
+    specified tickers & horizons, returning immediately (202) with the
+    job's initial status rather than blocking on the multi-minute,
+    CPU-bound training run itself.
 
+    ``AgenticForecastBackfiller``'s 6-step pipeline (fetch data -> technical
+    features -> primary signals -> meta targets -> backtrain meta-labelers
+    -> execute backfill -> export) now runs in an isolated, killable
+    subprocess (``ml.forecast_backfill_worker``, via
+    ``ml.forecast_backfill_job.start_job``) instead of this request handler
+    -- the previous implementation held the HTTP connection open for the
+    entire run. Poll ``GET /pilots/forecast_backfill/status/{job_id}`` for
+    ``phase``/``step``/``state`` until it reaches a terminal state
+    (``succeeded``/``failed``/``timeout``/``cancelled``).
 
-@app.post("/pilots/forecast_backfill/run", dependencies=[Depends(require_command_token)])
-def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Dict[str, Any]:
-    """Trigger an on-demand forecast backfill cycle across specified tickers & horizons.
+    Single-flight, same invariant the old in-process ``threading.Lock``
+    enforced: a second call while a run is already in progress would
+    otherwise race on the SAME shared output files (``ml/models/meta_*.pkl``,
+    ``output/agentic_forecast_backfill.csv``,
+    ``output/agentic_forecast_summary.json``) and could corrupt them via
+    interleaved writes. ``start_job`` returns ``None`` in that case; the
+    structured 409 body below carries the EXISTING job's id (mirrors
+    ``POST /automation/run``'s ``already_running`` response shape) so the
+    caller can poll it instead of hitting a dead end.
 
-    Runs synchronously (this is an occasional, manually-triggered research
-    action, not a hot path) but single-flight guarded: a second call while one
-    is already in progress would otherwise race on the SAME shared output
-    files (ml/models/meta_*.pkl, output/agentic_forecast_backfill.csv,
-    output/agentic_forecast_summary.json) and could corrupt them via
-    interleaved writes. A non-blocking lock acquire returns 409 instead.
+    Gated by two independent controls (see the dependencies above): the
+    dedicated ``FORECAST_BACKFILL_ENABLED`` flag (default ``False``,
+    GUI-writable but confirmation-required -- see
+    ``require_forecast_backfill_enabled``) and the fail-closed follow
+    command token.
+
+    ``req.horizons`` is still validated by ``ForecastBackfillRunRequest``'s
+    own ``@field_validator`` -- FastAPI resolves the route's ``dependencies``
+    (including the two guards above) BEFORE parsing/validating the request
+    body, so an invalid ``horizons`` value only reaches a 422 once both
+    guards already passed; it never reaches ``start_job`` (and therefore
+    never spawns a subprocess) either way.
     """
-    if not _forecast_backfill_lock.acquire(blocking=False):
-        raise HTTPException(
+    job = forecast_backfill_job.start_job(req.model_dump())
+    if job is None:
+        existing_job_id = forecast_backfill_job.get_active_job_id()
+        return JSONResponse(
             status_code=409,
-            detail="A forecast backfill run is already in progress.",
+            content={
+                "detail": {
+                    "detail": "A forecast backfill run is already in progress.",
+                    "job_id": existing_job_id,
+                }
+            },
         )
+    return forecast_backfill_job.serialize_job(job)
+
+
+@app.get(
+    "/pilots/forecast_backfill/status/{job_id}",
+    dependencies=[Depends(require_read_token)],
+)
+def get_forecast_backfill_job_status(job_id: str) -> Dict[str, Any]:
+    """Poll the state of a job started by
+    ``POST /pilots/forecast_backfill/run``. 404 if the job_id is unknown."""
+    job = forecast_backfill_job.get_job_state(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown forecast backfill job.")
+    return forecast_backfill_job.serialize_job(job)
+
+
+@app.post(
+    "/pilots/forecast_backfill/cancel/{job_id}",
+    dependencies=[
+        Depends(require_forecast_backfill_enabled),
+        Depends(require_command_token),
+    ],
+)
+def cancel_forecast_backfill_job(job_id: str) -> Dict[str, Any]:
+    """Cancel an in-flight forecast backfill job (SIGTERM -> SIGKILL the
+    isolated worker process). 404 if the job_id is unknown."""
     try:
-        from ml.forecast_backfill import AgenticForecastBackfiller
-
-        engine = AgenticForecastBackfiller(
-            tickers=req.tickers,
-            start_date=req.start_date,
-            end_date=req.end_date,
-            horizons=req.horizons,
-            use_fmp=req.use_fmp,
-            strategy_ids=req.strategy_ids,
-            theta_c=req.theta_c,
-        )
-
-        try:
-            engine.step_1_fetch_data()
-            engine.step_2_calculate_technical_features()
-            engine.step_3_generate_primary_signals()
-            engine.step_4_create_meta_targets()
-            metrics = engine.step_5_backtrain_meta_labelers()
-            engine.step_6_execute_backfill()
-            output_df, summary = engine.export_results()
-            return {
-                "status": "success",
-                "summary": summary,
-                "sample_rows": len(output_df),
-            }
-        except Exception as exc:
-            logger.error("Forecast backfill run API call failed: %s", exc, exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Forecast backfill failed: {exc}")
-    finally:
-        _forecast_backfill_lock.release()
+        cancelled = forecast_backfill_job.cancel_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown forecast backfill job.")
+    job = forecast_backfill_job.get_job_state(job_id)
+    payload = forecast_backfill_job.serialize_job(job) if job else {"job_id": job_id}
+    payload["cancelled"] = cancelled
+    return payload
 
 
 @app.get("/pilots/{pilot_id}", dependencies=[Depends(require_read_token)])

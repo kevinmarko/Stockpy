@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   ResponsiveContainer,
@@ -19,6 +19,7 @@ import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice } from "../components/ui";
+import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
@@ -65,41 +66,128 @@ export function StrategyMatrix() {
   );
   useAutoPoll(reload, "signals", { hasError: error != null });
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/settings"));
+  const editor = useMatrixEditor(data, reload);
 
   return (
-    <div className="screen">
-      <button
-        onClick={back}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: "pointer",
-          color: theme.textSecondary,
-          fontSize: "var(--t-callout)",
-          marginBottom: "var(--s-2)",
-        }}
-      >
-        ← Settings
-      </button>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1 className="screen-title">Signal modules</h1>
-        {data?.as_of && (
-          <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
+    <div className="screen" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-3)" }}>
+        <div>
+          <button
+            onClick={back}
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              color: theme.textSecondary,
+              fontSize: "var(--t-callout)",
+              marginBottom: "var(--s-2)",
+            }}
+          >
+            ← Settings
+          </button>
+          <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
+            <h1 className="screen-title" style={{ margin: 0 }}>Signal modules</h1>
+            {data?.as_of && (
+              <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{timeAgo(data.as_of)}</span>
+            )}
+          </div>
+          <p className="screen-sub" style={{ marginTop: "var(--s-1)" }}>
+            Per-module weights and enabled state for the signal aggregator. Advisory
+            only — tuning changes what the platform recommends, never places an order.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
+          <Button variant="neutral" onClick={() => resetGridLayout("strategy-matrix")}>Reset Layout</Button>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-4)" }}>
+        {loading && !data && <Loading lines={4} />}
+        {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
+        {!loading && !error && data && (
+          <DynamicGrid
+            layoutKey="strategy-matrix"
+            defaultLayouts={{
+              lg: [
+                { i: "meta-label", x: 0, y: 0, w: 12, h: 8, minW: 6, minH: 6 },
+                { i: "context", x: 0, y: 8, w: 12, h: 4, minW: 6, minH: 3 },
+                ...data.modules.map((m, i) => ({
+                  i: m.name,
+                  x: (i % 3) * 4,
+                  y: 12 + Math.floor(i / 3) * 4,
+                  w: 4,
+                  h: 4,
+                  minW: 3,
+                  minH: 3,
+                })),
+              ],
+            }}
+          >
+            <div key="meta-label">
+              <div style={{ height: "100%" }}>
+                <MetaLabelSection dist={data.meta_label} />
+              </div>
+            </div>
+
+            <div key="context">
+              <ContextCard data={data} editor={editor} />
+            </div>
+
+            {data.modules.map((m) => (
+              <div key={m.name}>
+                <ModuleCard module={m} data={data} editor={editor} />
+              </div>
+            ))}
+          </DynamicGrid>
         )}
       </div>
-      <p className="screen-sub">
-        Per-module weights and enabled state for the signal aggregator. Advisory
-        only — tuning changes what the platform recommends, never places an order.
-      </p>
 
-      {loading && <Loading lines={4} />}
-      {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
-      {!loading && !error && data && (
-        <>
-          <MetaLabelSection dist={data.meta_label} />
-          <MatrixEditor data={data} onReload={reload} />
-        </>
+      {editor.confirming && data && (
+        <Modal ariaLabel="Confirm signal-module changes" onClose={() => editor.setConfirming(false)}>
+          <h2 style={{ fontSize: 18, margin: "0 0 var(--s-2)" }}>Confirm changes</h2>
+          <p style={{ fontSize: "var(--t-body)", color: theme.textSecondary, marginTop: 0 }}>
+            These write to <code>.env</code> and apply on the engine's next restart —
+            not immediately.
+          </p>
+          {editor.changes.weightDiffs.length > 0 && (
+            <div style={{ marginTop: "var(--s-2)" }}>
+              <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Weights</h3>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: "var(--t-body)", lineHeight: 1.6 }}>
+                {editor.changes.weightDiffs.map((d) => (
+                  <li key={d.name}>
+                    <strong>{d.name}</strong>: {d.from} → {d.to}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {editor.changes.toggles.length > 0 && (
+            <div style={{ marginTop: "var(--s-3)" }}>
+              <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Modules</h3>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: "var(--t-body)", lineHeight: 1.6 }}>
+                {editor.changes.toggles.map((t) => (
+                  <li key={t.name}>
+                    <strong>{t.name}</strong>: {t.enabled ? "enabled" : "disabled"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {editor.mutationError && (
+            <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
+              <span>{editor.mutationError}</span>
+            </Notice>
+          )}
+          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
+            <Button variant="neutral" block onClick={() => editor.setConfirming(false)}>
+              Cancel
+            </Button>
+            <Button variant="primary" block pending={editor.mutationPending} onClick={editor.doSave}>
+              Write to .env
+            </Button>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -128,8 +216,8 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
   );
 
   return (
-    <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} data-testid="meta-label-section">
-      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Meta-label confidence distribution</h2>
+    <section className="card card-pad" style={{ height: "100%" }} data-testid="meta-label-section">
+      <div className="drag-handle" style={{ cursor: "grab", borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-1)", marginBottom: "var(--s-2)" }}><h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Meta-label confidence distribution</h2></div>
       <p style={{ margin: "0 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
         Distribution of meta-label confidence (geometric mean of active
         modules' P(signal correct)) across all symbols in the last snapshot.
@@ -191,8 +279,56 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
   );
 }
 
-function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () => void }) {
-  const [edit, setEdit] = useState<EditState>(() => initEdit(data.modules, data.disabled));
+interface MatrixChanges {
+  weightDiffs: { name: string; from: string; to: string }[];
+  toggles: { name: string; enabled: boolean }[];
+}
+
+interface MatrixEditorState {
+  edit: EditState;
+  setWeight: (name: string, v: string) => void;
+  setEnabled: (name: string, enabled: boolean) => void;
+  invalidNames: Set<string>;
+  canSave: boolean;
+  saved: boolean;
+  confirming: boolean;
+  setConfirming: (v: boolean) => void;
+  doSave: () => Promise<void>;
+  changes: MatrixChanges;
+  mutationError: string | null;
+  mutationPending: boolean;
+}
+
+/**
+ * Owns every stateful/mutation concern previously bundled inside the old
+ * `MatrixEditor` component. Extracted to a hook (not a component) so
+ * `StrategyMatrix` can call it unconditionally at the top of its render and
+ * then place the context card + each module card as genuinely separate,
+ * individually-keyed children of `<DynamicGrid>` — a component wrapping a
+ * Fragment of many keyed children (the previous `MatrixEditor`) is invisible
+ * to `DynamicGrid`'s own children traversal, since React never flattens a
+ * child component's own Fragment output into its parent's `children` prop
+ * before the parent renders; only literal elements/arrays present at the
+ * `<DynamicGrid>` JSX call site are seen.
+ *
+ * `data` is `null` while the initial fetch is in flight (`useApi`'s
+ * contract) — the hook degrades to empty edit state until the first real
+ * `data` arrives, then seeds `edit` from it exactly once (mirroring the old
+ * component's mount-time-only `useState` initializer, since it only ever
+ * mounted once `data` was already truthy).
+ */
+function useMatrixEditor(data: StrategyMatrixT | null, onReload: () => void): MatrixEditorState {
+  const [edit, setEdit] = useState<EditState>(() =>
+    data ? initEdit(data.modules, data.disabled) : { weights: {}, disabled: new Set<string>() },
+  );
+  const seededRef = useRef(data != null);
+  useEffect(() => {
+    if (!seededRef.current && data) {
+      seededRef.current = true;
+      setEdit(initEdit(data.modules, data.disabled));
+    }
+  }, [data]);
+
   const [confirming, setConfirming] = useState(false);
   const mutation = useMutation(
     () =>
@@ -206,8 +342,11 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
   );
   const saved = mutation.result != null && mutation.error == null;
 
-  const max = data.max_weight;
-  const original = useMemo(() => initEdit(data.modules, data.disabled), [data]);
+  const max = data?.max_weight ?? 0;
+  const original = useMemo(
+    () => (data ? initEdit(data.modules, data.disabled) : { weights: {}, disabled: new Set<string>() }),
+    [data],
+  );
 
   const invalidNames = useMemo(() => {
     const bad = new Set<string>();
@@ -228,7 +367,7 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
     return wChanged || dChanged;
   }, [edit, original]);
 
-  const changes = useMemo(() => {
+  const changes = useMemo<MatrixChanges>(() => {
     const weightDiffs: { name: string; from: string; to: string }[] = [];
     for (const k of Object.keys(edit.weights)) {
       if (edit.weights[k] !== original.weights[k]) {
@@ -256,7 +395,7 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
       return { ...s, disabled: d };
     });
 
-  const canSave = data.writable && dirty && invalidNames.size === 0 && !mutation.pending;
+  const canSave = !!data?.writable && dirty && invalidNames.size === 0 && !mutation.pending;
 
   const doSave = async () => {
     await mutation.run();
@@ -264,9 +403,28 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
     onReload(); // refresh so env_drift.detected surfaces; local edits are kept by the server echo
   };
 
+  return {
+    edit,
+    setWeight,
+    setEnabled,
+    invalidNames,
+    canSave,
+    saved,
+    confirming,
+    setConfirming,
+    doSave,
+    changes,
+    mutationError: mutation.error,
+    mutationPending: mutation.pending,
+  };
+}
+
+/** Single grid item's content — the "context" card. One `<section>`, not a Fragment. */
+function ContextCard({ data, editor }: { data: StrategyMatrixT; editor: MatrixEditorState }) {
+  const max = data.max_weight;
   return (
-    <>
-      {/* Context row */}
+    <section className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", height: "100%", cursor: "grab" }}>
+      <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Context & Alerts</h2>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", margin: "var(--s-1) 0 var(--s-3)" }}>
         <span className="chip">Regime {data.market_regime ?? "—"}</span>
         <span className="chip">Max weight {fmtNum(max, 0)}</span>
@@ -274,19 +432,19 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
       </div>
 
       {!data.writable && (
-        <Notice variant="warn" style={{ marginBottom: "var(--s-3)" }}>
+        <Notice variant="warn" style={{ marginBottom: "var(--s-1)" }}>
           <span>{data.note}</span>
         </Notice>
       )}
 
       {data.env_drift.detected && (
-        <Notice variant="info" style={{ marginBottom: "var(--s-3)" }} data-testid="env-drift-notice">
+        <Notice variant="info" style={{ marginBottom: "var(--s-1)" }} data-testid="env-drift-notice">
           <span>{data.env_drift.note}</span>
         </Notice>
       )}
 
-      {saved && (
-        <Notice variant="success" style={{ marginBottom: "var(--s-3)" }} data-testid="saved-notice">
+      {editor.saved && (
+        <Notice variant="success" style={{ marginBottom: "var(--s-1)" }} data-testid="saved-notice">
           <span>
             Saved to .env. The running engine keeps the previous values until its
             next restart.
@@ -294,139 +452,98 @@ function MatrixEditor({ data, onReload }: { data: StrategyMatrixT; onReload: () 
         </Notice>
       )}
 
-      {/* Module rows */}
-      <div>
-        {data.modules.map((m) => {
-          const enabled = !edit.disabled.has(m.name);
-          const invalid = invalidNames.has(m.name);
-          return (
-            <section
-              key={m.name}
-              className="card card-pad"
-              style={{ marginBottom: "var(--s-2-5)", opacity: enabled ? 1 : 0.6 }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <div style={{ fontWeight: 700 }}>{m.name}</div>
-                  <div style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
-                    {m.source === "snapshot"
-                      ? "scored last run, no configured weight"
-                      : m.source === "weights"
-                        ? "configured, not scored last run"
-                        : `${m.symbols_scored ?? "—"} symbols scored`}
-                  </div>
-                  <InfoTip
-                    triggerStyle={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      fontSize: "var(--t-micro)",
-                      color: theme.textMuted,
-                      marginTop: "var(--s-0-5)",
-                      fontFamily: "monospace",
-                      cursor: "pointer",
-                    }}
-                    content="sha256-prefix fingerprint of signals/<name>.py + its last-modified time"
-                  >
-                    {m.version_hash
-                      ? `v${m.version_hash} · modified ${timeAgo(m.last_modified)}`
-                      : "no file on disk"}
-                  </InfoTip>
-                </div>
-                <Toggle
-                  checked={enabled}
-                  onChange={(v) => setEnabled(m.name, v)}
-                  label={`${m.name} enabled`}
-                  disabled={!data.writable}
-                />
-              </div>
-              <div style={{ marginTop: "var(--s-2-5)", maxWidth: 180 }}>
-                <Input
-                  label="Weight"
-                  type="number"
-                  min={0}
-                  max={max}
-                  step={1}
-                  value={edit.weights[m.name] ?? ""}
-                  onChange={(e) => setWeight(m.name, e.target.value)}
-                  invalid={invalid}
-                  hint={
-                    m.pinned_zero
-                      ? "Pinned to 0 — carries information via confidence, not score."
-                      : invalid
-                        ? `Must be a number in [0, ${max}].`
-                        : undefined
-                  }
-                  disabled={!data.writable || m.pinned_zero}
-                />
-              </div>
-            </section>
-          );
-        })}
-      </div>
-
       {data.writable && (
-        <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)" }}>
+        <div style={{ marginTop: "auto", paddingTop: "var(--s-2)" }}>
           <Button
             variant="primary"
             block
-            disabled={!canSave}
-            onClick={() => setConfirming(true)}
+            disabled={!editor.canSave}
+            onClick={() => editor.setConfirming(true)}
           >
             Save changes
           </Button>
         </div>
       )}
+    </section>
+  );
+}
 
-      {confirming && (
-        <Modal ariaLabel="Confirm signal-module changes" onClose={() => setConfirming(false)}>
-          <h2 style={{ fontSize: 18, margin: "0 0 var(--s-2)" }}>Confirm changes</h2>
-          <p style={{ fontSize: "var(--t-body)", color: theme.textSecondary, marginTop: 0 }}>
-            These write to <code>.env</code> and apply on the engine's next restart —
-            not immediately.
-          </p>
-          {changes.weightDiffs.length > 0 && (
-            <div style={{ marginTop: "var(--s-2)" }}>
-              <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Weights</h3>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: "var(--t-body)", lineHeight: 1.6 }}>
-                {changes.weightDiffs.map((d) => (
-                  <li key={d.name}>
-                    <strong>{d.name}</strong>: {d.from} → {d.to}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {changes.toggles.length > 0 && (
-            <div style={{ marginTop: "var(--s-3)" }}>
-              <h3 style={{ fontSize: "var(--t-body)", color: theme.textMuted, margin: "0 0 var(--s-1)" }}>Modules</h3>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: "var(--t-body)", lineHeight: 1.6 }}>
-                {changes.toggles.map((t) => (
-                  <li key={t.name}>
-                    <strong>{t.name}</strong>: {t.enabled ? "enabled" : "disabled"}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {mutation.error && (
-            <Notice variant="warn" style={{ marginTop: "var(--s-3)" }}>
-              <span>{mutation.error}</span>
-            </Notice>
-          )}
-          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-4-5)" }}>
-            <Button variant="neutral" block onClick={() => setConfirming(false)}>
-              Cancel
-            </Button>
-            <Button variant="primary" block pending={mutation.pending} onClick={doSave}>
-              Write to .env
-            </Button>
-          </div>
-        </Modal>
-      )}
-    </>
+/** Single grid item's content — one module's card. One `<section>`, not a Fragment. */
+function ModuleCard({
+  module: m,
+  data,
+  editor,
+}: {
+  module: StrategyModuleRow;
+  data: StrategyMatrixT;
+  editor: MatrixEditorState;
+}) {
+  const max = data.max_weight;
+  const enabled = !editor.edit.disabled.has(m.name);
+  const invalid = editor.invalidNames.has(m.name);
+  return (
+    <section
+      className="card card-pad"
+      style={{ display: "flex", flexDirection: "column", height: "100%", opacity: enabled ? 1 : 0.6 }}
+    >
+      <div className="drag-handle" style={{ cursor: "grab", borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-2)", marginBottom: "var(--s-2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontWeight: 700 }}>{m.name}</div>
+        <Toggle
+          checked={enabled}
+          onChange={(v) => editor.setEnabled(m.name, v)}
+          label={`${m.name} enabled`}
+          disabled={!data.writable}
+        />
+      </div>
+      <div style={{ flex: 1, overflow: "auto" }}>
+        <div style={{ fontSize: "var(--t-footnote)", color: theme.textMuted, marginTop: "var(--s-0-5)" }}>
+          {m.source === "snapshot"
+            ? "scored last run, no configured weight"
+            : m.source === "weights"
+              ? "configured, not scored last run"
+              : `${m.symbols_scored ?? "—"} symbols scored`}
+        </div>
+        <InfoTip
+          triggerStyle={{
+            display: "block",
+            width: "100%",
+            textAlign: "left",
+            background: "none",
+            border: "none",
+            padding: 0,
+            fontSize: "var(--t-micro)",
+            color: theme.textMuted,
+            marginTop: "var(--s-0-5)",
+            fontFamily: "monospace",
+            cursor: "pointer",
+          }}
+          content="sha256-prefix fingerprint of signals/<name>.py + its last-modified time"
+        >
+          {m.version_hash
+            ? `v${m.version_hash} · modified ${timeAgo(m.last_modified)}`
+            : "no file on disk"}
+        </InfoTip>
+        <div style={{ marginTop: "var(--s-2-5)", maxWidth: "100%" }}>
+          <Input
+            label="Weight"
+            type="number"
+            min={0}
+            max={max}
+            step={1}
+            value={editor.edit.weights[m.name] ?? ""}
+            onChange={(e) => editor.setWeight(m.name, e.target.value)}
+            invalid={invalid}
+            hint={
+              m.pinned_zero
+                ? "Pinned to 0 — carries information via confidence, not score."
+                : invalid
+                  ? `Must be a number in [0, ${max}].`
+                  : undefined
+            }
+            disabled={!data.writable || m.pinned_zero}
+          />
+        </div>
+      </div>
+    </section>
   );
 }

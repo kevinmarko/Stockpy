@@ -120,12 +120,26 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     expect(await screen.findByText("1.18")).toBeInTheDocument();
   });
 
-  it("collapses everything past portfolio risk/equity into a closed-by-default 'Background telemetry' disclosure", async () => {
+  it("renders the DynamicGrid tiles (portfolio risk + equity)", async () => {
     renderScreen();
+    // In test environment, DynamicGrid renders the items without grid logic but assigns test id
+    expect(await screen.findByTestId("grid-observability")).toBeInTheDocument();
+  });
+
+  it("keeps everything past portfolio risk/equity collapsed by default behind a real <details> disclosure, kept outside the DynamicGrid", async () => {
+    renderScreen();
+    // The DynamicGrid still mounts (portfolio risk + equity stayed genuinely
+    // draggable/resizable tiles -- see the test above), but the restored
+    // progressive-disclosure hierarchy means everything else (forecast
+    // skill, circuit breakers, risk gate log, telemetry, data latency,
+    // sizing audit, ETF transmission, heartbeat, strategy P&L, logs, macro
+    // sentiment) is NOT a grid item at all -- it's a single collapsed
+    // <details> in normal document flow, closed unless the operator opens
+    // it, exactly as it was before the DynamicGrid migration.
+    await screen.findByTestId("grid-observability");
     const details = await screen.findByTestId("background-telemetry");
     expect(details.tagName).toBe("DETAILS");
     expect((details as HTMLDetailsElement).open).toBe(false);
-    expect(await screen.findByText(/Background telemetry/)).toBeInTheDocument();
   });
 
   it("renders the portfolio heat tile from the mock", async () => {

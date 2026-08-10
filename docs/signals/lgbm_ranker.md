@@ -5,9 +5,18 @@
 **Score range:** `[-1.0, +1.0]`
 **Regime gate:** Always active
 **Status:** **Dormant by default** — contributes a neutral `0.0` until a model is trained and deployed.
-**Pilot:** None — no Pilot packages this module until it passes the model's own DSR gate;
-surfacing it as a copyable strategy before then would advertise a dormant no-op as a
-live signal.
+**Pilot:** [`ml-cross-sectional-rank`](../../pilots/catalog.py) (added 2026-08) — joined to the
+`STRATEGY_REGISTRY["lgbm_ranker"]` backtest below. **This is a methodology gate, not the live
+model's own gate**: the two are deliberately independent. `STRATEGY_REGISTRY["lgbm_ranker"]`
+genuinely retrains a fresh `LGBMCrossSectionalRanker` per CPCV fold on real point-in-time
+features (native MultiIndex CPCV, PR #648) to ask "does this approach generalize
+out-of-sample on this universe?" — it does **not** load or evaluate the single persisted
+`ml/models/lgbm_latest.pkl` artifact the live signal module actually loads via
+`load_latest()`. The live signal module itself stays **exactly as dormant as before** until
+`ml/registry.yaml` independently records `deployable: true` for the currently-trained artifact
+(via `scripts/train_lgbm.py`'s own DSR/PBO gate — see "Training & Activation" below) —
+passing the Pilot's backtest does not, by itself, activate the live module. See the
+**Backtest Validation** section below for the real measured numbers and honest scope caveats.
 
 ---
 
@@ -82,3 +91,74 @@ Activation path:
 - Covered by `tests/test_lgbm_ranker_signal.py` (registration, registry/weight
   consistency, rank→score map, neutral-when-no-model) and `tests/test_model_interface.py`
   / `tests/test_lgbm_purged_integration.py` (the underlying `ml/lgbm_ranker` model).
+
+---
+
+## Backtest Validation (`STRATEGY_REGISTRY["lgbm_ranker"]`, 2026-08)
+
+**New `STRATEGY_REGISTRY` entry** (`scripts/refresh_validations.py::_build_lgbm_ranker_adapter`),
+joined to the `ml-cross-sectional-rank` Pilot. This is a genuinely different kind of adapter from
+every other entry in the registry: instead of replaying one fixed, precomputed return series
+across CPCV folds (which would leak — a model fit once on the full history and then "OOS"-scored
+on slices of that same history has already seen every fold's test data), it RETRAINS a fresh
+`LGBMCrossSectionalRanker` on each fold's own training rows via
+`ranker.train(X_tr, y_tr, t1=t1_tr, use_native_multiindex_cv=True)` — the first production caller
+of PR #648's native `(date, ticker)` MultiIndex CPCV path, with a real ~21-trading-day forward-
+return `t1` (not a synthesized default).
+
+**Real, measured result** (live yfinance data, `python -m scripts.refresh_validations
+--strategies lgbm_ranker --start 2015-01-01 --end 2024-12-31 --json`, run 2026-08-07):
+
+| Metric | Value | Gate | Result |
+|---|---|---|---|
+| Sharpe (net) | **−0.334** | > 0.50 | ❌ FAIL |
+| PBO | 0.000 | < 0.50 | ✅ |
+| DSR | 1.000 | > 0.95 | ✅ |
+| MaxDD | 3.68% | < 30% | ✅ |
+| `deployable` | **False** | | |
+
+Actual window used: **2019-01-02 → 2024-11-25** — the CLI was asked for 2015-2024, but the
+adapter internally bounds its OWN feature-panel build to the last ~6 years of the requested
+range (`_build_lgbm_ranker_adapter`'s own docstring, "Bounded window" — the same computational-
+feasibility reasoning `forecast_direction_arima_hw` already documents for its own bounded 5-year
+window), so the harness's `X.index[0]`/`X.index[-1]` self-report this narrower effective window.
+
+**Honest read**: PBO/DSR/MaxDD all clear their gates comfortably, but net-of-cost Sharpe is
+**negative** — the top-minus-bottom-half long-short book genuinely lost money after
+`TieredCostModel` transaction costs over this window. This is a real, measured result, not a
+data or wiring bug (the adapter's own unit/network tests confirm real training and real,
+finite long-short returns per fold — see `tests/test_validation_lgbm_ranker_registry.py`). A
+few honest, evidence-adjacent factors likely contributing (not verified as THE cause, since no
+counterfactual re-run was performed to isolate them individually — stated as plausible, not
+proven):
+
+* **Single hyperparameter candidate.** Unlike `scripts/train_lgbm.py::compute_cpcv_metrics`'s
+  own `_CANDIDATE_PARAMS` (3 configs), this adapter trains exactly ONE fixed
+  `LGBMCrossSectionalRanker(purged_kfold_splits=3, embargo_pct=0.0)` config per fold — `n_trials=1`
+  in the JSON summary. DSR with a single trial is a weak statement (no selection-bias correction
+  is actually exercised); PBO=0.0 with one trial is close to structurally guaranteed rather than
+  a meaningfully passed gate. This is an honest limitation of this adapter's current design, not
+  a fabricated pass.
+* **Bounded, proxy-OHLCV feature panel.** The 6-year window (vs. other adapters' full 2005-2024)
+  and the `_ClosesOnlyDataEngine` proxy (`High`/`Low`/`Volume` synthesized around real Close —
+  see the adapter's own docstring) mean the ranker never sees genuine intraday range or real
+  volume, and trains on materially less history than a live monthly-retrain cadence would
+  accumulate over years.
+* **No point-in-time fundamentals** (`historical_store=False`) — `book_to_market`/
+  `earnings_yield`/`quality_factor_score`/`low_vol_score` are NaN-filled to 0.0 at train time for
+  every row in this backtest (verified: the trained model's feature list includes all of
+  `ml.feature_engineering.FEATURE_COLUMNS`, but the four fundamental columns carry no real signal
+  here), removing roughly a third of the live signal's intended feature set.
+* **`turnover=0.03`** is a reasoned estimate (matching `cross_sectional_momentum`/
+  `relative_strength_xsec`'s own daily-rebalance figure), not measured directly from this
+  adapter's own weight series — a real measurement was not performed for this entry.
+
+**Not a contradiction of the module's live status**: `signals/lgbm_ranker.py` was already, and
+remains, dormant by default (neutral `0.0` contribution) until `ml/registry.yaml` independently
+records `deployable: true` for a trained artifact via `scripts/train_lgbm.py`'s own gate — this
+backtest exercises a DIFFERENT question (does the methodology generalize on this universe with
+these features?) and answers it honestly: not yet, on this measurement. No number above is
+fabricated; a future re-run with multiple hyperparameter candidates, the full universe/window,
+and/or real point-in-time fundamentals could plausibly move this result but was not performed
+here — see `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08 entry for the full writeup and
+`tests/test_validation_lgbm_ranker_registry.py` for the adapter's own regression coverage.

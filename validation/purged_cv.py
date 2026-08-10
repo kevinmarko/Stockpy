@@ -47,8 +47,37 @@ class CombinatorialPurgedCV:
         if n_samples < self.n_splits:
             raise ValueError("Number of samples is less than n_splits")
 
+        is_multi = isinstance(X.index, pd.MultiIndex)
+
+        if is_multi:
+            # The block-partitioning and purge/embargo logic below both assume
+            # positional row order matches chronological order (the same
+            # assumption already implicit for a plain DatetimeIndex). For a
+            # MultiIndex that assumption is easy to violate silently -- e.g. a
+            # frame built via pd.concat per-ticker rather than sorted by date
+            # first -- so it's verified explicitly rather than trusted.
+            date_level = X.index.get_level_values(0)
+            if not date_level.is_monotonic_increasing:
+                raise ValueError(
+                    "CombinatorialPurgedCV.split(): X's MultiIndex level 0 "
+                    "(treated as the Date level) must be sorted "
+                    "(monotonic increasing) -- CPCV's contiguous block "
+                    "partitioning assumes positional order matches "
+                    "chronological order. Sort X by its Date level "
+                    "(e.g. X.sort_index(level=0)) before calling split()."
+                )
+
         # Define default t1 if not provided
         if t1 is None:
+            if is_multi:
+                raise ValueError(
+                    "CombinatorialPurgedCV.split(): a default t1 cannot be safely "
+                    "synthesized for a MultiIndex -- shifting the raw index by -1 "
+                    "would mix across the index's non-date levels (e.g. tickers) "
+                    "unless the frame is guaranteed sorted with each entity's rows "
+                    "contiguous, which this method cannot verify. Pass t1 "
+                    "explicitly (indexed the same way as X)."
+                )
             # Each event ends at the next index/timestamp.
             # The last element can't be shifted forward; we set it to one step
             # beyond the final index value.  For string/label indices (e.g. ticker
@@ -64,6 +93,19 @@ class CombinatorialPurgedCV:
                 # String or other label index: sentinel = the label itself
                 t1_times.iloc[-1] = X.index[-1]
             t1 = pd.Series(t1_times.values, index=X.index)
+        elif is_multi and len(t1) and isinstance(t1.iloc[0], tuple):
+            # Guard against a caller passing t1 values that are themselves
+            # MultiIndex tuples (e.g. built off X.index directly) rather than
+            # plain, level-0-comparable scalars -- this would otherwise fail
+            # silently as a tuple-vs-timestamp comparison later in the purge
+            # loop instead of raising here.
+            raise ValueError(
+                "CombinatorialPurgedCV.split(): t1 values must be plain "
+                "timestamps/scalars comparable to the Date level, not "
+                "MultiIndex tuples -- extract the Date level first, e.g. "
+                "t1 = pd.Series(X.index.get_level_values('Date') + offset, "
+                "index=X.index)."
+            )
 
         # 1. Partition observations into contiguous blocks
         indices = np.arange(n_samples)
@@ -96,11 +138,13 @@ class CombinatorialPurgedCV:
             # 3. Purging and Embargo
             # For each test block, we find its time range and remove overlapping train samples
             purged_train_idx = set(train_idx)
-            
+
             for b in combo:
                 block_indices = blocks[b]
                 test_start_time = X.index[block_indices[0]]
                 test_end_time = X.index[block_indices[-1]]
+                if is_multi:
+                    test_start_time, test_end_time = test_start_time[0], test_end_time[0]
                 
                 # Get max t1 in the test block
                 test_t1 = t1.iloc[block_indices]
@@ -109,6 +153,8 @@ class CombinatorialPurgedCV:
                 # Purging and Embargo: we check each training index
                 for tr_idx in list(purged_train_idx):
                     tr_time = X.index[tr_idx]
+                    if is_multi:
+                        tr_time = tr_time[0]
                     tr_t1 = t1.iloc[tr_idx]
                     
                     # Purge if training event overlaps with test block

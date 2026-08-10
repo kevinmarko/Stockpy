@@ -631,10 +631,22 @@ class StrategyValidationHarness:
         end_date: str,
         X: Optional[pd.DataFrame] = None,
         y: Optional[pd.Series] = None,
-        strategy_name: str = "Strategy"
+        strategy_name: str = "Strategy",
+        t1: Optional[pd.Series] = None,
     ) -> ValidationReport:
         """
         Runs the full validation suite. If X/y are not provided, downloads data.
+
+        Args:
+            t1: Optional event-end-times Series, forwarded verbatim to
+                ``run_cpcv_evaluation`` -> ``CombinatorialPurgedCV.split()``.
+                ``None`` (the default) reproduces the pre-existing behavior
+                exactly for every flat-``DatetimeIndex`` adapter already
+                registered in ``scripts.refresh_validations.STRATEGY_REGISTRY``
+                — CPCV synthesizes its own default t1 in that case, same as
+                before this parameter existed. REQUIRED (raises inside
+                ``CombinatorialPurgedCV.split()`` otherwise) when ``X.index``
+                is a ``pd.MultiIndex`` — see that method's own docstring.
         """
         logger.info(f"Starting validation harness for {strategy_name}...")
         
@@ -715,7 +727,7 @@ class StrategyValidationHarness:
             self.strategy_fn,
             X,
             y,
-            t1=None,
+            t1=t1,
             n_splits=self.n_cpcv_splits,
             n_test_splits=self.n_test_splits,
             cost_model_fn=self._apply_cost_model if oos_gate_enabled else None,
@@ -808,7 +820,19 @@ class StrategyValidationHarness:
         # the benchmark to exactly the same OOS dates/downsampling as equity_curve
         # so the two overlay on one x-axis. When `y` is unavailable/empty,
         # _build_equity_curve returns [] (→ surfaces as benchmark: None downstream).
-        benchmark_returns = y.reindex(full_returns.index) if y is not None else None
+        #
+        # `y` may be a MultiIndex Series (Date, Ticker) for a native-MultiIndex-CPCV
+        # adapter (see scripts.refresh_validations._build_sector_quality_rank_adapter)
+        # — reindexing a MultiIndex Series onto full_returns' flat DatetimeIndex
+        # raises ValueError (verified: "cannot include dtype 'M' in a buffer"),
+        # not a silent all-NaN result, so this is wrapped rather than left to the
+        # bare `if y is not None` guard above. Degrades to no benchmark overlay
+        # (never fabricated — CONSTRAINT #4), never crashes (CONSTRAINT #6).
+        try:
+            benchmark_returns = y.reindex(full_returns.index) if y is not None else None
+        except Exception as exc:  # noqa: BLE001 - defensive, see comment above
+            logger.debug("benchmark_returns reindex failed (%s); no benchmark overlay", exc)
+            benchmark_returns = None
         benchmark_curve = _build_equity_curve(benchmark_returns)
 
         # Honest LABELED macro benchmark: buy-&-hold of SPY (the broad market),

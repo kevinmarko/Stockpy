@@ -126,6 +126,20 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FORECAST_BACKFILL_MAX_DEPTH",
     "FORECAST_BACKFILL_RANDOM_STATE",
     "FORECAST_BACKFILL_CLASSIFIER_TYPE",
+    # Wall-clock deadline for the async forecast-backfill job's worker
+    # subprocess (ml/forecast_backfill_job.py) -- a timeout tunable, same
+    # treatment as RH_LOGIN_DEADLINE_SECONDS below.
+    "FORECAST_BACKFILL_DEADLINE_SECONDS",
+    # Master switch for the async forecast-backfill job itself (spawns a
+    # subprocess that retrains and OVERWRITES production ml/models/meta_*.pkl
+    # artifacts read by live inference). GUI-writable like every other
+    # non-secret tunable, but also a settings_keysets.DANGEROUS_KEYS member
+    # (SAFETY_CRITICAL_KEY_REASONS), requiring typed confirmation on write
+    # regardless of editor -- see its own settings.py Field docstring for
+    # the full reasoning. POST /pilots/forecast_backfill/{run,cancel} remain
+    # independently gated by the FOLLOW_API_TOKEN command token regardless
+    # of this flag's own GUI-writability.
+    "FORECAST_BACKFILL_ENABLED",
     # Observability / runtime
     "DASHBOARD_REFRESH_SECONDS",
     # Poll interval (seconds) for the Launcher tab's live pipeline-progress bar
@@ -212,6 +226,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",  # bool — run CNN-LSTM fit/predict in an isolated subprocess
     "CNN_LSTM_PROCESS_POOL_WORKERS",          # int — persistent isolation-pool worker count
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",    # int — per-call isolation timeout (seconds)
+    # lgbm_ranker native MultiIndex CPCV support (ml/lgbm_ranker.py, PR #650/#651).
+    # Non-secret model-training tunable, no credential material.
+    "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",  # bool — real t1-based purge instead of flatten+default-t1
     "ADVISORY_REUSE_PIPELINE_COMPUTE",     # bool — OUTPUT-CHANGING: reuse pipeline GARCH/forecast in advisory overlay
     "FUNDAMENTALS_SOURCE",        # "yahoo" | "yfinance_info"
     "BETA_LOOKBACK_DAYS",         # int — beta computation lookback (days)
@@ -662,9 +679,9 @@ SECRET_KEYS: tuple[str, ...] = (
 # Deliberately excluded from BOTH allowlists
 # ---------------------------------------------------------------------------
 # Fields on settings.Settings that are neither GUI-writable non-secret tunables
-# nor secrets to mask -- today that means exactly one class: filesystem paths,
-# where editing from the GUI has no clear safety benefit and risks pointing
-# the app at a bogus location.
+# nor secrets to mask -- today that means one class: filesystem paths, where
+# editing from the GUI has no clear safety benefit and risks pointing the app
+# at a bogus location.
 #
 # HISTORY (2026-08-08): a second class used to live here too -- 12 fail-closed
 # master switches gating a real side effect (arbitrary command execution, a

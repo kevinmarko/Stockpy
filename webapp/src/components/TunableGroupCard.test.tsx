@@ -6,7 +6,10 @@
  * framer-motion expand/collapse wrapper around the content is a purely
  * visual addition and isn't itself asserted on here (jsdom doesn't run real
  * animations), only that the content ends up present/absent as expected
- * once the state settles.
+ * once the state settles. The toggle button (`group-header-<name>`) is
+ * distinct from the card's outer `.drag-handle` region used by DynamicGrid
+ * to drag the tile around the grid -- see TunableGroupCard.tsx's
+ * onMouseDown/onTouchStart stopPropagation guard on that button.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -47,7 +50,7 @@ describe("TunableGroupCard", () => {
     expect(screen.getByTestId("group-header-sizing")).toHaveTextContent("Collapse");
   });
 
-  it("clicking the header toggles open/closed", async () => {
+  it("clicking the toggle button toggles open/closed", async () => {
     const user = userEvent.setup();
     render(
       <TunableGroupCard name="Sizing" fields={[field("KELLY_FRACTION")]}>
@@ -55,18 +58,18 @@ describe("TunableGroupCard", () => {
       </TunableGroupCard>
     );
 
-    const header = screen.getByTestId("group-header-sizing");
+    const toggle = screen.getByTestId("group-header-sizing");
     expect(screen.queryByText("Field content")).not.toBeInTheDocument();
 
-    await user.click(header);
+    await user.click(toggle);
     expect(await screen.findByText("Field content")).toBeInTheDocument();
-    expect(header).toHaveTextContent("Collapse");
+    expect(toggle).toHaveTextContent("Collapse");
 
-    await user.click(header);
+    await user.click(toggle);
     await waitFor(() =>
       expect(screen.queryByText("Field content")).not.toBeInTheDocument()
     );
-    expect(header).toHaveTextContent("Expand");
+    expect(toggle).toHaveTextContent("Expand");
   });
 
   it("renders the dirtyCount badge only when > 0", () => {
