@@ -18,21 +18,22 @@ signals/multifactor.py, signals/news_catalyst.py, signals/sector_quality_rank.py
 (each has a dedicated test file); signals/pairs_trading.py (a plain function,
 not a registered SignalModule -- covered in tests/test_no_fabricated_metrics.py).
 
-A SIGNIFICANT FINDING, pinned (not silently fixed) throughout this file:
-signals/registry.py's compute_all() validates only that each
-required_features KEY exists on the row -- never that its VALUE is non-NaN
--- before calling compute(). In Python, `NaN > x` and `NaN < x` are always
-False. Several modules below are written as
-`if condition: <bullish> else: <bearish>` -- so a NaN required value falls
-through to the else/bearish branch and produces a confidently NEGATIVE score
-from missing data, not a neutral one. This is a real, multi-module,
-consistent pattern (not a one-off bug), but per the precedent set by the
-prior two items in this initiative, this PR is test-only: it pins and
-documents the actual verified behavior rather than silently patching the
-signal-scoring production code. A follow-up to add pd.isna() guards
+A SIGNIFICANT FINDING, originally pinned (not silently fixed) by an earlier
+test-only pass through this file, and since CLOSED by production-code
+changes to the affected modules: signals/registry.py's compute_all()
+validates only that each required_features KEY exists on the row -- never
+that its VALUE is non-NaN -- before calling compute(). In Python,
+`NaN > x` and `NaN < x` are always False. Several modules below were
+written as `if condition: <bullish> else: <bearish>` -- so a NaN required
+value fell through to the else/bearish branch and produced a confidently
+NEGATIVE score from missing data, not a neutral one. This was a real,
+multi-module, consistent pattern (not a one-off bug). aroon_trend.py,
+graham_value.py, macd_momentum.py, macro_regime.py, dividend_quality.py,
+and forecast_alignment.py now each carry an explicit pd.isna()/None guard
 (matching the pattern signals/edge_garch.py, signals/rsi_extremes.py,
-signals/sortino_drawdown.py, signals/relative_strength.py already use) is a
-natural next step, intentionally left for the user to decide on separately.
+signals/sortino_drawdown.py, signals/relative_strength.py already used) --
+the tests below assert the honest neutral score=0.0 the guard produces,
+not the previously-fabricated directional score.
 """
 
 from __future__ import annotations
