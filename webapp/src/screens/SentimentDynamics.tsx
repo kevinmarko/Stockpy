@@ -135,7 +135,9 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Sentiment vs. VIX</h2>
         <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
           Archived daily news sentiment for {symbol} alongside the CBOE Volatility
-          Index.
+          Index, on a shared date axis. No lead-lag relationship is computed or
+          implied here — the sentiment archive is new, and this is a raw trend view,
+          not a backtest.
         </p>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
