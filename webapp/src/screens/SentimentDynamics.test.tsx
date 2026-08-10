@@ -10,6 +10,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SentimentDynamics } from "./SentimentDynamics";
 import { api } from "../api/client";
+import { mockNoProviderSentimentFixture } from "../api/mock";
 
 function renderScreen() {
   return render(
@@ -47,6 +48,9 @@ describe("SentimentDynamics screen (real mock API)", () => {
       // still be a real number even when the agent itself is unavailable.
       volatility_persistence: 0.93,
       source: "unavailable",
+      headlines: [],
+      earnings_catalyst: null,
+      provider_used: "none",
     });
     renderScreen();
 
@@ -57,6 +61,107 @@ describe("SentimentDynamics screen (real mock API)", () => {
     expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
     // Vol Persistence still renders its real, independently-computed value.
     expect(screen.getByText("0.93")).toBeInTheDocument();
+  });
+
+  describe("Earnings Catalyst banner", () => {
+    it("renders the amber 'Dampened' pill for the mock's default (dampened) fixture", async () => {
+      renderScreen();
+      const banner = await screen.findByTestId("earnings-catalyst-banner");
+      expect(banner).toHaveTextContent("Dampened");
+      // Covers BOTH windows -- explicit in the copy, not just implied.
+      expect(banner).toHaveTextContent(/run-up/i);
+      expect(banner).toHaveTextContent(/after the print/i);
+    });
+
+    it("renders the red 'Suppressed' pill inside the pre-earnings blackout window", async () => {
+      vi.spyOn(api, "getSentimentDynamics").mockResolvedValueOnce({
+        ticker: "AAPL",
+        date: new Date().toISOString(),
+        sentiment_score: 0.1,
+        sentiment_intensity: 0.5,
+        credibility_score: 0.6,
+        volatility_persistence: 0.5,
+        source: "antigravity_agent",
+        headlines: [],
+        earnings_catalyst: {
+          next_earnings_date: new Date(Date.now() + 6 * 3_600_000).toISOString(),
+          hours_to_earnings: 6,
+          status: "suppressed",
+          multiplier: 0,
+        },
+        provider_used: "fmp",
+      });
+      renderScreen();
+      const badge = await screen.findByTestId("earnings-catalyst-badge");
+      expect(badge).toHaveTextContent("Suppressed");
+    });
+
+    it("says 'no earnings date currently scheduled' rather than implying a known future date when status is normal with no date", async () => {
+      vi.spyOn(api, "getSentimentDynamics").mockResolvedValueOnce({
+        ticker: "AAPL",
+        date: new Date().toISOString(),
+        sentiment_score: 0.1,
+        sentiment_intensity: 0.5,
+        credibility_score: 0.6,
+        volatility_persistence: 0.5,
+        source: "antigravity_agent",
+        headlines: [],
+        earnings_catalyst: {
+          next_earnings_date: null,
+          hours_to_earnings: null,
+          status: "normal",
+          multiplier: 1,
+        },
+        provider_used: "fmp",
+      });
+      renderScreen();
+      const banner = await screen.findByTestId("earnings-catalyst-banner");
+      expect(banner).toHaveTextContent("Clear");
+      expect(banner).toHaveTextContent(/no earnings date currently scheduled/i);
+    });
+
+    it("renders nothing when earnings_catalyst is null", async () => {
+      vi.spyOn(api, "getSentimentDynamics").mockResolvedValueOnce(mockNoProviderSentimentFixture);
+      renderScreen();
+      await screen.findByTestId("headline-feed-empty");
+      expect(screen.queryByTestId("earnings-catalyst-banner")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Headline feed", () => {
+    it("renders each mock headline's publisher, title link, score, and a provider badge", async () => {
+      renderScreen();
+      const feed = await screen.findByTestId("headline-feed");
+      expect(feed).toHaveTextContent("Reuters");
+      expect(feed).toHaveTextContent("Bloomberg");
+      expect(feed).toHaveTextContent("MarketWatch");
+      // Never a publisher this data path structurally cannot return.
+      expect(feed.textContent).not.toMatch(/SEC EDGAR/i);
+      expect(await screen.findByTestId("headline-feed-provider")).toHaveTextContent("fmp");
+      const items = screen.getAllByTestId("headline-item");
+      expect(items.length).toBe(3);
+    });
+
+    it("renders the honest 'News provider not configured' empty state for the cold-start fixture, never a fabricated headline", async () => {
+      vi.spyOn(api, "getSentimentDynamics").mockResolvedValueOnce(mockNoProviderSentimentFixture);
+      renderScreen();
+      expect(await screen.findByTestId("headline-feed-empty")).toHaveTextContent(
+        "News provider not configured"
+      );
+      expect(screen.queryByTestId("headline-item")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("headline-feed-provider")).not.toBeInTheDocument();
+    });
+
+    it("renders the 'No recent headlines' empty state when a provider is configured but returned nothing", async () => {
+      vi.spyOn(api, "getSentimentDynamics").mockResolvedValueOnce({
+        ...mockNoProviderSentimentFixture,
+        provider_used: "finnhub",
+      });
+      renderScreen();
+      expect(await screen.findByTestId("headline-feed-empty")).toHaveTextContent(
+        "No recent headlines"
+      );
+    });
   });
 
   describe("Sentiment vs. VIX chart", () => {
