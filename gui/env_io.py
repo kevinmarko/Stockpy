@@ -226,6 +226,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",  # bool — run CNN-LSTM fit/predict in an isolated subprocess
     "CNN_LSTM_PROCESS_POOL_WORKERS",          # int — persistent isolation-pool worker count
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",    # int — per-call isolation timeout (seconds)
+    # lgbm_ranker native MultiIndex CPCV support (ml/lgbm_ranker.py, PR #650/#651).
+    # Non-secret model-training tunable, no credential material.
+    "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",  # bool — real t1-based purge instead of flatten+default-t1
     "ADVISORY_REUSE_PIPELINE_COMPUTE",     # bool — OUTPUT-CHANGING: reuse pipeline GARCH/forecast in advisory overlay
     "FUNDAMENTALS_SOURCE",        # "yahoo" | "yfinance_info"
     "BETA_LOOKBACK_DAYS",         # int — beta computation lookback (days)

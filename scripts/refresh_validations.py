@@ -2142,6 +2142,229 @@ def _build_signal_replay_adapter(
     return X, y, precomputed
 
 
+class _ClosesOnlyDataEngine:
+    """Wraps an already-downloaded real ``closes`` DataFrame into the
+    ``IDataProvider.fetch_technical_raw(tickers) -> {ticker: OHLCV df}``
+    contract ``ml.training_data.build_training_panel`` needs.
+
+    Reuses the GENUINE downloaded Close prices this module already fetched
+    for the strategy (CONSTRAINT #4 — no fabricated prices); only
+    ``High``/``Low``/``Volume`` are synthetic proxies (a tight ±0.1% band
+    around Close / a flat 1e6 share count) since ``_download_closes`` only
+    ever carries adjusted Close — the SAME shape simplification
+    ``scripts/train_lgbm.py``'s own ``_SyntheticDataEngine`` makes for its
+    offline/test path. No ``FEATURE_COLUMNS`` entry currently depends on real
+    intraday range or real volume (verified against
+    ``ml/feature_engineering.py``), so this proxy never silently degrades a
+    feature that matters.
+    """
+
+    def __init__(self, closes: pd.DataFrame):
+        self._closes = closes
+
+    def fetch_technical_raw(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
+        out: Dict[str, pd.DataFrame] = {}
+        for t in tickers:
+            if t not in self._closes.columns:
+                continue
+            c = self._closes[t].dropna()
+            if c.empty:
+                continue
+            out[t] = pd.DataFrame(
+                {
+                    "Open": c, "High": c * 1.001, "Low": c * 0.999,
+                    "Close": c, "Volume": 1_000_000.0,
+                },
+                index=c.index,
+            )
+        return out
+
+
+def _build_lgbm_ranker_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Any]:
+    """LightGBM cross-sectional ranker (``lgbm_ranker``), validated by
+    GENUINELY RETRAINING a fresh model per CPCV fold on real point-in-time
+    features — not replaying a single fixed formula precomputed once, which
+    is what every other adapter in this registry does and what would leak
+    look-ahead here (a model fit once on the FULL history and then "OOS"-
+    evaluated on slices of that same history has already seen every fold's
+    test data during training).
+
+    Two-layer CPCV, both exercising real code, deliberately kept distinct:
+
+    * OUTER (this adapter's contract with ``StrategyValidationHarness``):
+      ``X``/``y`` are DATE-indexed (one row per unique trading date, exactly
+      like every other multi-ticker adapter here) — ``harness.py``'s
+      ``benchmark_curve`` does ``y.reindex(full_returns.index)``, which
+      raises ``InvalidIndexError`` on a non-unique index, so the raw
+      (date, ticker) panel itself can never be handed to the harness
+      directly. ``y`` is the equal-weight daily return of the tradeable
+      universe (the same "honest real underlying return" convention
+      ``cross_sectional_momentum`` uses for ITS benchmark curve) — never
+      used for training, only for the outer walk-forward/CPCV row count and
+      the report's benchmark overlay.
+    * INNER (this function's own ``strategy_fn``, closed over the REAL
+      (date, ticker) MultiIndex training panel): each fold call receives
+      ``(X_train, y_train, X_test, y_test)`` from the harness — all
+      date-indexed — and uses ONLY their ``.index`` (the dates belonging to
+      this fold) to filter the closed-over panel down to the matching
+      (date, ticker) rows, then trains a FRESH
+      ``LGBMCrossSectionalRanker`` on exactly that fold's training rows via
+      ``ranker.train(X_tr_mi, y_tr_mi, t1=t1_tr, use_native_multiindex_cv=True)``
+      — genuinely exercising PR #648's native MultiIndex CPCV path (nested
+      inside this fold's own early-stopping sub-CV), not merely a flag
+      flipped with nothing behind it.
+
+    Long-short returns are computed via ``scripts.train_lgbm._long_short_returns``
+    (imported, NOT duplicated, per this module's reuse convention) — top-half
+    minus bottom-half mean forward-return rank, grouped by date.  That helper
+    expects a FLAT (repeated-date, one row per (date, ticker)) index with
+    values aligned 1:1 to a features frame, exactly what
+    ``scripts/train_lgbm.py::compute_cpcv_metrics`` already feeds it — this
+    adapter reproduces that same flat shape for its fold slices rather than
+    reimplementing the grouping logic.
+
+    HONEST SCOPE (CONSTRAINT #4):
+
+    * Universe: ``_XSEC_UNIVERSE_30`` (same as ``cross_sectional_momentum`` /
+      ``relative_strength_xsec``), no SPY trend-gate benchmark used here.
+    * Feature panel window is BOUNDED to the last ~6 years of ``closes``'s
+      own date range (not the full requested backtest window, which for the
+      CLI default 2005-2024 span would mean building 20 years × 30 tickers of
+      point-in-time features per validation run) — the SAME "computationally
+      infeasible to re-fit at every historical date across the full 20-year
+      window" reasoning ``forecast_direction_arima_hw``'s own docstring
+      already documents for its bounded 5-year window. This is a real,
+      documented scope-narrowing choice, not a silent one.
+    * ``historical_store=False`` skips point-in-time fundamentals (SEC EDGAR)
+      entirely — ``_FUNDAMENTAL_COLS`` degrade to honest NaN, never a
+      fabricated derivation (the ranker's own ``.fillna(0.0)`` at train/
+      predict time handles NaN features the same way it already does for a
+      genuinely untrained/missing model).
+    * ``turnover=0.03`` (see ``STRATEGY_REGISTRY`` entry below) is a REASONED
+      estimate matching this registry's other daily-rebalanced cross-sectional
+      top/bottom-half adapters (``cross_sectional_momentum`` /
+      ``relative_strength_xsec``, also 0.03) — not an empirical measurement
+      specific to this adapter's own weight series (see
+      ``docs/signals/lgbm_ranker.md``'s Backtest Validation section for
+      whether a live run was able to measure it directly).
+
+    Returns ``(X, y, {})`` on an empty/insufficient panel — the standard
+    dead-letter shape every adapter here uses (``run_validations`` raises a
+    per-strategy ``RuntimeError``, never crashes the whole sweep).
+    """
+    from ml.feature_engineering import FEATURE_COLUMNS
+    from ml.lgbm_ranker import LGBMCrossSectionalRanker
+    from ml.training_data import build_training_panel
+    from scripts.train_lgbm import _long_short_returns
+
+    universe = [t for t in _XSEC_UNIVERSE_30 if t in closes.columns]
+    if len(universe) < 5:
+        logger.warning(
+            "_build_lgbm_ranker_adapter: only %d/%d universe names present in "
+            "`closes` — insufficient for a cross-sectional ranker.", len(universe),
+            len(_XSEC_UNIVERSE_30),
+        )
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    full_index = closes.index.sort_values()
+    BOUND_YEARS = 6
+    bounded_start = max(full_index[0], full_index[-1] - pd.Timedelta(days=365 * BOUND_YEARS))
+    start = pd.Timestamp(bounded_start)
+    end = pd.Timestamp(full_index[-1])
+
+    data_engine = _ClosesOnlyDataEngine(closes[universe])
+    X_panel, y_panel, t1_panel, _price_history = build_training_panel(
+        start, end, universe,
+        data_engine=data_engine, horizon_days=21, step_days=5,
+        historical_store=False,
+    )
+    if X_panel.empty:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    feat_cols = [c for c in FEATURE_COLUMNS if c in X_panel.columns]
+    # Same two honesty filters scripts/train_lgbm.py::build_training_panel
+    # already applies: drop rows whose forward-return rank or momentum
+    # feature is NaN (forward-window ran off the end of history / warm-up
+    # not satisfied yet) rather than fabricate a value for either.
+    valid = y_panel.notna()
+    if "ROC_12M" in X_panel.columns:
+        valid &= X_panel["ROC_12M"].notna()
+    X_panel = X_panel.loc[valid, feat_cols]
+    y_panel = y_panel.loc[valid]
+    t1_panel = t1_panel.reindex(X_panel.index)
+
+    dates = X_panel.index.get_level_values(0).unique().sort_values()
+    if len(dates) < 15:
+        logger.warning(
+            "_build_lgbm_ranker_adapter: only %d panel dates after filtering "
+            "— insufficient for CPCV.", len(dates),
+        )
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    # Outer, date-indexed contract with the harness. y is the equal-weight
+    # daily return of the tradeable universe (real, honest — used only for
+    # the outer row-count/CPCV date range and the report's benchmark curve,
+    # never for training). X is a minimal diagnostic frame the harness never
+    # reads the values of (only its length/index).
+    rets = closes[universe].pct_change()
+    y_outer = rets.mean(axis=1).reindex(dates).fillna(0.0)
+    coverage = X_panel.groupby(level=0).size()
+    X_outer = pd.DataFrame({"Panel_Ticker_Coverage": coverage.reindex(dates).fillna(0.0)}, index=dates)
+
+    def strategy_fn(
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+    ) -> List[Dict[str, Any]]:
+        try:
+            train_dates = pd.DatetimeIndex(X_train.index).unique()
+            test_dates = pd.DatetimeIndex(X_test.index).unique()
+            panel_dates = X_panel.index.get_level_values(0)
+
+            mask_tr = panel_dates.isin(train_dates)
+            mask_te = panel_dates.isin(test_dates)
+            X_tr_mi, y_tr_mi, t1_tr = X_panel.loc[mask_tr], y_panel.loc[mask_tr], t1_panel.loc[mask_tr]
+            X_te_mi, y_te_mi = X_panel.loc[mask_te], y_panel.loc[mask_te]
+
+            if len(X_tr_mi) < 20 or len(X_te_mi) < 4:
+                return []
+
+            ranker = LGBMCrossSectionalRanker(purged_kfold_splits=3, embargo_pct=0.0)
+            ranker.train(X_tr_mi, y_tr_mi, t1=t1_tr, use_native_multiindex_cv=True)
+            if ranker._model is None:
+                return []
+
+            # Flatten to the repeated-date shape _long_short_returns expects
+            # (one row per (date, ticker), values unchanged) — reused, not
+            # duplicated, exactly the calling convention
+            # scripts/train_lgbm.py::compute_cpcv_metrics already establishes.
+            X_tr_flat = X_tr_mi.set_axis(X_tr_mi.index.get_level_values(0))
+            y_tr_flat = pd.Series(y_tr_mi.values, index=X_tr_flat.index)
+            X_te_flat = X_te_mi.set_axis(X_te_mi.index.get_level_values(0))
+            y_te_flat = pd.Series(y_te_mi.values, index=X_te_flat.index)
+
+            train_ret = _long_short_returns(ranker, X_tr_flat, y_tr_flat, feat_cols)
+            test_ret = _long_short_returns(ranker, X_te_flat, y_te_flat, feat_cols)
+            if train_ret.empty or test_ret.empty:
+                return []
+
+            return [{
+                "params": "LGBM_Ranker",
+                "train_returns": train_ret,
+                "test_returns": test_ret,
+                "turnover": 0.03,
+            }]
+        except Exception as exc:  # CONSTRAINT #6 — a bad fold must not abort CPCV
+            logger.debug("lgbm_ranker strategy_fn fold failed: %s", exc)
+            return []
+
+    return X_outer, y_outer, strategy_fn
+
+
 def _make_strategy_fn(
     precomputed: Dict[str, pd.Series],
     turnover: float = 0.01,
@@ -2178,8 +2401,18 @@ def _make_strategy_fn(
 # Format: strategy_id → (adapter_fn, turnover, universe)
 #
 #   * ``adapter_fn`` returns ``(X, y, precomputed)`` — the feature matrix, the
-#     daily return series, and a dict of pre-computed strategy return series.
+#     daily return series, and EITHER a dict of pre-computed strategy return
+#     series (every adapter except one) OR a ready-made ``strategy_fn``
+#     callable (``lgbm_ranker`` only — see ``_build_lgbm_ranker_adapter``'s
+#     docstring for why a static precomputed dict can't honestly validate a
+#     TRAINED model: it would let every CPCV "OOS" fold evaluate a model that
+#     already saw that fold's data during a single full-history fit).
+#     ``run_validations`` dispatches on ``callable(precomputed)`` — a real
+#     ``strategy_fn`` is used as-is; a dict is wrapped via
+#     ``_make_strategy_fn``.
 #   * ``turnover`` — average daily turnover fed to the harness cost model.
+#     Unused (baked into the adapter's own returned trials) for the callable
+#     convention.
 #   * ``universe``  — list of tickers the adapter needs.  A SINGLE-name universe
 #     (``["SPY"]``) means the adapter is invoked with the SPY close ``pd.Series``;
 #     a MULTI-name universe means it is invoked with
@@ -2311,6 +2544,14 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
         0.06,
         ["SPY", *_XSEC_UNIVERSE_30],
     ),
+    # Genuine per-fold retraining (see _build_lgbm_ranker_adapter's docstring
+    # for the two-layer CPCV design and why this is the one adapter here that
+    # returns a ready-made strategy_fn callable instead of a precomputed dict).
+    # turnover=0.03 is baked into the adapter's own returned trials (matches
+    # cross_sectional_momentum/relative_strength_xsec's daily-rebalance
+    # estimate) — the 0.03 here is unused by run_validations' dispatch for a
+    # callable adapter but kept non-zero/documented rather than a misleading 0.
+    "lgbm_ranker": (_build_lgbm_ranker_adapter, 0.03, _XSEC_UNIVERSE_30),
 }
 
 
@@ -2530,7 +2771,16 @@ def run_validations(
                     "insufficient history for this start/end range."
                 )
 
-            strategy_fn = _make_strategy_fn(precomputed, turnover=turnover)
+            # lgbm_ranker (the one adapter that genuinely retrains per fold)
+            # returns a ready-made strategy_fn callable instead of a
+            # precomputed dict of static return series — see
+            # _build_lgbm_ranker_adapter's docstring and the STRATEGY_REGISTRY
+            # format comment above for why. Every other adapter's dict is
+            # wrapped via _make_strategy_fn as before.
+            strategy_fn = (
+                precomputed if callable(precomputed)
+                else _make_strategy_fn(precomputed, turnover=turnover)
+            )
 
             harness = StrategyValidationHarness(
                 strategy_fn=strategy_fn,
