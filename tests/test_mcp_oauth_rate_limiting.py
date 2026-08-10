@@ -18,7 +18,12 @@ from mcp.server.fastmcp import FastMCP
 from starlette.testclient import TestClient
 
 from mcp_oauth_provider import InvestyoOAuthProvider, register_login_routes
-from mcp_oauth_rate_limit import RateLimitRule, rate_limit_asgi_middleware
+from mcp_oauth_rate_limit import (
+    RateLimitRule,
+    SlidingWindowLimiter,
+    _SWEEP_EVERY_N_CHECKS,
+    rate_limit_asgi_middleware,
+)
 from mcp_oauth_store import McpOAuthStore
 
 # Small, fast rules so tests never depend on real wall-clock windows.
@@ -174,3 +179,52 @@ def test_login_and_register_are_independent_buckets(monkeypatch: pytest.MonkeyPa
     login_resp = client.get("/login?req=does-not-exist")
     assert login_resp.status_code == 404
     assert "expired" in login_resp.text.lower()
+
+
+class TestSlidingWindowLimiterMemoryBound:
+    """SlidingWindowLimiter is a long-lived, in-process dict keyed by
+    f"{bucket}:{client_ip}" on the exact unauthenticated surface this module
+    protects -- a key, once created, is otherwise never removed even after
+    its own window fully expires with no follow-up traffic, so an attacker
+    (or ordinary IP churn) sending one request each from a large number of
+    distinct source IPs would grow it without bound for the process's
+    lifetime. These tests exercise the periodic sweep that bounds this."""
+
+    def test_stale_entries_are_swept_after_enough_checks(self):
+        limiter = SlidingWindowLimiter()
+        rule = RateLimitRule(limit=10, window_seconds=3600)
+
+        for i in range(_SWEEP_EVERY_N_CHECKS + 500):
+            limiter.check("register", f"10.0.{i // 256}.{i % 256}", rule, now=1_000.0)
+        assert len(limiter._windows) == _SWEEP_EVERY_N_CHECKS + 500, (
+            "nothing should be stale yet -- all hits are at the same timestamp"
+        )
+
+        # Advance well past window_seconds and drive enough NEW checks to
+        # trigger another sweep cycle -- every entry from the first batch is
+        # now older than the limiter's own largest-seen window and must be
+        # dropped; only the new batch remains.
+        for i in range(_SWEEP_EVERY_N_CHECKS):
+            limiter.check("register", f"10.1.{i // 256}.{i % 256}", rule, now=10_000.0)
+        assert len(limiter._windows) <= _SWEEP_EVERY_N_CHECKS, (
+            f"expected the first batch to be swept away, got {len(limiter._windows)} tracked keys"
+        )
+
+    def test_active_entries_survive_a_sweep(self):
+        """A key with genuinely recent, still-in-window hits must NOT be
+        dropped by the sweep just because unrelated keys triggered it."""
+        limiter = SlidingWindowLimiter()
+        rule = RateLimitRule(limit=10, window_seconds=3600)
+
+        # An IP that is still actively within its window right up to the
+        # moment the sweep fires.
+        allowed, _ = limiter.check("register", "203.0.113.1", rule, now=9_999.0)
+        assert allowed
+
+        # Drive the sweep counter past its threshold with OTHER stale keys.
+        for i in range(_SWEEP_EVERY_N_CHECKS):
+            limiter.check("register", f"10.2.{i // 256}.{i % 256}", rule, now=10_000.0)
+
+        assert "register:203.0.113.1" in limiter._windows, (
+            "an active, in-window key must survive a sweep triggered by unrelated traffic"
+        )

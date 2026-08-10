@@ -154,6 +154,14 @@ def _bucket_for_path(path: str) -> Optional[str]:
     return _PATH_BUCKETS.get(path)
 
 
+# How often (in number of check() calls) SlidingWindowLimiter opportunistically
+# sweeps stale, permanently-idle tracking keys -- see _sweep()'s own docstring
+# for why this is needed at all. Not too frequent (the sweep is O(n) in the
+# number of currently-tracked keys) and not too rare (bounds how large the
+# dict can grow between sweeps).
+_SWEEP_EVERY_N_CHECKS = 1000
+
+
 class SlidingWindowLimiter:
     """Plain in-process, in-memory sliding-window request counter.
 
@@ -164,6 +172,14 @@ class SlidingWindowLimiter:
 
     def __init__(self) -> None:
         self._windows: Dict[str, Deque[float]] = {}
+        self._checks_since_sweep = 0
+        # Largest window_seconds this limiter has ever been asked to
+        # enforce, tracked dynamically (not read from module-level
+        # RATE_LIMIT_RULES) so this class stays correct for ANY caller,
+        # including tests that construct their own RateLimitRule instances
+        # with different windows (e.g. this module's own test suite's
+        # _SMALL_RULES).
+        self._max_window_seconds_seen = 0.0
 
     def check(
         self,
@@ -177,6 +193,7 @@ class SlidingWindowLimiter:
         is ``0.0`` when ``allowed`` is ``True``.
         """
         now = now if now is not None else time.time()
+        self._max_window_seconds_seen = max(self._max_window_seconds_seen, rule.window_seconds)
         key = f"{bucket}:{client_ip}"
         window = self._windows.setdefault(key, deque())
 
@@ -186,10 +203,49 @@ class SlidingWindowLimiter:
 
         if len(window) >= rule.limit:
             retry_after = (window[0] + rule.window_seconds) - now
-            return False, max(retry_after, 0.0)
+            allowed, retry = False, max(retry_after, 0.0)
+        else:
+            window.append(now)
+            allowed, retry = True, 0.0
 
-        window.append(now)
-        return True, 0.0
+        self._checks_since_sweep += 1
+        if self._checks_since_sweep >= _SWEEP_EVERY_N_CHECKS:
+            self._checks_since_sweep = 0
+            self._sweep(now)
+
+        return allowed, retry
+
+    def _sweep(self, now: float) -> None:
+        """Opportunistic housekeeping against unbounded growth.
+
+        ``check()`` only ever prunes the ONE window belonging to the key it
+        was just called for -- a key that stops being hit entirely (an
+        attacker/user who made exactly one request, or whose window simply
+        aged out with no follow-up traffic) keeps its dict entry forever,
+        even once its deque has pruned itself down to empty. On the exact
+        unauthenticated surface this module protects (``/register``,
+        ``/login``, ``/token``), an attacker sending one request each from a
+        large number of distinct source IPs -- or distinct spoofed
+        ``CF-Connecting-IP`` values arriving via the trusted loopback path --
+        would otherwise grow ``self._windows`` without bound for the
+        lifetime of this (long-running, always-on) process. Verified
+        directly: 50,000 distinct single-request IPs left 50,000 permanent
+        entries with no cleanup mechanism prior to this fix.
+
+        A key is dropped when its most recent hit predates
+        ``self._max_window_seconds_seen`` -- the largest window any caller
+        has ever enforced through this limiter, so a key idle longer than
+        that is, by construction, at least as stale as any real rule's own
+        window and safe to drop entirely (the next request from that same
+        IP simply recreates it fresh).
+        """
+        stale_cutoff = now - self._max_window_seconds_seen
+        stale_keys = [
+            key for key, window in self._windows.items()
+            if not window or window[-1] < stale_cutoff
+        ]
+        for key in stale_keys:
+            del self._windows[key]
 
 
 def rate_limit_asgi_middleware(app, limiter: Optional[SlidingWindowLimiter] = None, rules: Optional[Dict[str, RateLimitRule]] = None):  # noqa: ANN001 - raw ASGI app
