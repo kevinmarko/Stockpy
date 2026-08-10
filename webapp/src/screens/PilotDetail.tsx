@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router";
-import { api } from "../api/client";
+import { api, apiMeta } from "../api/client";
 import type { PerfRange, PilotDetail as PilotDetailT, PerformanceResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { RangeToggle } from "../components/RangeToggle";
 import { PerfLine, SectorDonut } from "../components/charts";
-import { ErrorState, HonestyRow, Loading, StaleDataNotice } from "../components/ui";
+import { ErrorState, HonestyRow, InfoTip, Loading, StaleDataNotice } from "../components/ui";
 import { FollowModal } from "./FollowModal";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -76,6 +76,11 @@ export function PilotDetail() {
             <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>
               as of {timeAgo(pilot.as_of)}
             </span>
+            {apiMeta.useMock && (
+              <InfoTip triggerClassName="chip" content="Running on mock data">
+                demo
+              </InfoTip>
+            )}
           </div>
         </div>
       </div>

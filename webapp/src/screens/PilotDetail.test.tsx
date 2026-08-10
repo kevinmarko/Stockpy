@@ -28,6 +28,16 @@ describe("PilotDetail screen (real mock API)", () => {
     vi.restoreAllMocks();
   });
 
+  // HONESTY: this screen renders the equity-curve chart and HonestyRow (Sharpe/
+  // DSR/PBO/MaxDD), so a viewer on the default (VITE_USE_MOCK=true) fresh
+  // checkout must see an on-screen cue that they're looking at demo data, not
+  // a live validated run.
+  it("shows the 'demo' mock-data chip (default test env runs against the mock API)", async () => {
+    renderDetail("trend-following");
+    await screen.findByRole("heading", { name: "Trend Follower" });
+    expect(screen.getByText("demo")).toBeInTheDocument();
+  });
+
   it("renders holdings, sector allocation, and the Follow CTA for a deployable pilot", async () => {
     renderDetail("trend-following");
 

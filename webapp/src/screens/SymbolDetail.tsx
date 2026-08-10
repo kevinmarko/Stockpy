@@ -10,7 +10,7 @@ import {
   Tooltip,
   Legend,
 } from "recharts";
-import { api } from "../api/client";
+import { api, apiMeta } from "../api/client";
 import type {
   AiChartResponse,
   AiCommentaryResponse,
@@ -25,7 +25,7 @@ import type {
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
-import { Button, ErrorState, Loading, MetricBadge, Notice } from "../components/ui";
+import { Button, ErrorState, InfoTip, Loading, MetricBadge, Notice } from "../components/ui";
 import { PerfLine, chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { DecisionModal } from "../components/DecisionModal";
 import { TabGuide } from "../components/TabGuide";
@@ -321,6 +321,11 @@ export function SymbolDetail() {
             <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>
               as of {timeAgo(data.as_of)}
             </span>
+            {apiMeta.useMock && (
+              <InfoTip triggerClassName="chip" content="Running on mock data">
+                demo
+              </InfoTip>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "var(--s-2)" }}>
