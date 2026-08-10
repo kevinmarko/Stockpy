@@ -18,16 +18,25 @@ class MACDMomentumSignal(SignalModule):
             has_aroon = df["aroon_osc"].notna()
         else:
             has_aroon = pd.Series(False, index=df.index)
-            
-        is_bullish = df["macd_line"] > df["macd_signal"]
-        
+
+        # `~is_bullish` (rather than an explicit `macd_line <= macd_signal`
+        # comparison) mis-fabricates a confident "MACD Bearish" reading for a
+        # NaN macd_line/macd_signal: `NaN > x` is False, so is_bullish is
+        # False, and NOT False is True -- the exact scalar compute()
+        # fabrication bug this module's own compute() now guards against
+        # (see below), reintroduced here by the negation. An explicit `valid`
+        # mask keeps both branches gated the same way forecast_alignment.py's
+        # compute_vectorized() already does.
+        valid = df["macd_line"].notna() & df["macd_signal"].notna()
+        is_bullish = valid & (df["macd_line"] > df["macd_signal"])
+
         points = pd.Series(0.0, index=df.index)
         points[has_aroon & is_bullish] = 10.0
-        points[has_aroon & ~is_bullish] = -15.0
-        
+        points[has_aroon & valid & ~is_bullish] = -15.0
+
         exps = pd.Series("", index=df.index)
         exps[has_aroon & is_bullish] = "+10pts: MACD Bullish"
-        exps[has_aroon & ~is_bullish] = "-15pts: MACD Bearish Crossover"
+        exps[has_aroon & valid & ~is_bullish] = "-15pts: MACD Bearish Crossover"
         
         score = points / 15.0
         
@@ -48,7 +57,9 @@ class MACDMomentumSignal(SignalModule):
             macd_line = row["macd_line"]
             macd_signal = row["macd_signal"]
             
-            if macd_line > macd_signal:
+            if pd.isna(macd_line) or pd.isna(macd_signal):
+                pass
+            elif macd_line > macd_signal:
                 exps.append("+10pts: MACD Bullish")
                 points += 10.0
             else:

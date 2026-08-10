@@ -14,6 +14,9 @@ class MacroRegimeSignal(SignalModule):
     required_features = ["sector"]
 
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
+        if context.macro is None:
+            return SignalOutput(score=0.0, confidence=0.0, explanation="")
+            
         regime = context.macro.market_regime
         points = 0.0
         exps = []
