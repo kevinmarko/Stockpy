@@ -120,7 +120,13 @@ class TestRegisterWidgetResourcesDegrade:
         monkeypatch.setattr(mcp_widget_resources, "BUNDLE_PATH", tmp_path / "does-not-exist.js")
         monkeypatch.setattr(mcp_widget_resources, "TEMPLATES_DIR", tmp_path)
         _write_common_assets(tmp_path)
-        for name in ("pilot-picker.html", "pilot-detail.html", "follow-result.html", "pilot-compare.html"):
+        for name in (
+            "pilot-picker.html",
+            "pilot-detail.html",
+            "follow-result.html",
+            "pilot-compare.html",
+            "pilot-portfolio.html",
+        ):
             (tmp_path / name).write_text("<p>placeholder</p>")
 
         fake_mcp = Mock()
@@ -138,7 +144,13 @@ class TestRegisterWidgetResourcesSuccess:
         bundle_path = tmp_path / "fake-bundle.js"
         bundle_path.write_text("globalThis.ExtApps={FAKE:1};")
         _write_common_assets(tmp_path)
-        for name in ("pilot-picker.html", "pilot-detail.html", "follow-result.html", "pilot-compare.html"):
+        for name in (
+            "pilot-picker.html",
+            "pilot-detail.html",
+            "follow-result.html",
+            "pilot-compare.html",
+            "pilot-portfolio.html",
+        ):
             (tmp_path / name).write_text(
                 "<!doctype html>\n"
                 "<style>/*__WIDGET_COMMON_CSS__*/</style>\n"
@@ -150,7 +162,7 @@ class TestRegisterWidgetResourcesSuccess:
             )
         return bundle_path
 
-    def test_all_four_registered_with_correct_uris_and_mime_type(self, monkeypatch, tmp_path):
+    def test_all_five_registered_with_correct_uris_and_mime_type(self, monkeypatch, tmp_path):
         bundle_path = self._build_full_fixture(tmp_path)
         monkeypatch.setattr(mcp_widget_resources, "BUNDLE_PATH", bundle_path)
         monkeypatch.setattr(mcp_widget_resources, "TEMPLATES_DIR", tmp_path)
@@ -161,13 +173,14 @@ class TestRegisterWidgetResourcesSuccess:
         result = mcp_widget_resources.register_widget_resources(fake_mcp)
 
         assert result is True
-        assert fake_mcp.resource.call_count == 4
+        assert fake_mcp.resource.call_count == 5
 
         expected_uris = {
             "ui://widgets/pilot-picker.html",
             "ui://widgets/pilot-detail.html",
             "ui://widgets/follow-result.html",
             "ui://widgets/pilot-compare.html",
+            "ui://widgets/pilot-portfolio.html",
         }
         seen_uris = set()
         for call in fake_mcp.resource.call_args_list:
@@ -188,6 +201,7 @@ _EXPECTED_UI_URIS = {
     "_PILOT_DETAIL_UI": "ui://widgets/pilot-detail.html",
     "_FOLLOW_RESULT_UI": "ui://widgets/follow-result.html",
     "_PILOT_COMPARE_UI": "ui://widgets/pilot-compare.html",
+    "_PILOT_PORTFOLIO_UI": "ui://widgets/pilot-portfolio.html",
 }
 
 
@@ -276,6 +290,57 @@ class TestPilotCompareWidgetSmoke:
         tool = srv.mcp._tool_manager.get_tool("compare_pilots")
         assert tool is not None
         assert tool.meta == srv._PILOT_COMPARE_UI
+
+
+class TestPilotPortfolioWidgetSmoke:
+    """Mirrors ``TestPilotCompareWidgetSmoke`` for the ``get_portfolio_by_pilot``
+    widget (``pilot-portfolio.html``) -- runs the real vendored bundle
+    (skipped when it hasn't been built locally) instead of a synthetic
+    tmp_path fixture."""
+
+    @pytest.mark.skipif(
+        not mcp_widget_resources.BUNDLE_PATH.exists(),
+        reason=(
+            "vendored ext-apps bundle not built locally; run: "
+            "cd mcp_widgets/build && npm install && npm run build"
+        ),
+    )
+    def test_pilot_portfolio_renders_with_no_leftover_placeholders(self):
+        result = mcp_widget_resources.render_widget_html("pilot-portfolio.html")
+        assert result is not None
+        assert "__EXT_APPS_BUNDLE__" not in result
+        assert "__WIDGET_COMMON_CSS__" not in result
+        assert "__WIDGET_COMMON_JS__" not in result
+        assert "globalThis.ExtApps=" in result
+
+    @pytest.mark.skipif(
+        not mcp_widget_resources.BUNDLE_PATH.exists(),
+        reason=(
+            "vendored ext-apps bundle not built locally; run: "
+            "cd mcp_widgets/build && npm install && npm run build"
+        ),
+    )
+    def test_pilot_portfolio_bundle_contains_new_render_function(self):
+        result = mcp_widget_resources.render_widget_html("pilot-portfolio.html")
+        assert result is not None
+        assert "function renderPortfolioByPilotPanel" in result
+        # Reuses existing shared helpers verbatim (not re-implemented).
+        assert "function formatCurrency" in result
+
+    def test_pilot_portfolio_ui_wiring_consistent_with_widgets_available(self):
+        import investyo_mcp_server as srv
+
+        if srv._WIDGETS_AVAILABLE:
+            assert srv._PILOT_PORTFOLIO_UI == {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}}
+        else:
+            assert srv._PILOT_PORTFOLIO_UI is None
+
+    def test_get_portfolio_by_pilot_tool_meta_matches_constant(self):
+        import investyo_mcp_server as srv
+
+        tool = srv.mcp._tool_manager.get_tool("get_portfolio_by_pilot")
+        assert tool is not None
+        assert tool.meta == srv._PILOT_PORTFOLIO_UI
 
 
 # ---------------------------------------------------------------------------

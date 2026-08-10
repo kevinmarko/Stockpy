@@ -65,6 +65,7 @@ _PILOT_PICKER_UI = {"ui": {"resourceUri": "ui://widgets/pilot-picker.html"}} if 
 _PILOT_DETAIL_UI = {"ui": {"resourceUri": "ui://widgets/pilot-detail.html"}} if _WIDGETS_AVAILABLE else None
 _FOLLOW_RESULT_UI = {"ui": {"resourceUri": "ui://widgets/follow-result.html"}} if _WIDGETS_AVAILABLE else None
 _PILOT_COMPARE_UI = {"ui": {"resourceUri": "ui://widgets/pilot-compare.html"}} if _WIDGETS_AVAILABLE else None
+_PILOT_PORTFOLIO_UI = {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}} if _WIDGETS_AVAILABLE else None
 
 
 def _active_universe() -> list:
@@ -3486,7 +3487,7 @@ def unfollow_pilot(pilot_id: str) -> str:
         return f"Failed to unfollow pilot '{pilot_id}': {str(e)}"
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+@mcp.tool(meta=_PILOT_PORTFOLIO_UI, annotations=ToolAnnotations(readOnlyHint=True))
 def get_portfolio_by_pilot() -> str:
     """
     Segments the operator's REAL live account P&L by which followed Pilot a

@@ -35,6 +35,7 @@ _WIDGET_RESOURCES = [
     ("pilot-detail.html", "ui://widgets/pilot-detail.html", "Pilot Detail"),
     ("follow-result.html", "ui://widgets/follow-result.html", "Follow Confirmation"),
     ("pilot-compare.html", "ui://widgets/pilot-compare.html", "Pilot Comparison"),
+    ("pilot-portfolio.html", "ui://widgets/pilot-portfolio.html", "Portfolio by Pilot"),
 ]
 
 _FIX_IT_HINT = "cd mcp_widgets/build && npm install && npm run build"

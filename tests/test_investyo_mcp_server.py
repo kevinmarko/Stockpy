@@ -3458,6 +3458,19 @@ class TestGetPortfolioByPilot:
         result = srv.get_portfolio_by_pilot()
         assert "Failed to build portfolio-by-pilot attribution" in result
 
+    def test_tool_meta_wired_to_pilot_portfolio_widget(self):
+        """The widget for this tool was deferred at v1 and shipped later --
+        confirm the ``meta=`` kwarg now points at ``pilot-portfolio.html``
+        (mirrors compare_pilots' equivalent wiring test in
+        tests/test_investyo_mcp_widgets.py::TestPilotCompareWidgetSmoke)."""
+        tool = srv.mcp._tool_manager.get_tool("get_portfolio_by_pilot")
+        assert tool is not None
+        assert tool.meta == srv._PILOT_PORTFOLIO_UI
+        if srv._WIDGETS_AVAILABLE:
+            assert tool.meta == {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}}
+        else:
+            assert tool.meta is None
+
 
 # ---------------------------------------------------------------------------
 # Prompt Registry version-control tools (Backlog item 9): get_registry_prompt_status,

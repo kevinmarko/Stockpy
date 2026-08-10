@@ -424,6 +424,197 @@ function renderEquityOverlaySvg(container, series) {
   container.appendChild(legend);
 }
 
+function fmtPlValue(v) {
+  if (typeof v !== "number" || Number.isNaN(v)) return "—";
+  const sign = v >= 0 ? "+" : "-";
+  return sign + "$" + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtPct(v) {
+  if (typeof v !== "number" || Number.isNaN(v)) return "—";
+  return (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
+}
+
+function plClass(v) {
+  return (typeof v === "number" && v < 0) ? "pl-negative" : "pl-positive";
+}
+
+function renderPortfolioByPilotPanel(container, payload) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "portfolio-by-pilot-panel";
+
+  if (!payload) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No portfolio-by-pilot data available.";
+    wrapper.appendChild(empty);
+    container.appendChild(wrapper);
+    return wrapper;
+  }
+
+  // Honesty banner -- non-negotiable, always at the top, always visible.
+  // This must never be mistaken for real per-lot P&L.
+  const banner = document.createElement("div");
+  banner.className = "banner-caution proxy-banner";
+  const bannerLabel = document.createElement("div");
+  bannerLabel.className = "proxy-banner-label";
+  bannerLabel.textContent = "⚠️ PROXY ATTRIBUTION (" + (payload.attribution_basis || "proxy") + ") — not per-lot P&L";
+  const bannerNote = document.createElement("div");
+  bannerNote.className = "proxy-banner-note";
+  bannerNote.textContent = payload.note || "";
+  banner.appendChild(bannerLabel);
+  banner.appendChild(bannerNote);
+  wrapper.appendChild(banner);
+
+  if (payload.as_of) {
+    const asOf = document.createElement("div");
+    asOf.className = "portfolio-as-of";
+    asOf.textContent = "As of: " + payload.as_of;
+    wrapper.appendChild(asOf);
+  }
+
+  // By-Pilot section
+  const pilotsTitle = document.createElement("h4");
+  pilotsTitle.textContent = "By Pilot";
+  wrapper.appendChild(pilotsTitle);
+
+  const pilots = payload.pilots || [];
+  if (pilots.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = payload.reason || "No attributable claims on record.";
+    wrapper.appendChild(empty);
+  } else {
+    const grid = document.createElement("div");
+    grid.className = "pilot-portfolio-grid";
+
+    for (const pilot of pilots) {
+      const card = document.createElement("div");
+      card.className = "card pilot-portfolio-card";
+
+      const header = document.createElement("div");
+      header.className = "pilot-portfolio-card-header";
+      const nameEl = document.createElement("strong");
+      nameEl.textContent = pilot.pilot_name || pilot.pilot_id || "";
+      const idEl = document.createElement("span");
+      idEl.className = "pilot-card-id";
+      idEl.textContent = pilot.pilot_id || "";
+      header.appendChild(nameEl);
+      header.appendChild(idEl);
+      card.appendChild(header);
+
+      const statRow = document.createElement("div");
+      statRow.className = "stat-row";
+      const stats = [
+        ["Attributed Value", formatCurrency(pilot.attributed_market_value)],
+        ["Unrealized P&L", fmtPlValue(pilot.attributed_unrealized_pl)],
+        ["P&L %", fmtPct(pilot.attributed_unrealized_pl_pct)],
+      ];
+      for (const [label, value] of stats) {
+        const cell = document.createElement("div");
+        const labelEl = document.createElement("div");
+        labelEl.className = "stat-label";
+        labelEl.textContent = label;
+        const valueEl = document.createElement("div");
+        valueEl.className = "stat-value";
+        if (label !== "Attributed Value") {
+          const raw = label === "P&L %" ? pilot.attributed_unrealized_pl_pct : pilot.attributed_unrealized_pl;
+          valueEl.classList.add(plClass(raw));
+        }
+        valueEl.textContent = value;
+        cell.appendChild(labelEl);
+        cell.appendChild(valueEl);
+        statRow.appendChild(cell);
+      }
+      card.appendChild(statRow);
+
+      const positions = pilot.positions || [];
+      if (positions.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "empty-state";
+        empty.textContent = "No attributed positions.";
+        card.appendChild(empty);
+      } else {
+        const table = document.createElement("table");
+        table.className = "table";
+        table.innerHTML = "<thead><tr><th>Symbol</th><th>Attributed Value</th><th>Attributed P&L</th><th></th></tr></thead>";
+        const tbody = document.createElement("tbody");
+        for (const pos of positions) {
+          const tr = document.createElement("tr");
+          const tdSymbol = document.createElement("td");
+          tdSymbol.textContent = pos.symbol ?? "—";
+          const tdValue = document.createElement("td");
+          tdValue.textContent = formatCurrency(pos.attributed_value);
+          const tdPl = document.createElement("td");
+          tdPl.textContent = fmtPlValue(pos.attributed_unrealized_pl);
+          tdPl.className = plClass(pos.attributed_unrealized_pl);
+          const tdOverlap = document.createElement("td");
+          if (pos.overlap_scaled) {
+            const badge = document.createElement("span");
+            badge.className = "badge badge-caution overlap-badge";
+            badge.textContent = "overlap-scaled";
+            tdOverlap.appendChild(badge);
+          }
+          tr.appendChild(tdSymbol);
+          tr.appendChild(tdValue);
+          tr.appendChild(tdPl);
+          tr.appendChild(tdOverlap);
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        card.appendChild(table);
+      }
+
+      grid.appendChild(card);
+    }
+    wrapper.appendChild(grid);
+  }
+
+  // Unattributed bucket -- deliberately NOT styled as a pilot card, since it
+  // isn't one.
+  const unattributedSection = document.createElement("div");
+  unattributedSection.className = "unattributed-section";
+
+  const unattributedTitle = document.createElement("h4");
+  unattributedTitle.textContent = "Unattributed";
+  unattributedSection.appendChild(unattributedTitle);
+
+  const unattributedNote = document.createElement("p");
+  unattributedNote.className = "unattributed-note";
+  unattributedNote.textContent = "Held value no follow currently claims.";
+  unattributedSection.appendChild(unattributedNote);
+
+  const unattributed = payload.unattributed || [];
+  if (unattributed.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "None on record.";
+    unattributedSection.appendChild(empty);
+  } else {
+    const table = document.createElement("table");
+    table.className = "table";
+    table.innerHTML = "<thead><tr><th>Symbol</th><th>Value</th></tr></thead>";
+    const tbody = document.createElement("tbody");
+    for (const u of unattributed) {
+      const tr = document.createElement("tr");
+      const tdSymbol = document.createElement("td");
+      tdSymbol.textContent = u.symbol ?? "—";
+      const tdValue = document.createElement("td");
+      tdValue.textContent = formatCurrency(u.value);
+      tr.appendChild(tdSymbol);
+      tr.appendChild(tdValue);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    unattributedSection.appendChild(table);
+  }
+
+  wrapper.appendChild(unattributedSection);
+
+  container.appendChild(wrapper);
+  return wrapper;
+}
+
 function renderFollowResultCard(container, payload) {
   const wrapper = document.createElement("div");
   wrapper.className = "follow-result";
