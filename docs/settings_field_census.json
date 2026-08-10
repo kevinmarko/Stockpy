@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "1507beb744827a4f395dd9317414dfcbf11cd3c1",
+    "git_commit": "f4123e635ab0679546bad79a8a6d4ab625a06d85",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3077,7 +3077,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 249,
+      "total_reads": 250,
       "distinct_fields": 153,
       "counts": {
         "FMP_API_KEY": 10,
@@ -3116,6 +3116,7 @@
         "FORECAST_MAX_CONCURRENCY": 2,
         "FORECAST_MODEL_PERSISTENCE_ENABLED": 2,
         "FORECAST_PROPHET_WEIGHT": 2,
+        "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED": 2,
         "MARKET_DATA_WS_ENABLED": 2,
         "META_LABEL_MIN_CONFIDENCE": 2,
         "OPAL_RESEARCH_MODEL": 2,
@@ -3202,7 +3203,6 @@
         "GDELT_MAX_RETRIES": 1,
         "GDELT_MIN_REQUEST_INTERVAL_SECONDS": 1,
         "GDELT_RETRY_BACKOFF_SECONDS": 1,
-        "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED": 1,
         "LLM_COMMENTARY_CACHE_PATH": 1,
         "LLM_STATUS_MAX_AGE_HOURS": 1,
         "MARKET_DATA_LATENCY_TRACKING_ENABLED": 1,
