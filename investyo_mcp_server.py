@@ -2801,6 +2801,75 @@ def get_portfolio_coverage() -> str:
         return f"Failed to build portfolio coverage report: {str(e)}"
 
 
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def get_quote(symbol: str) -> str:
+    """
+    Latest live/delayed quote for one symbol via the platform's own
+    market-data layer (data.market_data.CompositeProvider -- Alpaca when
+    configured, else yfinance; the SAME provider every other read path in
+    this codebase uses, via data.market_data.get_provider()). Honest about
+    staleness: is_stale is unconditionally True for yfinance quotes by
+    design, and is surfaced explicitly rather than hidden behind a plain
+    price. READ-ONLY; no order code.
+
+    Args:
+        symbol: A ticker symbol, e.g. "AAPL".
+    """
+    import math
+
+    try:
+        from data.market_data import get_provider, MarketDataError
+
+        sym = symbol.upper().strip()
+        provider = get_provider()
+
+        try:
+            q = provider.get_latest_quote(sym)
+        except MarketDataError as exc:
+            return f"No quote available for '{sym}': {exc}"
+
+        def _num(v):
+            try:
+                if v is None:
+                    return None
+                f = float(v)
+                return None if math.isnan(f) or math.isinf(f) else f
+            except (TypeError, ValueError):
+                return None
+
+        price = _num(q.price)
+        bid = _num(q.bid)
+        ask = _num(q.ask)
+        ts = q.timestamp.isoformat() if q.timestamp else None
+        live_badge = "🟡 Delayed" if q.is_stale else "🟢 Live"
+
+        lines = [f"# Quote: {q.symbol}\n"]
+        lines.append(
+            "**Price**: {price}  |  **Bid**: {bid}  |  **Ask**: {ask}".format(
+                price=f"${price:,.2f}" if price is not None else "N/A",
+                bid=f"${bid:,.2f}" if bid is not None else "N/A",
+                ask=f"${ask:,.2f}" if ask is not None else "N/A",
+            )
+        )
+        lines.append(f"\n**Live/Delayed**: {live_badge} (source: {q.source}, as of {ts})")
+
+        payload = {
+            "symbol": q.symbol,
+            "price": price,
+            "bid": bid,
+            "ask": ask,
+            "timestamp": ts,
+            "is_stale": q.is_stale,
+            "source": q.source,
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to get quote for '{symbol}': {str(e)}"
+
+
 # ==========================================
 # [9] PILOTS MARKETPLACE (READ-ONLY + GATED FOLLOW)
 # ==========================================
@@ -3217,6 +3286,195 @@ def follow_pilot(pilot_id: str, amount: float) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Failed to follow pilot '{pilot_id}': {str(e)}"
+
+
+@mcp.tool()
+def unfollow_pilot(pilot_id: str) -> str:
+    """
+    Stops following a Pilot: cancels the follow via
+    pilots.follows_store.FollowsStore.upsert(pilot_id, 0.0) -- the SAME
+    "amount == 0 cancels it" semantics api/pilots_api.py's PUT /follows
+    already uses, deliberately NOT FollowsStore.remove(), which would delete
+    the follow's mirrored attribution entirely. This immediately excludes the
+    Pilot from get_follows()/AUM/followers proxies and stops all FUTURE
+    rebalancing for it (pilots.mirror.plan_follow is never called again for a
+    cancelled follow) -- but places NO sell order and writes NO
+    execution-queue entry. Any positions this follow previously put on remain
+    held; if the follow has a recorded mirrored set, the residual
+    symbols/values are surfaced honestly so you know what is left behind.
+
+    Never gated on the global kill switch: unfollowing only removes tracking
+    and stops future increases in exposure, so it takes on no new risk and
+    should stay available even when the kill switch is active.
+
+    Idempotent: calling this on a Pilot you are not currently following (no
+    follow row on record) returns a short message rather than erroring.
+
+    Args:
+        pilot_id: A Pilot id from list_pilots (e.g. "trend-following").
+    """
+    try:
+        from pilots import catalog
+        from pilots.follows_store import FollowsStore, STATUS_ACTIVE
+
+        pilot = catalog.get_pilot(pilot_id)
+        if pilot is None:
+            return _unknown_pilot_message(pilot_id)
+
+        store = FollowsStore()
+        existing = store.get(pilot_id)
+        if existing is None:
+            return f"Not currently following `{pilot_id}` — nothing to unfollow."
+
+        was_following = existing.get("status") == STATUS_ACTIVE
+        prior_amount = existing.get("amount")
+        # Read the residual mirrored set BEFORE cancelling (upsert(0.0)
+        # preserves it, but reading pre-cancel matches follow_pilot's own
+        # convention of reporting the pre-write state).
+        residual_mirrored = store.get_mirrored(pilot_id)
+
+        store.upsert(pilot_id, 0.0)
+
+        lines = [f"# Unfollow: {pilot.name} (`{pilot.id}`)\n"]
+        if was_following:
+            lines.append(
+                f"✅ Follow cancelled (was ${float(prior_amount or 0.0):,.2f}). "
+                "No future rebalancing will occur for this Pilot."
+            )
+        else:
+            lines.append(
+                f"_Already not actively following `{pilot_id}` "
+                f"(last amount ${float(prior_amount or 0.0):,.2f})._"
+            )
+
+        if residual_mirrored:
+            lines.append("\n## Still Held (not automatically sold)")
+            lines.append(
+                "You still hold existing positions from this Pilot; they "
+                "will not be automatically sold."
+            )
+            lines.append("| Symbol | Target Notional (last attributed) |")
+            lines.append("|--------|-------------------------------------|")
+            for m in residual_mirrored:
+                notional = m.get("target_notional")
+                lines.append(
+                    "| `{sym}` | {notional} |".format(
+                        sym=m.get("symbol", "?"),
+                        notional=f"${notional:,.2f}" if notional is not None else "N/A",
+                    )
+                )
+        else:
+            lines.append("\n_No attributed positions on record for this follow._")
+
+        payload = {
+            "pilot_id": pilot_id,
+            "was_following": was_following,
+            "cancelled_amount": prior_amount,
+            "residual_mirrored": residual_mirrored,
+            "note": (
+                "Unfollowing stops future rebalancing but does not sell any "
+                "existing positions."
+            ),
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(payload, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to unfollow pilot '{pilot_id}': {str(e)}"
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def get_portfolio_by_pilot() -> str:
+    """
+    Segments the operator's REAL live account P&L by which followed Pilot a
+    position is attributed to -- an honest PROXY, not per-lot cost-basis
+    tracking (Stockpy does not record which Pilot originated a specific
+    executed broker order). Attribution is built from each follow's last
+    persisted target allocation (pilots.follows_store.FollowsStore
+    .get_mirrored), capped by currently-held market value and scaled down
+    where multiple Pilots claim the same symbol -- see
+    pilots.portfolio_attribution for the full algorithm. Includes both
+    active AND cancelled follows (an unfollowed Pilot's residual holdings
+    stay visible), plus an "Unattributed" bucket for held value no follow
+    claims. Reads the account snapshot DB-first
+    (data.historical_store.HistoricalStore.latest_account_snapshot()) and
+    never forces a live Robinhood login. READ-ONLY; never fabricates a
+    position or a claim.
+    """
+    try:
+        from pilots import catalog
+        from pilots.follows_store import FollowsStore
+        from pilots.portfolio_attribution import attribute_portfolio_by_pilot
+        from data.historical_store import HistoricalStore
+
+        account_snapshot = None
+        try:
+            account_snapshot = HistoricalStore().latest_account_snapshot()
+        except Exception:
+            # Matches follow_pilot's own convention: a snapshot-fetch failure
+            # degrades to None (honest "no account data") rather than raising.
+            account_snapshot = None
+
+        follows = FollowsStore().list_all()
+        pilot_names = {p.id: p.name for p in catalog.list_pilots()}
+
+        result = attribute_portfolio_by_pilot(account_snapshot, follows, pilot_names=pilot_names)
+
+        lines = ["# Portfolio by Pilot (proxy attribution)\n"]
+        lines.append(f"> {result['note']}\n")
+        if result.get("reason"):
+            lines.append(f"_{result['reason']}_")
+
+        if result["pilots"]:
+            lines.append("\n## By Pilot")
+            lines.append("| Pilot | Attributed Value | Unrealized P&L | P&L % |")
+            lines.append("|-------|-------------------|-----------------|-------|")
+            for p in result["pilots"]:
+                pct = p.get("attributed_unrealized_pl_pct")
+                lines.append(
+                    "| `{pid}`{name} | ${val:,.2f} | ${pl:,.2f} | {pct} |".format(
+                        pid=p["pilot_id"],
+                        name=f" ({p['pilot_name']})" if p.get("pilot_name") else "",
+                        val=p["attributed_market_value"],
+                        pl=p["attributed_unrealized_pl"],
+                        pct=f"{pct:+.1%}" if pct is not None else "—",
+                    )
+                )
+            for p in result["pilots"]:
+                if not p["positions"]:
+                    continue
+                lines.append(f"\n### `{p['pilot_id']}` — Attributed Positions")
+                lines.append("| Symbol | Attributed Value | Attributed P&L | Overlap-Scaled |")
+                lines.append("|--------|-------------------|-----------------|-----------------|")
+                for pos in p["positions"]:
+                    lines.append(
+                        "| `{sym}` | ${val:,.2f} | ${pl:,.2f} | {ov} |".format(
+                            sym=pos["symbol"],
+                            val=pos["attributed_value"],
+                            pl=pos["attributed_unrealized_pl"],
+                            ov="⚠️ yes" if pos["overlap_scaled"] else "no",
+                        )
+                    )
+
+        lines.append("\n## Unattributed (no follow claims this)")
+        if result["unattributed"]:
+            lines.append("| Symbol | Value |")
+            lines.append("|--------|-------|")
+            for u in result["unattributed"]:
+                lines.append(f"| `{u['symbol']}` | ${u['value']:,.2f} |")
+        else:
+            lines.append(
+                "_None on record — either every held position with positive "
+                "value is attributed to at least one Pilot, or nothing is held._"
+            )
+
+        lines.append("\n```json")
+        lines.append(json.dumps(result, indent=2, default=str))
+        lines.append("```")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Failed to build portfolio-by-pilot attribution: {str(e)}"
 
 
 def _bearer_auth_asgi_middleware(app, token: str):
