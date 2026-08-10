@@ -10,6 +10,7 @@ from functools import lru_cache
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from mcp_oauth_rate_limit import rate_limit_asgi_middleware
 from settings import settings as _settings
 
 # Initialize the FastMCP server for the Investyo Platform. When
@@ -3338,10 +3339,16 @@ if __name__ == "__main__":
         )
 
         print(f"Starting InvestYo MCP Server in streamable-http/oauth mode on {args.host}:{args.port}...")
-        # No extra middleware wrapper needed: the SDK's own RequireAuthMiddleware
-        # gates /mcp because auth_server_provider was supplied at FastMCP()
-        # construction (module top).
-        app = mcp.streamable_http_app()
+        # The SDK's own RequireAuthMiddleware gates /mcp (auth_server_provider
+        # was supplied at FastMCP() construction, module top) -- no extra
+        # wrapper needed there. /register, /login, /token have no such gate
+        # of their own (RFC 7591 registration is unauthenticated by design,
+        # and /login is the human trust boundary, not a bearer check), so
+        # rate_limit_asgi_middleware wraps the app to bound per-IP request
+        # rate on exactly those three routes. See mcp_oauth_rate_limit.py's
+        # module docstring for the CF-Connecting-IP trust decision and its
+        # residual-risk caveat.
+        app = rate_limit_asgi_middleware(mcp.streamable_http_app())
         uvicorn.run(app, host=args.host, port=args.port, log_level=mcp.settings.log_level.lower())
     # Deliberately bypasses mcp.run() here -- FastMCP.run_streamable_http_async
     # has no middleware injection hook, so this replicates its two-line
