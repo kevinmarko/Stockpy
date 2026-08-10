@@ -501,6 +501,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # Per-regime signal weight overrides merged onto SIGNAL_WEIGHTS (JSON dict;
     # see _JSON_KEYS).
     "REGIME_SIGNAL_WEIGHTS",
+    "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
     # RLHF Calibration Review Queue operator tunables (rlhf_calibration_store.py).
     # RLHF_CALIBRATION_ENABLED is GUI-writable here (created directly in
