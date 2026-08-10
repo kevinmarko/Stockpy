@@ -287,6 +287,18 @@ class Settings(BaseSettings):
             "empty/unset password is never treated as 'anything passes'."
         ),
     )
+    MCP_OAUTH_MULTI_USER_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Switches the OAuth /login form from the single-passphrase check "
+            "(MCP_OAUTH_PASSWORD) to per-user credentials in oauth_users "
+            "(mcp_oauth_store.py), provisioned via scripts/manage_oauth_users.py. "
+            "False (default) preserves today's exact single-password behavior. "
+            "GUI-writable (non-secret) but a settings_keysets.DANGEROUS_KEYS "
+            "member -- flipping it changes the entire auth trust boundary, the "
+            "same risk class MCP_OAUTH_ENABLED itself already carries."
+        ),
+    )
     PILOTS_API_ENABLED: bool = Field(
         default=True,
         description=(

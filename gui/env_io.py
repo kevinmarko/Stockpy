@@ -561,6 +561,13 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "LLM_WRITES_ENABLED",
     "MACRO_GATE_WRITES_ENABLED",
     "MCP_OAUTH_ENABLED",
+    # Switches the OAuth /login form from the single-passphrase check to
+    # per-user credentials in oauth_users (mcp_oauth_store.py). Non-secret
+    # (no credential material of its own -- password hashes live in the DB
+    # via DATABASE_URL, already SECRET_KEYS); same DANGEROUS_KEYS treatment
+    # as MCP_OAUTH_ENABLED itself, since flipping it changes the entire
+    # auth trust boundary.
+    "MCP_OAUTH_MULTI_USER_ENABLED",
     "PROMPT_REGISTRY_WRITES_ENABLED",
     "RAG_QUERY_API_ENABLED",
     "STRATEGY_WRITES_ENABLED",
