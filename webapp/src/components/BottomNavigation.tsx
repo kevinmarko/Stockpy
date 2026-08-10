@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Modal } from "./Modal";
 import { theme } from "../theme";
@@ -11,6 +11,13 @@ export function BottomNav() {
   const nav = useNavigate();
   const path = loc.pathname;
   const [moreOpen, setMoreOpen] = useState(false);
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const handle = () => setTick(t => t + 1);
+    window.addEventListener("navItemsChanged", handle);
+    return () => window.removeEventListener("navItemsChanged", handle);
+  }, []);
 
   const primary = NAV_ITEMS.filter((it) => it.section === "primary");
   const secondary = NAV_ITEMS.filter((it) => it.section !== "primary");
@@ -143,6 +150,14 @@ export function Sidebar() {
   const loc = useLocation();
   const nav = useNavigate();
   const path = loc.pathname;
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const handle = () => setTick(t => t + 1);
+    window.addEventListener("navItemsChanged", handle);
+    return () => window.removeEventListener("navItemsChanged", handle);
+  }, []);
+
   const primary = NAV_ITEMS.filter((it) => it.section === "primary");
   const secondary = NAV_ITEMS.filter((it) => it.section !== "primary");
 

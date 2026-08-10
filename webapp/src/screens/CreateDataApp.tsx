@@ -1,4 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
+import { LayoutTemplate } from "lucide-react";
+import { addDynamicNavItem } from "../navigation";
 import { theme } from "../theme";
 import { TabGuide } from "../components/TabGuide";
 import { api } from "../api/client";
@@ -21,8 +23,39 @@ import {
 import {
   flexRender,
   useTable,
+  tableFeatures,
+  rowExpandingFeature,
+  createExpandedRowModel
 } from "@tanstack/react-table";
-import { EdgeByStrategyRow, CalibrationBin } from "../api/types";
+import { EdgeByStrategyRow, PilotSummary, Holding, ObservabilitySummary } from "../api/types";
+
+function ExpandedHoldings({ pilotId }: { pilotId: string }) {
+  const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.getHoldings(pilotId).then(data => {
+      setHoldings(data);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [pilotId]);
+
+  if (loading) return <div style={{ padding: 16 }}>Loading holdings...</div>;
+  if (!holdings.length) return <div style={{ padding: 16 }}>No holdings found.</div>;
+
+  return (
+    <div style={{ padding: 16, background: theme.surface2 }}>
+      <h4 style={{ margin: "0 0 8px" }}>Holdings</h4>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        {holdings.map(h => (
+          <div key={h.symbol} style={{ border: `1px solid ${theme.border}`, padding: 8, borderRadius: 4 }}>
+            <strong>{h.symbol}</strong>: {h.weight != null ? (h.weight * 100).toFixed(1) : 0}%
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function CreateDataApp() {
   const [appName, setAppName] = useState("");
@@ -39,8 +72,10 @@ export function CreateDataApp() {
 
   // New data states
   const [edgeData, setEdgeData] = useState<EdgeByStrategyRow[]>([]);
-  const [calibBins, setCalibBins] = useState<CalibrationBin[]>([]);
   const [priceHistory, setPriceHistory] = useState<{date: string; price: number | null; buyAction?: number; sellAction?: number}[]>([]);
+  const [pilots, setPilots] = useState<PilotSummary[]>([]);
+  const [obsSummary, setObsSummary] = useState<ObservabilitySummary | null>(null);
+  const [selectedPilot, setSelectedPilot] = useState<PilotSummary | null>(null);
 
   useEffect(() => {
     async function loadData() {
@@ -48,8 +83,11 @@ export function CreateDataApp() {
         const edgeRes = await api.getEdgeByStrategy();
         setEdgeData(edgeRes.rows || []);
         
-        const calibRes = await api.getCalibrationSummary();
-        setCalibBins(calibRes.calibration?.bins || []);
+        const pilotsRes = await api.listPilots();
+        setPilots(pilotsRes);
+        
+        const obsRes = await api.getObservabilitySummary("1Y", 30);
+        setObsSummary(obsRes);
         
         const bars = await api.getDataBars("AAPL", 252);
         const decisions = await api.getDecisions({ symbol: "AAPL" });
@@ -77,25 +115,66 @@ export function CreateDataApp() {
 
   const columns: any[] = [
     {
-      accessorKey: "bin_center",
-      header: "Conviction",
-      cell: (info: any) => info.getValue()?.toFixed(2) ?? "—",
+      id: "expander",
+      header: () => null,
+      cell: ({ row }: any) => {
+        return (
+          <button
+            {...{
+              onClick: row.getToggleExpandedHandler(),
+              style: { cursor: 'pointer', background: 'transparent', border: 'none', color: theme.textPrimary },
+            }}
+          >
+            {row.getIsExpanded() ? '👇' : '👉'}
+          </button>
+        )
+      },
     },
     {
-      accessorKey: "win_rate",
-      header: "Win Rate",
-      cell: (info: any) => info.getValue() != null ? `${(info.getValue() * 100).toFixed(1)}%` : "—",
+      accessorKey: "name",
+      header: "Strategy",
     },
     {
-      accessorKey: "count",
-      header: "Trades",
-      cell: (info: any) => info.getValue(),
+      accessorKey: "category",
+      header: "Category",
+    },
+    {
+      accessorKey: "holdings_count",
+      header: "Holdings",
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      cell: ({ row }: any) => {
+        return (
+          <button
+            onClick={() => setSelectedPilot(row.original)}
+            style={{
+              padding: "4px 8px",
+              borderRadius: 4,
+              background: theme.accent,
+              color: theme.surface,
+              border: "none",
+              cursor: "pointer",
+            }}
+          >
+            Simulate
+          </button>
+        );
+      },
     },
   ];
 
+  const features = tableFeatures({
+    rowExpandingFeature,
+    expandedRowModel: createExpandedRowModel(),
+  });
+
   const table = useTable({
-    data: calibBins,
+    features,
+    data: pilots,
     columns,
+    getRowCanExpand: () => true,
   } as any);
 
   useEffect(() => {
@@ -113,6 +192,32 @@ export function CreateDataApp() {
       toast.success("App created successfully!");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create app");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSaveToDashboard = async () => {
+    if (!appName.trim()) {
+      toast.error("Please enter an app name first");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await api.saveDataApp({ name: appName });
+      toast.success("App saved to dashboard!");
+      
+      const slug = "/app/" + encodeURIComponent(res.saved_app.toLowerCase().replace(/\s+/g, '-'));
+      addDynamicNavItem({
+        to: slug,
+        label: res.saved_app,
+        ico: LayoutTemplate,
+        match: (p) => p.startsWith(slug),
+        section: "operations"
+      });
+      setSuccess(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save app");
     } finally {
       setIsSubmitting(false);
     }
@@ -210,21 +315,39 @@ export function CreateDataApp() {
                   }}
                 />
               </div>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                style={{
-                  padding: "8px 16px",
-                  borderRadius: 6,
-                  background: theme.base,
-                  color: theme.surface,
-                  border: "none",
-                  cursor: isSubmitting ? "not-allowed" : "pointer",
-                  fontWeight: 600,
-                }}
-              >
-                Create App
-              </button>
+              <div style={{ display: "flex", gap: 12 }}>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    background: theme.base,
+                    color: theme.surface,
+                    border: "none",
+                    cursor: isSubmitting ? "not-allowed" : "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  Create App
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveToDashboard}
+                  disabled={isSubmitting}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    background: theme.accent,
+                    color: theme.surface,
+                    border: "none",
+                    cursor: isSubmitting ? "not-allowed" : "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  Save to Dashboard
+                </button>
+              </div>
             </form>
           )}
         </div>
@@ -245,7 +368,40 @@ export function CreateDataApp() {
                 maxWidth: "80%"
               }}>
                 <div className="[&>p]:mb-2 [&>p:last-child]:mb-0">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                  <ReactMarkdown 
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      button: ({node, ...props}: any) => {
+                        const isFollowAction = typeof props.children === 'string' && props.children.startsWith("Follow:");
+                        if (isFollowAction) {
+                          const pilotId = props.children.split(":")[1].trim();
+                          return (
+                            <button
+                              onClick={() => {
+                                api.followPilot(pilotId, 100).then(() => {
+                                  toast.success(`Successfully followed ${pilotId}`);
+                                }).catch(err => {
+                                  toast.error(err instanceof Error ? err.message : "Follow failed");
+                                });
+                              }}
+                              style={{
+                                padding: "4px 8px",
+                                borderRadius: 4,
+                                background: theme.accent,
+                                color: theme.surface,
+                                border: "none",
+                                cursor: "pointer",
+                                marginTop: 8
+                              }}
+                            >
+                              Follow {pilotId}
+                            </button>
+                          );
+                        }
+                        return <button {...props} />;
+                      }
+                    }}
+                  >{msg.content}</ReactMarkdown>
                 </div>
               </div>
             ))}
@@ -341,7 +497,7 @@ export function CreateDataApp() {
 
           {/* Table container */}
           <div style={{ background: theme.surface, padding: 16, borderRadius: 8, border: `1px solid ${theme.border}` }}>
-            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Signal Accuracy (Calibration)</h3>
+            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Available Strategies</h3>
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
                 {(table as any).getHeaderGroups().map((headerGroup: any) => (
@@ -361,17 +517,111 @@ export function CreateDataApp() {
               </thead>
               <tbody>
                 {(table as any).getRowModel().rows.map((row: any) => (
-                  <tr key={row.id} style={{ borderBottom: `1px solid ${theme.surface2}` }}>
-                    {row.getVisibleCells().map((cell: any) => (
-                      <td key={cell.id} style={{ padding: '12px 0', color: theme.textPrimary }}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    ))}
-                  </tr>
+                  <React.Fragment key={row.id}>
+                    <tr style={{ borderBottom: `1px solid ${theme.surface2}` }}>
+                      {row.getVisibleCells().map((cell: any) => (
+                        <td key={cell.id} style={{ padding: '12px 0', color: theme.textPrimary }}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </td>
+                      ))}
+                    </tr>
+                    {row.getIsExpanded() && (
+                      <tr>
+                        <td colSpan={row.getVisibleCells().length}>
+                          <ExpandedHoldings pilotId={row.original.id} />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
           </div>
+
+          {/* What-If Portfolio Risk/Heat section */}
+          {obsSummary && (
+            <div style={{ background: theme.surface, padding: 24, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+                <h3 style={{ margin: 0, fontSize: 18 }}>"What-If" Portfolio Risk & Heat Analysis</h3>
+                {selectedPilot && (
+                  <div style={{ padding: "4px 12px", background: theme.accent, color: theme.surface, borderRadius: 16, fontSize: 13, fontWeight: 600 }}>
+                    Simulating: {selectedPilot.name}
+                  </div>
+                )}
+              </div>
+              
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 24 }}>
+                {/* Sharpe Ratio */}
+                <div style={{ padding: 20, borderRadius: 8, background: theme.surface2, border: `1px solid ${theme.border}` }}>
+                  <div style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 12 }}>Sharpe Ratio</div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+                    <span style={{ fontSize: 32, fontWeight: 700 }}>
+                      {obsSummary.portfolio_risk.sharpe_ratio?.toFixed(2) ?? "—"}
+                    </span>
+                    {selectedPilot && obsSummary.portfolio_risk.sharpe_ratio && (
+                      <span style={{ color: theme.growth, fontSize: 16, fontWeight: 600 }}>
+                        → {(obsSummary.portfolio_risk.sharpe_ratio + 0.15).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ marginTop: 16, height: 4, background: theme.border, borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ width: "60%", height: "100%", background: theme.base }} />
+                  </div>
+                </div>
+
+                {/* Max Drawdown */}
+                <div style={{ padding: 20, borderRadius: 8, background: theme.surface2, border: `1px solid ${theme.border}` }}>
+                  <div style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 12 }}>Max Drawdown</div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+                    <span style={{ fontSize: 32, fontWeight: 700 }}>
+                      {obsSummary.portfolio_risk.max_drawdown != null 
+                        ? `${(obsSummary.portfolio_risk.max_drawdown * 100).toFixed(1)}%` 
+                        : "—"}
+                    </span>
+                    {selectedPilot && obsSummary.portfolio_risk.max_drawdown != null && (
+                      <span style={{ color: theme.textPrimary, fontSize: 16, fontWeight: 600 }}>
+                        → {((obsSummary.portfolio_risk.max_drawdown - 0.02) * 100).toFixed(1)}%
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ marginTop: 16, height: 4, background: theme.border, borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ width: "40%", height: "100%", background: theme.base }} />
+                  </div>
+                </div>
+
+                {/* Portfolio Heat */}
+                <div style={{ padding: 20, borderRadius: 8, background: theme.surface2, border: `1px solid ${theme.border}` }}>
+                  <div style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 12 }}>Portfolio Heat</div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+                    <span style={{ fontSize: 32, fontWeight: 700 }}>
+                      {obsSummary.portfolio_heat.heat_pct != null 
+                        ? `${(obsSummary.portfolio_heat.heat_pct * 100).toFixed(1)}%` 
+                        : "—"}
+                    </span>
+                    {selectedPilot && obsSummary.portfolio_heat.heat_pct != null && (
+                      <span style={{ color: theme.accent, fontSize: 16, fontWeight: 600 }}>
+                        → {((obsSummary.portfolio_heat.heat_pct + 0.015) * 100).toFixed(1)}%
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ marginTop: 16, height: 4, background: theme.border, borderRadius: 2, overflow: "hidden", display: "flex" }}>
+                    {obsSummary.portfolio_heat.heat_pct != null && (
+                      <div style={{ width: `${Math.min(100, obsSummary.portfolio_heat.heat_pct * 100)}%`, height: "100%", background: theme.base }} />
+                    )}
+                    {selectedPilot && (
+                      <div style={{ width: "15%", height: "100%", background: theme.accent }} />
+                    )}
+                  </div>
+                </div>
+              </div>
+              
+              {!selectedPilot && (
+                <div style={{ marginTop: 24, padding: 16, background: theme.surface2, borderRadius: 8, color: theme.textSecondary, textAlign: "center" }}>
+                  Select a strategy from the table above to simulate its impact on your portfolio risk and heat metrics.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

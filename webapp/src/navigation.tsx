@@ -87,3 +87,9 @@ export const NAV_ITEMS: NavItem[] = [
   // Settings
   { to: "/settings", label: "Settings", ico: Settings, match: (p) => p.startsWith("/settings"), section: "settings" },
 ];
+
+export function addDynamicNavItem(item: NavItem) {
+  NAV_ITEMS.push(item);
+  window.dispatchEvent(new Event("navItemsChanged"));
+}
+

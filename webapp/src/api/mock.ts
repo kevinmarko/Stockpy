@@ -189,6 +189,8 @@ import type {
   CacheLongShortApproveBulkResult,
   DataAppCreationForm,
   DataAppCreationResult,
+  DataAppSavePayload,
+  DataAppSaveResult,
 } from "./types";
 
 const SECTORS = [
@@ -6140,6 +6142,16 @@ export const mockApi = {
     });
   },
 
+  async followPilot(id: string, amount: number): Promise<FollowResult> {
+    return mockApi.follow(id, amount);
+  },
+
+  async getHoldings(id: string): Promise<Holding[]> {
+    const p = findPilot(id);
+    if (!p) throw notFound(id);
+    return delay(p.holdings);
+  },
+
   async getAutomationStatus(): Promise<AutomationStatus> {
     const now = Date.now();
     return delay(
@@ -8157,6 +8169,12 @@ export const mockApi = {
       success: true,
       app_id: "mock-app-123",
       message: "Data App created successfully",
+    });
+  },
+  async saveDataApp(payload: DataAppSavePayload): Promise<DataAppSaveResult> {
+    return delay({
+      status: "success",
+      saved_app: payload.name || "Untitled App",
     });
   },
 };

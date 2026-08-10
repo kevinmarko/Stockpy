@@ -5462,6 +5462,10 @@ class DataAppCreationForm(BaseModel):
 def create_data_app(form: DataAppCreationForm) -> Dict[str, Any]:
     return {"status": "success", "name": form.name}
 
+@app.post("/data-app/save", dependencies=[Depends(require_command_token)])
+def save_data_app(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {"status": "success", "saved_app": payload.get("name", "Untitled App")}
+
 from fastapi.responses import StreamingResponse
 import asyncio
 

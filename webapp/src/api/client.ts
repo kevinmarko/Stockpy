@@ -134,6 +134,9 @@ import type {
   CacheLongShortApproveBulkResult,
   DataAppCreationForm,
   DataAppCreationResult,
+  DataAppSavePayload,
+  DataAppSaveResult,
+  Holding,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
@@ -611,6 +614,13 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify({ amount }),
     }),
+  followPilot: (id: string, amount: number) =>
+    http<FollowResult>(`/pilots/${encodeURIComponent(id)}/follow`, {
+      method: "POST",
+      body: JSON.stringify({ amount }),
+    }),
+  getHoldings: (id: string) =>
+    http<Holding[]>(`/pilots/${encodeURIComponent(id)}/holdings`),
   getAutomationStatus: () => http<AutomationStatus>("/automation/status"),
   getAutomationSchedule: () => http<AutomationSchedule>("/automation/schedule"),
   // ---- Control API (orchestrator daemon, port 8601) — the Pipeline Dashboard's
@@ -914,6 +924,11 @@ const liveApi = {
     http<DataAppCreationResult>("/data-app/create", {
       method: "POST",
       body: JSON.stringify(form),
+    }),
+  saveDataApp: (payload: DataAppSavePayload) =>
+    http<DataAppSaveResult>("/data-app/save", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
 };
 

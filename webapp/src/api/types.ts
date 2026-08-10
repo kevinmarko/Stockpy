@@ -3731,3 +3731,5 @@ export interface DataAppCreationResult {
   app_id: string | null;
   message: string | null;
 }
+export interface DataAppSavePayload { name: string; [key: string]: any; }
+export interface DataAppSaveResult { status: string; saved_app: string; }
