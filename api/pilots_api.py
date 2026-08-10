@@ -5468,9 +5468,41 @@ import asyncio
 @app.get("/chat/stream", dependencies=[Depends(require_read_token)])
 async def chat_stream(query: str = ""):
     async def event_generator():
-        yield 'event: message\ndata: {"system_message": {"text_type": "THOUGHT", "text": "Thinking about your query..."}}\n\n'
-        await asyncio.sleep(0.5)
-        yield 'event: message\ndata: {"system_message": {"text_type": "THOUGHT", "text": "Analyzing database schemas..."}}\n\n'
-        await asyncio.sleep(0.5)
-        yield f'event: message\ndata: {{"system_message": {{"text_type": "FINAL_RESPONSE", "text": "Here is the result for your query: {query}. It looks like you are accessing the SQLite backend."}}}}\n\n'
+        if not settings.GEMINI_API_KEY:
+            yield f'event: message\ndata: {json.dumps({"system_message": {"text_type": "FINAL_RESPONSE", "text": "Error: GEMINI_API_KEY is not set in environment."}})}\n\n'
+            return
+
+        try:
+            from google import genai
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        except ImportError:
+            yield f'event: message\ndata: {json.dumps({"system_message": {"text_type": "FINAL_RESPONSE", "text": "Error: google-genai SDK is not installed."}})}\n\n'
+            return
+
+        yield f'event: message\ndata: {json.dumps({"system_message": {"text_type": "THOUGHT", "text": "Querying Gemini..."}})}\n\n'
+
+        try:
+            response = await client.aio.models.generate_content_stream(
+                model="gemini-2.5-flash",
+                contents=query,
+            )
+            async for chunk in response:
+                if chunk.text:
+                    payload = json.dumps({
+                        "system_message": {
+                            "text_type": "FINAL_RESPONSE",
+                            "text": chunk.text
+                        }
+                    })
+                    yield f'event: message\ndata: {payload}\n\n'
+        except Exception as exc:
+            logger.error("chat_stream Gemini API error: %s", exc)
+            payload = json.dumps({
+                "system_message": {
+                    "text_type": "FINAL_RESPONSE",
+                    "text": f"\n\nError calling Gemini: {exc}"
+                }
+            })
+            yield f'event: message\ndata: {payload}\n\n'
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")

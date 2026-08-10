@@ -5,6 +5,58 @@ import { api } from "../api/client";
 import toast from "react-hot-toast";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import {
+  flexRender,
+  useTable,
+} from "@tanstack/react-table";
+
+const chartData = [
+  { name: "Jan", revenue: 4000, users: 2400 },
+  { name: "Feb", revenue: 3000, users: 1398 },
+  { name: "Mar", revenue: 2000, users: 9800 },
+  { name: "Apr", revenue: 2780, users: 3908 },
+  { name: "May", revenue: 1890, users: 4800 },
+  { name: "Jun", revenue: 2390, users: 3800 },
+];
+
+type MetricRow = {
+  metric: string;
+  value: number;
+  growth: string;
+};
+
+const tableData: MetricRow[] = [
+  { metric: "Total Revenue", value: 16060, growth: "+12%" },
+  { metric: "Active Users", value: 24206, growth: "+5%" },
+  { metric: "Avg Session", value: 120, growth: "-2%" },
+];
+
+const columns: any[] = [
+  {
+    accessorKey: "metric",
+    header: "Metric",
+    cell: (info: any) => info.getValue(),
+  },
+  {
+    accessorKey: "value",
+    header: "Value",
+    cell: (info: any) => (info.getValue() as number).toLocaleString(),
+  },
+  {
+    accessorKey: "growth",
+    header: "Growth",
+    cell: (info: any) => info.getValue(),
+  },
+];
 
 export function CreateDataApp() {
   const [appName, setAppName] = useState("");
@@ -18,6 +70,11 @@ export function CreateDataApp() {
   const [currentThought, setCurrentThought] = useState("");
   
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const table = useTable({
+    data: tableData,
+    columns,
+  } as any);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -100,8 +157,8 @@ export function CreateDataApp() {
         </div>
       </div>
       <TabGuide tabKey="create-data-app" />
-      <div className="screen-content" style={{ padding: 16, display: 'flex', gap: 24 }}>
-        
+      <div className="screen-content" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 32 }}>
+        <div style={{ display: 'flex', gap: 24 }}>
         {/* Left Column: Form */}
         <div style={{ flex: 1 }}>
           <h2 style={{ fontSize: 18, marginBottom: 16 }}>Configuration</h2>
@@ -208,6 +265,64 @@ export function CreateDataApp() {
               Send
             </button>
           </form>
+        </div>
+        </div>
+
+        {/* Bottom row: Data Visualizations */}
+        <div style={{ display: 'flex', gap: 24 }}>
+          {/* Chart container */}
+          <div style={{ flex: 1, background: theme.surface, padding: 16, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Revenue Overview</h3>
+            <div style={{ width: '100%', height: 300 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                  <XAxis dataKey="name" stroke={theme.textSecondary} />
+                  <YAxis stroke={theme.textSecondary} />
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: theme.surface, borderColor: theme.border, color: theme.textPrimary }} 
+                    itemStyle={{ color: theme.textPrimary }}
+                  />
+                  <Line type="monotone" dataKey="revenue" stroke={theme.accent} strokeWidth={2} />
+                  <Line type="monotone" dataKey="users" stroke={theme.growth} strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Table container */}
+          <div style={{ flex: 1, background: theme.surface, padding: 16, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Key Metrics</h3>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+              <thead>
+                {(table as any).getHeaderGroups().map((headerGroup: any) => (
+                  <tr key={headerGroup.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                    {headerGroup.headers.map((header: any) => (
+                      <th key={header.id} style={{ padding: '8px 0', color: theme.textSecondary, fontWeight: 500 }}>
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext()
+                            )}
+                      </th>
+                    ))}
+                  </tr>
+                ))}
+              </thead>
+              <tbody>
+                {(table as any).getRowModel().rows.map((row: any) => (
+                  <tr key={row.id} style={{ borderBottom: `1px solid ${theme.surface2}` }}>
+                    {row.getVisibleCells().map((cell: any) => (
+                      <td key={cell.id} style={{ padding: '12px 0', color: theme.textPrimary }}>
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
