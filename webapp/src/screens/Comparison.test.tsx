@@ -281,6 +281,23 @@ describe("Comparison screen (R2)", () => {
     expect(dropdown.disabled).toBe(true);
   });
 
+  // T4.1 (HONESTY): the metrics table must pair every pilot's numbers with
+  // its actual PBO/DSR/Sharpe/MaxDD gate verdict -- a failing strategy's
+  // equity curve/metrics must never get the same visual treatment as a
+  // passing one with no indication it failed the gate.
+  it("shows the Deployable gate badge for both a passing and a failing pilot in the metrics table", async () => {
+    renderComparison();
+    // trend-following: deployable=true (mock.ts). momentum-burst: deployable=false,
+    // "Fails the overfitting gate" per its own mock.ts description.
+    fireEvent.click(await screen.findByTestId("comparison-checkbox-trend-following"));
+    fireEvent.click(await screen.findByTestId("comparison-checkbox-momentum-burst"));
+
+    expect(await screen.findByText("Key Metrics Comparison")).toBeInTheDocument();
+    const deployableRow = screen.getByText("Deployable").closest('[role="row"]') as HTMLElement;
+    expect(within(deployableRow).getByText("● Deployable")).toBeInTheDocument();
+    expect(within(deployableRow).getByText("▲ Not deployable")).toBeInTheDocument();
+  });
+
   // T3.4 (regression): the Max Drawdown heatmap must highlight the SMALLER
   // (better) magnitude, never the larger one -- max_drawdown is a positive
   // fraction (0.19 = 19% drawdown), so "best" is a min, not a max. Fixture:

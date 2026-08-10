@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { api } from "../api/client";
+import { api, apiMeta } from "../api/client";
 import type {
   CalibrationBin,
   CalibrationSummary,
@@ -9,7 +9,7 @@ import type {
   RecTrackingRow,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { Button, EmptyState, ErrorState, Loading, Table, Tile } from "../components/ui";
+import { Button, EmptyState, ErrorState, InfoTip, Loading, Table, Tile } from "../components/ui";
 import { DecisionModal } from "../components/DecisionModal";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct } from "../format";
@@ -607,7 +607,14 @@ export function Calibration() {
       >
         ← Back
       </button>
-      <h1 className="screen-title">Calibration</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <h1 className="screen-title">Calibration</h1>
+        {apiMeta.useMock && (
+          <InfoTip triggerClassName="chip" triggerStyle={{ marginTop: "var(--s-1)" }} content="Running on mock data">
+            demo
+          </InfoTip>
+        )}
+      </div>
       <p className="screen-sub">
         Did our actual calls work? Model confidence vs. real outcomes, your decisions vs. the
         model's baseline, and post-trade excursion quality — never a fabricated number.

@@ -65,6 +65,15 @@ describe("Calibration screen (real mock API)", () => {
     expect(screen.getByText("41")).toBeInTheDocument();
   });
 
+  // HONESTY: this screen charts MFE/MAE/edge-ratio performance numbers, so a
+  // viewer on the default (VITE_USE_MOCK=true) fresh checkout must see an
+  // on-screen cue that they're looking at demo data, not a live validated run.
+  it("shows the 'demo' mock-data chip (default test env runs against the mock API)", async () => {
+    renderScreen();
+    await screen.findByText("Conviction calibration");
+    expect(screen.getByText("demo")).toBeInTheDocument();
+  });
+
   it("shows the honest 'insufficient data' note for an under-min calibration bin", async () => {
     renderScreen();
     // The fixture has one bin with count 2 (< min_trades_per_bin=5) → win_rate null.

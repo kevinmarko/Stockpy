@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { api } from "../api/client";
+import { api, apiMeta } from "../api/client";
 import type {
   AiDisagreementRow,
   AiDisagreementsResponse,
@@ -523,7 +523,14 @@ export function StrategyHealth() {
       </button>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "var(--s-4)" }}>
         <div>
-          <h1 className="screen-title" style={{ marginBottom: "var(--s-1)" }}>Strategy health</h1>
+          <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
+            <h1 className="screen-title" style={{ marginBottom: "var(--s-1)" }}>Strategy health</h1>
+            {apiMeta.useMock && (
+              <InfoTip triggerClassName="chip" content="Running on mock data">
+                demo
+              </InfoTip>
+            )}
+          </div>
           <p className="screen-sub">
             Every Pilot's underlying validated strategy, and the actual per-gate
             value behind its deployable badge.

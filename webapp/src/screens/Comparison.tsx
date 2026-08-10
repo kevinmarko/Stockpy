@@ -3,7 +3,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api } from "../api/client";
 import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Notice, Button } from "../components/ui";
+import { ErrorState, Loading, Notice, Button, DeployableBadge } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
@@ -440,6 +440,20 @@ export function Comparison() {
                         <div role="cell" style={stickyColStyle}>Category</div>
                         {selectedPilots.map(p => (
                           <div role="cell" key={`cat-${p.id}`} style={cellStyle}>{p.category}</div>
+                        ))}
+                      </div>
+
+                      {/* Deployable — the PBO/DSR/Sharpe/MaxDD gate verdict, always paired
+                          with the numbers below it so a failing strategy's equity curve
+                          and metrics are never shown with the same visual treatment as a
+                          passing one (see PilotCard/Marketplace/StrategyHealth/PilotDetail,
+                          which all pair this badge with performance numbers the same way). */}
+                      <div style={{ display: "contents" }} role="row">
+                        <div role="cell" style={stickyColStyle}>Deployable</div>
+                        {selectedPilots.map(p => (
+                          <div role="cell" key={`dep-${p.id}`} style={cellStyle}>
+                            <DeployableBadge deployable={p.headline.deployable} />
+                          </div>
                         ))}
                       </div>
 

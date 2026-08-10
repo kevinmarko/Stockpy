@@ -29,6 +29,15 @@ describe("SymbolDetail screen (real mock API)", () => {
     expect(await screen.findByRole("heading", { name: "NVDA" })).toBeInTheDocument();
   });
 
+  // HONESTY: this screen charts MFE/MAE/edge-ratio performance numbers, so a
+  // viewer on the default (VITE_USE_MOCK=true) fresh checkout must see an
+  // on-screen cue that they're looking at demo data, not a live validated run.
+  it("shows the 'demo' mock-data chip (default test env runs against the mock API)", async () => {
+    renderSymbol("NVDA");
+    await screen.findByRole("heading", { name: "NVDA" });
+    expect(screen.getByText("demo")).toBeInTheDocument();
+  });
+
   it("the 'Held by Pilots' section links into at least one Pilot detail page", async () => {
     renderSymbol("NVDA");
     await screen.findByRole("heading", { name: "NVDA" });

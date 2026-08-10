@@ -34,6 +34,15 @@ describe("StrategyHealth screen (real mock API)", () => {
     expect(screen.getAllByText("● Deployable").length).toBeGreaterThan(0);
   });
 
+  // HONESTY: this screen charts PBO/DSR/Sharpe/MaxDD gate performance numbers,
+  // so a viewer on the default (VITE_USE_MOCK=true) fresh checkout must see an
+  // on-screen cue that they're looking at demo data, not a live validated run.
+  it("shows the 'demo' mock-data chip (default test env runs against the mock API)", async () => {
+    renderScreen();
+    await screen.findByText("Trend Follower");
+    expect(screen.getByText("demo")).toBeInTheDocument();
+  });
+
   it("shows a single failing gate blocking an otherwise-clean strategy (edge-garch)", async () => {
     renderScreen();
     await screen.findByText("Edge & Volatility");
