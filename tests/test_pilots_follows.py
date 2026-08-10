@@ -221,6 +221,32 @@ class TestMirroredSet:
             {"symbol": "AAPL", "weight": 0.6, "target_notional": 6000.0},
         ]
 
+    def test_upsert_zero_cancel_preserves_mirrored(self, tmp_path):
+        """The exact contract ``unfollow_pilot`` (investyo_mcp_server.py)
+        depends on: cancelling a follow via ``upsert(pilot_id, 0.0)`` -- the
+        established "amount == 0 cancels it" semantics, NOT ``.remove()`` --
+        must set status to cancelled, exclude the row from the active
+        proxies, and STILL preserve the ``mirrored`` attribution so a caller
+        can honestly report "you still hold these positions" after
+        unfollowing."""
+        s = _store(tmp_path)
+        s.upsert("trend-following", 250.0)
+        s.set_mirrored("trend-following", self._SET)
+
+        row = s.upsert("trend-following", 0.0)
+
+        assert row["status"] == STATUS_CANCELLED
+        assert row["amount"] == 0.0
+        # mirrored attribution survives the cancel.
+        assert s.get_mirrored("trend-following") == [
+            {"symbol": "NVDA", "weight": 0.4, "target_notional": 4000.0},
+            {"symbol": "AAPL", "weight": 0.6, "target_notional": 6000.0},
+        ]
+        # Cancelled row is excluded from the active proxies.
+        assert s.aum_proxy() == 0.0
+        assert s.followers_proxy() == 0
+        assert s.list_active() == []
+
     def test_set_mirrored_without_prior_row_adds_no_fabricated_amount(self, tmp_path):
         s = _store(tmp_path)
         # No upsert first — set_mirrored creates a minimal row.
