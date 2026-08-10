@@ -14,7 +14,15 @@
 #       skips the network pull.
 #   * data_api    :8603  (background)
 #   * metrics_api :8604  (background)
-#   * caddy       :8888  (background) — reverse proxy for Pilots PWA
+#   * caddy       :8888  (background, OPTIONAL) — reverse proxy for Pilots PWA.
+#       Not load-bearing for the trading pipeline: if the caddy binary is
+#       missing, or webapp/dist hasn't been built yet, this logs a WARNING
+#       and skips starting it — the daemon/data_api/metrics_api still come
+#       up normally. A hard `exit 1` here (like the $PYTHON check below)
+#       would crash-loop the entire backend, including data collection,
+#       over what is only a PWA-browser-access dependency. See
+#       docs/RUNBOOK.md §0.2 for setup (brew install caddy, one-time
+#       `tailscale serve`, scripts/build_webapp_prod.sh).
 #
 # SIGNAL PATH (2026-07 fix — read before changing anything below)
 # -----------------------------------------------------------------
@@ -82,7 +90,17 @@ echo "$(date '+%F %T')  Starting InvestYo stack (daemon + data_api + metrics_api
 # cannot host them (its AST guard forbids the heavy-engine imports they need).
 "$UVICORN" api.data_api:app    --port 8603 >> "$LOG_DIR/stack_data_api.log"    2>&1 &
 "$UVICORN" api.metrics_api:app --port 8604 >> "$LOG_DIR/stack_metrics_api.log" 2>&1 &
-caddy run --config "$REPO_ROOT/scripts/Caddyfile" >> "$LOG_DIR/stack_caddy.log" 2>&1 &
+
+# Caddy reverse proxy (:8888) — OPTIONAL, warn-and-skip (see the header
+# comment above for why this is not a hard `exit 1` like $PYTHON below).
+CADDY="$(command -v caddy || true)"
+if [ -z "$CADDY" ]; then
+    echo "$(date '+%F %T')  WARNING: caddy binary not found on PATH — Pilots PWA reverse proxy (:8888) will NOT start. Install via 'brew install caddy'; see docs/RUNBOOK.md §0.2. Continuing without it (data collection and the APIs are unaffected)." >&2
+elif [ ! -f "$REPO_ROOT/webapp/dist/index.html" ]; then
+    echo "$(date '+%F %T')  WARNING: webapp/dist/index.html not found — Pilots PWA reverse proxy (:8888) will NOT start (nothing built to serve). Run scripts/build_webapp_prod.sh first; see docs/RUNBOOK.md §0.2. Continuing without it." >&2
+else
+    "$CADDY" run --config "$REPO_ROOT/scripts/Caddyfile" >> "$LOG_DIR/stack_caddy.log" 2>&1 &
+fi
 
 # Orchestrator daemon, BACKGROUNDED (see the SIGNAL PATH comment at the top
 # of this file for why this is deliberate, not equivalent to the previous
