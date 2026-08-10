@@ -3,9 +3,39 @@
     auto_https off
 }
 
-:8888 {
+# Loopback-only: this proxy is reached exclusively via `tailscale serve`,
+# which itself always targets http://127.0.0.1:8888 (see docs/RUNBOOK.md
+# §0.2). A bare `:8888` binds every network interface, not just loopback --
+# that would let anyone on the same LAN/WiFi reach the Pilots/Control/Data/
+# Metrics APIs directly, bypassing Tailscale's ACLs entirely, contradicting
+# the "no public exposure" design intent.
+#
+# The `http://` scheme prefix is REQUIRED, not decorative: giving Caddy an
+# explicit HOST in the site address (even with auto_https off) makes its
+# Caddyfile adapter set up a TLS connection policy for that host by
+# default (verified: without `http://`, `caddy adapt` emits a non-empty
+# `tls_connection_policies` for this server, and every plain-HTTP request
+# then fails with "Client sent an HTTP request to an HTTPS server") --
+# `http://` is what actually suppresses that and keeps this a plain-HTTP
+# listener, matching auto_https off's real intent.
+http://127.0.0.1:8888 {
+    # The site ADDRESS above only sets Host-header matching -- it does NOT
+    # restrict the socket bind (verified: without this directive, Caddy
+    # still listens on ":8888", i.e. all interfaces, despite the address
+    # looking loopback-scoped). `bind` is what actually restricts the
+    # listening socket itself.
+    bind 127.0.0.1
 
     encode gzip
+
+    # Per-request access log -- caddy runs with cwd=REPO_ROOT (see
+    # investyo_stack_service.sh), so this is relative to the repo root, same
+    # as `root * webapp/dist` below. Without an explicit log directive here,
+    # stack_caddy.log only ever captures startup/error events, not the
+    # per-request traffic the RUNBOOK's troubleshooting section implies.
+    log {
+        output file output/stack_caddy_access.log
+    }
 
     # Pilots API (:8602)
     # The frontend uses VITE_API_BASE_URL=https://<tailnet>/svc

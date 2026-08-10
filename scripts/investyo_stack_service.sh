@@ -22,7 +22,10 @@
 #       would crash-loop the entire backend, including data collection,
 #       over what is only a PWA-browser-access dependency. See
 #       docs/RUNBOOK.md §0.2 for setup (brew install caddy, one-time
-#       `tailscale serve`, scripts/build_webapp_prod.sh).
+#       `tailscale serve`, scripts/build_webapp_prod.sh). NOT independently
+#       process-supervised: unlike the daemon (waited on, teardown-tracked),
+#       a caddy crash mid-run just silently drops the proxy -- the rest of
+#       the stack keeps running until this whole wrapper next restarts.
 #
 # SIGNAL PATH (2026-07 fix — read before changing anything below)
 # -----------------------------------------------------------------

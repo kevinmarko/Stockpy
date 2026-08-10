@@ -5,7 +5,10 @@ set -e
 cd "$(dirname "$0")/../webapp"
 
 echo "Installing webapp dependencies..."
-npm install
+# npm ci (not install): a production build should install EXACTLY what
+# package-lock.json pins and fail loudly on any lockfile/manifest mismatch,
+# rather than silently updating the lockfile.
+npm ci
 
 echo "Building production webapp bundle..."
 npm run build
