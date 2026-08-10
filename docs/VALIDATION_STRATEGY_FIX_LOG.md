@@ -400,6 +400,70 @@ MultiIndex-with-t1 runs end-to-end, benchmark-reindex-never-crashes guard).
 
 ---
 
+## 2026-08-08 — `lgbm_ranker`: new `STRATEGY_REGISTRY` entry (genuine per-fold retraining)
+
+**New entry, not a fix to an existing one.** `scripts/refresh_validations.py::
+_build_lgbm_ranker_adapter` is the first `STRATEGY_REGISTRY` adapter that genuinely RETRAINS a
+fresh `LGBMCrossSectionalRanker` on each CPCV fold's own training rows, instead of replaying one
+fixed, precomputed return series across folds (the pattern every other adapter here uses, correct
+for a static formula but a real look-ahead leak for a trained model — a model fit once on the
+full history and "OOS"-scored on slices of that same history has already seen every fold's test
+data). Uses `ranker.train(X_tr, y_tr, t1=t1_tr, use_native_multiindex_cv=True)` — the first
+production caller of `validation/purged_cv.py::CombinatorialPurgedCV`'s native `(date, ticker)`
+MultiIndex support (PR #648), with a real ~21-trading-day forward-return `t1` rather than a
+synthesized "next row" default. `ml/lgbm_ranker.py::LGBMCrossSectionalRanker.train()` gained the
+`use_native_multiindex_cv` kwarg and `settings.LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED` (default
+`False`) to support this — see that file's own docstring; both changes are additive and
+byte-identical for every existing caller (verified: `tests/test_lgbm_no_leakage.py`,
+`tests/test_lgbm_feature_pit.py`, `tests/test_lgbm_ranker_signal.py`,
+`tests/test_lgbm_purged_integration.py`, `tests/test_validation_lgbm.py`, `tests/test_train_lgbm.py`,
+`tests/test_model_interface.py` all pass unmodified).
+
+**Real, measured result** (live yfinance data, `python -m scripts.refresh_validations
+--strategies lgbm_ranker --start 2015-01-01 --end 2024-12-31 --json`, 2026-08-07; effective window
+self-reported by the harness as 2019-01-02 → 2024-11-25 — the adapter bounds its own feature-panel
+build to the last ~6 years, the same "computationally infeasible to re-fit at every historical
+date across the full 20-year window" reasoning `forecast_direction_arima_hw`'s entry below already
+established):
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | `deployable` |
+|---|---|---|---|---|---|
+| `lgbm_ranker` | **−0.334** | 0.000 | 1.000 | 3.68% | **False** |
+
+**Honest reason for the `deployable=False`**: PBO/DSR/MaxDD all clear their gates, but net-of-cost
+Sharpe is negative — the top-minus-bottom-half long-short book genuinely lost money after
+`TieredCostModel` costs over this window. This is a real, measured number (confirmed the wiring
+itself is correct: per-fold training produces real, finite long-short returns —
+`tests/test_validation_lgbm_ranker_registry.py`), not a data or plumbing bug. Plausible
+contributing factors, stated honestly as unverified (no counterfactual re-run was performed to
+isolate any one of them): only ONE hyperparameter candidate is tried per fold (`n_trials=1` in
+the JSON summary — unlike `scripts/train_lgbm.py::compute_cpcv_metrics`'s own 3-candidate design,
+so DSR/PBO here are a much weaker statement about selection-bias correction than the sibling
+entries in this table); the bounded 6-year window and the adapter's own `_ClosesOnlyDataEngine`
+proxy OHLCV (real Close, synthesized High/Low/Volume); and `historical_store=False` (no
+point-in-time fundamentals, so a third of the live signal's feature set is NaN-filled to 0.0
+throughout). `turnover=0.03` is a reasoned estimate matching `cross_sectional_momentum`/
+`relative_strength_xsec`'s own daily-rebalance figure, not measured directly from this adapter's
+weight series. See `docs/signals/lgbm_ranker.md`'s own Backtest Validation section for the full
+writeup — including the explicit statement that this does NOT change `signals/lgbm_ranker.py`'s
+live dormant status, which is gated independently via `ml/registry.yaml`/`scripts/train_lgbm.py`.
+
+**Per this log's own stated rule**: no threshold was loosened, no filter was date-snooped, and
+this genuinely-measured `deployable=False` is recorded as-is — an honest outcome, not a failure to
+hide. `ml-cross-sectional-rank` (`pilots/catalog.py`) is still surfaced as a Pilot joined to this
+`validation_strategy_id`, with an explicit inline comment (and its own catalog-docstring bullet)
+stating this backtest validates the RETRAINING METHODOLOGY, not the exact currently-deployed
+`ml/models/lgbm_latest.pkl` artifact — matching every other Pilot catalog entry's convention of
+stating its own scope-narrowing caveats plainly rather than implying a stronger guarantee than
+what was actually measured.
+
+Tests: `tests/test_lgbm_ranker_native_cv.py` (the `train()` signature change — native-path
+`ValueError`-if-missing-t1, flatten-path unchanged, settings-flag fallback),
+`tests/test_validation_lgbm_ranker_registry.py` (network-marked, the production adapter end-to-end
+through the real harness), plus the seven pre-existing lgbm test files listed above (regression).
+
+---
+
 ## Verification methodology
 
 Every fix in this log was independently re-run through the real walk-forward harness

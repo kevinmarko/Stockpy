@@ -444,14 +444,6 @@ export function SymbolDetail() {
           </section>
         </div>
 
-      {journaling && (
-        <DecisionModal
-          signal={{ symbol: data.symbol, action: advisory.action, conviction: advisory.conviction }}
-          onClose={() => setJournaling(false)}
-          onLogged={decisions.reload}
-        />
-      )}
-
         <div key="snapshot">
           {/* Identity */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
@@ -738,6 +730,14 @@ export function SymbolDetail() {
           </section>
         </div>
       </DynamicGrid>
+
+      {journaling && (
+        <DecisionModal
+          signal={{ symbol: data.symbol, action: advisory.action, conviction: advisory.conviction }}
+          onClose={() => setJournaling(false)}
+          onLogged={decisions.reload}
+        />
+      )}
 
       <div style={{ marginTop: "var(--s-8)", marginBottom: "var(--s-4)" }}>
         <ActiveTraderLadder symbol={data.symbol} currentPrice={identity.price} />

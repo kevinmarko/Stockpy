@@ -1645,6 +1645,26 @@ class Settings(BaseSettings):
             "ETF_TRANSMISSION_SIZING_ENABLED)."
         ),
     )
+
+    # --- LGBM ranker native MultiIndex CPCV (ml/lgbm_ranker.py) ---
+    LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: LGBMCrossSectionalRanker.train() calls "
+            "CombinatorialPurgedCV.split() directly on the (date, ticker) "
+            "MultiIndex panel (PR #648's native MultiIndex support) instead of "
+            "flattening to a date-only index first before purging/embargoing. "
+            "Default False preserves today's exact flatten-path behavior for "
+            "every existing caller -- train()'s own use_native_multiindex_cv "
+            "kwarg always overrides this when explicitly passed (True or "
+            "False); this setting is only consulted when a caller leaves that "
+            "kwarg unset (None). The native path additionally REQUIRES an "
+            "explicit t1 (raises ValueError otherwise) -- CombinatorialPurgedCV "
+            "cannot safely synthesize a default t1 across a MultiIndex -- while "
+            "the flatten path keeps silently synthesizing a 'next row' default "
+            "t1 when none is supplied, exactly as it always has."
+        ),
+    )
     BERT_LLA_ENABLED: bool = Field(
         default=False,
         description=(

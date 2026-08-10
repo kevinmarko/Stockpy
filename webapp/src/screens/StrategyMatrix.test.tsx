@@ -7,7 +7,7 @@
  * shows the "restart to apply" notice without reverting the form; env_drift
  * surfaces a pending-write notice.
  */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -116,13 +116,24 @@ describe("StrategyMatrix screen", () => {
     });
     renderScreen();
     await screen.findByText("macro_regime");
-    // Edit macro_regime weight 45 -> 50.
+    // Edit macro_regime weight 45 -> 50. userEvent.clear() + userEvent.type()
+    // on this type="number" input was confirmed (via direct instrumentation)
+    // to be genuinely non-deterministic: clear() does not always empty the
+    // field before type() runs, sometimes leaving the typed digits appended
+    // to the original value instead of replacing it (e.g. "45" + "50" ->
+    // "4550", which fails the max-weight check and permanently disables
+    // Save) -- a known jsdom/testing-library flakiness class for number
+    // inputs, not a component bug. fireEvent.change sets the value directly
+    // and deterministically, matching how the component's own onChange
+    // handler consumes it (e.target.value).
     const row = screen.getByText("macro_regime").closest("section")!;
     const input = within(row).getByLabelText("Weight") as HTMLInputElement;
-    await userEvent.clear(input);
-    await userEvent.type(input, "50");
+    fireEvent.change(input, { target: { value: "50" } });
+    expect(input.value).toBe("50");
     // Save -> confirm modal -> Write.
-    await userEvent.click(screen.getByRole("button", { name: /Save changes/ }));
+    const saveButton = screen.getByRole("button", { name: /Save changes/ });
+    await waitFor(() => expect(saveButton).not.toBeDisabled());
+    await userEvent.click(saveButton);
     const dialog = await screen.findByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: /Write to \.env/ }));
     await waitFor(() => expect(setSpy).toHaveBeenCalledTimes(1));
