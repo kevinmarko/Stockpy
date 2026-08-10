@@ -12,7 +12,25 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResponsiveLayouts } from "react-grid-layout";
-import { reconcileLayout, resetGridLayout } from "./DynamicGrid";
+import { reconcileLayout, resetGridLayout, DynamicGrid } from "./DynamicGrid";
+import { render, screen, fireEvent } from "@testing-library/react";
+
+vi.mock("react-grid-layout", async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-grid-layout')>();
+  return {
+    ...actual,
+    ResponsiveGridLayout: (props: any) => (
+      <div data-testid="mock-rgl" data-drag-enabled={props.dragConfig?.enabled} data-resize-enabled={props.resizeConfig?.enabled}>
+        {props.children}
+      </div>
+    )
+  };
+});
+
+// Mock hook used by DynamicGrid
+vi.mock("./hooks/useContainerWidth", () => ({
+  useContainerWidth: () => ({ width: 1000, containerRef: { current: null }, mounted: true })
+}));
 
 const defaultLayouts: ResponsiveLayouts = {
   lg: [
@@ -161,5 +179,85 @@ describe("resetGridLayout", () => {
 
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(confirmSpy.mock.calls[0][0]).toMatch(/reset/i);
+  });
+});
+
+describe("DynamicGrid component rendering", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    process.env.TEST_RENDER_DYNAMIC_GRID = "true";
+  });
+
+  afterEach(() => {
+    delete process.env.TEST_RENDER_DYNAMIC_GRID;
+  });
+
+  it("disables drag on mobile screens", () => {
+    // Mock mobile screen width
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 });
+    window.dispatchEvent(new Event('resize'));
+
+    render(
+      <DynamicGrid layoutKey="test" defaultLayouts={defaultLayouts}>
+        <div key="AAPL">Apple</div>
+        <div key="MSFT">Microsoft</div>
+        <div key="GOOG">Google</div>
+      </DynamicGrid>
+    );
+
+    const rgl = screen.getByTestId("mock-rgl");
+    // dragConfig={{ enabled: !isMobile }} means enabled should be false
+    expect(rgl.getAttribute("data-drag-enabled")).toBe("false");
+  });
+
+  it("enables drag on desktop screens", () => {
+    // Mock desktop screen width
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1200 });
+    window.dispatchEvent(new Event('resize'));
+
+    render(
+      <DynamicGrid layoutKey="test" defaultLayouts={defaultLayouts}>
+        <div key="AAPL">Apple</div>
+        <div key="MSFT">Microsoft</div>
+        <div key="GOOG">Google</div>
+      </DynamicGrid>
+    );
+
+    const rgl = screen.getByTestId("mock-rgl");
+    expect(rgl.getAttribute("data-drag-enabled")).toBe("true");
+  });
+
+  it("toggles reorder overlay and moves items via up/down buttons", () => {
+    render(
+      <DynamicGrid layoutKey="test" defaultLayouts={defaultLayouts}>
+        <div key="AAPL">Apple</div>
+        <div key="MSFT">Microsoft</div>
+        <div key="GOOG">Google</div>
+      </DynamicGrid>
+    );
+
+    // Click Reorder Widgets toggle
+    const reorderBtn = screen.getByRole("button", { name: /Reorder Widgets/i });
+    fireEvent.click(reorderBtn);
+
+    // Overlay buttons should appear
+    const moveAaplDown = screen.getByRole("button", { name: /Move widget AAPL down/i });
+    expect(moveAaplDown).toBeTruthy();
+
+    // Click down to move AAPL down (should swap with MSFT)
+    fireEvent.click(moveAaplDown);
+
+    // The layout state updates internally. The result is saved to localStorage.
+    const saved = localStorage.getItem("grid-layout-test");
+    expect(saved).not.toBeNull();
+    const parsed = JSON.parse(saved!);
+    
+    const aapl = parsed.lg.find((i: any) => i.i === "AAPL");
+    const msft = parsed.lg.find((i: any) => i.i === "MSFT");
+    
+    // MSFT was at x: 4, AAPL was at x: 0
+    // After moving AAPL down (right), AAPL should be at x: 4, MSFT at x: 0
+    expect(aapl.x).toBe(4);
+    expect(msft.x).toBe(0);
   });
 });

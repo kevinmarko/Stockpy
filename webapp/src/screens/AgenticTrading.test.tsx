@@ -574,6 +574,10 @@ describe("Agentic Trading screen (real mock API)", () => {
       renderScreen();
 
       const loginBtn = await screen.findByRole("button", { name: /Login to Robinhood/i });
+      
+      // Wait for the button to become enabled (brokerageStatus loading finishes)
+      await waitFor(() => expect(loginBtn).not.toBeDisabled());
+
       await act(async () => {
         fireEvent.click(loginBtn);
       });

@@ -70,6 +70,33 @@ const AGENTIC_LAYOUTS: ResponsiveLayouts = {
     { i: "decision", x: 0, y: 54, w: 10, h: 12 },
     { i: "controls", x: 0, y: 66, w: 10, h: 12 },
   ],
+  sm: [
+    { i: "agent_status", x: 0, y: 0, w: 6, h: 8 },
+    { i: "discovery", x: 0, y: 8, w: 6, h: 12 },
+    { i: "execution", x: 0, y: 20, w: 6, h: 10 },
+    { i: "advanced_visuals", x: 0, y: 30, w: 6, h: 14 },
+    { i: "rlhf", x: 0, y: 44, w: 6, h: 10 },
+    { i: "decision", x: 0, y: 54, w: 6, h: 12 },
+    { i: "controls", x: 0, y: 66, w: 6, h: 12 },
+  ],
+  xs: [
+    { i: "agent_status", x: 0, y: 0, w: 4, h: 8 },
+    { i: "discovery", x: 0, y: 8, w: 4, h: 12 },
+    { i: "execution", x: 0, y: 20, w: 4, h: 10 },
+    { i: "advanced_visuals", x: 0, y: 30, w: 4, h: 14 },
+    { i: "rlhf", x: 0, y: 44, w: 4, h: 10 },
+    { i: "decision", x: 0, y: 54, w: 4, h: 12 },
+    { i: "controls", x: 0, y: 66, w: 4, h: 12 },
+  ],
+  xxs: [
+    { i: "agent_status", x: 0, y: 0, w: 2, h: 8 },
+    { i: "discovery", x: 0, y: 8, w: 2, h: 12 },
+    { i: "execution", x: 0, y: 20, w: 2, h: 10 },
+    { i: "advanced_visuals", x: 0, y: 30, w: 2, h: 14 },
+    { i: "rlhf", x: 0, y: 44, w: 2, h: 10 },
+    { i: "decision", x: 0, y: 54, w: 2, h: 12 },
+    { i: "controls", x: 0, y: 66, w: 2, h: 12 },
+  ],
 };
 
 export function AgenticTrading() {
@@ -169,15 +196,25 @@ export function AgenticTrading() {
             <Button
               variant="neutral"
               onClick={async () => {
-                await api.disconnectBrokerage();
-                brokerageStatus.reload();
+                try {
+                  await api.disconnectBrokerage();
+                  brokerageStatus.reload();
+                } catch (e) {
+                  console.error("Failed to disconnect:", e);
+                }
               }}
               style={{ color: theme.decline, borderColor: theme.decline }}
+              disabled={brokerageStatus.loading || !!brokerageStatus.error}
             >
               Disconnect Robinhood 🔓
             </Button>
           ) : (
-            <Button variant="primary" onClick={() => setShowAuthModal(true)}>
+            <Button 
+              variant="primary" 
+              onClick={() => setShowAuthModal(true)}
+              disabled={brokerageStatus.loading || !!brokerageStatus.error}
+              title={brokerageStatus.error ? "Brokerage service unavailable" : undefined}
+            >
               Login to Robinhood 🔒
             </Button>
           )}
@@ -721,8 +758,8 @@ function ScanConfigModal({
       name: name.trim(),
       filters: {
         sector: sector !== "ALL" ? sector : undefined,
-        min_price: Number(minPrice),
-        min_volume: Number(minVolume),
+        min_price: Number(minPrice) || 0,
+        min_volume: Number(minVolume) || 0,
       },
       enabled: true,
     })

@@ -146,7 +146,7 @@ export function DynamicGrid({
   isResizable = true
 }: DynamicGridProps) {
   const { width, containerRef, mounted } = useContainerWidth();
-  const isTest = typeof process !== "undefined" && process.env.NODE_ENV === "test";
+  const isTest = typeof process !== "undefined" && process.env.NODE_ENV === "test" && !process.env.TEST_RENDER_DYNAMIC_GRID;
 
   // A stable signature of "what keys are actually in `children` right now".
   // Nearly every consumer passes `defaultLayouts` as an inline object
@@ -174,6 +174,40 @@ export function DynamicGrid({
   // until after that settling window has already passed.
   const [layouts, setLayouts] = useState<ResponsiveLayouts | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [isReorderMode, setIsReorderMode] = useState(false);
+  const [currentBreakpoint, setCurrentBreakpoint] = useState<string>('lg');
+
+  const moveWidget = (key: string, offset: -1 | 1) => {
+    setLayouts(prevLayouts => {
+      if (!prevLayouts) return prevLayouts;
+      const bpLayout = prevLayouts[currentBreakpoint];
+      if (!bpLayout) return prevLayouts;
+
+      const sorted = [...bpLayout].sort((a, b) => {
+        if (a.y !== b.y) return a.y - b.y;
+        return a.x - b.x;
+      });
+
+      const currentIndex = sorted.findIndex(item => item.i === key);
+      if (currentIndex === -1) return prevLayouts;
+      
+      const targetIndex = currentIndex + offset;
+      if (targetIndex < 0 || targetIndex >= sorted.length) return prevLayouts;
+
+      const a = sorted[currentIndex];
+      const b = sorted[targetIndex];
+      
+      const nextBpLayout = bpLayout.map(item => {
+        if (item.i === a.i) return { ...item, x: b.x, y: b.y };
+        if (item.i === b.i) return { ...item, x: a.x, y: a.y };
+        return item;
+      });
+
+      const newLayouts = { ...prevLayouts, [currentBreakpoint]: nextBpLayout };
+      localStorage.setItem(`grid-layout-${layoutKey}`, JSON.stringify(newLayouts));
+      return newLayouts;
+    });
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem(`grid-layout-${layoutKey}`);
@@ -243,8 +277,19 @@ export function DynamicGrid({
   if (!layouts) return null;
 
   return (
-    <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
-      {mounted && (
+    <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 16px 8px' }}>
+        <button 
+          type="button"
+          onClick={() => setIsReorderMode(p => !p)}
+          className={`btn btn-sm ${isReorderMode ? 'btn-primary' : 'btn-neutral'}`}
+          aria-pressed={isReorderMode}
+        >
+          {isReorderMode ? 'Done Reordering' : 'Reorder Widgets'}
+        </button>
+      </div>
+      <div style={{ flex: 1, position: 'relative' }}>
+        {mounted && (
         <ResponsiveGridLayout
           className="dynamic-grid"
           layouts={layouts}
@@ -261,10 +306,47 @@ export function DynamicGrid({
           onDragStop={endInteraction}
           onResizeStart={beginInteraction}
           onResizeStop={endInteraction}
+          onBreakpointChange={(newBp) => setCurrentBreakpoint(newBp)}
         >
-          {children}
+          {Children.map(children, (child) => {
+            if (!isValidElement(child)) return child;
+            const key = String(child.key);
+            return (
+              <div key={key}>
+                {isReorderMode && (
+                  <div 
+                    style={{ 
+                      position: 'absolute', inset: 0, zIndex: 50, 
+                      background: 'rgba(0,0,0,0.7)', 
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16,
+                      borderRadius: 'var(--radius-md)'
+                    }}
+                  >
+                    <button 
+                      className="btn btn-neutral" 
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); moveWidget(key, -1); }}
+                      aria-label={`Move widget ${key} up`}
+                    >
+                      ↑ Up
+                    </button>
+                    <button 
+                      className="btn btn-neutral" 
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); moveWidget(key, 1); }}
+                      aria-label={`Move widget ${key} down`}
+                    >
+                      ↓ Down
+                    </button>
+                  </div>
+                )}
+                <div style={{ height: '100%', width: '100%', pointerEvents: isReorderMode ? 'none' : 'auto' }}>
+                  {child}
+                </div>
+              </div>
+            );
+          })}
         </ResponsiveGridLayout>
       )}
+      </div>
     </div>
   );
 }

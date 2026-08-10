@@ -85,8 +85,8 @@ describe("Dashboard screen (R1)", () => {
 
 
   // T2.1: Corrupted LocalStorage Handling
-  it("falls back to default layout if localStorage is corrupted", async () => {
-    localStorage.setItem("dashboard_layout", "{ invalid json }");
+  it("does not crash when layout is non-JSON or corrupted", async () => {
+    localStorage.setItem("grid-layout-dashboard", "{ invalid json }");
     renderDashboard();
     expect(await screen.findByTestId("dashboard-title")).toBeInTheDocument();
     expect(screen.getByTestId("widget-portfolio-summary")).toBeInTheDocument();
