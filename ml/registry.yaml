@@ -125,9 +125,9 @@ models:
     role: meta_labeler
     path: ml/models/meta_cross_sectional_momentum_latest.pkl
     trained_date: '2026-08-10'
-    cpcv_dsr: 4.513406991823177e-08
+    cpcv_dsr: 5.6662074922458854e-08
     pbo: 0.0
-    n_train: 16455
+    n_train: 16452
     deployable: false
     notes: Binary LightGBM classifier predicting P(cross_sectional_momentum signal correct). Shares the
       same triple-barrier label construction and feature set as the timeseries momentum meta-labeler;
@@ -156,5 +156,5 @@ models:
     - dist_sma_50
     - vol_ewma
     - primary_score
-    cpcv_mean_oos_sharpe: 0.28421872925642594
+    cpcv_mean_oos_sharpe: 0.29401208882109614
     cpcv_mean_oos_max_dd: 1.0
