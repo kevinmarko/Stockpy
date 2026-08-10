@@ -24,6 +24,7 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 from mcp.server.fastmcp import FastMCP
 from starlette.testclient import TestClient
 
+from mcp_oauth_password import hash_password
 from mcp_oauth_provider import InvestyoOAuthProvider, register_login_routes
 from mcp_oauth_store import McpOAuthStore
 
@@ -32,6 +33,12 @@ def _set_oauth_password(monkeypatch: pytest.MonkeyPatch, value):
     from settings import settings
 
     monkeypatch.setitem(settings.__dict__, "MCP_OAUTH_PASSWORD", value)
+
+
+def _set_multi_user_enabled(monkeypatch: pytest.MonkeyPatch, value: bool):
+    from settings import settings
+
+    monkeypatch.setitem(settings.__dict__, "MCP_OAUTH_MULTI_USER_ENABLED", value)
 
 
 def _make_pkce_pair():
@@ -263,6 +270,126 @@ def test_authorize_login_lockout_blocks_even_the_correct_password(
         )
         assert locked_resp.status_code == 429
         assert "location" not in {k.lower() for k in locked_resp.headers.keys()}
+
+
+@contextlib.contextmanager
+def _make_multi_user_oauth_app(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    _set_multi_user_enabled(monkeypatch, True)
+    db_path = tmp_path / f"mcp_oauth_flow_multi_{uuid.uuid4().hex}.db"
+    store = McpOAuthStore(db_url=f"sqlite:///{db_path}")
+    provider = InvestyoOAuthProvider(store=store)
+
+    issuer_url = "http://127.0.0.1:8080"
+    mcp = FastMCP(
+        "test-oauth-flow-multi-user",
+        auth_server_provider=provider,
+        auth=AuthSettings(
+            issuer_url=issuer_url,
+            resource_server_url=issuer_url,
+            client_registration_options=ClientRegistrationOptions(enabled=True),
+            revocation_options=RevocationOptions(enabled=True),
+        ),
+    )
+    register_login_routes(mcp, provider)
+    app = mcp.streamable_http_app()
+    with TestClient(app, follow_redirects=False) as client:
+        yield client, store
+
+
+def _complete_flow_for_user(client, username: str, password: str) -> str:
+    """Drives register -> authorize -> /login (username+password) -> /token
+    for one user, returning the minted access token."""
+    verifier, challenge = _make_pkce_pair()
+
+    register_resp = client.post(
+        "/register",
+        json={
+            "redirect_uris": ["https://claude.ai/api/mcp/auth_callback"],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "client_name": f"test-client-{username}",
+        },
+    )
+    assert register_resp.status_code == 201, register_resp.text
+    client_id = register_resp.json()["client_id"]
+
+    authorize_resp = client.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": f"state-{username}",
+        },
+    )
+    assert authorize_resp.status_code in (302, 307), authorize_resp.text
+    nonce = urllib.parse.parse_qs(
+        urllib.parse.urlparse(authorize_resp.headers["location"]).query
+    )["req"][0]
+
+    login_resp = client.post(
+        f"/login?req={nonce}",
+        data={"req": nonce, "username": username, "password": password},
+    )
+    assert login_resp.status_code == 302, login_resp.text
+    callback_query = urllib.parse.parse_qs(
+        urllib.parse.urlparse(login_resp.headers["location"]).query
+    )
+    auth_code = callback_query["code"][0]
+
+    token_resp = client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": auth_code,
+            "redirect_uri": "https://claude.ai/api/mcp/auth_callback",
+            "client_id": client_id,
+            "code_verifier": verifier,
+        },
+    )
+    assert token_resp.status_code == 200, token_resp.text
+    return token_resp.json()["access_token"]
+
+
+def test_two_users_independently_complete_full_flow_with_distinct_token_subjects(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """Two named users, each independently completing the full
+    register -> authorize -> login -> PKCE-token -> authenticated-call flow,
+    each ending with a distinct token `subject`."""
+    with _make_multi_user_oauth_app(monkeypatch, tmp_path) as (client, store):
+        store.create_user("alice", hash_password("alice-pw", n=2**4, r=1, p=1))
+        store.create_user("bob", hash_password("bob-pw", n=2**4, r=1, p=1))
+
+        alice_token = _complete_flow_for_user(client, "alice", "alice-pw")
+        bob_token = _complete_flow_for_user(client, "bob", "bob-pw")
+
+        assert alice_token != bob_token
+
+        alice_row = store.load_access_token(alice_token)
+        bob_row = store.load_access_token(bob_token)
+        assert alice_row is not None and bob_row is not None
+        assert alice_row["subject"] == "alice"
+        assert bob_row["subject"] == "bob"
+        assert alice_row["subject"] != bob_row["subject"]
+
+        # Each token independently authenticates a real /mcp call.
+        alice_mcp_resp = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            headers={"Authorization": f"Bearer {alice_token}"},
+        )
+        assert alice_mcp_resp.status_code != 401, alice_mcp_resp.text
+
+        bob_mcp_resp = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            headers={"Authorization": f"Bearer {bob_token}"},
+        )
+        assert bob_mcp_resp.status_code != 401, bob_mcp_resp.text
 
 
 def test_manual_dry_run_refuses_to_start_without_required_settings(monkeypatch: pytest.MonkeyPatch):
