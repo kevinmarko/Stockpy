@@ -407,3 +407,87 @@ body {
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+/* get_portfolio_by_pilot widget (pilot-portfolio.html) */
+
+.portfolio-by-pilot-panel {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.proxy-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.proxy-banner-label {
+  font-weight: 700;
+}
+
+.proxy-banner-note {
+  font-weight: 400;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.portfolio-as-of {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.portfolio-by-pilot-panel h4 {
+  margin: 4px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+
+.pilot-portfolio-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pilot-portfolio-card {
+  padding: 12px;
+}
+
+.pilot-portfolio-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.pilot-portfolio-card-header strong {
+  font-size: 14px;
+}
+
+.pl-positive {
+  color: var(--growth);
+}
+
+.pl-negative {
+  color: var(--decline);
+}
+
+.overlap-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+}
+
+.unattributed-section {
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 12px;
+}
+
+.unattributed-note {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin: 0 0 8px;
+}
