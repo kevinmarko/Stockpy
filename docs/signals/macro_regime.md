@@ -95,3 +95,60 @@ The HMM second opinion (`regime/hmm_regime.py`) can downgrade RISK ON → NEUTRA
 Reduce below 30.0 only if your strategy is explicitly **macro-agnostic** (e.g. a pure
 pairs trade). For the multi-asset advisory pipeline, reducing this weight below 30 is not
 recommended without also re-validating the strategy harness (`python -m validation.harness`).
+
+---
+
+## Backtest Validation (`STRATEGY_REGISTRY["macro_regime_pit"]`, 2026-08)
+
+**Real, measured result** (live yfinance + FRED data via `HistoricalStore`, `python -m
+scripts.refresh_validations --strategies macro_regime_pit --start 2023-08-08 --end 2026-08-06
+--json`, run 2026-08-10):
+
+| Metric | Value | Gate | Result |
+|---|---|---|---|
+| Sharpe | **1.556** | > 0.50 | ✅ |
+| PBO | 0.000 | < 0.50 | ✅ |
+| DSR | **0.000** | > 0.95 | ❌ FAIL |
+| MaxDD | 15.4% | < 30% | ✅ |
+| `deployable` | **False** | | |
+
+Actual window used: **2023-08-08 → 2026-08-05** (`n_trials=2`, the two variants below). This is
+*not* a self-imposed bound like `forecast_direction_arima_hw`'s — it's forced by real data
+availability: `BAMLH0A0HYM2` (HY OAS, the CREDIT EVENT input) only has FRED history starting
+**2023-08-08** in this platform's `HistoricalStore` (`VIXCLS`/`T10Y2Y`/`UNRATE` all go back
+decades further). `_reconstruct_macro_regime_series` correctly degrades any date missing an
+input series to `market_regime=None` (never a fabricated classification — CONSTRAINT #4), so
+requesting an earlier `--start` would only prepend years of NaN-scored rows, not add real
+signal — `--start 2023-08-08` was chosen deliberately to match the real constraint rather than
+pad the window with uninformative dates.
+
+**Honest read**: PBO and MaxDD both pass comfortably, and the raw Sharpe (1.556) looks strong —
+but DSR fails hard (0.000, far below the 0.95 gate). This is not a bug or a data-wiring problem;
+it is DSR doing exactly what it's designed to do. Bailey & López de Prado's Deflated Sharpe
+Ratio penalizes an observed Sharpe for (a) the number of trials tested (`n_trials=2` here — the
+rank-based `MacroRegime_TopHalf` book and the explicit `MacroRegime_SectorRotation` book), (b)
+non-normal return skew/kurtosis, and — the dominant factor at this sample size — **(c) the
+standard error of the Sharpe estimate itself, which shrinks only as ~1/√N**. With real HY-OAS
+coverage starting 2023-08-08, this backtest has roughly 2.5 years (~650 trading days) of usable
+history — genuinely too short a track record for DSR to statistically distinguish a Sharpe of
+1.556 from one that arose by chance, no matter how good it looks in-sample. A separate
+family-wide multiple-testing correction (`family_multiple_testing.family_dsr`, Benjamini-Hochberg
+across signal modules) reports a softer **0.849** for the same single-strategy observation using
+a different, simpler formula — still short of 0.95, consistent with the same short-sample
+conclusion, and *not* the number the deployability gate actually reads (`ValidationReport.dsr`,
+sourced from the CPCV path-distribution DSR at `n_trials=2`, is the gating value — 0.000, per
+`validation/harness.py`).
+
+**What would change this**: the two real levers are (1) time — as `BAMLH0A0HYM2` accumulates
+more FRED history against the live pipeline's already-decades-deep `VIXCLS`/`T10Y2Y`/`UNRATE`
+coverage, the usable window lengthens and DSR's sample-size penalty eases on its own, with no
+code change; or (2) a v2 macro-regime backtest that doesn't gate on HY OAS at all (e.g. a
+yield-curve/VIX/Sahm-only variant, dropping the CREDIT EVENT branch) — not attempted here, since
+that would validate a *different*, narrower regime rule than what `signals/macro_regime.py`
+actually runs live. No threshold was loosened and no date range was cherry-picked to avoid this
+result — `--start` was set to the earliest date the real inputs support, and the honest FAIL is
+recorded as-is. The two documented v1 caveats from earlier in this file (HMM downgrade not
+replayed; sector is a current snapshot applied across history) remain unaddressed and are
+orthogonal to the DSR failure above — neither would move the DSR result materially, since both
+affect signal *magnitude*, not sample length. See `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08
+entry for the full writeup.

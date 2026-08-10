@@ -464,6 +464,61 @@ through the real harness), plus the seven pre-existing lgbm test files listed ab
 
 ---
 
+## 2026-08-10 — `macro_regime_pit` and `forecast_direction_arima_hw`: closing a documentation gap
+(no code change)
+
+Both `STRATEGY_REGISTRY` adapters (`scripts/refresh_validations.py:1416`/`:1550`) and their
+`pilots/catalog.py` Pilot entries (`regime-navigator`, `forecast-aligned`) were already merged
+2026-07-17, but neither had ever been run and documented per this log's own required convention —
+a compliance gap, not a code gap. This entry closes it with real, measured numbers; no adapter or
+catalog code changed.
+
+**`macro_regime_pit`** — `python -m scripts.refresh_validations --strategies macro_regime_pit
+--start 2023-08-08 --end 2026-08-06 --json`, run 2026-08-10. `--start` was set to
+`BAMLH0A0HYM2`'s real FRED-history floor in this platform's `HistoricalStore` (2023-08-08) rather
+than the log's usual `2005-01-01` default, since any earlier date degrades to an honestly
+unscored `market_regime=None` row (CONSTRAINT #4) and would only pad the sample with
+uninformative dates, not add real signal.
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | `deployable` |
+|---|---|---|---|---|---|
+| `macro_regime_pit` | **1.556** | 0.000 | **0.000** | 15.4% | **False** |
+
+Honest reason: PBO and MaxDD pass comfortably and the raw Sharpe is strong, but DSR fails hard —
+not a bug, but DSR's own well-known small-sample penalty. Real HY-OAS coverage only reaches back
+to 2023-08-08, leaving ~2.5 years (~650 trading days) of usable history, too short for DSR to
+statistically separate a Sharpe of 1.556 from chance regardless of how strong it looks
+in-sample. See `docs/signals/macro_regime.md`'s Backtest Validation section for the full
+statistical writeup, including why the doubled-checked `family_multiple_testing.family_dsr`
+figure (0.849) tells the same short-sample story through a different formula and is *not* the
+number the gate actually reads.
+
+**`forecast_direction_arima_hw`** — `python -m scripts.refresh_validations --strategies
+forecast_direction_arima_hw --start 2015-01-01 --end 2026-08-06 --json`, run 2026-08-10.
+Self-bounded effective window (by the adapter's own documented design): **2021-08-05 →
+2026-08-05**.
+
+| Strategy | Sharpe | PBO | DSR | MaxDD | `deployable` |
+|---|---|---|---|---|---|
+| `forecast_direction_arima_hw` | **−0.128** | 0.000 | 1.000 | **31.7%** | **False** |
+
+Honest reason: two independent gates fail — negative net Sharpe and MaxDD clearing the 30%
+ceiling by 1.7 points — while PBO and DSR both pass cleanly (n_trials=1, so little overfitting-
+by-selection risk to begin with). The self-bounded 2021-2026 window spans the 2021 growth peak,
+the sharp 2022 rate-hike bear market, and a multi-year recovery — a whipsaw-heavy period that is
+close to a worst case for ARIMA/Holt-Winters, both fundamentally trend/level-extrapolation
+methods by design. See `docs/signals/forecast_alignment.md`'s Backtest Validation section for
+the full result table, the plausible-but-unverified contributing factors, and why this does not
+change `signals/forecast_alignment.py`'s live dormant/active status (weight 10.0, unaffected).
+
+**Per this log's own stated rule**: no threshold was loosened, no filter was date-snooped, and
+both genuinely-measured results are recorded as-is — including the honest `deployable=False` for
+both `macro_regime_pit` and `forecast_direction_arima_hw`. Neither Pilot's catalog entry
+changed; both were already correctly joined to their `validation_strategy_id` and are unaffected
+by this documentation-only pass.
+
+---
+
 ## Verification methodology
 
 Every fix in this log was independently re-run through the real walk-forward harness
