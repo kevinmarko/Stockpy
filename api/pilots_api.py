@@ -161,6 +161,7 @@ from pilots import (
     forecast_skill,
     gravity_audit as gravity_audit_reader,
     models,
+    news_catalyst,
     observability,
     options,
     pairs,
@@ -1176,6 +1177,9 @@ def get_pilot_detail(pilot_id: str) -> Any:
     payload = _pilot_summary(pilot, snapshot, store)
     payload["validation_strategy_id"] = pilot.validation_strategy_id
     payload["weights"] = dict(pilot.weights)
+    
+    has_news = pilot.weights.get("news-catalyst", 0.0) > 0.0
+    payload["news_coverage"] = news_catalyst.get_news_catalyst_coverage() if has_news else None
 
     if snapshot is None:
         payload.update(
@@ -5450,3 +5454,23 @@ def approve_cls_bulk(body: CacheLongShortApproveBulkRequest) -> Dict[str, Any]:
     store = CacheLongShortStore()
     store.approve_tax_lots(body.lot_ids)
     return {"status": "approved", "count": len(body.lot_ids)}
+
+class DataAppCreationForm(BaseModel):
+    name: str
+
+@app.post("/data-app/create", dependencies=[Depends(require_command_token)])
+def create_data_app(form: DataAppCreationForm) -> Dict[str, Any]:
+    return {"status": "success", "name": form.name}
+
+from fastapi.responses import StreamingResponse
+import asyncio
+
+@app.get("/chat/stream", dependencies=[Depends(require_read_token)])
+async def chat_stream(query: str = ""):
+    async def event_generator():
+        yield 'event: message\ndata: {"system_message": {"text_type": "THOUGHT", "text": "Thinking about your query..."}}\n\n'
+        await asyncio.sleep(0.5)
+        yield 'event: message\ndata: {"system_message": {"text_type": "THOUGHT", "text": "Analyzing database schemas..."}}\n\n'
+        await asyncio.sleep(0.5)
+        yield f'event: message\ndata: {{"system_message": {{"text_type": "FINAL_RESPONSE", "text": "Here is the result for your query: {query}. It looks like you are accessing the SQLite backend."}}}}\n\n'
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

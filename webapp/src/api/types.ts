@@ -2091,6 +2091,26 @@ export interface MacroGateUpdateResult {
  * GJR-GARCH fit over price history, so it can be a real number even when
  * `source === "unavailable"` (or `null` itself on insufficient history).
  */
+export interface HeadlineSentimentItem {
+  title: string;
+  publisher: string;
+  url: string | null;
+  published_at: string | null;
+  score: number;
+  probabilities?: {
+    positive: number;
+    neutral: number;
+    negative: number;
+  };
+}
+
+export interface EarningsCatalystStatus {
+  next_earnings_date: string | null;
+  hours_to_earnings: number | null;
+  status: "normal" | "suppressed" | "dampened";
+  multiplier: number;
+}
+
 export interface SentimentDynamics {
   ticker: string;
   date: string;
@@ -2099,6 +2119,9 @@ export interface SentimentDynamics {
   credibility_score: number | null;
   volatility_persistence: number | null;
   source: "antigravity_agent" | "unavailable";
+  headlines: HeadlineSentimentItem[];
+  earnings_catalyst: EarningsCatalystStatus | null;
+  provider_used: "fmp" | "finnhub" | "none";
 }
 
 /**
@@ -3695,4 +3718,16 @@ export interface CacheLongShortPendingTrade {
 export interface CacheLongShortApproveBulkResult {
   status: string;
   count: number;
+}
+
+export interface DataAppCreationForm {
+  name: string;
+  description?: string;
+  template_type?: string;
+}
+
+export interface DataAppCreationResult {
+  success: boolean;
+  app_id: string | null;
+  message: string | null;
 }

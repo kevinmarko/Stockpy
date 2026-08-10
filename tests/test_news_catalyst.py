@@ -1752,3 +1752,49 @@ class TestSettings:
         from settings import settings
         # Suppress window (hours) should be less than dampen window (hours)
         assert settings.NEWS_EARNINGS_SUPPRESS_HOURS < settings.NEWS_EARNINGS_DAMPEN_DAYS * 24
+
+
+class TestGetSymbolNewsCatalystDetails:
+    def test_get_symbol_news_catalyst_details_empty(self):
+        from signals.news_catalyst import get_symbol_news_catalyst_details
+
+        with patch("signals.news_catalyst.fetch_company_headlines", return_value=[]):
+            with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
+                res = get_symbol_news_catalyst_details("AAPL")
+
+        assert res["symbol"] == "AAPL"
+        assert res["headlines"] == []
+        assert res["earnings_catalyst"]["status"] == "normal"
+        assert res["earnings_catalyst"]["multiplier"] == 1.0
+        assert res["raw_sentiment_avg"] is None
+
+    def test_get_symbol_news_catalyst_details_with_headlines(self):
+        from signals.news_catalyst import get_symbol_news_catalyst_details
+
+        mock_headlines = [
+            {
+                "headline": "AAPL reports record quarterly revenue and growth",
+                "source": "fmp",
+                "url": "https://example.com/news/1",
+                "datetime": 1700000000,
+            },
+            {
+                "headline": "AAPL faces supply delay concerns",
+                "source": "finnhub",
+                "url": "https://example.com/news/2",
+                "datetime": 1700001000,
+            },
+        ]
+
+        with patch("signals.news_catalyst.fetch_company_headlines", return_value=mock_headlines):
+            with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
+                res = get_symbol_news_catalyst_details("AAPL")
+
+        assert res["symbol"] == "AAPL"
+        assert len(res["headlines"]) == 2
+        assert res["headlines"][0]["source"] == "fmp"
+        assert "probabilities" in res["headlines"][0]
+        assert res["source_breakdown"] == {"fmp": 1, "finnhub": 1}
+        assert res["raw_sentiment_avg"] is not None
+        assert res["earnings_catalyst"]["multiplier"] == 1.0
+

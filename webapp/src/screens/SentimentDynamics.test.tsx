@@ -47,6 +47,9 @@ describe("SentimentDynamics screen (real mock API)", () => {
       // still be a real number even when the agent itself is unavailable.
       volatility_persistence: 0.93,
       source: "unavailable",
+      headlines: [],
+      earnings_catalyst: null,
+      provider_used: "none",
     });
     renderScreen();
 
@@ -135,5 +138,41 @@ describe("SentimentDynamics screen (real mock API)", () => {
       expect(section.textContent).not.toMatch(/lead-lag (is|:|of) [-\d]/i);
       expect(section.textContent).toMatch(/no lead-lag relationship is (computed|implied)/i);
     });
+
+    it("renders earnings catalyst banner and headline feed when present", async () => {
+      vi.spyOn(api, "getSentimentDynamics").mockResolvedValueOnce({
+        ticker: "AAPL",
+        date: new Date().toISOString(),
+        sentiment_score: 0.25,
+        sentiment_intensity: 0.65,
+        credibility_score: 0.88,
+        volatility_persistence: 0.92,
+        source: "antigravity_agent",
+        headlines: [
+          {
+            title: "AAPL beats quarterly revenue estimates",
+            publisher: "fmp",
+            url: "https://example.com/news/1",
+            published_at: "2026-08-01T12:00:00Z",
+            score: 0.45,
+            probabilities: { positive: 0.6, neutral: 0.3, negative: 0.1 },
+          },
+        ],
+        earnings_catalyst: {
+          next_earnings_date: "2026-08-20T00:00:00Z",
+          hours_to_earnings: 240,
+          status: "normal",
+          multiplier: 1.0,
+        },
+        provider_used: "fmp",
+      });
+
+      renderScreen();
+
+      expect(await screen.findByTestId("earnings-catalyst-banner")).toBeInTheDocument();
+      expect(screen.getByTestId("headline-feed-section")).toBeInTheDocument();
+      expect(screen.getByText("AAPL beats quarterly revenue estimates ↗")).toBeInTheDocument();
+    });
   });
 });
+

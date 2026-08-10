@@ -25,6 +25,7 @@ import {
   CircleHelp,
   Settings,
   Briefcase,
+  LayoutTemplate,
 } from "lucide-react";
 
 export type NavSection = "primary" | "research" | "trading" | "operations" | "settings";
@@ -81,6 +82,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/pipeline", label: "Pipeline", ico: Rocket, match: (p) => p.startsWith("/pipeline"), section: "operations" },
   { to: "/console", label: "Console", ico: Monitor, match: (p) => p.startsWith("/console"), section: "operations" },
   { to: "/operations/reports", label: "Report Library", ico: Library, match: (p) => p.startsWith("/operations/reports"), section: "operations" },
+  { to: "/create-data-app", label: "Create Data App", ico: LayoutTemplate, match: (p) => p.startsWith("/create-data-app"), section: "operations" },
   { to: "/help", label: "Help & Glossary", ico: CircleHelp, match: (p) => p.startsWith("/help"), section: "operations" },
   // Settings
   { to: "/settings", label: "Settings", ico: Settings, match: (p) => p.startsWith("/settings"), section: "settings" },

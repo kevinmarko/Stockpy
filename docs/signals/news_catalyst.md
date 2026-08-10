@@ -9,10 +9,10 @@
 **Pilot:** News Catalyst (`news-catalyst`, `pilots/catalog.py`) — no backtest curve
 (`validation_strategy_id=None`); backtesting headline sentiment needs point-in-time news
 history no free vendor supplies historically — fabricating a headline archive would
-violate CONSTRAINT #4. As of 2026-07, `pre_compute()` forward-archives each cycle's
-live score to `HistoricalStore.news_history` (`settings.NEWS_HISTORY_CAPTURE_ENABLED`,
-default on) so real point-in-time history accumulates going forward — a genuine
-backtest becomes possible after roughly 6-12+ months, but not before.
+violate CONSTRAINT #4. The Pilot's telemetry (archived score count, 7-day headline volume,
+and universe score distribution) is exposed safely via `GET /pilots/{pilot_id}` using
+a dependency-light read helper (`api/pilots/news_catalyst.py`), honoring the API
+AST guard invariants. Live sentiment dynamics are visualized in the Pilots PWA.
 
 **Multi-source credibility blend (Sentiment Pipeline Phase 3-4, 2026-07):** `compute()`'s
 score is now a renormalized weighted blend of the Finnhub-headline component above and a
@@ -303,3 +303,23 @@ tab via `research_engine.compute_correlation_clusters()`, not by this module.
   proximity multiplier defaults to 1.0 (full signal) — the suppression only fires when
   `fetch_next_earnings_any()` (FMP-first, Finnhub-fallback) returns a valid
   next-earnings date.
+
+---
+
+## Pilot Telemetry & API Integration
+
+The `news-catalyst` Pilot's specific telemetry is exposed via `GET /pilots/{pilot_id}`
+by the `api/pilots/news_catalyst.py` dependency-light read helper. This helper honors
+the strict AST-guard invariants of `api/pilots_api.py` (preventing heavy signal/engine
+imports on the web path).
+
+The `get_news_catalyst_coverage()` read helper returns:
+- `archived_score_count`: Total valid sentiment points recorded.
+- `headline_volume_7d`: The count of recent fetched headlines over the last 7 days.
+- `universe_score_distribution`: A histogram of positive/neutral/negative scores across the active universe.
+
+**Frontend Integration (`webapp/src/screens/SentimentDynamics.tsx`)**:
+The UI visualizes the `SentimentDynamics` payload securely, surfacing:
+- `earnings_catalyst`: Shows suppression or dampening logic based on proximity to earnings.
+- `headlines`: Maps `HeadlineSentimentItem` with detailed probabilities, and explicitly highlights `publisher` attribution.
+- `provider_used`: Reflects the API source ("fmp", "finnhub", or "none") and degrades gracefully when unconfigured, honoring CONSTRAINT #4.

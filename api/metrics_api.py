@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import math
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -237,7 +238,25 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
 
     try:
         engine = SentimentRiskEngine()
-        sentiment_result = await engine.get_live_sentiment(symbol, date, returns)
+        from signals.news_catalyst import get_symbol_news_catalyst_details
+
+        # Run the agent inference and the news inference concurrently
+        # get_symbol_news_catalyst_details is synchronous and does network/ML, so we run it in a thread
+        sentiment_task = asyncio.create_task(engine.get_live_sentiment(symbol, date, returns))
+        news_task = asyncio.create_task(asyncio.to_thread(get_symbol_news_catalyst_details, symbol))
+        
+        sentiment_result, details = await asyncio.gather(sentiment_task, news_task, return_exceptions=True)
+
+        if isinstance(sentiment_result, Exception):
+            logger.warning("metrics_api: sentiment dynamics failed for %s: %s", symbol, sentiment_result)
+            raise HTTPException(status_code=404, detail="Sentiment calculation failed")
+            
+        if isinstance(details, Exception):
+            logger.debug("metrics_api: news catalyst details lookup failed for %s: %s", symbol, details)
+            details = {}
+
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning("metrics_api: sentiment dynamics failed for %s: %s", symbol, exc)
         raise HTTPException(status_code=404, detail="Sentiment calculation failed")
@@ -250,6 +269,9 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
         "credibility_score": sentiment_result.credibility_score,
         "volatility_persistence": sentiment_result.volatility_persistence,
         "source": sentiment_result.source,
+        "headlines": details.get("headlines", []),
+        "earnings_catalyst": details.get("earnings_catalyst"),
+        "provider_used": details.get("provider_used", "none"),
     }
 
     return _clean_nan(result)

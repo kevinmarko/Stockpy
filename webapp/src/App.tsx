@@ -44,6 +44,7 @@ import { ForecastBackfillScreen } from "./screens/ForecastBackfillScreen";
 import { SectorSelection } from "./screens/SectorSelection";
 import { Commands } from "./screens/Commands";
 import { Console } from "./screens/Console";
+import { CreateDataApp } from "./screens/CreateDataApp";
 import { ReportLibrary } from "./screens/ReportLibrary";
 import { PromptRegistry } from "./screens/PromptRegistry";
 import { AgenticTrading } from "./screens/AgenticTrading";
@@ -247,6 +248,7 @@ export default function App() {
                   <Route path="/sector-selection" element={<SectorSelection />} />
                   <Route path="/commands" element={<Commands />} />
                   <Route path="/console" element={<Console />} />
+                  <Route path="/create-data-app" element={<CreateDataApp />} />
                   <Route path="/operations/reports" element={<ReportLibrary />} />
                   <Route path="/agentic" element={<AgenticTrading />} />
                   <Route path="/research" element={<ResearchHub />} />

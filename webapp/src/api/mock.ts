@@ -187,6 +187,8 @@ import type {
   CacheLongShortDashboard,
   CacheLongShortPendingTrade,
   CacheLongShortApproveBulkResult,
+  DataAppCreationForm,
+  DataAppCreationResult,
 } from "./types";
 
 const SECTORS = [
@@ -5707,6 +5709,19 @@ const MOCK_PROMPT_REGISTRY_ENABLED = true;
 const MOCK_PROMPT_REGISTRY_WRITABLE = true;
 
 // ================= public mock API (shape-identical to client.ts) =================
+export const mockNoProviderSentimentFixture: SentimentDynamics = {
+  ticker: "AAPL",
+  date: new Date().toISOString(),
+  sentiment_score: 0.15,
+  sentiment_intensity: 0.72,
+  credibility_score: 0.85,
+  volatility_persistence: 0.94,
+  source: "antigravity_agent",
+  headlines: [],
+  earnings_catalyst: null,
+  provider_used: "none",
+};
+
 export const mockApi = {
   async health() {
     return delay({ status: "ok", mock: true }, 60);
@@ -7413,18 +7428,55 @@ export const mockApi = {
     });
   },
 
+
   async getSentimentDynamics(symbol: string): Promise<SentimentDynamics> {
     // Illustrative "available" example (this repo's USE_MOCK convention) —
     // the real endpoint can also return source: "unavailable" with all
     // three agent-derived fields null; see SentimentDynamics.test.tsx.
+    const sym = symbol.toUpperCase();
+    const now = new Date();
+    const earningsDate = new Date(now.getTime() + 14 * 24 * 3600 * 1000).toISOString();
     return delay<SentimentDynamics>({
-      ticker: symbol.toUpperCase(),
-      date: new Date().toISOString(),
+      ticker: sym,
+      date: now.toISOString(),
       sentiment_score: 0.15,
       sentiment_intensity: 0.72,
       credibility_score: 0.85,
       volatility_persistence: 0.94,
       source: "antigravity_agent",
+      headlines: [
+        {
+          title: `${sym} reports quarterly surge in enterprise subscription demand`,
+          publisher: "Reuters",
+          url: "https://financialmodelingprep.com/news",
+          published_at: new Date(now.getTime() - 3600 * 1000 * 4).toISOString(),
+          score: 0.42,
+          probabilities: { positive: 0.58, neutral: 0.26, negative: 0.16 },
+        },
+        {
+          title: `Analysts adjust price targets for ${sym} ahead of industry summit`,
+          publisher: "Bloomberg",
+          url: "https://finnhub.io/news",
+          published_at: new Date(now.getTime() - 3600 * 1000 * 18).toISOString(),
+          score: 0.08,
+          probabilities: { positive: 0.35, neutral: 0.38, negative: 0.27 },
+        },
+        {
+          title: `${sym} Files Form 8-K regarding corporate governance updates`,
+          publisher: "SEC EDGAR",
+          url: "https://sec.gov/edgar",
+          published_at: new Date(now.getTime() - 3600 * 1000 * 36).toISOString(),
+          score: -0.05,
+          probabilities: { positive: 0.12, neutral: 0.71, negative: 0.17 },
+        },
+      ],
+      earnings_catalyst: {
+        next_earnings_date: earningsDate,
+        hours_to_earnings: 336.0,
+        status: "normal",
+        multiplier: 1.0,
+      },
+      provider_used: "fmp",
     });
   },
 
@@ -8098,6 +8150,13 @@ export const mockApi = {
     return delay({
       status: "approved",
       count: lotIds.length
+    });
+  },
+  async createDataApp(_form: DataAppCreationForm): Promise<DataAppCreationResult> {
+    return delay({
+      success: true,
+      app_id: "mock-app-123",
+      message: "Data App created successfully",
     });
   },
 };

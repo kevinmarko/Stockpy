@@ -171,6 +171,12 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "0.1 to 1: a filter for 'rumor mill' spikes — low credibility means the sentiment reading is likely noise rather than a durable signal.",
   "volatility persistence":
     "A GJR-GARCH measure of how long a volatility shock takes to decay back toward baseline for a symbol. Computed independently from price history, not from the sentiment agent — it stays populated even when the sentiment agent itself is unavailable.",
+  "earnings catalyst":
+    "A proximity gate that suppresses (forces to 0.0x) or dampens (reduces multiplier) the news sentiment signal when too close to an upcoming earnings date, managing extreme event-carry risk.",
+  "finbert classification":
+    "A specialized language model's softmax probability distribution (Positive/Neutral/Negative) for a given financial headline, translating text into a numeric sentiment score.",
+  "news provider":
+    "The upstream data source (e.g., FMP, Finnhub, SEC EDGAR) that supplied the headline and its publication timestamp.",
   // The three entries below back the Settings screen's Data Auto-Refresh
   // card. Deliberately written with ZERO numeric literals: the interval,
   // floors, and defaults they describe are user-set local device
@@ -190,6 +196,8 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "A highly correlated alternative security (like a sector ETF) bought when selling the original asset for tax-loss harvesting to maintain market exposure while waiting out the wash-sale rule window.",
   "correlation drift":
     "When a proxy security stops tracking its target asset closely enough. A background process continually monitors this correlation and flags if the proxy relationship weakens below a safety threshold.",
+  "data app":
+    "An interactive application built to query, visualize, and interact with data.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -261,7 +269,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
     title: "Sentiment Dynamics",
     description:
       "Live sentiment analysis from financial news and social media for one symbol, driven by the Antigravity Agent, alongside a GJR-GARCH volatility-persistence read and an archived sentiment-vs-VIX trend chart. Every value degrades honestly to '—' when the sourcing agent is unavailable — never a guessed number.",
-    keyConcepts: ["sentiment score", "sentiment intensity", "credibility score", "volatility persistence"],
+    keyConcepts: ["sentiment score", "sentiment intensity", "credibility score", "volatility persistence", "earnings catalyst", "finbert classification", "news provider"],
   },
   "sector-selection": {
     title: "Sector Selection",
@@ -415,6 +423,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "A systematic tax-loss harvesting (TLH) overlay. It monitors concentrated equity positions for TLH opportunities, generating a proxy hedge (like a highly-correlated sector ETF) to maintain beta exposure while avoiding wash-sale rules. Pending trades are routed here for approval before taking effect.",
     keyConcepts: ["tax loss harvesting", "proxy hedge", "correlation drift"],
+  },
+  "create-data-app": {
+    title: "Create Data App",
+    description:
+      "Design and deploy custom data applications directly from the platform. Build interactive visualizations, connect to your datasets, and share insights without leaving the environment.",
+    keyConcepts: ["data app"],
   },
 };
 

@@ -12,6 +12,8 @@ import {
 } from "recharts";
 import { api } from "../api/client";
 import type {
+  EarningsCatalystStatus,
+  HeadlineSentimentItem,
   MacroHistorySeries,
   SentimentDynamics as SentimentDynamicsData,
   SentimentHistory,
@@ -33,6 +35,197 @@ function getScoreColor(score: number | null): string {
   return theme.textSecondary;
 }
 
+function EarningsCatalystBanner({ catalyst }: { catalyst?: EarningsCatalystStatus | null }) {
+  if (!catalyst) return null;
+
+  const { status, multiplier, next_earnings_date, hours_to_earnings } = catalyst;
+
+  let bannerVariant: "info" | "warn" = "info";
+  let title = "✅ Earnings Catalyst Clear";
+  let description = `Full news signal multiplier (1.0x). Next earnings date: ${
+    next_earnings_date ? fmtDate(next_earnings_date) : "no earnings date currently scheduled"
+  }.`;
+
+  if (status === "suppressed") {
+    bannerVariant = "warn";
+    title = "🚨 Earnings Proximity Suppressed (Within 48h)";
+    description = `News catalyst signal is forced to 0.0x multiplier due to extreme event uncertainty before earnings on ${
+      next_earnings_date ? fmtDate(next_earnings_date) : "upcoming date"
+    } (${hours_to_earnings != null ? `${hours_to_earnings.toFixed(1)}h away` : "imminent"}).`;
+  } else if (status === "dampened") {
+    bannerVariant = "warn";
+    title = `⚠️ Earnings Proximity Dampened (7-Day Pre or 24h Post Earnings)`;
+    description = `News catalyst signal multiplier reduced to ${multiplier}x (${(multiplier * 100).toFixed(
+      0
+    )}%) due to elevated carry risk near earnings (${
+      next_earnings_date ? fmtDate(next_earnings_date) : "event window"
+    }).`;
+  }
+
+  return (
+    <Notice variant={bannerVariant} style={{ marginBottom: "var(--s-4)" }} data-testid="earnings-catalyst-banner">
+      <div>
+        <strong>{title}</strong> — {description}
+      </div>
+    </Notice>
+  );
+}
+
+function HeadlineFeed({
+  headlines,
+  providerUsed,
+}: {
+  headlines?: HeadlineSentimentItem[];
+  providerUsed?: "fmp" | "finnhub" | "none";
+}) {
+  if (!headlines || headlines.length === 0) {
+    if (providerUsed === "none") {
+      return (
+        <Notice variant="info" style={{ marginTop: "var(--s-4)" }}>
+          <span>News provider not configured — see Settings.</span>
+        </Notice>
+      );
+    }
+    return (
+      <Notice variant="info" style={{ marginTop: "var(--s-4)" }}>
+        <span>No recent headlines available.</span>
+      </Notice>
+    );
+  }
+
+  return (
+    <section className="card card-pad" style={{ marginTop: "var(--s-4)", padding: 0 }} data-testid="headline-feed-section">
+      <div
+        className="drag-handle"
+        style={{
+          padding: "var(--s-3)",
+          borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "var(--s-2)",
+        }}
+      >
+        <div>
+          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Scored News Headlines & FinBERT Breakdown</h2>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-micro)", margin: "4px 0 0 0" }}>
+            FinBERT 3-class softmax probability distribution & signed score per headline
+          </p>
+        </div>
+
+        {providerUsed && providerUsed !== "none" && (
+          <div style={{ display: "flex", gap: "var(--s-1-5)", alignItems: "center", flexWrap: "wrap" }}>
+              <span
+                style={{
+                  fontSize: "var(--t-micro)",
+                  padding: "2px 8px",
+                  borderRadius: "var(--r-pill)",
+                  background: "rgba(255, 255, 255, 0.06)",
+                  border: `1px solid ${theme.border}`,
+                  color: theme.textSecondary,
+                  textTransform: "uppercase",
+                  fontWeight: 600,
+                }}
+              >
+                via {providerUsed}
+              </span>
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: "var(--s-3)", display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
+        {headlines.map((item, idx) => {
+          const probs = item.probabilities;
+          const posPct = probs ? Math.round(probs.positive * 100) : 0;
+          const neuPct = probs ? Math.round(probs.neutral * 100) : 0;
+          const negPct = probs ? Math.round(probs.negative * 100) : 0;
+
+          return (
+            <div
+              key={idx}
+              style={{
+                padding: "var(--s-3)",
+                borderRadius: "var(--r-sm)",
+                background: "rgba(255, 255, 255, 0.03)",
+                border: `1px solid rgba(255, 255, 255, 0.08)`,
+                display: "flex",
+                flexDirection: "column",
+                gap: "var(--s-2)",
+              }}
+              data-testid={`headline-item-${idx}`}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
+                <div style={{ flex: 1 }}>
+                  <span
+                    style={{
+                      fontSize: "var(--t-micro)",
+                      padding: "2px 6px",
+                      borderRadius: "4px",
+                      background: "rgba(255, 255, 255, 0.08)",
+                      color: theme.accent,
+                      fontWeight: 700,
+                      marginRight: "var(--s-2)",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {item.publisher}
+                  </span>
+                  {item.url ? (
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: theme.textPrimary, textDecoration: "none", fontWeight: 500, fontSize: "var(--t-body)" }}
+                    >
+                      {item.title} ↗
+                    </a>
+                  ) : (
+                    <span style={{ color: theme.textPrimary, fontWeight: 500, fontSize: "var(--t-body)" }}>{item.title}</span>
+                  )}
+                </div>
+                <span
+                  style={{
+                    fontSize: "var(--t-caption)",
+                    fontWeight: 700,
+                    color: getScoreColor(item.score),
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {item.score > 0 ? `+${fmtNum(item.score, 2)}` : fmtNum(item.score, 2)}
+                </span>
+              </div>
+
+              {probs && (
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--t-micro)", color: theme.textMuted, marginBottom: "4px" }}>
+                    <span>FinBERT Classification:</span>
+                    <span>
+                      <strong style={{ color: theme.growth }}>+{posPct}% Pos</strong> · {neuPct}% Neu ·{" "}
+                      <strong style={{ color: theme.decline }}>-{negPct}% Neg</strong>
+                    </span>
+                  </div>
+                  <div style={{ height: "6px", width: "100%", background: "rgba(255, 255, 255, 0.1)", borderRadius: "3px", overflow: "hidden", display: "flex" }}>
+                    <div style={{ width: `${posPct}%`, background: theme.growth, height: "100%" }} />
+                    <div style={{ width: `${neuPct}%`, background: "rgba(255, 255, 255, 0.3)", height: "100%" }} />
+                    <div style={{ width: `${negPct}%`, background: theme.decline, height: "100%" }} />
+                  </div>
+                </div>
+              )}
+
+              {item.published_at && (
+                <div style={{ fontSize: "var(--t-micro)", color: theme.textMuted }}>
+                  Published: {fmtDate(item.published_at)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function Breakdown({ d }: { d: SentimentDynamicsData }) {
   return (
     <>
@@ -49,6 +242,8 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
         </Notice>
       )}
 
+      <EarningsCatalystBanner catalyst={d.earnings_catalyst} />
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-4)" }}>
         <Tile
           label="Sentiment Score"
@@ -59,51 +254,32 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
         <Tile label="Vol Persistence" value={fmtNum(d.volatility_persistence, 2)} />
       </div>
 
-      <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+      <HeadlineFeed headlines={d.headlines} providerUsed={d.provider_used} />
+
+      <section className="card card-pad" style={{ marginTop: "var(--s-4)", display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
         <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
           <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Interpretation</h2>
         </div>
         <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
-        <p style={{ color: theme.textSecondary, fontSize: "var(--t-callout)", lineHeight: 1.5 }}>
-          <strong>Score (-1 to 1):</strong> Positive means bullish news sentiment, negative means bearish.
-          <br/>
-          <strong>Intensity (0.1 to 1):</strong> High values mean extreme emotional language or high news volume.
-          <br/>
-          <strong>Credibility (0.1 to 1):</strong> Filter for 'rumor mill' spikes; low credibility means the sentiment is likely noise.
-          <br/>
-          <strong>Persistence:</strong> GJR-GARCH measure of how long volatility shocks endure.
-        </p>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-callout)", lineHeight: 1.5 }}>
+            <strong>Score (-1 to 1):</strong> Positive means bullish news sentiment, negative means bearish.
+            <br/>
+            <strong>Intensity (0.1 to 1):</strong> High values mean extreme emotional language or high news volume.
+            <br/>
+            <strong>Credibility (0.1 to 1):</strong> Filter for 'rumor mill' spikes; low credibility means the sentiment is likely noise.
+            <br/>
+            <strong>Persistence:</strong> GJR-GARCH measure of how long volatility shocks endure.
+          </p>
         </div>
       </section>
     </>
   );
 }
 
-// Minimum ALIGNED days (both a real VIX value AND a real, non-null sentiment
-// score on the same date) before this chart will show the trend without a
-// prominent "not enough history yet" banner. This is a display threshold,
-// NOT settings.SENTIMENT_PIT_MIN_MONTHS (the much larger, ~6-month bar
-// validation/backtest deployability claims must clear) — this chart makes
-// no lead-lag or causal claim at all, at any depth; the banner exists
-// purely so a two-week-old archive doesn't get mistaken for a real trend.
 const _MIN_ALIGNED_DAYS = 14;
-
 const _SHARED_CHART_MARGIN = { top: 6, right: 10, left: -10, bottom: 0 } as const;
-
 type AlignedPoint = { date: string; vix: number | null; sentiment: number | null };
 
-/**
- * SentimentVixChart — rolling news sentiment vs. VIX, TWO stacked charts
- * sharing one date-aligned x-axis. Deliberately never a single dual-axis
- * chart: sentiment (~[-1,1]) and VIX (~10-80) are different scales, and
- * overlaying two y-axes on one plot is the most common charting mistake —
- * two panels with a shared x-domain reads the lead-lag relationship (if
- * any) more honestly than a forced overlay would.
- *
- * No correlation/lead-lag NUMBER is ever computed or shown here — the
- * sentiment archive (news_history) only started 2026-07, far too young for
- * that claim. See the coverage banner below _MIN_ALIGNED_DAYS.
- */
 function SentimentVixChart({ symbol }: { symbol: string }) {
   const vix = useApi<MacroHistorySeries>(() => api.getMacroHistory("VIXCLS", 180), []);
   const sentimentHist = useApi<SentimentHistory>(
@@ -280,15 +456,29 @@ export function SentimentDynamics() {
             style={{
               padding: "6px 12px",
               borderRadius: "var(--r-sm)",
-              background: "transparent",
+              background: "var(--surface)",
               border: `1px solid ${theme.border}`,
-              color: theme.textSecondary,
-              fontSize: "var(--t-caption)",
-              fontWeight: 600,
+              color: theme.textPrimary,
               cursor: "pointer",
             }}
           >
-            Configure ingestion →
+            ⚙️ Settings
+          </button>
+          <button
+            onClick={() => reload()}
+            style={{
+              padding: "6px 12px",
+              borderRadius: "var(--r-sm)",
+              background: theme.accent,
+              border: "none",
+              color: "#fff",
+              cursor: loading ? "not-allowed" : "pointer",
+              fontWeight: 500,
+              opacity: loading ? 0.7 : 1,
+            }}
+            disabled={loading}
+          >
+            {loading ? "Refreshing..." : "🔄 Refresh News"}
           </button>
         </div>
       </div>

@@ -578,6 +578,8 @@ def fetch_company_headlines(symbol: str, lookback_days: int) -> List[Dict[str, A
     try:
         fmp_items = _fetch_company_headlines_fmp(symbol, lookback_days)
         if fmp_items:
+            for item in fmp_items:
+                item["_provider"] = "fmp"
             return fmp_items
     except Exception as exc:  # pragma: no cover -- defensive, FMP path already guards itself
         logger.debug("fetch_company_headlines: FMP dispatch failed for %s: %s", symbol, exc)
@@ -585,7 +587,10 @@ def fetch_company_headlines(symbol: str, lookback_days: int) -> List[Dict[str, A
     client = build_finnhub_client()
     if client is None:
         return []
-    return fetch_company_news(client, symbol, lookback_days)
+    items = fetch_company_news(client, symbol, lookback_days)
+    for item in items:
+        item["_provider"] = "finnhub"
+    return items
 
 
 def fetch_next_earnings_any(symbol: str) -> Optional[datetime]:
@@ -628,6 +633,111 @@ def fetch_next_earnings_any(symbol: str) -> Optional[datetime]:
     if client is None:
         return None
     return fetch_next_earnings(client, symbol)
+
+
+def get_symbol_news_catalyst_details(
+    symbol: str, lookback_days: int = 7, max_headlines: int = 5
+) -> Dict[str, Any]:
+    """Retrieve structured news catalyst breakdown for ``symbol``:
+    recent scored headlines with FinBERT 3-class softmax probabilities
+    (positive/neutral/negative), source attribution, and earnings catalyst
+    proximity status.
+
+    Returns a clean dict (never raises; returns an empty-headlines structure
+    on failure or unconfigured providers).
+    """
+    symbol = symbol.upper()
+    now_utc = datetime.now(timezone.utc)
+    headlines = fetch_company_headlines(symbol, lookback_days)
+    if headlines:
+        headlines = headlines[:max_headlines]
+    next_earnings = fetch_next_earnings_any(symbol)
+
+    diff_hours = (next_earnings - now_utc).total_seconds() / 3600.0 if next_earnings else None
+
+    if diff_hours is None or diff_hours < -24 or diff_hours > 7 * 24:
+        status = "normal"
+    elif 0 <= diff_hours <= 48:
+        status = "suppressed"
+    else:
+        status = "dampened"
+
+    multiplier = _earnings_proximity_multiplier(next_earnings, now_utc, 48.0, 7.0)
+
+    provider_used = "none"
+    if headlines:
+        provider_used = headlines[0].get("_provider", "none")
+
+    if not headlines:
+        return {
+            "symbol": symbol,
+            "headlines": [],
+            "earnings_catalyst": {
+                "next_earnings_date": next_earnings.isoformat() if next_earnings else None,
+                "hours_to_earnings": round(diff_hours, 1) if diff_hours is not None else None,
+                "status": status,
+                "multiplier": multiplier,
+            },
+            "provider_used": provider_used,
+            "source_breakdown": {},
+            "raw_sentiment_avg": None,
+            "dampened_sentiment_score": None,
+        }
+
+    headline_texts = [item.get("headline", "") for item in headlines if item.get("headline")]
+    pipeline = _get_finbert_pipeline()
+    probs_list = score_headlines(headline_texts, pipeline=pipeline)
+
+    headline_items: List[Dict[str, Any]] = []
+    source_counts: Dict[str, int] = {}
+    raw_scores: List[float] = []
+
+    for item, probs in zip(headlines, probs_list):
+        text = item.get("headline", "")
+        if not text:
+            continue
+        source = str(item.get("source") or "news").lower()
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+        signed_score = _distribution_to_signed(probs)
+        raw_scores.append(signed_score)
+
+        ts = item.get("datetime")
+        published_at = (
+            datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+        )
+        headline_items.append(
+            {
+                "title": text,
+                "publisher": source,
+                "url": item.get("url"),
+                "published_at": published_at,
+                "score": round(signed_score, 4),
+                "probabilities": {
+                    "positive": round(probs.get("positive", 0.0), 4),
+                    "neutral": round(probs.get("neutral", 0.0), 4),
+                    "negative": round(probs.get("negative", 0.0), 4),
+                },
+            }
+        )
+
+    avg_raw = sum(raw_scores) / len(raw_scores) if raw_scores else 0.0
+    dampened_score = avg_raw * multiplier
+
+    return {
+        "symbol": symbol,
+        "headlines": headline_items,
+        "earnings_catalyst": {
+            "next_earnings_date": next_earnings.isoformat() if next_earnings else None,
+            "hours_to_earnings": round(diff_hours, 1) if diff_hours is not None else None,
+            "status": status,
+            "multiplier": multiplier,
+        },
+        "provider_used": provider_used,
+        "raw_sentiment_avg": round(avg_raw, 4),
+        "dampened_sentiment_score": round(dampened_score, 4),
+    }
+
 
 
 # ---------------------------------------------------------------------------

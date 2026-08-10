@@ -132,6 +132,8 @@ import type {
   CacheLongShortDashboard,
   CacheLongShortPendingTrade,
   CacheLongShortApproveBulkResult,
+  DataAppCreationForm,
+  DataAppCreationResult,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
@@ -907,6 +909,11 @@ const liveApi = {
     http<CacheLongShortApproveBulkResult>("/pilots/cache-long-short/approve-bulk", {
       method: "POST",
       body: JSON.stringify({ lot_ids: lotIds }),
+    }),
+  createDataApp: (form: DataAppCreationForm) =>
+    http<DataAppCreationResult>("/data-app/create", {
+      method: "POST",
+      body: JSON.stringify(form),
     }),
 };
 
