@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 356,
+  "files_scanned": 357,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -1950,7 +1950,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3354",
+        "site": "investyo_mcp_server.py:3361",
         "via": []
       }
     ],
@@ -1961,7 +1961,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:25",
+        "site": "investyo_mcp_server.py:26",
         "via": []
       },
       {
@@ -1970,7 +1970,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3312",
+        "site": "investyo_mcp_server.py:3313",
         "via": []
       }
     ],
@@ -1981,16 +1981,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:33",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "investyo_mcp_server.py:45",
+        "site": "investyo_mcp_server.py:34",
         "via": []
       },
       {
@@ -2001,6 +1992,15 @@
         ],
         "site": "investyo_mcp_server.py:46",
         "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "investyo_mcp_server.py:47",
+        "via": []
       }
     ],
     "MCP_OAUTH_PASSWORD": [
@@ -2010,7 +2010,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3320",
+        "site": "investyo_mcp_server.py:3321",
         "via": []
       }
     ],
