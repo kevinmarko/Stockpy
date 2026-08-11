@@ -41,6 +41,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from api._redact import redact_line
 
 from dotenv import load_dotenv as _load_dotenv
 
@@ -437,7 +438,7 @@ def update_universe(watchlist: List[str] = Body(...)) -> Dict[str, Any]:
         write_setting("DEFAULT_TICKERS", symbols)
     except Exception as exc:
         logger.warning("data_api: universe write failed: %s", exc)
-        raise HTTPException(status_code=400, detail=f"Could not update universe: {exc}")
+        raise HTTPException(status_code=400, detail=f"Could not update universe: {redact_line(str(exc))}")
     return {"status": "updated", "symbols": symbols}
 
 

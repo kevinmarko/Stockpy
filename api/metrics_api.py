@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query
+from api._redact import redact_line
 from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv as _load_dotenv
