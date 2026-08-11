@@ -1,7 +1,6 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
-import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * OperationsHub — landing screen for the "Operations" nav section (see
@@ -63,20 +62,7 @@ export function OperationsHub() {
       </div>
 
       <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-3)" }}>
-        <DynamicGrid
-          layoutKey="operations-hub"
-          defaultLayouts={{
-            lg: CARDS.map((c, i) => ({
-              i: c.to,
-              x: (i % 2) * 6,
-              y: Math.floor(i / 2) * 2,
-              w: 6,
-              h: 2,
-              minW: 4,
-              minH: 2,
-            })),
-          }}
-        >
+        <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           {CARDS.map((c) => (
             <div key={c.to}>
               <div className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
@@ -85,7 +71,6 @@ export function OperationsHub() {
                   style={{
                     padding: "var(--s-3)",
                     borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
-                    cursor: "grab",
                     display: "flex",
                     alignItems: "center",
                     gap: "var(--s-2)"
@@ -117,7 +102,7 @@ export function OperationsHub() {
               </div>
             </div>
           ))}
-        </DynamicGrid>
+        </div>
       </div>
     </div>
   );

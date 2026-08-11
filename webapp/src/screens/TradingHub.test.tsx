@@ -70,12 +70,11 @@ describe("TradingHub screen", () => {
     expect(await screen.findByText("Commands landing")).toBeInTheDocument();
   });
 
-  it("clicking the card's drag-handle header (icon + label) does NOT navigate -- only the body does", async () => {
+  it("clicking the card's header (icon + label) does NOT navigate -- only the body does", async () => {
     const user = userEvent.setup();
     renderHub();
-    // The label text lives in the .drag-handle header now, not the
-    // clickable body -- clicking it must be a no-op navigation-wise, since
-    // it's the grab affordance for react-grid-layout's drag config.
+    // The label text lives in the header now, not the
+    // clickable body -- clicking it must be a no-op navigation-wise.
     await user.click(screen.getByText("Attribution"));
     expect(screen.queryByText("Attribution landing")).not.toBeInTheDocument();
   });

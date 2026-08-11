@@ -24,7 +24,6 @@ import { ErrorState, Loading, Notice, Tile } from "../components/ui";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { fmtDate, fmtDateTime, fmtNum } from "../format";
 import { seriesColor, theme } from "../theme";
 
@@ -130,7 +129,6 @@ function HeadlineFeed({
         style={{
           padding: "var(--s-3)",
           borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
-          cursor: "grab",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
@@ -230,7 +228,7 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
       </div>
 
       <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-        <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
           <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Interpretation</h2>
         </div>
         <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -301,7 +299,7 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="sentiment-vix-chart">
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Sentiment vs. VIX</h2>
         <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
           Archived daily news sentiment for {symbol} alongside the CBOE Volatility
@@ -467,7 +465,7 @@ export function SentimentDynamics() {
       {!loading && !error && data && <EarningsCatalystBanner c={data.earnings_catalyst} />}
 
       <div style={{ marginTop: "var(--s-4)" }}>
-        <DynamicGrid layoutKey="sentiment-layout" defaultLayouts={{}}>
+        <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           <div key="breakdown">
             {loading && <Loading lines={3} />}
             {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
@@ -482,7 +480,7 @@ export function SentimentDynamics() {
               <HeadlineFeed headlines={data.headlines} providerUsed={data.provider_used} />
             )}
           </div>
-        </DynamicGrid>
+        </div>
       </div>
     </div>
   );

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { TabGuide } from "../components/TabGuide";
 import { LogStream } from "../components/LogStream";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { DataTable, type Column } from "../components/DataTable";
 import { Button } from "../components/ui";
 import { api } from "../api/client";
@@ -295,21 +294,11 @@ export function Console() {
       <TabGuide tabKey="console" />
 
       <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-4)" }}>
-        <DynamicGrid
-          layoutKey="console"
-          defaultLayouts={{
-            lg: [
-              { i: "quickLaunchers", x: 0, y: 0, w: 12, h: 4, minW: 6, minH: 3 },
-              { i: "systemResources", x: 0, y: 4, w: 6, h: 6, minW: 4, minH: 4 },
-              { i: "logStream", x: 6, y: 4, w: 6, h: 6, minW: 4, minH: 4 },
-              { i: "jobHistory", x: 0, y: 10, w: 12, h: 4, minW: 6, minH: 3 },
-            ],
-          }}
-        >
+        <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           <div key="quickLaunchers">
             {/* Quick Launchers */}
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Quick Launchers</h2>
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -399,7 +388,7 @@ export function Console() {
 
           <div key="systemResources">
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>System Resources</h2>
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -414,7 +403,7 @@ export function Console() {
 
           <div key="jobHistory">
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Jobs launched this session</h2>
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -426,7 +415,7 @@ export function Console() {
               </div>
             </section>
           </div>
-        </DynamicGrid>
+        </div>
       </div>
     </div>
   );

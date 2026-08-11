@@ -14,24 +14,8 @@ import { RangeToggle } from "../components/RangeToggle";
 import { theme } from "../theme";
 import { fmtUsd, fmtSignedUsd } from "../format";
 import { deriveAttentionItems } from "../observabilityAttention";
-import { DynamicGrid } from "../components/DynamicGrid";
 
-const defaultDashboardLayouts = {
-  lg: [
-    { i: "portfolio", x: 0, y: 0, w: 4, h: 9 },
-    { i: "performance", x: 4, y: 0, w: 8, h: 12 },
-    { i: "activity", x: 0, y: 9, w: 4, h: 9 },
-    { i: "pilots", x: 4, y: 12, w: 5, h: 9 },
-    { i: "notebook", x: 9, y: 12, w: 3, h: 6 },
-  ],
-  sm: [
-    { i: "portfolio", x: 0, y: 0, w: 6, h: 9 },
-    { i: "performance", x: 0, y: 9, w: 6, h: 12 },
-    { i: "activity", x: 0, y: 21, w: 6, h: 9 },
-    { i: "pilots", x: 0, y: 30, w: 6, h: 9 },
-    { i: "notebook", x: 0, y: 39, w: 6, h: 6 },
-  ]
-};
+
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -137,7 +121,7 @@ export function Dashboard() {
         </Notice>
       )}
 
-      <DynamicGrid layoutKey="dashboard" defaultLayouts={defaultDashboardLayouts}>
+      <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
         {/* Portfolio Summary */}
         <div
           key="portfolio"
@@ -157,7 +141,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Portfolio Summary</span>
           </div>
@@ -228,7 +211,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Account Performance</span>
           </div>
@@ -277,7 +259,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Activity Feed</span>
           </div>
@@ -305,7 +286,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Top Pilots</span>
           </div>
@@ -359,7 +339,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>NotebookML Export</span>
           </div>
@@ -367,7 +346,7 @@ export function Dashboard() {
             <NotebookMLExport portfolio={port.data} />
           </div>
         </div>
-      </DynamicGrid>
+      </div>
     </div>
   );
 }

@@ -30,11 +30,10 @@ export function RlhfReviewQueue({ refreshToken }: { refreshToken: number }) {
   return (
     <section className="card card-pad" style={{ marginTop: "var(--s-4)" }}>
       {/*
-        "drag-handle" is a marker class with no CSS attached anywhere in
-        this codebase (see components/DynamicGrid.tsx's `draggableHandle`
-        prop) -- a no-op here since this component only ever renders inside
-        AgenticTrading.tsx's DynamicGrid ("rlhf" tile), which had no
-        drag-handle at all before this.
+        "drag-handle" had a role in the old customizable grid layout (see
+        AgenticTrading.tsx's "rlhf" tile) and is now a no-op here beyond the
+        global `.drag-handle { cursor: default !important; }` rule in
+        index.css, retained for layout consistency.
       */}
       <div className="drag-handle">
         <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>RLHF Review Queue</h2>

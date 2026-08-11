@@ -50,7 +50,6 @@ export function TunableGroupCard({
       }}
     >
       <div
-        className="drag-handle"
         style={{
           width: "100%",
           display: "flex",
@@ -59,7 +58,6 @@ export function TunableGroupCard({
           padding: "var(--s-3) var(--s-4)",
           background: theme.surface2,
           borderBottom: `1px solid ${theme.border}`,
-          cursor: "grab",
           textAlign: "left",
           color: theme.textPrimary,
         }}
@@ -111,13 +109,8 @@ export function TunableGroupCard({
         </div>
 
         {/*
-          This button lives inside the `.drag-handle` region that
-          react-grid-layout (see DynamicGrid.tsx's `draggableHandle`) wires up
-          for mousedown/touchstart-driven tile dragging. Without stopping
-          propagation here, a click on this toggle would also be interpreted
-          as the start of a tile drag -- the same guard used for interactive
-          controls placed inside a drag-handle elsewhere in this codebase,
-          see webapp/src/screens/PromptRegistry.tsx's SyncNowControl wrapper.
+          This button is used to expand/collapse the content area.
+          It stops propagation so clicks don't bubble up unnecessarily.
         */}
         <button
           type="button"

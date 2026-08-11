@@ -13,22 +13,6 @@ import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from 
 import { FollowModal } from "./FollowModal";
 import { seriesColor, theme } from "../theme";
 import { fmtNum, fmtPct, fmtUsd } from "../format";
-import { DynamicGrid } from "../components/DynamicGrid";
-
-const defaultComparisonLayouts = {
-  lg: [
-    { i: 'recommended', x: 0, y: 0, w: 12, h: 10 },
-    { i: 'performance', x: 0, y: 10, w: 12, h: 8 },
-    { i: 'metrics', x: 0, y: 18, w: 12, h: 12 },
-    { i: 'alerts', x: 0, y: 30, w: 12, h: 8 },
-  ],
-  sm: [
-    { i: 'recommended', x: 0, y: 0, w: 6, h: 10 },
-    { i: 'performance', x: 0, y: 10, w: 6, h: 8 },
-    { i: 'metrics', x: 0, y: 18, w: 6, h: 12 },
-    { i: 'alerts', x: 0, y: 30, w: 6, h: 8 },
-  ]
-};
 
 export function Comparison() {
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
@@ -317,7 +301,7 @@ export function Comparison() {
             </Notice>
           )}
 
-          <DynamicGrid layoutKey="comparison" defaultLayouts={defaultComparisonLayouts}>
+          <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
             {/* Recommended stocks table */}
             <RecommendedStocks key="recommended" />
 
@@ -329,7 +313,7 @@ export function Comparison() {
             [
               /* Overlaid Performance Chart */
               <div key="performance" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}` }}>
                   <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Overlaid Performance</h2>
                 </div>
                 <div style={{ flex: 1, padding: "var(--s-3)", overflow: "auto" }}>
@@ -390,7 +374,7 @@ export function Comparison() {
 
               /* Comparison Grid */
               <div key="metrics" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}` }}>
                   <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Key Metrics Comparison</h2>
                 </div>
                 <div style={{ flex: 1, overflowX: "auto" }}>
@@ -538,7 +522,7 @@ export function Comparison() {
 
               /* Recent pilot alerts */
               <div key="alerts" className="card card-pad" data-testid="comparison-activity-feed" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}` }}>
                   <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Recent pilot alerts</h2>
                 </div>
                 <div style={{ flex: 1, padding: "var(--s-3)", overflow: "auto" }}>
@@ -547,7 +531,7 @@ export function Comparison() {
               </div>
             ]
           )}
-          </DynamicGrid>
+          </div>
         </div>
       </div>
 

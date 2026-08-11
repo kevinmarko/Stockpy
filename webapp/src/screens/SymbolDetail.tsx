@@ -35,7 +35,6 @@ import { realizableTheta, effectiveIvr } from "../optionsHonesty";
 import { useState } from "react";
 import type { DecisionEntry } from "../api/types";
 import ActiveTraderLadder from "../components/ActiveTraderLadder";
-import { DynamicGrid } from "../components/DynamicGrid";
 
 /** News sentiment (FinBERT, ~[-1,1]) → colored bullish/neutral/bearish badge. */
 function NewsBadge({ value }: { value: number | null }) {
@@ -111,7 +110,7 @@ function RegimeSizingCard({
   if (pre == null || post == null) {
     return (
       <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="regime-sizing-card">
-        <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
           <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Regime sizing impact</h2>
         </div>
         <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -133,7 +132,7 @@ function RegimeSizingCard({
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="regime-sizing-card">
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Regime sizing impact</h2>
         <p style={{ margin: "var(--s-1) 0 0", fontSize: "var(--t-body)", color: theme.textMuted }}>
           Kelly Target before vs. after the HMM regime multiplier + meta-label
@@ -342,30 +341,35 @@ export function SymbolDetail() {
       <TabGuide tabKey="symbol-detail" />
 
       {/* Advisory */}
-      <DynamicGrid
-        layoutKey="symbol-detail"
-        defaultLayouts={{
-          lg: [
-            { i: "advisory", x: 0, y: 0, w: 4, h: 4, minW: 3, minH: 3 },
-            { i: "regime", x: 4, y: 0, w: 4, h: 4, minW: 3, minH: 3 },
-            { i: "snapshot", x: 8, y: 0, w: 4, h: 4, minW: 3, minH: 3 },
-            { i: "factors", x: 0, y: 4, w: 4, h: 4, minW: 3, minH: 3 },
-            { i: "risk", x: 4, y: 4, w: 4, h: 4, minW: 3, minH: 3 },
-            { i: "tactical", x: 8, y: 4, w: 4, h: 4, minW: 3, minH: 3 },
-            { i: "rolling_beta", x: 0, y: 8, w: 6, h: 4, minW: 4, minH: 3 },
-            { i: "forecast", x: 6, y: 8, w: 6, h: 4, minW: 4, minH: 3 },
-            { i: "options", x: 0, y: 12, w: 4, h: 4, minW: 3, minH: 3 },
-            { i: "decision", x: 4, y: 12, w: 8, h: 4, minW: 4, minH: 3 },
-            { i: "claude", x: 0, y: 16, w: 4, h: 5, minW: 3, minH: 4 },
-            { i: "gemini", x: 4, y: 16, w: 4, h: 5, minW: 3, minH: 4 },
-            { i: "opal", x: 8, y: 16, w: 4, h: 5, minW: 3, minH: 4 },
-            { i: "pilots", x: 0, y: 21, w: 4, h: 4, minW: 3, minH: 3 },
-          ],
-        }}
-      >
-        <div key="advisory">
+      <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)", marginTop: "var(--s-4)" }}>
+        <style>{`
+          .dashboard-layout > section, .dashboard-layout > div { min-height: 0; }
+          @media (min-width: 992px) {
+            .dashboard-layout {
+              display: grid !important;
+              grid-template-columns: repeat(12, 1fr);
+              grid-template-rows: auto;
+              align-items: start;
+            }
+            .dashboard-layout > [data-grid-area="advisory"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="regime"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="snapshot"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="factors"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="risk"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="tactical"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="rolling_beta"] { grid-column: span 6; }
+            .dashboard-layout > [data-grid-area="forecast"] { grid-column: span 6; }
+            .dashboard-layout > [data-grid-area="options"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="decision"] { grid-column: span 8; }
+            .dashboard-layout > [data-grid-area="claude"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="gemini"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="opal"] { grid-column: span 4; }
+            .dashboard-layout > [data-grid-area="pilots"] { grid-column: span 4; }
+          }
+        `}</style>
+        <div data-grid-area="advisory" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Advisory</h2>
             </div>
             <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -394,18 +398,18 @@ export function SymbolDetail() {
           </section>
         </div>
 
-        <div key="regime">
+        <div data-grid-area="regime" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           <RegimeSizingCard sizing={sizing} symbol={data.symbol} />
         </div>
 
-        <div key="decision">
+        <div data-grid-area="decision" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {/* Decision journal — per-symbol log of what the operator actually did
               with this signal. Shared DecisionModal with the Calibration screen's
               portfolio-wide journal (../components/DecisionModal); this section
               is the standalone, symbol-scoped read (GET /decisions?symbol=...)
               Calibration's bundled recent-decisions preview doesn't offer. */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Decision journal</h2>
               <Button
                 variant="neutral"
@@ -448,10 +452,10 @@ export function SymbolDetail() {
           </section>
         </div>
 
-        <div key="snapshot">
+        <div data-grid-area="snapshot" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {/* Identity */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Snapshot</h2>
             </div>
             <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -468,10 +472,10 @@ export function SymbolDetail() {
           </section>
         </div>
 
-        <div key="tactical">
+        <div data-grid-area="tactical" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {/* Tactical ranges (pre-formatted strings, NOT tuples) */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Tactical ranges</h2>
             </div>
             <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -483,10 +487,10 @@ export function SymbolDetail() {
           </section>
         </div>
 
-        <div key="factors">
+        <div data-grid-area="factors" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {/* Factors */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Factor exposure</h2>
             </div>
             <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -516,10 +520,10 @@ export function SymbolDetail() {
           </section>
         </div>
 
-        <div key="risk">
+        <div data-grid-area="risk" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {/* Risk */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Risk & regime</h2>
             </div>
             <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -551,10 +555,10 @@ export function SymbolDetail() {
           </section>
         </div>
 
-        <div key="rolling_beta">
+        <div data-grid-area="rolling_beta" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {/* Rolling beta vs SPY — time-varying, distinct from the static point-in-time beta */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Rolling beta vs SPY</h2>
             </div>
             <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -586,10 +590,10 @@ export function SymbolDetail() {
           </section>
         </div>
 
-        <div key="forecast">
+        <div data-grid-area="forecast" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {/* Forecast reliability + model skill weights */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
               <div
                 style={{
                   display: "flex",
@@ -665,10 +669,10 @@ export function SymbolDetail() {
           </section>
         </div>
 
-        <div key="options">
+        <div data-grid-area="options" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {/* Options premium directive (persisted matrix; advisory) */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Options premium</h2>
             </div>
             <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -689,20 +693,20 @@ export function SymbolDetail() {
             read, Opal research brief. Each is operator-triggered only (never
             generated automatically) and fully independent: one card failing or
             being disabled never blocks the other two. */}
-        <div key="claude">
+        <div data-grid-area="claude" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           <CommentaryCard symbol={data.symbol} />
         </div>
-        <div key="gemini">
+        <div data-grid-area="gemini" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           <ChartReadCard symbol={data.symbol} />
         </div>
-        <div key="opal">
+        <div data-grid-area="opal" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           <ResearchBriefCard symbol={data.symbol} />
         </div>
 
-        <div key="pilots">
+        <div data-grid-area="pilots" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
           {/* Held by Pilots — the Stockpy reverse cross-link */}
           <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-            <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+            <div style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>
                 Held by Pilots{" "}
                 <span style={{ color: theme.textMuted }}>({held_by_pilots.length})</span>
@@ -733,7 +737,7 @@ export function SymbolDetail() {
             </div>
           </section>
         </div>
-      </DynamicGrid>
+      </div>
 
       {journaling && (
         <DecisionModal
@@ -883,7 +887,7 @@ function CommentaryCard({ symbol }: { symbol: string }) {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <AiCardHeader
           title="Claude analyst note"
           subtitle={`On-demand Claude narrative for ${symbol} — not generated automatically.`}
@@ -933,7 +937,7 @@ function ChartReadCard({ symbol }: { symbol: string }) {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <AiCardHeader
           title="Gemini chart read"
           subtitle={`On-demand chart-pattern read for ${symbol} — not generated automatically.`}
@@ -990,7 +994,7 @@ function ResearchBriefCard({ symbol }: { symbol: string }) {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <AiCardHeader
           title="Opal research brief"
           subtitle={`On-demand grounded research brief for ${symbol} — not generated automatically.`}
