@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `b0a7f9e4108091e9ce9a67f2c67d4577b512293f`
+- Measured at commit: `9871ea1ac54dcdbccdd1f522d465233948623507`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -221,7 +221,7 @@ _S.settings, _bl_settings, _dsr_settings, _live_settings, _oos_gate_settings, _r
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 677 | 218 |
-| (b) `getattr(settings, "KEY", default)` | 252 | 155 |
+| (b) `getattr(settings, "KEY", default)` | 253 | 155 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
 
@@ -346,7 +346,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `GDELT_MAX_RETRIES` | b | 1 | 0 |
 | `GDELT_MIN_REQUEST_INTERVAL_SECONDS` | b | 1 | 0 |
 | `GDELT_RETRY_BACKOFF_SECONDS` | b | 1 | 0 |
-| `GRAVITY_AI_RUNNER_ENABLED` | b | 3 | 0 |
+| `GRAVITY_AI_RUNNER_ENABLED` | b | 4 | 0 |
 | `GRAVITY_REQUIRE_NATIVE` | d | 0 | 1 |
 | `LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED` | b | 2 | 0 |
 | `LLM_COMMENTARY_CACHE_PATH` | b | 1 | 0 |
