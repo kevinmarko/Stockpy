@@ -483,4 +483,12 @@ def main():
 
 
 if __name__ == "__main__":
+    # Venv re-exec + .env loading -- placed here (not at module top)
+    # because this module is also imported as a library by
+    # tests/test_bug_hunter.py; a module-top call would fire the
+    # re-exec check on every such import, not just when this file is
+    # the actual entry point. See scripts/_bootstrap.py's module
+    # docstring for the full rationale.
+    from scripts._bootstrap import bootstrap
+    bootstrap()
     main()
