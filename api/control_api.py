@@ -118,14 +118,13 @@ import json
 import logging
 import os
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+from dotenv import load_dotenv as _load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
-
-from dotenv import load_dotenv as _load_dotenv
 
 from settings import ENV_PATH, INTERVAL_MAX_SECONDS, settings, validate_interval_seconds
 
@@ -140,6 +139,8 @@ _load_dotenv(ENV_PATH, override=False)
 
 from api.auth import (
     require_orchestrator_command_token as require_command_token,
+)
+from api.auth import (
     require_read_token,
     require_stream_token,
 )
@@ -186,6 +187,7 @@ app.add_middleware(
 # just the WS ones).
 try:
     from api.ws_api import training_router
+
     app.include_router(training_router)
 except Exception as _ws_e:  # noqa: BLE001 - a WS mount must never break the rest of this API
     logger.warning("training_router mount skipped in control_api: %s", _ws_e)
@@ -194,7 +196,9 @@ except Exception as _ws_e:  # noqa: BLE001 - a WS mount must never break the res
 # try/except above so a broken api.ws_api import degrades this module to
 # "no training-status broadcasts", never a crash on import.
 try:
-    from api.ws_api import broadcast_training_status_threadsafe as _broadcast_training_status
+    from api.ws_api import (
+        broadcast_training_status_threadsafe as _broadcast_training_status,
+    )
     from api.ws_api import training_status_manager as _training_status_manager
 except Exception:  # noqa: BLE001 - see the training_router mount comment above
     _broadcast_training_status = None
@@ -208,6 +212,7 @@ async def _capture_main_loop() -> None:
     ``create_job`` below) can still schedule a training-status broadcast
     coroutine onto it via ``broadcast_training_status_threadsafe``."""
     from api import ws_api
+
     ws_api.set_main_loop(asyncio.get_running_loop())
 
 
@@ -215,10 +220,10 @@ async def _capture_main_loop() -> None:
 # Daemon registry — set once by the process entrypoint after daemon.start()
 # ---------------------------------------------------------------------------
 
-_daemon: Optional[OrchestratorDaemon] = None
+_daemon: OrchestratorDaemon | None = None
 
 
-def set_daemon(daemon: Optional[OrchestratorDaemon]) -> None:
+def set_daemon(daemon: OrchestratorDaemon | None) -> None:
     """Register the live daemon instance this API should front.
 
     Called once by ``desktop/orchestrator_daemon.py`` after
@@ -228,7 +233,7 @@ def set_daemon(daemon: Optional[OrchestratorDaemon]) -> None:
     _daemon = daemon
 
 
-def get_daemon() -> Optional[OrchestratorDaemon]:
+def get_daemon() -> OrchestratorDaemon | None:
     """Return the currently-registered daemon instance, or None if
     ``set_daemon`` has never been called (or was reset to None)."""
     return _daemon
@@ -278,7 +283,7 @@ class IntervalUpdateRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _serialize_run(record: Optional[RunRecord]) -> Optional[Dict[str, Any]]:
+def _serialize_run(record: RunRecord | None) -> dict[str, Any] | None:
     """Serialize a RunRecord into a JSON-safe dict, or None passthrough.
 
     ``progress`` (reporting/progress.py telemetry, added alongside the other
@@ -311,13 +316,13 @@ def _serialize_run(record: Optional[RunRecord]) -> Optional[Dict[str, Any]]:
 
 
 @app.get("/health")
-def health() -> Dict[str, Any]:
+def health() -> dict[str, Any]:
     """Liveness check for this API process. Always open, no auth."""
     return {"status": "ok", "daemon_alive": get_daemon() is not None}
 
 
 @app.get("/status", dependencies=[Depends(require_read_token)])
-def get_status() -> Dict[str, Any]:
+def get_status() -> dict[str, Any]:
     """Full daemon + kill-switch status snapshot."""
     daemon = get_daemon()
     if daemon is None:
@@ -441,7 +446,7 @@ def trigger_pipeline_metrics() -> JSONResponse:
 
 
 @app.get("/run/{run_id}/status", dependencies=[Depends(require_read_token)])
-def get_run_status(run_id: str) -> Dict[str, Any]:
+def get_run_status(run_id: str) -> dict[str, Any]:
     """Status of a specific run (including one still RUNNING)."""
     daemon = get_daemon()
     if daemon is None:
@@ -455,7 +460,7 @@ def get_run_status(run_id: str) -> Dict[str, Any]:
 
 
 @app.get("/run/latest", dependencies=[Depends(require_read_token)])
-def get_latest_run() -> Dict[str, Any]:
+def get_latest_run() -> dict[str, Any]:
     """Status of the most recent run (may still be RUNNING)."""
     daemon = get_daemon()
     if daemon is None:
@@ -471,7 +476,7 @@ def get_latest_run() -> Dict[str, Any]:
 
 
 @app.get("/runs/history", dependencies=[Depends(require_read_token)])
-def get_runs_history(limit: int = 50) -> List[Dict[str, Any]]:
+def get_runs_history(limit: int = 50) -> list[dict[str, Any]]:
     """Durable run history read straight from the ``pipeline_runs`` DB table
     (``desktop/run_history_store.py``).
 
@@ -492,7 +497,7 @@ def get_runs_history(limit: int = 50) -> List[Dict[str, Any]]:
 
 
 @app.put("/interval", dependencies=[Depends(require_command_token)])
-def set_interval(body: IntervalUpdateRequest) -> Dict[str, Any]:
+def set_interval(body: IntervalUpdateRequest) -> dict[str, Any]:
     """Change the daemon's internal timer cadence LIVE, without a restart.
 
     Guarded by ``require_command_token`` ALONE — unlike
@@ -520,7 +525,7 @@ def set_interval(body: IntervalUpdateRequest) -> Dict[str, Any]:
 
 
 @app.post("/daemon/restart", dependencies=[Depends(require_command_token)])
-def restart_daemon() -> Dict[str, Any]:
+def restart_daemon() -> dict[str, Any]:
     """Terminate this process so its process supervisor (systemd
     ``Restart=always``, launchd ``KeepAlive``) respawns it with freshly
     -written ``.env`` values picked up.
@@ -581,21 +586,25 @@ def _require_jobs_api_enabled() -> None:
 
 class JobCreateRequest(BaseModel):
     job_type: str = Field(..., description="Job type to execute")
-    params: Optional[Dict[str, Any]] = Field(default=None, description="Optional job parameters")
+    params: dict[str, Any] | None = Field(
+        default=None, description="Optional job parameters"
+    )
 
 
 @app.post(
     "/jobs",
     dependencies=[Depends(require_command_token), Depends(_require_jobs_api_enabled)],
 )
-def create_job(body: JobCreateRequest) -> Dict[str, Any]:
+def create_job(body: JobCreateRequest) -> dict[str, Any]:
     """Launch a background process job (preflight, pytest, validation, verify, gravity, advisory, orchestrator)."""
     from api._jobs import JobType, job_manager
 
     try:
         jtype = JobType(body.job_type)
     except ValueError as err:
-        raise HTTPException(status_code=400, detail=f"Unknown job_type: {body.job_type!r}") from err
+        raise HTTPException(
+            status_code=400, detail=f"Unknown job_type: {body.job_type!r}"
+        ) from err
 
     try:
         rec = job_manager.start_job(jtype, body.params)
@@ -620,14 +629,18 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
     )
     if jtype in _training_job_types and _broadcast_training_status is not None:
         try:
-            msg = json.dumps({
-                "job_id": rec.job_id,
-                "status": "started",
-                "message": f"{rec.job_type.value} started",
-            })
+            msg = json.dumps(
+                {
+                    "job_id": rec.job_id,
+                    "status": "started",
+                    "message": f"{rec.job_type.value} started",
+                }
+            )
             _broadcast_training_status(msg)
         except Exception as exc:  # noqa: BLE001 - a broadcast must never break job creation
-            logger.warning("training-status broadcast failed for job %s: %s", rec.job_id, exc)
+            logger.warning(
+                "training-status broadcast failed for job %s: %s", rec.job_id, exc
+            )
 
     return {
         "job_id": rec.job_id,
@@ -643,7 +656,7 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
     "/jobs/{job_id}",
     dependencies=[Depends(require_read_token), Depends(_require_jobs_api_enabled)],
 )
-def get_job_status(job_id: str) -> Dict[str, Any]:
+def get_job_status(job_id: str) -> dict[str, Any]:
     """Inspect the status of a launched background job."""
     from api._jobs import job_manager
 
@@ -667,7 +680,7 @@ def get_job_status(job_id: str) -> Dict[str, Any]:
     "/jobs/{job_id}/cancel",
     dependencies=[Depends(require_command_token), Depends(_require_jobs_api_enabled)],
 )
-def cancel_job(job_id: str) -> Dict[str, Any]:
+def cancel_job(job_id: str) -> dict[str, Any]:
     """Cancel a running background job. ``cancelled: false`` (200, not an
     error) reports an honest "asked, but stop could not be confirmed" rather
     than claiming success stop_run() didn't actually achieve."""
@@ -676,7 +689,9 @@ def cancel_job(job_id: str) -> Dict[str, Any]:
     try:
         confirmed = job_manager.cancel_job(job_id)
     except KeyError as err:
-        raise HTTPException(status_code=404, detail=f"No job found with ID {job_id}") from err
+        raise HTTPException(
+            status_code=404, detail=f"No job found with ID {job_id}"
+        ) from err
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
 
@@ -694,7 +709,7 @@ _SSE_POLL_SECONDS = 0.5
 def stream_job_logs(
     job_id: str,
     offset: int = 0,
-    last_event_id: Optional[str] = Header(default=None, alias="Last-Event-ID"),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ):
     """Stream live logs for a job over Server-Sent Events (SSE).
 
@@ -709,7 +724,9 @@ def stream_job_logs(
     component was first mounted with).
     """
     import time as _time
+
     from fastapi.responses import StreamingResponse
+
     from api._jobs import JobType, job_manager
     from api._redact import redact_line
 
@@ -732,18 +749,28 @@ def stream_job_logs(
             return f.readlines(), f.tell()
 
     async def log_event_generator():
+        import os
+
         current_offset = max(0, resume_offset)
         last_sent = _time.monotonic()
         while True:
             sent_any = False
             if log_path.exists():
-                lines, new_offset = await asyncio.to_thread(_read_lines, log_path, current_offset)
-                if lines:
-                    for line in lines:
-                        scrubbed = redact_line(line.rstrip("\n"))
-                        yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
-                    current_offset = new_offset
-                    sent_any = True
+                try:
+                    current_size = os.stat(log_path).st_size
+                except OSError:
+                    current_size = current_offset  # File disappeared or inaccessible
+
+                if current_size > current_offset:
+                    lines, new_offset = await asyncio.to_thread(
+                        _read_lines, log_path, current_offset
+                    )
+                    if lines:
+                        for line in lines:
+                            scrubbed = redact_line(line.rstrip("\n"))
+                            yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
+                        current_offset = new_offset
+                        sent_any = True
 
             if not rec.handle.is_running():
                 # Stream final lines if any and stop
@@ -755,13 +782,20 @@ def stream_job_logs(
                     getattr(JobType, "TRAIN_META", None),
                     getattr(JobType, "TRAIN_LGBM", None),
                 )
-                if rec.job_type in _training_job_types and _training_status_manager is not None:
+                if (
+                    rec.job_type in _training_job_types
+                    and _training_status_manager is not None
+                ):
                     try:
-                        await _training_status_manager.broadcast(json.dumps({
-                            "job_id": job_id,
-                            "status": "finished",
-                            "exit_code": rec.exit_code(),
-                        }))
+                        await _training_status_manager.broadcast(
+                            json.dumps(
+                                {
+                                    "job_id": job_id,
+                                    "status": "finished",
+                                    "exit_code": rec.exit_code(),
+                                }
+                            )
+                        )
                     except Exception:
                         pass
                 break
@@ -781,7 +815,7 @@ def stream_job_logs(
 
 
 @app.get("/system/cron-status", dependencies=[Depends(require_read_token)])
-def get_system_cron_status() -> Dict[str, Any]:
+def get_system_cron_status() -> dict[str, Any]:
     """Parse deploy/crontab.txt and return the schedule.
 
     Delegates to ``pilots.run_status.parse_crontab_status`` -- see that
