@@ -124,6 +124,20 @@ class TestMaxPositionSizeCheck:
         result = gate.max_position_size_check(_buy("AAPL"), ctx)
         assert result.passed
 
+    def test_sell_skips_position_size_check_even_over_the_cap(self):
+        """A SELL that would trip the notional cap on a BUY must still pass --
+        this check exists to cap NEW long exposure, not to block an operator
+        from exiting an existing position (Finding 3)."""
+        gate = PreTradeRiskGate(max_position_size_pct=0.05)
+        ctx = RiskContext(
+            account=_account(100_000),
+            current_prices={"AAPL": 150.0},
+        )
+        # Same qty/price that test_fails_over_limit blocks for a BUY.
+        result = gate.max_position_size_check(_sell("AAPL", qty=100), ctx)
+        assert result.passed
+        assert "SELL" in result.reason
+
 
 # ---------------------------------------------------------------------------
 # 2. portfolio_heat_check

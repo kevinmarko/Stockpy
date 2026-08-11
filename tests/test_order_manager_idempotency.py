@@ -152,6 +152,82 @@ def test_client_order_id_different_symbols():
     assert coid_aapl != coid_msft
 
 
+def test_concurrent_submissions_of_same_intent_reach_broker_once():
+    """Two concurrent asyncio calls for the SAME client_order_id must not
+    both reach the broker -- the check-then-act dedup race (Finding 19)."""
+
+    class SlowBroker(MockBroker):
+        """submit_order awaits before recording, widening the race window
+        that used to let two concurrent callers both pass the dedup check
+        before either registered the coid."""
+
+        async def submit_order(self, intent: OrderIntent) -> OrderResult:
+            await asyncio.sleep(0.05)
+            return await super().submit_order(intent)
+
+    broker = SlowBroker()
+    om = OrderManager(broker, dry_run=False)
+    intent = _intent("AAPL")
+
+    async def main():
+        results = await asyncio.gather(
+            om.submit_order_with_idempotency(intent, timestamp=_FIXED_TS),
+            om.submit_order_with_idempotency(intent, timestamp=_FIXED_TS),
+        )
+        return results
+
+    r1, r2 = asyncio.run(main())
+
+    assert len(broker.submitted) == 1, (
+        f"Expected exactly 1 broker call for concurrent duplicate submissions, "
+        f"got {len(broker.submitted)}"
+    )
+    assert r1.client_order_id == r2.client_order_id
+    assert r1.status == OrderStatus.ACCEPTED
+    assert r2.status == OrderStatus.ACCEPTED
+
+
+def test_risk_gate_configured_without_context_logs_warning(caplog):
+    """A risk gate configured on OrderManager but no risk_context supplied to
+    a given call silently skips ALL pre-trade checks -- this must log a
+    WARNING so the bypass is visible (Finding 5)."""
+    import logging
+    from execution.risk_gate import PreTradeRiskGate
+
+    broker = MockBroker()
+    om = OrderManager(broker, dry_run=False, risk_gate=PreTradeRiskGate())
+
+    with caplog.at_level(logging.WARNING, logger="execution.order_manager"):
+        result = asyncio.run(
+            om.submit_order_with_idempotency(_intent("AAPL"), timestamp=_FIXED_TS)
+        )
+
+    assert result.status == OrderStatus.ACCEPTED  # gate is skipped, not enforced
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("risk_context" in msg.lower() or "risk gate" in msg.lower() for msg in warnings), (
+        f"Expected a WARNING about the skipped risk gate, got: {warnings}"
+    )
+
+
+def test_risk_gate_configured_with_context_logs_no_warning(caplog):
+    """When risk_context IS supplied, no 'skipped' warning should fire."""
+    import logging
+    from execution.risk_gate import PreTradeRiskGate, RiskContext
+
+    broker = MockBroker()
+    om = OrderManager(broker, dry_run=False, risk_gate=PreTradeRiskGate())
+
+    with caplog.at_level(logging.WARNING, logger="execution.order_manager"):
+        asyncio.run(
+            om.submit_order_with_idempotency(
+                _intent("AAPL"), timestamp=_FIXED_TS, risk_context=RiskContext()
+            )
+        )
+
+    warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert not any("risk_context" in msg.lower() for msg in warnings)
+
+
 def test_retry_on_transient_error():
     """First submission returns ERROR → retry → second attempt succeeds."""
 

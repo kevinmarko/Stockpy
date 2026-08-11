@@ -175,6 +175,8 @@ class PreTradeRiskGate:
     ) -> RiskCheckResult:
         """Block BUY when notional > max_position_size_pct * account equity."""
         name = "max_position_size"
+        if intent.side != OrderSide.BUY:
+            return RiskCheckResult(name, True, "SELL — position-size check skipped")
         if context.account is None or context.account.equity <= 0:
             return RiskCheckResult(name, True, "no account snapshot — skipping")
         price = context.current_prices.get(intent.symbol.upper())
@@ -257,6 +259,12 @@ class PreTradeRiskGate:
         if len(new_ret) < 20:
             return RiskCheckResult(name, True, f"{new_sym} has < 20 observations — skipping")
         for sym in existing:
+            if sym == new_sym:
+                # A new order for a symbol we already hold is self-correlated
+                # by definition (r=1.0 against itself) -- comparing it to its
+                # own return series would always self-block. Only compare
+                # against genuinely DIFFERENT existing holdings.
+                continue
             if sym not in context.returns_df.columns:
                 continue
             other_ret = context.returns_df[sym].dropna()
@@ -264,6 +272,18 @@ class PreTradeRiskGate:
             if len(common) < 20:
                 continue
             corr = float(new_ret.loc[common].corr(other_ret.loc[common]))
+            if pd.isna(corr):
+                # A degenerate/near-constant return series (std ~= 0) makes
+                # corr() return NaN. abs(NaN) > threshold silently evaluates
+                # False, letting a data-quality problem pass as "safe" --
+                # fail closed instead (CLAUDE.md's degenerate-std guard
+                # convention: never let NaN silently take the passing branch).
+                reason = (
+                    f"{new_sym} ↔ {sym}: correlation is NaN (degenerate/near-constant "
+                    "return series) — failing closed, data quality issue"
+                )
+                self._alert_correlation_concentration(new_sym, sym, float("nan"))
+                return RiskCheckResult(name, False, reason)
             if abs(corr) > self.max_correlation:
                 reason = (
                     f"{new_sym} ↔ {sym}: |r|={abs(corr):.3f} > threshold {self.max_correlation:.2f}"

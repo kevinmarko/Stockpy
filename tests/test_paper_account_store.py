@@ -72,6 +72,26 @@ def test_insufficient_funds(store):
     assert len(orders) == 1
     assert orders[0].status == OrderStatus.REJECTED
 
+def test_sell_full_position_with_float_drift_succeeds(store):
+    """A full-position sell where pos.qty has drifted to
+    12.499999999999998 (float noise) for a requested qty=12.5 must succeed,
+    not be wrongly rejected by an exact `<` comparison (Finding 28)."""
+    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+        # Buy in three fractional chunks so the summed qty carries the same
+        # kind of float noise a real fill sequence would produce.
+        store.apply_fill("drift_buy_1", "AAPL", "buy", 4.166666666666666, 150.0, 0.0)
+        store.apply_fill("drift_buy_2", "AAPL", "buy", 4.166666666666666, 150.0, 0.0)
+        store.apply_fill("drift_buy_3", "AAPL", "buy", 4.166666666666666, 150.0, 0.0)
+
+        success = store.apply_fill("drift_sell", "AAPL", "sell", 12.5, 150.0, 0.0)
+        assert success is True
+        assert store.get_open_positions() == []
+
+        orders = store.get_orders()
+        sell_order = next(o for o in orders if o.client_order_id == "drift_sell")
+        assert sell_order.status == OrderStatus.FILLED
+
+
 def test_insufficient_inventory(store):
     success = store.apply_fill("client_order_4", "AAPL", "sell", 100.0, 150.0, 0.0)
     assert success is False
