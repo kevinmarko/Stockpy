@@ -157,13 +157,19 @@ def run_pytest_verification(root_dir: Path, quick: bool) -> Dict[str, Any]:
     """Run pytest verification suite."""
     py_cmd = get_python_cmd(root_dir)
     if quick:
-        # Quick targeted suite: contract tests + lookahead perturbation + bug hunter self-test
+        # Quick targeted suite: contract tests + lookahead perturbation.
+        # Deliberately excludes tests/test_bug_hunter.py: that file has an
+        # integration test which shells out to `bug_hunter.py --quick`, and
+        # that quick mode runs this very pytest step -- including
+        # tests/test_bug_hunter.py -- so listing it here would make every
+        # `--quick` run recursively re-spawn itself (bounded only by process
+        # timeouts, not a real base case). Its self-test still runs as part
+        # of the full (non-quick) suite / `make verify`.
         cmd = py_cmd + [
             "-m", "pytest",
             "tests/test_help_content.py",
-            "tests/test_dto_models.py",
+            "tests/test_dto_boundary_contracts.py",
             "tests/test_quantitative_models.py",
-            "tests/test_bug_hunter.py",
             "-q",
         ]
     else:
