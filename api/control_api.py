@@ -727,6 +727,8 @@ def stream_job_logs(
             pass  # malformed header -> fall back to ?offset=
 
     def _read_lines(path, offset):
+        if not path.exists():
+            return None, offset
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             f.seek(offset)
             return f.readlines(), f.tell()
@@ -736,14 +738,13 @@ def stream_job_logs(
         last_sent = _time.monotonic()
         while True:
             sent_any = False
-            if log_path.exists():
-                lines, new_offset = await asyncio.to_thread(_read_lines, log_path, current_offset)
-                if lines:
-                    for line in lines:
-                        scrubbed = redact_line(line.rstrip("\n"))
-                        yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
-                    current_offset = new_offset
-                    sent_any = True
+            lines, new_offset = await asyncio.to_thread(_read_lines, log_path, current_offset)
+            if lines:
+                for line in lines:
+                    scrubbed = redact_line(line.rstrip("\n"))
+                    yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
+                current_offset = new_offset
+                sent_any = True
 
             if not rec.handle.is_running():
                 # Stream final lines if any and stop
