@@ -2800,6 +2800,11 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
     value: false, default: false,
     description: "Fetch sector valuation & performance snapshots.",
   },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_UNIVERSE_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Use FMP's historical S&P 500 constituent-changes feed as the primary source for survivorship-bias reconstruction (Wikipedia demoted to fallback).",
+  },
 ];
 
 const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
