@@ -27,7 +27,7 @@ import {
   rowExpandingFeature,
   createExpandedRowModel
 } from "@tanstack/react-table";
-import { EdgeByStrategyRow, PilotSummary, Holding, ObservabilitySummary } from "../api/types";
+import { EdgeByStrategyRow, PilotSummary, Holding, ObservabilitySummary, SentimentHistoryPoint } from "../api/types";
 
 function ExpandedHoldings({ pilotId }: { pilotId: string }) {
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -76,6 +76,7 @@ export function CreateDataApp() {
   const [pilots, setPilots] = useState<PilotSummary[]>([]);
   const [obsSummary, setObsSummary] = useState<ObservabilitySummary | null>(null);
   const [selectedPilot, setSelectedPilot] = useState<PilotSummary | null>(null);
+  const [sentimentData, setSentimentData] = useState<SentimentHistoryPoint[]>([]);
 
   useEffect(() => {
     async function loadData() {
@@ -105,6 +106,9 @@ export function CreateDataApp() {
           };
         });
         setPriceHistory(merged);
+        
+        const sentimentRes = await api.getSentimentHistory("AAPL", 180);
+        setSentimentData(sentimentRes.points || []);
         
       } catch(e) {
         console.error("Failed to load charts data", e);
@@ -492,6 +496,49 @@ export function CreateDataApp() {
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+            </div>
+          </div>
+          
+          {/* Sentiment Backfill History */}
+          <div style={{ background: theme.surface, padding: 16, borderRadius: 8, border: `1px solid ${theme.border}` }}>
+            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16 }}>Sentiment Dynamics (AAPL) — Backfilled Archive</h3>
+            <div style={{ width: '100%', height: 250 }}>
+              {sentimentData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={sentimentData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={theme.border} />
+                    <XAxis 
+                      dataKey="date" 
+                      stroke={theme.textSecondary} 
+                      fontSize={12} 
+                      tickFormatter={(val) => val.split('-').slice(1).join('/')} 
+                    />
+                    <YAxis 
+                      stroke={theme.textSecondary} 
+                      domain={[-1, 1]} 
+                    />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: theme.surface, borderColor: theme.border, color: theme.textPrimary }} 
+                      itemStyle={{ color: theme.textPrimary }}
+                      formatter={(val: any) => (typeof val === "number" ? [val.toFixed(2), "Sentiment Score"] : ["—", "Sentiment Score"])}
+                    />
+                    <Legend />
+                    <Line 
+                      type="monotone" 
+                      dataKey="score" 
+                      stroke={theme.accent} 
+                      dot={false} 
+                      strokeWidth={2} 
+                      name="Sentiment Score (-1 to 1)" 
+                      connectNulls={false}
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : (
+                <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: theme.textSecondary }}>
+                  No backfill data available for AAPL.
+                </div>
+              )}
             </div>
           </div>
 
