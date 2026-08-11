@@ -325,14 +325,14 @@ class TestFetchAndCacheUniverseMalformedTable:
 
     def test_too_few_tables_raises_value_error(self):
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
-             mock.patch("universe_engine.pd.read_html", return_value=[pd.DataFrame({"Symbol": ["AAPL"]})]):
+             mock.patch("universe_engine.pd.read_html", side_effect=[[pd.DataFrame({"Symbol": ["AAPL"]})], []]):
             with pytest.raises(ValueError, match="tables not found"):
                 universe_engine.fetch_and_cache_universe()
 
     def test_missing_symbol_column_raises_value_error(self):
         current_no_symbol = pd.DataFrame({"NotASymbolColumn": ["AAPL"]})
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
-             mock.patch("universe_engine.pd.read_html", return_value=[current_no_symbol, self._changes_table()]):
+             mock.patch("universe_engine.pd.read_html", side_effect=[[current_no_symbol], [self._changes_table()]]):
             with pytest.raises(ValueError, match="Symbol/Ticker column"):
                 universe_engine.fetch_and_cache_universe()
 
@@ -340,7 +340,7 @@ class TestFetchAndCacheUniverseMalformedTable:
         current_df = pd.DataFrame({"Symbol": ["AAPL"]})
         changes_no_cols = pd.DataFrame({"Something": ["irrelevant"]})
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
-             mock.patch("universe_engine.pd.read_html", return_value=[current_df, changes_no_cols]):
+             mock.patch("universe_engine.pd.read_html", side_effect=[[current_df], [changes_no_cols]]):
             with pytest.raises(ValueError, match="Date, Added Ticker, or Removed Ticker"):
                 universe_engine.fetch_and_cache_universe()
 
@@ -368,7 +368,7 @@ class TestFetchAndCacheUniverseMalformedTable:
             "Removed Ticker": [None, "OLD"],
         })
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
-             mock.patch("universe_engine.pd.read_html", return_value=[current_df, changes_df_guaranteed]):
+             mock.patch("universe_engine.pd.read_html", side_effect=[[current_df], [changes_df_guaranteed]]):
             result = universe_engine.fetch_and_cache_universe()
 
         # The valid "NEW"/"OLD" change row must still be present.
