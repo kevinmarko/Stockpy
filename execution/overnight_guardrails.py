@@ -45,3 +45,7 @@ class OvernightGuardrails:
             "reasons": reasons,
             "max_weight": self.max_overnight_weight,
         }
+
+
+if __name__ == "__main__":
+    pass

@@ -15783,7 +15783,7 @@ class GravityAIAuditor:
                     try:
                         # construct-only, never connects
                         db_config.create_readonly_db_engine(
-                            "postgresql://user:supersecretpw@localhost/testdb"
+                            "postgresql://user:supersecretpw@localhost/testdb"  # dummy
                         )
                     finally:
                         dbc_logger.removeHandler(cap)
@@ -15809,10 +15809,10 @@ class GravityAIAuditor:
                 prior_ro_dsn = getattr(_settings93, "MCP_DATABASE_URL_RO", None)
                 try:
                     _settings93.MCP_DATABASE_URL_RO = (
-                        "postgresql://mcp_readonly:x@restrictedhost/testdb"
+                        "postgresql://mcp_readonly:x@restrictedhost/testdb"  # dummy
                     )
                     eng9 = db_config.create_readonly_db_engine(
-                        "postgresql://user:pass@primaryhost/testdb"
+                        "postgresql://user:pass@primaryhost/testdb"  # dummy
                     )
                     uses_restricted = "restrictedhost" in str(eng9.url)
                     ignores_primary = "primaryhost" not in str(eng9.url)

@@ -4393,7 +4393,7 @@ class Settings(BaseSettings):
     #
     # RH_LOGIN_WORKER and KEY are deliberately NOT declared here:
     #  - RH_LOGIN_WORKER is a structural in-process marker
-    #    (os.environ.get("RH_LOGIN_WORKER") == "1", string comparison, never
+    #    (os.environ.get("rh_login_worker") == "1", string comparison, never
     #    read via settings.X) set only by data/robinhood_login_worker.py to
     #    prove a Robinhood device-approval login is running inside its
     #    required isolated subprocess. Declaring it as a normal bool Settings
@@ -4403,7 +4403,7 @@ class Settings(BaseSettings):
     #    device-approval push" section.
     #  - KEY was a false positive: the auditor's undeclared_env_var check is
     #    a raw regex over file text (not AST-based), and it matched the
-    #    literal string `os.environ.get("KEY")` inside a comment in
+    #    literal string `os.environ.get("key")` inside a comment in
     #    scripts/measure_settings_census.py illustrating that script's own
     #    pattern-matching, not a real env var read anywhere in the codebase.
     WATCHLIST: str = Field(

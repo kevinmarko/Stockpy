@@ -248,3 +248,7 @@ class SFGarchLSTMModel(Model):
         except Exception as exc:  # noqa: BLE001 -- degrade to ridge (CONSTRAINT #6)
             logger.debug("SFGarchLSTMModel: LSTM inference unavailable (%s); using ridge fallback.", exc)
         return preds
+
+
+if __name__ == "__main__":
+    pass

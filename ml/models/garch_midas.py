@@ -61,3 +61,7 @@ class GarchMidasModel(Model):
         clean_X = X.fillna(0.0).values
         pred_vol = np.abs(clean_X @ self.weights)
         return np.asarray(pred_vol, dtype=float)
+
+
+if __name__ == "__main__":
+    pass

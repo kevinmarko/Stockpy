@@ -352,3 +352,7 @@ def reconcile(
             "ok": False,
             "error": str(exc),
         }
+
+
+if __name__ == "__main__":
+    pass

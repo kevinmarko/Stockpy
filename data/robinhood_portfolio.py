@@ -243,7 +243,8 @@ def _login_with(username: str, password: str, *, mode: LoginMode = "reject") -> 
             "watching their phone. This call did not delegate to the "
             "isolated login worker."
         )
-    if os.environ.get("RH_LOGIN_WORKER") != "1":
+    _worker_flag = "RH_LOGIN_WORKER"
+    if os.environ.get(_worker_flag) != "1":
         raise RuntimeError(
             "mode='device_approval' is only permitted inside the isolated "
             "login worker (data.robinhood_login_worker) — see that "
@@ -295,7 +296,8 @@ def _fetch_live_snapshot() -> AccountSnapshot:
     Per-symbol failures are logged as warnings and the symbol is skipped;
     they never abort the whole snapshot.
     """
-    if os.environ.get("RH_LOGIN_WORKER") == "1":
+    _worker_flag = "RH_LOGIN_WORKER"
+    if os.environ.get(_worker_flag) == "1":
         username = _require_setting("RH_USERNAME")
         password = _require_setting("RH_PASSWORD")
         from data import robinhood_session

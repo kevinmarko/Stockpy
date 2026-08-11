@@ -103,3 +103,7 @@ class EmojiSentimentModel(Model):
         features = np.nan_to_num(self._build_features(X), nan=0.0)
         preds = features @ self.weights
         return np.clip(preds, -1.0, 1.0)
+
+
+if __name__ == "__main__":
+    pass

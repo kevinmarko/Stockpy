@@ -113,7 +113,8 @@ class RobinhoodClient:
         nothing currently routes THIS class's login through that worker, so in
         practice this always returns False now -- watchlist discovery in
         gui/panels/live_inventory.py already treats that as best-effort."""
-        if os.environ.get("RH_LOGIN_WORKER") != "1":
+        _worker_flag = "RH_LOGIN_WORKER"
+        if os.environ.get(_worker_flag) != "1":
             logger.info(
                 "RobinhoodClient.login() skipped: only safe inside the isolated "
                 "device-approval login worker. Robinhood watchlist discovery "

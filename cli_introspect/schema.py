@@ -67,3 +67,7 @@ class CommandSpec:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+if __name__ == "__main__":
+    pass

@@ -950,14 +950,14 @@ class _ReadVisitor(ast.NodeVisitor):
                             "expr": _safe_unparse(node),
                         }
                     )
-        # os.environ.get("KEY") / environ.get("KEY")
+        # os.environ.get("key") / environ.get("key")
         if isinstance(f, ast.Attribute) and f.attr == "get":
             kind = self._is_environ(f.value)
             if kind and node.args and isinstance(node.args[0], ast.Constant):
                 v = node.args[0].value
                 if isinstance(v, str) and v in self.fields:
                     self.env_reads.append((v, node.lineno, f"{kind}.get()"))
-        # os.getenv("KEY") / getenv("KEY")
+        # os.getenv("key") / getenv("key")
         is_getenv = (isinstance(f, ast.Attribute) and f.attr == "getenv") or (
             isinstance(f, ast.Name) and f.id == "getenv"
         )
