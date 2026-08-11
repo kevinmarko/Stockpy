@@ -50,7 +50,12 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
-        tables = pd.read_html(resp.text)
+        import io
+        tables = pd.read_html(io.StringIO(resp.text), attrs={'id': 'constituents'})
+
+        changes_resp = requests.get("https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500", headers=headers, timeout=15)
+        changes_resp.raise_for_status()
+        changes_tables = pd.read_html(io.StringIO(changes_resp.text), attrs={'class': 'wikitable'})
     except Exception as e:
         logger.error(f"Error scraping Wikipedia: {e}")
         if os.path.exists(CACHE_PATH):
@@ -58,7 +63,7 @@ def fetch_and_cache_universe() -> pd.DataFrame:
             return pd.read_parquet(CACHE_PATH)
         raise RuntimeError(f"Failed to scrape Wikipedia and no cache found: {e}")
 
-    if len(tables) < 2:
+    if not tables or not changes_tables:
         raise ValueError("Wikipedia page structure changed. S&P 500 tables not found.")
 
     # 1. Parse Current Constituents
@@ -75,7 +80,7 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     current_tickers = [t for t in current_tickers if t]
 
     # 2. Parse Changes
-    changes_df = tables[1].copy()
+    changes_df = changes_tables[0].copy()
     if isinstance(changes_df.columns, pd.MultiIndex):
         changes_df.columns = [f"{col[0]}_{col[1]}" for col in changes_df.columns]
 
