@@ -4297,7 +4297,7 @@ class Settings(BaseSettings):
         ),
     )
     FORECAST_BACKFILL_DEADLINE_SECONDS: int = Field(
-        default=1800,
+        default=5400,
         description=(
             "Hard wall-clock deadline for one forecast-backfill run, from "
             "worker start to a terminal result. The worker process group is "
@@ -4305,7 +4305,18 @@ class Settings(BaseSettings):
             "relative to data/robinhood_login.py's RH_LOGIN_DEADLINE_SECONDS "
             "(180s, bounded by how long a human will wait for a push "
             "notification) -- this job is a CPU-bound multi-ticker, "
-            "multi-horizon model training run, not a human-approval wait."
+            "multi-horizon model training run, not a human-approval wait. "
+            "Sized (90 minutes) to cover a full run over today's real "
+            "operator universe (~500 tickers), not just a small test "
+            "fixture -- ml/forecast_backfill.py's AgenticForecastBackfiller "
+            "genuinely exceeded the prior 1800s (30 min) default at that "
+            "scale because two of its stages are not yet "
+            "vectorized/checkpointed. This sandbox has no live-market "
+            "network access to precisely re-measure full-universe runtime, "
+            "so this is a deliberately generous, documented safety margin "
+            "rather than a tightly-tuned number. It remains a hard backstop "
+            "even after the pipeline's own perf fixes land -- a stuck "
+            "worker must still be reaped eventually."
         ),
     )
 

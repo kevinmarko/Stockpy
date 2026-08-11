@@ -23,8 +23,8 @@ Speed
 FORECAST_BACKFILL_DEADLINE_SECONDS is monkeypatched to a sub-2-second value
 (matching the house convention of patching the live `settings.settings`
 singleton directly -- see tests/test_robinhood_login.py) so the whole file
-runs in a few seconds, never anywhere near the real 1800s production
-default.
+runs in a few seconds, never anywhere near the real (settings.py-defined)
+production default.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def _stub_worker(monkeypatch):
 @pytest.fixture(autouse=True)
 def _fast_deadline(monkeypatch):
     """A tiny deadline so a hung/wedged worker is reaped in ~1-2s instead of
-    the real 1800s production default."""
+    the real (settings.py-defined) production default."""
     monkeypatch.setattr("settings.settings.FORECAST_BACKFILL_DEADLINE_SECONDS", 1.5)
 
 
