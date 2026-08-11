@@ -51,11 +51,11 @@ def fetch_and_cache_universe() -> pd.DataFrame:
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         import io
-        tables = pd.read_html(io.StringIO(resp.text), attrs={'id': 'constituents'})
+        tables = pd.read_html(io.StringIO(resp.text), attrs={'id': 'constituents'}, flavor='bs4')
 
         changes_resp = requests.get("https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500", headers=headers, timeout=15)
         changes_resp.raise_for_status()
-        changes_tables = pd.read_html(io.StringIO(changes_resp.text), attrs={'class': 'wikitable'})
+        changes_tables = pd.read_html(io.StringIO(changes_resp.text), attrs={'class': 'wikitable'}, flavor='bs4')
     except Exception as e:
         logger.error(f"Error scraping Wikipedia: {e}")
         if os.path.exists(CACHE_PATH):
