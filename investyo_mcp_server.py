@@ -3587,22 +3587,34 @@ def get_portfolio_by_pilot() -> str:
 
 @mcp.tool()
 def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
-    """Computes historical VaR and Expected Shortfall from real daily returns."""
+    """
+    Computes real 95% Value-at-Risk and Expected Shortfall for a ticker from
+    its actual daily OHLCV returns (via data.historical_store.HistoricalStore),
+    never a fabricated/placeholder figure.
+
+    Args:
+        ticker: Stock ticker (e.g., AAPL).
+        method: "historical" (default) — empirical 5th percentile of daily
+            returns for VaR, mean of returns at/below that percentile for ES.
+            "parametric" — normal-distribution VaR/ES from the sample mean
+            and standard deviation instead of the empirical percentile.
+    """
     try:
         from data.historical_store import HistoricalStore
         import numpy as np
-        
+
+        ticker = ticker.upper()
         df = HistoricalStore().get_bars(ticker, lookback_days=504)
         if df is None or len(df) < 252:
-            return "insufficient history: need at least 252 days of price bars"
-            
+            return f"insufficient history for ticker {ticker}: need at least 252 days of price bars"
+
         returns = df['Close'].pct_change().dropna()
         if len(returns) < 252:
-            return "insufficient history: need at least 252 days of return data"
-            
+            return f"insufficient history for ticker {ticker}: need at least 252 days of return data"
+
         std_ret = returns.std()
         if np.isnan(std_ret) or std_ret < 1e-12:
-            return f"insufficient history: degenerate return standard deviation ({std_ret})"
+            return f"insufficient history for ticker {ticker}: degenerate return standard deviation ({std_ret})"
             
         if method == "historical":
             var_95 = np.percentile(returns, 5)
@@ -3614,44 +3626,74 @@ def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
             es_95 = mu - std_ret * norm.pdf(norm.ppf(0.05)) / 0.05
 
         return (
+            f"Ticker: {ticker}\n"
             f"VaR (95%): {var_95:.4%}\n"
             f"Expected Shortfall (95%): {es_95:.4%}\n"
             f"Method: {method}\n"
             f"Sample size: {len(returns)} days"
         )
     except Exception as e:
-        return f"failed to compute metrics: {str(e)}"
+        return f"failed to compute metrics for {ticker}: {str(e)}"
 
 @mcp.tool()
 def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
-    """Applies a dated historical shock window to a portfolio's positions."""
+    """
+    Replays one of the platform's dated historical shock windows
+    (validation.stress_scenarios.STRESS_SCENARIOS: OCT_2008, FEB_2018,
+    MAR_2020, AUG_2024) against a real, cached Robinhood account snapshot's
+    actual positions and their real historical bars — never a fabricated
+    drawdown.
+
+    Args:
+        portfolio_id: Only "live" is currently supported — the operator's
+            real Robinhood account, resolved from a cached snapshot only
+            (this tool never triggers a live broker login; it returns an
+            honest error when no cached snapshot exists).
+        scenario: One of validation.stress_scenarios.STRESS_SCENARIOS'
+            keys. An unrecognized name is an error, never silently
+            substituted with a default window.
+    """
     try:
         from validation.stress_scenarios import STRESS_SCENARIOS, run_stress_scenario
         from data.robinhood_portfolio import fetch_account_snapshot
         from data.historical_store import HistoricalStore
         import pandas as pd
-        import numpy as np
-        
+
         if scenario not in STRESS_SCENARIOS:
             return f"scenario not found. Available: {list(STRESS_SCENARIOS.keys())}"
-            
+
         if portfolio_id != "live":
-             return "Portfolio not found. (Only 'live' portfolio_id is currently supported for stress test)"
-             
-        snapshot = fetch_account_snapshot(live_cache=True)
+            return "Portfolio not found. (Only 'live' portfolio_id is currently supported for stress test)"
+
+        try:
+            # allow_live_fetch=False: this MCP tool must never trigger a
+            # live Robinhood device-approval login. Returns the best
+            # available cached snapshot regardless of staleness, or raises
+            # RuntimeError when no cache exists at all (CONSTRAINT #4 --
+            # no fabricated portfolio).
+            snapshot = fetch_account_snapshot(allow_live_fetch=False)
+        except Exception as fetch_exc:
+            return (
+                "No cached Robinhood account snapshot available for stress "
+                f"testing: {fetch_exc}"
+            )
+
         if not snapshot or not snapshot.positions:
-             return "No positions in portfolio to stress test."
-             
+            return "No positions in the cached portfolio snapshot to stress test."
+
+        # AccountSnapshot.positions is a dict of symbol -> PortfolioPosition.
+        positions = list(snapshot.positions.values())
+
         def returns_fn(start: str, end: str) -> pd.Series:
             store = HistoricalStore()
             returns_series = []
-            
+
             # Sum up total portfolio value to weight the returns
-            total_value = sum(pos.quantity * pos.current_price for pos in snapshot.positions)
+            total_value = sum(pos.quantity * pos.current_price for pos in positions)
             if total_value == 0:
-                 return pd.Series(dtype=float)
-                 
-            for pos in snapshot.positions:
+                return pd.Series(dtype=float)
+
+            for pos in positions:
                 bars = store.get_bars(pos.symbol, lookback_days=5000)
                 if bars is not None and not bars.empty:
                     # Filter for start/end dates
@@ -3661,20 +3703,20 @@ def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
                         r = window_bars['Close'].pct_change().dropna()
                         weight = (pos.quantity * pos.current_price) / total_value
                         returns_series.append(r * weight)
-            
+
             if not returns_series:
                 return pd.Series(dtype=float)
-            
+
             # Align indices and sum row-wise for daily portfolio return
             agg_returns = pd.concat(returns_series, axis=1).sum(axis=1)
             return agg_returns
-            
+
         scenario_obj = STRESS_SCENARIOS[scenario]
         result = run_stress_scenario(returns_fn, scenario_obj)
-        
+
         if result.error:
-             return f"Stress test failed: {result.error}"
-             
+            return f"Stress test failed: {result.error}"
+
         return (
             f"Scenario: {result.scenario}\n"
             f"Window: {result.start} to {result.end}\n"
@@ -3688,41 +3730,50 @@ def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
 
 @mcp.tool()
 def get_factor_attributions(ticker: str) -> str:
-    """Fetches multifactor fundamental attributions for a given ticker."""
+    """
+    Returns the real multifactor fundamental attribution (Value/Quality/
+    LowVol/Size Z-scores and the combined Multifactor Composite) for a
+    ticker, read from its most recent row in the DailySignals table --
+    the exact cross-sectionally-computed scores signals/multifactor.py's
+    pre_compute() wrote for that cycle (see config.COLUMN_SCHEMA and
+    get_signal_breakdown, which queries the same table the same way).
+    These z-scores are computed relative to the FULL universe scored that
+    cycle, so they cannot be honestly recomputed for a single ticker in
+    isolation -- this tool reads the persisted, real per-cycle values
+    instead of fabricating a fresh one.
+
+    Args:
+        ticker: Stock ticker (e.g., AAPL).
+    """
+    ticker = ticker.upper()
     try:
-        from processing_engine import ProcessingEngine
-        from data_engine import DataEngine
-        from dto_models import FundamentalDataDTO
-        
-        de = DataEngine("")
-        raw = de.fetch_fundamentals_raw([ticker])
-        if not raw or ticker not in raw or 'info' not in raw[ticker]:
-             return f"unavailable: no fundamental data for {ticker}"
-             
-        data = raw[ticker]
-        dto = FundamentalDataDTO.from_raw_dict(ticker, data.get('info', {}), dividends=data.get('dividends'))
-             
-        pe = ProcessingEngine()
-        fund_dtos = {ticker: dto}
-        try:
-             res_df = pe.calculate_fundamental_metrics(fund_dtos)
-        except Exception as e:
-             return f"unavailable: {str(e)}"
-             
-        if res_df.empty or ticker not in res_df.index:
-             return f"unavailable: no recent factor score for {ticker}"
-             
-        row = res_df.loc[ticker]
-        
+        columns, rows = _db_query(
+            """SELECT "Value_Z", "Quality_Z", "LowVol_Z", "Size_Z",
+                      "Multifactor_Composite", timestamp
+               FROM DailySignals
+               WHERE "Symbol" = ?
+               ORDER BY timestamp DESC LIMIT 1""",
+            (ticker,)
+        )
+        if not rows:
+            return f"no recent factor score for {ticker}"
+
+        data = dict(zip(columns, rows[0]))
+
+        def _fmt(key: str) -> str:
+            val = data.get(key)
+            return "N/A" if val is None else str(val)
+
         return (
-            f"Value Z-Score: {row.get('Value_Z', 'N/A')}\n"
-            f"Quality Z-Score: {row.get('Quality_Z', 'N/A')}\n"
-            f"LowVol Z-Score: {row.get('LowVol_Z', 'N/A')}\n"
-            f"Size Z-Score: {row.get('Size_Z', 'N/A')}\n"
-            f"Multifactor Composite: {row.get('Multifactor_Composite', 'N/A')}"
+            f"# Factor Attribution: {ticker} ({data.get('timestamp', 'N/A')})\n\n"
+            f"Value Z-Score: {_fmt('Value_Z')}\n"
+            f"Quality Z-Score: {_fmt('Quality_Z')}\n"
+            f"LowVol Z-Score: {_fmt('LowVol_Z')}\n"
+            f"Size Z-Score: {_fmt('Size_Z')}\n"
+            f"Multifactor Composite: {_fmt('Multifactor_Composite')}"
         )
     except Exception as e:
-        return f"failed to get factor attributions: {str(e)}"
+        return f"failed to get factor attributions for {ticker}: {str(e)}"
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def get_order_execution_history(limit: int = 50) -> str:

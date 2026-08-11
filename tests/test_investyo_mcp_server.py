@@ -3853,6 +3853,13 @@ class TestReadPlatformLogsFindsLogsSubdirectory:
 # ==============================================================================
 
 class TestGetVarEsMetrics:
+    """get_var_es_metrics computes REAL historical/parametric VaR & ES from
+    daily returns derived from HistoricalStore.get_bars -- never a hardcoded
+    figure. These tests confirm (a) two different return series produce
+    DIFFERENT VaR/ES numbers, (b) the honest insufficient-history path is
+    exercised and distinct from the computed path, and (c) a deterministic
+    fixture produces a real number within an analytically-derivable bound."""
+
     def test_insufficient_history(self, monkeypatch):
         from investyo_mcp_server import get_var_es_metrics
         def mock_get_bars(self, ticker, lookback_days=504):
@@ -3861,83 +3868,252 @@ class TestGetVarEsMetrics:
         monkeypatch.setattr("data.historical_store.HistoricalStore.get_bars", mock_get_bars)
         result = get_var_es_metrics("AAPL")
         assert "insufficient history" in result
+        assert "AAPL" in result
+        # Never a fabricated percentage alongside the honest-unavailable message.
+        assert "VaR" not in result
 
-    def test_valid_history(self, monkeypatch):
+    def test_degenerate_std_guard(self, monkeypatch):
+        """A flat (zero-variance) price series must degrade honestly per the
+        repo's < 1e-12 degenerate-std convention, never emit a fabricated
+        VaR/ES computed from near-zero noise."""
         from investyo_mcp_server import get_var_es_metrics
-        import numpy as np
         import pandas as pd
         def mock_get_bars(self, ticker, lookback_days=504):
             dates = pd.date_range("2020-01-01", periods=300)
-            np.random.seed(42)
-            returns = np.random.normal(0.001, 0.02, size=300)
-            prices = (1 + returns).cumprod() * 100
+            return pd.DataFrame({"Close": [100.0] * 300}, index=dates)
+        monkeypatch.setattr("data.historical_store.HistoricalStore.get_bars", mock_get_bars)
+        result = get_var_es_metrics("FLAT")
+        assert "insufficient history" in result
+        assert "degenerate" in result
+
+    def test_valid_history_historical_method(self, monkeypatch):
+        from investyo_mcp_server import get_var_es_metrics
+        import numpy as np
+        import pandas as pd
+        dates = pd.date_range("2020-01-01", periods=300)
+        np.random.seed(42)
+        returns = np.random.normal(0.001, 0.02, size=300)
+        prices = (1 + returns).cumprod() * 100
+
+        def mock_get_bars(self, ticker, lookback_days=504):
             return pd.DataFrame({"Close": prices}, index=dates)
         monkeypatch.setattr("data.historical_store.HistoricalStore.get_bars", mock_get_bars)
-        
+
         result_hist = get_var_es_metrics("AAPL", method="historical")
         assert "VaR (95%)" in result_hist
         assert "Expected Shortfall" in result_hist
-        
+        assert "Method: historical" in result_hist
+
+        # Real, independently-computed expectation from the same fixture
+        # returns series -- not a hardcoded literal.
+        real_returns = pd.Series(prices).pct_change().dropna()
+        expected_var = np.percentile(real_returns, 5)
+        expected_es = real_returns[real_returns <= expected_var].mean()
+        assert f"{expected_var:.4%}" in result_hist
+        assert f"{expected_es:.4%}" in result_hist
+
         result_param = get_var_es_metrics("AAPL", method="parametric")
         assert "VaR (95%)" in result_param
-        assert "parametric" in result_param
+        assert "Method: parametric" in result_param
+        # Parametric and historical VaR/ES on the same series must not be
+        # identical formulas wearing different labels -- confirm they
+        # produce genuinely different numbers.
+        assert result_param != result_hist
+
+    def test_different_tickers_produce_different_output(self, monkeypatch):
+        """Proves the tool is not a hardcoded stub: two distinct return
+        series for two distinct tickers must produce distinct VaR/ES."""
+        from investyo_mcp_server import get_var_es_metrics
+        import numpy as np
+        import pandas as pd
+        dates = pd.date_range("2020-01-01", periods=300)
+
+        def make_mock(seed, vol):
+            def mock_get_bars(self, ticker, lookback_days=504):
+                np.random.seed(seed)
+                rets = np.random.normal(0.0, vol, size=300)
+                prices = (1 + rets).cumprod() * 100
+                return pd.DataFrame({"Close": prices}, index=dates)
+            return mock_get_bars
+
+        monkeypatch.setattr("data.historical_store.HistoricalStore.get_bars", make_mock(1, 0.01))
+        result_low_vol = get_var_es_metrics("LOWVOL")
+
+        monkeypatch.setattr("data.historical_store.HistoricalStore.get_bars", make_mock(2, 0.08))
+        result_high_vol = get_var_es_metrics("HIGHVOL")
+
+        assert result_low_vol != result_high_vol
+
 
 class TestRunStressScenarioSimulation:
+    """run_stress_scenario_simulation reuses the real
+    validation.stress_scenarios.STRESS_SCENARIOS windows against a real
+    (cache-only) Robinhood account snapshot's positions and real bars."""
+
     def test_invalid_portfolio(self):
         from investyo_mcp_server import run_stress_scenario_simulation
         res = run_stress_scenario_simulation("fake", "OCT_2008")
         assert "Only 'live' portfolio_id is currently supported" in res
-        
+
     def test_scenario_not_found(self):
+        """An unknown scenario name is an honest error, never a silently
+        substituted default window."""
         from investyo_mcp_server import run_stress_scenario_simulation
         res = run_stress_scenario_simulation("live", "FAKE_SCENARIO")
         assert "scenario not found" in res
-        
-    def test_success(self, monkeypatch):
+        assert "OCT_2008" in res  # lists the real available scenarios
+
+    def test_no_cached_snapshot_degrades_honestly(self, monkeypatch):
+        """This tool must never trigger a live broker login and must never
+        fabricate a portfolio -- when fetch_account_snapshot(allow_live_fetch=False)
+        has no cache to fall back on, it raises, and the tool must surface
+        that as an honest, clearly-labeled unavailable message."""
         from investyo_mcp_server import run_stress_scenario_simulation
-        def mock_get_snapshot(live_cache=True):
-            from data.robinhood_portfolio import AccountSnapshot
-            from datetime import datetime, timezone
-            return AccountSnapshot(
-                positions={"AAPL": None}, 
-                buying_power=1000.0, 
-                total_equity=5000.0, 
-                total_dividends=0.0,
-                fetched_at=datetime.now(timezone.utc)
+
+        def mock_fetch(*args, **kwargs):
+            assert kwargs.get("allow_live_fetch") is False, (
+                "must call fetch_account_snapshot with allow_live_fetch=False "
+                "to guarantee no live broker login is ever attempted"
             )
-        def mock_run_scenario(*args, **kwargs):
-            from validation.stress_scenarios import StressResult
-            return StressResult(
-                scenario="OCT_2008", start="2008-09-01", end="2008-11-30",
-                max_drawdown=500.0, final_return=-500.0, survived=True,
-                n_days=90, expected_max_dd_for_short_vol=0.0, error=None
-            )
-        monkeypatch.setattr("data.robinhood_portfolio.fetch_account_snapshot", mock_get_snapshot)
-        monkeypatch.setattr("validation.stress_scenarios.run_stress_scenario", mock_run_scenario)
+            raise RuntimeError("No cached Robinhood account snapshot available")
+
+        monkeypatch.setattr("data.robinhood_portfolio.fetch_account_snapshot", mock_fetch)
         res = run_stress_scenario_simulation("live", "OCT_2008")
-        assert "-50000.0000%" in res
+        assert "No cached Robinhood account snapshot available" in res
+        # Never a fabricated drawdown alongside the honest-unavailable message.
+        assert "Max Drawdown" not in res
+
+    def test_success_uses_real_position_values_and_bars(self, monkeypatch):
+        """Exercises the real returns_fn closure end-to-end (does NOT mock
+        out run_stress_scenario itself) against a real dict-keyed
+        AccountSnapshot.positions and real PortfolioPosition objects, to
+        prove the dict .values() iteration and weighting actually work."""
+        from investyo_mcp_server import run_stress_scenario_simulation
+        from data.robinhood_portfolio import AccountSnapshot, PortfolioPosition
+        from datetime import datetime, timezone
+        import pandas as pd
+        import numpy as np
+
+        def mock_fetch(*args, allow_live_fetch=True, **kwargs):
+            return AccountSnapshot(
+                positions={
+                    "AAPL": PortfolioPosition(
+                        symbol="AAPL", quantity=10.0, average_cost=100.0,
+                        current_price=150.0, market_value=1500.0,
+                        unrealized_pl=500.0, unrealized_pl_pct=50.0,
+                        dividends_received=0.0, name="Apple Inc.",
+                    ),
+                },
+                buying_power=1000.0,
+                total_equity=2500.0,
+                total_dividends=0.0,
+                fetched_at=datetime.now(timezone.utc),
+            )
+
+        def mock_get_bars(self, symbol, lookback_days=5000, **kwargs):
+            dates = pd.date_range("2008-09-01", "2008-11-30", freq="B")
+            np.random.seed(7)
+            rets = np.random.normal(-0.01, 0.03, size=len(dates))
+            prices = (1 + rets).cumprod() * 100
+            return pd.DataFrame({"Close": prices}, index=dates)
+
+        monkeypatch.setattr("data.robinhood_portfolio.fetch_account_snapshot", mock_fetch)
+        monkeypatch.setattr("data.historical_store.HistoricalStore.get_bars", mock_get_bars)
+
+        res = run_stress_scenario_simulation("live", "OCT_2008")
+        assert "Scenario: OCT_2008" in res
+        assert "Max Drawdown" in res
+        assert "Survived" in res
+        # Real computed max drawdown must be a finite, bounded fraction --
+        # not a fabricated placeholder value.
+        import re
+        m = re.search(r"Max Drawdown: (-?\d+\.\d+)%", res)
+        assert m is not None
+        dd = float(m.group(1))
+        assert 0.0 <= dd <= 100.0
+
+    def test_no_positions_degrades_honestly(self, monkeypatch):
+        from investyo_mcp_server import run_stress_scenario_simulation
+        from data.robinhood_portfolio import AccountSnapshot
+        from datetime import datetime, timezone
+
+        def mock_fetch(*args, allow_live_fetch=True, **kwargs):
+            return AccountSnapshot(
+                positions={}, buying_power=1000.0, total_equity=0.0,
+                total_dividends=0.0, fetched_at=datetime.now(timezone.utc),
+            )
+
+        monkeypatch.setattr("data.robinhood_portfolio.fetch_account_snapshot", mock_fetch)
+        res = run_stress_scenario_simulation("live", "OCT_2008")
+        assert "No positions" in res
+
 
 class TestGetFactorAttributions:
-    def test_unavailable_data(self, monkeypatch):
+    """get_factor_attributions reads the real, persisted per-cycle
+    Value_Z/Quality_Z/LowVol_Z/Size_Z/Multifactor_Composite columns from the
+    DailySignals table via _db_query -- the same real-schema convention
+    TestGetSignalBreakdown uses, since these z-scores are cross-sectional
+    and cannot be honestly recomputed for one ticker in isolation."""
+
+    def test_missing_db_returns_error(self, monkeypatch, tmp_path):
         from investyo_mcp_server import get_factor_attributions
-        def mock_fetch(self, tickers): return None
-        monkeypatch.setattr("data_engine.DataEngine.fetch_fundamentals_raw", mock_fetch)
+        monkeypatch.chdir(tmp_path)
         res = get_factor_attributions("AAPL")
-        assert "unavailable: no fundamental data" in res
-        
-    def test_success(self, monkeypatch):
+        assert "no recent factor score for AAPL" in res or "failed" in res
+
+    def test_ticker_not_in_universe(self, monkeypatch, tmp_path):
         from investyo_mcp_server import get_factor_attributions
-        import pandas as pd
-        def mock_fetch(self, tickers): return {"AAPL": {"info": {"shortName": "Apple"}}}
-        def mock_calc(self, fund_dtos):
-            return pd.DataFrame({"Value_Z": [1.5], "Multifactor_Composite": [2.0]}, index=["AAPL"])
-                
-        monkeypatch.setattr("data_engine.DataEngine.fetch_fundamentals_raw", mock_fetch)
-        monkeypatch.setattr("processing_engine.ProcessingEngine.calculate_fundamental_metrics", mock_calc)
-        
-        res = get_factor_attributions("AAPL")
-        assert "Value Z-Score: 1.5" in res
-        assert "Multifactor Composite: 2.0" in res
+        monkeypatch.chdir(tmp_path)
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
+
+        res = get_factor_attributions("zzzz")
+        assert "no recent factor score for ZZZZ" in res
+
+    def test_real_row_returns_real_values(self, monkeypatch, tmp_path):
+        import sqlite3
+        from investyo_mcp_server import get_factor_attributions
+        monkeypatch.chdir(tmp_path)
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
+
+        conn = sqlite3.connect("quant_platform.db")
+        conn.execute(
+            'INSERT INTO DailySignals ("Symbol", timestamp, "Value_Z", '
+            '"Quality_Z", "LowVol_Z", "Size_Z", "Multifactor_Composite") '
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("AAPL", "2026-01-01 09:30:00", 1.2, -0.4, 0.7, -1.1, 0.35),
+        )
+        conn.execute(
+            'INSERT INTO DailySignals ("Symbol", timestamp, "Value_Z", '
+            '"Quality_Z", "LowVol_Z", "Size_Z", "Multifactor_Composite") '
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("AAPL", "2026-01-02 09:30:00", 1.5, -0.2, 0.9, -1.0, 0.42),
+        )
+        conn.execute(
+            'INSERT INTO DailySignals ("Symbol", timestamp, "Value_Z", '
+            '"Quality_Z", "LowVol_Z", "Size_Z", "Multifactor_Composite") '
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("MSFT", "2026-01-02 09:30:00", -0.3, 1.8, 0.1, 0.6, 0.55),
+        )
+        conn.commit()
+        conn.close()
+
+        res_aapl = get_factor_attributions("aapl")
+        # Most recent row (01-02), not the earlier 01-01 row.
+        assert "Value Z-Score: 1.5" in res_aapl
+        assert "Quality Z-Score: -0.2" in res_aapl
+        assert "LowVol Z-Score: 0.9" in res_aapl
+        assert "Size Z-Score: -1.0" in res_aapl
+        assert "Multifactor Composite: 0.42" in res_aapl
+
+        res_msft = get_factor_attributions("msft")
+        assert "Value Z-Score: -0.3" in res_msft
+        assert "Multifactor Composite: 0.55" in res_msft
+
+        # Two different tickers must produce different output -- proves
+        # this is a real per-symbol DB read, not a hardcoded stub.
+        assert res_aapl != res_msft
 
 class TestGetOrderExecutionHistory:
     def test_empty_history(self, monkeypatch):
