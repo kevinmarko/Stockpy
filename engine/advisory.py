@@ -820,6 +820,7 @@ def evaluate(
                 current_price=current_price,
                 history_series=bars_df["Close"],
                 history_df=bars_df,
+                precomputed_garch_annual_vol=garch_vol,
             )
             raw_f30 = fc_results.get("Forecast_30", 0.0)
             forecast_price = float(raw_f30) if raw_f30 and raw_f30 > 0 else None
