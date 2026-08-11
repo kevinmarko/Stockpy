@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Any
@@ -61,32 +62,34 @@ def run_static_ast_audit(root_dir: Path, include_tests: bool = False,
     if include_tests:
         cmd.append("--include-tests")
 
-    json_tmp = root_dir / ".bug_hunter_ast_tmp.json"
+    fd, json_tmp_str = tempfile.mkstemp(dir=str(root_dir), prefix=".bug_hunter_ast_", suffix=".json")
+    os.close(fd)
+    json_tmp = Path(json_tmp_str)
     cmd.extend(["--json", str(json_tmp)])
 
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        findings = []
-        summary = {}
-        if json_tmp.exists():
-            with open(json_tmp, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                findings = data.get("findings", [])
-                summary = data.get("summary", {})
-            json_tmp.unlink(missing_ok=True)
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            findings = []
+            summary = {}
+            if json_tmp.exists():
+                with open(json_tmp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    findings = data.get("findings", [])
+                    summary = data.get("summary", {})
 
-        return {
-            "status": "PASS" if res.returncode == 0 else "FAIL",
-            "exit_code": res.returncode,
-            "findings": findings,
-            "summary": summary,
-            "stdout": res.stdout,
-            "stderr": res.stderr
-        }
-    except Exception as e:
-        if json_tmp.exists():
-            json_tmp.unlink(missing_ok=True)
-        return {"status": "ERROR", "message": str(e), "findings": []}
+            return {
+                "status": "PASS" if res.returncode == 0 else "FAIL",
+                "exit_code": res.returncode,
+                "findings": findings,
+                "summary": summary,
+                "stdout": res.stdout,
+                "stderr": res.stderr
+            }
+        except Exception as e:
+            return {"status": "ERROR", "message": str(e), "findings": []}
+    finally:
+        json_tmp.unlink(missing_ok=True)
 
 
 def run_webapp_typecheck(root_dir: Path) -> Dict[str, Any]:
