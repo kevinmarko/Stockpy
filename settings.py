@@ -4393,7 +4393,7 @@ class Settings(BaseSettings):
     #
     # RH_LOGIN_WORKER and KEY are deliberately NOT declared here:
     #  - RH_LOGIN_WORKER is a structural in-process marker
-    #    (os.environ.get("rh_login_worker") == "1", string comparison, never
+    #    (os.environ.get("RH_LOGIN_WORKER") == "1", string comparison, never
     #    read via settings.X) set only by data/robinhood_login_worker.py to
     #    prove a Robinhood device-approval login is running inside its
     #    required isolated subprocess. Declaring it as a normal bool Settings

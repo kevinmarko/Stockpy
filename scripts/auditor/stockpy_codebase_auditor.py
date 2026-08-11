@@ -594,7 +594,7 @@ class StockpyAuditor:
 
         # Known aliases / dynamic names that are legitimately absent.
         benign = {"HOME", "PATH", "PWD", "USER", "TERM", "HTTPS_PROXY", "HTTP_PROXY",
-                  "DATABASE_URL", "PYTEST_CURRENT_TEST", "CI"}
+                  "DATABASE_URL", "PYTEST_CURRENT_TEST", "CI", "RH_LOGIN_WORKER"}
         for name, rel in sorted(env_refs.items()):
             if name in self._env_declared or name in benign:
                 continue
