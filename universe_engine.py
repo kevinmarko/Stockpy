@@ -43,14 +43,20 @@ def clean_ticker(ticker: Any) -> Optional[str]:
 
 def fetch_and_cache_universe() -> pd.DataFrame:
     """Scrapes Wikipedia and caches the combined data to a parquet file."""
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    from io import StringIO
+    url_current = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    url_changes = "https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
     logger.info("Fetching S&P 500 constituents from Wikipedia...")
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        tables = pd.read_html(resp.text)
+        resp_current = requests.get(url_current, headers=headers, timeout=15)
+        resp_current.raise_for_status()
+        tables_current = pd.read_html(StringIO(resp_current.text))
+
+        resp_changes = requests.get(url_changes, headers=headers, timeout=15)
+        resp_changes.raise_for_status()
+        tables_changes = pd.read_html(StringIO(resp_changes.text))
     except Exception as e:
         logger.error(f"Error scraping Wikipedia: {e}")
         if os.path.exists(CACHE_PATH):
@@ -58,11 +64,11 @@ def fetch_and_cache_universe() -> pd.DataFrame:
             return pd.read_parquet(CACHE_PATH)
         raise RuntimeError(f"Failed to scrape Wikipedia and no cache found: {e}")
 
-    if len(tables) < 2:
+    if not tables_current or not tables_changes:
         raise ValueError("Wikipedia page structure changed. S&P 500 tables not found.")
 
     # 1. Parse Current Constituents
-    current_df = tables[0]
+    current_df = tables_current[0]
     symbol_col = None
     for col in current_df.columns:
         if col.lower() in ["symbol", "ticker"]:
@@ -75,7 +81,7 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     current_tickers = [t for t in current_tickers if t]
 
     # 2. Parse Changes
-    changes_df = tables[1].copy()
+    changes_df = tables_changes[0].copy()
     if isinstance(changes_df.columns, pd.MultiIndex):
         changes_df.columns = [f"{col[0]}_{col[1]}" for col in changes_df.columns]
 
