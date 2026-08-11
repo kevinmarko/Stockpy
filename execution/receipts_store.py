@@ -354,5 +354,9 @@ def reconcile(
         }
 
 
-if __name__ == "__main__":
-    pass
+# NOTE: the auditor's LOW `orphaned_module` finding on this file is expected and accurate —
+# see the module docstring above: its real caller is the `robinhood-execution` agent skill
+# (.agents/skills/), not a Python import the static AST auditor can see. Do not silence it
+# by re-adding a fake dunder-main entry-point stub (the auditor's _is_entrypoint check does
+# a literal source substring match, so even a comment containing that guard's exact text
+# would fool it — write around it, as done here).
