@@ -144,6 +144,31 @@ class TestColdStartInsufficientMatchingTrades:
             f"Expected scale-in-tagged fallback for n={n} trades, got '{tag}'"
         )
 
+    def test_scale_in_respects_caller_supplied_min_trades(self):
+        """Finding 30 regression: the cold-start scale-in ramp previously
+        always divided by the MODULE CONSTANT MIN_TRADES_REQUIRED (30),
+        ignoring a caller-supplied non-default ``min_trades`` -- a caller
+        passing a smaller (or larger) threshold must see the ramp actually
+        respect it, not silently fall back to 30."""
+        store = TransactionsStore(db_url="sqlite:///:memory:")
+        n = 3
+        custom_min_trades = 5
+        _seed_store_with_trades(store, n=n, strategy=STRATEGY_A, win=True)
+
+        weight, tag = kelly_sizing_for_strategy(
+            store, strategy_id=STRATEGY_A, realized_vol=REALIZED_VOL,
+            min_trades=custom_min_trades,
+        )
+        scale_in = min(1.0, n / custom_min_trades)
+        expected = volatility_target_weight(REALIZED_VOL, target_vol=0.10, max_leverage=2.0) * scale_in
+        assert math.isclose(weight, expected, rel_tol=1e-9, abs_tol=1e-12), (
+            f"Expected scale-in against custom min_trades={custom_min_trades} "
+            f"({expected:.4f}), got ({weight:.4f})"
+        )
+        assert tag == f"vol_target_fallback(scalein={scale_in:.2f},n={n})", (
+            f"Expected tag scaled against custom min_trades, got '{tag}'"
+        )
+
     def test_exactly_at_threshold_activates_bootstrap(self):
         """Exactly MIN_TRADES_REQUIRED matching trades → bootstrap path activates."""
         store = TransactionsStore(db_url="sqlite:///:memory:")

@@ -22,7 +22,6 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, Notice } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -38,7 +37,7 @@ function signalColor(signal: string): string {
 function PairCard({ p }: { p: PairRow }) {
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab", borderBottom: `1px solid ${theme.border}`, padding: "var(--s-3)" }}>
+      <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${theme.border}`, padding: "var(--s-3)" }}>
         <div style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>
           {p.ticker1} <span style={{ color: theme.textMuted }}>/</span> {p.ticker2}
         </div>
@@ -325,9 +324,6 @@ export function PairsRadar() {
             only — no orders are placed.
           </p>
         </div>
-        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
-          <Button variant="neutral" onClick={() => resetGridLayout("pairs-radar")}>Reset Layout</Button>
-        </div>
       </div>
 
       <TabGuide tabKey="pairs" />
@@ -343,26 +339,13 @@ export function PairsRadar() {
                 {data.reason ?? "No cointegrated pairs found yet."}
               </div>
             ) : (
-              <DynamicGrid
-                layoutKey="pairs-radar"
-                defaultLayouts={{
-                  lg: data.pairs.map((p, i) => ({
-                    i: `${p.ticker1}-${p.ticker2}`,
-                    x: (i % 3) * 4,
-                    y: Math.floor(i / 3) * 3,
-                    w: 4,
-                    h: 3,
-                    minW: 3,
-                    minH: 3,
-                  })),
-                }}
-              >
+              <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
                 {data.pairs.map((p) => (
                   <div key={`${p.ticker1}-${p.ticker2}`}>
                     <PairCard p={p} />
                   </div>
                 ))}
-              </DynamicGrid>
+              </div>
             )
           )}
         </div>

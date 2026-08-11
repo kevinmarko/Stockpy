@@ -201,11 +201,19 @@ class TestGetSentimentAggregateBySymbol:
         assert store.get_sentiment_aggregate_by_symbol("2026-07-21") == {}
 
     def test_aggregates_mean_final_weighted_score(self, tmp_path):
+        """Finding 5 fix: ``credibility_weighted_sentiment`` is a genuine
+        credibility-WEIGHTED mean (``sum(final_weighted_score) /
+        sum(credibility_weight)``), not a plain per-document mean -- see
+        tests/test_historical_store_sentiment_aggregate.py for the full
+        weighted-vs-naive-mean coverage. Both documents here carry an EQUAL
+        credibility_weight, so the weighted mean coincides with the plain
+        mean (0.6), exercising the equal-weight degenerate case without
+        duplicating the dedicated unequal-weight tests."""
         db = str(tmp_path / "sentiment.db")
         store = HistoricalStore(db_path=db)
         self._seed(store, [
-            self._doc(final_weighted_score=0.4),
-            self._doc(final_weighted_score=0.8),
+            self._doc(final_weighted_score=0.4, credibility_weight=1.0),
+            self._doc(final_weighted_score=0.8, credibility_weight=1.0),
         ])
         result = store.get_sentiment_aggregate_by_symbol("2026-07-21")
         assert result["AAPL"]["credibility_weighted_sentiment"] == pytest.approx(0.6)
@@ -244,8 +252,8 @@ class TestGetSentimentAggregateBySymbol:
         db = str(tmp_path / "sentiment.db")
         store = HistoricalStore(db_path=db)
         self._seed(store, [
-            self._doc(symbol="AAPL", final_weighted_score=0.9),
-            self._doc(symbol="MSFT", final_weighted_score=-0.2),
+            self._doc(symbol="AAPL", final_weighted_score=0.9, credibility_weight=1.0),
+            self._doc(symbol="MSFT", final_weighted_score=-0.2, credibility_weight=1.0),
         ])
         result = store.get_sentiment_aggregate_by_symbol("2026-07-21")
         assert set(result.keys()) == {"AAPL", "MSFT"}
@@ -258,10 +266,10 @@ class TestGetSentimentAggregateBySymbol:
         db = str(tmp_path / "sentiment.db")
         store = HistoricalStore(db_path=db)
         self._seed(store, [
-            self._doc(final_weighted_score=0.9),  # trading_day 2026-07-21
+            self._doc(final_weighted_score=0.9, credibility_weight=1.0),  # trading_day 2026-07-21
             self._doc(
                 as_of=datetime(2026, 7, 21, 20, 1, tzinfo=timezone.utc),  # 16:01 ET -> rolls to 07-22
-                final_weighted_score=-0.9,
+                final_weighted_score=-0.9, credibility_weight=1.0,
             ),
         ])
         today_result = store.get_sentiment_aggregate_by_symbol("2026-07-21")

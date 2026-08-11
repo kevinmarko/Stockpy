@@ -16,19 +16,12 @@
  * from that persisted state instead of the static, NAV_ITEMS-mirroring
  * `CARDS` array, a drag could silently reintroduce drift.
  */
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ResearchHub } from "./ResearchHub";
 import { TAB_HELP } from "../help/helpContent";
-import { NAV_ITEMS } from "../navigation";
-
-const GRID_LOCAL_STORAGE_KEY = "grid-layout-research-hub";
-
-afterEach(() => {
-  localStorage.removeItem(GRID_LOCAL_STORAGE_KEY);
-});
 
 /** Stub landing screens, same pattern App.test.tsx uses to assert navigation. */
 function Stub({ marker }: { marker: string }) {
@@ -130,58 +123,13 @@ describe("ResearchHub screen", () => {
     expect(await screen.findByText(marker)).toBeInTheDocument();
   });
 
-  it("clicking a card's drag-handle header (icon + label) does NOT navigate -- only the body does", async () => {
+  it("clicking a card's header (icon + label) does NOT navigate -- only the body does", async () => {
     const user = userEvent.setup();
     renderHub();
-    // "Pilots" text lives in the .drag-handle header now, not the
-    // clickable body -- clicking it must be a no-op navigation-wise, since
-    // it's the grab affordance for react-grid-layout's drag config.
+    // "Pilots" text lives in the header now, not the
+    // clickable body -- clicking it must be a no-op navigation-wise.
     await user.click(screen.getByText("Pilots"));
     expect(screen.queryByText("landed:marketplace")).not.toBeInTheDocument();
   });
 
-  it("renders cards in NAV_ITEMS' canonical research-section order, immune to a stale drag-reordered layout in localStorage (parity gap G2 invariant)", () => {
-    // Simulate what localStorage would hold after a user previously dragged
-    // cards into a different visual arrangement -- DynamicGrid persists
-    // react-grid-layout x/y coordinates under this key. If this hub's
-    // rendered card order were ever derived from that persisted state
-    // instead of the static CARDS array (which mirrors NAV_ITEMS), a drag
-    // could silently reintroduce the exact drift parity gap G2 already
-    // fixed once (see this file's top docstring and ResearchHub.tsx's own).
-    localStorage.setItem(
-      GRID_LOCAL_STORAGE_KEY,
-      JSON.stringify({
-        lg: [
-          { i: "/data-explorer", x: 0, y: 0, w: 4, h: 3 },
-          { i: "/forecast", x: 4, y: 0, w: 4, h: 3 },
-          { i: "/marketplace", x: 8, y: 0, w: 4, h: 3 },
-          { i: "/sector-selection", x: 0, y: 3, w: 4, h: 3 },
-          { i: "/sentiment", x: 4, y: 3, w: 4, h: 3 },
-          { i: "/signals", x: 8, y: 3, w: 4, h: 3 },
-          { i: "/options", x: 0, y: 6, w: 4, h: 3 },
-          { i: "/pairs", x: 4, y: 6, w: 4, h: 3 },
-          { i: "/strategy-health", x: 8, y: 6, w: 4, h: 3 },
-          { i: "/models", x: 0, y: 9, w: 4, h: 3 },
-          { i: "/compare", x: 4, y: 9, w: 4, h: 3 },
-        ],
-      })
-    );
-
-    renderHub();
-
-    const grid = screen.getByTestId("grid-research-hub");
-    const renderedLabels = within(grid)
-      .getAllByRole("button")
-      .map((el) => el.getAttribute("aria-label"));
-
-    const expectedOrder = NAV_ITEMS.filter(
-      (item) => item.section === "research" && renderedLabels.includes(item.label)
-    ).map((item) => item.label);
-
-    // Every rendered card's accessible name, read off the DOM in the exact
-    // order it was mounted, must equal NAV_ITEMS' research-section order --
-    // NOT the scrambled localStorage layout set up above.
-    expect(renderedLabels).toEqual(expectedOrder);
-    expect(renderedLabels).toHaveLength(11);
-  });
 });

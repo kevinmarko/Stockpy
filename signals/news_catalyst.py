@@ -560,6 +560,7 @@ def _fetch_company_headlines_fmp(symbol: str, lookback_days: int) -> List[Dict[s
             "url": article.get("url"),
             "source": article.get("site") or article.get("publisher") or "fmp",
             "summary": article.get("text", ""),
+            "_provider": "fmp",
         })
     return out
 
@@ -574,6 +575,13 @@ def fetch_company_headlines(symbol: str, lookback_days: int) -> List[Dict[str, A
     provider actually served the data, so callers do not need to know or
     care which one ran. Never raises; ``[]`` when neither provider has
     anything (or neither is configured).
+
+    Each returned item carries an internal ``"_provider"`` key (``"fmp"`` or
+    ``"finnhub"``) tagging which provider actually served it -- consumed by
+    :func:`get_symbol_news_catalyst_details` to report ``provider_used``
+    without a second, separately-maintained notion of which provider ran.
+    Purely additive: existing callers that only read ``headline``/
+    ``datetime``/``url``/``source``/``summary`` are unaffected.
     """
     try:
         fmp_items = _fetch_company_headlines_fmp(symbol, lookback_days)
@@ -585,7 +593,11 @@ def fetch_company_headlines(symbol: str, lookback_days: int) -> List[Dict[str, A
     client = build_finnhub_client()
     if client is None:
         return []
-    return fetch_company_news(client, symbol, lookback_days)
+    finnhub_items = fetch_company_news(client, symbol, lookback_days)
+    for item in finnhub_items:
+        if isinstance(item, dict):
+            item["_provider"] = "finnhub"
+    return finnhub_items
 
 
 def fetch_next_earnings_any(symbol: str) -> Optional[datetime]:
@@ -628,6 +640,178 @@ def fetch_next_earnings_any(symbol: str) -> Optional[datetime]:
     if client is None:
         return None
     return fetch_next_earnings(client, symbol)
+
+
+# ---------------------------------------------------------------------------
+# On-demand, per-request detail bundle (API consumers -- e.g.
+# api/metrics_api.py's GET /metrics/sentiment/{symbol})
+# ---------------------------------------------------------------------------
+# Distinct from NewsCatalystSignal.pre_compute()'s once-per-cycle path above:
+# this is a synchronous, single-symbol helper meant to be called on demand
+# (wrapped in asyncio.to_thread by an async caller, since it does blocking
+# network I/O + FinBERT inference) rather than batched across the whole
+# universe once per trading cycle. It reuses the SAME provider-agnostic
+# dispatchers / earnings-proximity math / FinBERT-vs-lexicon gate as the
+# per-cycle path so the two can never silently diverge.
+
+def _empty_news_catalyst_details(symbol: str) -> Dict[str, Any]:
+    """Honest degrade shape for :func:`get_symbol_news_catalyst_details` --
+    zero headlines, a neutral/normal earnings read, and no fabricated
+    averages (CONSTRAINT #4). Used both for the genuine zero-headline case
+    and as the fallback on any unexpected failure.
+    """
+    return {
+        "symbol": str(symbol).upper() if symbol else str(symbol),
+        "headlines": [],
+        "earnings_catalyst": {
+            "next_earnings_date": None,
+            "hours_to_earnings": None,
+            "status": "normal",
+            "multiplier": 1.0,
+        },
+        "provider_used": "none",
+        "source_breakdown": {},
+        "raw_sentiment_avg": None,
+        "dampened_sentiment_score": None,
+    }
+
+
+def get_symbol_news_catalyst_details(
+    symbol: str, lookback_days: int = 7, max_headlines: int = 5
+) -> Dict[str, Any]:
+    """On-demand, per-request news-catalyst detail bundle for one symbol.
+
+    Fetches up to ``max_headlines`` most-recent headlines (via
+    :func:`fetch_company_headlines`) over the last ``lookback_days`` days,
+    scores each one via :func:`score_headlines` (respecting
+    ``settings.FINBERT_ENABLED`` -- lexicon-only when the operator has
+    explicitly disabled FinBERT, exactly like
+    ``NewsCatalystSignal._score_via_provider``), and combines that with the
+    next-earnings proximity read (via :func:`fetch_next_earnings_any` +
+    the existing :func:`_earnings_proximity_multiplier`) into a single
+    dict:
+
+    ``{"symbol", "headlines": [{"title", "publisher", "url",
+    "published_at", "score", "probabilities"}], "earnings_catalyst":
+    {"next_earnings_date", "hours_to_earnings", "status", "multiplier"},
+    "provider_used", "source_breakdown", "raw_sentiment_avg",
+    "dampened_sentiment_score"}``.
+
+    Never raises (CONSTRAINT #6) -- any unexpected failure degrades to
+    :func:`_empty_news_catalyst_details`'s honest empty shape, logged at
+    DEBUG. ``raw_sentiment_avg``/``dampened_sentiment_score`` are ``None``
+    (never a fabricated ``0.0`` -- CONSTRAINT #4) when there were zero
+    headlines to score this call.
+    """
+    try:
+        from settings import settings as _settings
+
+        symbol_u = str(symbol).upper()
+        now_utc = datetime.now(timezone.utc)
+
+        # ---- Earnings-proximity read (same math as the per-cycle path) ----
+        next_earnings = fetch_next_earnings_any(symbol_u)
+        suppress_h = float(_settings.NEWS_EARNINGS_SUPPRESS_HOURS)
+        dampen_d = float(_settings.NEWS_EARNINGS_DAMPEN_DAYS)
+        multiplier = _earnings_proximity_multiplier(next_earnings, now_utc, suppress_h, dampen_d)
+        # Status derived from the multiplier's own return value -- NOT a
+        # second, independent threshold comparison against suppress_h/
+        # dampen_d, which is exactly the kind of drift bug this helper must
+        # not reintroduce.
+        if multiplier <= 0.0:
+            status = "suppressed"
+        elif multiplier >= 1.0:
+            status = "normal"
+        else:
+            status = "dampened"
+        hours_to_earnings = (
+            (next_earnings - now_utc).total_seconds() / 3600.0
+            if next_earnings is not None else None
+        )
+        earnings_catalyst: Dict[str, Any] = {
+            "next_earnings_date": (
+                next_earnings.strftime("%Y-%m-%d") if next_earnings is not None else None
+            ),
+            "hours_to_earnings": hours_to_earnings,
+            "status": status,
+            "multiplier": float(multiplier),
+        }
+
+        # ---- Headlines: fetch, cap to most-recent, score ----
+        raw_items = fetch_company_headlines(symbol_u, lookback_days) or []
+        provider_used = "none"
+        if raw_items:
+            provider_used = str(raw_items[0].get("_provider") or "none")
+
+        def _item_sort_ts(item: Dict[str, Any]) -> float:
+            ts = item.get("datetime")
+            return float(ts) if isinstance(ts, (int, float)) else -1.0
+
+        ordered_items = sorted(raw_items, key=_item_sort_ts, reverse=True)
+        cap = max_headlines if max_headlines and max_headlines > 0 else len(ordered_items)
+        capped_items = ordered_items[:cap]
+
+        headline_texts = [str(item.get("headline", "")) for item in capped_items]
+        # Respect FINBERT_ENABLED -- MUST NOT call _get_finbert_pipeline()
+        # unconditionally (that would ignore an explicit lexicon-only
+        # override), matching _score_via_provider's own gate exactly.
+        pipeline = _get_finbert_pipeline() if _settings.FINBERT_ENABLED else None
+        distributions = score_headlines(headline_texts, pipeline=pipeline) if headline_texts else []
+
+        headline_out: List[Dict[str, Any]] = []
+        source_counts: Dict[str, int] = {}
+        signed_scores: List[float] = []
+        for item, dist in zip(capped_items, distributions):
+            publisher = str(
+                item.get("source") or item.get("publisher") or item.get("site") or "unknown"
+            )
+            source_counts[publisher] = source_counts.get(publisher, 0) + 1
+            signed = float(_distribution_to_signed(dist))
+            signed_scores.append(signed)
+
+            published_at: Optional[str] = None
+            ts = item.get("datetime")
+            if isinstance(ts, (int, float)):
+                try:
+                    published_at = datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+                except (OverflowError, OSError, ValueError):
+                    published_at = None
+
+            headline_out.append({
+                "title": str(item.get("headline", "")),
+                "publisher": publisher,
+                "url": item.get("url"),
+                "published_at": published_at,
+                "score": signed,
+                "probabilities": {
+                    "positive": float(dist.get("positive", 0.0)),
+                    "neutral": float(dist.get("neutral", 0.0)),
+                    "negative": float(dist.get("negative", 0.0)),
+                },
+            })
+
+        raw_sentiment_avg = (
+            float(sum(signed_scores) / len(signed_scores)) if signed_scores else None
+        )
+        dampened_sentiment_score = (
+            raw_sentiment_avg * multiplier if raw_sentiment_avg is not None else None
+        )
+
+        return {
+            "symbol": symbol_u,
+            "headlines": headline_out,
+            "earnings_catalyst": earnings_catalyst,
+            "provider_used": provider_used,
+            "source_breakdown": source_counts,
+            "raw_sentiment_avg": raw_sentiment_avg,
+            "dampened_sentiment_score": dampened_sentiment_score,
+        }
+    except Exception as exc:
+        logger.debug(
+            "get_symbol_news_catalyst_details: degraded to empty shape for %s: %s",
+            symbol, exc,
+        )
+        return _empty_news_catalyst_details(symbol)
 
 
 # ---------------------------------------------------------------------------

@@ -72,6 +72,46 @@ def test_submit_order_invalid_price_is_rejected():
     assert "invalid price" in result.error_message.lower()
 
 
+def test_submit_order_dry_run_never_touches_quote_or_store():
+    """dry_run=True must short-circuit before any quote fetch or store write
+    -- mirrors AlpacaBroker.submit_order's exact pattern (Finding 10)."""
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    intent = _intent(client_order_id="dry_run_order")
+    intent.dry_run = True
+    with patch("data.fmp_client.quote") as mock_quote:
+        result = asyncio.run(broker.submit_order(intent))
+        mock_quote.assert_not_called()
+
+    assert result.status == OrderStatus.ACCEPTED
+    assert result.broker_order_id is None
+    # Store must be untouched -- no order recorded, no fill applied.
+    assert broker.store.get_orders() == []
+    assert broker.store.get_open_positions() == []
+
+
+def test_submit_order_missing_market_cap_uses_none_not_zero():
+    """A quote payload missing marketCap must feed TieredCostModel a real
+    None, not a fabricated 0.0 -- a fabricated 0.0 routes to the smallest
+    ('illiquid', 20.0 bps) liquidity tier instead of the unknown-market-cap
+    ('large_cap', 1.0 bps) fallback, a ~20x cost misclassification
+    (Finding 21)."""
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    captured = {}
+    real_calc = broker.cost_model.calculate_cost
+
+    def spy_calc(*args, **kwargs):
+        captured["market_cap"] = kwargs.get("market_cap")
+        return real_calc(*args, **kwargs)
+
+    with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0}]), \
+         patch.object(broker.cost_model, "calculate_cost", side_effect=spy_calc):
+        result = asyncio.run(broker.submit_order(_intent(client_order_id="no_mcap")))
+
+    assert result.status == OrderStatus.FILLED
+    assert captured["market_cap"] is None
+    assert broker.cost_model.get_liquidity_tier(captured["market_cap"]) == "large_cap"
+
+
 def test_submit_order_rejects_multi_leg_options_orders():
     # A single-symbol FMP quote cannot honestly price a spread/condor --
     # V1 rejects rather than silently mis-filling it.

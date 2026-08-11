@@ -53,6 +53,7 @@ from signals.news_catalyst import (
     fetch_company_news,
     fetch_next_earnings,
     fetch_next_earnings_any,
+    get_symbol_news_catalyst_details,
     score_headlines,
 )
 from signals.registry import SignalRegistry
@@ -697,6 +698,54 @@ class TestHistoricalStoreFinbertScoreCache:
             conn.commit()
         assert store.get_finbert_score("deadbeef") is None
 
+    def test_count_finbert_scores_empty_table_is_zero(self, tmp_path):
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "finbert9.db"))
+        assert store.count_finbert_scores() == 0
+
+    def test_count_finbert_scores_counts_all_rows(self, tmp_path):
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "finbert10.db"))
+        store.save_finbert_scores({
+            _content_hash("headline one"): {"positive": 0.5, "neutral": 0.3, "negative": 0.2},
+            _content_hash("headline two"): {"positive": 0.1, "neutral": 0.8, "negative": 0.1},
+        })
+        assert store.count_finbert_scores() == 2
+
+    def test_count_finbert_scores_since_filters_by_scored_at(self, tmp_path):
+        import sqlite3
+        from data.historical_store import HistoricalStore
+
+        db = str(tmp_path / "finbert11.db")
+        store = HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "INSERT INTO finbert_score_cache "
+                "(content_hash, positive, neutral, negative, scored_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("old-hash", 0.5, 0.3, 0.2, "2020-01-01T00:00:00+00:00"),
+            )
+            conn.execute(
+                "INSERT INTO finbert_score_cache "
+                "(content_hash, positive, neutral, negative, scored_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("new-hash", 0.1, 0.8, 0.1, "2026-08-01T00:00:00+00:00"),
+            )
+            conn.commit()
+        cutoff = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        assert store.count_finbert_scores(since=cutoff) == 1
+        assert store.count_finbert_scores() == 2
+
+    def test_count_finbert_scores_read_failure_returns_zero(self, tmp_path, monkeypatch):
+        """CONSTRAINT #6: a read failure must never raise; degrades to 0."""
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(db_path=str(tmp_path / "finbert12.db"))
+        monkeypatch.setattr(store, "Session", None)
+        assert store.count_finbert_scores() == 0
+
 
 # ===========================================================================
 # TestSignalCompute
@@ -1253,7 +1302,10 @@ class TestProviderAgnosticDispatchers:
 
     def test_headlines_fmp_disabled_falls_to_finnhub(self):
         """FMP_NEWS_ENABLED defaults False -- straight to the Finnhub path,
-        and whatever Finnhub returns comes back unchanged."""
+        and whatever Finnhub returns comes back unchanged apart from the
+        internal "_provider" provenance tag fetch_company_headlines() now
+        stamps onto every Finnhub-sourced item (see
+        get_symbol_news_catalyst_details's provider_used)."""
         mock_client = MagicMock()
         mock_client.company_news.return_value = [
             {"headline": "Finnhub headline one", "datetime": 1234567890}
@@ -1261,7 +1313,9 @@ class TestProviderAgnosticDispatchers:
         with patch("settings.settings.FMP_NEWS_ENABLED", False):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 result = fetch_company_headlines("AAPL", 7)
-        assert result == [{"headline": "Finnhub headline one", "datetime": 1234567890}]
+        assert result == [
+            {"headline": "Finnhub headline one", "datetime": 1234567890, "_provider": "finnhub"}
+        ]
 
     def test_headlines_fmp_enabled_short_circuits_finnhub(self):
         """FMP enabled + keyed and the FMP fetch returns real items -> those
@@ -1298,7 +1352,9 @@ class TestProviderAgnosticDispatchers:
                 with patch("data.fmp_client.stock_news", return_value=[]):
                     with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                         result = fetch_company_headlines("AAPL", 7)
-        assert result == [{"headline": "Finnhub fallback headline", "datetime": 555}]
+        assert result == [
+            {"headline": "Finnhub fallback headline", "datetime": 555, "_provider": "finnhub"}
+        ]
 
     def test_headlines_fmp_unavailable_falls_through_to_finnhub(self):
         """FMP enabled + keyed but stock_news() raises FMPUnavailable ->
@@ -1317,7 +1373,9 @@ class TestProviderAgnosticDispatchers:
                 ):
                     with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                         result = fetch_company_headlines("AAPL", 7)
-        assert result == [{"headline": "Finnhub fallback after FMP outage", "datetime": 999}]
+        assert result == [
+            {"headline": "Finnhub fallback after FMP outage", "datetime": 999, "_provider": "finnhub"}
+        ]
 
     def test_headlines_neither_provider_available_returns_empty(self):
         """FMP disabled AND no Finnhub client -> [], never raises."""
@@ -1752,3 +1810,170 @@ class TestSettings:
         from settings import settings
         # Suppress window (hours) should be less than dampen window (hours)
         assert settings.NEWS_EARNINGS_SUPPRESS_HOURS < settings.NEWS_EARNINGS_DAMPEN_DAYS * 24
+
+
+# ===========================================================================
+# TestGetSymbolNewsCatalystDetails
+# ===========================================================================
+
+class TestGetSymbolNewsCatalystDetails:
+    """get_symbol_news_catalyst_details() -- the on-demand, per-request
+    detail bundle consumed by api/metrics_api.py's GET
+    /metrics/sentiment/{symbol}. Covers the specific bugs a prior broken
+    attempt at this function shipped: a dropped source_breakdown, an
+    unconditional FinBERT pipeline load ignoring FINBERT_ENABLED=False, and
+    a "source" key instead of "publisher"."""
+
+    def test_empty_headlines_returns_honest_shape(self):
+        """No headlines, no earnings date -> normal/1.0 earnings_catalyst,
+        raw_sentiment_avg/dampened_sentiment_score both None (never a
+        fabricated 0.0 -- CONSTRAINT #4)."""
+        with patch("signals.news_catalyst.fetch_company_headlines", return_value=[]):
+            with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
+                result = get_symbol_news_catalyst_details("aapl")
+
+        assert result["symbol"] == "AAPL"
+        assert result["headlines"] == []
+        assert result["earnings_catalyst"]["status"] == "normal"
+        assert result["earnings_catalyst"]["multiplier"] == 1.0
+        assert result["earnings_catalyst"]["next_earnings_date"] is None
+        assert result["earnings_catalyst"]["hours_to_earnings"] is None
+        assert result["provider_used"] == "none"
+        assert result["source_breakdown"] == {}
+        assert result["raw_sentiment_avg"] is None
+        assert result["dampened_sentiment_score"] is None
+
+    def test_with_headlines_populates_publisher_and_source_breakdown(self):
+        """Real bug-regression coverage: the returned headline dicts use a
+        "publisher" key (not "source"), and source_breakdown is actually
+        included in the return value (a prior broken version computed it
+        and silently dropped it)."""
+        headlines = [
+            {
+                "headline": "Apple beats and raises guidance",
+                "datetime": 2000,
+                "url": "https://example.com/1",
+                "source": "example.com",
+                "_provider": "fmp",
+            },
+            {
+                "headline": "Apple faces new lawsuit",
+                "datetime": 1000,
+                "url": "https://example.com/2",
+                "source": "example.com",
+                "_provider": "fmp",
+            },
+        ]
+        distributions = [
+            {"positive": 0.8, "neutral": 0.15, "negative": 0.05},
+            {"positive": 0.1, "neutral": 0.2, "negative": 0.7},
+        ]
+        with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
+            with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
+                with patch("signals.news_catalyst.score_headlines", return_value=distributions):
+                    result = get_symbol_news_catalyst_details("AAPL")
+
+        assert result["provider_used"] == "fmp"
+        assert len(result["headlines"]) == 2
+        # Most-recent (datetime=2000) sorts first.
+        assert result["headlines"][0]["title"] == "Apple beats and raises guidance"
+        assert result["headlines"][0]["publisher"] == "example.com"
+        assert result["headlines"][0]["probabilities"] == {
+            "positive": 0.8, "neutral": 0.15, "negative": 0.05
+        }
+        assert result["headlines"][0]["score"] == pytest.approx(0.75)
+        assert result["source_breakdown"] == {"example.com": 2}
+        assert result["raw_sentiment_avg"] == pytest.approx((0.75 + (0.1 - 0.7)) / 2)
+        assert result["dampened_sentiment_score"] == pytest.approx(
+            result["raw_sentiment_avg"] * result["earnings_catalyst"]["multiplier"]
+        )
+
+    def test_max_headlines_caps_to_most_recent(self):
+        """Three real headlines, max_headlines=2 -> only the two most
+        recent (by "datetime") come back."""
+        headlines = [
+            {"headline": "oldest", "datetime": 100, "source": "a", "_provider": "finnhub"},
+            {"headline": "newest", "datetime": 300, "source": "a", "_provider": "finnhub"},
+            {"headline": "middle", "datetime": 200, "source": "a", "_provider": "finnhub"},
+        ]
+        distributions = [
+            {"positive": 0.5, "neutral": 0.3, "negative": 0.2},
+            {"positive": 0.5, "neutral": 0.3, "negative": 0.2},
+        ]
+        with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
+            with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
+                with patch("signals.news_catalyst.score_headlines", return_value=distributions):
+                    result = get_symbol_news_catalyst_details("AAPL", max_headlines=2)
+
+        titles = [h["title"] for h in result["headlines"]]
+        assert titles == ["newest", "middle"]
+
+    def test_earnings_within_suppress_window_reports_suppressed(self):
+        soon = datetime.now(timezone.utc) + timedelta(hours=10)
+        with patch("signals.news_catalyst.fetch_company_headlines", return_value=[]):
+            with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=soon):
+                result = get_symbol_news_catalyst_details("AAPL")
+        assert result["earnings_catalyst"]["status"] == "suppressed"
+        assert result["earnings_catalyst"]["multiplier"] == 0.0
+        assert result["earnings_catalyst"]["next_earnings_date"] == soon.strftime("%Y-%m-%d")
+
+    def test_earnings_within_dampen_window_reports_dampened(self):
+        soon = datetime.now(timezone.utc) + timedelta(days=3)
+        with patch("signals.news_catalyst.fetch_company_headlines", return_value=[]):
+            with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=soon):
+                result = get_symbol_news_catalyst_details("AAPL")
+        assert result["earnings_catalyst"]["status"] == "dampened"
+        assert result["earnings_catalyst"]["multiplier"] == 0.5
+
+    def test_finbert_disabled_never_loads_pipeline(self):
+        """FINBERT_ENABLED=False MUST route through the lexicon path --
+        _get_finbert_pipeline() must never even be called. A prior broken
+        version called it unconditionally, ignoring the operator's explicit
+        lexicon-only override."""
+        headlines = [
+            {
+                "headline": "Apple beats and raises guidance",
+                "datetime": 5000,
+                "source": "example.com",
+                "_provider": "finnhub",
+            },
+        ]
+        with patch("settings.settings.FINBERT_ENABLED", False):
+            with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
+                with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
+                    with patch("signals.news_catalyst._get_finbert_pipeline") as mock_pipeline:
+                        with patch("settings.settings.FINBERT_SCORE_CACHE_ENABLED", False):
+                            result = get_symbol_news_catalyst_details("AAPL")
+
+        mock_pipeline.assert_not_called()
+        assert result["headlines"][0]["title"] == "Apple beats and raises guidance"
+        # Lexicon path still produces a real signed score for this
+        # positive-keyword headline.
+        assert result["headlines"][0]["score"] > 0.0
+
+    def test_never_raises_degrades_to_empty_shape(self):
+        """CONSTRAINT #6: any unexpected failure inside the function body
+        must degrade to the honest empty shape, never propagate."""
+        with patch(
+            "signals.news_catalyst.fetch_next_earnings_any",
+            side_effect=RuntimeError("simulated failure"),
+        ):
+            result = get_symbol_news_catalyst_details("AAPL")
+
+        assert result["symbol"] == "AAPL"
+        assert result["headlines"] == []
+        assert result["earnings_catalyst"]["status"] == "normal"
+        assert result["provider_used"] == "none"
+        assert result["raw_sentiment_avg"] is None
+
+    def test_provider_used_none_when_no_provider_tag_present(self):
+        """Defensive: if a headline batch somehow carries no "_provider"
+        tag, provider_used degrades to "none" rather than raising a
+        KeyError."""
+        headlines = [{"headline": "untagged headline", "datetime": 100, "source": "a"}]
+        distributions = [{"positive": 0.5, "neutral": 0.3, "negative": 0.2}]
+        with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
+            with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
+                with patch("signals.news_catalyst.score_headlines", return_value=distributions):
+                    result = get_symbol_news_catalyst_details("AAPL")
+        assert result["provider_used"] == "none"

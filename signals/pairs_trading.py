@@ -65,7 +65,14 @@ def generate_pairs_signals(
     # Rolling z-score of spread
     spread_mean = spread.rolling(window=zscore_window, min_periods=zscore_window // 2).mean()
     spread_std = spread.rolling(window=zscore_window, min_periods=zscore_window // 2).std()
-    z_score = (spread - spread_mean) / spread_std
+    # Degenerate-std guard (this repo's `< 1e-12` convention -- mirrors
+    # signals/multifactor.py::_zscore_winsorize): an exact-zero std against a
+    # nonzero numerator would otherwise produce `inf`, which `pd.isna()` does
+    # NOT catch, silently defeating the state machine's only NaN guard below.
+    z_score = pd.Series(
+        np.where(spread_std >= 1e-12, (spread - spread_mean) / spread_std, np.nan),
+        index=spread.index,
+    )
     
     # Rolling adf p-value
     rolling_p = rolling_adf_pvalue(spread, window=adf_window)

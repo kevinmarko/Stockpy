@@ -271,6 +271,73 @@ def test_reconcile_error_shaped_when_fetch_raises(out_dir):
     assert report["unexpected_fills"] == []
 
 
+def test_reconcile_quantity_mismatch_with_known_qty_is_not_a_silent_match(out_dir):
+    """A same-key placed/fill pair whose KNOWN quantities diverge wildly
+    (placed 100, filled 3) must not be folded into matched_keys, nor
+    misrepresented as unmatched_placed/unexpected_fills -- it is a distinct
+    failure mode surfaced honestly in its own quantity_mismatch bucket, and
+    must flip ok=False."""
+    ts = "2026-07-06T14:00:00+00:00"
+    rs.append_placed({"symbol": "AAPL", "side": "buy", "qty": 100, "ts": ts}, out_dir)
+
+    orders = [_raw_order("url/AAPL/", "buy", 3, 190.0, ts, "o1")]
+    fetcher = lambda: orders
+    resolver = _resolver({"url/AAPL/": "AAPL"})
+
+    report = rs.reconcile(out_dir, orders_fetcher=fetcher, symbol_resolver=resolver, force=True)
+    assert report["ok"] is False
+    assert report["placed_count"] == 1
+    assert report["filled_matched"] == 0
+    # A key-based match exists (same date/symbol/side), so it must NOT be
+    # misrepresented as "no fill at all" or "an unexplained fill".
+    assert report["unmatched_placed"] == []
+    assert report["unexpected_fills"] == []
+    assert len(report["quantity_mismatch"]) == 1
+    mismatch = report["quantity_mismatch"][0]
+    assert mismatch["symbol"] == "AAPL"
+    assert mismatch["side"] == "buy"
+    assert mismatch["placed_qty"] == 100.0
+    assert mismatch["filled_qty"] == 3.0
+    assert mismatch["diff"] == pytest.approx(97.0)
+
+
+def test_reconcile_within_tolerance_qty_still_matches(out_dir):
+    """A known placed qty that matches the fill qty exactly must still count
+    as a genuine match (no false-positive mismatch on the happy path)."""
+    ts = "2026-07-06T14:00:00+00:00"
+    rs.append_placed({"symbol": "MSFT", "side": "sell", "qty": 10, "ts": ts}, out_dir)
+
+    orders = [_raw_order("url/MSFT/", "sell", 10, 300.0, ts, "o2")]
+    fetcher = lambda: orders
+    resolver = _resolver({"url/MSFT/": "MSFT"})
+
+    report = rs.reconcile(out_dir, orders_fetcher=fetcher, symbol_resolver=resolver, force=True)
+    assert report["ok"] is True
+    assert report["filled_matched"] == 1
+    assert report["quantity_mismatch"] == []
+
+
+def test_reconcile_notional_based_buy_with_unknown_qty_stays_key_matched(out_dir):
+    """A notional-based BUY intent (qty=None, target_notional set) can't be
+    quantity-compared in advance -- key presence alone must remain the
+    honest match criterion, unaffected by whatever share count actually
+    filled (no false-positive mismatch on a legitimate notional order)."""
+    ts = "2026-07-06T14:00:00+00:00"
+    rs.append_placed(
+        {"symbol": "NVDA", "side": "buy", "qty": None, "target_notional": 500.0, "ts": ts},
+        out_dir,
+    )
+
+    orders = [_raw_order("url/NVDA/", "buy", 4.37, 114.4, ts, "o3")]
+    fetcher = lambda: orders
+    resolver = _resolver({"url/NVDA/": "NVDA"})
+
+    report = rs.reconcile(out_dir, orders_fetcher=fetcher, symbol_resolver=resolver, force=True)
+    assert report["ok"] is True
+    assert report["filled_matched"] == 1
+    assert report["quantity_mismatch"] == []
+
+
 def test_reconcile_fetcher_failure_degrades_to_no_fills(out_dir):
     """fetch_filled_orders swallows a fetcher exception and returns [] — so a
     placed ledger entry surfaces as unmatched, and reconcile never raises."""

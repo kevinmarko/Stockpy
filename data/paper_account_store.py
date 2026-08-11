@@ -194,7 +194,7 @@ class PaperAccountStore:
                     session.add(pos)
                     
             elif side == "sell":
-                if current_qty < qty:
+                if current_qty < qty - _QTY_EPSILON:
                     logger.warning(f"Insufficient inventory for paper sell of {qty} {symbol}: pos={current_qty}")
                     self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED)
                     return False

@@ -7,7 +7,6 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useTrainingStatus } from "../hooks/useTrainingStatus";
 import { Button, DeployableBadge, ErrorState, Loading, MetricBadge, InfoTip, Notice, Select } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
@@ -90,7 +89,7 @@ function ModelCard({
   const canRetrain = m.role === "cross_sectional_ranker" || m.role === "meta_labeler";
   return (
     <section className="card card-pad" style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", padding: 0 }}>
-      <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)", padding: "var(--s-3)", borderBottom: "1px solid var(--border)", cursor: "grab" }}>
+      <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)", padding: "var(--s-3)", borderBottom: "1px solid var(--border)" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", wordBreak: "break-word" }}>{m.name}</div>
           {m.role && (
@@ -349,11 +348,6 @@ export function Models() {
             <h1 className="screen-title" style={{ margin: 0 }}>The models</h1>
           </div>
         </div>
-        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
-          <button type="button" className="btn btn-neutral" onClick={() => resetGridLayout("models")}>
-            Reset Layout
-          </button>
-        </div>
       </div>
       <p className="screen-sub">
         The ML models behind the platform, with their honest CPCV validation
@@ -380,39 +374,22 @@ export function Models() {
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0 }}>
-              <DynamicGrid
-                layoutKey="models"
-                defaultLayouts={{
-                  lg: [
-                  { i: "comparison-chart", x: 0, y: 0, w: 6, h: 10 },
-                  { i: "signal-weights", x: 6, y: 0, w: 6, h: 10 },
-                  { i: "filters", x: 0, y: 10, w: 12, h: 3, isResizable: false },
-                  ...(visibleModels.length === 0
-                    ? [{ i: "empty-models", x: 0, y: 13, w: 12, h: 4, isResizable: false }]
-                    : visibleModels.map((m, idx) => ({
-                        i: `model-${m.name}`,
-                        x: (idx % 3) * 4,
-                        y: 13 + Math.floor(idx / 3) * 6,
-                        w: 4,
-                        h: 6
-                      })))
-                ]}}
-              >
+              <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
                 <div key="comparison-chart" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)", cursor: "grab" }}>Model Comparison</div>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>Model Comparison</div>
                   <div style={{ flex: 1, minHeight: 0, padding: "var(--s-3)" }}>
                     <ModelComparisonChart />
                   </div>
                 </div>
 
                 <div key="signal-weights" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)", cursor: "grab" }}>Signal Drivers</div>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>Signal Drivers</div>
                   <div style={{ flex: 1, minHeight: 0, padding: "var(--s-3)" }}>
                     <SignalDriverWeights />
                   </div>
                 </div>
 
-                <div key="filters" className="card card-pad drag-handle" style={{ display: "flex", alignItems: "center", gap: "var(--s-4)", cursor: "grab", height: "100%" }}>
+                <div key="filters" className="card card-pad drag-handle" style={{ display: "flex", alignItems: "center", gap: "var(--s-4)", height: "100%" }}>
                   <div style={{ display: "flex", gap: "var(--s-2)", overflowX: "auto", scrollbarWidth: "none", flex: 1 }}>
                     {FILTERS.map((f) => (
                       <button
@@ -463,7 +440,7 @@ export function Models() {
                     </div>
                   ))
                 )}
-              </DynamicGrid>
+              </div>
             </div>
           )
         )}

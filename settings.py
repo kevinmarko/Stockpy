@@ -1658,6 +1658,40 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- DSR single-trial correction (validation/metrics.py) ---
+    VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Opt-in fix for validation/metrics.py::deflated_sharpe_ratio's "
+            "n_trials<=1 shortcut, which unconditionally returns 1.0 (a "
+            "perfect deflated Sharpe) for any single-trial strategy instead "
+            "of actually computing the DSR test statistic -- so a strategy "
+            "with only one configuration always passes the 'DSR > 0.95' "
+            "deployability gate regardless of how weak its observed Sharpe, "
+            "skew, or kurtosis actually are. This bug is directly relied on "
+            "today by 5 STRATEGY_REGISTRY strategies that hit DSR=1.000 "
+            "exactly via this shortcut -- multifactor_lowvol_size, "
+            "garch_vol_target, cross_sectional_momentum, "
+            "relative_strength_xsec, timeseries_momentum (confirmed in "
+            "docs/VALIDATION_STRATEGY_FIX_LOG.md) -- and are currently "
+            "recorded deployable=True, so the corrected math ships opt-in "
+            "rather than silently changing any currently-recorded verdict. "
+            "False (the default) reproduces the pre-existing `return 1.0` "
+            "shortcut byte-for-byte. True sets sr_0 = 0.0 (mathematically "
+            "correct: with genuinely only one trial there is no "
+            "multiple-testing selection-bias penalty to deflate for) and "
+            "falls through to compute the REAL z_stat/norm.cdf from the "
+            "actual sr_observed/skew/kurtosis/n_observations, instead of "
+            "short-circuiting to a hardcoded perfect pass. Flipping this on "
+            "requires a follow-up session with live-market data access to "
+            "re-run scripts/refresh_validations.py against the 5 strategies "
+            "named above and update docs/VALIDATION_STRATEGY_FIX_LOG.md "
+            "before this can ever change what's actually live -- exactly "
+            "like this codebase's other opt-in correctness levers (e.g. "
+            "VALIDATION_HARNESS_OOS_GATE_ENABLED above)."
+        ),
+    )
+
     # --- LGBM ranker native MultiIndex CPCV (ml/lgbm_ranker.py) ---
     LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED: bool = Field(
         default=False,

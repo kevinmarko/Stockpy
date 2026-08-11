@@ -81,7 +81,11 @@ from gui.ai_insights_panel import (
 from gui.llm_commentary_panel import commentary_status, generate_for_symbol_row
 from llm.chart_insight import generate_chart_pattern_read, render_price_chart_png
 from llm.research import generate_research_brief
+from pilots.catalog import get_pilot as _catalog_get_pilot, list_pilots as _catalog_list_pilots
+from pilots.observability import observability_summary as _pilots_observability_summary
 from pilots.scoring import load_snapshot
+from pilots.scoring import pilot_holdings as _pilots_pilot_holdings
+from pilots.scoring import pilot_trades as _pilots_pilot_trades
 
 logger = logging.getLogger(__name__)
 
@@ -1460,6 +1464,161 @@ def _sse(event_type: str, content: str) -> str:
     return f"data: {json.dumps({'type': event_type, 'content': content})}\n\n"
 
 
+# ---------------------------------------------------------------------------
+# Chat grounding tools -- READ-ONLY function-calling tools for POST /api/chat
+# (Gemini automatic function calling; see chat_endpoint's docstring). Each
+# function below is a plain Python callable the google-genai SDK introspects
+# (type hints + docstring) to build its own tool schema and invoke
+# automatically mid-turn -- passed directly into
+# ``types.GenerateContentConfig(tools=[...])``, per the SDK's automatic
+# function calling support.
+#
+# HARD CONSTRAINTS for every function in this section:
+#   * READ-ONLY, always -- never a mutating action (no order placement, no
+#     follow/unfollow, no watch-rule writes, no settings writes). This
+#     section must NEVER grow an execute_paper_trade / follow_pilot /
+#     update_watch_rules / etc. tool.
+#   * MUST NEVER raise (CONSTRAINT #6) -- any failure is caught and returns
+#     an honest ``{"error": "..."}`` dict so one bad tool call can never
+#     crash the chat turn (matches every other dead-letter boundary in this
+#     codebase).
+#   * Reuses REAL existing platform read helpers -- nothing here
+#     reimplements pilot scoring, holdings, trades, or observability logic.
+# ---------------------------------------------------------------------------
+
+
+def _chat_tool_history_dir() -> str:
+    """Resolve the rotated-snapshot history dir from live settings per call
+    (mirrors api/pilots_api.py::_history_dir -- kept local since this file
+    has no other reason to import that module)."""
+    return str(settings.OUTPUT_DIR / "history")
+
+
+def _chat_tool_pilot_to_dict(pilot: Any) -> Dict[str, Any]:
+    return {
+        "id": pilot.id,
+        "name": pilot.name,
+        "category": pilot.category,
+        "description": pilot.description,
+        "weights": dict(pilot.weights),
+        "long_only": pilot.long_only,
+        "validation_strategy_id": pilot.validation_strategy_id,
+    }
+
+
+def list_all_pilots() -> Dict[str, Any]:
+    """List every Pilot (copyable strategy) available on the Stockpy
+    platform: id, display name, category, description, signal-module weight
+    blend, and whether it is long-only. Use this to answer "what
+    strategies/pilots exist" or to resolve a Pilot's id from its display
+    name before calling another tool that needs ``pilot_id``."""
+    try:
+        return {"pilots": [_chat_tool_pilot_to_dict(p) for p in _catalog_list_pilots()]}
+    except Exception as exc:  # noqa: BLE001 - dead-letter: a tool call must never raise
+        logger.warning("chat tool list_all_pilots failed: %s", exc)
+        return {"error": "Could not list pilots."}
+
+
+def get_pilot_holdings(pilot_id: str) -> Dict[str, Any]:
+    """Get a specific Pilot's current TARGET holdings -- the symbols it
+    would hold, each one's target weight, sector, score, and current
+    action -- computed from the latest persisted platform snapshot.
+    ``pilot_id`` is the Pilot's stable slug (e.g. "trend-following"); call
+    list_all_pilots first if you don't already know it."""
+    try:
+        pilot = _catalog_get_pilot(pilot_id)
+        if pilot is None:
+            return {"error": f"Unknown pilot_id '{pilot_id}'."}
+        snapshot = load_snapshot()
+        if snapshot is None:
+            return {
+                "pilot_id": pilot_id,
+                "holdings": [],
+                "reason": "No platform snapshot available yet.",
+            }
+        return {"pilot_id": pilot_id, "holdings": _pilots_pilot_holdings(pilot, snapshot)}
+    except Exception as exc:  # noqa: BLE001 - dead-letter
+        logger.warning("chat tool get_pilot_holdings failed: %s", exc)
+        return {"error": "Could not fetch pilot holdings."}
+
+
+def get_pilot_recent_trades(pilot_id: str) -> Dict[str, Any]:
+    """Get a specific Pilot's recent signal-change trades (ENTER/EXIT/
+    REWEIGHT events), most recent last, derived by diffing its holdings
+    across recent historical platform snapshots. ``pilot_id`` is the Pilot's
+    stable slug; call list_all_pilots first if you don't already know it."""
+    try:
+        pilot = _catalog_get_pilot(pilot_id)
+        if pilot is None:
+            return {"error": f"Unknown pilot_id '{pilot_id}'."}
+        trades = _pilots_pilot_trades(pilot, history_dir=_chat_tool_history_dir())
+        return {"pilot_id": pilot_id, "trades": trades}
+    except Exception as exc:  # noqa: BLE001 - dead-letter
+        logger.warning("chat tool get_pilot_recent_trades failed: %s", exc)
+        return {"error": "Could not fetch pilot trades."}
+
+
+def get_current_portfolio() -> Dict[str, Any]:
+    """Get the operator's REAL current brokerage portfolio: total equity,
+    buying power, and every open position (symbol, quantity, average cost,
+    current price, market value, unrealized P&L). Sourced from the latest
+    persisted account snapshot -- never a live brokerage call."""
+    try:
+        snap = HistoricalStore(readonly=True).latest_account_snapshot()
+        if snap is None:
+            return {"reason": "No account snapshot available yet."}
+        return {
+            "total_equity": snap.total_equity,
+            "buying_power": snap.buying_power,
+            "total_dividends": snap.total_dividends,
+            "fetched_at": snap.fetched_at.isoformat() if snap.fetched_at else None,
+            "positions": [
+                {
+                    "symbol": pos.symbol,
+                    "quantity": pos.quantity,
+                    "average_cost": pos.average_cost,
+                    "current_price": pos.current_price,
+                    "market_value": pos.market_value,
+                    "unrealized_pl": pos.unrealized_pl,
+                }
+                for pos in (snap.positions or {}).values()
+            ],
+        }
+    except Exception as exc:  # noqa: BLE001 - dead-letter
+        logger.warning("chat tool get_current_portfolio failed: %s", exc)
+        return {"error": "Could not fetch the current portfolio."}
+
+
+def get_platform_status() -> Dict[str, Any]:
+    """Get the platform's current regime/risk status: portfolio risk metrics
+    (Sharpe, Calmar, max drawdown), portfolio heat vs. its limit, and the
+    current macro regime overlay (Sahm rule, high-yield OAS, HMM risk-on
+    probability). Use this to answer questions about overall platform/
+    portfolio health or the current market regime."""
+    try:
+        summary = _pilots_observability_summary()
+        return {
+            "portfolio_risk": summary.get("portfolio_risk"),
+            "portfolio_heat": summary.get("portfolio_heat"),
+            "regime_overlay": summary.get("regime"),
+        }
+    except Exception as exc:  # noqa: BLE001 - dead-letter
+        logger.warning("chat tool get_platform_status failed: %s", exc)
+        return {"error": "Could not fetch platform status."}
+
+
+# The fixed, read-only tool set handed to Gemini's automatic function
+# calling. NEVER add a mutating function here (see the hard constraints in
+# this section's header comment above).
+_CHAT_TOOLS = [
+    list_all_pilots,
+    get_pilot_holdings,
+    get_pilot_recent_trades,
+    get_current_portfolio,
+    get_platform_status,
+]
+
+
 @app.post(
     "/api/chat",
     dependencies=[Depends(require_token), Depends(_require_ai_generation_enabled)],
@@ -1481,6 +1640,16 @@ async def chat_endpoint(req: ChatMessageRequest):
     anything to build it -- it only threads the string into the prompt, so
     it stays free of any FMP/heavy-engine import surface. Omitted/empty is
     byte-identical to the endpoint's behavior before this field existed.
+
+    The Gemini branch additionally grounds the model in REAL persisted
+    platform state via ``_CHAT_TOOLS`` -- a fixed, read-only set of Python
+    functions (list pilots, a pilot's holdings/recent trades, the operator's
+    real current portfolio, platform risk/regime status) wired in through
+    Gemini's automatic function calling. Every tool function is read-only
+    and never raises (an internal failure returns an honest
+    ``{"error": ...}`` dict instead) -- see the tool section's header
+    comment above ``chat_endpoint`` for the hard constraints. The Anthropic
+    branch does not yet have an equivalent tool-calling integration.
     """
 
     async def stream_generator():
@@ -1521,10 +1690,16 @@ async def chat_endpoint(req: ChatMessageRequest):
                     )
                 )
 
-                # Use generate_content_stream for streaming
+                # Use generate_content_stream for streaming, with the
+                # read-only platform-grounding tool set wired in via Gemini's
+                # automatic function calling (the SDK introspects each
+                # callable's type hints + docstring to build its schema and
+                # invokes it automatically mid-turn -- see _CHAT_TOOLS'
+                # definition above for the hard read-only constraint).
                 response_stream = client.models.generate_content_stream(
                     model='gemini-2.5-flash',
                     contents=contents,
+                    config=types.GenerateContentConfig(tools=_CHAT_TOOLS),
                 )
 
                 async for chunk in _iter_blocking(response_stream):

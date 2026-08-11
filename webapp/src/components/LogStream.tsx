@@ -71,7 +71,6 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
           gap: "var(--s-2)",
           padding: "var(--s-3)",
           borderBottom: `1px solid ${theme.border}`,
-          cursor: "grab",
         }}
       >
         <span style={{ fontWeight: 700, color: theme.textSecondary, fontSize: "var(--t-callout)" }}>

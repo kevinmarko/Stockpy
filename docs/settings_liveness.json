@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 262,
+    "live_safe": 263,
     "no_op": 2,
     "restart_required": 90,
-    "total": 354
+    "total": 355
   },
   "dynamic_sites": [
     {
@@ -42,28 +42,28 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 164,
+      "line": 168,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3100,
+      "line": 3144,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4146,
+      "line": 4190,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4251,
+      "line": 4295,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 363,
+  "files_scanned": 366,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -398,6 +398,7 @@
     "SYNC_WATCHLIST_FILES",
     "UNIVERSE_SYNC_ENABLED",
     "USE_DUAL_MOMENTUM_OVERLAY",
+    "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
     "VOL_TARGET",
     "WATCH_RULES_FILE",
@@ -410,15 +411,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 729,
+    "attr": 738,
     "factory_param": 4,
-    "getattr_const": 250,
+    "getattr_const": 255,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 221,
     "factory_param": 4,
-    "getattr_const": 153,
+    "getattr_const": 155,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -529,7 +530,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/order_manager.py:183",
+        "site": "execution/order_manager.py:188",
         "via": []
       }
     ],
@@ -604,7 +605,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/data_api.py:117",
+        "site": "api/data_api.py:121",
         "via": []
       },
       {
@@ -613,7 +614,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/metrics_api.py:70",
+        "site": "api/metrics_api.py:73",
         "via": []
       },
       {
@@ -622,7 +623,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:319",
+        "site": "api/pilots_api.py:321",
         "via": []
       },
       {
@@ -1292,7 +1293,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4628",
+        "site": "api/pilots_api.py:4672",
         "via": []
       }
     ],
@@ -1303,7 +1304,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4627",
+        "site": "api/pilots_api.py:4671",
         "via": []
       }
     ],
@@ -1314,7 +1315,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4772",
+        "site": "api/pilots_api.py:4816",
         "via": []
       },
       {
@@ -1389,7 +1390,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4752",
+        "site": "api/pilots_api.py:4796",
         "via": []
       },
       {
@@ -1433,7 +1434,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:609",
+        "site": "api/pilots_api.py:611",
         "via": []
       }
     ],
@@ -1951,7 +1952,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3752",
+        "site": "investyo_mcp_server.py:4433",
         "via": []
       }
     ],
@@ -1971,7 +1972,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3704",
+        "site": "investyo_mcp_server.py:4385",
         "via": []
       }
     ],
@@ -2011,7 +2012,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3712",
+        "site": "investyo_mcp_server.py:4393",
         "via": []
       }
     ],
@@ -2217,7 +2218,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "pilots/scan_config_store.py:80",
+        "site": "pilots/scan_config_store.py:165",
         "via": []
       },
       {
@@ -2448,7 +2449,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:604",
+        "site": "api/pilots_api.py:606",
         "via": []
       },
       {
@@ -2477,7 +2478,7 @@
         "rules": [
           "closure_value"
         ],
-        "site": "pipeline/production_steps.py:531",
+        "site": "pipeline/production_steps.py:560",
         "via": []
       }
     ],
@@ -2506,7 +2507,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "main.py:256",
+        "site": "main.py:261",
         "via": []
       },
       {

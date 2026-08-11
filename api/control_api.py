@@ -726,21 +726,24 @@ def stream_job_logs(
         except ValueError:
             pass  # malformed header -> fall back to ?offset=
 
+    def _read_lines(path, offset):
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            f.seek(offset)
+            return f.readlines(), f.tell()
+
     async def log_event_generator():
         current_offset = max(0, resume_offset)
         last_sent = _time.monotonic()
         while True:
             sent_any = False
             if log_path.exists():
-                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                    f.seek(current_offset)
-                    lines = f.readlines()
-                    if lines:
-                        for line in lines:
-                            scrubbed = redact_line(line.rstrip("\n"))
-                            yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
-                        current_offset = f.tell()
-                        sent_any = True
+                lines, new_offset = await asyncio.to_thread(_read_lines, log_path, current_offset)
+                if lines:
+                    for line in lines:
+                        scrubbed = redact_line(line.rstrip("\n"))
+                        yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
+                    current_offset = new_offset
+                    sent_any = True
 
             if not rec.handle.is_running():
                 # Stream final lines if any and stop

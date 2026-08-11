@@ -76,7 +76,7 @@ def test_signal_registry_missing_features():
 
 def test_signal_registry_invalid_registration():
     registry = SignalRegistry()
-    
+
     class BadSignal(SignalModule):
         name = ""  # Invalid name
         required_features = []
@@ -85,3 +85,75 @@ def test_signal_registry_invalid_registration():
 
     with pytest.raises(ValueError, match="Signal module must have a non-empty 'name'"):
         registry.register(BadSignal())
+
+
+# ============================================================================
+# Finding 13 -- registration collision guard
+# ============================================================================
+
+class _DuplicateNameSignalA(SignalModule):
+    name = "duplicate_name"
+    required_features: list = []
+
+    def compute(self, row, context):
+        return SignalOutput(0.1, 0.5, "A")
+
+
+class _DuplicateNameSignalB(SignalModule):
+    """A DIFFERENT class that happens to share the same ``name`` as
+    ``_DuplicateNameSignalA`` -- the realistic collision scenario (e.g. a
+    copy-pasted module that forgot to rename itself)."""
+
+    name = "duplicate_name"
+    required_features: list = []
+
+    def compute(self, row, context):
+        return SignalOutput(-0.9, 0.9, "B")
+
+
+def test_double_registration_with_different_instance_raises():
+    """A second, DIFFERENT module instance registered under a name already
+    in use must raise -- previously this silently overwrote the first
+    registration with no signal to the caller, violating this codebase's
+    'never silently drop, skip, or double-register a module' convention."""
+    registry = SignalRegistry()
+    registry.register(_DuplicateNameSignalA())
+
+    with pytest.raises(ValueError, match="collision"):
+        registry.register(_DuplicateNameSignalB())
+
+    # The FIRST registration must survive untouched -- not silently
+    # replaced by the (rejected) second registration attempt.
+    retrieved = registry.get("duplicate_name")
+    assert isinstance(retrieved, _DuplicateNameSignalA)
+
+
+def test_registering_the_same_instance_twice_is_a_harmless_noop():
+    """Re-registering the EXACT SAME object (e.g. via two import paths that
+    resolve to the same singleton) is not a real collision and must not
+    raise -- it's the same module, not two modules fighting over one name."""
+    registry = SignalRegistry()
+    module = _DuplicateNameSignalA()
+    registry.register(module)
+    registry.register(module)  # must not raise
+    assert registry.get("duplicate_name") is module
+
+
+def test_all_real_signal_modules_register_without_collision():
+    """Exercises the FULL real signal-loading path (signals/__init__.py's
+    _register_all(), which every one of the platform's registered
+    SignalModule implementations goes through at import time) rather than a
+    synthetic registry -- proving the collision check doesn't false-positive
+    against the platform's own real module set."""
+    import signals  # noqa: F401 -- triggers signals/__init__.py::_register_all()
+    from signals.registry import global_registry as real_global_registry
+
+    all_modules = real_global_registry.get_all()
+    # Matches docs/signals/README.md's documented count of registered
+    # SignalModule implementations; a regression here (fewer than expected)
+    # would indicate a module silently failed to register.
+    assert len(all_modules) >= 17
+    # Every registered name is unique by construction (a dict can't hold
+    # duplicate keys) -- the real assertion is that registration itself
+    # never raised while loading the full real module set above.
+    assert len(all_modules) == len(set(all_modules.keys()))

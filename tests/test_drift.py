@@ -171,6 +171,25 @@ class TestDeadLetterResilience:
         assert result.drift_detected is False
         assert result.drift_index is None
 
+    @pytest.mark.parametrize("method", ["cusum", "page_hinkley"])
+    def test_near_zero_but_not_exact_sigma_never_fires_spurious_drift(self, method):
+        """Finding 10 regression test: a conceptually flat series whose
+        sample std lands near (not exactly) zero due to floating-point
+        residue -- e.g. ~1e-16 -- must be treated the same as an exact 0.0
+        degenerate case, per this repo's documented `< 1e-12` degenerate-std
+        guard convention. An exact `== 0.0` check misses this and lets a
+        vanishingly small (but nonzero) sigma produce a near-zero
+        slack/delta and threshold, which — with 49 identical values
+        followed by one value differing at the 1e-15 level — would
+        otherwise trip a spurious drift alarm on pure floating-point noise."""
+        series = [5.0] * 49 + [5.0 + 1e-15]
+        sigma = float(np.std(np.asarray(series, dtype=float), ddof=1))
+        # Confirm this really is the "near but not exact zero" case under test.
+        assert 0.0 < sigma < 1e-12
+        result = detect_drift(series, method=method)
+        assert result.drift_detected is False
+        assert result.drift_index is None
+
     def test_unknown_method_degrades_gracefully(self):
         series = _stationary_series(seed=1)
         result = detect_drift(series, method="not_a_real_method")  # type: ignore[arg-type]

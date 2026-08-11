@@ -7,7 +7,6 @@ import { Button, EmptyState, ErrorState, Loading, Notice, Select, Table } from "
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 
 /**
  * Prompt Registry — version control for every AI-facing instruction. Ports
@@ -52,11 +51,6 @@ export function PromptRegistry() {
             <h1 className="screen-title" style={{ margin: 0 }}>Prompt Registry</h1>
           </div>
         </div>
-        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
-          <button type="button" className="btn btn-neutral" onClick={() => resetGridLayout("prompt-registry")}>
-            Reset Layout
-          </button>
-        </div>
       </div>
       <p className="screen-sub">
         Version control for every AI-facing instruction — resolved version, source,
@@ -69,17 +63,8 @@ export function PromptRegistry() {
         {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
         {!loading && !error && data && (
           <div style={{ flex: 1, minHeight: 0 }}>
-            <DynamicGrid
-              layoutKey="prompt-registry"
-              defaultLayouts={{
-                lg: [
-                  { i: "notices", x: 0, y: 0, w: 12, h: data.enabled ? 3 : 4, isResizable: false },
-                  { i: "sync", x: 0, y: 4, w: 12, h: 2, isResizable: false },
-                  { i: "table", x: 0, y: 6, w: 12, h: 14 }
-                ]
-              }}
-            >
-              <div key="notices" className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)", overflow: "auto", cursor: "grab" }}>
+            <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
+              <div key="notices" className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)", overflow: "auto" }}>
                 <Notice variant="info" data-testid="prompt-security-banner">
                   <span aria-hidden>🛡️</span>
                   <span>
@@ -100,14 +85,14 @@ export function PromptRegistry() {
                 )}
               </div>
 
-              <div key="sync" className="card card-pad drag-handle" style={{ display: "flex", alignItems: "center", cursor: "grab", overflow: "hidden" }}>
+              <div key="sync" className="card card-pad drag-handle" style={{ display: "flex", alignItems: "center", overflow: "hidden" }}>
                 <div onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
                   <SyncNowControl registryEnabled={data.enabled} onSynced={reload} />
                 </div>
               </div>
 
               <div key="table" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
-                <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)", cursor: "grab" }}>Registered Prompts</div>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>Registered Prompts</div>
                 <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
                   {data.prompts.length === 0 ? (
                     <EmptyState
@@ -134,7 +119,7 @@ export function PromptRegistry() {
                   )}
                 </div>
               </div>
-            </DynamicGrid>
+            </div>
           </div>
         )}
       </div>

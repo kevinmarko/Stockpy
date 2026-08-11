@@ -29,7 +29,6 @@ import { useMutation } from "../hooks/useMutation";
 import { usePoll } from "../hooks/usePoll";
 import { ErrorState, Loading, Notice, Button, EmptyState, StaleDataNotice } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { LogStream } from "../components/LogStream";
 import { downloadBlob } from "../utils/csv";
 import { timeAgo } from "../format";
@@ -270,7 +269,7 @@ function BriefingsSection({ files, onReload }: { files: ReportFile[]; onReload: 
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>📝 Daily briefings</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -344,9 +343,6 @@ export function ReportLibrary() {
             dashboards, daily briefings, and validation reports — in one place.
           </p>
         </div>
-        <button className="reset-layout-btn" onClick={() => resetGridLayout("report-library-layout")} title="Reset grid layout">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-        </button>
       </div>
 
       <TabGuide tabKey="reports" />
@@ -363,10 +359,10 @@ export function ReportLibrary() {
             hint={data.reason ?? "Run the pipeline, generate a briefing, or run the validation harness."}
           />
         ) : (
-            <DynamicGrid layoutKey="report-library-layout" defaultLayouts={{}}>
+            <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
               <div key="daily-report">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                     <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>📰 Daily report</h2>
                   </div>
                   <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -383,7 +379,7 @@ export function ReportLibrary() {
 
               <div key="orchestrator-dashboards">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                     <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>📊 Orchestrator dashboards</h2>
                     <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
                       Only refresh on a manual main_orchestrator.py run — their modified
@@ -409,7 +405,7 @@ export function ReportLibrary() {
 
               <div key="validation-reports">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                     <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>✅ Validation reports</h2>
                   </div>
                   <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -431,7 +427,7 @@ export function ReportLibrary() {
                   </div>
                 </section>
               </div>
-            </DynamicGrid>
+            </div>
         )
       )}
     </div>

@@ -179,3 +179,61 @@ def test_conservative_pass_existing_symbol_missing_from_returns():
     ctx = RiskContext(open_positions=[_pos("MSFT")], returns_df=df)
     result = gate.max_correlation_check(_buy("AAPL"), ctx)
     assert result.passed
+
+
+# ---------------------------------------------------------------------------
+# Self-correlation exclusion (Finding 4)
+# ---------------------------------------------------------------------------
+
+def test_self_correlation_excluded_when_adding_to_existing_holding():
+    """Submitting an order for a symbol already held must not self-block --
+    a symbol is perfectly correlated with itself (r=1.0), so comparing it
+    to its own return series inside the existing-positions loop always
+    breached the threshold before this fix."""
+    gate = PreTradeRiskGate(max_correlation=0.85)
+    ctx = RiskContext(
+        open_positions=[_pos("AAPL")],  # already hold AAPL
+        returns_df=_make_returns(0.10, sym_new="AAPL", sym_held="MSFT"),
+    )
+    result = gate.max_correlation_check(_buy("AAPL"), ctx)
+    assert result.passed
+
+
+def test_self_correlation_excluded_but_other_holding_still_checked():
+    """Self-correlation is skipped, but a genuinely correlated OTHER holding
+    in the same open_positions list must still block."""
+    rng = np.random.default_rng(2)
+    base = rng.standard_normal(60)
+    dangerous_other = 0.95 * base + np.sqrt(1 - 0.95 ** 2) * rng.standard_normal(60)
+    df = pd.DataFrame({"AAPL": base, "MSFT": dangerous_other})
+
+    gate = PreTradeRiskGate(max_correlation=0.85)
+    ctx = RiskContext(
+        open_positions=[_pos("AAPL"), _pos("MSFT")],  # already hold AAPL AND MSFT
+        returns_df=df,
+    )
+    result = gate.max_correlation_check(_buy("AAPL"), ctx)
+    assert not result.passed
+    assert "MSFT" in result.reason
+
+
+# ---------------------------------------------------------------------------
+# Degenerate/NaN correlation fails closed (Finding 12)
+# ---------------------------------------------------------------------------
+
+def test_nan_correlation_fails_closed():
+    """A degenerate/near-constant return series makes corr() return NaN.
+    abs(NaN) > threshold silently evaluates False, so this must be an
+    EXPLICIT check that blocks -- not a fallthrough to the passing branch."""
+    gate = PreTradeRiskGate(max_correlation=0.85)
+    n = 60
+    # AAPL is a genuine random series; MSFT is exactly constant -> std=0 ->
+    # corr() is NaN regardless of AAPL's values.
+    df = pd.DataFrame({
+        "AAPL": np.random.default_rng(3).standard_normal(n),
+        "MSFT": np.full(n, 100.0),
+    })
+    ctx = RiskContext(open_positions=[_pos("MSFT")], returns_df=df)
+    result = gate.max_correlation_check(_buy("AAPL"), ctx)
+    assert not result.passed
+    assert "nan" in result.reason.lower()

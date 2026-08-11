@@ -13,7 +13,6 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -158,7 +157,7 @@ function DirectiveCard({ d, onOpen }: { d: OptionsDirective; onOpen: () => void 
     >
       <div
         className="drag-handle"
-        style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "baseline", cursor: "grab" }}
+        style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <span style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>{d.Symbol}</span>
@@ -1029,7 +1028,6 @@ export function OptionsMatrix() {
           </div>
         </div>
         <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
-          <Button variant="neutral" onClick={() => resetGridLayout("options-matrix")}>Reset Layout</Button>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <Button
             onClick={() => openChat(buildOptionsContextText(directives))}
@@ -1180,26 +1178,13 @@ export function OptionsMatrix() {
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-3)" }}>
-              <DynamicGrid
-                layoutKey="options-matrix"
-                defaultLayouts={{
-                  lg: visible.map((d, i) => ({
-                    i: d.Symbol,
-                    x: (i % 3) * 4,
-                    y: Math.floor(i / 3) * 4,
-                    w: 4,
-                    h: 4,
-                    minW: 3,
-                    minH: 3,
-                  })),
-                }}
-              >
+              <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
                 {visible.map((d) => (
                   <div key={d.Symbol}>
                     <DirectiveCard d={d} onOpen={() => setOpenSymbol(d.Symbol)} />
                   </div>
                 ))}
-              </DynamicGrid>
+              </div>
             </div>
           )}
 

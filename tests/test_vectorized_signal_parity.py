@@ -53,6 +53,8 @@ from signals.sortino_drawdown import SortinoDrawdownSignal
 from signals.aggregator import SignalAggregator
 from signals.registry import global_registry, SignalRegistry
 from signals.base import SignalModule
+from signals.cross_sectional_momentum import CrossSectionalMomentumSignal
+from settings import settings
 
 from tests.test_signal_module_contracts import _signal_context, _realistic_row
 
@@ -384,6 +386,96 @@ def test_aggregate_vectorized_matches_per_ticker_aggregate_end_to_end():
 # (pipeline/production_steps.py's new try/except, added alongside the fix)
 # ============================================================================
 
+class TestGatedModulesStillAppearInVectorizedOutputs:
+    """Finding 4 regression: prior to the fix, ``aggregate_vectorized()``
+    built each ticker's per-module ``SignalOutput`` INSIDE the same loop
+    body that ``continue``d past a ``DISABLED_SIGNAL_MODULES``/regime-
+    inactive module -- so a gated module had NO entry at all in the
+    vectorized path's ``outputs`` dict. ``aggregate()`` (the row-wise path)
+    always builds ``outputs = self.registry.compute_all(row, context)``
+    BEFORE any gating check, so a gated module's raw output is always
+    present there for introspection -- only its WEIGHTED contribution to
+    ``final_score``/``score_log`` is excluded. This class pins the corrected
+    parity between the two paths.
+    """
+
+    def test_disabled_module_still_present_in_vectorized_outputs(self, monkeypatch):
+        monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", ["aroon_trend"])
+
+        ctx = _signal_context()
+        universe_df = pd.DataFrame([_realistic_row().to_dict()], index=["A"])
+        universe_df["graham_number"] = ctx.fundamentals.graham_number
+        universe_df["dividend_yield"] = ctx.fundamentals.dividend_yield
+        universe_df["is_dividend_sustainable"] = ctx.fundamentals.is_dividend_sustainable
+
+        aggregator = SignalAggregator(global_registry)
+        vec_results = aggregator.aggregate_vectorized(universe_df, ctx)
+        vec_final_score, _, _, _, vec_outputs, _ = vec_results["A"]
+
+        row_final_score, _, _, _, row_outputs, _ = aggregator.aggregate(
+            universe_df.loc["A"], ctx
+        )
+
+        # The disabled module is STILL present in both outputs dicts --
+        # this is the exact parity the fix restores.
+        assert "aroon_trend" in vec_outputs
+        assert "aroon_trend" in row_outputs
+        assert set(vec_outputs.keys()) == set(row_outputs.keys())
+
+        # Its raw compute() output is genuine, non-fabricated data (real
+        # score for the bullish aroon_osc=65.0 fixture row), not a stand-in.
+        assert vec_outputs["aroon_trend"].score == pytest.approx(
+            row_outputs["aroon_trend"].score, abs=ABS_TOL
+        )
+
+        # And the two aggregation paths agree end-to-end (the disabled
+        # module contributes nothing to final_score on either path).
+        assert vec_final_score == pytest.approx(row_final_score, abs=ABS_TOL)
+
+    def test_regime_multiplier_readable_from_vectorized_outputs_even_when_disabled(
+        self, monkeypatch
+    ):
+        """Regression for the real downstream consequence noted in
+        strategy_engine.py: ``outputs.get('regime_multiplier')`` drives the
+        HMM regime sizing multiplier (``StrategyEngine`` reads
+        ``.confidence`` off of it, defaulting to a neutral 1.0 only when the
+        key is entirely absent). Before the Finding 4 fix, disabling
+        ``regime_multiplier`` via ``DISABLED_SIGNAL_MODULES`` made it vanish
+        from ``aggregate_vectorized()``'s outputs dict, so a caller reading
+        ``outputs.get('regime_multiplier')`` on the vectorized path ONLY
+        would have silently reset the multiplier to neutral 1.0 --
+        inconsistent with the row-wise path, where the raw (non-neutral)
+        multiplier stays readable regardless of the disable flag. This test
+        proves only the aggregator-level outputs-dict parity is fixed; what
+        StrategyEngine does with the value afterward is out of this
+        bundle's scope."""
+        monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", ["regime_multiplier"])
+
+        ctx = _signal_context()
+        # A distinctly non-neutral value so a stale "reset to 1.0" bug is
+        # trivially distinguishable from the real, gated-but-present value.
+        ctx.macro.hmm_risk_on_probability = 0.22
+
+        universe_df = pd.DataFrame([_realistic_row().to_dict()], index=["A"])
+        universe_df["graham_number"] = ctx.fundamentals.graham_number
+        universe_df["dividend_yield"] = ctx.fundamentals.dividend_yield
+        universe_df["is_dividend_sustainable"] = ctx.fundamentals.is_dividend_sustainable
+
+        aggregator = SignalAggregator(global_registry)
+        vec_results = aggregator.aggregate_vectorized(universe_df, ctx)
+        _, _, _, _, vec_outputs, _ = vec_results["A"]
+
+        assert "regime_multiplier" in vec_outputs
+        # confidence carries the HMM multiplier per regime_multiplier.py's
+        # contract -- still readable even though the module is disabled,
+        # NOT silently reset to the neutral 1.0 default.
+        assert vec_outputs["regime_multiplier"].confidence == pytest.approx(0.22)
+        # regime_multiplier never adds directional alpha -- score stays 0.0
+        # regardless of gating (this is the module's own invariant, not
+        # something the gate changes).
+        assert vec_outputs["regime_multiplier"].score == 0.0
+
+
 def test_aggregate_vectorized_failure_falls_back_to_empty_dict_not_raise(monkeypatch):
     """Mirrors the fallback semantics added in pipeline/production_steps.py:
     a universe-wide failure in aggregate_vectorized() must not propagate --
@@ -413,3 +505,100 @@ def test_aggregate_vectorized_failure_falls_back_to_empty_dict_not_raise(monkeyp
     final_score, _, _, _, outputs, meta = aggregator.aggregate(universe_df.loc["A"], ctx)
     assert isinstance(final_score, float)
     assert isinstance(outputs, dict)
+
+
+# ============================================================================
+# Section 5 -- cross_sectional_momentum vectorized-path regression (Finding 2)
+#
+# Before the fix, pipeline/production_steps.py's vec_df carried a 'ticker'
+# column but never a 'Symbol' column, and its SignalContext was built
+# without xsec_percentile_ranks -- so CrossSectionalMomentumSignal.compute()
+# 's `row.get("Symbol", "")` always resolved to "" and its lookup into
+# context.xsec_percentile_ranks always missed, silently contributing exactly
+# 0.0 for every ticker, every cycle, in the live vectorized path (the module
+# has no compute_vectorized() override of its own, so it runs through
+# SignalModule's default `df.apply(lambda row: self.compute(row, context))`
+# fallback, making it especially easy for a missing DataFrame column to go
+# unnoticed). This section builds a universe with a REAL rank spread (not
+# all zeros/all-neutral, which is exactly what the bug produced) plus both
+# ingredients the production fix now supplies, and proves the vectorized
+# path and the scalar path agree.
+# ============================================================================
+
+class TestCrossSectionalMomentumVectorizedParity:
+    def _universe_with_rank_spread(self):
+        """5 tickers with a genuine, non-degenerate cross-sectional rank
+        spread -- the fixture the pre-fix bug (uniform score=0.0 for every
+        ticker) would have failed against."""
+        ranks = {"A": 0.1, "B": 0.3, "C": 0.5, "D": 0.7, "E": 0.9}
+        rows = []
+        for ticker in ranks:
+            row = _realistic_row().to_dict()
+            row["Symbol"] = ticker
+            rows.append(row)
+        universe_df = pd.DataFrame(rows, index=list(ranks.keys()))
+        return universe_df, ranks
+
+    def test_symbol_column_and_ranks_produce_a_real_score_spread_not_uniform_zero(self):
+        """Sanity check on the fixture itself: with the Symbol column
+        present and xsec_percentile_ranks populated, scores must actually
+        vary across the extreme-rank tickers -- pinning the bug's exact
+        symptom (a uniform, silently-neutral 0.0) as the negative case."""
+        universe_df, ranks = self._universe_with_rank_spread()
+        ctx = _signal_context()
+        ctx.xsec_percentile_ranks = ranks
+
+        module = CrossSectionalMomentumSignal()
+        vec_out = module.compute_vectorized(universe_df, ctx)
+
+        scores = vec_out["score"].tolist()
+        assert len(set(round(s, 6) for s in scores)) > 1, (
+            f"expected a real spread of scores, got uniform {scores} "
+            "(this is exactly what the Finding 2 bug produced)"
+        )
+        assert vec_out.loc["A", "score"] < 0, "lowest-rank ticker must score bearish"
+        assert vec_out.loc["E", "score"] > 0, "highest-rank ticker must score bullish"
+
+    def test_vectorized_score_matches_scalar_score_per_ticker(self):
+        universe_df, ranks = self._universe_with_rank_spread()
+        ctx = _signal_context()
+        ctx.xsec_percentile_ranks = ranks
+
+        module = CrossSectionalMomentumSignal()
+        vec_out = module.compute_vectorized(universe_df, ctx)
+
+        for ticker in universe_df.index:
+            row = universe_df.loc[ticker]
+            scalar_out = module.compute(row, ctx)
+            assert math.isclose(scalar_out.score, vec_out.loc[ticker, "score"], abs_tol=ABS_TOL), (
+                f"{ticker}: scalar={scalar_out.score} vs vectorized={vec_out.loc[ticker, 'score']}"
+            )
+
+    def test_aggregate_vectorized_end_to_end_reflects_real_ranks_not_silently_zeroed(self):
+        """The deepest form of this regression check: goes through
+        SignalAggregator.aggregate_vectorized() -- what pipeline/
+        production_steps.py actually calls -- and confirms
+        cross_sectional_momentum's contribution in `outputs` genuinely
+        reflects the real rank spread and matches the scalar aggregate(),
+        rather than being silently neutral for every ticker."""
+        universe_df, ranks = self._universe_with_rank_spread()
+        ctx = _signal_context()
+        ctx.xsec_percentile_ranks = ranks
+
+        vectorized_results = SignalAggregator(global_registry).aggregate_vectorized(universe_df, ctx)
+
+        for ticker in universe_df.index:
+            _, _, _, _, vec_outputs, _ = vectorized_results[ticker]
+            assert "cross_sectional_momentum" in vec_outputs
+
+            scalar_result = SignalAggregator(global_registry).aggregate(universe_df.loc[ticker], ctx)
+            _, _, _, _, scalar_outputs, _ = scalar_result
+
+            assert math.isclose(
+                vec_outputs["cross_sectional_momentum"].score,
+                scalar_outputs["cross_sectional_momentum"].score,
+                abs_tol=ABS_TOL,
+            ), f"{ticker}: cross_sectional_momentum vec vs scalar diverged"
+
+        assert vectorized_results["A"][4]["cross_sectional_momentum"].score < 0
+        assert vectorized_results["E"][4]["cross_sectional_momentum"].score > 0

@@ -60,7 +60,29 @@ class FMPPaperBroker(BrokerBase):
 
         client_order_id = intent.client_order_id or "unknown"
 
-        # 1. Reject what this broker cannot honestly simulate (see module
+        # 1. Dry-run interception -- matches AlpacaBroker.submit_order's exact
+        # pattern (execution/alpaca_broker.py). Placed before any quote fetch
+        # or store write so a dry_run=True intent never touches fmp_client or
+        # PaperAccountStore, and OrderManager tests exercising both broker
+        # backends see identical dry-run behavior.
+        if intent.dry_run:
+            logger.info(
+                "[DRY-RUN] Would submit %s %s x %.4f @ %s (strategy=%s, coid=%s)",
+                intent.side.value.upper(),
+                intent.symbol,
+                intent.qty,
+                intent.limit_price or "MARKET",
+                intent.strategy_id,
+                client_order_id,
+            )
+            return OrderResult(
+                client_order_id=client_order_id,
+                broker_order_id=None,
+                status=OrderStatus.ACCEPTED,
+                submitted_at=datetime.now(timezone.utc),
+            )
+
+        # 2. Reject what this broker cannot honestly simulate (see module
         # docstring) instead of silently mis-filling it.
         if intent.legs:
             return self._error_result(
@@ -74,7 +96,7 @@ class FMPPaperBroker(BrokerBase):
                 client_order_id, f"Invalid order quantity {intent.qty}", OrderStatus.REJECTED
             )
 
-        # 2. Fetch live quote
+        # 3. Fetch live quote
         try:
             # quote() returns a list of dicts, e.g. [{"symbol": "AAPL", "price": 150.0, "marketCap": 2e9}]
             resp = fmp_client.quote(intent.symbol)
@@ -88,13 +110,21 @@ class FMPPaperBroker(BrokerBase):
                 logger.error(f"FMPPaperBroker: Invalid price {raw_price} for {intent.symbol}")
                 return self._error_result(client_order_id, f"Invalid price {raw_price}")
 
-            market_cap = float(quote_data.get("marketCap", 0.0))
+            # marketCap is genuinely unmeasured when FMP omits it, not zero --
+            # a fabricated 0.0 previously routed straight into
+            # TieredCostModel.get_liquidity_tier's smallest-market-cap bucket
+            # ("illiquid", 20.0 bps) instead of its unknown-market-cap
+            # fallback ("large_cap", 1.0 bps), a ~20x cost misclassification
+            # (CONSTRAINT #4: missing data must surface as None, never a
+            # fabricated default that looks like a real measurement).
+            raw_market_cap = quote_data.get("marketCap")
+            market_cap = float(raw_market_cap) if raw_market_cap else None
 
         except Exception as e:
             logger.error(f"FMPPaperBroker: Failed to fetch quote for {intent.symbol}: {e}")
             return self._error_result(client_order_id, f"FMP quote failed: {e}")
 
-        # 3. Limit orders: no resting-order book in V1, so an order that
+        # 4. Limit orders: no resting-order book in V1, so an order that
         # isn't marketable RIGHT NOW against the current quote is honestly
         # rejected rather than silently filled at a price the order never
         # asked for, or silently accepted and left to sit forever.
@@ -116,7 +146,7 @@ class FMPPaperBroker(BrokerBase):
                     OrderStatus.REJECTED,
                 )
 
-        # 4. Calculate execution costs
+        # 5. Calculate execution costs
         costs = self.cost_model.calculate_cost(
             side=intent.side.value,
             shares=intent.qty,
@@ -134,7 +164,7 @@ class FMPPaperBroker(BrokerBase):
         commission_and_fees = total_cost_dollars
         fill_price = raw_price
         
-        # 5. Apply Fill
+        # 6. Apply Fill
         success = self.store.apply_fill(
             client_order_id=client_order_id,
             symbol=intent.symbol,
@@ -148,7 +178,7 @@ class FMPPaperBroker(BrokerBase):
         if not success:
             return self._error_result(client_order_id, "Insufficient funds or inventory", OrderStatus.REJECTED)
             
-        # 6. Result and Stream Event
+        # 7. Result and Stream Event
         broker_order_id = f"FMP-{client_order_id}"
         now = datetime.now(timezone.utc)
         

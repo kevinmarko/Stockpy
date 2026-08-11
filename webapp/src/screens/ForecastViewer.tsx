@@ -7,8 +7,6 @@ import { ErrorState, Loading, Tile } from "../components/ui";
 import { AttentionHeatmapStrip, ForecastCandleChart } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
-import { Button } from "../components/ui";
 import toast from "react-hot-toast";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
@@ -154,19 +152,10 @@ function ForecastView({
       </div>
 
       <div style={{ flex: 1, minHeight: 0 }}>
-        <DynamicGrid
-          layoutKey="forecast-viewer"
-          defaultLayouts={{
-            lg: [
-              { i: "summary", x: 0, y: 0, w: 12, h: 4, minW: 6, minH: 3 },
-              { i: "price", x: 0, y: 4, w: 8, h: 6, minW: 4, minH: 4 },
-              { i: "model", x: 8, y: 4, w: 4, h: 6, minW: 3, minH: 4 },
-            ],
-          }}
-        >
+        <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           <div key="summary">
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0, background: "var(--surface-2)" }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
                   <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Horizon & Expected Return Summary</h2>
                   <Link
@@ -235,7 +224,7 @@ function ForecastView({
           <div key="price">
             {/* 1. Data Visualization & Chart Enhancements */}
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
                   <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Price & forecast</h2>
                   <div onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
@@ -275,7 +264,7 @@ function ForecastView({
           <div key="model">
             {/* 2. Model Breakdown & Insights */}
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Model detail</h2>
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -320,7 +309,7 @@ function ForecastView({
               </div>
             </section>
           </div>
-        </DynamicGrid>
+        </div>
       </div>
 
       {/* 3. User Interaction & Export Capabilities */}
@@ -365,7 +354,6 @@ export function ForecastViewer() {
             Multi-horizon price forecast for a symbol — 10/30/60/90-day blended levels, model weighting, drivers, and Monte-Carlo confidence bands.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("forecast-viewer")}>Reset Layout</Button>
       </div>
 
       <TabGuide tabKey="forecast" />

@@ -188,3 +188,90 @@ class TestFlagEnabled:
         # produce finite numbers in the expected range, not byte-equality.
         assert 0.0 <= report_off.pbo <= 1.0
         assert 0.0 <= report_off.dsr <= 1.0
+
+
+def _half_zero_return_strategy_fn(idx):
+    """A strategy whose daily returns are exactly 0.0 (no trade) on every
+    OTHER day, and a real nonzero return on the rest -- so the
+    trade-conditional mean (mean over days where a trade occurred) and the
+    UNCONDITIONAL mean (mean over every day) are genuinely, provably
+    different (~2x apart here). The full series is generated ONCE (fixed
+    seed, not re-randomized per call), matching _drawdown_strategy_fn's own
+    idempotency rationale above.
+
+    turnover=0.0 is deliberate: StrategyValidationHarness._apply_cost_model
+    subtracts ``turnover * cost_rate`` from EVERY day (including the
+    exact-zero no-trade days) -- with any nonzero turnover this shifts every
+    "no trade" 0.0 into a small negative number, destroying the exact zeros
+    this fixture depends on to keep the trade-conditional and unconditional
+    means distinguishable post-cost-adjustment.
+    """
+    rng = np.random.default_rng(21)
+    n = len(idx)
+    raw = rng.normal(0.0008, 0.01, size=n)
+    mask = np.resize([True, False], n)
+    vals = np.where(mask, raw, 0.0)
+    rets = pd.Series(vals, index=idx)
+
+    def strategy_fn(X_train, y_train, X_test, y_test):
+        return [{
+            "params": "half_zero",
+            "train_returns": rets.reindex(y_train.index).dropna(),
+            "test_returns": rets.reindex(y_test.index).dropna(),
+            "turnover": 0.0,
+        }]
+    return strategy_fn
+
+
+class TestOosGateCalmarUnconditionalMean:
+    """Finding 29: the OOS-gate Calmar mixed a trade-CONDITIONAL mean
+    (mean_oos_avg_trade_pct -- averaged only over days a trade actually
+    occurred) into a full-period (*252) annualization, silently overstating
+    Calmar for any strategy that doesn't trade every day. Must match the
+    non-OOS-gate Calmar's own UNCONDITIONAL-mean convention
+    (full_returns.mean(), averaged over every day)."""
+
+    def test_gate_calmar_uses_unconditional_mean_not_trade_conditional(self, tmp_path, monkeypatch):
+        from settings import settings as live_settings
+        monkeypatch.setattr(live_settings, "VALIDATION_HARNESS_OOS_GATE_ENABLED", True, raising=False)
+
+        X, y = _synthetic_xy()
+        harness = StrategyValidationHarness(
+            strategy_fn=_half_zero_return_strategy_fn(X.index),
+            universe_fn=lambda _d: ["SYN"],
+            cost_model=TieredCostModel(),
+            n_cpcv_splits=5,
+            n_test_splits=2,
+            reports_dir=str(tmp_path),
+        )
+
+        captured = {}
+        orig = harness_module.run_cpcv_evaluation
+
+        def spy(*args, **kwargs):
+            result = orig(*args, **kwargs)
+            captured["result"] = result
+            return result
+
+        monkeypatch.setattr(harness_module, "run_cpcv_evaluation", spy)
+        report = harness.run(start_date="2015-01-01", end_date="2016-03-01", X=X, y=y, strategy_name="s")
+
+        cpcv = captured["result"]
+        # Premise: the trade-conditional and unconditional means genuinely
+        # differ for this fixture -- otherwise the two formulas would be
+        # indistinguishable and this test would pass even with the bug.
+        assert cpcv["mean_oos_avg_trade_pct"] != pytest.approx(cpcv["mean_oos_return"])
+
+        expected_calmar = (
+            (cpcv["mean_oos_return"] * 252 / cpcv["mean_oos_max_dd"])
+            if (not np.isnan(cpcv["mean_oos_max_dd"]) and cpcv["mean_oos_max_dd"] >= 1e-12)
+            else np.nan
+        )
+        wrong_calmar = (
+            (cpcv["mean_oos_avg_trade_pct"] * 252 / cpcv["mean_oos_max_dd"])
+            if (not np.isnan(cpcv["mean_oos_max_dd"]) and cpcv["mean_oos_max_dd"] >= 1e-12)
+            else np.nan
+        )
+
+        assert report.calmar == pytest.approx(expected_calmar, nan_ok=True)
+        assert report.calmar != pytest.approx(wrong_calmar, nan_ok=True)

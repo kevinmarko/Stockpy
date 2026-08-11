@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import {
   Zap,
   BarChart2,
@@ -25,7 +25,10 @@ import {
   CircleHelp,
   Settings,
   Briefcase,
+  LineChart,
+  LayoutTemplate,
 } from "lucide-react";
+import { useCustomViews } from "./customViews";
 
 export type NavSection = "primary" | "research" | "trading" | "operations" | "settings";
 
@@ -60,6 +63,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/agentic", label: "Agent", ico: Bot, match: (p) => p.startsWith("/agentic"), section: "primary" },
   // Research
   { to: "/marketplace", label: "Pilots", ico: Compass, match: (p) => p.startsWith("/marketplace") || p.startsWith("/pilots"), section: "research" },
+  { to: "/pilots-manager", label: "Pilots Manager", ico: Bot, match: (p) => p.startsWith("/pilots-manager"), section: "research" },
   { to: "/compare", label: "Compare", ico: Scale, match: (p) => p.startsWith("/compare"), section: "research" },
   { to: "/models", label: "Models", ico: BrainCircuit, match: (p) => p.startsWith("/models"), section: "research" },
   { to: "/strategy-health", label: "Strategy Health", ico: Shield, match: (p) => p.startsWith("/strategy-health"), section: "research" },
@@ -76,12 +80,41 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/calibration", label: "Calibration", ico: Sliders, match: (p) => p.startsWith("/calibration"), section: "trading" },
   { to: "/commands", label: "Commands", ico: Terminal, match: (p) => p.startsWith("/commands"), section: "trading" },
   { to: "/cache-long-short", label: "Cache L/S", ico: Briefcase, match: (p) => p.startsWith("/cache-long-short"), section: "trading" },
+  { to: "/strategy-insights", label: "Strategy Insights", ico: LineChart, match: (p) => p.startsWith("/strategy-insights"), section: "trading" },
   // Operations
   { to: "/observability", label: "Mission Control", ico: Satellite, match: (p) => p.startsWith("/observability"), section: "operations" },
   { to: "/pipeline", label: "Pipeline", ico: Rocket, match: (p) => p.startsWith("/pipeline"), section: "operations" },
   { to: "/console", label: "Console", ico: Monitor, match: (p) => p.startsWith("/console"), section: "operations" },
   { to: "/operations/reports", label: "Report Library", ico: Library, match: (p) => p.startsWith("/operations/reports"), section: "operations" },
+  { to: "/create-data-app", label: "Create Data App", ico: LayoutTemplate, match: (p) => p.startsWith("/create-data-app"), section: "operations" },
   { to: "/help", label: "Help & Glossary", ico: CircleHelp, match: (p) => p.startsWith("/help"), section: "operations" },
   // Settings
   { to: "/settings", label: "Settings", ico: Settings, match: (p) => p.startsWith("/settings"), section: "settings" },
 ];
+
+/**
+ * NAV_ITEMS plus one entry per operator-saved custom view (see
+ * customViews.ts), each routing to /app/:slug. Real, reactive nav injection
+ * -- `useCustomViews()` is backed by `useSyncExternalStore`, so both
+ * `Sidebar` and `BottomNav` (components/BottomNavigation.tsx) re-render the
+ * instant a view is created/renamed/deleted from any screen or browser tab,
+ * with no page reload required.
+ */
+export function useNavItems(): NavItem[] {
+  const { views } = useCustomViews();
+  return useMemo(
+    () => [
+      ...NAV_ITEMS,
+      ...views.map(
+        (v): NavItem => ({
+          to: `/app/${v.slug}`,
+          label: v.name,
+          ico: LayoutTemplate,
+          match: (p) => p === `/app/${v.slug}`,
+          section: "operations",
+        })
+      ),
+    ],
+    [views]
+  );
+}

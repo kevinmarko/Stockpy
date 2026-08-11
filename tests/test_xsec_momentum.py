@@ -31,6 +31,7 @@ from signals.cross_sectional_momentum import (
 from signals.base import SignalContext, SignalOutput
 from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
 from main_orchestrator import compute_xsec_momentum_ranks
+from pipeline.production_steps import _compute_xsec_momentum
 
 # ---- Fixtures ----
 
@@ -137,6 +138,35 @@ def test_rank_pct_in_unit_interval():
         assert 0.0 <= rank <= 1.0, f"{ticker} rank={rank} out of [0,1]"
 
 
+def test_row_missing_symbol_column_falls_back_to_neutral():
+    """Regression documenting Finding 2's exact failure mode: a row with no
+    'Symbol' key at all (the shape pipeline/production_steps.py's vec_df
+    used to have -- only a 'ticker' column, never 'Symbol') makes
+    compute()'s `row.get(SYMBOL_COL, "")` resolve to "", which then always
+    misses in context.xsec_percentile_ranks and silently returns a neutral
+    score=0.0 -- exactly why the live vectorized path contributed a uniform
+    0.0 for cross_sectional_momentum on every ticker, every cycle."""
+    universe_df = _build_universe_df(10)
+    signal = CrossSectionalMomentumSignal()
+    ctx = _make_context("T009")
+    signal.pre_compute(universe_df, ctx)
+    assert ctx.xsec_percentile_ranks  # real ranks exist
+
+    row_without_symbol = pd.Series({"ticker": "T009"})  # no 'Symbol' key
+    out = signal.compute(row_without_symbol, ctx)
+    assert out.score == 0.0
+    assert out.confidence == 0.0
+    assert "WARNING" in out.explanation
+
+    # The same ticker, with the 'Symbol' key present, resolves to its real
+    # (non-neutral) rank-based score -- proving the column name is what
+    # matters, not the underlying rank data. T009 (index 8 of 10, near-top
+    # returns) sits well off the rank=0.5 midpoint.
+    row_with_symbol = pd.Series({SYMBOL_COL: "T009"})
+    out_with_symbol = signal.compute(row_with_symbol, ctx)
+    assert out_with_symbol.score != 0.0
+
+
 def test_missing_ticker_returns_neutral():
     """Unknown ticker not present in pre_compute output returns score=0, confidence=0."""
     universe_df = _build_universe_df(10)
@@ -239,6 +269,99 @@ def test_compute_xsec_momentum_ranks_vectorized():
     assert len(ranks) == 5
     for val in ranks.values:
         assert 0.0 <= val <= 1.0
+
+
+# ---- Finding 15: single-source raw-return + rank helper ----
+
+def _make_tech_raw_for_helper(n: int = 300, drift_step: float = 0.05) -> dict:
+    dates = pd.date_range("2020-01-01", periods=n, freq="B")
+    tech_raw = {}
+    # (i + 1) so every ticker (including the first) has non-zero drift --
+    # a flat (zero-drift) price series has an identical 0.0 return under
+    # ANY skip/lookback window, which would defeat the
+    # "different constants produce different raw returns" assertion below.
+    for i, ticker in enumerate(["AAA", "BBB", "CCC", "DDD", "EEE"]):
+        prices = 100.0 + np.cumsum(np.ones(n) * ((i + 1) * drift_step))
+        df = pd.DataFrame({"Close": prices, "Open": prices, "High": prices,
+                           "Low": prices, "Volume": 1000}, index=dates)
+        tech_raw[ticker] = df
+    return tech_raw
+
+
+def test_compute_xsec_momentum_returns_and_ranks_share_one_universe():
+    """pipeline/production_steps.py::_compute_xsec_momentum (Finding 15's
+    single-source helper) must return a raw-return dict and a rank Series
+    covering the EXACT same set of eligible tickers, since both
+    XSec_12_1M and XSec_Momentum_Rank are now sourced from the same call
+    -- they can no longer silently diverge the way the old two-copies-of-
+    the-formula code could if skip_days/lookback_days were ever changed in
+    only one place."""
+    tech_raw = _make_tech_raw_for_helper()
+    returns, ranks = _compute_xsec_momentum(tech_raw)
+
+    assert set(returns.keys()) == set(ranks.index)
+    assert len(returns) == 5
+    for val in ranks.values:
+        assert 0.0 <= val <= 1.0
+
+
+def test_compute_xsec_momentum_matches_orchestrator_ranks_at_default_constants():
+    """At the shared default skip_days=22/lookback_days=252, the helper's
+    ranks must agree exactly with main_orchestrator.compute_xsec_momentum_ranks
+    -- proving the duplicated formula (necessary because this fix's file
+    scope is restricted to pipeline/production_steps.py) has not drifted
+    from the orchestrator's own implementation."""
+    tech_raw = _make_tech_raw_for_helper()
+    _, helper_ranks = _compute_xsec_momentum(tech_raw)
+    orchestrator_ranks = compute_xsec_momentum_ranks(tech_raw)
+
+    assert set(helper_ranks.index) == set(orchestrator_ranks.index)
+    for ticker in helper_ranks.index:
+        assert abs(float(helper_ranks[ticker]) - float(orchestrator_ranks[ticker])) < 1e-9
+
+
+def test_compute_xsec_momentum_raw_return_formula_matches_rank_input():
+    """Directly proves the two outputs can't diverge: recompute each
+    ticker's raw 12-1m return by hand from the SAME skip/lookback
+    constants and confirm it equals both the helper's own raw-return dict
+    AND what a manual rank() over those returns would produce -- i.e. the
+    rank Series really is derived from the same raw-return values, not a
+    second independently-computed series."""
+    tech_raw = _make_tech_raw_for_helper()
+    skip_days, lookback_days = 22, 252
+    returns, ranks = _compute_xsec_momentum(tech_raw, skip_days=skip_days, lookback_days=lookback_days)
+
+    for ticker, df in tech_raw.items():
+        close = df["Close"].dropna()
+        p_recent = float(close.iloc[-(skip_days + 1)])
+        p_old = float(close.iloc[-(lookback_days + 1)])
+        expected_return = p_recent / p_old - 1.0
+        assert abs(returns[ticker] - expected_return) < 1e-9
+
+    expected_ranks = pd.Series(returns).rank(pct=True, ascending=True)
+    for ticker in ranks.index:
+        assert abs(float(ranks[ticker]) - float(expected_ranks[ticker])) < 1e-9
+
+
+def test_compute_xsec_momentum_custom_constants_move_both_outputs_together():
+    """If skip_days/lookback_days are changed, BOTH outputs must move
+    together (since they come from the same pass) -- the exact scenario
+    the pre-fix two-copy code could get wrong if only one copy's constants
+    were ever updated."""
+    tech_raw = _make_tech_raw_for_helper(n=400, drift_step=0.05)
+
+    returns_default, ranks_default = _compute_xsec_momentum(tech_raw, skip_days=22, lookback_days=252)
+    returns_custom, ranks_custom = _compute_xsec_momentum(tech_raw, skip_days=10, lookback_days=300)
+
+    # Both universes are non-empty and both raw-return/rank pairs are
+    # mutually consistent (same keys) under their own constants.
+    assert set(returns_default.keys()) == set(ranks_default.index)
+    assert set(returns_custom.keys()) == set(ranks_custom.index)
+    # Different lookback windows over a linearly-drifting series produce
+    # numerically different raw returns -- confirming the constants were
+    # genuinely threaded through to the computation, not ignored.
+    for ticker in returns_default:
+        assert abs(returns_default[ticker] - returns_custom[ticker]) > 1e-9
 
 
 def test_insufficient_history_excluded():

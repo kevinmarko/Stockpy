@@ -47,12 +47,16 @@ import { Console } from "./screens/Console";
 import { ReportLibrary } from "./screens/ReportLibrary";
 import { PromptRegistry } from "./screens/PromptRegistry";
 import { AgenticTrading } from "./screens/AgenticTrading";
+import { PilotsManager } from "./screens/PilotsManager";
 import { ResearchHub } from "./screens/ResearchHub";
 import { TradingHub } from "./screens/TradingHub";
 import { OperationsHub } from "./screens/OperationsHub";
 import { Help } from "./screens/Help";
 import { Onboarding } from "./screens/Onboarding";
 import { CacheLongShort } from "./screens/CacheLongShort";
+import { StrategyInsights } from "./screens/StrategyInsights";
+import { CreateDataApp } from "./screens/CreateDataApp";
+import { CustomView } from "./screens/CustomView";
 import { readOnboarding } from "./onboarding";
 import { TokenGate } from "./components/TokenGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -249,11 +253,15 @@ export default function App() {
                   <Route path="/console" element={<Console />} />
                   <Route path="/operations/reports" element={<ReportLibrary />} />
                   <Route path="/agentic" element={<AgenticTrading />} />
+                  <Route path="/pilots-manager" element={<PilotsManager />} />
                   <Route path="/research" element={<ResearchHub />} />
                   <Route path="/trading" element={<TradingHub />} />
                   <Route path="/operations" element={<OperationsHub />} />
                   <Route path="/portfolio" element={<Portfolio />} />
                   <Route path="/cache-long-short" element={<CacheLongShort />} />
+                  <Route path="/strategy-insights" element={<StrategyInsights />} />
+                  <Route path="/create-data-app" element={<CreateDataApp />} />
+                  <Route path="/app/:slug" element={<CustomView />} />
                   <Route path="/help" element={<Help />} />
                   <Route path="/settings" element={<SettingsLayout />}>
                     <Route index element={<SettingsGeneral />} />

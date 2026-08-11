@@ -17,7 +17,6 @@ import { DeployableBadge, ErrorState, InfoTip, Loading, Select, Table } from "..
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
 import { ValidationTrend } from "../components/ValidationTrend";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { loadThresholds } from "../help/thresholds";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -158,7 +157,7 @@ function HealthCard({
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", wordBreak: "break-word" }}>
             {row.pilot_name}
@@ -320,7 +319,7 @@ function AiDisagreementSection() {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>🔍 AI Verdict Disagreements</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -378,7 +377,7 @@ function GravityAuditSection() {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>🛡️ Gravity Audit</h2>
         <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
           The platform's structural + AI-cross-checked self-audit.
@@ -536,9 +535,6 @@ export function StrategyHealth() {
             value behind its deployable badge.
           </p>
         </div>
-        <button className="reset-layout-btn" onClick={() => resetGridLayout("strategy-health-layout")} title="Reset grid layout">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-        </button>
       </div>
 
       <TabGuide tabKey="strategy-health" />
@@ -587,25 +583,7 @@ export function StrategyHealth() {
               )}
             </div>
 
-            <DynamicGrid
-              layoutKey="strategy-health-layout"
-              defaultLayouts={{
-                lg: [
-                  ...data.map((row, i) => ({
-                    i: row.pilot_id,
-                    x: (i % 3) * 4,
-                    y: Math.floor(i / 3) * 6,
-                    w: 4,
-                    h: 6,
-                    minW: 3,
-                    minH: 4,
-                  })),
-                  { i: "validation-trend", x: 0, y: Math.ceil(data.length / 3) * 6, w: 12, h: 8 },
-                  { i: "gravity-audit", x: 0, y: Math.ceil(data.length / 3) * 6 + 8, w: 12, h: 10 },
-                  { i: "ai-disagreement", x: 0, y: Math.ceil(data.length / 3) * 6 + 18, w: 12, h: 8 },
-                ],
-              }}
-            >
+            <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
               {data.map((row) => (
                 <div key={row.pilot_id}>
                   <HealthCard row={row} thresholds={thresholds} metric={trendMetric} />
@@ -613,7 +591,7 @@ export function StrategyHealth() {
               ))}
               <div key="validation-trend">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                     <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Cross-strategy validation</h2>
                   </div>
                   <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -627,7 +605,7 @@ export function StrategyHealth() {
               <div key="ai-disagreement">
                 <AiDisagreementSection />
               </div>
-            </DynamicGrid>
+            </div>
           </>
         )
       )}
