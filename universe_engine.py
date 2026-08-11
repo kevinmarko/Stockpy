@@ -44,13 +44,19 @@ def clean_ticker(ticker: Any) -> Optional[str]:
 def fetch_and_cache_universe() -> pd.DataFrame:
     """Scrapes Wikipedia and caches the combined data to a parquet file."""
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    historical_url = "https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
     logger.info("Fetching S&P 500 constituents from Wikipedia...")
     try:
+        from io import StringIO
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
-        tables = pd.read_html(resp.text)
+        tables = pd.read_html(StringIO(resp.text))
+
+        hist_resp = requests.get(historical_url, headers=headers, timeout=15)
+        hist_resp.raise_for_status()
+        hist_tables = pd.read_html(StringIO(hist_resp.text), match="Date|Added|Removed")
     except Exception as e:
         logger.error(f"Error scraping Wikipedia: {e}")
         if os.path.exists(CACHE_PATH):
@@ -58,7 +64,7 @@ def fetch_and_cache_universe() -> pd.DataFrame:
             return pd.read_parquet(CACHE_PATH)
         raise RuntimeError(f"Failed to scrape Wikipedia and no cache found: {e}")
 
-    if len(tables) < 2:
+    if not tables:
         raise ValueError("Wikipedia page structure changed. S&P 500 tables not found.")
 
     # 1. Parse Current Constituents
@@ -75,7 +81,10 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     current_tickers = [t for t in current_tickers if t]
 
     # 2. Parse Changes
-    changes_df = tables[1].copy()
+    if not hist_tables:
+        raise ValueError("Could not find historical changes table on Wikipedia.")
+
+    changes_df = hist_tables[0].copy()
     if isinstance(changes_df.columns, pd.MultiIndex):
         changes_df.columns = [f"{col[0]}_{col[1]}" for col in changes_df.columns]
 
