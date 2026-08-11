@@ -9,6 +9,7 @@ import os
 import logging
 import argparse
 from datetime import date, datetime, timedelta
+from io import StringIO
 from typing import List, Tuple, Dict, Any, Optional
 import pandas as pd
 import numpy as np
@@ -50,7 +51,7 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
-        tables = pd.read_html(resp.text)
+        tables = pd.read_html(StringIO(resp.text))
     except Exception as e:
         logger.error(f"Error scraping Wikipedia: {e}")
         if os.path.exists(CACHE_PATH):
@@ -58,7 +59,7 @@ def fetch_and_cache_universe() -> pd.DataFrame:
             return pd.read_parquet(CACHE_PATH)
         raise RuntimeError(f"Failed to scrape Wikipedia and no cache found: {e}")
 
-    if len(tables) < 2:
+    if not tables:
         raise ValueError("Wikipedia page structure changed. S&P 500 tables not found.")
 
     # 1. Parse Current Constituents
@@ -75,25 +76,40 @@ def fetch_and_cache_universe() -> pd.DataFrame:
     current_tickers = [t for t in current_tickers if t]
 
     # 2. Parse Changes
-    changes_df = tables[1].copy()
-    if isinstance(changes_df.columns, pd.MultiIndex):
-        changes_df.columns = [f"{col[0]}_{col[1]}" for col in changes_df.columns]
+    changes_df = None
+    for tbl in tables[1:]:
+        if isinstance(tbl.columns, pd.MultiIndex):
+            cols = [f"{col[0]}_{col[1]}".lower() for col in tbl.columns]
+        else:
+            cols = [str(col).lower() for col in tbl.columns]
 
-    date_col = None
-    added_col = None
-    removed_col = None
+        has_date = any("date" in c for c in cols)
+        has_added = any("added" in c and "ticker" in c for c in cols)
+        has_removed = any("removed" in c and "ticker" in c for c in cols)
 
-    for col in changes_df.columns:
-        col_lower = str(col).lower()
-        if "date" in col_lower:
-            date_col = col
-        elif "added" in col_lower and "ticker" in col_lower:
-            added_col = col
-        elif "removed" in col_lower and "ticker" in col_lower:
-            removed_col = col
+        if has_date and (has_added or has_removed):
+            changes_df = tbl.copy()
+            break
 
-    if not date_col or not added_col or not removed_col:
-        raise ValueError("Could not identify Date, Added Ticker, or Removed Ticker columns in changes table.")
+    if changes_df is not None:
+        if isinstance(changes_df.columns, pd.MultiIndex):
+            changes_df.columns = [f"{col[0]}_{col[1]}" for col in changes_df.columns]
+
+        date_col = None
+        added_col = None
+        removed_col = None
+
+        for col in changes_df.columns:
+            col_lower = str(col).lower()
+            if "date" in col_lower:
+                date_col = col
+            elif "added" in col_lower and "ticker" in col_lower:
+                added_col = col
+            elif "removed" in col_lower and "ticker" in col_lower:
+                removed_col = col
+
+    else:
+        logger.warning("Changes table not found on Wikipedia. Returning current constituents only.")
 
     # Convert to combined schema
     records = []
@@ -107,24 +123,32 @@ def fetch_and_cache_universe() -> pd.DataFrame:
             "removed_ticker": None
         })
 
-    # Add historical changes
-    for _, row in changes_df.iterrows():
-        try:
-            raw_date = row[date_col]
-            if pd.isna(raw_date):
-                continue
-            parsed_date = pd.to_datetime(raw_date).strftime("%Y-%m-%d")
-            added = clean_ticker(row[added_col])
-            removed = clean_ticker(row[removed_col])
-            if added or removed:
-                records.append({
-                    "type": "change",
-                    "date": parsed_date,
-                    "added_ticker": added,
-                    "removed_ticker": removed
-                })
-        except Exception as ex:
-            logger.warning(f"Skipping malformed change row: {row.to_dict()} due to: {ex}")
+    # Add historical changes if available
+    if changes_df is not None and date_col and (added_col or removed_col):
+        for _, row in changes_df.iterrows():
+            try:
+                raw_date = row[date_col]
+                if pd.isna(raw_date):
+                    continue
+                parsed_date = pd.to_datetime(raw_date).strftime("%Y-%m-%d")
+
+                added = None
+                if added_col and pd.notna(row[added_col]):
+                    added = clean_ticker(row[added_col])
+
+                removed = None
+                if removed_col and pd.notna(row[removed_col]):
+                    removed = clean_ticker(row[removed_col])
+
+                if added or removed:
+                    records.append({
+                        "type": "change",
+                        "date": parsed_date,
+                        "added_ticker": added,
+                        "removed_ticker": removed
+                    })
+            except Exception as ex:
+                logger.warning(f"Skipping malformed change row: {row.to_dict()} due to: {ex}")
 
     combined_df = pd.DataFrame(records)
     
