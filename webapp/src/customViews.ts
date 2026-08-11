@@ -48,6 +48,8 @@ export interface CustomView {
   name: string;
   slug: string;
   widgets: CustomViewWidgets;
+  widgetOrder: (keyof CustomViewWidgets)[];
+  widgetConfigs: Partial<Record<keyof CustomViewWidgets, any>>;
   createdAt: string; // ISO
   updatedAt: string; // ISO
 }
@@ -59,7 +61,36 @@ function loadFromStorage(): CustomView[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as CustomView[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    
+    // Canonical order for deterministic legacy migration
+    const canonicalOrder: (keyof CustomViewWidgets)[] = [
+      "edgeByStrategy", "symbolOverlay", "aiChat", "pilotsTable", "sentimentMini", "portfolioHeat", "optionsDirective", "signalBreakdown", "macroRegime"
+    ];
+
+    // Migration: populate widgetOrder and widgetConfigs if missing
+    return parsed.map((view: any) => {
+      // Check for array to ensure idempotency and skip re-deriving if it already exists
+      let widgetOrder = Array.isArray(view.widgetOrder) ? view.widgetOrder : undefined;
+      
+      if (!widgetOrder && view.widgets) {
+        // Derive order from widgets boolean map using stable canonical order
+        widgetOrder = canonicalOrder.filter(k => view.widgets[k]);
+        // Note: We don't eagerly write back to localStorage here. 
+        // This is an intentional in-memory migration that saves natively on the operator's next write.
+      }
+
+      // Filter out any malformed/unknown keys from widgetOrder
+      if (widgetOrder) {
+        widgetOrder = widgetOrder.filter((k: any) => canonicalOrder.includes(k as keyof CustomViewWidgets));
+      }
+
+      return {
+        ...view,
+        widgetOrder: widgetOrder || [],
+        widgetConfigs: view.widgetConfigs || {}
+      };
+    }) as CustomView[];
   } catch {
     // Corrupt/unavailable storage degrades to "no saved views" -- never throws.
     return [];
@@ -164,15 +195,35 @@ function slugify(name: string): string {
 /** `persisted: false` means the view is only good for this browser tab's
  * current session -- it will NOT survive a reload. Callers must surface
  * this honestly (never a blanket "Saved" toast regardless of the result). */
-export function addOrUpdateView(input: { name: string; widgets: CustomViewWidgets }): { view: CustomView; persisted: boolean } {
+export function addOrUpdateView(input: {
+  id?: string;
+  name: string;
+  widgets: CustomViewWidgets;
+  widgetOrder?: (keyof CustomViewWidgets)[];
+  widgetConfigs?: Partial<Record<keyof CustomViewWidgets, any>>;
+}): { view: CustomView; persisted: boolean } {
   const name = input.name.trim();
-  const slug = slugify(name);
-  const existing = views.find((v) => v.slug === slug);
+  let slug = slugify(name);
+  
+  // Find by ID first if provided, otherwise find by slug
+  let existing = input.id ? views.find((v) => v.id === input.id) : views.find((v) => v.slug === slug);
+  
+  // If we are renaming an existing view, make sure the new slug doesn't collide with a DIFFERENT view
+  if (existing && input.id && slug !== existing.slug) {
+    let existingWithNewSlug = views.find((v) => v.slug === slug && v.id !== input.id);
+    if (existingWithNewSlug) {
+      slug = `${slug}-${hashString(input.id)}`;
+    }
+  }
+
   const now = new Date().toISOString();
+
+  const widgetOrder = input.widgetOrder ?? (Object.keys(input.widgets) as (keyof CustomViewWidgets)[]).filter(k => input.widgets[k]);
+  const widgetConfigs = input.widgetConfigs ?? {};
 
   let view: CustomView;
   if (existing) {
-    view = { ...existing, name, widgets: input.widgets, updatedAt: now };
+    view = { ...existing, name, slug, widgets: input.widgets, widgetOrder, widgetConfigs, updatedAt: now };
     views = views.map((v) => (v.id === existing.id ? view : v));
   } else {
     view = {
@@ -180,6 +231,8 @@ export function addOrUpdateView(input: { name: string; widgets: CustomViewWidget
       name,
       slug,
       widgets: input.widgets,
+      widgetOrder,
+      widgetConfigs,
       createdAt: now,
       updatedAt: now,
     };
@@ -198,13 +251,54 @@ export function removeView(id: string): { persisted: boolean } {
   return { persisted };
 }
 
+export function importViews(jsonString: string): { importedCount: number; persisted: boolean; error?: string } {
+  try {
+    const parsed = JSON.parse(jsonString);
+    if (!Array.isArray(parsed)) throw new Error("Invalid format: expected array of views");
+    
+    // Quick validation
+    const validViews = parsed.filter(v => v && typeof v.name === "string" && typeof v.slug === "string" && v.widgets);
+    if (validViews.length === 0) throw new Error("No valid views found in the imported file");
+
+    // Merge logic: if a slug exists, we can either overwrite or keep existing.
+    // Let's overwrite existing for simplicity, or append if new.
+    let importedCount = 0;
+    for (const view of validViews) {
+      const widgetOrder = view.widgetOrder || (Object.keys(view.widgets) as (keyof CustomViewWidgets)[]).filter(k => view.widgets[k]);
+      const widgetConfigs = view.widgetConfigs || {};
+      
+      const existingIdx = views.findIndex(v => v.slug === view.slug);
+      const migratedView: CustomView = {
+        ...view,
+        widgetOrder,
+        widgetConfigs
+      };
+      
+      if (existingIdx >= 0) {
+        views[existingIdx] = migratedView;
+      } else {
+        views.push(migratedView);
+      }
+      importedCount++;
+    }
+
+    const persisted = persist();
+    notify();
+    return { importedCount, persisted };
+  } catch (e: any) {
+    return { importedCount: 0, persisted: false, error: e.message || "Failed to parse JSON" };
+  }
+}
+
+
 export function useCustomViews(): {
   views: CustomView[];
   addOrUpdateView: typeof addOrUpdateView;
   removeView: typeof removeView;
+  importViews: typeof importViews;
 } {
   const list = useSyncExternalStore(subscribe, getSnapshot);
-  return { views: list, addOrUpdateView, removeView };
+  return { views: list, addOrUpdateView, removeView, importViews };
 }
 
 /** Exposed for tests to reset the shared in-memory store between cases --

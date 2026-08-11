@@ -26,16 +26,20 @@ const FALLBACK_SYMBOLS = ["AAPL", "MSFT", "SPY"];
  * `StrategyInsights.tsx` and the Create Data App `/app/:slug` renderer, kept
  * as the ONE implementation rather than two independently-drifting copies.
  */
-export function SymbolSignalOverlayChart() {
+export function SymbolSignalOverlayChart({ defaultTicker }: { defaultTicker?: string }) {
   const portfolio = useApi<Portfolio>(() => api.getPortfolio(), []);
   const symbols = useMemo(() => {
     const held = Array.from(
       new Set((portfolio.data?.positions ?? []).map((p) => p.symbol).filter(Boolean))
     );
-    return held.length > 0 ? held : FALLBACK_SYMBOLS;
-  }, [portfolio.data]);
+    let list = held.length > 0 ? held : FALLBACK_SYMBOLS;
+    if (defaultTicker && !list.includes(defaultTicker)) {
+      list = [defaultTicker, ...list];
+    }
+    return list;
+  }, [portfolio.data, defaultTicker]);
 
-  const [symbol, setSymbol] = useState(symbols[0] ?? "AAPL");
+  const [symbol, setSymbol] = useState(defaultTicker || (symbols[0] ?? "AAPL"));
 
   // Keep the selection valid as `symbols` resolves from the fallback list to
   // the operator's real holdings (portfolio fetch lands after mount).
