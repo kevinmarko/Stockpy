@@ -794,7 +794,7 @@ def run_bug_hunter(quick: bool = False, fail_on: str = "HIGH") -> str:
         quick: If True, skips heavy tests like Gravity AI Review Suite and validation harness checks.
         fail_on: Minimum severity to trigger a failure (CRITICAL, HIGH, MEDIUM, LOW, NONE). Default is HIGH.
     """
-    cmd = ["python", "scripts/bug_hunter.py", "--fail-on", fail_on]
+    cmd = [sys.executable, "scripts/bug_hunter.py", "--fail-on", fail_on]
     if quick:
         cmd.append("--quick")
 
@@ -803,11 +803,14 @@ def run_bug_hunter(quick: bool = False, fail_on: str = "HIGH") -> str:
             cmd,
             capture_output=True,
             text=True,
-            check=True
+            check=True,
+            timeout=900
         )
         return f"Bug Hunter completed successfully (PASS):\n{result.stdout}"
     except subprocess.CalledProcessError as e:
         return f"Bug Hunter found issues (FAIL - exit code {e.returncode}):\n{e.stdout}\n{e.stderr}"
+    except subprocess.TimeoutExpired:
+        return "Bug Hunter timed out after 15 minutes."
     except FileNotFoundError:
         return "Error: python or scripts/bug_hunter.py not found."
 
