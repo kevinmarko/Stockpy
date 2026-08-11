@@ -16010,7 +16010,7 @@ class GravityAIAuditor:
                     ("ForecastTracker(db_path=db_path, readonly=True)", 1),
                     ("ForecastTracker(readonly=True)", 1),
                 ],
-                "api/pilots_api.py": [("HistoricalStore(readonly=True)", 7)],
+                "api/pilots_api.py": [("HistoricalStore(readonly=True)", 6)],
                 "api/state_api.py": [("TransactionsStore(readonly=True)", 1)],
                 "gui/panels/analytics.py": [("HistoricalStore(readonly=True)", 1)],
                 "pilots/forecast_skill.py": [("ForecastTracker(readonly=True)", 1)],
