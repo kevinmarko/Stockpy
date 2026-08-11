@@ -346,6 +346,21 @@ class TestRelativeStrength:
     def test_nan_relative_strength_is_neutral(self):
         assert self._score(relative_strength=float("nan")).score == 0.0
 
+    def test_vectorized_missing_column_is_neutral_not_fabricated_bearish(self):
+        """Regression: compute_vectorized() used to fall back to a fabricated
+        `pd.Series(0.0, ...)` when the "relative_strength" column was absent,
+        which the `rs <= 0` bucket inclusively caught -- producing a full
+        bearish score=-1.0 for every ticker instead of the neutral/no-score
+        result the scalar compute() produces for the same missing-column
+        case. The fallback must be NaN so `valid = rs.notna()` excludes
+        every row."""
+        df = pd.DataFrame(
+            {"Close": [100.0, 200.0]}, index=["AAPL", "MSFT"]
+        )  # deliberately no "relative_strength" column
+        out = RelativeStrengthSignal().compute_vectorized(df, _signal_context())
+        assert (out["score"] == 0.0).all()
+        assert (out["explanation"] == "").all()
+
 
 # ============================================================================
 # Section 2 — Gap-closing classes for modules with existing-but-incomplete

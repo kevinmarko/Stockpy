@@ -108,14 +108,26 @@ class TestLoadWatchlist:
         result = _load_watchlist()
         assert result == ["AAPL", "MSFT", "GOOG"]
 
-    def test_env_var_takes_precedence_over_file(
+    def test_env_var_and_file_are_merged(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
+        """WATCHLIST env var and watchlist.txt are a genuine union, not precedence."""
         monkeypatch.setenv("WATCHLIST", "TSLA")
         (tmp_path / "watchlist.txt").write_text("NVDA\nAMD\n")
         monkeypatch.chdir(tmp_path)
         result = _load_watchlist()
-        assert result == ["TSLA"]
+        assert set(result) == {"TSLA", "NVDA", "AMD"}
+
+    def test_env_var_and_file_union_with_overlap_deduped(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """Different tickers in each source are unioned; overlapping ones are deduped."""
+        monkeypatch.setenv("WATCHLIST", "TSLA,NVDA")
+        (tmp_path / "watchlist.txt").write_text("NVDA\nAMD\n")
+        monkeypatch.chdir(tmp_path)
+        result = _load_watchlist()
+        assert set(result) == {"TSLA", "NVDA", "AMD"}
+        assert len(result) == 3  # NVDA not duplicated
 
     def test_from_file(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
@@ -216,6 +228,21 @@ class TestBuildUniverse:
             result = _build_universe(snap)
         mock_sheet2.assert_not_called()
         assert "TSLA" in result
+
+    def test_watchlist_env_and_file_both_merged_into_universe(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """WATCHLIST env var and watchlist.txt, populated with different tickers,
+        are both merged into the universe -- a genuine 3-way union with held
+        positions, per this repo's documented `positions ∪ WATCHLIST ∪
+        watchlist.txt` convention."""
+        monkeypatch.setenv("WATCHLIST", "NVDA,MSFT")
+        (tmp_path / "watchlist.txt").write_text("AMD\nINTC\n")
+        monkeypatch.chdir(tmp_path)
+        snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
+        result = _build_universe(snap)
+        assert set(result) == {"AAPL", "NVDA", "MSFT", "AMD", "INTC"}
+        assert result == sorted(result)
 
 
 # ---------------------------------------------------------------------------
