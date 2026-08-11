@@ -7,8 +7,7 @@ import { ErrorState, Loading, Tile } from "../components/ui";
 import { AttentionHeatmapStrip, ForecastCandleChart } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
-import { Button } from "../components/ui";
+import { DynamicGrid } from "../components/DynamicGrid";
 import toast from "react-hot-toast";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
@@ -365,7 +364,6 @@ export function ForecastViewer() {
             Multi-horizon price forecast for a symbol — 10/30/60/90-day blended levels, model weighting, drivers, and Monte-Carlo confidence bands.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("forecast-viewer")}>Reset Layout</Button>
       </div>
 
       <TabGuide tabKey="forecast" />

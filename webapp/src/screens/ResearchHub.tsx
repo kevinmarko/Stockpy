@@ -1,8 +1,7 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
-import { Button } from "../components/ui";
+import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * ResearchHub — landing screen for the "Research" nav section (see
@@ -62,9 +61,6 @@ export function ResearchHub() {
           <p className="screen-sub">
             Strategies and symbols worth a closer look before you act.
           </p>
-        </div>
-        <div style={{ display: "flex", gap: "var(--s-2)" }}>
-          <Button variant="neutral" onClick={() => resetGridLayout("research-hub")}>Reset Layout</Button>
         </div>
       </div>
 

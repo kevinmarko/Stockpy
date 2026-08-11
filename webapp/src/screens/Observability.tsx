@@ -18,7 +18,7 @@ import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, InfoTip, Input, Loading, Notice, Select, Table, Tile } from "../components/ui";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import { TabGuide } from "../components/TabGuide";
 import { glossaryDef } from "../help/helpContent";
 import { loadThresholds } from "../help/thresholds";
@@ -1139,9 +1139,6 @@ export function Observability() {
               Portfolio risk, guardrail events, and system telemetry.
             </p>
           </div>
-        </div>
-        <div style={{ display: "flex", gap: "var(--s-2)" }}>
-          <Button variant="neutral" onClick={() => resetGridLayout("observability")}>Reset Layout</Button>
         </div>
       </div>
 

@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import toast from "react-hot-toast";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import { api, ApiError } from "../api/client";
 import type {
   ControlStatus,
@@ -661,7 +661,6 @@ export function PipelineDashboard() {
             The orchestrator daemon's live status and stage-scoped run triggers.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("pipeline")}>Reset Layout</Button>
       </div>
 
       <TabGuide tabKey="pipeline" />

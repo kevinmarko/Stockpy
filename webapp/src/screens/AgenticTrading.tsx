@@ -8,7 +8,7 @@ import { useBrokerageLoginJob } from "../hooks/useBrokerageLoginJob";
 import { useDebounce } from "../hooks/useDebounce";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { useExecutionMode } from "../components/ExecutionModeContext";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import type { ResponsiveLayouts } from "react-grid-layout";
 import type {
   AgenticDiscovery,
@@ -184,10 +184,6 @@ export function AgenticTrading() {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)" }}>
-          <Button variant="neutral" onClick={() => resetGridLayout("agentic")}>
-            Reset Layout
-          </Button>
-
           <Button variant="neutral" onClick={refreshAll} pending={isRefreshingData}>
             {isRefreshingData ? "Refreshing Data…" : "Refresh Data 🔄"}
           </Button>

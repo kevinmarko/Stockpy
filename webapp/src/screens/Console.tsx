@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { TabGuide } from "../components/TabGuide";
 import { LogStream } from "../components/LogStream";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import { DataTable, type Column } from "../components/DataTable";
 import { Button } from "../components/ui";
 import { api } from "../api/client";
@@ -284,7 +284,6 @@ export function Console() {
           </p>
         </div>
         <div style={{ display: "flex", gap: "var(--s-2)" }}>
-          <Button variant="neutral" onClick={() => resetGridLayout("console")}>Reset Layout</Button>
         {activeJob && activeJob.cancellable && activeJob.is_running !== false && (
           <Button variant="neutral" onClick={handleCancel} data-testid="console-cancel-job">
             Cancel Active Job

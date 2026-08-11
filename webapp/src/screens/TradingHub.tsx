@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * TradingHub.tsx — landing screen for the "Trading Tools" nav section
@@ -102,7 +102,6 @@ export function TradingHub() {
           <h1 className="screen-title" style={{ marginTop: "var(--s-2)" }}>Trading Tools</h1>
           <p className="screen-sub">Grading and acting on your own portfolio.</p>
         </div>
-        <button className="btn btn-neutral" onClick={() => resetGridLayout("trading-hub")}>Reset Layout</button>
       </div>
 
       <div style={{ marginTop: "var(--s-3)" }}>

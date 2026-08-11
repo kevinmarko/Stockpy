@@ -12,12 +12,12 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import type { ResponsiveLayouts } from "react-grid-layout";
 import { PerfLine } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
 import { TabGuide } from "../components/TabGuide";
-import { ErrorState, Loading, Tile, InfoTip, Button } from "../components/ui";
+import { ErrorState, Loading, Tile, InfoTip } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { fmtNum, fmtPct, fmtSignedUsd, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -201,9 +201,6 @@ export function Portfolio() {
                 <span className="badge badge-warn">stale</span>
               ))}
           </span>
-          <Button variant="neutral" onClick={() => resetGridLayout("portfolio")}>
-            Reset Layout
-          </Button>
         </div>
       </div>
 
