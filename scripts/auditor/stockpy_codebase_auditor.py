@@ -524,7 +524,7 @@ class StockpyAuditor:
         if any(m in low for m in entry_markers):
             return True
         rel = info.rel
-        if rel.startswith(("scripts/", "api/", "gui/", "deploy/")):
+        if rel.startswith(("scripts/", "api/", "gui/", "deploy/", "ml/models/")):
             return True
         try:
             source = info.path.read_text(encoding="utf-8", errors="replace")

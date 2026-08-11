@@ -56,7 +56,3 @@ class BondBertModel(Model):
         
         clean_X = X.fillna(0.0).values
         return np.asarray(clean_X @ self.weights, dtype=float)
-
-
-if __name__ == "__main__":
-    pass
