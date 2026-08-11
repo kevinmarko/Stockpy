@@ -4,7 +4,7 @@ import { theme } from "../theme";
 
 /**
  * OperationsHub — landing screen for the "Operations" nav section (see
- * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 5
+ * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 6
  * screens as clickable cards; someone else wires the section-header tap that
  * routes here. This screen owns only its own content and navigation.
  *
@@ -26,6 +26,14 @@ import { theme } from "../theme";
  * Console was -- built read-only against `output/`/`reports/` artifacts, not
  * a `.env`-write surface, so it belongs here alongside Console/Pipeline
  * rather than under Settings.
+ *
+ * Create Data App (parity gap G11, caught by review) is the same shape
+ * again: navigation.tsx's NAV_ITEMS gained it under the "operations"
+ * section, but this hub's CARDS array is hand-maintained separately and
+ * doesn't auto-derive from NAV_ITEMS, so it silently missed the addition --
+ * exactly the reachable-in-Sidebar-but-not-here gap this file already fixed
+ * twice for Console/Report Library. No test enforces NAV_ITEMS/CARDS parity
+ * yet; this comment is the only guard until one exists.
  */
 interface HubCard {
   to: string;
@@ -45,6 +53,7 @@ const CARDS: HubCard[] = [
     ico: "❓",
     description: "Search the platform's full glossary of terms, metrics, and gates -- every definition each screen's own \"How this works\" panel draws from, in one searchable place.",
   },
+  { to: "/create-data-app", label: "Create Data App", ico: "🧩", description: TAB_HELP["create-data-app"].description },
 ];
 
 export function OperationsHub() {

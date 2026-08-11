@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import {
   Zap,
   BarChart2,
@@ -26,7 +26,9 @@ import {
   Settings,
   Briefcase,
   LineChart,
+  LayoutTemplate,
 } from "lucide-react";
+import { useCustomViews } from "./customViews";
 
 export type NavSection = "primary" | "research" | "trading" | "operations" | "settings";
 
@@ -84,7 +86,35 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/pipeline", label: "Pipeline", ico: Rocket, match: (p) => p.startsWith("/pipeline"), section: "operations" },
   { to: "/console", label: "Console", ico: Monitor, match: (p) => p.startsWith("/console"), section: "operations" },
   { to: "/operations/reports", label: "Report Library", ico: Library, match: (p) => p.startsWith("/operations/reports"), section: "operations" },
+  { to: "/create-data-app", label: "Create Data App", ico: LayoutTemplate, match: (p) => p.startsWith("/create-data-app"), section: "operations" },
   { to: "/help", label: "Help & Glossary", ico: CircleHelp, match: (p) => p.startsWith("/help"), section: "operations" },
   // Settings
   { to: "/settings", label: "Settings", ico: Settings, match: (p) => p.startsWith("/settings"), section: "settings" },
 ];
+
+/**
+ * NAV_ITEMS plus one entry per operator-saved custom view (see
+ * customViews.ts), each routing to /app/:slug. Real, reactive nav injection
+ * -- `useCustomViews()` is backed by `useSyncExternalStore`, so both
+ * `Sidebar` and `BottomNav` (components/BottomNavigation.tsx) re-render the
+ * instant a view is created/renamed/deleted from any screen or browser tab,
+ * with no page reload required.
+ */
+export function useNavItems(): NavItem[] {
+  const { views } = useCustomViews();
+  return useMemo(
+    () => [
+      ...NAV_ITEMS,
+      ...views.map(
+        (v): NavItem => ({
+          to: `/app/${v.slug}`,
+          label: v.name,
+          ico: LayoutTemplate,
+          match: (p) => p === `/app/${v.slug}`,
+          section: "operations",
+        })
+      ),
+    ],
+    [views]
+  );
+}

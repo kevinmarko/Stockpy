@@ -55,6 +55,8 @@ import { Help } from "./screens/Help";
 import { Onboarding } from "./screens/Onboarding";
 import { CacheLongShort } from "./screens/CacheLongShort";
 import { StrategyInsights } from "./screens/StrategyInsights";
+import { CreateDataApp } from "./screens/CreateDataApp";
+import { CustomView } from "./screens/CustomView";
 import { readOnboarding } from "./onboarding";
 import { TokenGate } from "./components/TokenGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -258,6 +260,8 @@ export default function App() {
                   <Route path="/portfolio" element={<Portfolio />} />
                   <Route path="/cache-long-short" element={<CacheLongShort />} />
                   <Route path="/strategy-insights" element={<StrategyInsights />} />
+                  <Route path="/create-data-app" element={<CreateDataApp />} />
+                  <Route path="/app/:slug" element={<CustomView />} />
                   <Route path="/help" element={<Help />} />
                   <Route path="/settings" element={<SettingsLayout />}>
                     <Route index element={<SettingsGeneral />} />
