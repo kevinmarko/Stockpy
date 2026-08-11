@@ -146,6 +146,108 @@ class TestWalkForwardSymbol:
 
 
 # ---------------------------------------------------------------------------
+# Finding 11 — embargo_days is now genuinely applied as a purge gap between
+# train and test, not merely recorded and echoed into the artifact.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingEngine:
+    """Stub engine that records the exact training array AND days_forward
+    handed to run_arima for every anchor actually visited, so tests can
+    assert both on the real boundary of the training window and on the
+    forecast-horizon compensation (see _forecast_one's docstring) rather
+    than trusting the config field alone."""
+
+    def __init__(self):
+        self.calls: list[np.ndarray] = []
+        self.days_forward_calls: list[int] = []
+
+    def run_arima(self, history, days_forward, order=(1, 1, 1)):
+        self.calls.append(np.asarray(history, dtype=float))
+        self.days_forward_calls.append(days_forward)
+        return float(history[-1]) + 1.0  # finite, positive, non-sentinel
+
+
+class TestEmbargoGapApplied:
+    def test_nonzero_embargo_shrinks_training_window_before_anchor(self):
+        """With embargo_days=7, the training window for a surviving anchor
+        must end 7 bars before that anchor, not immediately at it -- proving
+        embargo_days is a real purge gap, not a recorded-but-unused field
+        (the original Finding 11 bug)."""
+        slope = 0.5
+        start = 100.0
+        n = 200
+        embargo_days = 7
+        prices = _make_ohlcv(_smooth_trend_prices(n, start, slope))
+        stub = _RecordingEngine()
+        config = BacktestConfig(
+            min_train_bars=60, lookback_days=300, step_days=30,
+            embargo_days=embargo_days,
+        )
+        # Anchors would be t=60,90,120,150,180. The very first (t=60) has
+        # only min_train_bars=60 bars of history available before it --
+        # exactly zero slack -- so the 7-day embargo purge legitimately
+        # starves it below min_train_bars and it is skipped. t=90 is the
+        # first anchor with enough slack to survive.
+        errors = _walk_forward_symbol(prices, stub, "ARIMA", horizon=10, config=config)
+        assert len(errors) > 0
+        assert len(stub.calls) > 0
+
+        anchor_t = 90
+        train_arr = stub.calls[0]
+        expected_train_end = anchor_t - embargo_days  # exclusive upper bound
+        expected_tail_value = start + slope * (expected_train_end - 1)
+
+        # The training array's LAST element must be the price at index
+        # (anchor_t - embargo_days - 1) -- never a value closer to the
+        # anchor, which would mean the embargo gap was not actually applied.
+        assert train_arr[-1] == pytest.approx(expected_tail_value)
+        assert len(train_arr) == expected_train_end  # train_start was 0 here
+
+        # The forecast horizon passed to a train-end-anchored model (ARIMA)
+        # must be compensated by embargo_days so the actual forecast TARGET
+        # stays pinned at the same real point in time regardless of the
+        # purge gap -- otherwise the model would be silently asked to
+        # extrapolate to a point embargo_days short of the real comparison
+        # target (Close[t + horizon]), injecting a systematic bias into
+        # every MASE/RMSE cell instead of a genuine train/test purge effect.
+        assert stub.days_forward_calls[0] == 10 + embargo_days
+
+    def test_zero_embargo_reproduces_original_train_test_boundary(self):
+        """embargo_days=0 must reproduce the pre-fix boundary exactly: the
+        training window still ends immediately at the anchor (already
+        strictly excluded via slicing), nothing more."""
+        slope = 0.5
+        start = 100.0
+        n = 200
+        prices = _make_ohlcv(_smooth_trend_prices(n, start, slope))
+        stub = _RecordingEngine()
+        config = BacktestConfig(
+            min_train_bars=60, lookback_days=300, step_days=1_000, embargo_days=0,
+        )
+        errors = _walk_forward_symbol(prices, stub, "ARIMA", horizon=10, config=config)
+        assert len(errors) == 1
+        assert len(stub.calls) == 1
+        train_arr = stub.calls[0]
+
+        anchor_t = config.min_train_bars  # only anchor visited (step_days huge)
+        expected_tail_value = start + slope * (anchor_t - 1)
+        assert train_arr[-1] == pytest.approx(expected_tail_value)
+        assert len(train_arr) == anchor_t
+        # embargo_days=0 -> no forecast-horizon compensation needed either.
+        assert stub.days_forward_calls[0] == 10
+
+    def test_embargo_days_reflected_in_backtest_meta(self):
+        """The committed artifact's backtest_meta already echoes
+        config.embargo_days (validation/sector_config_io.py, out of this
+        bundle's scope) -- this test just pins that the value round-trips
+        through BacktestConfig, so that claim stays honest now that the
+        walk-forward loop actually reads and applies the field."""
+        config = BacktestConfig(embargo_days=12)
+        assert config.embargo_days == 12
+
+
+# ---------------------------------------------------------------------------
 # No-lookahead test — the single most important property of this module.
 # ---------------------------------------------------------------------------
 
@@ -168,11 +270,18 @@ class TestNoLookahead:
         anchor_t = min_train_bars  # first (and only, via step_days below) anchor visited
 
         # step_days larger than the anchor range collapses the walk-forward
-        # to a single anchor: t = min_train_bars.
+        # to a single anchor: t = min_train_bars. embargo_days=0 here
+        # because this test's property (no-lookahead into the FUTURE) is
+        # orthogonal to the train/test purge gap (Finding 11) — the anchor
+        # has exactly min_train_bars of history available before it with no
+        # slack to spare for a nonzero embargo, so a nonzero value would
+        # just starve the anchor of its `min_train_bars` requirement rather
+        # than exercise anything this test is about.
         config = BacktestConfig(
             min_train_bars=min_train_bars,
             lookback_days=750,
             step_days=1_000,
+            embargo_days=0,
         )
 
         base_close = _smooth_trend_prices(n, 100.0, 0.3)
@@ -252,7 +361,13 @@ def backtest_result():
         models=("MC", "ARIMA", "HW"),
         lookback_days=300,
         min_train_bars=60,
-        step_days=90,
+        # step_days=30 (rather than 90) keeps multiple anchors per symbol
+        # surviving the now-enforced embargo_days=5 purge gap (Finding 11)
+        # -- with a wider step, the first anchor (t=min_train_bars) is the
+        # only one within reach of the embargo-shrunk training window and
+        # gets dropped, leaving too few observations for the MASE
+        # comparisons below to reliably show their intended direction.
+        step_days=30,
         embargo_days=5,
     )
     return run_sector_backtest(price_data, ticker_sectors, engine, config)
