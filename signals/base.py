@@ -224,6 +224,34 @@ class SignalModule(ABC):
             } for r in results
         ], index=df.index)
 
+    def compute_batch_xsec(self, ranks_wide: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """Optional vectorized fast path used ONLY by the historical-backfill
+        replay (ml/forecast_backfill.py's ``_run_cross_sectional_module``).
+
+        Given a Date x Ticker wide DataFrame of pre-computed cross-sectional
+        percentile ranks (the same value ``pre_compute()`` would derive
+        per-date from ``XSec_12_1M``, just batched across every date at
+        once), return a Date x Ticker wide DataFrame of ``score`` in ONE
+        vectorized call instead of once per (date, ticker) via
+        ``pre_compute()``/``compute()``. Return ``None`` (the default) to
+        keep the existing per-date ``pre_compute()``/per-ticker ``compute()``
+        replay -- every module that doesn't implement this keeps working
+        exactly as before.
+
+        Parameters
+        ----------
+        ranks_wide : pd.DataFrame
+            Date-indexed, Ticker-columned percentile ranks in [0, 1] (NaN
+            wherever a ticker had no valid cross-sectional input that date).
+
+        Returns
+        -------
+        Optional[pd.DataFrame]
+            Date x Ticker wide DataFrame of ``score``, or ``None`` if this
+            module has no vectorized fast path.
+        """
+        return None
+
     @abstractmethod
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
         """Executes signal calculation logic on a single security observation.
