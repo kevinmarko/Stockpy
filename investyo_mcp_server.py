@@ -3580,6 +3580,243 @@ def get_portfolio_by_pilot() -> str:
         return f"Failed to build portfolio-by-pilot attribution: {str(e)}"
 
 
+
+# ==============================================================================
+# PHASE 1: READ-ONLY ANALYTICS TOOLS
+# ==============================================================================
+
+@mcp.tool()
+def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
+    """Computes historical VaR and Expected Shortfall from real daily returns."""
+    try:
+        from data.historical_store import HistoricalStore
+        import numpy as np
+        
+        df = HistoricalStore().get_bars(ticker, lookback_days=504)
+        if df is None or len(df) < 252:
+            return "insufficient history: need at least 252 days of price bars"
+            
+        returns = df['Close'].pct_change().dropna()
+        if len(returns) < 252:
+            return "insufficient history: need at least 252 days of return data"
+            
+        std_ret = returns.std()
+        if np.isnan(std_ret) or std_ret < 1e-12:
+            return f"insufficient history: degenerate return standard deviation ({std_ret})"
+            
+        if method == "historical":
+            var_95 = np.percentile(returns, 5)
+            es_95 = returns[returns <= var_95].mean()
+        else:
+            from scipy.stats import norm
+            mu = returns.mean()
+            var_95 = norm.ppf(0.05, mu, std_ret)
+            es_95 = mu - std_ret * norm.pdf(norm.ppf(0.05)) / 0.05
+
+        return (
+            f"VaR (95%): {var_95:.4%}\n"
+            f"Expected Shortfall (95%): {es_95:.4%}\n"
+            f"Method: {method}\n"
+            f"Sample size: {len(returns)} days"
+        )
+    except Exception as e:
+        return f"failed to compute metrics: {str(e)}"
+
+@mcp.tool()
+def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
+    """Applies a dated historical shock window to a portfolio's positions."""
+    try:
+        from validation.stress_scenarios import STRESS_SCENARIOS, run_stress_scenario
+        from data.robinhood_portfolio import fetch_account_snapshot
+        from data.historical_store import HistoricalStore
+        import pandas as pd
+        import numpy as np
+        
+        if scenario not in STRESS_SCENARIOS:
+            return f"scenario not found. Available: {list(STRESS_SCENARIOS.keys())}"
+            
+        if portfolio_id != "live":
+             return "Portfolio not found. (Only 'live' portfolio_id is currently supported for stress test)"
+             
+        snapshot = fetch_account_snapshot(live_cache=True)
+        if not snapshot or not snapshot.positions:
+             return "No positions in portfolio to stress test."
+             
+        def returns_fn(start: str, end: str) -> pd.Series:
+            store = HistoricalStore()
+            returns_series = []
+            
+            # Sum up total portfolio value to weight the returns
+            total_value = sum(pos.quantity * pos.current_price for pos in snapshot.positions)
+            if total_value == 0:
+                 return pd.Series(dtype=float)
+                 
+            for pos in snapshot.positions:
+                bars = store.get_bars(pos.symbol, lookback_days=5000)
+                if bars is not None and not bars.empty:
+                    # Filter for start/end dates
+                    mask = (bars.index >= pd.to_datetime(start)) & (bars.index <= pd.to_datetime(end))
+                    window_bars = bars.loc[mask]
+                    if not window_bars.empty:
+                        r = window_bars['Close'].pct_change().dropna()
+                        weight = (pos.quantity * pos.current_price) / total_value
+                        returns_series.append(r * weight)
+            
+            if not returns_series:
+                return pd.Series(dtype=float)
+            
+            # Align indices and sum row-wise for daily portfolio return
+            agg_returns = pd.concat(returns_series, axis=1).sum(axis=1)
+            return agg_returns
+            
+        scenario_obj = STRESS_SCENARIOS[scenario]
+        result = run_stress_scenario(returns_fn, scenario_obj)
+        
+        if result.error:
+             return f"Stress test failed: {result.error}"
+             
+        return (
+            f"Scenario: {result.scenario}\n"
+            f"Window: {result.start} to {result.end}\n"
+            f"Max Drawdown: {result.max_drawdown:.4%}\n"
+            f"Final Return: {result.final_return:.4%}\n"
+            f"Survived: {result.survived}\n"
+            f"Expected DD for short vol: {result.expected_max_dd_for_short_vol:.4%}"
+        )
+    except Exception as e:
+        return f"failed to run stress scenario: {str(e)}"
+
+@mcp.tool()
+def get_factor_attributions(ticker: str) -> str:
+    """Fetches multifactor fundamental attributions for a given ticker."""
+    try:
+        from processing_engine import ProcessingEngine
+        from data_engine import DataEngine
+        from dto_models import FundamentalDataDTO
+        
+        de = DataEngine("")
+        raw = de.fetch_fundamentals_raw([ticker])
+        if not raw or ticker not in raw or 'info' not in raw[ticker]:
+             return f"unavailable: no fundamental data for {ticker}"
+             
+        data = raw[ticker]
+        dto = FundamentalDataDTO.from_raw_dict(ticker, data.get('info', {}), dividends=data.get('dividends'))
+             
+        pe = ProcessingEngine()
+        fund_dtos = {ticker: dto}
+        try:
+             res_df = pe.calculate_fundamental_metrics(fund_dtos)
+        except Exception as e:
+             return f"unavailable: {str(e)}"
+             
+        if res_df.empty or ticker not in res_df.index:
+             return f"unavailable: no recent factor score for {ticker}"
+             
+        row = res_df.loc[ticker]
+        
+        return (
+            f"Value Z-Score: {row.get('Value_Z', 'N/A')}\n"
+            f"Quality Z-Score: {row.get('Quality_Z', 'N/A')}\n"
+            f"LowVol Z-Score: {row.get('LowVol_Z', 'N/A')}\n"
+            f"Size Z-Score: {row.get('Size_Z', 'N/A')}\n"
+            f"Multifactor Composite: {row.get('Multifactor_Composite', 'N/A')}"
+        )
+    except Exception as e:
+        return f"failed to get factor attributions: {str(e)}"
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def get_order_execution_history(limit: int = 50) -> str:
+    """Queries real fills from transactions_store.py"""
+    try:
+        from transactions_store import TransactionsStore
+        store = TransactionsStore()
+        closed_df = store.closed_trades_df
+        open_df = store.open_trades_df
+        
+        import pandas as pd
+        all_trades = pd.concat([closed_df, open_df])
+        if all_trades.empty:
+            return "no trade history found"
+            
+        all_trades = all_trades.sort_values("entry_ts", ascending=False).head(limit)
+        
+        lines = []
+        for _, row in all_trades.iterrows():
+            sym = row.get("symbol", "N/A")
+            side = row.get("side", "N/A")
+            qty = row.get("qty", 0)
+            entry_p = row.get("entry_price", 0.0)
+            
+            status = "CLOSED" if pd.notna(row.get("exit_ts")) else "OPEN"
+            lines.append(f"[{status}] {sym} {side} {qty} @ {entry_p}")
+            
+        return "\n".join(lines)
+    except Exception as e:
+        return f"failed to get execution history: {str(e)}"
+
+@mcp.tool()
+def get_model_drift_report() -> str:
+    """Reuses forecast_skill_by_symbol_summary to report model drift"""
+    try:
+        from pilots.observability import forecast_skill_by_symbol_summary
+        summary = forecast_skill_by_symbol_summary()
+        if not summary:
+            return "no drift data yet"
+        import json
+        return json.dumps(summary, indent=2)
+    except Exception as e:
+        return f"failed to generate model drift report: {str(e)}"
+
+@mcp.tool()
+def validate_order_compliance(ticker: str, side: str, size: float) -> str:
+    """Runs PreTradeRiskGate checks for order compliance without submitting."""
+    try:
+        from execution.risk_gate import PreTradeRiskGate, RiskContext
+        from execution.broker_base import OrderIntent, OrderType, OrderSide
+        
+        gate = PreTradeRiskGate()
+        
+        intent = OrderIntent(
+            symbol=ticker.upper(),
+            side=OrderSide(side.lower()),
+            qty=float(size),
+            order_type=OrderType.MARKET,
+            limit_price=None, 
+            strategy_id="compliance_check"
+        )
+        
+        passed, results = gate.run_all(intent, RiskContext())
+        
+        if passed:
+            return "compliance check PASSED: Order is allowed by risk gates."
+        else:
+            failed_checks = [r for r in results if not r.passed]
+            reasons = "; ".join(r.reason for r in failed_checks)
+            return f"compliance check FAILED: {reasons}"
+    except Exception as e:
+         return f"compliance check unavailable: {str(e)}"
+
+@mcp.prompt()
+def pre_market_briefing() -> str:
+    """Generates a structured prompt template for a pre-market briefing."""
+    return """Please generate a pre-market briefing.
+Include macro conditions, top watchlist candidates, and active alerts.
+"""
+
+@mcp.prompt()
+def portfolio_health_check() -> str:
+    """Generates a structured prompt template for a portfolio health check."""
+    return """Please generate a portfolio health check.
+Analyze current allocations, VaR, correlation risks, and open position PnL.
+"""
+
+@mcp.prompt()
+def strategy_post_mortem() -> str:
+    """Generates a structured prompt template for a strategy post-mortem."""
+    return """Please generate a strategy post-mortem.
+Analyze the latest closed trades, PnL attribution, execution slippage, and model drift.
+"""
+
 def _bearer_auth_asgi_middleware(app, token: str):
     """Wrap a Starlette ASGI app with a bearer-token gate for the
     streamable-http MCP transport. Rejects any 'http' scope request lacking
@@ -3742,4 +3979,3 @@ if __name__ == "__main__":
         uvicorn.run(app, host=args.host, port=args.port, log_level=mcp.settings.log_level.lower())
     else:
         mcp.run(transport="stdio")
-

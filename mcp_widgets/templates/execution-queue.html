@@ -1,0 +1,115 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+/*__WIDGET_COMMON_CSS__*/
+.queue-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+}
+.queue-table th, .queue-table td {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 1px solid #374151;
+}
+.queue-table th {
+    background-color: #1f2937;
+    color: #f3f4f6;
+    font-weight: 600;
+}
+.queue-table tr:hover {
+    background-color: #374151;
+}
+.status-badge {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-weight: bold;
+}
+.status-pending { background-color: #fbbf24; color: #78350f; }
+.status-executed { background-color: #10b981; color: #064e3b; }
+.status-failed { background-color: #ef4444; color: #7f1d1d; }
+</style>
+<body>
+  <div id="root">
+      <h2>Execution Queue</h2>
+      <table class="queue-table">
+          <thead>
+              <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Quantity</th>
+                  <th>Type</th>
+                  <th>Status</th>
+              </tr>
+          </thead>
+          <tbody id="queueBody">
+              <!-- rows will be injected here -->
+          </tbody>
+      </table>
+  </div>
+</body>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+/*__WIDGET_COMMON_JS__*/
+const { App } = globalThis.ExtApps;
+
+function getStatusBadgeClass(status) {
+    status = (status || '').toLowerCase();
+    if (status === 'pending') return 'status-pending';
+    if (status === 'executed') return 'status-executed';
+    if (status === 'failed') return 'status-failed';
+    return 'status-pending';
+}
+
+(async () => {
+  const app = new App({ name: "ExecutionQueue", version: "1.0.0" }, {}, { autoResize: true });
+
+  app.ontoolresult = ({ content }) => {
+    const payload = extractJsonPayload(content[0].text);
+    const tbody = document.getElementById('queueBody');
+    tbody.innerHTML = '';
+    
+    if (!payload || !payload.orders || payload.orders.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No orders in queue.</td></tr>';
+        return;
+    }
+    
+    payload.orders.forEach(order => {
+        const tr = document.createElement('tr');
+        
+        const tdSymbol = document.createElement('td');
+        tdSymbol.textContent = order.symbol || '-';
+        
+        const tdSide = document.createElement('td');
+        tdSide.textContent = order.side || '-';
+        tdSide.style.color = (order.side || '').toLowerCase() === 'buy' ? '#10b981' : '#ef4444';
+        
+        const tdQty = document.createElement('td');
+        tdQty.textContent = order.qty || '-';
+        
+        const tdType = document.createElement('td');
+        tdType.textContent = order.type || 'MARKET';
+        
+        const tdStatus = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = 'status-badge ' + getStatusBadgeClass(order.status);
+        badge.textContent = order.status || 'PENDING';
+        tdStatus.appendChild(badge);
+        
+        tr.appendChild(tdSymbol);
+        tr.appendChild(tdSide);
+        tr.appendChild(tdQty);
+        tr.appendChild(tdType);
+        tr.appendChild(tdStatus);
+        
+        tbody.appendChild(tr);
+    });
+  };
+
+  await app.connect();
+  const hostCtx = app.getHostContext?.();
+  if (hostCtx) applyHostTheme(hostCtx.theme);
+  app.onhostcontextchanged = (c) => applyHostTheme(c.theme);
+})();
+</script>

@@ -3846,3 +3846,129 @@ class TestReadPlatformLogsFindsLogsSubdirectory:
 
         assert "investyo.log" in result
         assert "other.log" in result
+
+
+# ==============================================================================
+# PHASE 1: READ-ONLY ANALYTICS TOOLS TESTS
+# ==============================================================================
+
+class TestGetVarEsMetrics:
+    def test_insufficient_history(self, monkeypatch):
+        from investyo_mcp_server import get_var_es_metrics
+        def mock_get_bars(self, ticker, lookback_days=504):
+            import pandas as pd
+            return pd.DataFrame()
+        monkeypatch.setattr("data.historical_store.HistoricalStore.get_bars", mock_get_bars)
+        result = get_var_es_metrics("AAPL")
+        assert "insufficient history" in result
+
+    def test_valid_history(self, monkeypatch):
+        from investyo_mcp_server import get_var_es_metrics
+        import numpy as np
+        import pandas as pd
+        def mock_get_bars(self, ticker, lookback_days=504):
+            dates = pd.date_range("2020-01-01", periods=300)
+            np.random.seed(42)
+            returns = np.random.normal(0.001, 0.02, size=300)
+            prices = (1 + returns).cumprod() * 100
+            return pd.DataFrame({"Close": prices}, index=dates)
+        monkeypatch.setattr("data.historical_store.HistoricalStore.get_bars", mock_get_bars)
+        
+        result_hist = get_var_es_metrics("AAPL", method="historical")
+        assert "VaR (95%)" in result_hist
+        assert "Expected Shortfall" in result_hist
+        
+        result_param = get_var_es_metrics("AAPL", method="parametric")
+        assert "VaR (95%)" in result_param
+        assert "parametric" in result_param
+
+class TestRunStressScenarioSimulation:
+    def test_invalid_portfolio(self):
+        from investyo_mcp_server import run_stress_scenario_simulation
+        res = run_stress_scenario_simulation("fake", "OCT_2008")
+        assert "Only 'live' portfolio_id is currently supported" in res
+        
+    def test_scenario_not_found(self):
+        from investyo_mcp_server import run_stress_scenario_simulation
+        res = run_stress_scenario_simulation("live", "FAKE_SCENARIO")
+        assert "scenario not found" in res
+        
+    def test_success(self, monkeypatch):
+        from investyo_mcp_server import run_stress_scenario_simulation
+        def mock_get_snapshot(live_cache=True):
+            from data.robinhood_portfolio import AccountSnapshot
+            from datetime import datetime, timezone
+            return AccountSnapshot(
+                positions={"AAPL": None}, 
+                buying_power=1000.0, 
+                total_equity=5000.0, 
+                total_dividends=0.0,
+                fetched_at=datetime.now(timezone.utc)
+            )
+        def mock_run_scenario(*args, **kwargs):
+            from validation.stress_scenarios import StressResult
+            return StressResult(
+                scenario="OCT_2008", start="2008-09-01", end="2008-11-30",
+                max_drawdown=500.0, final_return=-500.0, survived=True,
+                n_days=90, expected_max_dd_for_short_vol=0.0, error=None
+            )
+        monkeypatch.setattr("data.robinhood_portfolio.fetch_account_snapshot", mock_get_snapshot)
+        monkeypatch.setattr("validation.stress_scenarios.run_stress_scenario", mock_run_scenario)
+        res = run_stress_scenario_simulation("live", "OCT_2008")
+        assert "-50000.0000%" in res
+
+class TestGetFactorAttributions:
+    def test_unavailable_data(self, monkeypatch):
+        from investyo_mcp_server import get_factor_attributions
+        def mock_fetch(self, tickers): return None
+        monkeypatch.setattr("data_engine.DataEngine.fetch_fundamentals_raw", mock_fetch)
+        res = get_factor_attributions("AAPL")
+        assert "unavailable: no fundamental data" in res
+        
+    def test_success(self, monkeypatch):
+        from investyo_mcp_server import get_factor_attributions
+        import pandas as pd
+        def mock_fetch(self, tickers): return {"AAPL": {"info": {"shortName": "Apple"}}}
+        def mock_calc(self, fund_dtos):
+            return pd.DataFrame({"Value_Z": [1.5], "Multifactor_Composite": [2.0]}, index=["AAPL"])
+                
+        monkeypatch.setattr("data_engine.DataEngine.fetch_fundamentals_raw", mock_fetch)
+        monkeypatch.setattr("processing_engine.ProcessingEngine.calculate_fundamental_metrics", mock_calc)
+        
+        res = get_factor_attributions("AAPL")
+        assert "Value Z-Score: 1.5" in res
+        assert "Multifactor Composite: 2.0" in res
+
+class TestGetOrderExecutionHistory:
+    def test_empty_history(self, monkeypatch):
+        from investyo_mcp_server import get_order_execution_history
+        import pandas as pd
+        def mock_closed(self): return pd.DataFrame()
+        def mock_open(self): return pd.DataFrame()
+        monkeypatch.setattr("transactions_store.TransactionsStore.closed_trades_df", property(mock_closed))
+        monkeypatch.setattr("transactions_store.TransactionsStore.open_trades_df", property(mock_open))
+        assert "no trade history found" in get_order_execution_history()
+
+class TestGetModelDriftReport:
+    def test_empty_report(self, monkeypatch):
+        from investyo_mcp_server import get_model_drift_report
+        monkeypatch.setattr("pilots.observability.forecast_skill_by_symbol_summary", lambda: {})
+        assert "no drift data yet" in get_model_drift_report()
+
+class TestValidateOrderCompliance:
+    def test_passed(self, monkeypatch):
+        from investyo_mcp_server import validate_order_compliance
+        def mock_run_all(self, intent, context): return True, []
+        monkeypatch.setattr("execution.risk_gate.PreTradeRiskGate.run_all", mock_run_all)
+        res = validate_order_compliance("AAPL", "buy", 10.0)
+        assert "PASSED" in res
+        
+    def test_failed(self, monkeypatch):
+        from investyo_mcp_server import validate_order_compliance
+        from execution.risk_gate import RiskCheckResult
+        def mock_run_all(self, intent, context): 
+            return False, [RiskCheckResult(passed=False, check_name="VIX", reason="VIX too high")]
+        monkeypatch.setattr("execution.risk_gate.PreTradeRiskGate.run_all", mock_run_all)
+        res = validate_order_compliance("AAPL", "buy", 10.0)
+        assert "FAILED" in res
+        assert "VIX too high" in res

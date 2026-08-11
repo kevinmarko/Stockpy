@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+/*__WIDGET_COMMON_CSS__*/
+.tree-node {
+    margin-left: 20px;
+    padding-left: 10px;
+    border-left: 1px dashed #ccc;
+    margin-top: 5px;
+}
+.tree-label {
+    font-weight: 500;
+}
+.tree-value {
+    color: #3b82f6;
+    margin-left: 10px;
+}
+.root-node {
+    margin-left: 0;
+    border-left: none;
+    font-size: 1.1em;
+}
+</style>
+<body>
+  <div id="root">
+      <h2>Signal Tree</h2>
+      <div id="treeContainer"></div>
+  </div>
+</body>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+/*__WIDGET_COMMON_JS__*/
+const { App } = globalThis.ExtApps;
+
+function renderTree(node, container, isRoot=true) {
+    const el = document.createElement('div');
+    el.className = isRoot ? 'tree-node root-node' : 'tree-node';
+    
+    const content = document.createElement('div');
+    const label = document.createElement('span');
+    label.className = 'tree-label';
+    label.textContent = node.name || 'Node';
+    
+    const value = document.createElement('span');
+    value.className = 'tree-value';
+    value.textContent = node.value !== undefined ? String(node.value) : '';
+    
+    content.appendChild(label);
+    content.appendChild(value);
+    el.appendChild(content);
+    
+    if (node.children && Array.isArray(node.children)) {
+        node.children.forEach(child => {
+            renderTree(child, el, false);
+        });
+    }
+    container.appendChild(el);
+}
+
+(async () => {
+  const app = new App({ name: "SignalTree", version: "1.0.0" }, {}, { autoResize: true });
+
+  app.ontoolresult = ({ content }) => {
+    const payload = extractJsonPayload(content[0].text);
+    const container = document.getElementById('treeContainer');
+    container.innerHTML = '';
+    if (!payload || !payload.tree) {
+        container.textContent = 'No signal tree data available.';
+        return;
+    }
+    
+    renderTree(payload.tree, container, true);
+  };
+
+  await app.connect();
+  const hostCtx = app.getHostContext?.();
+  if (hostCtx) applyHostTheme(hostCtx.theme);
+  app.onhostcontextchanged = (c) => applyHostTheme(c.theme);
+})();
+</script>

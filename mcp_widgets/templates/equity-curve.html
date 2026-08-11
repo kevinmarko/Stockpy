@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+/*__WIDGET_COMMON_CSS__*/
+.chart-container {
+    position: relative;
+    height: 400px;
+    width: 100%;
+    margin-top: 20px;
+}
+</style>
+<body>
+  <div id="root">
+      <h2>Equity Curve</h2>
+      <div class="chart-container">
+          <canvas id="equityChart"></canvas>
+      </div>
+  </div>
+</body>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+/*__WIDGET_COMMON_JS__*/
+const { App } = globalThis.ExtApps;
+let chartInstance = null;
+
+(async () => {
+  const app = new App({ name: "EquityCurve", version: "1.0.0" }, {}, { autoResize: true });
+
+  app.ontoolresult = ({ content }) => {
+    const payload = extractJsonPayload(content[0].text);
+    if (!payload) return;
+    
+    // Assume payload has { dates: [...], values: [...] }
+    const dates = payload.dates || [];
+    const values = payload.values || [];
+
+    const ctx = document.getElementById('equityChart').getContext('2d');
+    
+    if (chartInstance) {
+        chartInstance.destroy();
+    }
+    
+    chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: dates,
+            datasets: [{
+                label: 'Portfolio Equity',
+                data: values,
+                borderColor: '#10b981',
+                tension: 0.1,
+                fill: false
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    display: true,
+                    title: { display: true, text: 'Date' }
+                },
+                y: {
+                    display: true,
+                    title: { display: true, text: 'Equity ($)' }
+                }
+            }
+        }
+    });
+  };
+
+  await app.connect();
+  const hostCtx = app.getHostContext?.();
+  if (hostCtx) applyHostTheme(hostCtx.theme);
+  app.onhostcontextchanged = (c) => applyHostTheme(c.theme);
+})();
+</script>

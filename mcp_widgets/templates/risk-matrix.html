@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+/*__WIDGET_COMMON_CSS__*/
+.chart-container {
+    position: relative;
+    height: 400px;
+    width: 100%;
+    margin-top: 20px;
+}
+</style>
+<body>
+  <div id="root">
+      <h2>Risk Matrix</h2>
+      <div class="chart-container">
+          <canvas id="riskChart"></canvas>
+      </div>
+  </div>
+</body>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+/*__WIDGET_COMMON_JS__*/
+const { App } = globalThis.ExtApps;
+let chartInstance = null;
+
+(async () => {
+  const app = new App({ name: "RiskMatrix", version: "1.0.0" }, {}, { autoResize: true });
+
+  app.ontoolresult = ({ content }) => {
+    const payload = extractJsonPayload(content[0].text);
+    if (!payload) return;
+    
+    // Assume payload has points: [{x, y, r, label}] for a bubble chart
+    const dataPoints = payload.points || [];
+
+    const ctx = document.getElementById('riskChart').getContext('2d');
+    
+    if (chartInstance) {
+        chartInstance.destroy();
+    }
+    
+    chartInstance = new Chart(ctx, {
+        type: 'bubble',
+        data: {
+            datasets: [{
+                label: 'Risk Scenarios',
+                data: dataPoints,
+                backgroundColor: 'rgba(239, 68, 68, 0.5)'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    display: true,
+                    title: { display: true, text: 'Probability / VaR' }
+                },
+                y: {
+                    display: true,
+                    title: { display: true, text: 'Impact / PnL' }
+                }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.raw.label || '';
+                            if (label) label += ': ';
+                            label += `(${context.raw.x}, ${context.raw.y})`;
+                            return label;
+                        }
+                    }
+                }
+            }
+        }
+    });
+  };
+
+  await app.connect();
+  const hostCtx = app.getHostContext?.();
+  if (hostCtx) applyHostTheme(hostCtx.theme);
+  app.onhostcontextchanged = (c) => applyHostTheme(c.theme);
+})();
+</script>

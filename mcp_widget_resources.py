@@ -36,6 +36,10 @@ _WIDGET_RESOURCES = [
     ("follow-result.html", "ui://widgets/follow-result.html", "Follow Confirmation"),
     ("pilot-compare.html", "ui://widgets/pilot-compare.html", "Pilot Comparison"),
     ("pilot-portfolio.html", "ui://widgets/pilot-portfolio.html", "Portfolio by Pilot"),
+    ("equity-curve.html", "ui://widgets/equity-curve.html", "Equity Curve"),
+    ("risk-matrix.html", "ui://widgets/risk-matrix.html", "Risk Matrix"),
+    ("signal-tree.html", "ui://widgets/signal-tree.html", "Signal Tree"),
+    ("execution-queue.html", "ui://widgets/execution-queue.html", "Execution Queue"),
 ]
 
 _FIX_IT_HINT = "cd mcp_widgets/build && npm install && npm run build"
