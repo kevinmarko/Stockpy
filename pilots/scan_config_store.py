@@ -40,6 +40,7 @@ Design constraints (identical to ``FollowsStore``):
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from datetime import datetime, timezone
@@ -165,16 +166,29 @@ class ScanConfigStore:
         self._path = Path(path) if path is not None else settings.OUTPUT_DIR / "scan_configs.json"
         self._clock: Callable[[], str] = clock or _utc_now_iso
         self._seed_defaults = seed_defaults
+        self._cached_configs: Optional[List[Dict[str, Any]]] = None
+        self._cached_mtime: float = 0.0
 
     def _load(self) -> List[Dict[str, Any]]:
         """Return the raw scan-config list; empty on missing/corrupt file (never raises)."""
+        try:
+            mtime = self._path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+
+        if self._cached_configs is not None and mtime == self._cached_mtime:
+            return copy.deepcopy(self._cached_configs)
+
         if not self._path.exists():
             if self._seed_defaults:
                 # Seed default scans on first run, timestamped now (not at
                 # module-import time -- see _default_scans()'s docstring).
                 defaults = _default_scans()
                 self._save(defaults)
-                return list(defaults)
+                if self._cached_configs is not None:
+                    return copy.deepcopy(self._cached_configs)
+                else:
+                    return list(defaults)
             return []
         try:
             with self._path.open("r", encoding="utf-8") as fh:
@@ -190,7 +204,10 @@ class ScanConfigStore:
         configs = data.get("scan_configs", [])
         if not isinstance(configs, list):
             return []
-        return [c for c in configs if isinstance(c, dict) and c.get("name")]
+
+        self._cached_configs = [c for c in configs if isinstance(c, dict) and c.get("name")]
+        self._cached_mtime = mtime
+        return copy.deepcopy(self._cached_configs)
 
     def _save(self, configs: List[Dict[str, Any]]) -> None:
         """Atomically persist *configs* via write-then-rename."""
@@ -201,6 +218,12 @@ class ScanConfigStore:
             with tmp.open("w", encoding="utf-8") as fh:
                 json.dump(payload, fh, indent=2)
             tmp.replace(self._path)
+
+            self._cached_configs = [c for c in configs if isinstance(c, dict) and c.get("name")]
+            try:
+                self._cached_mtime = self._path.stat().st_mtime
+            except OSError:
+                self._cached_mtime = 0.0
         except Exception as exc:  # noqa: BLE001 - clean up temp on any failure
             logger.warning("ScanConfigStore: failed to write %s: %s", self._path, exc)
             tmp.unlink(missing_ok=True)
