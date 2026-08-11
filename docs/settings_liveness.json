@@ -1709,7 +1709,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "Gravity AI Review Suite.py:4493",
+        "site": "Gravity AI Review Suite.py:4514",
         "via": []
       }
     ],
@@ -2241,7 +2241,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:10999",
+        "site": "Gravity AI Review Suite.py:11020",
         "via": []
       }
     ],
