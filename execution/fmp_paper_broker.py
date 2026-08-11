@@ -49,6 +49,7 @@ class FMPPaperBroker(BrokerBase):
         self._readonly = readonly
 
     async def submit_order(self, intent: OrderIntent) -> OrderResult:
+        """Submit an order for execution."""
         if self._readonly:
             return OrderResult(
                 client_order_id=intent.client_order_id or "unknown",
@@ -221,21 +222,26 @@ class FMPPaperBroker(BrokerBase):
         )
 
     async def cancel_order(self, broker_order_id: str) -> bool:
+        """Cancel an open order."""
         # All our paper orders fill or reject immediately.
         return False
 
     async def get_open_positions(self) -> List[PositionSnapshot]:
+        """Get all open positions."""
         # Using a threadpool if it were purely async, but SQLite reads are fast.
         # Real production would run this via asyncio.to_thread
         return await asyncio.to_thread(self.store.get_open_positions)
 
     async def get_account(self) -> AccountSnapshot:
+        """Get the current account snapshot."""
         return await asyncio.to_thread(self.store.get_account)
 
     async def get_orders(self, status: Optional[str] = None, limit: int = 100) -> List[OrderResult]:
+        """Get order history."""
         return await asyncio.to_thread(self.store.get_orders, status, limit)
 
     async def stream_trade_updates(self) -> AsyncIterator[TradeUpdateEvent]:
+        """Stream real-time trade updates."""
         while True:
             event = await self.stream_queue.get()
             yield event

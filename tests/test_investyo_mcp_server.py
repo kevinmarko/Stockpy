@@ -1396,6 +1396,31 @@ class TestRunPlatformTests:
         assert "AssertionError" in result
 
 
+class TestRunBugHunter:
+    def test_success(self, monkeypatch):
+        captured = {}
+        def _mock_run(cmd, **k):
+            captured["cmd"] = cmd
+            return type("Obj", (object,), {"stdout": "Bug hunter pass", "returncode": 0})()
+            
+        monkeypatch.setattr(subprocess, "run", _mock_run)
+        res = srv.run_bug_hunter(quick=True, fail_on="CRITICAL")
+        assert "Bug Hunter completed successfully (PASS)" in res
+        assert "Bug hunter pass" in res
+        assert "--quick" in captured["cmd"]
+        assert "--fail-on" in captured["cmd"]
+        assert "CRITICAL" in captured["cmd"]
+
+    def test_failure(self, monkeypatch):
+        def _raise(*a, **k):
+            raise subprocess.CalledProcessError(1, ["python", "scripts/bug_hunter.py"], output="fail", stderr="err")
+
+        monkeypatch.setattr(subprocess, "run", _raise)
+        res = srv.run_bug_hunter()
+        assert "Bug Hunter found issues (FAIL" in res
+        assert "err" in res
+
+
 class TestTriggerEdgarBackfillTimeoutPattern:
     def test_success(self, monkeypatch):
         monkeypatch.setattr(

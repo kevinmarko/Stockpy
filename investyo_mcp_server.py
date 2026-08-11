@@ -813,6 +813,36 @@ def run_platform_tests() -> str:
         return "Error: pytest is not installed or not found in PATH."
 
 @mcp.tool()
+def run_bug_hunter(quick: bool = False, fail_on: str = "HIGH") -> str:
+    """
+    Runs the unified Stockpy Bug Hunter CLI to scan for bugs, secret leaks, 
+    circular dependencies, and test regressions.
+    
+    Args:
+        quick: If True, skips heavy tests like Gravity AI Review Suite and validation harness checks.
+        fail_on: Minimum severity to trigger a failure (CRITICAL, HIGH, MEDIUM, LOW, NONE). Default is HIGH.
+    """
+    cmd = [sys.executable, "scripts/bug_hunter.py", "--fail-on", fail_on]
+    if quick:
+        cmd.append("--quick")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=900
+        )
+        return f"Bug Hunter completed successfully (PASS):\n{result.stdout}"
+    except subprocess.CalledProcessError as e:
+        return f"Bug Hunter found issues (FAIL - exit code {e.returncode}):\n{e.stdout}\n{e.stderr}"
+    except subprocess.TimeoutExpired:
+        return "Bug Hunter timed out after 15 minutes."
+    except FileNotFoundError:
+        return "Error: python or scripts/bug_hunter.py not found."
+
+@mcp.tool()
 def query_investyo_db(sql_query: str) -> str:
     """
     Executes a read-only SELECT (or WITH-CTE SELECT) query against the platform database.

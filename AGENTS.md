@@ -88,6 +88,7 @@ InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative ana
 | `docs/GO_LIVE_CHECKLIST.md` | Pre-live checklist (all automatable items covered by `preflight_check.py`) |
 | `docs/FEATURE_TIER_HISTORY.md` | Detailed dated changelog for every Tier/Task/Scope feature shipped since 2026-06 (ML Stage 4, GUI tab build-outs, Tier 1-9 advisory/LLM features, AI Control Center, Prompt Registry) — full backstory, test surface, and Gravity step numbers per subsystem |
 | `docs/test_coverage_analysis.md` | Test-coverage audit — suite inventory, module-level gap table, and prioritized roadmap for improving test coverage |
+| `docs/BUG_HUNTING_PROCESS.md` | Bug hunting SOP, 4-tier severity model, 5-phase workflow, domain checklists, and verification tooling guide |
 | `docs/VALIDATION_STRATEGY_FIX_LOG.md` | Dated rollup of `STRATEGY_REGISTRY` deployability-gate fix attempts (`scripts/refresh_validations.py`) — before/after PBO/DSR/Sharpe/MaxDD per strategy, the causal lever used, and (for strategies that stayed honestly `deployable=False`) the measured, evidence-backed reason why. Cross-references the fixing PR and each strategy's `docs/signals/<name>.md` **Backtest Validation** section |
 
 ## Frontend strategy: web app only — desktop app decommissioned
