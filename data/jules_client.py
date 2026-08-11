@@ -81,6 +81,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import requests
+
 JULES_BASE_URL = "https://jules.googleapis.com/v1alpha"
 
 # Jules's automationMode enum has exactly two values; see the module
@@ -191,9 +193,35 @@ def list_sources() -> Dict[str, Any]:
     reshaping, matching ``data/fmp_client.py``'s "wrappers return raw JSON,
     consumers do the mapping" convention.
     """
-    raise NotImplementedError(
-        "scaffold — data/jules_client.py:list_sources is not yet implemented"
-    )
+    from settings import settings
+
+    if not settings.JULES_ENABLED:
+        raise JulesUnavailable(
+            "Jules integration is disabled (settings.JULES_ENABLED=False)."
+        )
+    if not settings.JULES_API_KEY:
+        raise JulesUnavailable(
+            "JULES_API_KEY is not set (settings.JULES_API_KEY); request skipped."
+        )
+
+    url = f"{JULES_BASE_URL}/sources"
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "X-Goog-Api-Key": settings.JULES_API_KEY,
+                "Accept": "application/json",
+            },
+            timeout=settings.JULES_REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise JulesUnavailable(f"Jules transport error on GET /sources: {exc}") from exc
+
+    status = getattr(response, "status_code", None)
+    if status is None or not (200 <= int(status) < 300):
+        raise JulesUnavailable(f"Jules returned HTTP {status} for GET /sources.")
+
+    return response.json()
 
 
 def dispatch_session(
@@ -219,6 +247,73 @@ def dispatch_session(
 
     Returns the raw parsed JSON response from ``POST /sessions``.
     """
-    raise NotImplementedError(
-        "scaffold — data/jules_client.py:dispatch_session is not yet implemented"
+    from settings import settings
+
+    if not settings.JULES_ENABLED:
+        raise JulesUnavailable(
+            "Jules integration is disabled (settings.JULES_ENABLED=False)."
+        )
+    if not settings.JULES_API_KEY:
+        raise JulesUnavailable(
+            "JULES_API_KEY is not set (settings.JULES_API_KEY); request skipped."
+        )
+
+    sources_response = list_sources()
+    known_sources = [
+        s.get("name") for s in sources_response.get("sources", []) if isinstance(s, dict)
+    ]
+    if source not in known_sources:
+        raise JulesUnavailable(
+            f"'{source}' is not in the connected Jules sources: {known_sources}. "
+            "Call list_sources() to see what's actually connected."
+        )
+
+    dedup_key = _compute_dedup_key(source, branch, title, prompt)
+    if not force and _check_dispatch_dedup(dedup_key):
+        raise JulesUnavailable(
+            f"An identical dispatch (source={source!r}, branch={branch!r}, "
+            f"title={title!r}) was already recorded today (dedup_key={dedup_key}). "
+            "Pass force=True to dispatch anyway."
+        )
+
+    url = f"{JULES_BASE_URL}/sessions"
+    body = {
+        "prompt": prompt,
+        "sourceContext": {
+            "source": source,
+            "githubRepoContext": {"startingBranch": branch},
+        },
+        "automationMode": _AUTOMATION_MODE,
+        "title": title,
+    }
+    try:
+        response = requests.post(
+            url,
+            headers={
+                "X-Goog-Api-Key": settings.JULES_API_KEY,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json=body,
+            timeout=settings.JULES_REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise JulesUnavailable(f"Jules transport error on POST /sessions: {exc}") from exc
+
+    status = getattr(response, "status_code", None)
+    if status is None or not (200 <= int(status) < 300):
+        raise JulesUnavailable(f"Jules returned HTTP {status} for POST /sessions.")
+
+    payload = response.json()
+    session_name = ""
+    if isinstance(payload, dict):
+        session_name = payload.get("name", "") or ""
+    _record_dispatch(
+        dedup_key=dedup_key,
+        source=source,
+        branch=branch,
+        title=title,
+        prompt=prompt,
+        session_name=session_name,
     )
+    return payload
