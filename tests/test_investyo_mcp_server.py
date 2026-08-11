@@ -4116,35 +4116,239 @@ class TestGetFactorAttributions:
         assert res_aapl != res_msft
 
 class TestGetOrderExecutionHistory:
-    def test_empty_history(self, monkeypatch):
+    """transactions_store.TransactionsStore.open_trades_df/closed_trades_df
+    are plain METHODS, not properties -- the tool previously read them as
+    bare attributes (``store.closed_trades_df`` with no call parens), which
+    handed pd.concat a pair of bound-method objects instead of DataFrames
+    and always raised (caught by the tool's own except, so every real call
+    silently degraded to "failed to get execution history: ..."). These
+    tests build a REAL TransactionsStore against a throwaway sqlite file
+    (matching TestGetSignalBreakdown's real-schema convention) rather than
+    monkeypatching the store's shape, so a regression back to attribute
+    access would fail loudly here instead of being masked by a mock."""
+
+    def _isolate_transactions_db(self, monkeypatch, tmp_path):
+        # TransactionsStore() (no args, exactly how the tool constructs it)
+        # resolves its sqlite file via db_config.resolve_database_url(),
+        # which is anchored to db_config.py's OWN directory -- NOT the
+        # process cwd -- so monkeypatch.chdir(tmp_path) alone does not
+        # isolate it (unlike _db_query's DailySignals access, which IS
+        # cwd-relative; see _db_query's own docstring). Route it to a
+        # throwaway file via settings.DATABASE_URL instead, matching
+        # db_config.resolve_database_url's own precedence.
+        from settings import settings
+        monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{tmp_path / 'tx_test.db'}")
+
+    def test_empty_history_is_honest_not_fabricated(self, monkeypatch, tmp_path):
+        self._isolate_transactions_db(monkeypatch, tmp_path)
         from investyo_mcp_server import get_order_execution_history
-        import pandas as pd
-        def mock_closed(self): return pd.DataFrame()
-        def mock_open(self): return pd.DataFrame()
-        monkeypatch.setattr("transactions_store.TransactionsStore.closed_trades_df", property(mock_closed))
-        monkeypatch.setattr("transactions_store.TransactionsStore.open_trades_df", property(mock_open))
-        assert "no trade history found" in get_order_execution_history()
+
+        result = get_order_execution_history()
+        assert "no execution history recorded yet" in result
+        # Must never fabricate a slippage figure for an empty book.
+        assert "bps" not in result.lower()
+
+    def test_populated_history_reports_real_fills_no_fabricated_slippage(self, monkeypatch, tmp_path):
+        self._isolate_transactions_db(monkeypatch, tmp_path)
+        from datetime import datetime, timezone
+        from transactions_store import TransactionsStore
+        from investyo_mcp_server import get_order_execution_history
+
+        store = TransactionsStore()
+        closed_id = store.record_trade(
+            symbol="AAPL", side="long", entry_ts=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            entry_price=100.0, shares=10.0,
+        )
+        store.close_trade(closed_id, datetime(2026, 1, 2, tzinfo=timezone.utc), 110.0)
+        store.record_trade(
+            symbol="MSFT", side="long", entry_ts=datetime(2026, 1, 3, tzinfo=timezone.utc),
+            entry_price=300.0, shares=5.0,
+        )
+
+        result = get_order_execution_history(limit=10)
+
+        assert "showing 2 of 2" in result
+        assert "[CLOSED] AAPL LONG 10.0 sh" in result
+        assert "entry $100.00" in result and "exit $110.00" in result
+        assert "realized P&L $+100.00" in result
+        assert "[OPEN] MSFT LONG 5.0 sh @ $300.00" in result
+        # No fabricated per-trade or average slippage -- the schema has no
+        # comparison basis for it.
+        assert "bps" not in result.lower()
+        assert "slippage figure is reported" in result
+
+    def test_respects_limit(self, monkeypatch, tmp_path):
+        self._isolate_transactions_db(monkeypatch, tmp_path)
+        from datetime import datetime, timezone
+        from transactions_store import TransactionsStore
+        from investyo_mcp_server import get_order_execution_history
+
+        store = TransactionsStore()
+        for i, sym in enumerate(["AAPL", "MSFT", "TSLA"]):
+            store.record_trade(
+                symbol=sym, side="long",
+                entry_ts=datetime(2026, 1, 1 + i, tzinfo=timezone.utc),
+                entry_price=100.0, shares=1.0,
+            )
+
+        result = get_order_execution_history(limit=1)
+        assert "showing 1 of 3" in result
+        # Most recent (TSLA, latest entry_ts) should be the one shown.
+        assert "TSLA" in result
+        assert "AAPL" not in result
+
 
 class TestGetModelDriftReport:
-    def test_empty_report(self, monkeypatch):
+    """forecast_skill_by_symbol_summary requires a `snapshot` positional
+    arg -- the tool previously called it with zero arguments, which always
+    raised TypeError (caught by the tool's except, degrading to a generic
+    failure message on every call, never real drift data)."""
+
+    def test_missing_snapshot_is_honest_not_fabricated(self, monkeypatch, tmp_path):
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
         from investyo_mcp_server import get_model_drift_report
-        monkeypatch.setattr("pilots.observability.forecast_skill_by_symbol_summary", lambda: {})
-        assert "no drift data yet" in get_model_drift_report()
+
+        result = get_model_drift_report()
+        assert "no drift data yet" in result
+        # Must never fabricate a decay percentage.
+        assert "%" not in result
+
+    def test_populated_report_reflects_real_summary(self, monkeypatch, tmp_path):
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
+        (tmp_path / "output").mkdir(exist_ok=True)
+        (tmp_path / "output" / "state_snapshot.json").write_text(
+            json.dumps({"signals": [{"symbol": "AAPL"}]}), encoding="utf-8"
+        )
+
+        captured = {}
+
+        def fake_summary(snapshot, horizon_days=30, window_days=None, min_obs=None):
+            captured["snapshot"] = snapshot
+            captured["horizon_days"] = horizon_days
+            return {
+                "horizon_days": horizon_days,
+                "rows": [
+                    {"symbol": "AAPL", "pending": 2, "completed": 8,
+                     "skill_weights": {"cnn_lstm": 0.65}}
+                ],
+                "reason": None,
+            }
+
+        monkeypatch.setattr(
+            "pilots.observability.forecast_skill_by_symbol_summary", fake_summary
+        )
+        from investyo_mcp_server import get_model_drift_report
+
+        result = get_model_drift_report()
+
+        # The snapshot actually loaded from disk was threaded through.
+        assert captured["snapshot"]["signals"][0]["symbol"] == "AAPL"
+        assert '"symbol": "AAPL"' in result
+        assert '"cnn_lstm": 0.65' in result
+
 
 class TestValidateOrderCompliance:
-    def test_passed(self, monkeypatch):
+    """The old test suite mocked execution.risk_gate.PreTradeRiskGate.run_all
+    directly, which only proved the tool relayed whatever run_all returned
+    -- it never exercised the tool's own (unpopulated) RiskContext(), which
+    passes EVERY check conservatively regardless of ticker/side/size
+    (execution/risk_gate.py's own documented "Unknown / missing context
+    fields (None) cause the associated check to pass conservatively"
+    contract) and therefore always returned PASSED in real usage. These
+    tests build a real DailySignals row (matching TestGetSignalBreakdown's
+    real-schema convention) so a genuinely-passing and a genuinely-failing
+    case are driven by actual data, not a mocked risk-gate verdict."""
+
+    def _insert_signal_row(self, symbol, kelly, sizing_capped, binding_constraint, vrp, true_ivr):
+        conn = sqlite3.connect("quant_platform.db")
+        conn.execute(
+            'INSERT INTO DailySignals ("Symbol", timestamp, "Kelly Target", '
+            '"Sizing_Was_Capped", "Sizing_Binding_Constraint", "VRP", "True_IVR") '
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (symbol, "2026-01-01 09:30:00", kelly, sizing_capped, binding_constraint, vrp, true_ivr),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_never_returns_blanket_passed_with_no_data(self, monkeypatch, tmp_path):
+        """No DailySignals row at all -- must be UNAVAILABLE, never PASSED."""
+        monkeypatch.chdir(tmp_path)
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
         from investyo_mcp_server import validate_order_compliance
-        def mock_run_all(self, intent, context): return True, []
-        monkeypatch.setattr("execution.risk_gate.PreTradeRiskGate.run_all", mock_run_all)
-        res = validate_order_compliance("AAPL", "buy", 10.0)
-        assert "PASSED" in res
-        
-    def test_failed(self, monkeypatch):
+
+        result = validate_order_compliance("NOSIGNAL", "buy", 10.0)
+        assert "UNAVAILABLE" in result
+        assert "PASSED" not in result
+        assert "no DailySignals row found" in result
+
+    def test_genuinely_passing_case(self, monkeypatch, tmp_path):
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
+        monkeypatch.chdir(tmp_path)
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
+        self._insert_signal_row("GOOD", kelly=0.10, sizing_capped="No",
+                                 binding_constraint="", vrp=0.05, true_ivr=65.0)
+        (tmp_path / "output").mkdir(exist_ok=True)
+        (tmp_path / "output" / "state_snapshot.json").write_text(
+            json.dumps({"vix": 14.0, "market_regime": "RISK ON"}), encoding="utf-8"
+        )
         from investyo_mcp_server import validate_order_compliance
-        from execution.risk_gate import RiskCheckResult
-        def mock_run_all(self, intent, context): 
-            return False, [RiskCheckResult(passed=False, check_name="VIX", reason="VIX too high")]
-        monkeypatch.setattr("execution.risk_gate.PreTradeRiskGate.run_all", mock_run_all)
-        res = validate_order_compliance("AAPL", "buy", 10.0)
-        assert "FAILED" in res
-        assert "VIX too high" in res
+
+        result = validate_order_compliance("GOOD", "buy", 10.0)
+        assert "Overall verdict: PASSED" in result
+        assert "kelly_sizing_cap**: PASS" in result
+        assert "vrp_premium_selling_regime**: PASS" in result
+
+    def test_genuinely_failing_case_is_different_from_passing(self, monkeypatch, tmp_path):
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
+        monkeypatch.chdir(tmp_path)
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
+        # Kelly Target well beyond settings.KELLY_CAP (0.20), and the
+        # per-symbol VRP gate columns fail their thresholds too.
+        self._insert_signal_row("BAD", kelly=0.35, sizing_capped="Yes",
+                                 binding_constraint="kelly_cap", vrp=0.001, true_ivr=20.0)
+        (tmp_path / "output").mkdir(exist_ok=True)
+        (tmp_path / "output" / "state_snapshot.json").write_text(
+            json.dumps({"vix": 14.0, "market_regime": "RISK ON"}), encoding="utf-8"
+        )
+        from investyo_mcp_server import validate_order_compliance
+
+        result = validate_order_compliance("BAD", "buy", 10.0)
+        assert "Overall verdict: FAILED" in result
+        assert "kelly_sizing_cap**: FAIL" in result
+        assert "exceeds KELLY_CAP" in result
+        assert "vrp_premium_selling_regime**: FAIL" in result
+
+    def test_sell_side_skips_kelly_cap_check(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
+        self._insert_signal_row("SELLME", kelly=0.35, sizing_capped="Yes",
+                                 binding_constraint="kelly_cap", vrp=None, true_ivr=None)
+        from investyo_mcp_server import validate_order_compliance
+
+        result = validate_order_compliance("SELLME", "sell", 10.0)
+        assert "kelly_sizing_cap**: PASS" in result
+        assert "not applicable" not in result  # uses the real "only applies to..." wording
+        assert "SELL order" in result
+
+    def test_missing_vrp_columns_are_unavailable_not_fabricated_pass(self, monkeypatch, tmp_path):
+        """A Kelly-only row (no VRP/True_IVR yet) must degrade that ONE
+        check to UNAVAILABLE, never silently pass it."""
+        monkeypatch.chdir(tmp_path)
+        import database_setup
+        database_setup.initialize_database("quant_platform.db")
+        self._insert_signal_row("PARTIAL", kelly=0.05, sizing_capped="No",
+                                 binding_constraint="", vrp=None, true_ivr=None)
+        from investyo_mcp_server import validate_order_compliance
+
+        result = validate_order_compliance("PARTIAL", "buy", 10.0)
+        assert "vrp_premium_selling_regime**: UNAVAILABLE" in result
+        assert "no VRP" in result or "no True_IVR/VRP" in result or "no True_IVR" in result
+        assert "kelly_sizing_cap**: PASS" in result
