@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addOrUpdateView,
   removeView,
+  importViews,
   useCustomViews,
   __resetCustomViewsForTests,
   type CustomViewWidgets,
@@ -220,6 +221,171 @@ describe("customViews store", () => {
       });
       const { persisted } = removeView(view.id);
       expect(persisted).toBe(false);
+    });
+  });
+
+  describe("addOrUpdateView persists widgetOrder/widgetConfigs", () => {
+    it("defaults widgetOrder to the active widgets, in the caller-provided key order, when none is given", () => {
+      const { view } = addOrUpdateView({ name: "Ordered", widgets: { ...ALL_WIDGETS_OFF, macroRegime: true, edgeByStrategy: true } });
+      expect(view.widgetOrder).toEqual(["edgeByStrategy", "macroRegime"]);
+      expect(view.widgetConfigs).toEqual({});
+    });
+
+    it("stores an explicit widgetOrder/widgetConfigs verbatim", () => {
+      const { view } = addOrUpdateView({
+        name: "Configured",
+        widgets: { ...ALL_WIDGETS_OFF, symbolOverlay: true, macroRegime: true },
+        widgetOrder: ["macroRegime", "symbolOverlay"],
+        widgetConfigs: { symbolOverlay: { defaultTicker: "TSLA" } },
+      });
+      expect(view.widgetOrder).toEqual(["macroRegime", "symbolOverlay"]);
+      expect(view.widgetConfigs).toEqual({ symbolOverlay: { defaultTicker: "TSLA" } });
+    });
+
+    it("editing by id and renaming to a name that collides with a DIFFERENT view's slug gets a disambiguated slug instead of overwriting that other view", () => {
+      const { view: other } = addOrUpdateView({ name: "Momentum Desk", widgets: ALL_WIDGETS });
+      const { view: mine } = addOrUpdateView({ name: "Original Name", widgets: NO_WIDGETS });
+
+      const { view: renamed } = addOrUpdateView({ id: mine.id, name: "Momentum Desk", widgets: NO_WIDGETS });
+
+      expect(renamed.id).toBe(mine.id);
+      expect(renamed.slug).not.toBe(other.slug);
+
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) as string);
+      expect(raw).toHaveLength(2);
+      // The other, pre-existing view under that real slug is untouched.
+      expect(raw.find((v: any) => v.id === other.id).slug).toBe(other.slug);
+    });
+  });
+
+  describe("importViews", () => {
+    it("imports a well-formed export (as handleExport in CreateDataApp.tsx produces) as a new view", () => {
+      const exported = JSON.stringify([
+        {
+          id: "foreign-id-1",
+          name: "Imported View",
+          slug: "imported-view",
+          widgets: { ...ALL_WIDGETS_OFF, macroRegime: true },
+          widgetOrder: ["macroRegime"],
+          widgetConfigs: {},
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ]);
+
+      const { importedCount, persisted, error } = importViews(exported);
+      expect(error).toBeUndefined();
+      expect(importedCount).toBe(1);
+      expect(persisted).toBe(true);
+
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) as string);
+      expect(raw).toHaveLength(1);
+      expect(raw[0].slug).toBe("imported-view");
+      expect(raw[0].widgetOrder).toEqual(["macroRegime"]);
+    });
+
+    it("REGRESSION: never trusts the imported file's own `id` for a brand-new view -- generates a fresh one instead, so two independently-exported files can never collide on id", () => {
+      const { view: local } = addOrUpdateView({ name: "Local View", widgets: ALL_WIDGETS });
+
+      // A second, foreign file that happens to reuse the SAME id as the
+      // local view above (plausible: both could have been created with the
+      // same non-crypto fallback id generator, or hand-edited).
+      const foreign = JSON.stringify([
+        { id: local.id, name: "Foreign View", slug: "foreign-view", widgets: ALL_WIDGETS },
+      ]);
+      const { importedCount } = importViews(foreign);
+      expect(importedCount).toBe(1);
+
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) as string);
+      expect(raw).toHaveLength(2);
+      const ids = raw.map((v: any) => v.id);
+      // Still exactly two DISTINCT ids -- the import did not clobber or
+      // alias the pre-existing local view's id.
+      expect(new Set(ids).size).toBe(2);
+      expect(ids).toContain(local.id);
+    });
+
+    it("a view whose (recomputed) slug matches an existing view overwrites it in place, preserving id/createdAt", () => {
+      const { view: original } = addOrUpdateView({ name: "Momentum Desk", widgets: NO_WIDGETS });
+
+      const reimport = JSON.stringify([
+        { id: "some-other-id", name: "Momentum Desk", widgets: ALL_WIDGETS, widgetOrder: ["macroRegime"] },
+      ]);
+      const { importedCount } = importViews(reimport);
+      expect(importedCount).toBe(1);
+
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) as string);
+      expect(raw).toHaveLength(1);
+      expect(raw[0].id).toBe(original.id); // id preserved, not the foreign file's id
+      expect(raw[0].createdAt).toBe(original.createdAt);
+      expect(raw[0].widgets).toEqual(ALL_WIDGETS);
+    });
+
+    it("sanitizes malformed widgets/widgetOrder instead of importing garbage -- unknown keys dropped, missing keys default false, an active widget missing from widgetOrder is appended rather than dropped", () => {
+      const malformed = JSON.stringify([
+        {
+          name: "Malformed",
+          widgets: { macroRegime: true, notARealWidget: true, symbolOverlay: "yes" },
+          widgetOrder: ["notARealWidget", "macroRegime"], // omits symbolOverlay entirely
+        },
+      ]);
+      const { importedCount, error } = importViews(malformed);
+      expect(error).toBeUndefined();
+      expect(importedCount).toBe(1);
+
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) as string);
+      expect(raw[0].widgets.macroRegime).toBe(true);
+      expect(raw[0].widgets.symbolOverlay).toBe(true); // truthy string coerced to real boolean
+      expect(raw[0].widgets).not.toHaveProperty("notARealWidget");
+      // symbolOverlay is active but wasn't listed in the source widgetOrder --
+      // it must still render, appended rather than silently dropped.
+      expect(raw[0].widgetOrder).toEqual(["macroRegime", "symbolOverlay"]);
+    });
+
+    it("reports a clear error and imports nothing for invalid JSON", () => {
+      const { importedCount, persisted, error } = importViews("not json");
+      expect(importedCount).toBe(0);
+      expect(persisted).toBe(false);
+      expect(error).toBeTruthy();
+      expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    });
+
+    it("reports a clear error for a well-formed JSON array with no usable views", () => {
+      const { importedCount, error } = importViews(JSON.stringify([{ name: "" }, { widgets: {} }]));
+      expect(importedCount).toBe(0);
+      expect(error).toBeTruthy();
+    });
+  });
+
+  describe("loadFromStorage migration (via __resetCustomViewsForTests)", () => {
+    it("derives widgetOrder for a legacy view (no widgetOrder/widgetConfigs field at all) from its widgets map, in canonical order", () => {
+      const legacy = [
+        {
+          id: "legacy-1",
+          name: "Legacy View",
+          slug: "legacy-view",
+          widgets: { ...ALL_WIDGETS_OFF, signalBreakdown: true, edgeByStrategy: true },
+          createdAt: "2025-01-01T00:00:00.000Z",
+          updatedAt: "2025-01-01T00:00:00.000Z",
+        },
+      ];
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy));
+      __resetCustomViewsForTests();
+
+      const { result } = renderHook(() => useCustomViews());
+      expect(result.current.views).toHaveLength(1);
+      // Canonical order is edgeByStrategy before signalBreakdown regardless
+      // of the two keys' order inside the legacy `widgets` object.
+      expect(result.current.views[0].widgetOrder).toEqual(["edgeByStrategy", "signalBreakdown"]);
+      expect(result.current.views[0].widgetConfigs).toEqual({});
+    });
+
+    it("drops a row with no real id/slug rather than surfacing an unusable entry", () => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([{ name: "No Identity", widgets: ALL_WIDGETS }]));
+      __resetCustomViewsForTests();
+
+      const { result } = renderHook(() => useCustomViews());
+      expect(result.current.views).toHaveLength(0);
     });
   });
 });
