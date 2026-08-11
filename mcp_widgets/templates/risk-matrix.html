@@ -4,17 +4,25 @@
 /*__WIDGET_COMMON_CSS__*/
 .chart-container {
     position: relative;
-    height: 400px;
+    height: 320px;
     width: 100%;
     margin-top: 20px;
+}
+.risk-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
 }
 </style>
 <body>
   <div id="root">
       <h2>Risk Matrix</h2>
+      <div class="risk-header" id="riskHeader"></div>
       <div class="chart-container">
           <canvas id="riskChart"></canvas>
       </div>
+      <p id="riskEmpty" class="empty-state" style="display:none;"></p>
   </div>
 </body>
 <script type="module">
@@ -23,58 +31,116 @@
 const { App } = globalThis.ExtApps;
 let chartInstance = null;
 
+const KIND_LABELS = {
+  var_es: "Value-at-Risk / Expected Shortfall",
+  factor_attribution: "Multifactor Attribution",
+};
+
+function barColor(value) {
+  if (typeof value !== "number") return "rgba(107, 114, 128, 0.5)";
+  return value < 0 ? "rgba(239, 68, 68, 0.65)" : "rgba(16, 185, 129, 0.65)";
+}
+
+function renderRiskMatrix(payload) {
+  const canvasWrap = document.querySelector(".chart-container");
+  const headerEl = document.getElementById("riskHeader");
+  const emptyEl = document.getElementById("riskEmpty");
+  headerEl.innerHTML = "";
+
+  // Real per-symbol risk output (get_var_es_metrics / get_factor_attributions)
+  // -- there is no live cross-symbol correlation matrix data source in this
+  // codebase, so this deliberately renders the honest simpler view (a
+  // per-metric bar chart) instead of fabricating correlation numbers.
+  const metrics = payload && Array.isArray(payload.metrics)
+    ? payload.metrics.filter((m) => m && typeof m.value === "number")
+    : [];
+
+  if (!payload || metrics.length === 0) {
+    canvasWrap.style.display = "none";
+    emptyEl.style.display = "block";
+    emptyEl.textContent = "No risk metrics available yet (insufficient history, or the tool has not been run for this symbol).";
+    if (chartInstance) {
+      chartInstance.destroy();
+      chartInstance = null;
+    }
+    return;
+  }
+
+  canvasWrap.style.display = "block";
+  emptyEl.style.display = "none";
+
+  if (payload.ticker) {
+    const chip = document.createElement("strong");
+    chip.textContent = payload.ticker;
+    headerEl.appendChild(chip);
+  }
+  const kindLabel = document.createElement("span");
+  kindLabel.className = "stat-label";
+  kindLabel.textContent = KIND_LABELS[payload.kind] || "Risk Metrics";
+  headerEl.appendChild(kindLabel);
+  if (payload.method) {
+    const methodChip = document.createElement("span");
+    methodChip.className = "badge";
+    methodChip.textContent = "method: " + payload.method;
+    headerEl.appendChild(methodChip);
+  }
+  if (typeof payload.sample_size === "number") {
+    const sampleChip = document.createElement("span");
+    sampleChip.className = "badge";
+    sampleChip.textContent = payload.sample_size + " day sample";
+    headerEl.appendChild(sampleChip);
+  }
+
+  const ctx = document.getElementById('riskChart').getContext('2d');
+  if (chartInstance) {
+    chartInstance.destroy();
+  }
+
+  const isPercent = metrics.some((m) => m.format === "percent");
+
+  chartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: metrics.map((m) => m.label),
+      datasets: [{
+        label: payload.ticker || "Risk",
+        data: metrics.map((m) => m.value),
+        backgroundColor: metrics.map((m) => barColor(m.value)),
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (context) => {
+              const m = metrics[context.dataIndex];
+              if (m.format === "percent") return (m.value * 100).toFixed(2) + "%";
+              return m.value.toFixed(3);
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            callback: (v) => isPercent ? (v * 100).toFixed(1) + "%" : v,
+          },
+        },
+      },
+    },
+  });
+}
+
 (async () => {
   const app = new App({ name: "RiskMatrix", version: "1.0.0" }, {}, { autoResize: true });
 
   app.ontoolresult = ({ content }) => {
     const payload = extractJsonPayload(content[0].text);
-    if (!payload) return;
-    
-    // Assume payload has points: [{x, y, r, label}] for a bubble chart
-    const dataPoints = payload.points || [];
-
-    const ctx = document.getElementById('riskChart').getContext('2d');
-    
-    if (chartInstance) {
-        chartInstance.destroy();
-    }
-    
-    chartInstance = new Chart(ctx, {
-        type: 'bubble',
-        data: {
-            datasets: [{
-                label: 'Risk Scenarios',
-                data: dataPoints,
-                backgroundColor: 'rgba(239, 68, 68, 0.5)'
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                x: {
-                    display: true,
-                    title: { display: true, text: 'Probability / VaR' }
-                },
-                y: {
-                    display: true,
-                    title: { display: true, text: 'Impact / PnL' }
-                }
-            },
-            plugins: {
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            let label = context.raw.label || '';
-                            if (label) label += ': ';
-                            label += `(${context.raw.x}, ${context.raw.y})`;
-                            return label;
-                        }
-                    }
-                }
-            }
-        }
-    });
+    renderRiskMatrix(payload);
   };
 
   await app.connect();
