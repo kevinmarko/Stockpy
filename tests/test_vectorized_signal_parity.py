@@ -53,6 +53,7 @@ from signals.sortino_drawdown import SortinoDrawdownSignal
 from signals.aggregator import SignalAggregator
 from signals.registry import global_registry, SignalRegistry
 from signals.base import SignalModule
+from settings import settings
 
 from tests.test_signal_module_contracts import _signal_context, _realistic_row
 
@@ -383,6 +384,96 @@ def test_aggregate_vectorized_matches_per_ticker_aggregate_end_to_end():
 # Section 4 -- dead-letter fallback around aggregate_vectorized()
 # (pipeline/production_steps.py's new try/except, added alongside the fix)
 # ============================================================================
+
+class TestGatedModulesStillAppearInVectorizedOutputs:
+    """Finding 4 regression: prior to the fix, ``aggregate_vectorized()``
+    built each ticker's per-module ``SignalOutput`` INSIDE the same loop
+    body that ``continue``d past a ``DISABLED_SIGNAL_MODULES``/regime-
+    inactive module -- so a gated module had NO entry at all in the
+    vectorized path's ``outputs`` dict. ``aggregate()`` (the row-wise path)
+    always builds ``outputs = self.registry.compute_all(row, context)``
+    BEFORE any gating check, so a gated module's raw output is always
+    present there for introspection -- only its WEIGHTED contribution to
+    ``final_score``/``score_log`` is excluded. This class pins the corrected
+    parity between the two paths.
+    """
+
+    def test_disabled_module_still_present_in_vectorized_outputs(self, monkeypatch):
+        monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", ["aroon_trend"])
+
+        ctx = _signal_context()
+        universe_df = pd.DataFrame([_realistic_row().to_dict()], index=["A"])
+        universe_df["graham_number"] = ctx.fundamentals.graham_number
+        universe_df["dividend_yield"] = ctx.fundamentals.dividend_yield
+        universe_df["is_dividend_sustainable"] = ctx.fundamentals.is_dividend_sustainable
+
+        aggregator = SignalAggregator(global_registry)
+        vec_results = aggregator.aggregate_vectorized(universe_df, ctx)
+        vec_final_score, _, _, _, vec_outputs, _ = vec_results["A"]
+
+        row_final_score, _, _, _, row_outputs, _ = aggregator.aggregate(
+            universe_df.loc["A"], ctx
+        )
+
+        # The disabled module is STILL present in both outputs dicts --
+        # this is the exact parity the fix restores.
+        assert "aroon_trend" in vec_outputs
+        assert "aroon_trend" in row_outputs
+        assert set(vec_outputs.keys()) == set(row_outputs.keys())
+
+        # Its raw compute() output is genuine, non-fabricated data (real
+        # score for the bullish aroon_osc=65.0 fixture row), not a stand-in.
+        assert vec_outputs["aroon_trend"].score == pytest.approx(
+            row_outputs["aroon_trend"].score, abs=ABS_TOL
+        )
+
+        # And the two aggregation paths agree end-to-end (the disabled
+        # module contributes nothing to final_score on either path).
+        assert vec_final_score == pytest.approx(row_final_score, abs=ABS_TOL)
+
+    def test_regime_multiplier_readable_from_vectorized_outputs_even_when_disabled(
+        self, monkeypatch
+    ):
+        """Regression for the real downstream consequence noted in
+        strategy_engine.py: ``outputs.get('regime_multiplier')`` drives the
+        HMM regime sizing multiplier (``StrategyEngine`` reads
+        ``.confidence`` off of it, defaulting to a neutral 1.0 only when the
+        key is entirely absent). Before the Finding 4 fix, disabling
+        ``regime_multiplier`` via ``DISABLED_SIGNAL_MODULES`` made it vanish
+        from ``aggregate_vectorized()``'s outputs dict, so a caller reading
+        ``outputs.get('regime_multiplier')`` on the vectorized path ONLY
+        would have silently reset the multiplier to neutral 1.0 --
+        inconsistent with the row-wise path, where the raw (non-neutral)
+        multiplier stays readable regardless of the disable flag. This test
+        proves only the aggregator-level outputs-dict parity is fixed; what
+        StrategyEngine does with the value afterward is out of this
+        bundle's scope."""
+        monkeypatch.setattr(settings, "DISABLED_SIGNAL_MODULES", ["regime_multiplier"])
+
+        ctx = _signal_context()
+        # A distinctly non-neutral value so a stale "reset to 1.0" bug is
+        # trivially distinguishable from the real, gated-but-present value.
+        ctx.macro.hmm_risk_on_probability = 0.22
+
+        universe_df = pd.DataFrame([_realistic_row().to_dict()], index=["A"])
+        universe_df["graham_number"] = ctx.fundamentals.graham_number
+        universe_df["dividend_yield"] = ctx.fundamentals.dividend_yield
+        universe_df["is_dividend_sustainable"] = ctx.fundamentals.is_dividend_sustainable
+
+        aggregator = SignalAggregator(global_registry)
+        vec_results = aggregator.aggregate_vectorized(universe_df, ctx)
+        _, _, _, _, vec_outputs, _ = vec_results["A"]
+
+        assert "regime_multiplier" in vec_outputs
+        # confidence carries the HMM multiplier per regime_multiplier.py's
+        # contract -- still readable even though the module is disabled,
+        # NOT silently reset to the neutral 1.0 default.
+        assert vec_outputs["regime_multiplier"].confidence == pytest.approx(0.22)
+        # regime_multiplier never adds directional alpha -- score stays 0.0
+        # regardless of gating (this is the module's own invariant, not
+        # something the gate changes).
+        assert vec_outputs["regime_multiplier"].score == 0.0
+
 
 def test_aggregate_vectorized_failure_falls_back_to_empty_dict_not_raise(monkeypatch):
     """Mirrors the fallback semantics added in pipeline/production_steps.py:
