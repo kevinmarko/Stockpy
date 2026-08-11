@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "9871ea1ac54dcdbccdd1f522d465233948623507",
+    "git_commit": "eb4e729d46a2c759fef2339588fdedac90b36ab3",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2862,6 +2862,7 @@
       "_bl_settings",
       "_dsr_settings",
       "_live_settings",
+      "_mt_settings",
       "_oos_gate_settings",
       "_rh_settings",
       "_s",
@@ -2878,7 +2879,7 @@
       "settings",
       "settings_module.settings"
     ],
-    "distinct_settings_alias_count": 19,
+    "distinct_settings_alias_count": 20,
     "form_a_attribute": {
       "total_reads": 677,
       "distinct_fields": 218,
@@ -3104,7 +3105,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 253,
+      "total_reads": 254,
       "distinct_fields": 155,
       "counts": {
         "FMP_API_KEY": 10,
@@ -3150,6 +3151,7 @@
         "OPAL_RESEARCH_PROVIDER": 2,
         "SENTIMENT_LLM_VERIFICATION_ENABLED": 2,
         "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 2,
+        "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED": 2,
         "ADVISORY_REUSE_PIPELINE_COMPUTE": 1,
         "ALERT_WEBHOOK_URL": 1,
         "ALPACA_KEY_ROTATED_DATE": 1,
@@ -3259,7 +3261,6 @@
         "SENTIMENT_LLM_VERIFICATION_PROVIDER": 1,
         "SNAPSHOT_HISTORY_DAYS": 1,
         "STATE_API_TOKEN": 1,
-        "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED": 1,
         "VALIDATION_HARNESS_OOS_GATE_ENABLED": 1,
         "WATCH_RULES_FILE": 1
       }

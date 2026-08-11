@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `9871ea1ac54dcdbccdd1f522d465233948623507`
+- Measured at commit: `eb4e729d46a2c759fef2339588fdedac90b36ab3`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -211,17 +211,17 @@ Scope: **364** production `.py` files (excludes `tests/`, `test_*.py`, `conftest
 
 Files that could not be parsed: **0**
 
-The singleton is bound under **19** distinct local names
+The singleton is bound under **20** distinct local names
 across the tree, which is why this is an AST pass and not a grep:
 
 ```
-_S.settings, _bl_settings, _dsr_settings, _live_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings_module.settings
+_S.settings, _bl_settings, _dsr_settings, _live_settings, _mt_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings_module.settings
 ```
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 677 | 218 |
-| (b) `getattr(settings, "KEY", default)` | 253 | 155 |
+| (b) `getattr(settings, "KEY", default)` | 254 | 155 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
 
@@ -377,7 +377,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `SECTOR_FORECAST_CONFIG_PATH` | b | 1 | 0 |
 | `SENTIMENT_LLM_VERIFICATION_ENABLED` | b | 2 | 0 |
 | `SENTIMENT_LLM_VERIFICATION_PROVIDER` | b | 1 | 0 |
-| `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` | b | 1 | 0 |
+| `VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED` | b | 2 | 0 |
 | `VALIDATION_HARNESS_OOS_GATE_ENABLED` | b | 1 | 0 |
 | `WATCHLIST` | d | 0 | 5 |
 
