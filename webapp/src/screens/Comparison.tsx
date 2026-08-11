@@ -13,22 +13,6 @@ import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from 
 import { FollowModal } from "./FollowModal";
 import { seriesColor, theme } from "../theme";
 import { fmtNum, fmtPct, fmtUsd } from "../format";
-import { DynamicGrid } from "../components/DynamicGrid";
-
-const defaultComparisonLayouts = {
-  lg: [
-    { i: 'recommended', x: 0, y: 0, w: 12, h: 10 },
-    { i: 'performance', x: 0, y: 10, w: 12, h: 8 },
-    { i: 'metrics', x: 0, y: 18, w: 12, h: 12 },
-    { i: 'alerts', x: 0, y: 30, w: 12, h: 8 },
-  ],
-  sm: [
-    { i: 'recommended', x: 0, y: 0, w: 6, h: 10 },
-    { i: 'performance', x: 0, y: 10, w: 6, h: 8 },
-    { i: 'metrics', x: 0, y: 18, w: 6, h: 12 },
-    { i: 'alerts', x: 0, y: 30, w: 6, h: 8 },
-  ]
-};
 
 export function Comparison() {
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
@@ -317,7 +301,7 @@ export function Comparison() {
             </Notice>
           )}
 
-          <DynamicGrid layoutKey="comparison" defaultLayouts={defaultComparisonLayouts}>
+          <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
             {/* Recommended stocks table */}
             <RecommendedStocks key="recommended" />
 
@@ -547,7 +531,7 @@ export function Comparison() {
               </div>
             ]
           )}
-          </DynamicGrid>
+          </div>
         </div>
       </div>
 

@@ -7,7 +7,6 @@ import { Button, EmptyState, ErrorState, Loading, Notice, Select, Table } from "
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
-import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * Prompt Registry — version control for every AI-facing instruction. Ports
@@ -64,16 +63,7 @@ export function PromptRegistry() {
         {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
         {!loading && !error && data && (
           <div style={{ flex: 1, minHeight: 0 }}>
-            <DynamicGrid
-              layoutKey="prompt-registry"
-              defaultLayouts={{
-                lg: [
-                  { i: "notices", x: 0, y: 0, w: 12, h: data.enabled ? 3 : 4, isResizable: false },
-                  { i: "sync", x: 0, y: 4, w: 12, h: 2, isResizable: false },
-                  { i: "table", x: 0, y: 6, w: 12, h: 14 }
-                ]
-              }}
-            >
+            <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
               <div key="notices" className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)", overflow: "auto", cursor: "grab" }}>
                 <Notice variant="info" data-testid="prompt-security-banner">
                   <span aria-hidden>🛡️</span>
@@ -129,7 +119,7 @@ export function PromptRegistry() {
                   )}
                 </div>
               </div>
-            </DynamicGrid>
+            </div>
           </div>
         )}
       </div>

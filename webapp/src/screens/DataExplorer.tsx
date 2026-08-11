@@ -10,7 +10,6 @@ import { SymbolInput } from "../components/SymbolInput";
 import { RecommendedStocks } from "../components/RecommendedStocks";
 import { MarketDataHealth } from "../components/MarketDataHealth";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -152,18 +151,7 @@ export function DataExplorer() {
       <SymbolInput initial={symbol} onSubmit={setSymbol} pending={bars.loading} />
 
       <div style={{ flex: 1, minHeight: 0 }}>
-        <DynamicGrid
-          layoutKey="data-explorer"
-          defaultLayouts={{
-            lg: [
-              { i: "recommended", x: 0, y: 0, w: 12, h: 4, minW: 6, minH: 3 },
-              { i: "bars", x: 0, y: 4, w: 8, h: 4, minW: 4, minH: 3 },
-              { i: "fundamentals", x: 8, y: 4, w: 4, h: 4, minW: 3, minH: 3 },
-              { i: "macro", x: 0, y: 8, w: 12, h: 2, minW: 4, minH: 2 },
-              { i: "health", x: 0, y: 10, w: 12, h: 4, minW: 6, minH: 3 },
-            ],
-          }}
-        >
+        <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           <div key="recommended">
             <RecommendedStocks onSelect={setSymbol} />
           </div>
@@ -207,7 +195,7 @@ export function DataExplorer() {
           <div key="health">
             <MarketDataHealth />
           </div>
-        </DynamicGrid>
+        </div>
       </div>
     </div>
   );

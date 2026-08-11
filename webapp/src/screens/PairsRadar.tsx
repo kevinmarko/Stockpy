@@ -22,7 +22,6 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, Notice } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -340,26 +339,13 @@ export function PairsRadar() {
                 {data.reason ?? "No cointegrated pairs found yet."}
               </div>
             ) : (
-              <DynamicGrid
-                layoutKey="pairs-radar"
-                defaultLayouts={{
-                  lg: data.pairs.map((p, i) => ({
-                    i: `${p.ticker1}-${p.ticker2}`,
-                    x: (i % 3) * 4,
-                    y: Math.floor(i / 3) * 3,
-                    w: 4,
-                    h: 3,
-                    minW: 3,
-                    minH: 3,
-                  })),
-                }}
-              >
+              <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
                 {data.pairs.map((p) => (
                   <div key={`${p.ticker1}-${p.ticker2}`}>
                     <PairCard p={p} />
                   </div>
                 ))}
-              </DynamicGrid>
+              </div>
             )
           )}
         </div>

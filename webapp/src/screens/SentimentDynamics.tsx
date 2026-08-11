@@ -24,7 +24,6 @@ import { ErrorState, Loading, Notice, Tile } from "../components/ui";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { fmtDate, fmtDateTime, fmtNum } from "../format";
 import { seriesColor, theme } from "../theme";
 
@@ -467,7 +466,7 @@ export function SentimentDynamics() {
       {!loading && !error && data && <EarningsCatalystBanner c={data.earnings_catalyst} />}
 
       <div style={{ marginTop: "var(--s-4)" }}>
-        <DynamicGrid layoutKey="sentiment-layout" defaultLayouts={{}}>
+        <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           <div key="breakdown">
             {loading && <Loading lines={3} />}
             {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
@@ -482,7 +481,7 @@ export function SentimentDynamics() {
               <HeadlineFeed headlines={data.headlines} providerUsed={data.provider_used} />
             )}
           </div>
-        </DynamicGrid>
+        </div>
       </div>
     </div>
   );

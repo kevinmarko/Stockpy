@@ -12,8 +12,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
-import { DynamicGrid } from "../components/DynamicGrid";
-import type { ResponsiveLayouts } from "react-grid-layout";
+// removed DynamicGrid imports
 import { PerfLine } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
 import { TabGuide } from "../components/TabGuide";
@@ -109,32 +108,7 @@ function ReconciliationSection({
   );
 }
 
-const PORTFOLIO_LAYOUTS: ResponsiveLayouts = {
-  lg: [
-    { i: "summary", x: 0, y: 0, w: 12, h: 5 },
-    { i: "equity", x: 0, y: 5, w: 12, h: 12 },
-    { i: "reconciliation", x: 0, y: 17, w: 12, h: 7 },
-    { i: "realized", x: 0, y: 24, w: 7, h: 10 },
-    { i: "follows", x: 7, y: 24, w: 5, h: 10 },
-    { i: "positions", x: 0, y: 34, w: 12, h: 10 },
-  ],
-  md: [
-    { i: "summary", x: 0, y: 0, w: 10, h: 5 },
-    { i: "equity", x: 0, y: 5, w: 10, h: 12 },
-    { i: "reconciliation", x: 0, y: 17, w: 10, h: 7 },
-    { i: "realized", x: 0, y: 24, w: 5, h: 10 },
-    { i: "follows", x: 5, y: 24, w: 5, h: 10 },
-    { i: "positions", x: 0, y: 34, w: 10, h: 10 },
-  ],
-  sm: [
-    { i: "summary", x: 0, y: 0, w: 6, h: 7 },
-    { i: "equity", x: 0, y: 7, w: 6, h: 12 },
-    { i: "reconciliation", x: 0, y: 19, w: 6, h: 8 },
-    { i: "realized", x: 0, y: 27, w: 6, h: 10 },
-    { i: "follows", x: 0, y: 37, w: 6, h: 10 },
-    { i: "positions", x: 0, y: 47, w: 6, h: 10 },
-  ],
-};
+// Layouts defined via CSS directly now
 
 export function Portfolio() {
   const [range, setRange] = useState<PerfRange>("3M");
@@ -206,11 +180,28 @@ export function Portfolio() {
 
       <TabGuide tabKey="portfolio" />
 
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <DynamicGrid layoutKey="portfolio" defaultLayouts={PORTFOLIO_LAYOUTS}>
+      <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)", paddingBottom: "var(--s-8)" }}>
+        <style>{`
+          .dashboard-layout > section, .dashboard-layout > div { min-height: 0; }
+          @media (min-width: 992px) {
+            .dashboard-layout {
+              display: grid !important;
+              grid-template-columns: repeat(12, 1fr);
+              grid-template-rows: auto;
+              align-items: start;
+            }
+            .dashboard-layout > [data-grid-area="summary"] { grid-column: span 12; }
+            .dashboard-layout > [data-grid-area="equity"] { grid-column: span 12; height: 400px; }
+            .dashboard-layout > [data-grid-area="reconciliation"] { grid-column: span 12; }
+            .dashboard-layout > [data-grid-area="realized"] { grid-column: span 7; height: 100%; }
+            .dashboard-layout > [data-grid-area="follows"] { grid-column: span 5; height: 100%; }
+            .dashboard-layout > [data-grid-area="positions"] { grid-column: span 12; }
+          }
+        `}</style>
+
           {/* Summary */}
-          <div key="summary" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-            <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+          <div data-grid-area="summary" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div style={{ marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Summary</h2>
             </div>
             <div style={{ display: "flex", gap: "var(--s-4)", alignItems: "center", marginBottom: "var(--s-3)" }}>
@@ -247,8 +238,8 @@ export function Portfolio() {
           </div>
 
           {/* Equity curve */}
-          <section key="equity" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-            <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-3)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+          <section data-grid-area="equity" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: "400px" }}>
+            <div style={{ marginBottom: 'var(--s-3)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
               <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Account value</h2>
             </div>
             <div style={{ flex: 1, minHeight: 0 }}>
@@ -285,16 +276,16 @@ export function Portfolio() {
       </section>
 
       {/* Reconciliation */}
-      <div key="reconciliation" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-        <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+      <div data-grid-area="reconciliation" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div style={{ marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
           <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Reconciliation</h2>
         </div>
         <ReconciliationSection positions={p.positions} universe={universe.data ?? null} />
       </div>
 
       {/* Realized performance (broker order history, FIFO round-trips) */}
-      <section key="realized" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-        <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+      <section data-grid-area="realized" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div style={{ marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
           <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Realized performance</h2>
         </div>
         <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", margin: "0 0 var(--s-3)" }}>
@@ -379,8 +370,8 @@ export function Portfolio() {
       </section>
 
       {/* Active follows */}
-      <section key="follows" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-        <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+      <section data-grid-area="follows" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div style={{ marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
           <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Active follows</h2>
         </div>
         {follows.loading ? (
@@ -427,8 +418,8 @@ export function Portfolio() {
       </section>
 
       {/* Positions */}
-      <section key="positions" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-        <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+      <section data-grid-area="positions" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div style={{ marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
           <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Positions</h2>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gridAutoRows: "max-content", gap: "var(--s-3)" }}>
@@ -476,7 +467,6 @@ export function Portfolio() {
           })}
             </div>
           </section>
-        </DynamicGrid>
       </div>
     </div>
   );

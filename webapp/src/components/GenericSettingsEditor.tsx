@@ -27,7 +27,6 @@ import { TunableGroupCard } from "./TunableGroupCard";
 import { Modal } from "./Modal";
 import { theme } from "../theme";
 import { TagInput } from "./TagInput";
-import { DynamicGrid } from "./DynamicGrid";
 import {
   buildConfirmMap,
   dangerousKeysIn,
@@ -110,13 +109,6 @@ function buildBaseline(groups: TunablesResponse["groups"]): Record<string, EditV
  * `rowHeight` (30px). Capped so one outsized group can't push every other card
  * off-screen — the internal scroll floor still catches the rest.
  */
-const GROUP_BASE_ROWS = 2;
-const GROUP_ROWS_PER_FIELD = 2;
-const GROUP_MAX_ROWS = 16;
-
-function computeGroupHeight(fieldCount: number): number {
-  return Math.min(GROUP_BASE_ROWS + fieldCount * GROUP_ROWS_PER_FIELD, GROUP_MAX_ROWS);
-}
 
 export interface GenericSettingsEditorProps {
   title: string;
@@ -270,7 +262,6 @@ export function GenericSettingsEditor({
 }
 
 function SettingsForm({
-  settingsKey,
   data,
   onReload,
   updateSettings,
@@ -382,20 +373,7 @@ function SettingsForm({
   // any remaining slack once real content mounts; this is only the sane
   // starting point used the first time a screen renders (before an operator's
   // own dragged/resized layout takes over from localStorage).
-  const groupLayouts = useMemo(() => {
-    const colHeights = [0, 0];
-    const groups = data.groups.map((g, idx) => {
-      const col = idx % 2;
-      const h = computeGroupHeight(g.fields.length);
-      const y = colHeights[col];
-      colHeights[col] += h;
-      return { i: `group-${idx}`, x: col * 6, y, w: 6, h };
-    });
-    const danger = dangerZone
-      ? [{ i: "danger-zone", x: 0, y: Math.max(colHeights[0], colHeights[1]), w: 12, h: 4 }]
-      : [];
-    return [...groups, ...danger];
-  }, [data.groups, dangerZone]);
+
 
   const buildPayload = () => {
     const payload: Record<string, number | boolean | string> = {};
@@ -486,10 +464,7 @@ function SettingsForm({
       )}
 
       <div style={{ minHeight: 320 }}>
-        <DynamicGrid
-          layoutKey={`settings-${settingsKey}`}
-          defaultLayouts={{ lg: groupLayouts }}
-        >
+        <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           {data.groups.map((group, idx) => {
             if (group.fields.length === 0) return null;
             const groupDirtyCount = group.fields.filter((f) => edited[f.key] !== baseline[f.key]).length;
@@ -530,7 +505,7 @@ function SettingsForm({
               </div>
             </div>
           )}
-        </DynamicGrid>
+        </div>
       </div>
 
       <div style={{ position: "sticky", bottom: "var(--safe-bottom)", marginTop: "var(--s-3)", padding: "var(--s-3)", background: "var(--surface-glass)", backdropFilter: "blur(12px)", borderTop: "1px solid var(--border)", zIndex: 10, borderRadius: "var(--r-md)" }}>

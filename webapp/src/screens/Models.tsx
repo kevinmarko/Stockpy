@@ -7,7 +7,6 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useTrainingStatus } from "../hooks/useTrainingStatus";
 import { Button, DeployableBadge, ErrorState, Loading, MetricBadge, InfoTip, Notice, Select } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
@@ -375,24 +374,7 @@ export function Models() {
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0 }}>
-              <DynamicGrid
-                layoutKey="models"
-                defaultLayouts={{
-                  lg: [
-                  { i: "comparison-chart", x: 0, y: 0, w: 6, h: 10 },
-                  { i: "signal-weights", x: 6, y: 0, w: 6, h: 10 },
-                  { i: "filters", x: 0, y: 10, w: 12, h: 3, isResizable: false },
-                  ...(visibleModels.length === 0
-                    ? [{ i: "empty-models", x: 0, y: 13, w: 12, h: 4, isResizable: false }]
-                    : visibleModels.map((m, idx) => ({
-                        i: `model-${m.name}`,
-                        x: (idx % 3) * 4,
-                        y: 13 + Math.floor(idx / 3) * 6,
-                        w: 4,
-                        h: 6
-                      })))
-                ]}}
-              >
+              <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
                 <div key="comparison-chart" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
                   <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)", cursor: "grab" }}>Model Comparison</div>
                   <div style={{ flex: 1, minHeight: 0, padding: "var(--s-3)" }}>
@@ -458,7 +440,7 @@ export function Models() {
                     </div>
                   ))
                 )}
-              </DynamicGrid>
+              </div>
             </div>
           )
         )}

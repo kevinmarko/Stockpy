@@ -18,7 +18,6 @@ import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, InfoTip, Input, Loading, Notice, Select, Table, Tile } from "../components/ui";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { TabGuide } from "../components/TabGuide";
 import { glossaryDef } from "../help/helpContent";
 import { loadThresholds } from "../help/thresholds";
@@ -1171,15 +1170,7 @@ export function Observability() {
               since these two are the sections an operator plausibly wants to
               rearrange or resize relative to each other. */}
           <div style={{ marginBottom: "var(--s-4)" }}>
-            <DynamicGrid
-              layoutKey="observability"
-              defaultLayouts={{
-                lg: [
-                  { i: "portfolioRisk", x: 0, y: 0, w: 6, h: 6, minW: 4, minH: 4 },
-                  { i: "equity", x: 6, y: 0, w: 6, h: 6, minW: 4, minH: 4 },
-                ],
-              }}
-            >
+            <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
               <div key="portfolioRisk">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
                   <div className="drag-handle" style={{ cursor: "grab" }}>
@@ -1259,7 +1250,7 @@ export function Observability() {
                   </div>
                 </section>
               </div>
-            </DynamicGrid>
+            </div>
           </div>
 
           {/* Everything below is detail, not "does anything need a look" --

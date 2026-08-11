@@ -29,7 +29,6 @@ import { useMutation } from "../hooks/useMutation";
 import { usePoll } from "../hooks/usePoll";
 import { ErrorState, Loading, Notice, Button, EmptyState, StaleDataNotice } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { LogStream } from "../components/LogStream";
 import { downloadBlob } from "../utils/csv";
 import { timeAgo } from "../format";
@@ -360,7 +359,7 @@ export function ReportLibrary() {
             hint={data.reason ?? "Run the pipeline, generate a briefing, or run the validation harness."}
           />
         ) : (
-            <DynamicGrid layoutKey="report-library-layout" defaultLayouts={{}}>
+            <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
               <div key="daily-report">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
                   <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
@@ -428,7 +427,7 @@ export function ReportLibrary() {
                   </div>
                 </section>
               </div>
-            </DynamicGrid>
+            </div>
         )
       )}
     </div>

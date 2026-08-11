@@ -7,7 +7,6 @@ import { ErrorState, Loading, MetricBadge, Notice, Select, StaleDataNotice } fro
 import { Toggle } from "../components/Toggle";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
-import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * AI Control Center — the write path over GET/PUT /llm/setting for the 5 AI
@@ -70,14 +69,14 @@ export function AIControlCenter() {
       {!loading && !error && data && (
         <>
           {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
-          <DynamicGrid layoutKey="ai-control-layout" defaultLayouts={{ lg: [{ i: "toggles", x: 0, y: 0, w: 8, h: 4 }, { i: "telemetry", x: 8, y: 0, w: 4, h: 4 }] }}>
+          <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
             <div key="toggles">
               <CapabilityToggles data={data} onSaved={reload} />
             </div>
             <div key="telemetry">
               <TelemetrySection data={data} />
             </div>
-          </DynamicGrid>
+          </div>
         </>
       )}
     </div>

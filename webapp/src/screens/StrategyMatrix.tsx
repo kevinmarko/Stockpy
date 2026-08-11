@@ -19,7 +19,6 @@ import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice } from "../components/ui";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
@@ -103,24 +102,7 @@ export function StrategyMatrix() {
         {loading && !data && <Loading lines={4} />}
         {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
         {!loading && !error && data && (
-          <DynamicGrid
-            layoutKey="strategy-matrix"
-            defaultLayouts={{
-              lg: [
-                { i: "meta-label", x: 0, y: 0, w: 12, h: 8, minW: 6, minH: 6 },
-                { i: "context", x: 0, y: 8, w: 12, h: 4, minW: 6, minH: 3 },
-                ...data.modules.map((m, i) => ({
-                  i: m.name,
-                  x: (i % 3) * 4,
-                  y: 12 + Math.floor(i / 3) * 4,
-                  w: 4,
-                  h: 4,
-                  minW: 3,
-                  minH: 3,
-                })),
-              ],
-            }}
-          >
+          <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
             <div key="meta-label">
               <div style={{ height: "100%" }}>
                 <MetaLabelSection dist={data.meta_label} />
@@ -136,7 +118,7 @@ export function StrategyMatrix() {
                 <ModuleCard module={m} data={data} editor={editor} />
               </div>
             ))}
-          </DynamicGrid>
+          </div>
         )}
       </div>
 
@@ -301,12 +283,12 @@ interface MatrixEditorState {
  * `MatrixEditor` component. Extracted to a hook (not a component) so
  * `StrategyMatrix` can call it unconditionally at the top of its render and
  * then place the context card + each module card as genuinely separate,
- * individually-keyed children of `<DynamicGrid>` — a component wrapping a
+ * individually-keyed children of `<div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>` — a component wrapping a
  * Fragment of many keyed children (the previous `MatrixEditor`) is invisible
  * to `DynamicGrid`'s own children traversal, since React never flattens a
  * child component's own Fragment output into its parent's `children` prop
  * before the parent renders; only literal elements/arrays present at the
- * `<DynamicGrid>` JSX call site are seen.
+ * `<div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>` JSX call site are seen.
  *
  * `data` is `null` while the initial fetch is in flight (`useApi`'s
  * contract) — the hook degrades to empty edit state until the first real

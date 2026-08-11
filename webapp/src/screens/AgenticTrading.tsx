@@ -8,8 +8,6 @@ import { useBrokerageLoginJob } from "../hooks/useBrokerageLoginJob";
 import { useDebounce } from "../hooks/useDebounce";
 import { usePersistedState } from "../hooks/usePersistedState";
 import { useExecutionMode } from "../components/ExecutionModeContext";
-import { DynamicGrid } from "../components/DynamicGrid";
-import type { ResponsiveLayouts } from "react-grid-layout";
 import type {
   AgenticDiscovery,
   AgenticStatus,
@@ -51,53 +49,7 @@ import { ModelHealthPanel } from "../components/ModelHealthPanel";
  * server-side before this screen existed — see ExecutionQueueSection's
  * docstring for why order placement itself is out of reach entirely.
  */
-const AGENTIC_LAYOUTS: ResponsiveLayouts = {
-  lg: [
-    { i: "agent_status", x: 0, y: 0, w: 12, h: 8 },
-    { i: "discovery", x: 0, y: 8, w: 12, h: 12 },
-    { i: "execution", x: 0, y: 20, w: 12, h: 10 },
-    { i: "advanced_visuals", x: 0, y: 30, w: 12, h: 14 },
-    { i: "rlhf", x: 0, y: 44, w: 12, h: 10 },
-    { i: "decision", x: 0, y: 54, w: 6, h: 12 },
-    { i: "controls", x: 6, y: 54, w: 6, h: 12 },
-  ],
-  md: [
-    { i: "agent_status", x: 0, y: 0, w: 10, h: 8 },
-    { i: "discovery", x: 0, y: 8, w: 10, h: 12 },
-    { i: "execution", x: 0, y: 20, w: 10, h: 10 },
-    { i: "advanced_visuals", x: 0, y: 30, w: 10, h: 14 },
-    { i: "rlhf", x: 0, y: 44, w: 10, h: 10 },
-    { i: "decision", x: 0, y: 54, w: 10, h: 12 },
-    { i: "controls", x: 0, y: 66, w: 10, h: 12 },
-  ],
-  sm: [
-    { i: "agent_status", x: 0, y: 0, w: 6, h: 8 },
-    { i: "discovery", x: 0, y: 8, w: 6, h: 12 },
-    { i: "execution", x: 0, y: 20, w: 6, h: 10 },
-    { i: "advanced_visuals", x: 0, y: 30, w: 6, h: 14 },
-    { i: "rlhf", x: 0, y: 44, w: 6, h: 10 },
-    { i: "decision", x: 0, y: 54, w: 6, h: 12 },
-    { i: "controls", x: 0, y: 66, w: 6, h: 12 },
-  ],
-  xs: [
-    { i: "agent_status", x: 0, y: 0, w: 4, h: 8 },
-    { i: "discovery", x: 0, y: 8, w: 4, h: 12 },
-    { i: "execution", x: 0, y: 20, w: 4, h: 10 },
-    { i: "advanced_visuals", x: 0, y: 30, w: 4, h: 14 },
-    { i: "rlhf", x: 0, y: 44, w: 4, h: 10 },
-    { i: "decision", x: 0, y: 54, w: 4, h: 12 },
-    { i: "controls", x: 0, y: 66, w: 4, h: 12 },
-  ],
-  xxs: [
-    { i: "agent_status", x: 0, y: 0, w: 2, h: 8 },
-    { i: "discovery", x: 0, y: 8, w: 2, h: 12 },
-    { i: "execution", x: 0, y: 20, w: 2, h: 10 },
-    { i: "advanced_visuals", x: 0, y: 30, w: 2, h: 14 },
-    { i: "rlhf", x: 0, y: 44, w: 2, h: 10 },
-    { i: "decision", x: 0, y: 54, w: 2, h: 12 },
-    { i: "controls", x: 0, y: 66, w: 2, h: 12 },
-  ],
-};
+// Layouts defined via CSS directly now
 
 export function AgenticTrading() {
   const status = useApi<AgenticStatus>(() => api.getAgenticStatus(), []);
@@ -232,28 +184,46 @@ export function AgenticTrading() {
         <ErrorState message={status.error} status={status.status} onRetry={status.reload} />
       )}
       
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <DynamicGrid layoutKey="agentic" defaultLayouts={AGENTIC_LAYOUTS}>
+      <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)", paddingBottom: "var(--s-8)" }}>
+        <style>{`
+          .dashboard-layout > section, .dashboard-layout > div { min-height: 0; }
+          @media (min-width: 992px) {
+            .dashboard-layout {
+              display: grid !important;
+              grid-template-columns: repeat(12, 1fr);
+              grid-template-rows: auto;
+              align-items: start;
+            }
+            .dashboard-layout > [data-grid-area="agent_status"] { grid-column: span 12; }
+            .dashboard-layout > [data-grid-area="discovery"] { grid-column: span 12; }
+            .dashboard-layout > [data-grid-area="execution"] { grid-column: span 12; }
+            .dashboard-layout > [data-grid-area="advanced_visuals"] { grid-column: span 12; }
+            .dashboard-layout > [data-grid-area="rlhf"] { grid-column: span 12; }
+            .dashboard-layout > [data-grid-area="decision"] { grid-column: span 6; }
+            .dashboard-layout > [data-grid-area="controls"] { grid-column: span 6; }
+          }
+        `}</style>
+
           {/* Agent Status */}
-          <div key="agent_status" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <div data-grid-area="agent_status" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             {!status.loading && !status.error && status.data && (
               <AgentStatusHeader data={status.data} onRefreshAll={refreshAll} />
             )}
           </div>
 
           {/* Discovery */}
-          <div key="discovery" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <div data-grid-area="discovery" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <DiscoverySection refreshToken={refreshToken} />
           </div>
 
           {/* Execution Queue */}
-          <div key="execution" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <div data-grid-area="execution" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <ExecutionQueueSection />
           </div>
 
           {/* Advanced Quantitative Visualizations Section */}
-          <div key="advanced_visuals" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-            <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+          <div data-grid-area="advanced_visuals" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <div style={{ marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
               <h2 style={{ fontSize: "var(--t-title)", margin: 0 }}>Advanced Quantitative Visualizations</h2>
             </div>
             <div
@@ -296,20 +266,19 @@ export function AgenticTrading() {
           </div>
 
           {/* RLHF Review Queue */}
-          <div key="rlhf" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <div data-grid-area="rlhf" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <RlhfReviewQueue refreshToken={refreshToken} />
           </div>
 
           {/* Decision Journal */}
-          <div key="decision" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <div data-grid-area="decision" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <DecisionJournalSection refreshToken={refreshToken} />
           </div>
 
           {/* Controls */}
-          <div key="controls" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <div data-grid-area="controls" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <ControlsSection status={status.data} onChanged={status.reload} />
           </div>
-        </DynamicGrid>
       </div>
 
       {showAuthModal && (
@@ -339,7 +308,7 @@ function SectionCard({
 }) {
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div className="drag-handle" style={{ cursor: 'grab', marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
+      <div style={{ marginBottom: 'var(--s-2)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
         <h2 style={{ margin: 0, fontSize: "var(--t-title)" }}>{title}</h2>
         {sub && (
           <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)", marginBottom: 0 }}>

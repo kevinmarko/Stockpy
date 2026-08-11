@@ -17,7 +17,6 @@ import { DeployableBadge, ErrorState, InfoTip, Loading, Select, Table } from "..
 import { Sparkline } from "../components/charts";
 import { TabGuide } from "../components/TabGuide";
 import { ValidationTrend } from "../components/ValidationTrend";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { loadThresholds } from "../help/thresholds";
 import { fmtNum, fmtPct, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -584,25 +583,7 @@ export function StrategyHealth() {
               )}
             </div>
 
-            <DynamicGrid
-              layoutKey="strategy-health-layout"
-              defaultLayouts={{
-                lg: [
-                  ...data.map((row, i) => ({
-                    i: row.pilot_id,
-                    x: (i % 3) * 4,
-                    y: Math.floor(i / 3) * 6,
-                    w: 4,
-                    h: 6,
-                    minW: 3,
-                    minH: 4,
-                  })),
-                  { i: "validation-trend", x: 0, y: Math.ceil(data.length / 3) * 6, w: 12, h: 8 },
-                  { i: "gravity-audit", x: 0, y: Math.ceil(data.length / 3) * 6 + 8, w: 12, h: 10 },
-                  { i: "ai-disagreement", x: 0, y: Math.ceil(data.length / 3) * 6 + 18, w: 12, h: 8 },
-                ],
-              }}
-            >
+            <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
               {data.map((row) => (
                 <div key={row.pilot_id}>
                   <HealthCard row={row} thresholds={thresholds} metric={trendMetric} />
@@ -624,7 +605,7 @@ export function StrategyHealth() {
               <div key="ai-disagreement">
                 <AiDisagreementSection />
               </div>
-            </DynamicGrid>
+            </div>
           </>
         )
       )}

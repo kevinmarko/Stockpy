@@ -13,7 +13,6 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -1179,26 +1178,13 @@ export function OptionsMatrix() {
             </div>
           ) : (
             <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-3)" }}>
-              <DynamicGrid
-                layoutKey="options-matrix"
-                defaultLayouts={{
-                  lg: visible.map((d, i) => ({
-                    i: d.Symbol,
-                    x: (i % 3) * 4,
-                    y: Math.floor(i / 3) * 4,
-                    w: 4,
-                    h: 4,
-                    minW: 3,
-                    minH: 3,
-                  })),
-                }}
-              >
+              <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
                 {visible.map((d) => (
                   <div key={d.Symbol}>
                     <DirectiveCard d={d} onOpen={() => setOpenSymbol(d.Symbol)} />
                   </div>
                 ))}
-              </DynamicGrid>
+              </div>
             </div>
           )}
 

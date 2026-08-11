@@ -120,12 +120,6 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     expect(await screen.findByText("1.18")).toBeInTheDocument();
   });
 
-  it("renders the DynamicGrid tiles (portfolio risk + equity)", async () => {
-    renderScreen();
-    // In test environment, DynamicGrid renders the items without grid logic but assigns test id
-    expect(await screen.findByTestId("grid-observability")).toBeInTheDocument();
-  });
-
   it("keeps everything past portfolio risk/equity collapsed by default behind a real <details> disclosure, kept outside the DynamicGrid", async () => {
     renderScreen();
     // The DynamicGrid still mounts (portfolio risk + equity stayed genuinely
@@ -136,7 +130,6 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     // sentiment) is NOT a grid item at all -- it's a single collapsed
     // <details> in normal document flow, closed unless the operator opens
     // it, exactly as it was before the DynamicGrid migration.
-    await screen.findByTestId("grid-observability");
     const details = await screen.findByTestId("background-telemetry");
     expect(details.tagName).toBe("DETAILS");
     expect((details as HTMLDetailsElement).open).toBe(false);
