@@ -2478,7 +2478,7 @@
         "rules": [
           "closure_value"
         ],
-        "site": "pipeline/production_steps.py:544",
+        "site": "pipeline/production_steps.py:560",
         "via": []
       }
     ],

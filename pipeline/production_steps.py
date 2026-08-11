@@ -114,6 +114,16 @@ class AsyncDataFetchStep(PipelineStep):
             ctx.macro_raw = de.fetch_macro_raw()
             ctx.fund_raw = de.fetch_fundamentals_raw(ctx.symbols)
             ctx.tech_raw = de.fetch_technical_raw(ctx.symbols)
+            # Broker-agnostic synthetic-data marker (Finding 1): this cycle's
+            # figures are MockDataEngine's flat $10 prices and fabricated
+            # fundamentals, not real market data. Mirrors
+            # main_orchestrator._mark_data_refreshed()'s real-data-only
+            # asymmetry below -- set ONLY on this fallback branch, never on
+            # the real-data path. BrokerExecutionStep checks this marker
+            # before it will submit any order, regardless of which broker
+            # backend (Alpaca, FMPPaperBroker, ...) settings.BROKER_BACKEND
+            # selects one layer deeper.
+            ctx.context_extras['data_is_synthetic'] = True
         else:
             # Real (non-mock) data landed — stamp the cross-cycle freshness
             # marker so the daemon's interval gate (DATA_FRESHNESS_TTL_SECONDS)
@@ -298,8 +308,14 @@ class ProcessingStep(PipelineStep):
         
         fund_dtos = {}
         for ticker, data in ctx.fund_raw.items():
-            if data and 'info' in data:
-                fund_dtos[ticker] = FundamentalDataDTO.from_raw_dict(ticker, data['info'], dividends=data.get('dividends'))
+            try:
+                if data and 'info' in data:
+                    fund_dtos[ticker] = FundamentalDataDTO.from_raw_dict(ticker, data['info'], dividends=data.get('dividends'))
+            except Exception as fund_dto_exc:
+                telemetry.warning(
+                    f"Fundamental DTO construction failed for {ticker}: {fund_dto_exc}. "
+                    f"Skipping fundamentals for this ticker this cycle."
+                )
 
         ctx.context_extras["fund_dtos"] = fund_dtos
 
@@ -1647,13 +1663,76 @@ def _build_etf_transmission_cov_matrix(
         return None
 
 
+def _compute_xsec_momentum(
+    tech_raw: dict,
+    skip_days: int = 22,
+    lookback_days: int = 252,
+) -> tuple[dict, "pd.Series"]:
+    """Single source for both the raw 12-1m cross-sectional momentum returns
+    AND their percentile ranks (Finding 15 fix).
+
+    Before this fix, StrategyEvalStep computed the percentile ranks via
+    main_orchestrator.compute_xsec_momentum_ranks() and SEPARATELY
+    re-derived the raw XSec_12_1M return with its own hand-inlined loop
+    using hardcoded -23/-253 iloc offsets -- two independent
+    implementations of the exact same Jegadeesh-Titman 12-1m formula that
+    could silently diverge if skip_days/lookback_days were ever changed in
+    only one of the two places. This helper computes both from ONE pass
+    over ``tech_raw`` so ``XSec_12_1M`` and ``XSec_Momentum_Rank`` can never
+    disagree about which tickers/returns they're built from.
+
+    Mirrors main_orchestrator.compute_xsec_momentum_ranks()'s exact
+    formula, defaults, and insufficient-history exclusion -- duplicated
+    here (not imported) because this fix's file scope is deliberately
+    restricted to pipeline/production_steps.py; keep the two in lockstep
+    if skip_days/lookback_days ever change in either place.
+
+    Parameters
+    ----------
+    tech_raw : dict[str, pd.DataFrame]
+        OHLCV DataFrames keyed by ticker.
+    skip_days : int
+        Trading days to skip at the end (default 22 ~= 1 month).
+    lookback_days : int
+        Total lookback window in trading days (default 252 ~= 12 months).
+
+    Returns
+    -------
+    tuple[dict[str, float], pd.Series]
+        (raw 12-1m returns keyed by ticker, percentile rank Series in
+        [0, 1] indexed by ticker). Both share the exact same universe of
+        eligible tickers (those with >= lookback_days + skip_days + 1
+        valid Close observations).
+    """
+    returns: dict = {}
+    required = lookback_days + skip_days + 1
+
+    for ticker, df in tech_raw.items():
+        if df is None or df.empty or "Close" not in df.columns:
+            continue
+        close = df["Close"].dropna()
+        if len(close) < required:
+            continue
+        p_recent = float(close.iloc[-(skip_days + 1)])   # price at t - skip_days
+        p_old = float(close.iloc[-(lookback_days + 1)])  # price at t - lookback_days
+        if p_old <= 0:
+            continue
+        returns[ticker] = p_recent / p_old - 1.0
+
+    if not returns:
+        return returns, pd.Series(dtype=float)
+
+    ranks = pd.Series(returns).rank(pct=True, ascending=True)
+    return returns, ranks
+
+
 class StrategyEvalStep(PipelineStep):
     """Evaluates strategy and overlaying advisory logic."""
     name = "strategy"
     
     def run(self, ctx: RunContext) -> None:
         """Evaluate the strategy and apply the holding-aware advisory overlay."""
-        from main_orchestrator import StrategyEngine, EvaluationEngine, MarketBarDTO, FundamentalDataDTO, compute_xsec_momentum_ranks, global_registry, SignalContext, DualMomentumAllocator
+        from main_orchestrator import StrategyEngine, EvaluationEngine, MarketBarDTO, FundamentalDataDTO, global_registry, SignalContext, DualMomentumAllocator
 
         telemetry.info("Routing data through Strategy and Evaluation Engines...")
         if ctx.progress is not None:
@@ -1668,20 +1747,10 @@ class StrategyEvalStep(PipelineStep):
         ctx.dashboard_df['XSec_12_1M'] = float('nan')
         ctx.dashboard_df['XSec_Momentum_Rank'] = float('nan')
 
-        xsec_rank_series = compute_xsec_momentum_ranks(ctx.tech_raw)
-
-        xsec_return_dict: dict = {}
-        for ticker_i, df_i in ctx.tech_raw.items():
-            if df_i is None or df_i.empty or 'Close' not in df_i.columns:
-                continue
-            close_i = df_i['Close'].dropna()
-            required_i = 252 + 22 + 1
-            if len(close_i) < required_i:
-                continue
-            p_recent_i = float(close_i.iloc[-23])   # t - 22
-            p_old_i = float(close_i.iloc[-253])      # t - 252
-            if p_old_i > 0:
-                xsec_return_dict[ticker_i] = p_recent_i / p_old_i - 1.0
+        # Finding 15: raw returns and percentile ranks are now sourced from
+        # ONE helper (_compute_xsec_momentum) instead of two independent
+        # formula implementations that could silently diverge.
+        xsec_return_dict, xsec_rank_series = _compute_xsec_momentum(ctx.tech_raw)
 
         ctx.dashboard_df['XSec_12_1M'] = ctx.dashboard_df['Symbol'].map(xsec_return_dict)
         ctx.dashboard_df['XSec_Momentum_Rank'] = ctx.dashboard_df['Symbol'].map(xsec_rank_series)
@@ -1923,6 +1992,12 @@ class StrategyEvalStep(PipelineStep):
         vec_df['current_price'] = ctx.dashboard_df.get('Price', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
         vec_df['Close'] = vec_df['current_price']
         vec_df['ticker'] = ctx.dashboard_df['Symbol'].values
+        # Added alongside 'ticker' above (Finding 2) -- CrossSectionalMomentumSignal
+        # .compute()'s `row.get("Symbol", "")` lookup needs this exact column
+        # name; without it every ticker resolved to "" and the module was
+        # silently dead (contributing 0.0) in this vectorized path. 'ticker'
+        # is left untouched since other code may still depend on it.
+        vec_df['Symbol'] = ctx.dashboard_df['Symbol'].values
         vec_df['sector'] = ctx.dashboard_df['Symbol'].map(lambda x: fund_dtos.get(x).sector if fund_dtos.get(x) else "Unknown").values
         
         vec_df['roc_12m'] = ctx.dashboard_df.get('ROC_12M', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
@@ -1943,7 +2018,16 @@ class StrategyEvalStep(PipelineStep):
         from dto_models import MarketBarDTO, FundamentalDataDTO
         dummy_bar = MarketBarDTO(date=datetime.now(), ticker="DUMMY", open_price=0.0, high_price=0.0, low_price=0.0, close_price=0.0, volume=0)
         dummy_fund = FundamentalDataDTO(ticker="DUMMY", pe_ratio=None, pb_ratio=None, dividend_yield=0.0, book_value=0.0, eps_trailing=0.0, dividend_growth_rate=0.0, payout_ratio=0.0, sector="Unknown", company_name="Unknown")
-        sig_ctx = SignalContext(bar=dummy_bar, fundamentals=dummy_fund, macro=ctx.macro_dto, multifactor_scores=shared_context.multifactor_scores)
+        sig_ctx = SignalContext(
+            bar=dummy_bar, fundamentals=dummy_fund, macro=ctx.macro_dto,
+            multifactor_scores=shared_context.multifactor_scores,
+            # Finding 2: without this, context.xsec_percentile_ranks was
+            # always the SignalContext default empty dict in this vectorized
+            # path, so cross_sectional_momentum.compute() always hit its
+            # "ticker not in ranks" branch and returned score=0.0 regardless
+            # of the Symbol-column fix above.
+            xsec_percentile_ranks=shared_context.xsec_percentile_ranks,
+        )
         aggregator = SignalAggregator(global_registry)
         try:
             vectorized_results = aggregator.aggregate_vectorized(vec_df, sig_ctx)
@@ -2564,6 +2648,26 @@ class BrokerExecutionStep(PipelineStep):
 
         # 6. Broker Execution
         effective_dry_run = ctx.force_account # Or pass it in context
+
+        # Synthetic-data gate (Finding 1): a cycle that fell back to
+        # MockDataEngine (AsyncDataFetchStep's fail-safe branch, triggered by
+        # a total market-data outage) must NEVER submit a live/paper broker
+        # order priced off flat $10 fabricated data. Checked BEFORE the
+        # ADVISORY_ONLY/broker-credential branches below, and returns
+        # unconditionally without calling main_orchestrator._execute_broker_
+        # orders. This never touches broker-selection code -- that selection
+        # happens one layer deeper inside _execute_broker_orders, keyed off
+        # settings.BROKER_BACKEND -- so it protects AlpacaBroker and
+        # FMPPaperBroker identically.
+        if ctx.context_extras.get("data_is_synthetic"):
+            telemetry.critical(
+                "Synthetic (MockDataEngine) data detected for this cycle -- "
+                "skipping broker execution entirely regardless of "
+                "ADVISORY_ONLY/broker credentials to avoid submitting orders "
+                "off fabricated prices."
+            )
+            return
+
         if getattr(settings, "ADVISORY_ONLY", True):
             telemetry.info(
                 "📋 ADVISORY_ONLY=True — pipeline produced %d signals; broker "
