@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3142,
+      "line": 3144,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4188,
+      "line": 4190,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4293,
+      "line": 4295,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -411,15 +411,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 735,
+    "attr": 736,
     "factory_param": 4,
-    "getattr_const": 251,
+    "getattr_const": 252,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 221,
     "factory_param": 4,
-    "getattr_const": 154,
+    "getattr_const": 155,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -1293,7 +1293,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4670",
+        "site": "api/pilots_api.py:4672",
         "via": []
       }
     ],
@@ -1304,7 +1304,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4669",
+        "site": "api/pilots_api.py:4671",
         "via": []
       }
     ],
@@ -1315,7 +1315,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4814",
+        "site": "api/pilots_api.py:4816",
         "via": []
       },
       {
@@ -1390,7 +1390,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4794",
+        "site": "api/pilots_api.py:4796",
         "via": []
       },
       {
@@ -2218,7 +2218,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "pilots/scan_config_store.py:80",
+        "site": "pilots/scan_config_store.py:165",
         "via": []
       },
       {
@@ -2478,7 +2478,7 @@
         "rules": [
           "closure_value"
         ],
-        "site": "pipeline/production_steps.py:531",
+        "site": "pipeline/production_steps.py:544",
         "via": []
       }
     ],
