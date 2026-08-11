@@ -226,6 +226,30 @@ def _db_query(sql: str, params: tuple = ()):
         return columns, rows
 
 
+def _load_state_snapshot() -> Optional[dict]:
+    """Loads ``output/state_snapshot.json`` using the same
+    ``settings.OUTPUT_DIR``-first resolution ``get_regime_status`` already
+    uses elsewhere in this file. Returns ``None`` -- never raises, never
+    fabricates a snapshot -- when the file is absent, unreadable, or not
+    valid JSON (CONSTRAINT #4/#6). Shared by ``get_model_drift_report`` and
+    ``validate_order_compliance`` so both read the pipeline's persisted
+    macro/forecast telemetry the same way instead of each re-deriving the
+    path resolution independently."""
+    try:
+        from settings import settings as _settings_local
+        snap_path = os.path.join(str(_settings_local.OUTPUT_DIR), "state_snapshot.json")
+    except Exception:
+        snap_path = os.path.join("output", "state_snapshot.json")
+
+    if not snap_path or not os.path.exists(snap_path):
+        return None
+    try:
+        with open(snap_path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
 # ==========================================
 # [1] RESOURCES (Read-Only Context)
 # ==========================================
@@ -3726,75 +3750,255 @@ def get_factor_attributions(ticker: str) -> str:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def get_order_execution_history(limit: int = 50) -> str:
-    """Queries real fills from transactions_store.py"""
+    """
+    Lists real open + closed paper-trading fills from transactions_store.py's
+    ``TransactionsStore`` (the ``trades`` table), most recent first, capped
+    at ``limit`` rows.
+
+    The ``trades`` schema persists only ``entry_price``/``exit_price`` -- the
+    actual recorded fill prices -- with no intended/quoted price, VWAP, or
+    TWAP column to diff against. This tool therefore does NOT compute or
+    report a slippage figure (CONSTRAINT #4: never invent a comparison basis
+    the store doesn't actually have); it reports the real recorded entry/exit
+    prices and realized P&L for closed trades instead. Empty history degrades
+    to an explicit "no execution history recorded yet" message, never a
+    fabricated average.
+    """
     try:
         from transactions_store import TransactionsStore
-        store = TransactionsStore()
-        closed_df = store.closed_trades_df
-        open_df = store.open_trades_df
-        
         import pandas as pd
-        all_trades = pd.concat([closed_df, open_df])
-        if all_trades.empty:
-            return "no trade history found"
-            
-        all_trades = all_trades.sort_values("entry_ts", ascending=False).head(limit)
-        
-        lines = []
+
+        store = TransactionsStore()
+        open_df = store.open_trades_df()
+        closed_df = store.closed_trades_df()
+        total = len(open_df) + len(closed_df)
+
+        if total == 0:
+            return (
+                "no execution history recorded yet -- the `trades` table in "
+                "transactions_store.py has no open or closed trades."
+            )
+
+        non_empty = [df for df in (open_df, closed_df) if not df.empty]
+        all_trades = pd.concat(non_empty, ignore_index=True, sort=False)
+        all_trades = all_trades.sort_values("entry_ts", ascending=False).head(max(0, int(limit)))
+
+        lines = [f"# Order Execution History (showing {len(all_trades)} of {total} recorded trades)\n"]
         for _, row in all_trades.iterrows():
             sym = row.get("symbol", "N/A")
-            side = row.get("side", "N/A")
-            qty = row.get("qty", 0)
+            side = str(row.get("side", "N/A"))
+            shares = row.get("shares", 0)
             entry_p = row.get("entry_price", 0.0)
-            
-            status = "CLOSED" if pd.notna(row.get("exit_ts")) else "OPEN"
-            lines.append(f"[{status}] {sym} {side} {qty} @ {entry_p}")
-            
+            entry_ts = row.get("entry_ts")
+            exit_p = row.get("exit_price")
+            exit_ts = row.get("exit_ts")
+
+            if pd.notna(exit_ts) and pd.notna(exit_p):
+                pnl_per_share = (exit_p - entry_p) if side == "long" else (entry_p - exit_p)
+                pnl = pnl_per_share * shares
+                lines.append(
+                    f"- [CLOSED] {sym} {side.upper()} {shares} sh: entry ${entry_p:.2f} "
+                    f"({entry_ts}) -> exit ${exit_p:.2f} ({exit_ts}), realized P&L ${pnl:+,.2f}"
+                )
+            else:
+                lines.append(
+                    f"- [OPEN] {sym} {side.upper()} {shares} sh @ ${entry_p:.2f} ({entry_ts})"
+                )
+
+        lines.append(
+            "\n_Note: no slippage figure is reported -- transactions_store.py's `trades` "
+            "table records only the actual entry/exit fill prices, with no intended/"
+            "quoted price, VWAP, or TWAP column to compare against._"
+        )
         return "\n".join(lines)
     except Exception as e:
         return f"failed to get execution history: {str(e)}"
 
 @mcp.tool()
 def get_model_drift_report() -> str:
-    """Reuses forecast_skill_by_symbol_summary to report model drift"""
+    """
+    Reports per-symbol, per-30-day-horizon forecast-skill decay by reusing
+    ``pilots.observability.forecast_skill_by_symbol_summary`` -- the exact
+    cold-start/inverse-RMSE computation the Pilots PWA's Observability screen
+    already uses -- against the symbols in the persisted
+    ``output/state_snapshot.json`` (loaded via the same pattern
+    ``get_regime_status``/``validate_order_compliance`` use elsewhere in this
+    file). Never fabricates a decay percentage: a missing snapshot, an empty
+    universe, or no forecast history yet each degrade to that function's own
+    honest ``reason`` string (CONSTRAINT #4).
+    """
     try:
         from pilots.observability import forecast_skill_by_symbol_summary
-        summary = forecast_skill_by_symbol_summary()
-        if not summary:
-            return "no drift data yet"
-        import json
-        return json.dumps(summary, indent=2)
+        import json as _json
+
+        snapshot = _load_state_snapshot()
+        summary = forecast_skill_by_symbol_summary(snapshot)
+
+        rows = summary.get("rows") or []
+        if not rows:
+            reason = summary.get("reason") or "no forecast-skill data available"
+            return f"no drift data yet: {reason}"
+
+        return _json.dumps(summary, indent=2)
     except Exception as e:
         return f"failed to generate model drift report: {str(e)}"
 
 @mcp.tool()
 def validate_order_compliance(ticker: str, side: str, size: float) -> str:
-    """Runs PreTradeRiskGate checks for order compliance without submitting."""
+    """
+    REAL, read-only pre-trade compliance check for a proposed order. Never
+    places or queues an order (advisory only), and never returns a blanket
+    PASSED regardless of input -- each check below degrades to an explicit
+    "unavailable" verdict when its underlying data is missing, and the
+    overall verdict is only PASSED when every evaluable check actually
+    passed (CONSTRAINT #4).
+
+    Reuses two gate conditions this codebase already documents/computes
+    elsewhere, rather than reimplementing risk-gate logic from scratch:
+
+    1. Kelly sizing cap (``settings.KELLY_CAP``) -- read from the ticker's
+       most recent ``DailySignals`` row ("Kelly Target",
+       "Sizing_Was_Capped", "Sizing_Binding_Constraint"). BUY-side only
+       (a SELL reduces exposure, so the cap does not apply).
+    2. Options-selling VRP regime gate (True_IVR > 50, VRP > 0.02, VIX < 30,
+       no CREDIT EVENT) -- per-symbol half from the same ``DailySignals``
+       row ("True_IVR", "VRP"); macro half (VIX, market regime) from the
+       persisted ``output/state_snapshot.json``. Thresholds are imported
+       from ``signals/vrp_premium_selling.py``, the module that already
+       enforces this identical rule, instead of being retyped here.
+    """
+    import math
+
     try:
-        from execution.risk_gate import PreTradeRiskGate, RiskContext
-        from execution.broker_base import OrderIntent, OrderType, OrderSide
-        
-        gate = PreTradeRiskGate()
-        
-        intent = OrderIntent(
-            symbol=ticker.upper(),
-            side=OrderSide(side.lower()),
-            qty=float(size),
-            order_type=OrderType.MARKET,
-            limit_price=None, 
-            strategy_id="compliance_check"
+        from signals.vrp_premium_selling import (
+            IVR_SELL_THRESHOLD,
+            VRP_MIN_THRESHOLD,
+            VIX_MAX_THRESHOLD,
         )
-        
-        passed, results = gate.run_all(intent, RiskContext())
-        
-        if passed:
-            return "compliance check PASSED: Order is allowed by risk gates."
-        else:
-            failed_checks = [r for r in results if not r.passed]
-            reasons = "; ".join(r.reason for r in failed_checks)
-            return f"compliance check FAILED: {reasons}"
     except Exception as e:
-         return f"compliance check unavailable: {str(e)}"
+        return f"compliance check unavailable: could not load VRP regime thresholds: {e}"
+
+    def _num(v):
+        try:
+            if v is None:
+                return None
+            f = float(v)
+            return None if math.isnan(f) or math.isinf(f) else f
+        except (TypeError, ValueError):
+            return None
+
+    ticker_u = ticker.upper().strip()
+    side_l = side.lower().strip()
+
+    checks: list[tuple[str, str, str]] = []  # (name, "PASS"/"FAIL"/"UNAVAILABLE", detail)
+
+    try:
+        columns, rows = _db_query(
+            """SELECT * FROM DailySignals
+               WHERE "Symbol" = ?
+               ORDER BY timestamp DESC LIMIT 1""",
+            (ticker_u,),
+        )
+    except Exception as e:
+        return f"compliance check unavailable: failed to query DailySignals for {ticker_u}: {e}"
+
+    row_data = dict(zip(columns, rows[0])) if rows else None
+
+    if row_data is None:
+        checks.append((
+            "kelly_sizing_cap", "UNAVAILABLE",
+            f"no DailySignals row found for {ticker_u} -- cannot evaluate Kelly cap",
+        ))
+        checks.append((
+            "vrp_premium_selling_regime", "UNAVAILABLE",
+            f"no DailySignals row found for {ticker_u} -- cannot evaluate VRP regime gate",
+        ))
+    else:
+        # ---- Check 1: Kelly sizing cap (BUY-side only) ----
+        if side_l not in ("buy", "long"):
+            checks.append((
+                "kelly_sizing_cap", "PASS",
+                f"{side_l.upper()} order -- Kelly sizing cap only applies to new/increased long exposure",
+            ))
+        else:
+            kelly = _num(row_data.get("Kelly Target"))
+            if kelly is None:
+                checks.append((
+                    "kelly_sizing_cap", "UNAVAILABLE",
+                    f"no Kelly Target recorded for {ticker_u}",
+                ))
+            else:
+                capped = row_data.get("Sizing_Was_Capped")
+                constraint = row_data.get("Sizing_Binding_Constraint") or ""
+                telemetry = f" (pipeline Sizing_Was_Capped={capped!r}, Sizing_Binding_Constraint={constraint!r})"
+                cap = _settings.KELLY_CAP
+                if abs(kelly) <= cap:
+                    checks.append((
+                        "kelly_sizing_cap", "PASS",
+                        f"Kelly Target {kelly:.4f} is within KELLY_CAP {cap:.2f}{telemetry}",
+                    ))
+                else:
+                    checks.append((
+                        "kelly_sizing_cap", "FAIL",
+                        f"Kelly Target {kelly:.4f} exceeds KELLY_CAP {cap:.2f}{telemetry}",
+                    ))
+
+        # ---- Check 2: options-selling VRP regime gate ----
+        true_ivr = _num(row_data.get("True_IVR"))
+        vrp = _num(row_data.get("VRP"))
+        if true_ivr is None or vrp is None:
+            missing = [n for n, v in (("True_IVR", true_ivr), ("VRP", vrp)) if v is None]
+            checks.append((
+                "vrp_premium_selling_regime", "UNAVAILABLE",
+                f"no {'/'.join(missing)} score recorded for {ticker_u}",
+            ))
+        else:
+            snap = _load_state_snapshot()
+            vix = _num(snap.get("vix")) if snap else None
+            regime = (snap.get("market_regime") or snap.get("regime")) if snap else None
+
+            violations = []
+            if true_ivr <= IVR_SELL_THRESHOLD:
+                violations.append(f"True_IVR {true_ivr:.1f} <= {IVR_SELL_THRESHOLD:.0f}")
+            if vrp <= VRP_MIN_THRESHOLD:
+                violations.append(f"VRP {vrp:.4f} <= {VRP_MIN_THRESHOLD:.2f}")
+            if vix is not None and vix >= VIX_MAX_THRESHOLD:
+                violations.append(f"VIX {vix:.1f} >= {VIX_MAX_THRESHOLD:.0f}")
+            if regime == "CREDIT EVENT":
+                violations.append("market regime is CREDIT EVENT")
+
+            if violations:
+                checks.append((
+                    "vrp_premium_selling_regime", "FAIL",
+                    "; ".join(violations),
+                ))
+            elif snap is None:
+                checks.append((
+                    "vrp_premium_selling_regime", "UNAVAILABLE",
+                    f"True_IVR {true_ivr:.1f} and VRP {vrp:.4f} clear the per-symbol half of the "
+                    "gate, but VIX/market-regime are unavailable (no output/state_snapshot.json) "
+                    "-- cannot fully evaluate the macro half",
+                ))
+            else:
+                checks.append((
+                    "vrp_premium_selling_regime", "PASS",
+                    f"True_IVR {true_ivr:.1f} > {IVR_SELL_THRESHOLD:.0f}, VRP {vrp:.4f} > "
+                    f"{VRP_MIN_THRESHOLD:.2f}, VIX {vix} < {VIX_MAX_THRESHOLD:.0f}, regime={regime}",
+                ))
+
+    statuses = [c[1] for c in checks]
+    if "FAIL" in statuses:
+        overall = "FAILED"
+    elif "PASS" in statuses:
+        overall = "PASSED"
+    else:
+        overall = "UNAVAILABLE"
+
+    lines = [f"# Order Compliance Check -- {ticker_u} {side_l.upper()} {size}\n"]
+    lines.append(f"**Overall verdict: {overall}**\n")
+    for name, status, detail in checks:
+        lines.append(f"- **{name}**: {status} -- {detail}")
+    return "\n".join(lines)
 
 @mcp.prompt()
 def pre_market_briefing() -> str:
