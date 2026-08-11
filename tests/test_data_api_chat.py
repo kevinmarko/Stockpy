@@ -184,9 +184,14 @@ def _fake_google_genai_module(monkeypatch, captured):
             self.role = role
             self.parts = parts
 
+    class _FakeGenerateContentConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
     class _FakeTypesModule:
         Content = _FakeContent
         Part = _FakePart
+        GenerateContentConfig = _FakeGenerateContentConfig
 
     class _FakeModels:
         @staticmethod

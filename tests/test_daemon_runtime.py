@@ -48,8 +48,29 @@ def _poll_until(predicate, *, timeout: float = 3.0, interval: float = 0.02) -> b
 @pytest.fixture(autouse=True)
 def _patch_data_engine_construction(monkeypatch):
     """Force the credentials-ABSENT branch so start() always builds a
-    MockDataEngine and never touches FRED / real DataEngine construction."""
-    monkeypatch.setattr(daemon_runtime.os.path, "exists", lambda p: False)
+    MockDataEngine and never touches FRED / real DataEngine construction.
+
+    Scoped to the literal "credentials.json" path daemon_runtime.py:255
+    actually checks (``os.path.exists("credentials.json")``) -- NOT a blanket
+    ``lambda p: False``. ``daemon_runtime.os`` is the real, process-wide
+    ``os`` module (not a copy), so an unscoped patch here replaces
+    ``os.path.exists`` for the whole process, not just this one call site.
+    Under Python 3.13+ (this repo is pinned to 3.12 via .venv, but a stray
+    unscoped patch would silently be wrong on any newer interpreter),
+    ``pathlib.Path.exists()`` was rewritten to delegate straight to
+    ``os.path.exists`` -- so a blanket ``False`` also makes every
+    ``Path(...).exists()`` check in the SAME process report "missing" during
+    these tests, including ``runtime_flags.load_store()``'s real
+    ``resolved.exists()`` check against a genuinely-written test fixture
+    file. That silently emptied ApplyReport in
+    TestMaybeRefreshSettingsAppliesChanges/IntervalHook/NeverRaises.
+    """
+    real_exists = daemon_runtime.os.path.exists
+    monkeypatch.setattr(
+        daemon_runtime.os.path,
+        "exists",
+        lambda p: False if p == "credentials.json" else real_exists(p),
+    )
 
 
 @pytest.fixture(autouse=True)

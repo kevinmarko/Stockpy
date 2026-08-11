@@ -21,6 +21,7 @@ This module MAY import the heavy calculation engines (unlike ``state_api.py`` /
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import datetime
@@ -51,6 +52,7 @@ from processing_engine import ProcessingEngine
 from forecasting_engine import ForecastingEngine
 from technical_options_engine import build_premium_directive, validate_directive_integrity
 from sentiment_risk_engine import SentimentRiskEngine
+from signals.news_catalyst import get_symbol_news_catalyst_details
 from signals.registry import global_registry
 from signals.aggregator import SignalAggregator
 from signals.base import SignalContext
@@ -256,7 +258,10 @@ def get_options(symbol: str) -> Dict[str, Any]:
 @app.get("/metrics/sentiment/{symbol}", dependencies=[Depends(require_token)])
 async def get_sentiment(symbol: str) -> Dict[str, Any]:
     """Sentiment Dynamics for ``symbol`` — Antigravity Agent news sentiment
-    plus GJR-GARCH asymmetric-volatility persistence.
+    plus GJR-GARCH asymmetric-volatility persistence, merged with a
+    ``signals.news_catalyst.get_symbol_news_catalyst_details`` news-catalyst
+    detail bundle (headlines, per-headline FinBERT/lexicon scores, earnings
+    proximity).
 
     Honesty contract (CONSTRAINT #4): an unconfigured/unavailable agent (SDK
     missing, no ``GEMINI_API_KEY``, or a failed live call) is a legitimate,
@@ -270,6 +275,19 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
     ``SentimentRiskEngine.get_live_sentiment`` is the single fixed engine call
     shared with the Streamlit ``gui/panels/sentiment_dynamics.py`` panel — one
     honesty contract enforced centrally, not two divergent implementations.
+    This handler does NOT modify ``sentiment_risk_engine.py`` — the two
+    results are combined here, at the API boundary, matching that module's
+    own docstring ("never touches ``signals/`` or ``StrategyEngine``").
+
+    The two calls run CONCURRENTLY via ``asyncio.gather`` — the news-catalyst
+    helper does blocking network I/O + FinBERT inference, so it is wrapped in
+    ``asyncio.to_thread`` rather than awaited inline (which would stall the
+    event loop for every other concurrent request). A news-catalyst failure
+    degrades that portion of the response to
+    ``headlines: [], earnings_catalyst: None, provider_used: "none"``
+    (logged, not propagated) — the Antigravity-agent fields above keep their
+    own independent honesty contract regardless of how the news-catalyst call
+    fares.
     """
     symbol = symbol.upper()
     bars = _fetch_bars(symbol, 252)
@@ -280,12 +298,21 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
     returns = bars['Close'].pct_change().dropna()
     date = datetime.now()
 
-    try:
-        engine = SentimentRiskEngine()
-        sentiment_result = await engine.get_live_sentiment(symbol, date, returns)
-    except Exception as exc:
-        logger.warning("metrics_api: sentiment dynamics failed for %s: %s", symbol, exc)
+    engine = SentimentRiskEngine()
+    sentiment_task = engine.get_live_sentiment(symbol, date, returns)
+    catalyst_task = asyncio.to_thread(get_symbol_news_catalyst_details, symbol)
+
+    sentiment_result, catalyst_result = await asyncio.gather(
+        sentiment_task, catalyst_task, return_exceptions=True
+    )
+
+    if isinstance(sentiment_result, BaseException):
+        logger.warning("metrics_api: sentiment dynamics failed for %s: %s", symbol, sentiment_result)
         raise HTTPException(status_code=404, detail="Sentiment calculation failed")
+
+    if isinstance(catalyst_result, BaseException):
+        logger.warning("metrics_api: news catalyst details failed for %s: %s", symbol, catalyst_result)
+        catalyst_result = {"headlines": [], "earnings_catalyst": None, "provider_used": "none"}
 
     result = {
         "ticker": sentiment_result.ticker,
@@ -295,6 +322,12 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
         "credibility_score": sentiment_result.credibility_score,
         "volatility_persistence": sentiment_result.volatility_persistence,
         "source": sentiment_result.source,
+        "headlines": catalyst_result.get("headlines", []),
+        "earnings_catalyst": catalyst_result.get("earnings_catalyst"),
+        "provider_used": catalyst_result.get("provider_used", "none"),
+        "source_breakdown": catalyst_result.get("source_breakdown", {}),
+        "raw_sentiment_avg": catalyst_result.get("raw_sentiment_avg"),
+        "dampened_sentiment_score": catalyst_result.get("dampened_sentiment_score"),
     }
 
     return _clean_nan(result)

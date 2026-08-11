@@ -12,6 +12,8 @@ import {
 } from "recharts";
 import { api } from "../api/client";
 import type {
+  EarningsCatalystStatus,
+  HeadlineSentimentItem,
   MacroHistorySeries,
   SentimentDynamics as SentimentDynamicsData,
   SentimentHistory,
@@ -23,7 +25,7 @@ import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from 
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
-import { fmtDate, fmtNum } from "../format";
+import { fmtDate, fmtDateTime, fmtNum } from "../format";
 import { seriesColor, theme } from "../theme";
 
 function getScoreColor(score: number | null): string {
@@ -31,6 +33,174 @@ function getScoreColor(score: number | null): string {
   if (score > 0.2) return theme.growth;
   if (score < -0.2) return theme.decline;
   return theme.textSecondary;
+}
+
+/**
+ * Earnings-proximity dampening status pill (`signals/news_catalyst.py`'s
+ * `_earnings_proximity_multiplier`). Red/"Suppressed" = fully zeroed (0.0x)
+ * inside the pre-earnings blackout window; amber/"Dampened" = halved (0.5x)
+ * — covers BOTH the multi-day run-up before earnings AND the ~24h window
+ * right after the print; green/"Clear" otherwise, including the honest
+ * "no earnings date currently scheduled" case (never implied as a confirmed
+ * future date). Renders nothing when `earnings_catalyst` is `null`.
+ */
+function EarningsCatalystBanner({ c }: { c: EarningsCatalystStatus | null }) {
+  if (c == null) return null;
+  const dateText = fmtDateTime(c.next_earnings_date);
+  const cls =
+    c.status === "suppressed"
+      ? "badge badge-bad"
+      : c.status === "dampened"
+        ? "badge badge-warn"
+        : "badge badge-good";
+  const label =
+    c.status === "suppressed" ? "Suppressed" : c.status === "dampened" ? "Dampened" : "Clear";
+
+  let copy: string;
+  if (c.status === "suppressed") {
+    copy = `News sentiment is fully suppressed (${fmtNum(c.multiplier, 1)}x) inside the pre-earnings blackout window${c.next_earnings_date ? ` — next earnings ${dateText}` : ""}. The live score isn't reliable this close to a print.`;
+  } else if (c.status === "dampened") {
+    copy = `News sentiment is dampened (${fmtNum(c.multiplier, 1)}x) — this covers both the run-up in the days leading into earnings and the roughly 24-hour window right after the print, while the reaction is still settling${c.next_earnings_date ? ` (next earnings ${dateText})` : ""}.`;
+  } else {
+    copy = c.next_earnings_date
+      ? `No earnings-driven dampening in effect right now — next earnings ${dateText}.`
+      : "No earnings-driven dampening in effect — no earnings date currently scheduled.";
+  }
+
+  return (
+    <div
+      className="card card-pad"
+      data-testid="earnings-catalyst-banner"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "var(--s-2-5)",
+        marginBottom: "var(--s-3)",
+        flexWrap: "wrap",
+      }}
+    >
+      <span className={cls} data-testid="earnings-catalyst-badge">
+        {label}
+      </span>
+      <span style={{ color: theme.textSecondary, fontSize: "var(--t-callout)" }}>{copy}</span>
+    </div>
+  );
+}
+
+/** Tiny 3-segment positive/neutral/negative probability bar for one headline. */
+function HeadlineProbabilityBar({ p }: { p: HeadlineSentimentItem["probabilities"] }) {
+  const total = p.positive + p.neutral + p.negative;
+  const safeTotal = total > 0 ? total : 1;
+  return (
+    <div
+      title={`positive ${fmtNum(p.positive, 2)} / neutral ${fmtNum(p.neutral, 2)} / negative ${fmtNum(p.negative, 2)}`}
+      style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", width: 84, flex: "0 0 auto" }}
+    >
+      <div style={{ width: `${(p.positive / safeTotal) * 100}%`, background: theme.growth }} />
+      <div style={{ width: `${(p.neutral / safeTotal) * 100}%`, background: theme.textMuted }} />
+      <div style={{ width: `${(p.negative / safeTotal) * 100}%`, background: theme.decline }} />
+    </div>
+  );
+}
+
+/**
+ * The real scored-headline feed backing `sentiment_score` (FMP-primary,
+ * Finnhub-fallback — `signals/news_catalyst.py`). Publisher/title/url/date
+ * come straight from `headlines`; `provider_used` is surfaced as a small
+ * badge when a real provider actually served this request. Honest empty
+ * states: "News provider not configured" when neither is set up at all,
+ * vs. "No recent headlines" when a provider is configured but genuinely
+ * returned nothing this request — never a fabricated headline.
+ */
+function HeadlineFeed({
+  headlines,
+  providerUsed,
+}: {
+  headlines: HeadlineSentimentItem[];
+  providerUsed: SentimentDynamicsData["provider_used"];
+}) {
+  return (
+    <section
+      className="card card-pad"
+      style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}
+      data-testid="headline-feed"
+    >
+      <div
+        className="drag-handle"
+        style={{
+          padding: "var(--s-3)",
+          borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
+          cursor: "grab",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "var(--s-2)",
+        }}
+      >
+        <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Headlines</h2>
+        {providerUsed !== "none" && (
+          <span className="chip" data-testid="headline-feed-provider">
+            {providerUsed}
+          </span>
+        )}
+      </div>
+      <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
+        {headlines.length === 0 && (
+          <div className="empty" data-testid="headline-feed-empty">
+            {providerUsed === "none" ? "News provider not configured" : "No recent headlines"}
+          </div>
+        )}
+        {headlines.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
+            {headlines.map((h, i) => (
+              <div
+                key={i}
+                data-testid="headline-item"
+                style={{
+                  borderBottom: i < headlines.length - 1 ? `1px solid ${theme.border}` : "none",
+                  paddingBottom: i < headlines.length - 1 ? "var(--s-2-5)" : 0,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "var(--s-2)",
+                    marginBottom: "var(--s-1)",
+                  }}
+                >
+                  <span style={{ fontWeight: 600, color: theme.textSecondary, fontSize: "var(--t-caption)" }}>
+                    {h.publisher}
+                  </span>
+                  <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>
+                    {fmtDateTime(h.published_at)}
+                  </span>
+                </div>
+                {h.url ? (
+                  <a
+                    href={h.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: theme.textPrimary, fontSize: "var(--t-callout)", textDecoration: "none" }}
+                  >
+                    {h.title}
+                  </a>
+                ) : (
+                  <span style={{ color: theme.textPrimary, fontSize: "var(--t-callout)" }}>{h.title}</span>
+                )}
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", marginTop: "var(--s-1-5)" }}>
+                  <span className="num" style={{ color: getScoreColor(h.score), fontSize: "var(--t-caption)" }}>
+                    {fmtNum(h.score, 2)}
+                  </span>
+                  <HeadlineProbabilityBar p={h.probabilities} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
 }
 
 function Breakdown({ d }: { d: SentimentDynamicsData }) {
@@ -297,6 +467,8 @@ export function SentimentDynamics() {
 
       <SymbolInput initial={symbol} onSubmit={setSymbol} pending={loading} />
 
+      {!loading && !error && data && <EarningsCatalystBanner c={data.earnings_catalyst} />}
+
       <div style={{ marginTop: "var(--s-4)" }}>
         <DynamicGrid layoutKey="sentiment-layout" defaultLayouts={{}}>
           <div key="breakdown">
@@ -306,6 +478,12 @@ export function SentimentDynamics() {
           </div>
           <div key="chart">
             <SentimentVixChart symbol={symbol} />
+          </div>
+          <div key="headlines">
+            {loading && <Loading lines={3} />}
+            {!loading && !error && data && (
+              <HeadlineFeed headlines={data.headlines} providerUsed={data.provider_used} />
+            )}
           </div>
         </DynamicGrid>
       </div>

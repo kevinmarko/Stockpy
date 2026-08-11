@@ -62,7 +62,10 @@ import type {
   PerfRange,
   PerformanceResponse,
   PilotDetail,
+  PilotSimulationRequest,
+  PilotSimulationResult,
   PilotSummary,
+  Holding,
   Portfolio,
   PortfolioAttribution,
   RealizedPerformance,
@@ -320,6 +323,13 @@ const liveApi = {
     http<PerformanceResponse>(
       `/pilots/${encodeURIComponent(id)}/performance?range=${range}`
     ),
+  getHoldings: (id: string) =>
+    http<Holding[]>(`/pilots/${encodeURIComponent(id)}/holdings`),
+  simulatePilotAllocation: (pilotId: string, payload: PilotSimulationRequest) =>
+    http<PilotSimulationResult>(`/pilots/${encodeURIComponent(pilotId)}/simulate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getUniverse: () => http<UniverseResponse>("/universe"),
   // Ranked BUY picks from the latest snapshot (pilots base, :8602).
   getRecommendations: (limit = 25) =>
