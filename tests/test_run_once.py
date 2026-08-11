@@ -175,6 +175,7 @@ class TestBuildUniverse:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
         with patch("main._load_tickers_from_sheet2", return_value=[]):
@@ -185,6 +186,7 @@ class TestBuildUniverse:
     ) -> None:
         """Sheet2 is consulted only when held + watchlist are both empty."""
         monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
         with patch("main._load_tickers_from_sheet2", return_value=["SPY", "QQQ"]):
@@ -456,6 +458,7 @@ class TestRunOnce:
     ) -> None:
         """No held symbols and no watchlist → empty RunResult; advisory never called."""
         monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         mock_snap.return_value = _make_snapshot(positions={})
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)

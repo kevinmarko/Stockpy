@@ -396,6 +396,8 @@ def write_follow_source(
     prior_mirrored: Optional[List[Dict[str, Any]]] = None,
     output_dir: Optional[Any] = None,
     now: Optional[datetime] = None,
+    sizing_tag: Optional[str] = None,
+    kelly_weight: Optional[float] = None,
 ) -> Optional[Path]:
     """Write one follow's source file: its pure current targets
     (:func:`pilots.mirror.build_follow_targets`) plus any ``prior_mirrored``
@@ -411,7 +413,10 @@ def write_follow_source(
     pilot_id = str(getattr(pilot, "id", "unknown"))
     from pilots.mirror import build_follow_targets  # lazy: avoid a module-load cycle
 
-    targets = build_follow_targets(pilot, amount, snapshot)
+    targets = build_follow_targets(
+        pilot, amount, snapshot,
+        sizing_tag=sizing_tag, kelly_weight=kelly_weight
+    )
     target_symbols = {t["symbol"] for t in targets}
     dropped: List[Dict[str, Any]] = []
     for row in (prior_mirrored or []):
