@@ -61,6 +61,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/agentic", label: "Agent", ico: Bot, match: (p) => p.startsWith("/agentic"), section: "primary" },
   // Research
   { to: "/marketplace", label: "Pilots", ico: Compass, match: (p) => p.startsWith("/marketplace") || p.startsWith("/pilots"), section: "research" },
+  { to: "/pilots-manager", label: "Pilots Manager", ico: Bot, match: (p) => p.startsWith("/pilots-manager"), section: "research" },
   { to: "/compare", label: "Compare", ico: Scale, match: (p) => p.startsWith("/compare"), section: "research" },
   { to: "/models", label: "Models", ico: BrainCircuit, match: (p) => p.startsWith("/models"), section: "research" },
   { to: "/strategy-health", label: "Strategy Health", ico: Shield, match: (p) => p.startsWith("/strategy-health"), section: "research" },

@@ -273,6 +273,8 @@ export interface FollowResult {
   queue_written: boolean;
   notional_cap: number; // ROBINHOOD_MAX_NOTIONAL_PER_ORDER
   min_amount: number;
+  sizing_path?: string;
+  kelly_weight?: number;
   notice: string; // human-readable gating notice
 }
 
