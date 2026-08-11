@@ -269,6 +269,101 @@ def test_options_404_no_bars(monkeypatch):
     assert resp.status_code == 404
 
 
+def test_options_passes_macro_proxy_and_vrp_none_from_snapshot(monkeypatch):
+    """Finding 6 regression: previously this endpoint called
+    ``build_premium_directive(symbol, bars, spot_price=..., is_stale=...)``
+    with NO ``macro_dto``/``vrp`` -- the VRP regime gate (VIX>=30 / CREDIT
+    EVENT) inside the engine silently never fired, matching the 4 other
+    production callers is what fixes this. Verify the endpoint now threads a
+    ``_MacroProxy`` built from the persisted state snapshot's vix/market_regime,
+    plus an explicit ``vrp=None``, exactly like
+    options_ondemand.py/reporting/options_snapshot.py/gui/panels/options_matrix.py."""
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider(quote=_quote()))
+    monkeypatch.setattr(
+        metrics_api, "load_snapshot", lambda: {"vix": 35.0, "market_regime": "CREDIT EVENT"}
+    )
+
+    captured = {}
+
+    def _fake_directive(symbol, df, *, spot_price, is_stale=False, **kw):
+        captured.update(kw)
+        return {"Strategy": "Cash", "Action": "Wait", "Net_Premium": 0.0}
+
+    monkeypatch.setattr(metrics_api, "build_premium_directive", _fake_directive)
+    monkeypatch.setattr(
+        metrics_api, "validate_directive_integrity",
+        lambda d: {"ok": True, "issues": []},
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/options/AAPL")
+    assert resp.status_code == 200
+    assert "macro_dto" in captured
+    macro_dto = captured["macro_dto"]
+    assert macro_dto.vix == 35.0
+    assert macro_dto.market_regime == "CREDIT EVENT"
+    assert captured.get("vrp") is None
+
+
+def test_options_macro_proxy_neutral_default_without_snapshot(monkeypatch):
+    """No persisted snapshot -> neutral defaults (vix=15.0/"RISK ON"), matching
+    ``options_ondemand.py``'s MACRO_DEFAULT_VIX/MACRO_DEFAULT_REGIME -- "no
+    override" rather than silently gating everything to Cash/Wait."""
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider(quote=_quote()))
+    monkeypatch.setattr(metrics_api, "load_snapshot", lambda: None)
+
+    captured = {}
+
+    def _fake_directive(symbol, df, *, spot_price, is_stale=False, **kw):
+        captured.update(kw)
+        return {"Strategy": "Put Credit Spread", "Net_Premium": 1.0}
+
+    monkeypatch.setattr(metrics_api, "build_premium_directive", _fake_directive)
+    monkeypatch.setattr(
+        metrics_api, "validate_directive_integrity",
+        lambda d: {"ok": True, "issues": []},
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/options/AAPL")
+    assert resp.status_code == 200
+    macro_dto = captured["macro_dto"]
+    assert macro_dto.vix == 15.0
+    assert macro_dto.market_regime == "RISK ON"
+    assert captured.get("vrp") is None
+
+
+def test_options_real_engine_gates_high_vix_snapshot_to_cash_wait(monkeypatch):
+    """End-to-end (no mocked engine): the persisted snapshot's VIX >= 30 must
+    genuinely gate the real ``technical_options_engine.build_premium_directive``
+    call to Cash/Wait, proving the wiring fix has a real effect and not just a
+    passed-but-ignored kwarg."""
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider(quote=_quote()))
+    monkeypatch.setattr(
+        metrics_api, "load_snapshot", lambda: {"vix": 35.0, "market_regime": "RISK ON"}
+    )
+    # Force the HIGH IVR REGIME branch deterministically regardless of the
+    # synthetic bars' realized-vol-derived IVR proxy, so the only thing that
+    # can be varying the outcome is the VRP regime gate under test.
+    from technical_options_engine import build_premium_directive as _real_directive
+
+    def _real_directive_low_threshold(*args, **kwargs):
+        kwargs.setdefault("ivr_sell_threshold", 0.0)
+        return _real_directive(*args, **kwargs)
+
+    monkeypatch.setattr(metrics_api, "build_premium_directive", _real_directive_low_threshold)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/options/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["Strategy"] == "Cash"
+    assert body["Action"] == "Wait"
+
+
 # ---------------------------------------------------------------------------
 # GET /metrics/models/comparison  (honesty: no fabricated performance curve)
 # ---------------------------------------------------------------------------

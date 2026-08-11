@@ -315,6 +315,58 @@ class TestMarketResidualization:
         )
         assert 0.0 <= value <= 1.0
 
+    def test_dropping_one_midwindow_composite_date_does_not_shift_r2(self):
+        """Finding 20 regression: previously the stock/market PRICE legs were
+        inner-joined against the already-differenced composite return column
+        BEFORE differencing -- so one date missing from the composite dropped
+        the corresponding stock/market PRICE row too, and the pct_change()
+        computed AFTER the join then spanned TWO days for the row immediately
+        after the gap, corrupting that one return and, through it, the whole
+        trailing window's cov/var/corr statistics. With returns computed
+        BEFORE the join, dropping one composite date removes only that one
+        row from the final 3-way alignment -- the OTHER returns are
+        unaffected, so R2 over a `window` that still has plenty of remaining
+        observations should barely move."""
+        rng = np.random.RandomState(4242)
+        n = 400
+        window = 60
+        mkt = rng.normal(0.0, 0.012, n)
+        shared = rng.normal(0.0, 0.008, n)  # non-market, ETF-transmitted shock
+        stock = 1.0 * mkt + shared + rng.normal(0.0, 0.001, n)
+        etf = 1.0 * mkt + shared + rng.normal(0.0, 0.001, n)
+
+        stock_bars = _bars(stock)
+        market_bars = _bars(mkt)
+        composite = _bars(etf)["Close"].pct_change().dropna()
+
+        r2_full = compute_market_residual_r2(
+            stock_bars, composite, market_bars, window=window, min_obs=window,
+        )
+        assert not math.isnan(r2_full)
+
+        # Drop a single date well inside the trailing `window` (not at the
+        # very tail, and not the whole-history edge), leaving stock_bars and
+        # market_bars themselves fully contiguous -- the realistic scenario
+        # of a composite with one missing constituent-basket date. gap_pos=-10
+        # is empirically where the pre-fix join-order bug's corruption is
+        # most pronounced for this seed (diff ~0.16 pre-fix vs ~0.0003
+        # post-fix) -- picked by direct measurement against the reverted
+        # buggy code, not tuned to make the assertion trivially pass.
+        gap_date = composite.index[-10]
+        composite_gapped = composite.drop(gap_date)
+
+        r2_gapped = compute_market_residual_r2(
+            stock_bars, composite_gapped, market_bars, window=window, min_obs=window,
+        )
+        assert not math.isnan(r2_gapped)
+
+        assert abs(r2_full - r2_gapped) < 0.01, (
+            f"a single dropped mid-window composite date shifted R2 by "
+            f"{abs(r2_full - r2_gapped):.4f} (full={r2_full:.4f}, "
+            f"gapped={r2_gapped:.4f}) -- the join-order bug corrupts the "
+            f"return computed for the row after the gap"
+        )
+
 
 class TestMarketResidualR2Degradation:
     """Every honesty-contract path: NaN, never 0.0."""
@@ -374,6 +426,25 @@ class TestMarketResidualR2Degradation:
         assert math.isnan(
             compute_market_residual_r2(stock, composite, flat_market, window=60, min_obs=60)
         )
+
+    def test_near_flat_market_series_is_nan_not_corrupted_r2(self):
+        """Finding 27 regression: a near-flat (not bit-identical) market-proxy
+        window produces a var_m that is near-zero but not exactly <= 0.0 due
+        to floating-point noise -- the old exact `<= 0.0` guard let that
+        near-zero value through, corrupting beta_i/beta_e (division by a
+        near-zero var_m) and, downstream, R2. The fixed `_DEGENERATE_STD`
+        (1e-12) guard must catch it and return NaN."""
+        n = 200
+        rng = np.random.RandomState(60)
+        # Near-flat market with floating-point-scale noise (~1e-10), NOT
+        # bit-identical -- an exact `<= 0.0` check would not catch this.
+        near_flat_market = _bars(rng.normal(0, 1e-10, n))
+        stock = _bars(rng.normal(0, 0.01, n))
+        composite = _bars(rng.normal(0, 0.01, n))["Close"].pct_change().dropna()
+        result = compute_market_residual_r2(
+            stock, composite, near_flat_market, window=60, min_obs=60,
+        )
+        assert math.isnan(result)
 
     def test_disjoint_date_ranges_are_nan(self):
         rng = np.random.RandomState(71)

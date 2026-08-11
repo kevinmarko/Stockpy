@@ -55,6 +55,7 @@ from signals.registry import global_registry
 from signals.aggregator import SignalAggregator
 from signals.base import SignalContext
 from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
+from pilots.scoring import load_snapshot
 import engine.advisory
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,41 @@ def _current_price(symbol: str, bars: pd.DataFrame) -> float:
         return float(get_provider().get_latest_quote(symbol).price)
     except (MarketDataError, Exception):  # noqa: B014 - defensive fallback
         return float(bars["Close"].iloc[-1])
+
+
+class _MacroProxy:
+    """``MacroEconomicDTO``-shaped stub (``.vix``/``.market_regime`` only) so
+    the VRP regime gate inside ``build_premium_directive`` fires without a
+    live FRED round-trip. Mirrors ``gui/panels/options_matrix.py::_MacroProxy``
+    / ``options_ondemand.py::_MacroProxy`` / ``reporting/options_snapshot.py::_MacroProxy``."""
+
+    def __init__(self, vix: float, market_regime: str):
+        self.vix = vix
+        self.market_regime = market_regime
+
+
+# Neutral defaults — the VRP regime gate in build_premium_directive only fires
+# on POSITIVE evidence of stress (VIX >= 30 or a CREDIT EVENT regime), so a
+# neutral default here reproduces "no override" rather than silently gating.
+# Mirrors options_ondemand.py's MACRO_DEFAULT_VIX/MACRO_DEFAULT_REGIME.
+_MACRO_DEFAULT_VIX = 15.0
+_MACRO_DEFAULT_REGIME = "RISK ON"
+
+
+def _macro_from_snapshot() -> tuple:
+    """Extract ``(vix, market_regime)`` from the persisted state snapshot,
+    falling back to neutral defaults when unavailable/malformed. Mirrors
+    ``options_ondemand.py::macro_from_snapshot``. Never raises."""
+    snapshot = load_snapshot()
+    if not isinstance(snapshot, dict):
+        return _MACRO_DEFAULT_VIX, _MACRO_DEFAULT_REGIME
+    raw_vix = snapshot.get("vix")
+    try:
+        vix = float(raw_vix) if raw_vix is not None else _MACRO_DEFAULT_VIX
+    except (TypeError, ValueError):
+        vix = _MACRO_DEFAULT_VIX
+    regime = str(snapshot.get("market_regime") or _MACRO_DEFAULT_REGIME)
+    return vix, regime
 
 
 @app.get("/health")
@@ -197,7 +233,16 @@ def get_options(symbol: str) -> Dict[str, Any]:
     except Exception:
         spot = float(bars["Close"].iloc[-1])
     try:
-        directive = build_premium_directive(symbol, bars, spot_price=spot, is_stale=is_stale)
+        vix, market_regime = _macro_from_snapshot()
+        macro_proxy = _MacroProxy(vix, market_regime)
+        directive = build_premium_directive(
+            symbol,
+            bars,
+            spot_price=spot,
+            is_stale=is_stale,
+            macro_dto=macro_proxy,
+            vrp=None,  # VRP requires an options chain — left None to skip that gate
+        )
         integrity = validate_directive_integrity(directive)
         directive = dict(directive)
         directive["Integrity_OK"] = bool(integrity.get("ok"))

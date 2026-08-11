@@ -120,6 +120,82 @@ def test_low_ivr_bullish_yields_call_debit_spread():
     assert directive["Realizable_Daily_Theta"] != directive["Realizable_Daily_Theta"]
 
 
+def test_call_debit_spread_legs_carry_delta_and_integrity_catches_mispricing():
+    """Finding 15 regression: Call Debit Spread legs previously omitted
+    ``Delta`` entirely, so ``validate_directive_integrity`` silently
+    SKIPPED the delta-tolerance check for this strategy (a mispriced leg
+    would pass integrity by omission, not by actually being correct)."""
+    rec = OptionsPricingRecommender(stock_price=100.0)
+    directive = rec.generate_strategy_pricing_matrix(
+        true_ivr=20.0, current_iv=0.18, trend_bias="Bullish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(),
+    )
+    assert directive["Strategy"] == "Call Debit Spread"
+    legs = directive["Legs"]
+    long_leg = next(l for l in legs if l["Side"] == "Long")
+    short_leg = next(l for l in legs if l["Side"] == "Short")
+    assert "Delta" in long_leg
+    assert "Delta" in short_leg
+    assert abs(long_leg["Delta"] - EXPECTED_DELTA_TARGETS[("Call Debit Spread", "Long", "Call")]) <= 0.05
+    assert abs(short_leg["Delta"] - EXPECTED_DELTA_TARGETS[("Call Debit Spread", "Short", "Call")]) <= 0.05
+
+    integrity = validate_directive_integrity(directive)
+    assert integrity["ok"], integrity["issues"]
+
+    # A mispriced leg now actually FAILS integrity instead of silently
+    # passing by omission of the Delta key.
+    mispriced = dict(directive)
+    mispriced["Legs"] = [
+        {**long_leg, "Delta": 0.05},  # far off the 0.50 target
+        short_leg,
+    ]
+    bad_integrity = validate_directive_integrity(mispriced)
+    assert not bad_integrity["ok"]
+
+
+def test_put_debit_spread_legs_carry_delta_and_integrity_catches_mispricing():
+    """Finding 15 regression, Bearish/Low-IVR Put Debit Spread branch."""
+    rec = OptionsPricingRecommender(stock_price=100.0)
+    directive = rec.generate_strategy_pricing_matrix(
+        true_ivr=20.0, current_iv=0.18, trend_bias="Bearish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(),
+    )
+    assert directive["Strategy"] == "Put Debit Spread"
+    legs = directive["Legs"]
+    long_leg = next(l for l in legs if l["Side"] == "Long")
+    short_leg = next(l for l in legs if l["Side"] == "Short")
+    assert "Delta" in long_leg
+    assert "Delta" in short_leg
+    assert abs(long_leg["Delta"] - EXPECTED_DELTA_TARGETS[("Put Debit Spread", "Long", "Put")]) <= 0.05
+    assert abs(short_leg["Delta"] - EXPECTED_DELTA_TARGETS[("Put Debit Spread", "Short", "Put")]) <= 0.05
+
+    integrity = validate_directive_integrity(directive)
+    assert integrity["ok"], integrity["issues"]
+
+    mispriced = dict(directive)
+    mispriced["Legs"] = [
+        {**long_leg, "Delta": -0.05},  # far off the -0.50 target
+        short_leg,
+    ]
+    bad_integrity = validate_directive_integrity(mispriced)
+    assert not bad_integrity["ok"]
+
+
+def test_neutral_ivr_bearish_put_debit_spread_legs_carry_delta():
+    """Finding 15 regression, the THIRD (NEUTRAL IVR REGIME) Put Debit Spread
+    branch -- identical fix needed, separate code path."""
+    rec = OptionsPricingRecommender(stock_price=100.0)
+    directive = rec.generate_strategy_pricing_matrix(
+        true_ivr=40.0, current_iv=0.22, trend_bias="Bearish", target_dte=30,
+        vrp=None, macro_dto=_MacroProxy(),
+    )
+    assert directive["Strategy"] == "Put Debit Spread"
+    legs = directive["Legs"]
+    assert all("Delta" in leg for leg in legs)
+    integrity = validate_directive_integrity(directive)
+    assert integrity["ok"], integrity["issues"]
+
+
 def test_call_debit_spread_directive_carries_nan_not_zero_theta_in_full_row():
     """End-to-end: build_premium_directive's hydrated row must not silently
     coerce the engine's honest NaN theta into a fabricated 0.0 for any

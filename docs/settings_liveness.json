@@ -411,7 +411,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 729,
+    "attr": 730,
     "factory_param": 4,
     "getattr_const": 251,
     "os_environ": 25
@@ -614,7 +614,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/metrics_api.py:70",
+        "site": "api/metrics_api.py:71",
         "via": []
       },
       {
@@ -1952,7 +1952,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3722",
+        "site": "investyo_mcp_server.py:3770",
         "via": []
       }
     ],
@@ -1972,7 +1972,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3674",
+        "site": "investyo_mcp_server.py:3722",
         "via": []
       }
     ],
@@ -2012,7 +2012,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3682",
+        "site": "investyo_mcp_server.py:3730",
         "via": []
       }
     ],

@@ -1861,6 +1861,134 @@ class TestGetOptionsDirective:
         assert "Realizable Daily Theta**: N/A" in result
         assert "nan" not in result.lower().split("```json")[0]
 
+    def _write_snapshot(self, tmp_path, data):
+        (tmp_path / "output").mkdir(exist_ok=True)
+        (tmp_path / "output" / "state_snapshot.json").write_text(
+            json.dumps(data), encoding="utf-8"
+        )
+
+    def test_passes_macro_proxy_and_vrp_none_from_snapshot(self, monkeypatch, tmp_path):
+        """Finding 7 regression: previously this tool called
+        ``build_premium_directive(sym, bars, spot_price=..., is_stale=...)``
+        with NO ``macro_dto``/``vrp`` -- the VRP regime gate (VIX>=30 / CREDIT
+        EVENT) inside the engine silently never fired. Verify the tool now
+        threads a ``_MacroProxy`` built from the persisted state snapshot's
+        vix/market_regime, plus an explicit ``vrp=None``, matching the 4 other
+        production callers of ``build_premium_directive``."""
+        import technical_options_engine as toe_mod
+        from settings import settings
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
+        self._write_snapshot(tmp_path, {"vix": 35.0, "market_regime": "CREDIT EVENT"})
+
+        captured = {}
+
+        def _fake_directive(symbol, bars, *, spot_price, is_stale=False, **kw):
+            captured.update(kw)
+            return self._directive()
+
+        monkeypatch.setattr(toe_mod, "build_premium_directive", _fake_directive)
+        monkeypatch.setattr(
+            toe_mod,
+            "validate_directive_integrity",
+            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
+        )
+        _patch_advisory_inputs(monkeypatch)
+        self._patch_bars_provider(monkeypatch)
+
+        srv.get_options_directive("AAPL")
+
+        assert "macro_dto" in captured
+        macro_dto = captured["macro_dto"]
+        assert macro_dto.vix == 35.0
+        assert macro_dto.market_regime == "CREDIT EVENT"
+        assert captured.get("vrp") is None
+
+    def test_macro_proxy_neutral_default_without_snapshot(self, monkeypatch, tmp_path):
+        """No persisted snapshot -> neutral defaults (vix=15.0/"RISK ON"),
+        matching options_ondemand.py's MACRO_DEFAULT_VIX/MACRO_DEFAULT_REGIME."""
+        import technical_options_engine as toe_mod
+        from settings import settings
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
+
+        captured = {}
+
+        def _fake_directive(symbol, bars, *, spot_price, is_stale=False, **kw):
+            captured.update(kw)
+            return self._directive()
+
+        monkeypatch.setattr(toe_mod, "build_premium_directive", _fake_directive)
+        monkeypatch.setattr(
+            toe_mod,
+            "validate_directive_integrity",
+            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
+        )
+        _patch_advisory_inputs(monkeypatch)
+        self._patch_bars_provider(monkeypatch)
+
+        srv.get_options_directive("AAPL")
+
+        macro_dto = captured["macro_dto"]
+        assert macro_dto.vix == 15.0
+        assert macro_dto.market_regime == "RISK ON"
+        assert captured.get("vrp") is None
+
+    def test_real_engine_gates_high_vix_snapshot_to_cash_wait(self, monkeypatch, tmp_path):
+        """End-to-end (no mocked strategy result): the persisted snapshot's
+        VIX >= 30 must genuinely gate the real
+        ``technical_options_engine.build_premium_directive`` call to
+        Cash/Wait, proving the wiring fix has a real effect and not just a
+        passed-but-ignored kwarg."""
+        import data.market_data as md_mod
+        import technical_options_engine as toe_mod
+        from settings import settings
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
+        self._write_snapshot(tmp_path, {"vix": 35.0, "market_regime": "RISK ON"})
+        _patch_advisory_inputs(monkeypatch)
+
+        # Realistic (non-degenerate) GBM-like bars -- the flat-price fixture
+        # from _patch_bars_provider would fail the GJR-GARCH fit outright
+        # (zero variance) and return Cash/Wait BEFORE ever reaching the VRP
+        # regime gate, making that a false-positive proof for this test.
+        rng = np.random.default_rng(0)
+        idx = pd.bdate_range("2023-01-01", periods=252)
+        returns = rng.normal(0.0005, 0.012, size=252)
+        close = 100 * np.exp(np.cumsum(returns))
+        bars = pd.DataFrame(
+            {
+                "Open": close * 0.999,
+                "High": close * 1.005,
+                "Low": close * 0.995,
+                "Close": close,
+                "Volume": rng.integers(1_000_000, 5_000_000, size=252),
+            },
+            index=idx,
+        )
+        fake_provider = MagicMock()
+        fake_provider.get_intraday_bars.return_value = bars
+        fake_provider.get_latest_quote.return_value = SimpleNamespace(
+            price=float(close[-1]), is_stale=False
+        )
+        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+
+        # Force the HIGH IVR REGIME branch deterministically regardless of
+        # the synthetic bars' realized-vol-derived IVR proxy, so the only
+        # thing that can be varying the outcome is the VRP regime gate.
+        real_directive = toe_mod.build_premium_directive
+
+        def _low_threshold_directive(*args, **kwargs):
+            kwargs.setdefault("ivr_sell_threshold", 0.0)
+            return real_directive(*args, **kwargs)
+
+        monkeypatch.setattr(toe_mod, "build_premium_directive", _low_threshold_directive)
+
+        result = srv.get_options_directive("AAPL")
+
+        assert "Cash" in result
+        assert "Wait" in result
+
 
 class TestGetRegimeStatus:
     def _write_snapshot(self, tmp_path, data):
