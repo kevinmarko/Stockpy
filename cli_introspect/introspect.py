@@ -170,7 +170,3 @@ def walk_parser(
         positionals=positionals,
         subcommands=subcommands,
     )
-
-
-if __name__ == "__main__":
-    pass
