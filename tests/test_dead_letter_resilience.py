@@ -323,9 +323,9 @@ class TestFetchAndCacheUniverseMalformedTable:
         resp.text = "<html></html>"
         return resp
 
-    def test_too_few_tables_raises_value_error(self):
+    def test_no_tables_raises_value_error(self):
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
-             mock.patch("universe_engine.pd.read_html", return_value=[pd.DataFrame({"Symbol": ["AAPL"]})]):
+             mock.patch("universe_engine.pd.read_html", return_value=[]):
             with pytest.raises(ValueError, match="tables not found"):
                 universe_engine.fetch_and_cache_universe()
 
@@ -336,13 +336,32 @@ class TestFetchAndCacheUniverseMalformedTable:
             with pytest.raises(ValueError, match="Symbol/Ticker column"):
                 universe_engine.fetch_and_cache_universe()
 
-    def test_missing_changes_columns_raises_value_error(self):
+    def test_missing_changes_table_or_columns_gracefully_degrades(self):
+        """If the changes table is missing entirely or lacks required columns,
+        it must log a warning and return only the current constituents,
+        rather than aborting."""
         current_df = pd.DataFrame({"Symbol": ["AAPL"]})
         changes_no_cols = pd.DataFrame({"Something": ["irrelevant"]})
+
+        # Test 1: Only 1 table (current constituents)
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
-             mock.patch("universe_engine.pd.read_html", return_value=[current_df, changes_no_cols]):
-            with pytest.raises(ValueError, match="Date, Added Ticker, or Removed Ticker"):
-                universe_engine.fetch_and_cache_universe()
+             mock.patch("universe_engine.pd.read_html", return_value=[current_df]), \
+             mock.patch("universe_engine.logger.warning") as mock_logger:
+            result = universe_engine.fetch_and_cache_universe()
+            assert len(result) == 1
+            assert result.iloc[0]["added_ticker"] == "AAPL"
+            assert result.iloc[0]["type"] == "current"
+            mock_logger.assert_called_once()
+
+        # Test 2: 2 tables, but second table is malformed
+        with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
+             mock.patch("universe_engine.pd.read_html", return_value=[current_df, changes_no_cols]), \
+             mock.patch("universe_engine.logger.warning") as mock_logger:
+            result = universe_engine.fetch_and_cache_universe()
+            assert len(result) == 1
+            assert result.iloc[0]["added_ticker"] == "AAPL"
+            assert result.iloc[0]["type"] == "current"
+            mock_logger.assert_called_once()
 
     def _changes_table(self):
         return _changes_table()
