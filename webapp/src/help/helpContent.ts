@@ -286,7 +286,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "create-data-app": {
     title: "Create Data App",
     description:
-      "Name a custom view built from the same real, live widgets Strategy Insights uses, and save it as a working sidebar shortcut. Saving actually persists (survives a reload, syncs across browser tabs) and actually adds a nav entry — never a decorative form.",
+      "Name a custom view built from the same real, live widgets Strategy Insights uses, and save it as a working sidebar shortcut — never a decorative form. Saved to this browser's storage (survives a reload, syncs across its other open tabs); if your browser blocks or fills that storage you'll see an honest warning instead of a false 'Saved'.",
     keyConcepts: ["edge ratio"],
   },
   "custom-view": {

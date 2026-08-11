@@ -3,6 +3,12 @@ import { MessageCircle, Trash2 } from "lucide-react";
 import { Button, EmptyState } from "../components/ui";
 import { EdgeByStrategyChart } from "../components/EdgeByStrategyChart";
 import { SymbolSignalOverlayChart } from "../components/SymbolSignalOverlayChart";
+import { PilotsTableWidget } from "../components/PilotsTableWidget";
+import { SentimentMiniChart } from "../components/SentimentMiniChart";
+import { PortfolioHeatWidget } from "../components/PortfolioHeatWidget";
+import { OptionsDirectiveSummary } from "../components/OptionsDirectiveSummary";
+import { SignalBreakdownMiniWidget } from "../components/SignalBreakdownMiniWidget";
+import { MacroRegimeBanner } from "../components/MacroRegimeBanner";
 import { TabGuide } from "../components/TabGuide";
 import { useChat } from "../chat/ChatContext";
 import { useCustomViews } from "../customViews";
@@ -44,8 +50,12 @@ export function CustomView() {
   }
 
   const handleDelete = () => {
-    removeView(view.id);
-    toast.success(`Removed "${view.name}" from the sidebar.`);
+    const { persisted } = removeView(view.id);
+    if (persisted) {
+      toast.success(`Removed "${view.name}" from the sidebar.`);
+    } else {
+      toast.error(`Removed "${view.name}" for this session, but your browser didn't allow the removal to be saved permanently.`);
+    }
     navigate("/create-data-app");
   };
 
@@ -80,6 +90,48 @@ export function CustomView() {
               Price history &amp; signal overlay
             </h2>
             <SymbolSignalOverlayChart />
+          </section>
+        )}
+
+        {view.widgets.pilotsTable && (
+          <section className="card card-pad">
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Pilots</h2>
+            <PilotsTableWidget />
+          </section>
+        )}
+
+        {view.widgets.sentimentMini && (
+          <section className="card card-pad">
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Sentiment history</h2>
+            <SentimentMiniChart />
+          </section>
+        )}
+
+        {view.widgets.portfolioHeat && (
+          <section className="card card-pad">
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Portfolio heat</h2>
+            <PortfolioHeatWidget />
+          </section>
+        )}
+
+        {view.widgets.optionsDirective && (
+          <section className="card card-pad">
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Options directives</h2>
+            <OptionsDirectiveSummary />
+          </section>
+        )}
+
+        {view.widgets.signalBreakdown && (
+          <section className="card card-pad">
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Signal breakdown</h2>
+            <SignalBreakdownMiniWidget />
+          </section>
+        )}
+
+        {view.widgets.macroRegime && (
+          <section className="card card-pad">
+            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Macro regime</h2>
+            <MacroRegimeBanner />
           </section>
         )}
 

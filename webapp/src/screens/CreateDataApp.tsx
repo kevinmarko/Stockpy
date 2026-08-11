@@ -11,12 +11,27 @@ const WIDGET_LABELS: Record<keyof CustomViewWidgets, string> = {
   edgeByStrategy: "Edge-by-strategy chart",
   symbolOverlay: "Symbol price + signal overlay chart",
   aiChat: "“Ask AI about this view” chat shortcut",
+  pilotsTable: "Pilots holdings table",
+  sentimentMini: "Sentiment history mini-chart",
+  portfolioHeat: "Portfolio heat gauge",
+  optionsDirective: "Options directive summary",
+  signalBreakdown: "Signal breakdown mini-chart",
+  macroRegime: "Macro regime banner",
 };
 
+// The original 3 widgets default ON (a useful view with zero configuration);
+// the 6 added later default OFF so a first-time "Create" isn't an
+// unexpectedly heavy 9-widget page -- an operator opts into the rest.
 const DEFAULT_WIDGETS: CustomViewWidgets = {
   edgeByStrategy: true,
   symbolOverlay: true,
   aiChat: true,
+  pilotsTable: false,
+  sentimentMini: false,
+  portfolioHeat: false,
+  optionsDirective: false,
+  signalBreakdown: false,
+  macroRegime: false,
 };
 
 /**
@@ -49,16 +64,28 @@ export function CreateDataApp() {
 
   const handleCreate = () => {
     if (!canCreate) return;
-    const view = addOrUpdateView({ name: trimmedName, widgets });
-    toast.success(`Saved "${view.name}" to the sidebar.`);
+    const { view, persisted } = addOrUpdateView({ name: trimmedName, widgets });
+    if (persisted) {
+      toast.success(`Saved "${view.name}" to the sidebar.`);
+    } else {
+      // Real localStorage write failed (quota exceeded, private-mode storage
+      // block, etc.) -- the view still works for THIS tab's current session,
+      // but will not survive a reload. Never claim "Saved" when it wasn't
+      // (CONSTRAINT #4) -- see customViews.ts's persist() doc.
+      toast.error(`"${view.name}" is only available for this session -- your browser didn't allow it to be saved permanently.`);
+    }
     setName("");
     setWidgets(DEFAULT_WIDGETS);
     navigate(`/app/${view.slug}`);
   };
 
   const handleDelete = (id: string, viewName: string) => {
-    removeView(id);
-    toast.success(`Removed "${viewName}" from the sidebar.`);
+    const { persisted } = removeView(id);
+    if (persisted) {
+      toast.success(`Removed "${viewName}" from the sidebar.`);
+    } else {
+      toast.error(`Removed "${viewName}" for this session, but your browser didn't allow the removal to be saved permanently.`);
+    }
   };
 
   return (

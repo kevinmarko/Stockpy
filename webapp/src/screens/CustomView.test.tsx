@@ -4,20 +4,38 @@
  * Covers: an unknown slug renders an honest empty state (never a blank or
  * broken page), only the widgets a view was saved with actually render, the
  * chat widget opens the real global chat panel (via useChat().openChat, the
- * existing grounded/authed pattern -- not a bespoke endpoint), and deleting
- * removes the view.
+ * existing grounded/authed pattern -- not a bespoke endpoint), deleting
+ * removes the view, and -- a code-review finding -- the view disappearing
+ * out from under an already-mounted page via an EXTERNAL write (not this
+ * component's own Delete button) degrades to the same honest empty state
+ * rather than crashing.
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CustomView } from "./CustomView";
-import { __resetCustomViewsForTests, addOrUpdateView } from "../customViews";
+import { __resetCustomViewsForTests, addOrUpdateView, removeView, type CustomViewWidgets } from "../customViews";
 
 const openChatMock = vi.fn();
 vi.mock("../chat/ChatContext", () => ({
   useChat: () => ({ openChat: openChatMock, closeChat: vi.fn(), isOpen: false, contextText: undefined }),
 }));
+
+function widgets(overrides: Partial<CustomViewWidgets> = {}): CustomViewWidgets {
+  return {
+    edgeByStrategy: false,
+    symbolOverlay: false,
+    aiChat: false,
+    pilotsTable: false,
+    sentimentMini: false,
+    portfolioHeat: false,
+    optionsDirective: false,
+    signalBreakdown: false,
+    macroRegime: false,
+    ...overrides,
+  };
+}
 
 function renderAt(slug: string) {
   return render(
@@ -45,7 +63,7 @@ describe("CustomView screen", () => {
   it("renders only the widgets the view was saved with", () => {
     addOrUpdateView({
       name: "Chart Only",
-      widgets: { edgeByStrategy: true, symbolOverlay: false, aiChat: false },
+      widgets: widgets({ edgeByStrategy: true }),
     });
     renderAt("chart-only");
 
@@ -54,11 +72,37 @@ describe("CustomView screen", () => {
     expect(screen.queryByTestId("custom-view-open-chat")).not.toBeInTheDocument();
   });
 
+  it("renders each of the 6 additional widget sections when enabled", () => {
+    addOrUpdateView({
+      name: "Everything",
+      widgets: widgets({
+        pilotsTable: true,
+        sentimentMini: true,
+        portfolioHeat: true,
+        optionsDirective: true,
+        signalBreakdown: true,
+        macroRegime: true,
+      }),
+    });
+    renderAt("everything");
+
+    for (const heading of [
+      "Pilots",
+      "Sentiment history",
+      "Portfolio heat",
+      "Options directives",
+      "Signal breakdown",
+      "Macro regime",
+    ]) {
+      expect(screen.getByText(heading)).toBeInTheDocument();
+    }
+  });
+
   it("the chat widget opens the real global chat panel with context naming the view", async () => {
     const user = userEvent.setup();
     addOrUpdateView({
       name: "Chatty View",
-      widgets: { edgeByStrategy: false, symbolOverlay: false, aiChat: true },
+      widgets: widgets({ aiChat: true }),
     });
     renderAt("chatty-view");
 
@@ -70,7 +114,7 @@ describe("CustomView screen", () => {
     const user = userEvent.setup();
     addOrUpdateView({
       name: "Doomed",
-      widgets: { edgeByStrategy: true, symbolOverlay: false, aiChat: false },
+      widgets: widgets({ edgeByStrategy: true }),
     });
     renderAt("doomed");
 
@@ -79,5 +123,27 @@ describe("CustomView screen", () => {
 
     const raw = JSON.parse(localStorage.getItem("stockpy.custom-views:v1") as string);
     expect(raw).toHaveLength(0);
+  });
+
+  it("REGRESSION (review finding): the view disappearing via an EXTERNAL write (not this component's own Delete button) falls back to the honest empty state instead of crashing", async () => {
+    const { view } = addOrUpdateView({
+      name: "Deleted Elsewhere",
+      widgets: widgets({ edgeByStrategy: true }),
+    });
+    renderAt("deleted-elsewhere");
+    expect(screen.getByText("Edge per strategy")).toBeInTheDocument();
+
+    // Simulate a delete performed from a second mounted instance / another
+    // browser tab -- NOT this component's own handleDelete click handler.
+    // useCustomViews() is a live useSyncExternalStore subscription, so the
+    // already-mounted CustomView must re-render and fall through to its
+    // not-found branch rather than crash on `view.widgets.*` once `view`
+    // becomes undefined.
+    act(() => {
+      removeView(view.id);
+    });
+
+    expect(screen.getByText("Data App not found")).toBeInTheDocument();
+    expect(screen.queryByText("Edge per strategy")).not.toBeInTheDocument();
   });
 });

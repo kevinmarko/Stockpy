@@ -14,7 +14,22 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it } from "vitest";
 import { Sidebar, BottomNav } from "./BottomNavigation";
-import { __resetCustomViewsForTests, addOrUpdateView, removeView } from "../customViews";
+import { __resetCustomViewsForTests, addOrUpdateView, removeView, type CustomViewWidgets } from "../customViews";
+
+function widgets(overrides: Partial<CustomViewWidgets> = {}): CustomViewWidgets {
+  return {
+    edgeByStrategy: false,
+    symbolOverlay: false,
+    aiChat: false,
+    pilotsTable: false,
+    sentimentMini: false,
+    portfolioHeat: false,
+    optionsDirective: false,
+    signalBreakdown: false,
+    macroRegime: false,
+    ...overrides,
+  };
+}
 
 function renderSidebar() {
   return render(
@@ -35,7 +50,7 @@ describe("Sidebar / BottomNav dynamic nav items", () => {
 
     addOrUpdateView({
       name: "My Custom App",
-      widgets: { edgeByStrategy: true, symbolOverlay: false, aiChat: false },
+      widgets: widgets({ edgeByStrategy: true }),
     });
 
     rerender(
@@ -47,9 +62,9 @@ describe("Sidebar / BottomNav dynamic nav items", () => {
   });
 
   it("deleting a saved view removes it from the Sidebar", () => {
-    const view = addOrUpdateView({
+    const { view } = addOrUpdateView({
       name: "Gone Soon",
-      widgets: { edgeByStrategy: true, symbolOverlay: false, aiChat: false },
+      widgets: widgets({ edgeByStrategy: true }),
     });
     const { rerender } = renderSidebar();
     expect(screen.getByText("Gone Soon")).toBeInTheDocument();
@@ -67,7 +82,7 @@ describe("Sidebar / BottomNav dynamic nav items", () => {
     const user = userEvent.setup();
     addOrUpdateView({
       name: "Mobile Reachable",
-      widgets: { edgeByStrategy: true, symbolOverlay: false, aiChat: false },
+      widgets: widgets({ edgeByStrategy: true }),
     });
     render(
       <MemoryRouter>

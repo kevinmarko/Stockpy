@@ -35,6 +35,12 @@ export interface CustomViewWidgets {
   edgeByStrategy: boolean;
   symbolOverlay: boolean;
   aiChat: boolean;
+  pilotsTable: boolean;
+  sentimentMini: boolean;
+  portfolioHeat: boolean;
+  optionsDirective: boolean;
+  signalBreakdown: boolean;
+  macroRegime: boolean;
 }
 
 export interface CustomView {
@@ -63,13 +69,22 @@ function loadFromStorage(): CustomView[] {
 let views: CustomView[] = loadFromStorage();
 const listeners = new Set<() => void>();
 
-function persist() {
+/**
+ * Returns whether the write actually reached localStorage. A previous
+ * version of this function swallowed the exception and returned nothing --
+ * addOrUpdateView()/removeView() always reported success and the UI always
+ * showed "Saved to the sidebar" even when the browser's storage was full or
+ * blocked (private mode, quota exceeded), so a view could vanish on the next
+ * reload with no explanation anywhere (CONSTRAINT #4/#6). The in-memory
+ * `views` array is still updated either way -- this tab's own session isn't
+ * degraded -- but callers can now tell the difference and say so honestly.
+ */
+function persist(): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(views));
+    return true;
   } catch {
-    // Storage full/unavailable -- the in-memory store still reflects this
-    // tab's session; degrade silently rather than throwing out of a click
-    // handler (matches usePersistedState's own convention).
+    return false;
   }
 }
 
@@ -98,13 +113,37 @@ if (typeof window !== "undefined") {
   });
 }
 
+/** Small deterministic string hash (same input always -> same output) --
+ * NOT cryptographic, just enough spread that two different inputs are very
+ * unlikely to collide at the scale of one operator's saved views. */
+function hashString(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h).toString(36);
+}
+
+/**
+ * `base || "view"` used to be a single, constant fallback for any name with
+ * no alphanumeric characters at all (e.g. "!!!", "日本株", pure emoji) --
+ * meaning any two such names, however different, silently collided on the
+ * literal slug/route "view" and one would overwrite the other under
+ * addOrUpdateView's existing-slug-match rule. That's a real instance of the
+ * "two differently-named entries collide on one route" failure this
+ * module's own addOrUpdateView doc explicitly says it was designed to avoid
+ * -- it just missed this one path. Falling back to a hash of the actual
+ * trimmed name keeps the invariant instead: the SAME odd name still maps to
+ * the SAME slug (repeat-saves-update-in-place still holds), but two
+ * DIFFERENT odd names no longer collide.
+ */
 function slugify(name: string): string {
-  const base = name
-    .trim()
+  const trimmed = name.trim();
+  const base = trimmed
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return base || "view";
+  return base || `view-${hashString(trimmed)}`;
 }
 
 /**
@@ -122,7 +161,10 @@ function slugify(name: string): string {
  * differently-named entries collide on the SAME sidebar route, `/app/foo-bar`,
  * which is a worse outcome than one view winning the name honestly).
  */
-export function addOrUpdateView(input: { name: string; widgets: CustomViewWidgets }): CustomView {
+/** `persisted: false` means the view is only good for this browser tab's
+ * current session -- it will NOT survive a reload. Callers must surface
+ * this honestly (never a blanket "Saved" toast regardless of the result). */
+export function addOrUpdateView(input: { name: string; widgets: CustomViewWidgets }): { view: CustomView; persisted: boolean } {
   const name = input.name.trim();
   const slug = slugify(name);
   const existing = views.find((v) => v.slug === slug);
@@ -143,15 +185,17 @@ export function addOrUpdateView(input: { name: string; widgets: CustomViewWidget
     };
     views = [...views, view];
   }
-  persist();
+  const persisted = persist();
   notify();
-  return view;
+  return { view, persisted };
 }
 
-export function removeView(id: string): void {
+/** See addOrUpdateView's `persisted` doc -- same honesty contract applies to deletion. */
+export function removeView(id: string): { persisted: boolean } {
   views = views.filter((v) => v.id !== id);
-  persist();
+  const persisted = persist();
   notify();
+  return { persisted };
 }
 
 export function useCustomViews(): {

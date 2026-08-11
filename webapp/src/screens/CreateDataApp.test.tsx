@@ -11,7 +11,22 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import { beforeEach, describe, expect, it } from "vitest";
 import { CreateDataApp } from "./CreateDataApp";
-import { __resetCustomViewsForTests, addOrUpdateView } from "../customViews";
+import { __resetCustomViewsForTests, addOrUpdateView, type CustomViewWidgets } from "../customViews";
+
+function widgets(overrides: Partial<CustomViewWidgets> = {}): CustomViewWidgets {
+  return {
+    edgeByStrategy: false,
+    symbolOverlay: false,
+    aiChat: false,
+    pilotsTable: false,
+    sentimentMini: false,
+    portfolioHeat: false,
+    optionsDirective: false,
+    signalBreakdown: false,
+    macroRegime: false,
+    ...overrides,
+  };
+}
 
 function LocationProbe() {
   const loc = useLocation();
@@ -82,7 +97,7 @@ describe("CreateDataApp screen", () => {
     const user = userEvent.setup();
     addOrUpdateView({
       name: "Existing View",
-      widgets: { edgeByStrategy: true, symbolOverlay: false, aiChat: false },
+      widgets: widgets({ edgeByStrategy: true }),
     });
     renderScreen();
 
@@ -96,7 +111,7 @@ describe("CreateDataApp screen", () => {
 
   it("deleting an existing view removes it from the list and from storage", async () => {
     const user = userEvent.setup();
-    addOrUpdateView({ name: "Doomed View", widgets: { edgeByStrategy: true, symbolOverlay: false, aiChat: false } });
+    addOrUpdateView({ name: "Doomed View", widgets: widgets({ edgeByStrategy: true }) });
     renderScreen();
 
     expect(await screen.findByTestId("data-app-row-doomed-view")).toBeInTheDocument();
@@ -106,6 +121,26 @@ describe("CreateDataApp screen", () => {
     expect(screen.getByText("No Data Apps yet")).toBeInTheDocument();
     const raw = JSON.parse(localStorage.getItem("stockpy.custom-views:v1") as string);
     expect(raw).toHaveLength(0);
+  });
+
+  it("REGRESSION (review finding): unchecking a single widget checkbox saves exactly that partial widgets object, not a wrong key", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+
+    await user.type(screen.getByLabelText("Name"), "Partial Widgets");
+    // Defaults are edgeByStrategy/symbolOverlay/aiChat ON, the rest OFF --
+    // uncheck only aiChat and confirm exactly that one flips, through the
+    // real UI checkbox (not a direct addOrUpdateView call), which is the
+    // only thing that can catch a checkbox wired to the wrong widget key.
+    await user.click(screen.getByTestId("widget-toggle-aiChat"));
+    await user.click(screen.getByTestId("create-data-app-submit"));
+    await screen.findByTestId("location-probe");
+
+    const raw = JSON.parse(localStorage.getItem("stockpy.custom-views:v1") as string);
+    expect(raw).toHaveLength(1);
+    expect(raw[0].widgets).toEqual(
+      widgets({ edgeByStrategy: true, symbolOverlay: true, aiChat: false })
+    );
   });
 
   it("saving again with the same name updates the existing view instead of duplicating", async () => {
