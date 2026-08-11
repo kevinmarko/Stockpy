@@ -86,9 +86,19 @@ this time.
    "subscribe to price ticks / alerts" fine — it does not cover a client
    pushing anything back over the same connection).
 
+Answered: Open Question 1 resolved to Phases 1–3 now, Phases 4–5 deferred.
+Open Question 2 resolved to vanilla JS/Chart.js (built). Open Question 3
+(SSE vs WebSocket) does not arise in Phases 1–3 as scoped — no new
+real-time/streaming component was part of this round; revisit if a future
+phase actually needs one.
+
 ---
 
-## Phase 1 — Read-only analytics tools, real data only
+## Phase 1 — Read-only analytics tools, real data only — ✅ DONE, verified
+
+See `docs/MCP_EXPANSION_WALKTHROUGH.md` for the full verified breakdown
+(each tool, its real data source, and the test/lint/pytest results). Kept
+below for the original design rationale.
 
 Scope deliberately narrowed to what can be computed from data this codebase
 already has, with an honest "not available" path (per this repo's
@@ -154,7 +164,7 @@ fake number) for anything it can't.
 
 ---
 
-## Phase 2 — Interactive widgets
+## Phase 2 — Interactive widgets — ✅ DONE, verified (with one honest scope cut)
 
 ### [MODIFY] `mcp_widget_resources.py`, [MODIFY] `mcp_widgets/build/build_bundle.mjs`, [NEW] `mcp_widgets/templates/*.html`
 
@@ -178,7 +188,7 @@ fake number) for anything it can't.
 
 ---
 
-## Phase 3 — Agent skills
+## Phase 3 — Agent skills — ✅ DONE, verified
 
 ### [NEW] `.agents/skills/{backtest-optimization,regime-model-tuning,mcp-widget-builder,alert-rule-authoring,incident-triage}/SKILL.md`
 
@@ -202,7 +212,7 @@ per skill (what does it look like when this goes wrong, and what's the fix).
 
 ---
 
-## Phase 4 — Execution boundary (gated on `[!IMPORTANT]` sign-off above)
+## Phase 4 — Execution boundary — ⏸ NOT STARTED THIS ROUND (still gated on `[!IMPORTANT]` sign-off above)
 
 ### [NEW] `robinhood_execution_mcp.py`
 
@@ -239,7 +249,7 @@ per skill (what does it look like when this goes wrong, and what's the fix).
 
 ---
 
-## Phase 5 — VM deploy automation (gated on `[!CAUTION]` sign-off above)
+## Phase 5 — VM deploy automation — ⏸ NOT STARTED THIS ROUND (still gated on `[!CAUTION]` sign-off above; `.github/workflows/deploy_mcp_vm.yml` currently triggers on `push: main`, NOT the recommended `workflow_dispatch` default — do not treat it as production-safe until this phase is explicitly picked up)
 
 ### [NEW] `.github/workflows/deploy_mcp_vm.yml`
 
