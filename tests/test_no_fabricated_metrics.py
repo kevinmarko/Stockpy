@@ -477,6 +477,56 @@ class TestGeneratePairsSignalsWarmup:
         assert len(signals_df) == 150
         assert not signals_df["position"].isna().any()
 
+    @staticmethod
+    def _pin_zero_hedge(monkeypatch) -> None:
+        """Pin the Kalman hedge ratio to alpha=0/beta=0 so spread == y_prices
+        exactly, giving deterministic control over the spread series for the
+        z-score degenerate-std guard tests below."""
+        import signals.pairs_trading as pairs_trading
+
+        def _fake_estimate(self, y, x):
+            idx = y.index.intersection(x.index)
+            return pd.DataFrame({"alpha": 0.0, "beta": 0.0}, index=idx)
+
+        monkeypatch.setattr(
+            pairs_trading.KalmanHedgeRatio, "estimate_hedge_ratio", _fake_estimate
+        )
+
+    def test_near_constant_spread_no_spurious_entry_or_stop(self, monkeypatch):
+        """Regression for Finding 12: z_score = (spread - mean) / spread_std
+        had no degenerate-std guard at all. A near-constant spread (floating-
+        point noise, NOT exactly constant) produces a near-zero-but-nonzero
+        std -- without the `< 1e-12` guard this can blow up into a spurious
+        extreme z-score from float noise alone. With the guard in place, the
+        window must be treated as NaN/undefined and the position must stay
+        flat throughout -- no spurious ENTRY, and therefore no STOP LOSS."""
+        self._pin_zero_hedge(monkeypatch)
+        n = 150
+        dates = pd.date_range("2023-01-01", periods=n, freq="B")
+        rng = np.random.RandomState(3)
+        # spread == y here (beta=0, alpha=0 pinned above): tiny floating-point
+        # noise (std ~1e-13, well under the 1e-12 guard threshold) around a
+        # constant base -- not exactly constant.
+        y = pd.Series(100.0 + rng.normal(0.0, 1e-13, n), index=dates)
+        x = pd.Series(np.full(n, 50.0), index=dates)  # irrelevant, beta pinned to 0
+
+        signals_df = generate_pairs_signals(y, x)
+        assert (signals_df["position"] == 0.0).all()
+
+    def test_exactly_constant_spread_no_spurious_entry_or_stop(self, monkeypatch):
+        """Companion to the near-constant case above: an EXACTLY-constant
+        spread window (spread_std == 0.0 exactly) must also stay flat --
+        proving the guard (and not a fragile 0/0-happens-to-be-NaN accident)
+        is what keeps the position from ever entering or stopping out."""
+        self._pin_zero_hedge(monkeypatch)
+        n = 150
+        dates = pd.date_range("2023-01-01", periods=n, freq="B")
+        y = pd.Series(np.full(n, 100.0), index=dates)  # spread == y, exactly constant
+        x = pd.Series(np.full(n, 50.0), index=dates)  # irrelevant, beta pinned to 0
+
+        signals_df = generate_pairs_signals(y, x)
+        assert (signals_df["position"] == 0.0).all()
+
 
 # ============================================================================
 # evaluation_engine.evaluate_portfolio — remaining un-pinned default branches

@@ -566,9 +566,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.step is None:
         report = run_all()
     else:
+        try:
+            from settings import settings as _s  # noqa: PLC0415
+
+            enabled = bool(getattr(_s, "GRAVITY_AI_RUNNER_ENABLED", False))
+        except Exception:
+            enabled = False
         report = RunReport(
             generated_at=_utc_iso(),
-            enabled=False,
+            enabled=enabled,
             steps=[run_step(args.step)],
             summary={},
         )
