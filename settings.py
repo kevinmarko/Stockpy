@@ -842,6 +842,28 @@ class Settings(BaseSettings):
             "controllable."
         ),
     )
+    FMP_UNIVERSE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for using FMP's historical S&P 500 constituent-"
+            "changes endpoint (data/fmp_client.py::historical_sp500_changes) "
+            "as the PRIMARY source for universe_engine.py's point-in-time "
+            "survivorship-bias reconstruction, with the legacy Wikipedia "
+            "'Selected changes' table scrape demoted to a fallback — that "
+            "table was removed from the live Wikipedia page entirely as of "
+            "2026-08, which is what necessitated this feed. Mirrors "
+            "fetch_company_headlines's FMP-first/Finnhub-fallback dispatcher "
+            "pattern in signals/news_catalyst.py. False (the default) is a "
+            "complete no-op reproducing today's exact Wikipedia-only "
+            "behavior — zero FMP requests attempted, "
+            "data/fmp_universe.py::fetch_sp500_changes_via_fmp short-circuits "
+            "to []. Single gate — key presence is enforced by _fmp_get "
+            "itself. Wikipedia's current-constituents table (unaffected by "
+            "the removal above) always stays the source of truth for the "
+            "CURRENT roster regardless of this flag; only the historical "
+            "changes half is FMP-eligible."
+        ),
+    )
     # ── FMP behavior knobs ───────────────────────────────────────────────
     FMP_FALLBACK_ENABLED: bool = Field(
         default=True,

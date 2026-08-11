@@ -26,6 +26,7 @@ const FMP_LABEL_MAP: Record<string, string> = {
   FMP_INSIDER_REFRESH_DAYS: "Insider Trading Refresh Interval (days)",
   FMP_INSIDER_MIN_LAG_DAYS: "Insider Trading Min Lag (days)",
   FMP_SECTOR_SNAPSHOT_ENABLED: "Enable Sector Snapshot",
+  FMP_UNIVERSE_ENABLED: "Enable S&P 500 Constituent-Changes Feed",
 };
 
 export function FmpSettings() {

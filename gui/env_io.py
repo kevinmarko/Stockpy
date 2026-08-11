@@ -337,6 +337,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_OPTIONS_HEALTH_ENABLED",         # bool — Altman Z/Piotroski F/ratios/realized-vol for options matrix
     "FMP_OPTIONS_CONTEXT_ENABLED",        # bool — news headlines + peer tickers on the options matrix
     "FMP_PEERS_ENABLED",                  # bool — on-demand GET /data/peers/{symbol} lookup
+    "FMP_UNIVERSE_ENABLED",               # bool — S&P 500 historical constituent-changes primary source (universe_engine.py)
     "FMP_FALLBACK_ENABLED",               # bool — fall through to Alpaca/yfinance/Yahoo
     "FMP_QUOTES_REALTIME",                # bool — label FMP quotes real-time (unverified on Starter)
     "FMP_BARS_ADJUSTMENT",                # str  — EOD variant; 'dividend-adjusted' matches yfinance
