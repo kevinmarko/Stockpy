@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "aa2fd72aa2ca39e1dc41049021b1b51b8f4d8744",
+    "git_commit": "88cf73d0851af5b7ebc88719347a3127df900e58",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2854,7 +2854,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 364,
+    "files_scanned": 365,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2872,6 +2872,7 @@
       "_settings.settings",
       "_settings93",
       "_settings93_ro",
+      "_settings_local",
       "_settings_mod.settings",
       "_settings_singleton",
       "_wf_settings",
@@ -2879,12 +2880,12 @@
       "settings",
       "settings_module.settings"
     ],
-    "distinct_settings_alias_count": 20,
+    "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 677,
+      "total_reads": 679,
       "distinct_fields": 218,
       "counts": {
-        "OUTPUT_DIR": 122,
+        "OUTPUT_DIR": 123,
         "SIGNAL_WEIGHTS": 21,
         "DASHBOARD_REFRESH_SECONDS": 18,
         "DISABLED_SIGNAL_MODULES": 14,
@@ -2893,6 +2894,7 @@
         "DRY_RUN": 9,
         "REGIME_SIGNAL_WEIGHTS": 9,
         "ALPACA_API_KEY": 7,
+        "KELLY_CAP": 7,
         "MAX_LEVERAGE": 7,
         "MAX_POSITION_WEIGHT": 7,
         "VOL_TARGET": 7,
@@ -2900,7 +2902,6 @@
         "ALPACA_SECRET_KEY": 6,
         "FINBERT_ENABLED": 6,
         "HISTORICAL_STORE_ENABLED": 6,
-        "KELLY_CAP": 6,
         "MAX_PORTFOLIO_HEAT": 6,
         "RISK_FREE_RATE": 6,
         "SIZING_CAP_ESCALATION_ENABLED": 6,
@@ -3105,7 +3106,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 254,
+      "total_reads": 255,
       "distinct_fields": 155,
       "counts": {
         "FMP_API_KEY": 10,
@@ -3132,6 +3133,7 @@
         "ALPACA_API_KEY": 2,
         "BARS_BACKFILL_DAYS": 2,
         "BERT_LLA_ENABLED": 2,
+        "BROKER_BACKEND": 2,
         "DB_MAX_OVERFLOW": 2,
         "DB_POOL_SIZE": 2,
         "ETF_HOLDINGS_MARKET_PROXY": 2,
@@ -3163,7 +3165,6 @@
         "BERT_LLA_BLEND_ENABLED": 1,
         "BERT_LLA_MIN_SENTIMENT_COVERAGE": 1,
         "BERT_LLA_WINDOW_SIZE": 1,
-        "BROKER_BACKEND": 1,
         "CACHE_LONG_SHORT_ENABLED": 1,
         "CNN_LSTM_PROCESS_POOL_WORKERS": 1,
         "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED": 1,

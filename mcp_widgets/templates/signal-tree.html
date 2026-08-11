@@ -1,0 +1,96 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+/*__WIDGET_COMMON_CSS__*/
+.tree-node {
+    margin-left: 20px;
+    padding-left: 10px;
+    border-left: 1px dashed #ccc;
+    margin-top: 5px;
+}
+.tree-label {
+    font-weight: 500;
+}
+.tree-value {
+    color: #3b82f6;
+    margin-left: 10px;
+}
+.root-node {
+    margin-left: 0;
+    border-left: none;
+    font-size: 1.1em;
+}
+</style>
+<body>
+  <div id="root">
+      <h2>Signal Tree</h2>
+      <div id="treeContainer"></div>
+  </div>
+</body>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+/*__WIDGET_COMMON_JS__*/
+const { App } = globalThis.ExtApps;
+
+function renderTree(node, container, isRoot=true) {
+    const el = document.createElement('div');
+    el.className = isRoot ? 'tree-node root-node' : 'tree-node';
+
+    const content = document.createElement('div');
+    const label = document.createElement('span');
+    label.className = 'tree-label';
+    label.textContent = node.name || 'Node';
+
+    const value = document.createElement('span');
+    value.className = 'tree-value';
+    value.textContent = node.value !== undefined && node.value !== null ? String(node.value) : '';
+
+    content.appendChild(label);
+    content.appendChild(value);
+    el.appendChild(content);
+
+    if (node.children && Array.isArray(node.children)) {
+        // get_signal_breakdown's real payload is a FLAT list of DailySignals
+        // columns (no genuine nested hierarchy is persisted) -- rendered
+        // here as one level of leaf children, not a fabricated multi-level
+        // tree.
+        node.children.forEach(child => {
+            renderTree(child, el, false);
+        });
+    }
+    container.appendChild(el);
+}
+
+(async () => {
+  const app = new App({ name: "SignalTree", version: "1.0.0" }, {}, { autoResize: true });
+
+  app.ontoolresult = ({ content }) => {
+    const payload = extractJsonPayload(content[0].text);
+    const container = document.getElementById('treeContainer');
+    container.innerHTML = '';
+    const tree = payload && payload.tree;
+    const hasChildren = tree && Array.isArray(tree.children) && tree.children.length > 0;
+    if (!hasChildren) {
+        const empty = document.createElement('p');
+        empty.className = 'empty-state';
+        empty.textContent = 'No signal data available yet for this symbol.';
+        container.appendChild(empty);
+        return;
+    }
+
+    if (payload.timestamp) {
+        const asOf = document.createElement('div');
+        asOf.className = 'stat-label';
+        asOf.textContent = 'As of: ' + payload.timestamp;
+        container.appendChild(asOf);
+    }
+
+    renderTree(tree, container, true);
+  };
+
+  await app.connect();
+  const hostCtx = app.getHostContext?.();
+  if (hostCtx) applyHostTheme(hostCtx.theme);
+  app.onhostcontextchanged = (c) => applyHostTheme(c.theme);
+})();
+</script>

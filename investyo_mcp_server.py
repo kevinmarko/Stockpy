@@ -66,6 +66,10 @@ _PILOT_DETAIL_UI = {"ui": {"resourceUri": "ui://widgets/pilot-detail.html"}} if 
 _FOLLOW_RESULT_UI = {"ui": {"resourceUri": "ui://widgets/follow-result.html"}} if _WIDGETS_AVAILABLE else None
 _PILOT_COMPARE_UI = {"ui": {"resourceUri": "ui://widgets/pilot-compare.html"}} if _WIDGETS_AVAILABLE else None
 _PILOT_PORTFOLIO_UI = {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}} if _WIDGETS_AVAILABLE else None
+_EQUITY_CURVE_UI = {"ui": {"resourceUri": "ui://widgets/equity-curve.html"}} if _WIDGETS_AVAILABLE else None
+_RISK_MATRIX_UI = {"ui": {"resourceUri": "ui://widgets/risk-matrix.html"}} if _WIDGETS_AVAILABLE else None
+_SIGNAL_TREE_UI = {"ui": {"resourceUri": "ui://widgets/signal-tree.html"}} if _WIDGETS_AVAILABLE else None
+_EXECUTION_QUEUE_UI = {"ui": {"resourceUri": "ui://widgets/execution-queue.html"}} if _WIDGETS_AVAILABLE else None
 
 
 def _active_universe() -> list:
@@ -224,6 +228,30 @@ def _db_query(sql: str, params: tuple = ()):
             columns = list(result.keys())
             rows = [tuple(row) for row in result.fetchall()]
         return columns, rows
+
+
+def _load_state_snapshot() -> Optional[dict]:
+    """Loads ``output/state_snapshot.json`` using the same
+    ``settings.OUTPUT_DIR``-first resolution ``get_regime_status`` already
+    uses elsewhere in this file. Returns ``None`` -- never raises, never
+    fabricates a snapshot -- when the file is absent, unreadable, or not
+    valid JSON (CONSTRAINT #4/#6). Shared by ``get_model_drift_report`` and
+    ``validate_order_compliance`` so both read the pipeline's persisted
+    macro/forecast telemetry the same way instead of each re-deriving the
+    path resolution independently."""
+    try:
+        from settings import settings as _settings_local
+        snap_path = os.path.join(str(_settings_local.OUTPUT_DIR), "state_snapshot.json")
+    except Exception:
+        snap_path = os.path.join("output", "state_snapshot.json")
+
+    if not snap_path or not os.path.exists(snap_path):
+        return None
+    try:
+        with open(snap_path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
 
 
 # ==========================================
@@ -1178,7 +1206,7 @@ def update_universe_tickers(action: str, symbol: str) -> str:
     except Exception as e:
         return f"Failed to write DEFAULT_TICKERS setting: {str(e)}"
 
-@mcp.tool()
+@mcp.tool(meta=_EQUITY_CURVE_UI)
 def plot_equity_curve(symbol: str, period: str = "1y") -> str:
     """
     Runs a Backtrader simulation on the given stock symbol and generates a PNG plot
@@ -1254,8 +1282,22 @@ def plot_equity_curve(symbol: str, period: str = "1y") -> str:
             f"Successfully simulated InstitutionalStrategy. Final Portfolio Value: ${equity[-1]:,.2f}\n\n"
             f"![Equity Curve for {symbol.upper()}](file://{img_path})\n"
         )
+
+        # Structured payload for the equity-curve widget (ui://widgets/equity-curve.html)
+        # -- the exact real dates/equity series just plotted above, never a
+        # re-derived or fabricated series.
+        chart_payload = {
+            "symbol": symbol.upper(),
+            "period": period,
+            "dates": [str(d) for d in dates],
+            "series": [
+                {"label": f"{symbol.upper()} Strategy", "values": [float(v) for v in equity]},
+            ],
+            "final_value": float(equity[-1]),
+        }
+        markdown_response += "\n```json\n" + json.dumps(chart_payload, indent=2, default=str) + "\n```"
         return markdown_response
-        
+
     except Exception as e:
         return f"Plot generation failed: {str(e)}"
 
@@ -1448,7 +1490,7 @@ def get_portfolio_context_note() -> str:
         return f"Failed to retrieve portfolio context note: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(meta=_EQUITY_CURVE_UI)
 def plot_portfolio_equity(period: str = "1y") -> str:
     """
     Runs the InstitutionalStrategy on all active universe tickers, merges their equity curves
@@ -1540,8 +1582,24 @@ def plot_portfolio_equity(period: str = "1y") -> str:
             f"- **SPY Benchmark Return**: {spy_ret:+.2f}%\n\n"
             f"![Portfolio vs SPY](file://{img_path})\n"
         )
+
+        # Structured payload for the equity-curve widget (ui://widgets/equity-curve.html)
+        # -- the exact real portfolio/benchmark series just plotted above,
+        # never a re-derived or fabricated series.
+        chart_payload = {
+            "symbol": None,
+            "period": period,
+            "dates": [d.strftime("%Y-%m-%d") for d in portfolio_series.index],
+            "series": [
+                {"label": "InvestYo Portfolio Strategy", "values": [float(v) for v in portfolio_series.values]},
+                {"label": "SPY Benchmark", "values": [float(v) for v in spy_series.values]},
+            ],
+            "portfolio_return_pct": float(port_ret),
+            "benchmark_return_pct": float(spy_ret),
+        }
+        markdown_response += "\n```json\n" + json.dumps(chart_payload, indent=2, default=str) + "\n```"
         return markdown_response
-        
+
     except Exception as e:
         return f"Portfolio plot generation failed: {str(e)}"
 
@@ -1898,7 +1956,7 @@ def run_lookahead_check(symbol: str, decision_date: str) -> str:
         return f"Lookahead check failed: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(meta=_SIGNAL_TREE_UI)
 def get_signal_breakdown(symbol: str) -> str:
     """
     Returns the full composite signal decomposition for a ticker,
@@ -1933,6 +1991,30 @@ def get_signal_breakdown(symbol: str) -> str:
             if val is not None:
                 lines.append(f"- **{key}**: {val}")
 
+        # Structured payload for the signal-tree widget (ui://widgets/signal-tree.html).
+        # This is a FLAT list of the real DailySignals row columns -- there is
+        # no genuine per-module weighted-contribution breakdown persisted per
+        # row (settings.SIGNAL_WEIGHTS is keyed by SignalModule name, e.g.
+        # "rsi2_mean_reversion", which has no reliable 1:1 mapping onto a
+        # DailySignals column name like "RSI_2"), so this deliberately does
+        # NOT fabricate a nested hierarchy or a weight-multiplied number --
+        # every node's value is exactly the value returned above.
+        tree_payload = {
+            "symbol": symbol.upper(),
+            "timestamp": data.get("timestamp"),
+            "tree": {
+                "name": f"Signal Breakdown: {symbol.upper()}",
+                "value": None,
+                "children": [
+                    {"name": key, "value": data.get(key)}
+                    for key in signal_keys
+                    if data.get(key) is not None
+                ],
+            },
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(tree_payload, indent=2, default=str))
+        lines.append("```")
         return "\n".join(lines)
     except Exception as e:
         return f"Signal breakdown failed: {str(e)}"
@@ -2118,7 +2200,7 @@ def generate_daily_signals(top_n: int = 10) -> str:
         return f"Signal generation failed: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(meta=_EXECUTION_QUEUE_UI)
 def get_execution_queue() -> str:
     """
     Reads the latest execution_queue.json and returns the gated order intents
@@ -2144,9 +2226,19 @@ def get_execution_queue() -> str:
         # field missing, rendered as literal "?"s). Read the real schema.
         intents = payload.get("intents") or []
         if not intents:
+            empty_payload = {
+                "mode": payload.get("mode", "?"),
+                "generated_at": payload.get("generated_at"),
+                "kill_switch_active": bool(payload.get("kill_switch_active", False)),
+                "n_placeable": 0,
+                "total": 0,
+                "orders": [],
+            }
             return (
                 f"Execution queue is empty (0 intents, mode={payload.get('mode', '?')}). "
-                "No orders pending."
+                "No orders pending.\n\n```json\n"
+                + json.dumps(empty_payload, indent=2, default=str)
+                + "\n```"
             )
 
         mode = payload.get("mode", "?")
@@ -2183,6 +2275,38 @@ def get_execution_queue() -> str:
                 f"{allowed} | {rationale} | {reasons_str} |"
             )
 
+        # Structured payload for the execution-queue widget
+        # (ui://widgets/execution-queue.html) -- the exact same real intents
+        # rendered in the markdown table above, re-shaped as `orders` for the
+        # widget. `order_type` comes straight from queue_builder's real
+        # OrderIntent (never fabricated -- there is no separate "status" the
+        # queue tracks beyond the gate verdict, so the widget derives its
+        # placeable/gated badge from `allow_place`, not an invented fill state).
+        orders_payload = {
+            "mode": mode,
+            "generated_at": generated_at,
+            "kill_switch_active": bool(payload.get("kill_switch_active", False)),
+            "n_placeable": n_placeable,
+            "total": len(intents),
+            "orders": [
+                {
+                    "symbol": i.get("symbol"),
+                    "action": i.get("action"),
+                    "side": i.get("side"),
+                    "qty": i.get("qty"),
+                    "order_type": i.get("order_type"),
+                    "target_notional": i.get("target_notional"),
+                    "allow_place": bool(i.get("allow_place", False)),
+                    "rationale": i.get("rationale"),
+                    "gate_reasons": i.get("gate_reasons") or [],
+                }
+                for i in intents
+                if isinstance(i, dict)
+            ],
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(orders_payload, indent=2, default=str))
+        lines.append("```")
         return "\n".join(lines)
     except Exception as e:
         return f"Failed to read execution queue: {str(e)}"
@@ -3628,6 +3752,515 @@ def get_portfolio_by_pilot() -> str:
         return f"Failed to build portfolio-by-pilot attribution: {str(e)}"
 
 
+
+# ==============================================================================
+# PHASE 1: READ-ONLY ANALYTICS TOOLS
+# ==============================================================================
+
+@mcp.tool(meta=_RISK_MATRIX_UI)
+def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
+    """
+    Computes real 95% Value-at-Risk and Expected Shortfall for a ticker from
+    its actual daily OHLCV returns (via data.historical_store.HistoricalStore),
+    never a fabricated/placeholder figure.
+
+    Args:
+        ticker: Stock ticker (e.g., AAPL).
+        method: "historical" (default) — empirical 5th percentile of daily
+            returns for VaR, mean of returns at/below that percentile for ES.
+            "parametric" — normal-distribution VaR/ES from the sample mean
+            and standard deviation instead of the empirical percentile.
+    """
+    try:
+        from data.historical_store import HistoricalStore
+        import numpy as np
+
+        ticker = ticker.upper()
+        df = HistoricalStore().get_bars(ticker, lookback_days=504)
+        if df is None or len(df) < 252:
+            return f"insufficient history for ticker {ticker}: need at least 252 days of price bars"
+
+        returns = df['Close'].pct_change().dropna()
+        if len(returns) < 252:
+            return f"insufficient history for ticker {ticker}: need at least 252 days of return data"
+
+        std_ret = returns.std()
+        if np.isnan(std_ret) or std_ret < 1e-12:
+            return f"insufficient history for ticker {ticker}: degenerate return standard deviation ({std_ret})"
+
+        if method == "historical":
+            var_95 = np.percentile(returns, 5)
+            es_95 = returns[returns <= var_95].mean()
+        else:
+            from scipy.stats import norm
+            mu = returns.mean()
+            var_95 = norm.ppf(0.05, mu, std_ret)
+            es_95 = mu - std_ret * norm.pdf(norm.ppf(0.05)) / 0.05
+
+        text_response = (
+            f"Ticker: {ticker}\n"
+            f"VaR (95%): {var_95:.4%}\n"
+            f"Expected Shortfall (95%): {es_95:.4%}\n"
+            f"Method: {method}\n"
+            f"Sample size: {len(returns)} days"
+        )
+
+        # Structured payload for the risk-matrix widget (ui://widgets/risk-matrix.html).
+        risk_payload = {
+            "ticker": ticker.upper(),
+            "kind": "var_es",
+            "method": method,
+            "sample_size": len(returns),
+            "metrics": [
+                {"label": "VaR (95%)", "value": float(var_95), "format": "percent"},
+                {"label": "Expected Shortfall (95%)", "value": float(es_95), "format": "percent"},
+            ],
+        }
+        return text_response + "\n\n```json\n" + json.dumps(risk_payload, indent=2, default=str) + "\n```"
+    except Exception as e:
+        return f"failed to compute metrics for {ticker}: {str(e)}"
+
+@mcp.tool()
+def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
+    """
+    Replays one of the platform's dated historical shock windows
+    (validation.stress_scenarios.STRESS_SCENARIOS: OCT_2008, FEB_2018,
+    MAR_2020, AUG_2024) against a real, cached Robinhood account snapshot's
+    actual positions and their real historical bars — never a fabricated
+    drawdown.
+
+    Args:
+        portfolio_id: Only "live" is currently supported — the operator's
+            real Robinhood account, resolved from a cached snapshot only
+            (this tool never triggers a live broker login; it returns an
+            honest error when no cached snapshot exists).
+        scenario: One of validation.stress_scenarios.STRESS_SCENARIOS'
+            keys. An unrecognized name is an error, never silently
+            substituted with a default window.
+    """
+    try:
+        from validation.stress_scenarios import STRESS_SCENARIOS, run_stress_scenario
+        from data.robinhood_portfolio import fetch_account_snapshot
+        from data.historical_store import HistoricalStore
+        import pandas as pd
+
+        if scenario not in STRESS_SCENARIOS:
+            return f"scenario not found. Available: {list(STRESS_SCENARIOS.keys())}"
+
+        if portfolio_id != "live":
+            return "Portfolio not found. (Only 'live' portfolio_id is currently supported for stress test)"
+
+        try:
+            # allow_live_fetch=False: this MCP tool must never trigger a
+            # live Robinhood device-approval login. Returns the best
+            # available cached snapshot regardless of staleness, or raises
+            # RuntimeError when no cache exists at all (CONSTRAINT #4 --
+            # no fabricated portfolio).
+            snapshot = fetch_account_snapshot(allow_live_fetch=False)
+        except Exception as fetch_exc:
+            return (
+                "No cached Robinhood account snapshot available for stress "
+                f"testing: {fetch_exc}"
+            )
+
+        if not snapshot or not snapshot.positions:
+            return "No positions in the cached portfolio snapshot to stress test."
+
+        # AccountSnapshot.positions is a dict of symbol -> PortfolioPosition.
+        positions = list(snapshot.positions.values())
+
+        def returns_fn(start: str, end: str) -> pd.Series:
+            store = HistoricalStore()
+            returns_series = []
+
+            # Sum up total portfolio value to weight the returns
+            total_value = sum(pos.quantity * pos.current_price for pos in positions)
+            if total_value == 0:
+                return pd.Series(dtype=float)
+
+            for pos in positions:
+                bars = store.get_bars(pos.symbol, lookback_days=5000)
+                if bars is not None and not bars.empty:
+                    # Filter for start/end dates
+                    mask = (bars.index >= pd.to_datetime(start)) & (bars.index <= pd.to_datetime(end))
+                    window_bars = bars.loc[mask]
+                    if not window_bars.empty:
+                        r = window_bars['Close'].pct_change().dropna()
+                        weight = (pos.quantity * pos.current_price) / total_value
+                        returns_series.append(r * weight)
+
+            if not returns_series:
+                return pd.Series(dtype=float)
+
+            # Align indices and sum row-wise for daily portfolio return
+            agg_returns = pd.concat(returns_series, axis=1).sum(axis=1)
+            return agg_returns
+
+        scenario_obj = STRESS_SCENARIOS[scenario]
+        result = run_stress_scenario(returns_fn, scenario_obj)
+
+        if result.error:
+            return f"Stress test failed: {result.error}"
+
+        return (
+            f"Scenario: {result.scenario}\n"
+            f"Window: {result.start} to {result.end}\n"
+            f"Max Drawdown: {result.max_drawdown:.4%}\n"
+            f"Final Return: {result.final_return:.4%}\n"
+            f"Survived: {result.survived}\n"
+            f"Expected DD for short vol: {result.expected_max_dd_for_short_vol:.4%}"
+        )
+    except Exception as e:
+        return f"failed to run stress scenario: {str(e)}"
+
+@mcp.tool(meta=_RISK_MATRIX_UI)
+def get_factor_attributions(ticker: str) -> str:
+    """
+    Returns the real multifactor fundamental attribution (Value/Quality/
+    LowVol/Size Z-scores and the combined Multifactor Composite) for a
+    ticker, read from its most recent row in the DailySignals table --
+    the exact cross-sectionally-computed scores signals/multifactor.py's
+    pre_compute() wrote for that cycle (see config.COLUMN_SCHEMA and
+    get_signal_breakdown, which queries the same table the same way).
+    These z-scores are computed relative to the FULL universe scored that
+    cycle, so they cannot be honestly recomputed for a single ticker in
+    isolation -- this tool reads the persisted, real per-cycle values
+    instead of fabricating a fresh one.
+
+    Args:
+        ticker: Stock ticker (e.g., AAPL).
+    """
+    ticker = ticker.upper()
+    try:
+        columns, rows = _db_query(
+            """SELECT "Value_Z", "Quality_Z", "LowVol_Z", "Size_Z",
+                      "Multifactor_Composite", timestamp
+               FROM DailySignals
+               WHERE "Symbol" = ?
+               ORDER BY timestamp DESC LIMIT 1""",
+            (ticker,)
+        )
+        if not rows:
+            return f"no recent factor score for {ticker}"
+
+        # Named `row` (not `data`) so the risk-matrix widget payload built
+        # below -- which predates this real-data rewrite and reads via
+        # `row.get(...)` -- keeps working unchanged.
+        row = dict(zip(columns, rows[0]))
+
+        def _fmt(key: str) -> str:
+            val = row.get(key)
+            return "N/A" if val is None else str(val)
+
+        text_response = (
+            f"# Factor Attribution: {ticker} ({row.get('timestamp', 'N/A')})\n\n"
+            f"Value Z-Score: {_fmt('Value_Z')}\n"
+            f"Quality Z-Score: {_fmt('Quality_Z')}\n"
+            f"LowVol Z-Score: {_fmt('LowVol_Z')}\n"
+            f"Size Z-Score: {_fmt('Size_Z')}\n"
+            f"Multifactor Composite: {_fmt('Multifactor_Composite')}"
+        )
+
+        # Structured payload for the risk-matrix widget (ui://widgets/risk-matrix.html).
+        # NaN (pandas' honest "not computable" sentinel per CONSTRAINT #4) is
+        # converted to None rather than fabricated as 0.0 or dropped silently.
+        import math
+
+        def _num(v):
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return None if math.isnan(f) else f
+
+        factor_payload = {
+            "ticker": ticker.upper(),
+            "kind": "factor_attribution",
+            "metrics": [
+                {"label": "Value Z-Score", "value": _num(row.get("Value_Z")), "format": "number"},
+                {"label": "Quality Z-Score", "value": _num(row.get("Quality_Z")), "format": "number"},
+                {"label": "LowVol Z-Score", "value": _num(row.get("LowVol_Z")), "format": "number"},
+                {"label": "Size Z-Score", "value": _num(row.get("Size_Z")), "format": "number"},
+                {"label": "Multifactor Composite", "value": _num(row.get("Multifactor_Composite")), "format": "number"},
+            ],
+        }
+        return text_response + "\n\n```json\n" + json.dumps(factor_payload, indent=2, default=str) + "\n```"
+    except Exception as e:
+        return f"failed to get factor attributions for {ticker}: {str(e)}"
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def get_order_execution_history(limit: int = 50) -> str:
+    """
+    Lists real open + closed paper-trading fills from transactions_store.py's
+    ``TransactionsStore`` (the ``trades`` table), most recent first, capped
+    at ``limit`` rows.
+
+    The ``trades`` schema persists only ``entry_price``/``exit_price`` -- the
+    actual recorded fill prices -- with no intended/quoted price, VWAP, or
+    TWAP column to diff against. This tool therefore does NOT compute or
+    report a slippage figure (CONSTRAINT #4: never invent a comparison basis
+    the store doesn't actually have); it reports the real recorded entry/exit
+    prices and realized P&L for closed trades instead. Empty history degrades
+    to an explicit "no execution history recorded yet" message, never a
+    fabricated average.
+    """
+    try:
+        from transactions_store import TransactionsStore
+        import pandas as pd
+
+        store = TransactionsStore()
+        open_df = store.open_trades_df()
+        closed_df = store.closed_trades_df()
+        total = len(open_df) + len(closed_df)
+
+        if total == 0:
+            return (
+                "no execution history recorded yet -- the `trades` table in "
+                "transactions_store.py has no open or closed trades."
+            )
+
+        non_empty = [df for df in (open_df, closed_df) if not df.empty]
+        all_trades = pd.concat(non_empty, ignore_index=True, sort=False)
+        all_trades = all_trades.sort_values("entry_ts", ascending=False).head(max(0, int(limit)))
+
+        lines = [f"# Order Execution History (showing {len(all_trades)} of {total} recorded trades)\n"]
+        for _, row in all_trades.iterrows():
+            sym = row.get("symbol", "N/A")
+            side = str(row.get("side", "N/A"))
+            shares = row.get("shares", 0)
+            entry_p = row.get("entry_price", 0.0)
+            entry_ts = row.get("entry_ts")
+            exit_p = row.get("exit_price")
+            exit_ts = row.get("exit_ts")
+
+            if pd.notna(exit_ts) and pd.notna(exit_p):
+                pnl_per_share = (exit_p - entry_p) if side == "long" else (entry_p - exit_p)
+                pnl = pnl_per_share * shares
+                lines.append(
+                    f"- [CLOSED] {sym} {side.upper()} {shares} sh: entry ${entry_p:.2f} "
+                    f"({entry_ts}) -> exit ${exit_p:.2f} ({exit_ts}), realized P&L ${pnl:+,.2f}"
+                )
+            else:
+                lines.append(
+                    f"- [OPEN] {sym} {side.upper()} {shares} sh @ ${entry_p:.2f} ({entry_ts})"
+                )
+
+        lines.append(
+            "\n_Note: no slippage figure is reported -- transactions_store.py's `trades` "
+            "table records only the actual entry/exit fill prices, with no intended/"
+            "quoted price, VWAP, or TWAP column to compare against._"
+        )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"failed to get execution history: {str(e)}"
+
+@mcp.tool()
+def get_model_drift_report() -> str:
+    """
+    Reports per-symbol, per-30-day-horizon forecast-skill decay by reusing
+    ``pilots.observability.forecast_skill_by_symbol_summary`` -- the exact
+    cold-start/inverse-RMSE computation the Pilots PWA's Observability screen
+    already uses -- against the symbols in the persisted
+    ``output/state_snapshot.json`` (loaded via the same pattern
+    ``get_regime_status``/``validate_order_compliance`` use elsewhere in this
+    file). Never fabricates a decay percentage: a missing snapshot, an empty
+    universe, or no forecast history yet each degrade to that function's own
+    honest ``reason`` string (CONSTRAINT #4).
+    """
+    try:
+        from pilots.observability import forecast_skill_by_symbol_summary
+        import json as _json
+
+        snapshot = _load_state_snapshot()
+        summary = forecast_skill_by_symbol_summary(snapshot)
+
+        rows = summary.get("rows") or []
+        if not rows:
+            reason = summary.get("reason") or "no forecast-skill data available"
+            return f"no drift data yet: {reason}"
+
+        return _json.dumps(summary, indent=2)
+    except Exception as e:
+        return f"failed to generate model drift report: {str(e)}"
+
+@mcp.tool()
+def validate_order_compliance(ticker: str, side: str, size: float) -> str:
+    """
+    REAL, read-only pre-trade compliance check for a proposed order. Never
+    places or queues an order (advisory only), and never returns a blanket
+    PASSED regardless of input -- each check below degrades to an explicit
+    "unavailable" verdict when its underlying data is missing, and the
+    overall verdict is only PASSED when every evaluable check actually
+    passed (CONSTRAINT #4).
+
+    Reuses two gate conditions this codebase already documents/computes
+    elsewhere, rather than reimplementing risk-gate logic from scratch:
+
+    1. Kelly sizing cap (``settings.KELLY_CAP``) -- read from the ticker's
+       most recent ``DailySignals`` row ("Kelly Target",
+       "Sizing_Was_Capped", "Sizing_Binding_Constraint"). BUY-side only
+       (a SELL reduces exposure, so the cap does not apply).
+    2. Options-selling VRP regime gate (True_IVR > 50, VRP > 0.02, VIX < 30,
+       no CREDIT EVENT) -- per-symbol half from the same ``DailySignals``
+       row ("True_IVR", "VRP"); macro half (VIX, market regime) from the
+       persisted ``output/state_snapshot.json``. Thresholds are imported
+       from ``signals/vrp_premium_selling.py``, the module that already
+       enforces this identical rule, instead of being retyped here.
+    """
+    import math
+
+    try:
+        from signals.vrp_premium_selling import (
+            IVR_SELL_THRESHOLD,
+            VRP_MIN_THRESHOLD,
+            VIX_MAX_THRESHOLD,
+        )
+    except Exception as e:
+        return f"compliance check unavailable: could not load VRP regime thresholds: {e}"
+
+    def _num(v):
+        try:
+            if v is None:
+                return None
+            f = float(v)
+            return None if math.isnan(f) or math.isinf(f) else f
+        except (TypeError, ValueError):
+            return None
+
+    ticker_u = ticker.upper().strip()
+    side_l = side.lower().strip()
+
+    checks: list[tuple[str, str, str]] = []  # (name, "PASS"/"FAIL"/"UNAVAILABLE", detail)
+
+    try:
+        columns, rows = _db_query(
+            """SELECT * FROM DailySignals
+               WHERE "Symbol" = ?
+               ORDER BY timestamp DESC LIMIT 1""",
+            (ticker_u,),
+        )
+    except Exception as e:
+        return f"compliance check unavailable: failed to query DailySignals for {ticker_u}: {e}"
+
+    row_data = dict(zip(columns, rows[0])) if rows else None
+
+    if row_data is None:
+        checks.append((
+            "kelly_sizing_cap", "UNAVAILABLE",
+            f"no DailySignals row found for {ticker_u} -- cannot evaluate Kelly cap",
+        ))
+        checks.append((
+            "vrp_premium_selling_regime", "UNAVAILABLE",
+            f"no DailySignals row found for {ticker_u} -- cannot evaluate VRP regime gate",
+        ))
+    else:
+        # ---- Check 1: Kelly sizing cap (BUY-side only) ----
+        if side_l not in ("buy", "long"):
+            checks.append((
+                "kelly_sizing_cap", "PASS",
+                f"{side_l.upper()} order -- Kelly sizing cap only applies to new/increased long exposure",
+            ))
+        else:
+            kelly = _num(row_data.get("Kelly Target"))
+            if kelly is None:
+                checks.append((
+                    "kelly_sizing_cap", "UNAVAILABLE",
+                    f"no Kelly Target recorded for {ticker_u}",
+                ))
+            else:
+                capped = row_data.get("Sizing_Was_Capped")
+                constraint = row_data.get("Sizing_Binding_Constraint") or ""
+                telemetry = f" (pipeline Sizing_Was_Capped={capped!r}, Sizing_Binding_Constraint={constraint!r})"
+                cap = _settings.KELLY_CAP
+                if abs(kelly) <= cap:
+                    checks.append((
+                        "kelly_sizing_cap", "PASS",
+                        f"Kelly Target {kelly:.4f} is within KELLY_CAP {cap:.2f}{telemetry}",
+                    ))
+                else:
+                    checks.append((
+                        "kelly_sizing_cap", "FAIL",
+                        f"Kelly Target {kelly:.4f} exceeds KELLY_CAP {cap:.2f}{telemetry}",
+                    ))
+
+        # ---- Check 2: options-selling VRP regime gate ----
+        true_ivr = _num(row_data.get("True_IVR"))
+        vrp = _num(row_data.get("VRP"))
+        if true_ivr is None or vrp is None:
+            missing = [n for n, v in (("True_IVR", true_ivr), ("VRP", vrp)) if v is None]
+            checks.append((
+                "vrp_premium_selling_regime", "UNAVAILABLE",
+                f"no {'/'.join(missing)} score recorded for {ticker_u}",
+            ))
+        else:
+            snap = _load_state_snapshot()
+            vix = _num(snap.get("vix")) if snap else None
+            regime = (snap.get("market_regime") or snap.get("regime")) if snap else None
+
+            violations = []
+            if true_ivr <= IVR_SELL_THRESHOLD:
+                violations.append(f"True_IVR {true_ivr:.1f} <= {IVR_SELL_THRESHOLD:.0f}")
+            if vrp <= VRP_MIN_THRESHOLD:
+                violations.append(f"VRP {vrp:.4f} <= {VRP_MIN_THRESHOLD:.2f}")
+            if vix is not None and vix >= VIX_MAX_THRESHOLD:
+                violations.append(f"VIX {vix:.1f} >= {VIX_MAX_THRESHOLD:.0f}")
+            if regime == "CREDIT EVENT":
+                violations.append("market regime is CREDIT EVENT")
+
+            if violations:
+                checks.append((
+                    "vrp_premium_selling_regime", "FAIL",
+                    "; ".join(violations),
+                ))
+            elif snap is None:
+                checks.append((
+                    "vrp_premium_selling_regime", "UNAVAILABLE",
+                    f"True_IVR {true_ivr:.1f} and VRP {vrp:.4f} clear the per-symbol half of the "
+                    "gate, but VIX/market-regime are unavailable (no output/state_snapshot.json) "
+                    "-- cannot fully evaluate the macro half",
+                ))
+            else:
+                checks.append((
+                    "vrp_premium_selling_regime", "PASS",
+                    f"True_IVR {true_ivr:.1f} > {IVR_SELL_THRESHOLD:.0f}, VRP {vrp:.4f} > "
+                    f"{VRP_MIN_THRESHOLD:.2f}, VIX {vix} < {VIX_MAX_THRESHOLD:.0f}, regime={regime}",
+                ))
+
+    statuses = [c[1] for c in checks]
+    if "FAIL" in statuses:
+        overall = "FAILED"
+    elif "PASS" in statuses:
+        overall = "PASSED"
+    else:
+        overall = "UNAVAILABLE"
+
+    lines = [f"# Order Compliance Check -- {ticker_u} {side_l.upper()} {size}\n"]
+    lines.append(f"**Overall verdict: {overall}**\n")
+    for name, status, detail in checks:
+        lines.append(f"- **{name}**: {status} -- {detail}")
+    return "\n".join(lines)
+
+@mcp.prompt()
+def pre_market_briefing() -> str:
+    """Generates a structured prompt template for a pre-market briefing."""
+    return """Please generate a pre-market briefing.
+Include macro conditions, top watchlist candidates, and active alerts.
+"""
+
+@mcp.prompt()
+def portfolio_health_check() -> str:
+    """Generates a structured prompt template for a portfolio health check."""
+    return """Please generate a portfolio health check.
+Analyze current allocations, VaR, correlation risks, and open position PnL.
+"""
+
+@mcp.prompt()
+def strategy_post_mortem() -> str:
+    """Generates a structured prompt template for a strategy post-mortem."""
+    return """Please generate a strategy post-mortem.
+Analyze the latest closed trades, PnL attribution, execution slippage, and model drift.
+"""
+
 def _bearer_auth_asgi_middleware(app, token: str):
     """Wrap a Starlette ASGI app with a bearer-token gate for the
     streamable-http MCP transport. Rejects any 'http' scope request lacking
@@ -3790,4 +4423,3 @@ if __name__ == "__main__":
         uvicorn.run(app, host=args.host, port=args.port, log_level=mcp.settings.log_level.lower())
     else:
         mcp.run(transport="stdio")
-

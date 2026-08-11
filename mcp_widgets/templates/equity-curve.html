@@ -1,0 +1,142 @@
+<!doctype html>
+<meta charset="utf-8" />
+<style>
+/*__WIDGET_COMMON_CSS__*/
+.chart-container {
+    position: relative;
+    height: 400px;
+    width: 100%;
+    margin-top: 20px;
+}
+.equity-stats {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+</style>
+<body>
+  <div id="root">
+      <h2>Equity Curve</h2>
+      <div id="equityStats" class="equity-stats"></div>
+      <div class="chart-container">
+          <canvas id="equityChart"></canvas>
+      </div>
+      <p id="equityEmpty" class="empty-state" style="display:none;"></p>
+  </div>
+</body>
+<script type="module">
+/*__EXT_APPS_BUNDLE__*/
+/*__WIDGET_COMMON_JS__*/
+const { App } = globalThis.ExtApps;
+let chartInstance = null;
+
+const SERIES_COLORS = ["#2563eb", "#f59e0b", "#10b981", "#ef4444"];
+
+function fmtPct(v) {
+  return (typeof v === "number" && !Number.isNaN(v)) ? (v >= 0 ? "+" : "") + v.toFixed(2) + "%" : "—";
+}
+
+function renderEquityCurve(payload) {
+  const canvasWrap = document.querySelector(".chart-container");
+  const statsEl = document.getElementById("equityStats");
+  const emptyEl = document.getElementById("equityEmpty");
+  statsEl.innerHTML = "";
+
+  // Honest empty-state: this tool's output is a real Backtrader
+  // simulation -- if it produced no `dates`/`series` (e.g. "Error: No
+  // data found..." or "Portfolio plot generation failed...") there is no
+  // real payload to chart, and we must never fabricate placeholder data.
+  const dates = payload && Array.isArray(payload.dates) ? payload.dates : [];
+  const series = payload && Array.isArray(payload.series) ? payload.series : [];
+  const hasData = dates.length > 0 && series.some((s) => Array.isArray(s.values) && s.values.length > 0);
+
+  if (!hasData) {
+    canvasWrap.style.display = "none";
+    emptyEl.style.display = "block";
+    emptyEl.textContent = "No equity curve data available yet (simulation did not run or returned no bars).";
+    if (chartInstance) {
+      chartInstance.destroy();
+      chartInstance = null;
+    }
+    return;
+  }
+
+  canvasWrap.style.display = "block";
+  emptyEl.style.display = "none";
+
+  if (payload.symbol) {
+    const chip = document.createElement("span");
+    chip.className = "badge";
+    chip.textContent = `${payload.symbol} · ${payload.period || ""}`;
+    statsEl.appendChild(chip);
+  }
+  if (typeof payload.final_value === "number") {
+    const chip = document.createElement("span");
+    chip.className = "stat-value";
+    chip.textContent = "Final value: $" + payload.final_value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    statsEl.appendChild(chip);
+  }
+  if (typeof payload.portfolio_return_pct === "number") {
+    const chip = document.createElement("span");
+    chip.className = "stat-value";
+    chip.textContent = "Strategy: " + fmtPct(payload.portfolio_return_pct);
+    statsEl.appendChild(chip);
+  }
+  if (typeof payload.benchmark_return_pct === "number") {
+    const chip = document.createElement("span");
+    chip.className = "stat-value";
+    chip.textContent = "Benchmark: " + fmtPct(payload.benchmark_return_pct);
+    statsEl.appendChild(chip);
+  }
+
+  const ctx = document.getElementById('equityChart').getContext('2d');
+  if (chartInstance) {
+    chartInstance.destroy();
+  }
+
+  chartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: dates,
+      datasets: series.map((s, i) => ({
+        label: s.label || `Series ${i + 1}`,
+        data: s.values || [],
+        borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
+        borderDash: i === 1 ? [6, 4] : undefined,
+        tension: 0.1,
+        pointRadius: 0,
+        fill: false,
+      })),
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          display: true,
+          title: { display: true, text: 'Date' },
+          ticks: { maxTicksLimit: 10 },
+        },
+        y: {
+          display: true,
+          title: { display: true, text: 'Equity ($)' },
+        },
+      },
+    },
+  });
+}
+
+(async () => {
+  const app = new App({ name: "EquityCurve", version: "1.0.0" }, {}, { autoResize: true });
+
+  app.ontoolresult = ({ content }) => {
+    const payload = extractJsonPayload(content[0].text);
+    renderEquityCurve(payload);
+  };
+
+  await app.connect();
+  const hostCtx = app.getHostContext?.();
+  if (hostCtx) applyHostTheme(hostCtx.theme);
+  app.onhostcontextchanged = (c) => applyHostTheme(c.theme);
+})();
+</script>

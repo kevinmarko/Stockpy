@@ -5,5 +5,8 @@
   },
   "scripts": {
     "build": "node build_bundle.mjs"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1"
   }
 }
