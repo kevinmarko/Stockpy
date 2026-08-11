@@ -30,37 +30,34 @@ boundary, operational agent skills, and automated VM deployment.
 ## User Review Required
 
 > [!IMPORTANT]
-> **Security & Execution Boundary.** `robinhood-execution-mcp` will be able to
-> place live orders. Per `CLAUDE.md`, *every* order submission in this
-> codebase — no exceptions — goes through `execution/order_manager.py`'s
-> `OrderManager` (idempotent `client_order_id`, dry-run gate, and
-> `execution/risk_gate.py`'s `PreTradeRiskGate`), never directly to a broker
-> client. This plan wires the new server through that exact stack rather than
-> reimplementing safety checks. Before this is built I need your explicit
-> confirmation of two things: (1) that routing through `OrderManager`/
-> `PreTradeRiskGate` is the correct approach (it should be — this isn't really
-> optional under this repo's conventions, but I'm not fabricating a "your call"
-> where the constraint has already been decided), and (2) what "dual-key human
-> confirmation" concretely means for an MCP tool call — see the proposed
-> two-step propose/confirm design in Component 3 below and tell me if that
-> matches what you had in mind, since an MCP tool invocation has no built-in
-> confirmation dialog the way a chat turn does.
+> **Security & Execution Boundary — ANSWERED.** The operator confirmed
+> routing through `OrderManager`/`PreTradeRiskGate` (never optional under
+> this repo's conventions anyway) and explicitly asked for a genuine
+> human-approval gate: the calling MCP agent must not be able to confirm
+> its own proposed trade. Phase 4 below now specifies the concrete design —
+> a durable `LiveTradeProposal` row, a real alert
+> (`observability.alerts.send_alert`) when one is created, and an
+> approve/reject action that exists **only** as `api/pilots_api.py`
+> endpoints + a Pilots PWA screen, never as an MCP tool the agent could call
+> itself. `confirm_live_trade` refuses to execute anything not already
+> marked `approved` by that separate human surface. This also fixes two
+> confirmed real bugs found by reading the code that landed with #675:
+> `get_live_positions()` crashes on any account with real holdings (wrong
+> attribute names, iterates a dict as a list), and `confirm_live_trade()`
+> currently submits every order with the pre-trade risk gate silently
+> disabled (no `risk_context` is ever built or passed). See Phase 4 below
+> for the full design, ready for a fresh agent to implement.
 
 > [!CAUTION]
-> **Infrastructure Deployment.** `docs/mcp_server_split_brain.md` currently
-> documents a *deliberate* decision not to auto-restart the production
-> `investyo-mcp` service from CI ("Restarting a service on a production VM is
-> a live deploy action, not something to execute autonomously from a
-> docs-only change"). This plan proposes changing that. Two separate
-> approvals are needed, not one: (1) do you want CI to be able to restart
-> production at all, and (2) if yes, do you want it gated behind manual
-> `workflow_dispatch` (someone clicks "Run workflow" after reviewing the diff)
-> or fully automatic `on: push` to `main`? I've defaulted the proposal below
-> to `workflow_dispatch`-only as the safer starting point — flip to `on: push`
-> only if you explicitly want that. Also note `secrets.GCP_CREDENTIALS` and
-> the IAM binding for VM SSH need to exist in this repo before the workflow
-> can run at all; that setup isn't part of this PR and needs to happen in the
-> GCP console separately.
+> **Infrastructure Deployment — ANSWERED.** The operator confirmed
+> `workflow_dispatch` (manual trigger) over fully automatic `on: push`. Note
+> for whoever builds Phase 5: `.github/workflows/deploy_mcp_vm.yml` landed
+> on `main` via #675 still wired to `on: push: branches: [main]` — the
+> confirmed `workflow_dispatch` change was never applied, so this is a real
+> outstanding fix, not just an open question anymore. Also note
+> `secrets.GCP_CREDENTIALS` and the IAM binding for VM SSH need to exist in
+> this repo before the workflow can run at all; that setup isn't part of
+> this PR and needs to happen in the GCP console separately.
 
 ## Open Questions
 
@@ -212,69 +209,242 @@ per skill (what does it look like when this goes wrong, and what's the fix).
 
 ---
 
-## Phase 4 — Execution boundary — ⏸ NOT STARTED THIS ROUND (still gated on `[!IMPORTANT]` sign-off above)
+## Phase 4 — Execution boundary — REVISED PLAN, ready for a fresh agent to build
 
-### [NEW] `robinhood_execution_mcp.py`
+> **Why this section was rewritten.** `robinhood_execution_mcp.py` already
+> exists on `main` (landed as part of PR #675) but was explicitly excluded
+> from that round's build-out and verification. A direct code-reading pass
+> (not a test run — no test file covered these paths at all) found it has
+> the exact "imports the right real modules, wrong details underneath" bug
+> class every other tool in this plan turned out to have:
+>
+> 1. **`get_live_positions()` — 3 confirmed bugs, crashes on any account with
+>    real holdings.** `AccountSnapshot.positions` is a `dict[symbol ->
+>    PortfolioPosition]` (confirmed in `data/robinhood_portfolio.py` and
+>    independently in `api/pilots_api.py::_serialize_portfolio`'s docstring),
+>    but the code does `for p in positions:` — iterating the dict's string
+>    *keys*, not its values — then calls `p.symbol`/`p.qty` on that string,
+>    which raises immediately. `PortfolioPosition` has no `.qty` field (it's
+>    `.quantity`), and `AccountSnapshot` has no `.net_liquidity` field (it's
+>    `.total_equity`).
+> 2. **`confirm_live_trade()` — the pre-trade risk gate is currently a
+>    no-op.** It calls `OrderManager.submit_order_with_idempotency(intent)`
+>    without ever building or passing `risk_context`. Read
+>    `execution/order_manager.py`'s actual code: when a gate is configured
+>    (it is — `PreTradeRiskGate()` is passed at construction) but
+>    `risk_context is None`, the manager does **not** block — it logs
+>    `"ALL pre-trade risk checks are being silently skipped for this
+>    order"` and lets the trade through anyway. Only the separate global
+>    kill switch (`execution/kill_switch.py`, checked unconditionally,
+>    independent of `risk_context`) still actually functions today.
+>
+> Beyond fixing those, **the operator explicitly asked for a real
+> human-approval gate**: today's "dual-key confirmation" is just two MCP
+> tool calls (`execute_live_trade` then `confirm_live_trade`) — nothing
+> stops the *same* calling agent/session from making both calls back to
+> back with no human ever actually seeing the trade. This plan redesigns
+> the flow so a human, not the calling agent, is the only party that can
+> ever set a proposal to `approved`.
 
-*   `execute_live_trade` builds an `OrderIntent` and submits it through
-    `execution/order_manager.py`'s `OrderManager.submit_order_with_idempotency`
-    — inherits the dry-run gate and `PreTradeRiskGate` checks for free, exactly
-    as `CLAUDE.md` requires for every order-submission path in this codebase.
-    No parallel safety logic is reimplemented here.
-*   **Dual-key confirmation**, concretely: `execute_live_trade` does not place
-    an order on first call. It returns a `confirmation_token` describing the
-    resolved order (symbol, side, qty, estimated cost, which risk-gate checks
-    it will pass through) and requires a second call,
-    `confirm_live_trade(confirmation_token)`, within a short TTL, to actually
-    submit — mirroring the existing `propose_paper_trade_for_review` /
-    review-then-execute pattern already used elsewhere in this MCP server,
-    rather than inventing a new confirmation mechanism.
-*   `cancel_order` / `get_live_positions` unchanged in shape from the original
-    proposal, but `get_live_positions` reads from the real
-    `data/robinhood_portfolio.py` snapshot, not a hardcoded `"AAPL, MSFT"`.
-*   Rate-limiting: a simple per-process token bucket (e.g. N calls per minute)
-    is sufficient for V1 — call this out explicitly as V1 scope so it isn't
-    silently claimed as more than it is.
+### Design: propose (agent) → notify (system) → approve (human, separate surface) → execute (agent, gated)
+
+Do not reinvent this shape — this codebase already has the exact template
+in `rlhf_calibration_store.py` (`RlhfCalibrationProposal(Base)` +
+`RlhfCalibrationStore`, `POST /rlhf/proposals` to create,
+`POST /rlhf/proposals/{id}/review` for the human's verdict). Copy that
+propose/store/human-reviews-via-a-separate-endpoint shape; do not
+build a parallel confirmation mechanism from scratch. The critical
+difference from the RLHF queue: that one is paper-only advisory data with
+no capital at stake, so the webapp never even needed to call its own
+create endpoint. This one gates **real order submission**, so the
+approve/reject action must be reachable *only* from a surface the MCP
+agent has no path to invoke itself.
+
+#### [NEW] `execution/live_trade_proposals_store.py`
+
+A new store, matching `rlhf_calibration_store.py`'s SQLAlchemy-declarative
+pattern (own `Base`, resolved through `db_config.py` like
+`transactions_store.py`/`cache_long_short_store.py`). One row per proposed
+trade:
+
+```
+LiveTradeProposal:
+    id / token          (str, primary key — the value returned to the caller)
+    symbol, side, qty, order_type, limit_price   (the resolved OrderIntent fields)
+    strategy_id          (str, default "mcp-agent" — who/what proposed it)
+    proposed_at          (datetime, UTC)
+    expires_at           (datetime, UTC — proposed_at + TTL, e.g. 5 min, matching today's constant)
+    status                ("pending_approval" | "approved" | "rejected" | "expired" | "executed" | "failed")
+    approved_at / approved_by   (nullable — set ONLY by the human-approval endpoint below, never by the MCP tool)
+    broker_order_id / error_message   (nullable — set by confirm_live_trade after a real submission attempt)
+```
+
+This REPLACES the current `_pending_orders = {}` in-memory module dict —
+durable storage also fixes the secondary gap that a process restart
+between propose and confirm silently drops the proposal today.
+
+#### [MODIFY] `robinhood_execution_mcp.py::execute_live_trade`
+
+*   Builds the `OrderIntent` exactly as today (same validation of
+    `side`/`order_type`), but instead of storing it in `_pending_orders` and
+    returning immediately, writes a `LiveTradeProposal` row with
+    `status="pending_approval"` via the new store.
+*   Sends a real notification via the existing multi-channel alert
+    infrastructure, `observability.alerts.send_alert("WARNING", ...)`
+    (the same function already used for the Sizing Cap threshold alert —
+    do not build a new notification path) with the proposal's id/token and
+    order details, so the operator is actually told a trade is waiting
+    rather than needing to poll.
+*   Returns the token/id to the caller with an explicit, unambiguous
+    message: **this order will NOT execute until the operator approves it
+    through the Pilots PWA — do not expect `confirm_live_trade` to succeed
+    on the next call.** (Today's docstring already implies a wait; make the
+    tool's *return value*, not just its docstring, say this plainly, since
+    an agent reads the return value, not the source.)
+*   Still consumes the rate limiter (keep the existing token-bucket class,
+    just point it at proposal creation instead of at both tools equally —
+    a human approving is not a rate-limitable event).
+
+#### [NEW] `api/pilots_api.py` — human-only approval surface
+
+*   `GET /pilots/execution/pending` — list proposals with
+    `status="pending_approval"` and not yet expired. Read tier
+    (`require_read_token`), matching every other GET in this file.
+*   `POST /pilots/execution/{id}/approve` and
+    `POST /pilots/execution/{id}/reject` — the ONLY way a proposal's status
+    can become `approved`. Gated by `require_command_token` **stacked with
+    a new dedicated flag**, following the exact `require_rag_query_enabled`
+    /`DATA_APP_CHAT_ENABLED` precedent from Phase 1 (own risk class, not a
+    shared flag) — call it `LIVE_TRADE_APPROVAL_ENABLED`. Per this
+    codebase's "changes what the platform can do with capital, defaults
+    False" carve-out (see `CACHE_LONG_SHORT_WRITES_ENABLED`'s reasoning in
+    `CLAUDE.md`) this master switch defaults **`False`**, not the
+    2026-08-03 "new admin capabilities default True" convention — that
+    convention explicitly excludes anything that "changes trading
+    behavior." Record `approved_by` from whatever identity context this
+    endpoint already has available (there is no per-operator auth in this
+    single-operator codebase — a fixed string like `"operator"` is honest
+    and sufficient; do not fabricate a user-identity system that doesn't
+    exist elsewhere here).
+*   These two endpoints are load-bearing precisely *because* they are not
+    MCP tools — `investyo_mcp_server.py`/`robinhood_execution_mcp.py` MUST
+    NOT expose an equivalent "approve" tool. The whole point of this
+    redesign is that the calling agent has no code path to set
+    `approved_by` itself.
+
+#### [NEW] Pilots PWA — pending live-trade approvals
+
+A small screen (or a card on an existing operational screen — Commands or
+Observability are the closest fits) listing `GET /pilots/execution/pending`
+with Approve/Reject buttons calling the two endpoints above. This is the
+human's actual interaction surface. Follow this repo's standard webapp
+pattern for a new screen (see `.agents/skills/new-pwa-screen/SKILL.md`):
+types → client + mock → screen → route → test, mock/live parity gate.
+
+#### [MODIFY] `robinhood_execution_mcp.py::confirm_live_trade`
+
+*   Looks up the proposal by id. If `status != "approved"`, return an
+    honest "still pending operator approval" (or "rejected"/"expired") —
+    never execute. This is the enforcement point: the calling agent cannot
+    forge an approved status, so this check is the actual gate.
+*   If approved: build a **real, populated `RiskContext`** — this is the
+    fix for the silently-skipped risk gate. Source real data the same way
+    the Phase 1 risk-tools agent already established:
+    `account`/`open_positions` from
+    `data.robinhood_portfolio.fetch_account_snapshot(allow_live_fetch=False)`
+    (cache-only — never trigger a live broker login from this path),
+    `macro` from whatever the platform's last-computed `MacroEconomicDTO`
+    source is (check `output/state_snapshot.json` or the macro engine's own
+    cached read path — do not add a new live macro fetch here).
+    `validation_reports`/`returns_df`/`start_of_day_equity` may stay `None`
+    if genuinely unavailable (every `RiskContext` field is documented
+    optional and a `None` field passes conservatively — this is a real,
+    intentional degrade path, not a gap to fabricate around).
+*   Calls `OrderManager.submit_order_with_idempotency(intent,
+    risk_context=risk_context)` — the one-line fix that actually turns the
+    risk gate on.
+*   Updates the proposal row to `executed`/`failed` with the real
+    `broker_order_id`/`error_message`.
+
+#### [MODIFY] `robinhood_execution_mcp.py::get_live_positions`
+
+*   Fix the 3 confirmed bugs: iterate `snapshot.positions.values()`, use
+    `.quantity` not `.qty`, use `.total_equity` not `.net_liquidity`.
+
+#### [NEW SETTING] `LIVE_TRADE_EXECUTION_ENABLED`
+
+Master switch for the whole `execute_live_trade`/`confirm_live_trade` pair
+(distinct from `LIVE_TRADE_APPROVAL_ENABLED` above, which gates the
+*approval* endpoints specifically) — defaults **`False`**, same
+capital-affecting-behavior carve-out reasoning as above. Both flags must be
+`True`, on top of each surface's own token gate, before a real order can
+ever be placed through this path.
 
 ### Verification (Phase 4)
 
-*   A dedicated test file exercises: dry-run intents never reach a broker call;
-    a rejected `PreTradeRiskGate` check blocks submission with the gate's own
-    reason string surfaced back to the caller; the propose/confirm token
-    expires; and a duplicate `confirm_live_trade` call is idempotent (doesn't
-    double-submit).
-*   Per `CLAUDE.md`'s branch workflow, this component touches execution logic
-    and goes through `git checkout -b` + PR — never a direct commit to `main`,
-    regardless of which agent builds it.
+*   `execute_live_trade` never calls the broker, ever — assert this
+    directly (mock/spy the broker and assert zero calls) rather than only
+    checking the returned message text.
+*   `confirm_live_trade` on a `pending_approval`/`rejected`/`expired`
+    proposal never calls `submit_order_with_idempotency` — same
+    zero-broker-calls assertion.
+*   `confirm_live_trade` on an `approved` proposal calls
+    `submit_order_with_idempotency` with a `risk_context` that is NOT
+    `None` and contains real, non-empty `account`/`open_positions` data
+    from a test fixture snapshot — this is the concrete regression test
+    against reintroducing the exact silently-skipped-gate bug found above.
+*   The approval endpoints are reachable only via `require_command_token` +
+    `LIVE_TRADE_APPROVAL_ENABLED`; confirm no MCP tool can set
+    `status="approved"`.
+*   `get_live_positions()` against a real (test) `AccountSnapshot` fixture
+    with actual positions does not raise and reports correct
+    `quantity`/`total_equity` values — the regression test for the 3
+    confirmed bugs.
+*   A duplicate `confirm_live_trade` call on an already-`executed` proposal
+    is idempotent (doesn't double-submit) — `OrderManager`'s own
+    `client_order_id` dedup already guarantees this at the broker layer;
+    write the test that proves it holds through this new code path too.
+*   Per `CLAUDE.md`'s branch workflow, this component touches execution
+    logic and goes through `git checkout -b` + PR off current `main` —
+    never a direct commit, regardless of which agent builds it.
 
 ---
 
-## Phase 5 — VM deploy automation — ⏸ NOT STARTED THIS ROUND (still gated on `[!CAUTION]` sign-off above; `.github/workflows/deploy_mcp_vm.yml` currently triggers on `push: main`, NOT the recommended `workflow_dispatch` default — do not treat it as production-safe until this phase is explicitly picked up)
+## Phase 5 — VM deploy automation — ready for a fresh agent to build
 
-### [NEW] `.github/workflows/deploy_mcp_vm.yml`
+### [MODIFY] `.github/workflows/deploy_mcp_vm.yml`
 
-*   Trigger: `workflow_dispatch` only, per the default proposed above — change
-    to `on: push` only on your explicit instruction.
-*   Body: the same SSH/restart command already verified and documented in
-    `docs/mcp_server_split_brain.md`'s existing remediation section (correct
-    `cd /opt/investyo` before `sudo -u investyo`, correct zone/project/VM
-    name) — reused verbatim, not re-derived.
-*   Requires `secrets.GCP_CREDENTIALS` and IAM configured in GCP first (your
-    action, outside this PR).
+*   Change the trigger from `on: push: branches: [main]` (its current state
+    on `main` as of this writing — landed via #675 without this change)
+    to `on: workflow_dispatch` — per the operator's earlier answer, this is
+    the confirmed default, not still an open question.
+*   Body: the SSH/restart command itself is already correct (verified
+    against `docs/mcp_server_split_brain.md`'s documented remediation —
+    correct `cd /opt/investyo` before `sudo -u investyo`, correct
+    zone/project/VM name) — leave it as-is, do not re-derive it.
+*   Requires `secrets.GCP_CREDENTIALS` and IAM configured in GCP first
+    (operator action, outside this PR — confirm this exists before relying
+    on the workflow; if it doesn't, the workflow will fail cleanly at the
+    auth step rather than silently doing nothing).
 
 ### [MODIFY] `docs/mcp_server_split_brain.md`
 
-*   Update the "Remediation" section to describe the new manual-trigger
-    workflow as an *option* operators can run instead of the raw `gcloud`
-    command, not as something that now happens automatically and
-    unconditionally — the doc's own prior reasoning against silent automation
-    stays correct until you say otherwise.
+*   Update the "Remediation" section to describe the manual-dispatch
+    workflow as an operator-invokable option (a button click after
+    reviewing the diff) instead of the current state (which, since it
+    landed on `main` still wired to `push:main`, has been describing
+    automatic-and-unconditional deployment inaccurately since #675 merged
+    — fix this promptly, independent of when the rest of Phase 5 lands).
 
 ### Verification (Phase 5)
 
-*   Trigger the workflow manually once against a non-critical change and
-    confirm `systemctl status investyo-mcp` reports healthy afterward, per the
+*   Trigger the workflow manually once (via `gh workflow run` or the
+    Actions UI) against a non-critical change and confirm
+    `systemctl status investyo-mcp` reports healthy afterward, per the
     doc's existing "Verify afterward" section.
+*   Confirm the workflow does NOT fire on an ordinary `git push` to `main`
+    that touches `investyo_mcp_server.py` — the actual regression test for
+    this phase.
 
 ---
 
