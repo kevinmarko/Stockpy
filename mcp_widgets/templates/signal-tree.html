@@ -35,21 +35,25 @@ const { App } = globalThis.ExtApps;
 function renderTree(node, container, isRoot=true) {
     const el = document.createElement('div');
     el.className = isRoot ? 'tree-node root-node' : 'tree-node';
-    
+
     const content = document.createElement('div');
     const label = document.createElement('span');
     label.className = 'tree-label';
     label.textContent = node.name || 'Node';
-    
+
     const value = document.createElement('span');
     value.className = 'tree-value';
-    value.textContent = node.value !== undefined ? String(node.value) : '';
-    
+    value.textContent = node.value !== undefined && node.value !== null ? String(node.value) : '';
+
     content.appendChild(label);
     content.appendChild(value);
     el.appendChild(content);
-    
+
     if (node.children && Array.isArray(node.children)) {
+        // get_signal_breakdown's real payload is a FLAT list of DailySignals
+        // columns (no genuine nested hierarchy is persisted) -- rendered
+        // here as one level of leaf children, not a fabricated multi-level
+        // tree.
         node.children.forEach(child => {
             renderTree(child, el, false);
         });
@@ -64,12 +68,24 @@ function renderTree(node, container, isRoot=true) {
     const payload = extractJsonPayload(content[0].text);
     const container = document.getElementById('treeContainer');
     container.innerHTML = '';
-    if (!payload || !payload.tree) {
-        container.textContent = 'No signal tree data available.';
+    const tree = payload && payload.tree;
+    const hasChildren = tree && Array.isArray(tree.children) && tree.children.length > 0;
+    if (!hasChildren) {
+        const empty = document.createElement('p');
+        empty.className = 'empty-state';
+        empty.textContent = 'No signal data available yet for this symbol.';
+        container.appendChild(empty);
         return;
     }
-    
-    renderTree(payload.tree, container, true);
+
+    if (payload.timestamp) {
+        const asOf = document.createElement('div');
+        asOf.className = 'stat-label';
+        asOf.textContent = 'As of: ' + payload.timestamp;
+        container.appendChild(asOf);
+    }
+
+    renderTree(tree, container, true);
   };
 
   await app.connect();

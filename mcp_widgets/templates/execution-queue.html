@@ -2,6 +2,13 @@
 <meta charset="utf-8" />
 <style>
 /*__WIDGET_COMMON_CSS__*/
+.queue-header {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 12px;
+}
 .queue-table {
     width: 100%;
     border-collapse: collapse;
@@ -26,27 +33,34 @@
     font-size: 0.85em;
     font-weight: bold;
 }
-.status-pending { background-color: #fbbf24; color: #78350f; }
-.status-executed { background-color: #10b981; color: #064e3b; }
-.status-failed { background-color: #ef4444; color: #7f1d1d; }
+.status-placeable { background-color: #10b981; color: #064e3b; }
+.status-gated { background-color: #fbbf24; color: #78350f; }
+.gate-reasons {
+    font-size: 0.85em;
+    color: #9ca3af;
+}
 </style>
 <body>
   <div id="root">
       <h2>Execution Queue</h2>
-      <table class="queue-table">
+      <div class="queue-header" id="queueHeader"></div>
+      <table class="queue-table" id="queueTable">
           <thead>
               <tr>
                   <th>Symbol</th>
+                  <th>Action</th>
                   <th>Side</th>
-                  <th>Quantity</th>
+                  <th>Qty / Notional</th>
                   <th>Type</th>
-                  <th>Status</th>
+                  <th>Gate</th>
+                  <th>Rationale</th>
               </tr>
           </thead>
           <tbody id="queueBody">
               <!-- rows will be injected here -->
           </tbody>
       </table>
+      <p id="queueEmpty" class="empty-state" style="display:none;"></p>
   </div>
 </body>
 <script type="module">
@@ -54,12 +68,12 @@
 /*__WIDGET_COMMON_JS__*/
 const { App } = globalThis.ExtApps;
 
-function getStatusBadgeClass(status) {
-    status = (status || '').toLowerCase();
-    if (status === 'pending') return 'status-pending';
-    if (status === 'executed') return 'status-executed';
-    if (status === 'failed') return 'status-failed';
-    return 'status-pending';
+function fmtQty(order) {
+    if (typeof order.qty === "number") return String(order.qty);
+    if (typeof order.target_notional === "number") {
+        return "$" + order.target_notional.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    }
+    return "—";
 }
 
 (async () => {
@@ -68,41 +82,88 @@ function getStatusBadgeClass(status) {
   app.ontoolresult = ({ content }) => {
     const payload = extractJsonPayload(content[0].text);
     const tbody = document.getElementById('queueBody');
+    const table = document.getElementById('queueTable');
+    const emptyEl = document.getElementById('queueEmpty');
+    const headerEl = document.getElementById('queueHeader');
     tbody.innerHTML = '';
-    
-    if (!payload || !payload.orders || payload.orders.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">No orders in queue.</td></tr>';
+    headerEl.innerHTML = '';
+
+    // get_execution_queue's real payload -- these are GATED order intents
+    // (execution/queue_builder.py), never fills. There is no fabricated
+    // "executed"/"failed" fill status here -- only the real allow_place
+    // gate verdict, rendered honestly as Placeable/Gated.
+    const orders = payload && Array.isArray(payload.orders) ? payload.orders : [];
+
+    if (!payload || orders.length === 0) {
+        table.style.display = 'none';
+        emptyEl.style.display = 'block';
+        emptyEl.textContent = payload
+            ? `Execution queue is empty (mode: ${payload.mode || '?'}). No orders pending.`
+            : 'No execution queue data available yet.';
         return;
     }
-    
-    payload.orders.forEach(order => {
+
+    table.style.display = 'table';
+    emptyEl.style.display = 'none';
+
+    const modeChip = document.createElement('span');
+    modeChip.className = 'badge';
+    modeChip.textContent = 'Mode: ' + (payload.mode || '?');
+    headerEl.appendChild(modeChip);
+
+    const killChip = document.createElement('span');
+    const killActive = !!payload.kill_switch_active;
+    killChip.className = 'badge ' + (killActive ? 'badge-decline' : 'badge-growth');
+    killChip.textContent = 'Kill switch: ' + (killActive ? 'ACTIVE' : 'inactive');
+    headerEl.appendChild(killChip);
+
+    const countChip = document.createElement('span');
+    countChip.className = 'stat-label';
+    countChip.textContent = `${payload.n_placeable ?? 0}/${payload.total ?? orders.length} placeable`;
+    headerEl.appendChild(countChip);
+
+    orders.forEach(order => {
         const tr = document.createElement('tr');
-        
+
         const tdSymbol = document.createElement('td');
         tdSymbol.textContent = order.symbol || '-';
-        
+
+        const tdAction = document.createElement('td');
+        tdAction.textContent = order.action || '-';
+
         const tdSide = document.createElement('td');
         tdSide.textContent = order.side || '-';
         tdSide.style.color = (order.side || '').toLowerCase() === 'buy' ? '#10b981' : '#ef4444';
-        
+
         const tdQty = document.createElement('td');
-        tdQty.textContent = order.qty || '-';
-        
+        tdQty.textContent = fmtQty(order);
+
         const tdType = document.createElement('td');
-        tdType.textContent = order.type || 'MARKET';
-        
-        const tdStatus = document.createElement('td');
+        tdType.textContent = order.order_type || '—';
+
+        const tdGate = document.createElement('td');
         const badge = document.createElement('span');
-        badge.className = 'status-badge ' + getStatusBadgeClass(order.status);
-        badge.textContent = order.status || 'PENDING';
-        tdStatus.appendChild(badge);
-        
+        badge.className = 'status-badge ' + (order.allow_place ? 'status-placeable' : 'status-gated');
+        badge.textContent = order.allow_place ? 'Placeable' : 'Gated';
+        tdGate.appendChild(badge);
+        if (!order.allow_place && Array.isArray(order.gate_reasons) && order.gate_reasons.length > 0) {
+            const reasons = document.createElement('div');
+            reasons.className = 'gate-reasons';
+            reasons.textContent = order.gate_reasons.join('; ');
+            tdGate.appendChild(reasons);
+        }
+
+        const tdRationale = document.createElement('td');
+        tdRationale.textContent = order.rationale || '—';
+
         tr.appendChild(tdSymbol);
+        tr.appendChild(tdAction);
         tr.appendChild(tdSide);
         tr.appendChild(tdQty);
         tr.appendChild(tdType);
-        tr.appendChild(tdStatus);
-        
+        tr.appendChild(tdGate);
+        tr.appendChild(tdRationale);
+
         tbody.appendChild(tr);
     });
   };

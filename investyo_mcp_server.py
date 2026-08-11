@@ -66,6 +66,10 @@ _PILOT_DETAIL_UI = {"ui": {"resourceUri": "ui://widgets/pilot-detail.html"}} if 
 _FOLLOW_RESULT_UI = {"ui": {"resourceUri": "ui://widgets/follow-result.html"}} if _WIDGETS_AVAILABLE else None
 _PILOT_COMPARE_UI = {"ui": {"resourceUri": "ui://widgets/pilot-compare.html"}} if _WIDGETS_AVAILABLE else None
 _PILOT_PORTFOLIO_UI = {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}} if _WIDGETS_AVAILABLE else None
+_EQUITY_CURVE_UI = {"ui": {"resourceUri": "ui://widgets/equity-curve.html"}} if _WIDGETS_AVAILABLE else None
+_RISK_MATRIX_UI = {"ui": {"resourceUri": "ui://widgets/risk-matrix.html"}} if _WIDGETS_AVAILABLE else None
+_SIGNAL_TREE_UI = {"ui": {"resourceUri": "ui://widgets/signal-tree.html"}} if _WIDGETS_AVAILABLE else None
+_EXECUTION_QUEUE_UI = {"ui": {"resourceUri": "ui://widgets/execution-queue.html"}} if _WIDGETS_AVAILABLE else None
 
 
 def _active_universe() -> list:
@@ -1202,7 +1206,7 @@ def update_universe_tickers(action: str, symbol: str) -> str:
     except Exception as e:
         return f"Failed to write DEFAULT_TICKERS setting: {str(e)}"
 
-@mcp.tool()
+@mcp.tool(meta=_EQUITY_CURVE_UI)
 def plot_equity_curve(symbol: str, period: str = "1y") -> str:
     """
     Runs a Backtrader simulation on the given stock symbol and generates a PNG plot
@@ -1278,8 +1282,22 @@ def plot_equity_curve(symbol: str, period: str = "1y") -> str:
             f"Successfully simulated InstitutionalStrategy. Final Portfolio Value: ${equity[-1]:,.2f}\n\n"
             f"![Equity Curve for {symbol.upper()}](file://{img_path})\n"
         )
+
+        # Structured payload for the equity-curve widget (ui://widgets/equity-curve.html)
+        # -- the exact real dates/equity series just plotted above, never a
+        # re-derived or fabricated series.
+        chart_payload = {
+            "symbol": symbol.upper(),
+            "period": period,
+            "dates": [str(d) for d in dates],
+            "series": [
+                {"label": f"{symbol.upper()} Strategy", "values": [float(v) for v in equity]},
+            ],
+            "final_value": float(equity[-1]),
+        }
+        markdown_response += "\n```json\n" + json.dumps(chart_payload, indent=2, default=str) + "\n```"
         return markdown_response
-        
+
     except Exception as e:
         return f"Plot generation failed: {str(e)}"
 
@@ -1472,7 +1490,7 @@ def get_portfolio_context_note() -> str:
         return f"Failed to retrieve portfolio context note: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(meta=_EQUITY_CURVE_UI)
 def plot_portfolio_equity(period: str = "1y") -> str:
     """
     Runs the InstitutionalStrategy on all active universe tickers, merges their equity curves
@@ -1564,8 +1582,24 @@ def plot_portfolio_equity(period: str = "1y") -> str:
             f"- **SPY Benchmark Return**: {spy_ret:+.2f}%\n\n"
             f"![Portfolio vs SPY](file://{img_path})\n"
         )
+
+        # Structured payload for the equity-curve widget (ui://widgets/equity-curve.html)
+        # -- the exact real portfolio/benchmark series just plotted above,
+        # never a re-derived or fabricated series.
+        chart_payload = {
+            "symbol": None,
+            "period": period,
+            "dates": [d.strftime("%Y-%m-%d") for d in portfolio_series.index],
+            "series": [
+                {"label": "InvestYo Portfolio Strategy", "values": [float(v) for v in portfolio_series.values]},
+                {"label": "SPY Benchmark", "values": [float(v) for v in spy_series.values]},
+            ],
+            "portfolio_return_pct": float(port_ret),
+            "benchmark_return_pct": float(spy_ret),
+        }
+        markdown_response += "\n```json\n" + json.dumps(chart_payload, indent=2, default=str) + "\n```"
         return markdown_response
-        
+
     except Exception as e:
         return f"Portfolio plot generation failed: {str(e)}"
 
@@ -1922,7 +1956,7 @@ def run_lookahead_check(symbol: str, decision_date: str) -> str:
         return f"Lookahead check failed: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(meta=_SIGNAL_TREE_UI)
 def get_signal_breakdown(symbol: str) -> str:
     """
     Returns the full composite signal decomposition for a ticker,
@@ -1957,6 +1991,30 @@ def get_signal_breakdown(symbol: str) -> str:
             if val is not None:
                 lines.append(f"- **{key}**: {val}")
 
+        # Structured payload for the signal-tree widget (ui://widgets/signal-tree.html).
+        # This is a FLAT list of the real DailySignals row columns -- there is
+        # no genuine per-module weighted-contribution breakdown persisted per
+        # row (settings.SIGNAL_WEIGHTS is keyed by SignalModule name, e.g.
+        # "rsi2_mean_reversion", which has no reliable 1:1 mapping onto a
+        # DailySignals column name like "RSI_2"), so this deliberately does
+        # NOT fabricate a nested hierarchy or a weight-multiplied number --
+        # every node's value is exactly the value returned above.
+        tree_payload = {
+            "symbol": symbol.upper(),
+            "timestamp": data.get("timestamp"),
+            "tree": {
+                "name": f"Signal Breakdown: {symbol.upper()}",
+                "value": None,
+                "children": [
+                    {"name": key, "value": data.get(key)}
+                    for key in signal_keys
+                    if data.get(key) is not None
+                ],
+            },
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(tree_payload, indent=2, default=str))
+        lines.append("```")
         return "\n".join(lines)
     except Exception as e:
         return f"Signal breakdown failed: {str(e)}"
@@ -2142,7 +2200,7 @@ def generate_daily_signals(top_n: int = 10) -> str:
         return f"Signal generation failed: {str(e)}"
 
 
-@mcp.tool()
+@mcp.tool(meta=_EXECUTION_QUEUE_UI)
 def get_execution_queue() -> str:
     """
     Reads the latest execution_queue.json and returns the gated order intents
@@ -2168,9 +2226,19 @@ def get_execution_queue() -> str:
         # field missing, rendered as literal "?"s). Read the real schema.
         intents = payload.get("intents") or []
         if not intents:
+            empty_payload = {
+                "mode": payload.get("mode", "?"),
+                "generated_at": payload.get("generated_at"),
+                "kill_switch_active": bool(payload.get("kill_switch_active", False)),
+                "n_placeable": 0,
+                "total": 0,
+                "orders": [],
+            }
             return (
                 f"Execution queue is empty (0 intents, mode={payload.get('mode', '?')}). "
-                "No orders pending."
+                "No orders pending.\n\n```json\n"
+                + json.dumps(empty_payload, indent=2, default=str)
+                + "\n```"
             )
 
         mode = payload.get("mode", "?")
@@ -2207,6 +2275,38 @@ def get_execution_queue() -> str:
                 f"{allowed} | {rationale} | {reasons_str} |"
             )
 
+        # Structured payload for the execution-queue widget
+        # (ui://widgets/execution-queue.html) -- the exact same real intents
+        # rendered in the markdown table above, re-shaped as `orders` for the
+        # widget. `order_type` comes straight from queue_builder's real
+        # OrderIntent (never fabricated -- there is no separate "status" the
+        # queue tracks beyond the gate verdict, so the widget derives its
+        # placeable/gated badge from `allow_place`, not an invented fill state).
+        orders_payload = {
+            "mode": mode,
+            "generated_at": generated_at,
+            "kill_switch_active": bool(payload.get("kill_switch_active", False)),
+            "n_placeable": n_placeable,
+            "total": len(intents),
+            "orders": [
+                {
+                    "symbol": i.get("symbol"),
+                    "action": i.get("action"),
+                    "side": i.get("side"),
+                    "qty": i.get("qty"),
+                    "order_type": i.get("order_type"),
+                    "target_notional": i.get("target_notional"),
+                    "allow_place": bool(i.get("allow_place", False)),
+                    "rationale": i.get("rationale"),
+                    "gate_reasons": i.get("gate_reasons") or [],
+                }
+                for i in intents
+                if isinstance(i, dict)
+            ],
+        }
+        lines.append("\n```json")
+        lines.append(json.dumps(orders_payload, indent=2, default=str))
+        lines.append("```")
         return "\n".join(lines)
     except Exception as e:
         return f"Failed to read execution queue: {str(e)}"
@@ -3609,7 +3709,7 @@ def get_portfolio_by_pilot() -> str:
 # PHASE 1: READ-ONLY ANALYTICS TOOLS
 # ==============================================================================
 
-@mcp.tool()
+@mcp.tool(meta=_RISK_MATRIX_UI)
 def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
     """
     Computes real 95% Value-at-Risk and Expected Shortfall for a ticker from
@@ -3639,7 +3739,7 @@ def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
         std_ret = returns.std()
         if np.isnan(std_ret) or std_ret < 1e-12:
             return f"insufficient history for ticker {ticker}: degenerate return standard deviation ({std_ret})"
-            
+
         if method == "historical":
             var_95 = np.percentile(returns, 5)
             es_95 = returns[returns <= var_95].mean()
@@ -3649,13 +3749,26 @@ def get_var_es_metrics(ticker: str, method: str = "historical") -> str:
             var_95 = norm.ppf(0.05, mu, std_ret)
             es_95 = mu - std_ret * norm.pdf(norm.ppf(0.05)) / 0.05
 
-        return (
+        text_response = (
             f"Ticker: {ticker}\n"
             f"VaR (95%): {var_95:.4%}\n"
             f"Expected Shortfall (95%): {es_95:.4%}\n"
             f"Method: {method}\n"
             f"Sample size: {len(returns)} days"
         )
+
+        # Structured payload for the risk-matrix widget (ui://widgets/risk-matrix.html).
+        risk_payload = {
+            "ticker": ticker.upper(),
+            "kind": "var_es",
+            "method": method,
+            "sample_size": len(returns),
+            "metrics": [
+                {"label": "VaR (95%)", "value": float(var_95), "format": "percent"},
+                {"label": "Expected Shortfall (95%)", "value": float(es_95), "format": "percent"},
+            ],
+        }
+        return text_response + "\n\n```json\n" + json.dumps(risk_payload, indent=2, default=str) + "\n```"
     except Exception as e:
         return f"failed to compute metrics for {ticker}: {str(e)}"
 
@@ -3752,7 +3865,7 @@ def run_stress_scenario_simulation(portfolio_id: str, scenario: str) -> str:
     except Exception as e:
         return f"failed to run stress scenario: {str(e)}"
 
-@mcp.tool()
+@mcp.tool(meta=_RISK_MATRIX_UI)
 def get_factor_attributions(ticker: str) -> str:
     """
     Returns the real multifactor fundamental attribution (Value/Quality/
@@ -3782,20 +3895,48 @@ def get_factor_attributions(ticker: str) -> str:
         if not rows:
             return f"no recent factor score for {ticker}"
 
-        data = dict(zip(columns, rows[0]))
+        # Named `row` (not `data`) so the risk-matrix widget payload built
+        # below -- which predates this real-data rewrite and reads via
+        # `row.get(...)` -- keeps working unchanged.
+        row = dict(zip(columns, rows[0]))
 
         def _fmt(key: str) -> str:
-            val = data.get(key)
+            val = row.get(key)
             return "N/A" if val is None else str(val)
 
-        return (
-            f"# Factor Attribution: {ticker} ({data.get('timestamp', 'N/A')})\n\n"
+        text_response = (
+            f"# Factor Attribution: {ticker} ({row.get('timestamp', 'N/A')})\n\n"
             f"Value Z-Score: {_fmt('Value_Z')}\n"
             f"Quality Z-Score: {_fmt('Quality_Z')}\n"
             f"LowVol Z-Score: {_fmt('LowVol_Z')}\n"
             f"Size Z-Score: {_fmt('Size_Z')}\n"
             f"Multifactor Composite: {_fmt('Multifactor_Composite')}"
         )
+
+        # Structured payload for the risk-matrix widget (ui://widgets/risk-matrix.html).
+        # NaN (pandas' honest "not computable" sentinel per CONSTRAINT #4) is
+        # converted to None rather than fabricated as 0.0 or dropped silently.
+        import math
+
+        def _num(v):
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return None if math.isnan(f) else f
+
+        factor_payload = {
+            "ticker": ticker.upper(),
+            "kind": "factor_attribution",
+            "metrics": [
+                {"label": "Value Z-Score", "value": _num(row.get("Value_Z")), "format": "number"},
+                {"label": "Quality Z-Score", "value": _num(row.get("Quality_Z")), "format": "number"},
+                {"label": "LowVol Z-Score", "value": _num(row.get("LowVol_Z")), "format": "number"},
+                {"label": "Size Z-Score", "value": _num(row.get("Size_Z")), "format": "number"},
+                {"label": "Multifactor Composite", "value": _num(row.get("Multifactor_Composite")), "format": "number"},
+            ],
+        }
+        return text_response + "\n\n```json\n" + json.dumps(factor_payload, indent=2, default=str) + "\n```"
     except Exception as e:
         return f"failed to get factor attributions for {ticker}: {str(e)}"
 
