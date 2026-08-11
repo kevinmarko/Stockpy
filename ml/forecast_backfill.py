@@ -340,7 +340,52 @@ class AgenticForecastBackfiller:
         A fresh ``SignalContext`` is constructed per date (via
         ``make_context``) so ``context.xsec_percentile_ranks`` from one date
         can never leak into another's rank lookup.
+
+        Vectorized fast path
+        ---------------------
+        ``ranks_wide`` (a Date x Ticker wide frame of cross-sectional
+        percentile ranks) is computed ONCE here via a single vectorized
+        ``.rank(axis=1, pct=True, ascending=True)`` call over the entire
+        historical panel -- the exact same per-date rank formula
+        ``pre_compute()`` computes today (see ``CrossSectionalMomentumSignal
+        .pre_compute``), just batched across every date at once instead of
+        looped. If ``module.compute_batch_xsec(ranks_wide)`` returns
+        something other than ``None`` (see ``SignalModule
+        .compute_batch_xsec``'s docstring in signals/base.py), this
+        ENTIRELY skips the per-date and per-ticker Python loops below --
+        at ~1000 trading days x up to 515 tickers that loop is up to ~500K
+        Python-level calls into ``pre_compute()``/``compute()``. Any module
+        that doesn't implement the hook (returns ``None``, the base-class
+        default) falls through to the existing double loop UNCHANGED --
+        that loop remains the correctness fallback for any other
+        cross-sectional module.
         """
+        ranks_wide = xsec_return_wide.rank(axis=1, pct=True, ascending=True)
+        batch_scores = module.compute_batch_xsec(ranks_wide)
+        if batch_scores is not None:
+            # future_stack=True keeps NaN entries (old dropna=False
+            # behavior, without the deprecation warning) so a (Date,
+            # Ticker) combination the module didn't score reindexes to NaN
+            # below rather than silently vanishing.
+            scores = batch_scores.stack(future_stack=True).reindex(self.data.index)
+            # confidence/explanation/meta_label_proba are unused downstream
+            # (see compute_batch_xsec's docstring) -- confidence = |score|
+            # is a cheap, cheap-to-justify one-line vectorized fill rather
+            # than an arbitrary constant; NaN score -> 0.0 confidence,
+            # matching the slow path's default-0.0-until-computed initial
+            # value for any (date, ticker) it never visits either.
+            confidences = scores.abs().fillna(0.0)
+            explanations = pd.Series("", index=self.data.index, dtype=object)
+            return pd.DataFrame(
+                {
+                    "score": scores,
+                    "confidence": confidences,
+                    "explanation": explanations,
+                    "meta_label_proba": 1.0,
+                },
+                index=self.data.index,
+            )
+
         scores = pd.Series(np.nan, index=self.data.index, dtype=float)
         confidences = pd.Series(0.0, index=self.data.index, dtype=float)
         explanations = pd.Series("", index=self.data.index, dtype=object)
@@ -435,6 +480,22 @@ class AgenticForecastBackfiller:
 
         for name, module in global_registry.get_all().items():
             if self.strategy_ids and name not in self.strategy_ids:
+                continue
+
+            # This engine's sole purpose is meta-label training/export (see
+            # module docstring). A module with no (non-empty)
+            # meta_label_features can never reach step 5's training gate
+            # ("skipping training" branch) or export_results()'s
+            # _has_trained_model filter, regardless of what step 3 computes
+            # for it here -- so computing anything for it in step 3 (the
+            # per-date/per-ticker cross-sectional replay in particular,
+            # which is the dominant cost of this whole pipeline) is pure
+            # waste. Skipping here, before the cross-sectional pre_compute
+            # path is ever reached, is what actually eliminates the
+            # ~500K-call replay for every such module (e.g. news_catalyst,
+            # multifactor, sector_quality_rank, lgbm_ranker).
+            if not getattr(module, "meta_label_features", []):
+                logger.debug(f"Skipping {name}: no meta_label_features declared (never trainable).")
                 continue
 
             missing = [f for f in module.required_features if f not in self.data.columns]

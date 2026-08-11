@@ -465,6 +465,116 @@ def test_cross_sectional_module_wiring_is_lookahead_free():
     pd.testing.assert_series_equal(before_day, after_day)
 
 
+def test_step_3_skips_cross_sectional_modules_with_no_meta_label_features():
+    """A registered module that overrides pre_compute (cross-sectional) but
+    declares no meta_label_features (multifactor, lgbm_ranker, news_catalyst,
+    sector_quality_rank) can never reach step 5's training gate or
+    export_results()'s _has_trained_model filter -- so step 3 must skip it
+    BEFORE ever invoking the expensive per-date/per-ticker
+    _run_cross_sectional_module replay for it. cross_sectional_momentum
+    (the one cross-sectional module that DOES declare meta_label_features)
+    must still be the only one replayed."""
+    from signals.registry import global_registry
+    from signals.base import SignalModule
+
+    non_trainable_cross_sectional = [
+        name
+        for name, module in global_registry.get_all().items()
+        if type(module).pre_compute is not SignalModule.pre_compute
+        and not getattr(module, "meta_label_features", [])
+    ]
+    # Sanity check this test is actually exercising something -- if this
+    # list is ever empty (e.g. every cross-sectional module gains
+    # meta_label_features), the assertions below would trivially pass for
+    # the wrong reason.
+    assert non_trainable_cross_sectional, "expected at least one non-trainable cross-sectional module"
+
+    tickers = ["AAA", "BBB", "CCC", "DDD"]
+    engine = _synthetic_engine(tickers)
+    engine.step_2_calculate_technical_features()
+
+    call_log = []
+    real_run = AgenticForecastBackfiller._run_cross_sectional_module
+
+    def _spy(self, module, xsec_return_wide, make_context):
+        call_log.append(module.name)
+        return real_run(self, module, xsec_return_wide, make_context)
+
+    with mock.patch.object(AgenticForecastBackfiller, "_run_cross_sectional_module", _spy):
+        engine.step_3_generate_primary_signals()
+
+    assert call_log == ["cross_sectional_momentum"]
+    for name in non_trainable_cross_sectional:
+        assert name not in engine.active_strategies
+        assert f"{name}_Signal" not in engine.data.columns
+
+
+def test_cross_sectional_fast_path_matches_slow_path_parity():
+    """The vectorized compute_batch_xsec() fast path (default) must produce
+    a numerically identical cross_sectional_momentum_Signal column to the
+    per-date/per-ticker pre_compute()/compute() slow path it replaces --
+    within this codebase's 1e-5 numeric-drift convention. Forces the slow
+    path by monkeypatching compute_batch_xsec to return None (its
+    documented "no fast path available" contract), on the same synthetic
+    fixture, and compares the two runs."""
+    from signals.registry import global_registry
+
+    tickers = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+
+    fast_engine = _synthetic_engine(tickers)
+    fast_engine.step_2_calculate_technical_features()
+    fast_engine.step_3_generate_primary_signals()
+    fast_sig = fast_engine.data["cross_sectional_momentum_Signal"].sort_index()
+
+    module = global_registry.get("cross_sectional_momentum")
+    with mock.patch.object(module, "compute_batch_xsec", return_value=None):
+        slow_engine = _synthetic_engine(tickers)
+        slow_engine.step_2_calculate_technical_features()
+        slow_engine.step_3_generate_primary_signals()
+    slow_sig = slow_engine.data["cross_sectional_momentum_Signal"].sort_index()
+
+    assert fast_sig.notna().any()
+    pd.testing.assert_series_equal(fast_sig, slow_sig, check_exact=False, atol=1e-5, rtol=0)
+
+
+def test_cross_sectional_fast_path_is_lookahead_free():
+    """Fast-path (compute_batch_xsec) mirror of
+    test_cross_sectional_module_wiring_is_lookahead_free: proves
+    compute_batch_xsec's single vectorized ``.rank(axis=1)`` call over the
+    whole historical panel didn't reintroduce a lookahead leak (e.g. by
+    computing one date's rank against data from a later date). Explicitly
+    confirms the FAST path (not the loop fallback) is what ran, by making
+    the per-ticker scalar compute() fail loudly if it's ever invoked."""
+    from signals.registry import global_registry
+
+    tickers = ["AAA", "BBB", "CCC", "DDD"]
+    module = global_registry.get("cross_sectional_momentum")
+
+    def _fail_if_slow_path_used(*args, **kwargs):
+        pytest.fail("compute() must not be called on the fast (compute_batch_xsec) path")
+
+    with mock.patch.object(module, "compute", side_effect=_fail_if_slow_path_used):
+        baseline = _synthetic_engine(tickers)
+        baseline.step_2_calculate_technical_features()
+        baseline.step_3_generate_primary_signals()
+        sig_before = baseline.data["cross_sectional_momentum_Signal"]
+
+        valid_dates = sig_before.dropna().index.get_level_values("Date").unique().sort_values()
+        cutoff_date = valid_dates[10]  # early in the valid range -- leaves room to perturb "the future"
+
+        perturbed = _synthetic_engine(tickers)
+        cutoff_pos = perturbed.prices.index.get_loc(cutoff_date)
+        # Blow up AAA's price for every date strictly after the cutoff.
+        perturbed.prices.iloc[cutoff_pos + 1 :, perturbed.prices.columns.get_loc("AAA")] *= 5.0
+        perturbed.step_2_calculate_technical_features()
+        perturbed.step_3_generate_primary_signals()
+        sig_after = perturbed.data["cross_sectional_momentum_Signal"]
+
+    before_day = sig_before.xs(cutoff_date, level="Date").sort_index()
+    after_day = sig_after.xs(cutoff_date, level="Date").sort_index()
+    pd.testing.assert_series_equal(before_day, after_day)
+
+
 def test_forecast_backfill_api_endpoint(monkeypatch, tmp_path):
     """Test API endpoint response from api.pilots_api."""
     from fastapi.testclient import TestClient
