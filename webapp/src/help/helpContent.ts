@@ -283,6 +283,18 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "A per-Pilot deep dive: real holdings coverage, archived news-sentiment coverage for Pilots that weight the news-catalyst signal, and a 'what if I allocated $X' allocation simulator. Every projection is computed fresh per Pilot and per allocation size — never a single reused number across Pilots.",
     keyConcepts: ["deployable", "kelly target", "news provider"],
   },
+  "create-data-app": {
+    title: "Create Data App",
+    description:
+      "Name a custom view built from the same real, live widgets Strategy Insights uses, and save it as a working sidebar shortcut. Saving actually persists (survives a reload, syncs across browser tabs) and actually adds a nav entry — never a decorative form.",
+    keyConcepts: ["edge ratio"],
+  },
+  "custom-view": {
+    title: "Data App",
+    description:
+      "An operator-saved custom view. Every widget here is the same live component used elsewhere in the app (Strategy Insights' charts, the platform's grounded chat) — a Data App is a saved combination of those, not a separate implementation.",
+    keyConcepts: ["edge ratio"],
+  },
   "sector-selection": {
     title: "Sector Selection",
     description:

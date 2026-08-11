@@ -1,16 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar as RBar,
-  ComposedChart,
-  Line,
-  Scatter,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-} from "recharts";
+import React, { useMemo, useState } from "react";
 import {
   createColumnHelper,
   flexRender,
@@ -21,35 +9,31 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { api } from "../api/client";
-import type {
-  Bar,
-  DecisionEntry,
-  EdgeByStrategy,
-  Holding,
-  PilotSummary,
-  Portfolio,
-} from "../api/types";
+import type { Holding, PilotSummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { Button, EmptyState, ErrorState, Input, Loading, Notice, Select, Table } from "../components/ui";
-import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
+import { Button, EmptyState, ErrorState, Input, Loading, Notice, Table } from "../components/ui";
+import { EdgeByStrategyChart } from "../components/EdgeByStrategyChart";
+import { SymbolSignalOverlayChart } from "../components/SymbolSignalOverlayChart";
 import { TabGuide } from "../components/TabGuide";
 import { fmtNum, fmtPct, fmtUsd } from "../format";
-import { seriesColor, theme } from "../theme";
+import { theme } from "../theme";
 
 /**
- * Strategy Insights — one static, always-present screen combining four
- * previously-siloed reads (edge-by-strategy, per-symbol price/decision
- * history, the Pilots catalog + holdings, and a real allocation simulation)
- * into a single operator workspace. Rebuilt after a code review found PR
- * #670 (unmerged) shipped a fabricated "What-If Simulation" panel (identical
- * hardcoded deltas for every strategy), a "Save to Dashboard" flow that
- * persisted nothing, and a dual-y-axis chart. This screen is deliberately
- * NOT a generic app builder: no nav-item creation, no save/persist flow, no
- * "create app" form.
+ * Strategy Insights — one static, always-present screen combining three
+ * previously-siloed reads (edge-by-strategy + price/decision history --
+ * both now shared widgets, see components/EdgeByStrategyChart.tsx and
+ * components/SymbolSignalOverlayChart.tsx -- the Pilots catalog + holdings,
+ * and a real allocation simulation) into a single operator workspace.
+ * Rebuilt after a code review found PR #670 (unmerged) shipped a fabricated
+ * "What-If Simulation" panel (identical hardcoded deltas for every
+ * strategy), a "Save to Dashboard" flow that persisted nothing, and a
+ * dual-y-axis chart. This screen is deliberately NOT a generic app builder:
+ * no nav-item creation, no save/persist flow, no "create app" form -- that
+ * capability now lives in screens/CreateDataApp.tsx + screens/CustomView.tsx,
+ * built with real persistence, reusing this screen's own chart widgets
+ * rather than a second implementation of them.
  */
-
-const FALLBACK_SYMBOLS = ["AAPL", "MSFT", "SPY"];
 
 /** A label / value row inside a card (value already formatted, "—" for null). */
 function StatRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -70,182 +54,7 @@ function StatRow({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Edge per Strategy -- TWO stacked single-axis bar charts (never one
-//    dual-y-axis chart -- this codebase's documented anti-dual-axis
-//    principle: different scales overlaid on one plot is "the most common
-//    charting mistake").
-// ---------------------------------------------------------------------------
-function EdgePanel() {
-  const { data, loading, error, status, reload } = useApi<EdgeByStrategy>(
-    () => api.getEdgeByStrategy(),
-    []
-  );
-
-  if (loading) return <Loading lines={3} />;
-  if (error) return <ErrorState message={error} status={status} onRetry={reload} />;
-  if (!data || data.rows.length === 0) {
-    return (
-      <EmptyState
-        title="No closed trades to score yet"
-        hint={data?.reason ?? "Edge ratio by strategy populates once trades close."}
-      />
-    );
-  }
-
-  return (
-    <div data-testid="strategy-insights-edge-chart">
-      <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginBottom: "var(--s-1-5)" }}>
-        Mean edge ratio by strategy
-      </div>
-      <div style={{ height: 200 }}>
-        <ResponsiveContainer>
-          <BarChart data={data.rows} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-            <CartesianGrid {...chartGridProps} />
-            <XAxis dataKey="strategy" tick={{ ...chartAxisTick, fontSize: "var(--t-micro)" }} {...chartAxisLine} />
-            <YAxis tick={chartAxisTick} {...chartAxisLine} />
-            <Tooltip
-              contentStyle={chartTooltipStyle}
-              formatter={(v) => [typeof v === "number" ? fmtNum(v, 2) : "—", "Mean edge ratio"]}
-            />
-            <RBar dataKey="mean_edge_ratio" name="Mean edge ratio" fill={seriesColor(0)} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: "var(--s-3) 0 var(--s-1-5)" }}>
-        Trade count by strategy
-      </div>
-      <div style={{ height: 200 }}>
-        <ResponsiveContainer>
-          <BarChart data={data.rows} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
-            <CartesianGrid {...chartGridProps} />
-            <XAxis dataKey="strategy" tick={{ ...chartAxisTick, fontSize: "var(--t-micro)" }} {...chartAxisLine} />
-            <YAxis tick={chartAxisTick} {...chartAxisLine} allowDecimals={false} />
-            <Tooltip
-              contentStyle={chartTooltipStyle}
-              formatter={(v) => [typeof v === "number" ? v.toFixed(0) : "—", "Trades"]}
-            />
-            <RBar dataKey="n_trades" name="Trades" fill={seriesColor(1)} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 2. Symbol price history + BUY/SELL decision overlay.
-// ---------------------------------------------------------------------------
-function PriceHistoryPanel({ symbols }: { symbols: string[] }) {
-  const [symbol, setSymbol] = useState(symbols[0] ?? "AAPL");
-
-  // Keep the selection valid as `symbols` resolves from the fallback list to
-  // the operator's real holdings (portfolio fetch lands after mount).
-  useEffect(() => {
-    if (symbols.length > 0 && !symbols.includes(symbol)) setSymbol(symbols[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbols]);
-
-  const bars = useApi<Bar[]>(() => api.getDataBars(symbol, 252), [symbol]);
-  const decisions = useApi<DecisionEntry[]>(
-    () => api.getDecisions({ symbol, limit: 100 }),
-    [symbol]
-  );
-
-  const merged = useMemo(() => {
-    if (!bars.data) return [];
-    const markerByDate = new Map<string, { buy: boolean; sell: boolean }>();
-    for (const d of decisions.data ?? []) {
-      const date = (d.signal_ts ?? "").slice(0, 10);
-      if (!date) continue;
-      const action = (d.signal_action ?? "").toUpperCase();
-      const prev = markerByDate.get(date) ?? { buy: false, sell: false };
-      if (action.includes("SELL")) prev.sell = true;
-      else if (action.includes("BUY")) prev.buy = true;
-      markerByDate.set(date, prev);
-    }
-    return bars.data.map((b) => {
-      const m = markerByDate.get(b.date);
-      return {
-        date: b.date,
-        close: b.Close,
-        buyMarker: m?.buy && b.Close != null ? b.Close : null,
-        sellMarker: m?.sell && b.Close != null ? b.Close : null,
-      };
-    });
-  }, [bars.data, decisions.data]);
-
-  const buyPoints = merged
-    .filter((m) => m.buyMarker != null)
-    .map((m) => ({ date: m.date, value: m.buyMarker as number }));
-  const sellPoints = merged
-    .filter((m) => m.sellMarker != null)
-    .map((m) => ({ date: m.date, value: m.sellMarker as number }));
-
-  const loading = bars.loading || decisions.loading;
-  const priced = merged.filter((m) => m.close != null);
-
-  return (
-    <div>
-      <div style={{ maxWidth: 220, marginBottom: "var(--s-3)" }}>
-        <Select
-          label="Symbol"
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value)}
-          options={symbols.map((s) => ({ value: s, label: s }))}
-          testId="strategy-insights-symbol-select"
-        />
-      </div>
-
-      {loading && <Loading lines={3} />}
-      {!loading && bars.error && (
-        <ErrorState message={bars.error} status={bars.status} onRetry={bars.reload} />
-      )}
-      {!loading && !bars.error && priced.length === 0 && (
-        <EmptyState
-          title="No price history yet"
-          hint={`No cached bars for ${symbol} yet.`}
-        />
-      )}
-      {!loading && !bars.error && priced.length > 0 && (
-        <div data-testid="strategy-insights-price-chart">
-          <div style={{ height: 260 }}>
-            <ResponsiveContainer>
-              <ComposedChart data={merged} margin={{ top: 8, right: 6, left: 6, bottom: 0 }}>
-                <CartesianGrid {...chartGridProps} />
-                <XAxis dataKey="date" tick={chartAxisTick} {...chartAxisLine} minTickGap={44} />
-                <YAxis tick={chartAxisTick} {...chartAxisLine} width={50} tickFormatter={(v: number) => fmtUsd(v)} />
-                <Tooltip
-                  contentStyle={chartTooltipStyle}
-                  formatter={(v, name) => [typeof v === "number" ? fmtUsd(v) : "—", name]}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="close"
-                  name="Close"
-                  stroke={theme.accent}
-                  strokeWidth={2}
-                  dot={false}
-                  connectNulls
-                  isAnimationActive={false}
-                />
-                <Scatter data={buyPoints} dataKey="value" name="BUY" shape="triangle" fill={theme.growth} isAnimationActive={false} />
-                <Scatter data={sellPoints} dataKey="value" name="SELL" shape="cross" fill={theme.decline} isAnimationActive={false} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-          <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-2)" }}>
-            <span style={{ color: theme.growth }}>▲</span> BUY &nbsp;
-            <span style={{ color: theme.decline }}>✕</span> SELL — from the decision log for {symbol}.
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 3. Strategies table -- @tanstack/react-table, expandable holdings row.
+// Strategies table -- @tanstack/react-table, expandable holdings row.
 // ---------------------------------------------------------------------------
 const pilotFeatures = tableFeatures({
   rowSortingFeature,
@@ -424,7 +233,7 @@ function StrategiesSection({ onSimulate }: { onSimulate: (pilot: PilotSummary) =
 }
 
 // ---------------------------------------------------------------------------
-// 4. Simulate panel -- real deltas only, never a client-side constant offset.
+// Simulate panel -- real deltas only, never a client-side constant offset.
 // ---------------------------------------------------------------------------
 function delta(current: number | null, projected: number | null): string {
   if (current == null || projected == null) return "";
@@ -541,14 +350,6 @@ function SimulatePanel({ pilot }: { pilot: PilotSummary | null }) {
 // Screen
 // ---------------------------------------------------------------------------
 export function StrategyInsights() {
-  const portfolio = useApi<Portfolio>(() => api.getPortfolio(), []);
-  const symbols = useMemo(() => {
-    const held = Array.from(
-      new Set((portfolio.data?.positions ?? []).map((p) => p.symbol).filter(Boolean))
-    );
-    return held.length > 0 ? held : FALLBACK_SYMBOLS;
-  }, [portfolio.data]);
-
   const [selectedPilot, setSelectedPilot] = useState<PilotSummary | null>(null);
 
   return (
@@ -564,14 +365,14 @@ export function StrategyInsights() {
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)", marginTop: "var(--s-4)" }}>
         <section className="card card-pad">
           <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Edge per strategy</h2>
-          <EdgePanel />
+          <EdgeByStrategyChart />
         </section>
 
         <section className="card card-pad">
           <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>
             Price history &amp; signal overlay
           </h2>
-          <PriceHistoryPanel symbols={symbols} />
+          <SymbolSignalOverlayChart />
         </section>
 
         <section className="card card-pad">
