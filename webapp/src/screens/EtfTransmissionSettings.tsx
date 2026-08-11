@@ -5,7 +5,6 @@ export function EtfTransmissionSettings() {
   return (
     <GenericSettingsEditor
       title="ETF Volatility Transmission"
-      settingsKey="etf-transmission"
       subtitle="Configure ETF holdings ingestion (EDGAR N-PORT), measurement & residualization parameters, position sizing derates, and portfolio covariance adjustments."
       backTo="/settings"
       fetchSettings={() => api.getEtfTransmissionSettings()}

@@ -37,7 +37,7 @@ function signalColor(signal: string): string {
 function PairCard({ p }: { p: PairRow }) {
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "grab", borderBottom: `1px solid ${theme.border}`, padding: "var(--s-3)" }}>
+      <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${theme.border}`, padding: "var(--s-3)" }}>
         <div style={{ fontWeight: 700, fontSize: "var(--t-input)" }}>
           {p.ticker1} <span style={{ color: theme.textMuted }}>/</span> {p.ticker2}
         </div>

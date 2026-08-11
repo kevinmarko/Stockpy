@@ -97,7 +97,7 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
         </div>
       ) : (
         <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-          <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+          <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--s-2)", flexWrap: "wrap" }}>
               <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Module contributions</h2>
               <Button
@@ -177,7 +177,7 @@ function GlobalImportancePanel() {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="global-importance-panel">
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Signal driver weights (universe-wide)</h2>
         <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: 0, lineHeight: 1.5 }}>
           Mean absolute contribution per module, averaged across every symbol currently

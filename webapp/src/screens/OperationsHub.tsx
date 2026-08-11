@@ -71,7 +71,6 @@ export function OperationsHub() {
                   style={{
                     padding: "var(--s-3)",
                     borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
-                    cursor: "grab",
                     display: "flex",
                     alignItems: "center",
                     gap: "var(--s-2)"

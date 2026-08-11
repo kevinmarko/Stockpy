@@ -196,7 +196,7 @@ function MetaLabelSection({ dist }: { dist: MetaLabelDistribution }) {
 
   return (
     <section className="card card-pad" style={{ height: "100%" }} data-testid="meta-label-section">
-      <div className="drag-handle" style={{ cursor: "grab", borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-1)", marginBottom: "var(--s-2)" }}><h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Meta-label confidence distribution</h2></div>
+      <div className="drag-handle" style={{ borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-1)", marginBottom: "var(--s-2)" }}><h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Meta-label confidence distribution</h2></div>
       <p style={{ margin: "0 0 var(--s-2-5)", fontSize: "var(--t-body)", color: theme.textMuted }}>
         Distribution of meta-label confidence (geometric mean of active
         modules' P(signal correct)) across all symbols in the last snapshot.
@@ -283,12 +283,8 @@ interface MatrixEditorState {
  * `MatrixEditor` component. Extracted to a hook (not a component) so
  * `StrategyMatrix` can call it unconditionally at the top of its render and
  * then place the context card + each module card as genuinely separate,
- * individually-keyed children of `<div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>` — a component wrapping a
- * Fragment of many keyed children (the previous `MatrixEditor`) is invisible
- * to `DynamicGrid`'s own children traversal, since React never flattens a
- * child component's own Fragment output into its parent's `children` prop
- * before the parent renders; only literal elements/arrays present at the
- * `<div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>` JSX call site are seen.
+ * individually-keyed children directly at the JSX call site, rather than
+ * hidden behind a single wrapping component's own Fragment output.
  *
  * `data` is `null` while the initial fetch is in flight (`useApi`'s
  * contract) — the hook degrades to empty edit state until the first real
@@ -402,7 +398,7 @@ function useMatrixEditor(data: StrategyMatrixT | null, onReload: () => void): Ma
 function ContextCard({ data, editor }: { data: StrategyMatrixT; editor: MatrixEditorState }) {
   const max = data.max_weight;
   return (
-    <section className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", height: "100%", cursor: "grab" }}>
+    <section className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Context & Alerts</h2>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2)", margin: "var(--s-1) 0 var(--s-3)" }}>
         <span className="chip">Regime {data.market_regime ?? "—"}</span>
@@ -465,7 +461,7 @@ function ModuleCard({
       className="card card-pad"
       style={{ display: "flex", flexDirection: "column", height: "100%", opacity: enabled ? 1 : 0.6 }}
     >
-      <div className="drag-handle" style={{ cursor: "grab", borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-2)", marginBottom: "var(--s-2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div className="drag-handle" style={{ borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-2)", marginBottom: "var(--s-2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ fontWeight: 700 }}>{m.name}</div>
         <Toggle
           checked={enabled}

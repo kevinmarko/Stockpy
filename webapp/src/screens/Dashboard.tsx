@@ -141,7 +141,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Portfolio Summary</span>
           </div>
@@ -212,7 +211,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Account Performance</span>
           </div>
@@ -261,7 +259,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Activity Feed</span>
           </div>
@@ -289,7 +286,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>Top Pilots</span>
           </div>
@@ -343,7 +339,6 @@ export function Dashboard() {
             borderBottom: `1px solid ${theme.border}`,
             paddingBottom: 8,
             marginBottom: "var(--s-3)",
-            cursor: "grab",
           }}>
             <span style={{ fontWeight: 700, color: theme.textPrimary }}>NotebookML Export</span>
           </div>

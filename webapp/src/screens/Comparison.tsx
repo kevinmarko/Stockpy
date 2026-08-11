@@ -313,7 +313,7 @@ export function Comparison() {
             [
               /* Overlaid Performance Chart */
               <div key="performance" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}` }}>
                   <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Overlaid Performance</h2>
                 </div>
                 <div style={{ flex: 1, padding: "var(--s-3)", overflow: "auto" }}>
@@ -374,7 +374,7 @@ export function Comparison() {
 
               /* Comparison Grid */
               <div key="metrics" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}` }}>
                   <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Key Metrics Comparison</h2>
                 </div>
                 <div style={{ flex: 1, overflowX: "auto" }}>
@@ -522,7 +522,7 @@ export function Comparison() {
 
               /* Recent pilot alerts */
               <div key="alerts" className="card card-pad" data-testid="comparison-activity-feed" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}`, cursor: "grab" }}>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid ${theme.borderStrong}` }}>
                   <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Recent pilot alerts</h2>
                 </div>
                 <div style={{ flex: 1, padding: "var(--s-3)", overflow: "auto" }}>

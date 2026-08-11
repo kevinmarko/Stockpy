@@ -92,7 +92,7 @@ function MacroSection() {
   ];
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Macro snapshot</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -158,7 +158,7 @@ export function DataExplorer() {
 
           <div key="bars">
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Price bars · {symbol}</h2>
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -173,7 +173,7 @@ export function DataExplorer() {
 
           <div key="fundamentals">
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Fundamentals · {symbol}</h2>
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>

@@ -887,7 +887,7 @@ function CommentaryCard({ symbol }: { symbol: string }) {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <AiCardHeader
           title="Claude analyst note"
           subtitle={`On-demand Claude narrative for ${symbol} — not generated automatically.`}
@@ -937,7 +937,7 @@ function ChartReadCard({ symbol }: { symbol: string }) {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <AiCardHeader
           title="Gemini chart read"
           subtitle={`On-demand chart-pattern read for ${symbol} — not generated automatically.`}
@@ -994,7 +994,7 @@ function ResearchBriefCard({ symbol }: { symbol: string }) {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <AiCardHeader
           title="Opal research brief"
           subtitle={`On-demand grounded research brief for ${symbol} — not generated automatically.`}

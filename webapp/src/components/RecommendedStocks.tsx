@@ -228,7 +228,7 @@ export function RecommendedStocks({
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="recommended-stocks">
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Recommended stocks</h2>
         <p style={{ margin: "0", fontSize: "var(--t-body)", color: theme.textMuted }}>
           The platform's current BUY picks, ranked by conviction. From the latest pipeline run
