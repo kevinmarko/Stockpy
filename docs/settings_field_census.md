@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `a6baf923c46556203639c01129ab4ab8ea492869`
+- Measured at commit: `569ccc1b9312e20e87b46f702ee43630e5f0e2f3`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -243,7 +243,7 @@ referenced by name somewhere and is probably read dynamically.
 | `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4816`, `gui/panels/settings_manager.py:126` | likely read dynamically |
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4796`, `gui/panels/settings_manager.py:162` | likely read dynamically |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
-| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10999` | likely read dynamically |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11020` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1120`, `pilots/feature_flags.py:49` | likely read dynamically |
 
