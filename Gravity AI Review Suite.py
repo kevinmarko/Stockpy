@@ -2108,7 +2108,7 @@ class GravityAIAuditor:
             import config as _cfg
             from strategy_engine import StrategyEngine, apply_sell_side_range
             from dto_models import (
-                MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO,
+                MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO, ExecutionRangeParameters
             )
         except Exception as e:
             sell_report["status"] = "FAILED"
@@ -2150,11 +2150,11 @@ class GravityAIAuditor:
         # Check 2 & 3: active-long format + monotonicity
         try:
             for sig in ("STRONG BUY", "BUY", "HOLD"):
-                out = apply_sell_side_range(
-                    signal=sig, current_price=100.0, safe_atr=2.0,
-                    chandelier_long=95.0, chandelier_short=0.0,
-                    forecast_price=110.0,
+                params = ExecutionRangeParameters(
+                    current_price=100.0, safe_atr=2.0, chandelier_long=95.0,
+                    chandelier_short=0.0, forecast_price=110.0
                 )
+                out = apply_sell_side_range(sig, params)
                 m = sell_zone_re.match(out)
                 if not m:
                     sell_report["checks"][f"sell_zone_format[{sig}]"] = (
@@ -2178,11 +2178,11 @@ class GravityAIAuditor:
 
         # Check 4: no fabrication when forecast_price == 0
         try:
-            out = apply_sell_side_range(
-                signal="BUY", current_price=200.0, safe_atr=4.0,
-                chandelier_long=190.0, chandelier_short=0.0,
-                forecast_price=0.0,
+            params = ExecutionRangeParameters(
+                current_price=200.0, safe_atr=4.0, chandelier_long=190.0,
+                chandelier_short=0.0, forecast_price=0.0
             )
+            out = apply_sell_side_range("BUY", params)
             m = sell_zone_re.match(out)
             if m and abs(float(m.group(2)) - 212.0) < 1e-6:
                 sell_report["checks"]["no_fabricated_upper"] = (
@@ -2199,11 +2199,11 @@ class GravityAIAuditor:
 
         # Check 5: stop-floor invariant under pathological ATR
         try:
-            out = apply_sell_side_range(
-                signal="BUY", current_price=1.0, safe_atr=10.0,
-                chandelier_long=0.0, chandelier_short=0.0,
-                forecast_price=0.0,
+            params = ExecutionRangeParameters(
+                current_price=1.0, safe_atr=10.0, chandelier_long=0.0,
+                chandelier_short=0.0, forecast_price=0.0
             )
+            out = apply_sell_side_range("BUY", params)
             m = sell_zone_re.match(out)
             if m and float(m.group(3)) >= 0.01:
                 sell_report["checks"]["stop_floor_clamped"] = (
@@ -2221,11 +2221,11 @@ class GravityAIAuditor:
         # Check 6: RISK REDUCE / unknown signals fail closed
         try:
             for sig in ("RISK REDUCE", "MOON_LAMBO"):
-                out = apply_sell_side_range(
-                    signal=sig, current_price=50.0, safe_atr=1.0,
-                    chandelier_long=48.0, chandelier_short=0.0,
-                    forecast_price=55.0,
+                params = ExecutionRangeParameters(
+                    current_price=50.0, safe_atr=1.0, chandelier_long=48.0,
+                    chandelier_short=0.0, forecast_price=55.0
                 )
+                out = apply_sell_side_range(sig, params)
                 if sell_now_re.match(out):
                     sell_report["checks"][f"fail_closed[{sig}]"] = (
                         "PASS: emits 'Sell Now @ market' immediate-exit"
@@ -2273,11 +2273,12 @@ class GravityAIAuditor:
 
         # Check 8: purity / lookahead invariant
         try:
-            kwargs = dict(signal="BUY", current_price=100.0, safe_atr=2.0,
-                          chandelier_long=95.0, chandelier_short=0.0,
-                          forecast_price=110.0)
-            a = apply_sell_side_range(**kwargs)
-            b = apply_sell_side_range(**kwargs)
+            params = ExecutionRangeParameters(
+                current_price=100.0, safe_atr=2.0, chandelier_long=95.0,
+                chandelier_short=0.0, forecast_price=110.0
+            )
+            a = apply_sell_side_range("BUY", params)
+            b = apply_sell_side_range("BUY", params)
             if a == b:
                 sell_report["checks"]["pure_function"] = (
                     "PASS: identical inputs → identical output (no hidden state)"

@@ -388,8 +388,28 @@ class MacroEconomicDTO(BaseDTO):
         return f"<MacroEconomicDTO - Regime: {self.market_regime} (Spread: {self.credit_spread}%)>"
 
 
+from dataclasses import dataclass
+
 # =============================================================================
-# 4. ROBINHOOD POSITION DTO
+# 4. EXECUTION RANGE PARAMETERS DTO
+# =============================================================================
+@dataclass
+class ExecutionRangeParameters:
+    """
+    Context parameters for computing execution ranges (tactical buy/hold/stop,
+    and dedicated sell-side boundaries). Combines standard execution inputs
+    to reduce function signature complexity.
+    """
+    current_price: float
+    safe_atr: float
+    chandelier_long: float
+    chandelier_short: float
+    graham_val: float = 0.0
+    forecast_price: float = 0.0
+
+
+# =============================================================================
+# 5. ROBINHOOD POSITION DTO
 # ==========================================================
 class RobinhoodPositionDTO(BaseDTO):
     """

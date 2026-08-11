@@ -27,6 +27,7 @@ import pytest
 
 import config
 from dto_models import MarketBarDTO, FundamentalDataDTO, MacroEconomicDTO
+from dto_models import ExecutionRangeParameters
 from strategy_engine import StrategyEngine, apply_sell_side_range
 
 
@@ -45,14 +46,14 @@ _SELL_NOW_RE = re.compile(r"^Sell Now @ market \| Stop @ \$([0-9]+\.[0-9]{2})$")
 @pytest.mark.parametrize("signal", ["STRONG BUY", "BUY", "HOLD"])
 def test_active_long_signals_emit_sell_zone(signal: str) -> None:
     """STRONG BUY / BUY / HOLD all yield a parseable Sell Zone with lower < upper."""
-    out = apply_sell_side_range(
-        signal=signal,
+    params = ExecutionRangeParameters(
         current_price=100.00,
         safe_atr=2.00,
         chandelier_long=95.00,
         chandelier_short=110.00,
         forecast_price=110.00,
     )
+    out = apply_sell_side_range(signal, params)
     m = _SELL_ZONE_RE.match(out)
     assert m is not None, f"Unexpected sell-side format for {signal!r}: {out!r}"
     lo, hi, stop = map(float, m.groups())
@@ -69,14 +70,14 @@ def test_active_long_signals_emit_sell_zone(signal: str) -> None:
 
 def test_forecast_below_atr_ceiling_uses_atr_resistance() -> None:
     """When the forecast does not exceed the +3σ ATR level, the ATR level wins."""
-    out = apply_sell_side_range(
-        signal="BUY",
+    params = ExecutionRangeParameters(
         current_price=100.00,
         safe_atr=5.00,
         chandelier_long=92.00,
         chandelier_short=0.0,
         forecast_price=108.00,  # < 100 + 3*5 = 115
     )
+    out = apply_sell_side_range("BUY", params)
     m = _SELL_ZONE_RE.match(out)
     assert m is not None
     _, hi, _ = map(float, m.groups())
@@ -85,14 +86,14 @@ def test_forecast_below_atr_ceiling_uses_atr_resistance() -> None:
 
 def test_risk_reduce_emits_sell_now() -> None:
     """RISK REDUCE collapses the take-profit zone into an immediate-exit string."""
-    out = apply_sell_side_range(
-        signal="RISK REDUCE",
+    params = ExecutionRangeParameters(
         current_price=50.00,
         safe_atr=1.00,
         chandelier_long=48.00,
         chandelier_short=0.0,
         forecast_price=55.00,
     )
+    out = apply_sell_side_range("RISK REDUCE", params)
     m = _SELL_NOW_RE.match(out)
     assert m is not None, f"RISK REDUCE should emit 'Sell Now @ market': {out!r}"
     (stop,) = map(float, m.groups())
@@ -104,14 +105,14 @@ def test_risk_reduce_emits_sell_now() -> None:
 # ===========================================================================
 def test_zero_forecast_does_not_fabricate_upper_bound() -> None:
     """forecast_price=0.0 means 'no forecast'; upper must fall back to pure ATR."""
-    out = apply_sell_side_range(
-        signal="BUY",
+    params = ExecutionRangeParameters(
         current_price=200.00,
         safe_atr=4.00,
         chandelier_long=190.00,
         chandelier_short=0.0,
         forecast_price=0.0,
     )
+    out = apply_sell_side_range("BUY", params)
     m = _SELL_ZONE_RE.match(out)
     assert m is not None
     _, hi, _ = map(float, m.groups())
@@ -121,14 +122,14 @@ def test_zero_forecast_does_not_fabricate_upper_bound() -> None:
 
 def test_missing_chandelier_falls_back_to_atr_stop() -> None:
     """chandelier_long=0 → trailing stop derived from current_price - 2.5*ATR."""
-    out = apply_sell_side_range(
-        signal="HOLD",
+    params = ExecutionRangeParameters(
         current_price=80.00,
         safe_atr=2.00,
         chandelier_long=0.0,
         chandelier_short=0.0,
         forecast_price=0.0,
     )
+    out = apply_sell_side_range("HOLD", params)
     m = _SELL_ZONE_RE.match(out)
     assert m is not None
     _, _, stop = map(float, m.groups())
@@ -137,14 +138,14 @@ def test_missing_chandelier_falls_back_to_atr_stop() -> None:
 
 def test_stop_never_goes_negative_under_extreme_atr() -> None:
     """A pathologically large ATR must clamp the stop floor to >= $0.01."""
-    out = apply_sell_side_range(
-        signal="BUY",
+    params = ExecutionRangeParameters(
         current_price=1.00,
         safe_atr=10.00,  # > current_price -> would drive stop negative
         chandelier_long=0.0,
         chandelier_short=0.0,
         forecast_price=0.0,
     )
+    out = apply_sell_side_range("BUY", params)
     m = _SELL_ZONE_RE.match(out)
     assert m is not None
     _, _, stop = map(float, m.groups())
@@ -155,14 +156,14 @@ def test_active_long_stale_chandelier_above_price_clamped_to_price() -> None:
     """Finding 9: a stale chandelier_long sitting ABOVE current_price (e.g. a
     trailing high set before a sharp drawdown) is not a sane trailing stop for
     a resting sell order -- clamp to current_price."""
-    out = apply_sell_side_range(
-        signal="BUY",
+    params = ExecutionRangeParameters(
         current_price=100.00,
         safe_atr=2.00,
         chandelier_long=150.00,  # stale, above current_price
         chandelier_short=0.0,
         forecast_price=0.0,
     )
+    out = apply_sell_side_range("BUY", params)
     m = _SELL_ZONE_RE.match(out)
     assert m is not None
     _, _, stop = map(float, m.groups())
@@ -171,14 +172,14 @@ def test_active_long_stale_chandelier_above_price_clamped_to_price() -> None:
 
 def test_risk_reduce_stale_chandelier_above_price_clamped_to_price() -> None:
     """Finding 9: same clamp applied to the RISK REDUCE immediate-exit branch."""
-    out = apply_sell_side_range(
-        signal="RISK REDUCE",
+    params = ExecutionRangeParameters(
         current_price=50.00,
         safe_atr=1.00,
         chandelier_long=75.00,  # stale, above current_price
         chandelier_short=0.0,
         forecast_price=0.0,
     )
+    out = apply_sell_side_range("RISK REDUCE", params)
     m = _SELL_NOW_RE.match(out)
     assert m is not None
     (stop,) = map(float, m.groups())
@@ -187,14 +188,14 @@ def test_risk_reduce_stale_chandelier_above_price_clamped_to_price() -> None:
 
 def test_unknown_signal_fails_closed_to_sell_now() -> None:
     """Unknown / future signal strings fail closed to the conservative exit branch."""
-    out = apply_sell_side_range(
-        signal="MOON",  # unknown
+    params = ExecutionRangeParameters(
         current_price=50.00,
         safe_atr=1.0,
         chandelier_long=49.00,
         chandelier_short=0.0,
         forecast_price=0.0,
     )
+    out = apply_sell_side_range("MOON", params)  # unknown
     assert _SELL_NOW_RE.match(out), f"Unknown signal must fail closed: {out!r}"
 
 
@@ -243,10 +244,12 @@ def test_sell_range_invariant_under_future_input_perturbation() -> None:
     later wires a non-causal input here, this test still passes because the helper itself
     has no hidden state, but the test documents the invariant so a future refactor
     introducing state (e.g. caching) would fail it."""
-    args = dict(signal="BUY", current_price=100.0, safe_atr=2.0,
-                chandelier_long=95.0, chandelier_short=0.0, forecast_price=110.0)
-    first = apply_sell_side_range(**args)
+    params = ExecutionRangeParameters(
+        current_price=100.0, safe_atr=2.0, chandelier_long=95.0,
+        chandelier_short=0.0, forecast_price=110.0
+    )
+    first = apply_sell_side_range("BUY", params)
     # Call again with the same inputs (simulating a "today" re-eval after future bars
     # would have been observed — the helper has no time dependency).
-    second = apply_sell_side_range(**args)
+    second = apply_sell_side_range("BUY", params)
     assert first == second, "apply_sell_side_range must be a pure function of its scalars"
