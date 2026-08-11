@@ -209,6 +209,66 @@ class TestDeflatedSharpeFamily:
         assert r.sharpe_observed == 1.5
         assert r.n_trials_own == 10
         assert r.n_trials_family == 10
+        assert r.family_correction_applied is True
+
+
+class TestDeflatedSharpeFamilySingleTrialNoOp:
+    """Finding 9: the family-wide correction inherits
+    deflated_sharpe_ratio's own n_trials<=1 legacy shortcut -- this must be
+    surfaced explicitly (a warning + an honest flag), never silently
+    reported as if a real correction had been applied."""
+
+    def test_family_total_le_1_flags_correction_not_applied_by_default(self):
+        # A single strategy with a single trial -> n_trials_family_total == 1.
+        results = deflated_sharpe_family([1.5], [1])
+        assert len(results) == 1
+        r = results[0]
+        assert r.n_trials_family == 1
+        # Legacy no-op shortcut value, reproduced byte-for-byte.
+        assert r.dsr_family_corrected == 1.0
+        assert r.family_correction_applied is False
+
+    def test_family_total_le_1_logs_warning(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING, logger="validation.multiple_testing"):
+            deflated_sharpe_family([1.5], [1])
+        assert any(
+            "n_trials_family_total" in rec.message and "not a genuine" in rec.message.lower()
+            for rec in caplog.records
+        )
+
+    def test_family_total_gt_1_flags_correction_applied(self):
+        results = deflated_sharpe_family([1.5, 1.2], [1, 1])
+        assert results[0].n_trials_family == 2
+        for r in results:
+            assert r.family_correction_applied is True
+
+    def test_single_trial_correction_setting_flips_flag_true(self, monkeypatch):
+        """Mirrors validation/metrics.py's own
+        VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED precedent: when the
+        setting is on, deflated_sharpe_ratio performs a REAL computation
+        even at n_trials<=1 (sr_0=0.0 branch), so this is no longer the
+        no-op case."""
+        import settings as settings_module
+        monkeypatch.setattr(
+            settings_module.settings, "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED", True,
+        )
+        results = deflated_sharpe_family([1.5], [1])
+        r = results[0]
+        assert r.n_trials_family == 1
+        assert r.family_correction_applied is True
+        # With the correction enabled, the single-trial branch runs a real
+        # computation (sr_0=0.0) rather than the flat 1.0 shortcut.
+        assert r.dsr_family_corrected != 1.0
+
+    def test_zero_total_trials_also_flagged_not_applied(self):
+        """n_trials_family_total == 0 (e.g. every strategy reports 0 trials)
+        is likewise <= 1 and must not be misrepresented as corrected."""
+        results = deflated_sharpe_family([1.0, 1.0], [0, 0])
+        for r in results:
+            assert r.n_trials_family == 0
+            assert r.family_correction_applied is False
+            assert r.dsr_family_corrected == 1.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

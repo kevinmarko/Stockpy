@@ -175,10 +175,16 @@ def _cusum_drift(arr: np.ndarray, threshold: Optional[float]) -> DriftResult:
     mu = float(np.mean(arr))
     sigma = float(np.std(arr, ddof=1)) if n > 1 else 0.0
 
-    # A perfectly flat / zero-variance series cannot exhibit a detectable
-    # "shift" in the statistical sense — guard the degenerate case rather
-    # than dividing by zero or firing spurious alarms.
-    if sigma == 0.0 or not math.isfinite(sigma):
+    # A perfectly flat / near-flat (degenerate) series cannot exhibit a
+    # detectable "shift" in the statistical sense — guard the degenerate
+    # case rather than dividing by (near-)zero or firing spurious alarms.
+    # An exact `== 0.0` check misses floating-point residue on a
+    # conceptually flat series (e.g. sigma ~1e-16), which would otherwise
+    # produce a vanishingly small `slack`/`h` and trip the alarm on pure
+    # noise. This repo's documented degenerate-std convention uses 1e-12 —
+    # far above float noise, far below any real drift-worthy std (see e.g.
+    # risk/etf_transmission.py, validation/metrics.py::sharpe_ratio).
+    if sigma < 1e-12 or not math.isfinite(sigma):
         return DriftResult(
             drift_detected=False,
             drift_index=None,
@@ -254,7 +260,11 @@ def _page_hinkley_drift(arr: np.ndarray, threshold: Optional[float]) -> DriftRes
     n = arr.shape[0]
     sigma = float(np.std(arr, ddof=1)) if n > 1 else 0.0
 
-    if sigma == 0.0 or not math.isfinite(sigma):
+    # Degenerate-std guard convention (see _cusum_drift's identical comment
+    # above): a near-zero-but-not-exact sigma from floating-point residue on
+    # a conceptually flat series must not be treated as "real variance", or
+    # `delta`/`lam` collapse toward zero and trip a spurious alarm on noise.
+    if sigma < 1e-12 or not math.isfinite(sigma):
         return DriftResult(
             drift_detected=False,
             drift_index=None,
