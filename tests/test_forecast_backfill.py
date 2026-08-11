@@ -16,6 +16,9 @@ here.
 """
 
 import json
+import subprocess
+import sys
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -28,6 +31,8 @@ import api.pilots_api as pilots_api
 import pilots.watchlist_writer as watchlist_writer
 from ml.forecast_backfill import AgenticForecastBackfiller
 from settings import settings
+
+_KILL_SCRIPT = Path(__file__).parent / "fixtures" / "forecast_backfill_partial_export_kill_script.py"
 
 
 @pytest.fixture(autouse=True)
@@ -399,6 +404,110 @@ def _synthetic_engine(tickers, n_days=400, seed=42):
     engine.prices = prices
     engine.volumes = volumes
     return engine
+
+
+# ---------------------------------------------------------------------------
+# Partial-export checkpointing (Fix 3): a hard kill mid-step-5 must leave
+# real, usable partial results on disk instead of "nothing was saved."
+# Uses a real subprocess + SIGKILL (via tests/fixtures/
+# forecast_backfill_partial_export_kill_script.py) rather than calling
+# step_5 in-process, because the whole point being verified is that the
+# checkpoint survives a kill landing between filesystem writes -- something
+# an in-process call can't exercise (the test process itself would die too).
+# ---------------------------------------------------------------------------
+
+
+def test_kill_mid_step_5_leaves_partial_export_with_completed_combos(tmp_path):
+    """SIGKILLing the pipeline mid-step-5 must still leave
+    agentic_forecast_backfill.partial.csv/.partial.json on disk, covering
+    the (model_type, horizon) combos that finished training before the
+    kill -- the actual point of Fix 3's checkpointing: a deadline-triggered
+    kill (ml/forecast_backfill_job.py::_enforce_deadline) must never mean
+    'nothing was saved.'"""
+    partial_csv = tmp_path / "agentic_forecast_backfill.partial.csv"
+    partial_json = tmp_path / "agentic_forecast_summary.partial.json"
+    assert not partial_csv.exists()
+    assert not partial_json.exists()
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(_KILL_SCRIPT),
+            "--output-dir",
+            str(tmp_path),
+            "--mode",
+            "mid_step5",
+            "--sleep-per-combo",
+            "0.5",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.time() + 30.0
+        while time.time() < deadline and not partial_csv.exists():
+            time.sleep(0.1)
+        assert partial_csv.exists(), "partial export never appeared before the wait timeout"
+        # A bit more margin so we're confident the kill below lands genuinely
+        # mid-loop (after a second combo has likely started/finished), not
+        # in the narrow instant right after the very first write.
+        time.sleep(0.5)
+    finally:
+        proc.kill()  # SIGKILL
+        proc.wait(timeout=10)
+
+    assert partial_csv.exists()
+    assert partial_json.exists()
+
+    df = pd.read_csv(partial_csv)
+    assert not df.empty
+
+    summary = json.loads(partial_json.read_text(encoding="utf-8"))
+    assert summary["status"] == "partial"
+    assert summary["combos_trained"], "expected at least one completed combo to be recorded"
+    # Two strategies x eight horizons = 16 possible combos -- the kill must
+    # have landed before all of them finished, proving this is a genuine
+    # mid-run checkpoint and not just the pipeline finishing on its own.
+    assert len(summary["combos_trained"]) < 16
+    assert summary["total_rows"] == len(df)
+    for model_key in summary["combos_trained"]:
+        model_type, horizon_part = model_key.rsplit("_", 1)
+        assert f"{model_type}_Signal" in df.columns
+        assert f"{model_type}_Meta_Prob_{horizon_part}" in df.columns
+
+
+def test_kill_before_any_combo_finishes_produces_no_partial_files(tmp_path):
+    """A kill landing before ANY step-5 combo finishes (still in steps 1-4,
+    or stalled before the first combo's training+save+inference completes)
+    must leave NO partial files on disk at all -- honestly 'nothing was
+    saved,' never an empty or misleading placeholder file."""
+    partial_csv = tmp_path / "agentic_forecast_backfill.partial.csv"
+    partial_json = tmp_path / "agentic_forecast_summary.partial.json"
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(_KILL_SCRIPT),
+            "--output-dir",
+            str(tmp_path),
+            "--mode",
+            "before_step5",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        # Steps 2-4 on this tiny synthetic panel (400 rows x 4 tickers) are
+        # fast, in-memory pandas/numpy work -- comfortably done well within
+        # this window -- but "before_step5" mode never calls step 5 at all,
+        # so no combo, ever, trains regardless of how long we wait here.
+        time.sleep(3.0)
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+
+    assert not partial_csv.exists()
+    assert not partial_json.exists()
 
 
 def test_cross_sectional_module_wiring_produces_real_differentiated_per_date_ranks():

@@ -47,7 +47,7 @@ import logging
 import pickle
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -105,8 +105,26 @@ class AgenticForecastBackfiller:
         use_fmp: bool = True,
         strategy_ids: Optional[List[str]] = None,
         theta_c: Optional[float] = None,
+        on_combo_trained: Optional[Callable[[str, Dict[str, Dict[str, float]]], None]] = None,
     ):
-        """Initialize backfill pipeline with parameters sourced from settings.py defaults."""
+        """Initialize backfill pipeline with parameters sourced from settings.py defaults.
+
+        ``on_combo_trained``, when supplied, is called synchronously as
+        ``on_combo_trained(model_key, cumulative_metrics)`` immediately after
+        each (model_type, horizon) combo finishes training in step 5 -- after
+        its ``.pkl`` is saved and its inference probabilities are already
+        populated on ``self.data`` via ``_infer_one`` (see step 5's own
+        docstring). ``cumulative_metrics`` is a snapshot (``dict(self.metrics)``,
+        never the live mutable reference) of every combo's metrics trained SO
+        FAR this run, not just the combo that just finished. This is the sole
+        checkpoint-progress seam this engine exposes -- kept as an optional
+        constructor kwarg rather than a new required parameter so every
+        existing caller (``scripts/run_forecast_backfill.py``, this file's
+        own tests) is unaffected: the default (``None``) reproduces today's
+        exact behavior, no callback ever invoked. A callback that raises is
+        caught and logged, never allowed to abort training (CONSTRAINT #6 --
+        checkpoint plumbing must never be the reason a real model fails to
+        train)."""
         self.tickers = tickers or settings.DEFAULT_TICKERS or ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"]
         self.end_date = end_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if start_date:
@@ -134,6 +152,7 @@ class AgenticForecastBackfiller:
         self.use_fmp = use_fmp
         self.strategy_ids = strategy_ids
         self.theta_c = theta_c if theta_c is not None else getattr(settings, "META_LABEL_MIN_CONFIDENCE", 0.5)
+        self.on_combo_trained = on_combo_trained
 
         self.prices: pd.DataFrame = pd.DataFrame()
         self.volumes: pd.DataFrame = pd.DataFrame()
@@ -596,6 +615,20 @@ class AgenticForecastBackfiller:
         elsewhere (``validation/purged_cv.py``, the CNN-LSTM purged train/val
         split in ``forecasting_engine.py``) — so the reported OOS accuracy/AUC
         isn't inflated by boundary leakage.
+
+        Checkpointing (interleaved training + inference): immediately after
+        each combo's ``clf_final`` is trained and its ``.pkl`` saved, this
+        loop now ALSO calls ``_infer_one(model_type, h, clf_final)`` (so that
+        combo's ``{model_type}_Meta_Prob_{h}d`` column is populated on
+        ``self.data`` right away, rather than only after step 6 runs — which,
+        pre-fix, meant NOTHING was inferable until every combo across every
+        strategy had finished training), invokes ``self.on_combo_trained``
+        if one was supplied, and writes a running partial export via
+        ``_write_partial_export()``. This is what lets a deadline-triggered
+        SIGKILL (``ml/forecast_backfill_job.py::_enforce_deadline``) still
+        leave real, usable partial results on disk instead of "nothing was
+        saved" — see ``_write_partial_export``'s own docstring for the exact
+        files written.
         """
         logger.info("[*] Step 5: Training meta-labelers across models & horizons...")
 
@@ -724,8 +757,65 @@ class AgenticForecastBackfiller:
 
                 logger.info("   [✓] Trained %s. Accuracy: %.4f, AUC: %.4f", model_key, accuracy, auc)
 
+                # Interleave inference with training (see this method's own
+                # docstring): this combo's forecast probabilities exist on
+                # self.data as soon as its model is trained, not only after
+                # every combo across every strategy finishes in step 6.
+                self._infer_one(model_type, h, clf_final)
+
+                if self.on_combo_trained is not None:
+                    try:
+                        self.on_combo_trained(model_key, dict(self.metrics))
+                    except Exception as exc:  # noqa: BLE001 - a caller's callback must never abort training
+                        logger.warning("on_combo_trained callback failed for %s: %s", model_key, exc)
+
+                self._write_partial_export()
+
         logger.info("[+] Step 5 complete. Models trained and saved.")
         return self.metrics
+
+    def _infer_one(self, model_type: str, h: int, clf: Optional[Any]) -> None:
+        """Populate ``self.data[f'{model_type}_Meta_Prob_{h}d']`` for exactly
+        ONE (model_type, horizon) combo.
+
+        Reuses the exact same ``_resolve_meta_features``/valid-mask logic
+        step 6 has always used, just narrowed to a single combo so step 5's
+        training loop can call it immediately after a combo's model is
+        fit — see step 5's own docstring for why. ``step_6_execute_backfill``
+        is now a thin wrapper that calls this once per (active strategy,
+        horizon) pair, so it stays safe to call again (idempotent re-run
+        over whatever's in ``self.models`` at the time).
+
+        ``clf=None`` (no trained model for this horizon — e.g. insufficient
+        samples) or no resolvable features degrades the column to NaN, never
+        a fabricated confidence value (CONSTRAINT #4) — matches the
+        pre-refactor step 6 behavior exactly.
+        """
+        from signals.registry import global_registry
+
+        module = global_registry.get(model_type)
+        features_raw = getattr(module, "meta_label_features", []) if module else []
+        resolved_features = self._resolve_meta_features(model_type, features_raw)
+        prob_col = f"{model_type}_Meta_Prob_{h}d"
+
+        if not resolved_features:
+            self.data[prob_col] = np.nan
+            return
+
+        valid_mask = self.data[resolved_features].notna().all(axis=1)
+        inference_df = self.data[valid_mask]
+        X_infer = inference_df[resolved_features]
+
+        if clf is not None and not X_infer.empty:
+            probabilities = clf.predict_proba(X_infer)[:, 1]
+            self.data.loc[valid_mask, prob_col] = probabilities
+        else:
+            # No trained model for this horizon (insufficient samples) —
+            # NaN, never a fabricated confidence value (CONSTRAINT #4).
+            # export_results()'s dropna() then correctly excludes these
+            # rows from the exported CSV rather than reporting a fake
+            # 100%-confidence probability.
+            self.data[prob_col] = np.nan
 
     def step_6_execute_backfill(self) -> pd.DataFrame:
         """Step 6: Execute continuous out-of-sample forecast probability backfilling.
@@ -736,6 +826,17 @@ class AgenticForecastBackfiller:
         a classifier queried with a different feature set than it was fit
         on raises a hard sklearn feature-name/count mismatch error, so this
         must never drift from step_5's resolution independently.
+
+        Thin wrapper around ``_infer_one`` as of the checkpointing change:
+        step 5 already calls ``_infer_one`` right after each combo trains,
+        so by the time this method runs, every already-trained combo's
+        Meta_Prob column is already populated — calling it again here just
+        recomputes the identical values (idempotent). This method's real
+        remaining job is to guarantee coverage for every active strategy's
+        full horizon set regardless of what already ran (a fresh call on an
+        engine that never went through step 5's loop, e.g. a model loaded
+        from disk directly) and to honestly NaN-fill any horizon that never
+        trained at all.
         """
         logger.info("[*] Step 6: Executing continuous backfill inference...")
         from signals.registry import global_registry
@@ -755,28 +856,123 @@ class AgenticForecastBackfiller:
                     self.data[f"{model_type}_Meta_Prob_{h}d"] = np.nan
                 continue
 
-            valid_mask = self.data[resolved_features].notna().all(axis=1)
-            inference_df = self.data[valid_mask]
-            X_infer = inference_df[resolved_features]
-
             for h in horizons_raw:
                 model_key = f"{model_type}_{h}d"
                 clf = self.models.get(model_key)
-
-                prob_col = f"{model_type}_Meta_Prob_{h}d"
-                if clf is not None and not X_infer.empty:
-                    probabilities = clf.predict_proba(X_infer)[:, 1]
-                    self.data.loc[valid_mask, prob_col] = probabilities
-                else:
-                    # No trained model for this horizon (insufficient samples) —
-                    # NaN, never a fabricated confidence value (CONSTRAINT #4).
-                    # export_results()'s dropna() then correctly excludes these
-                    # rows from the exported CSV rather than reporting a fake
-                    # 100%-confidence probability.
-                    self.data[prob_col] = np.nan
+                self._infer_one(model_type, h, clf)
 
         logger.info("[+] Step 6 complete. Forecast backfill executed.")
         return self.data
+
+    def _trainable_export_columns(self) -> Tuple[List[str], List[str]]:
+        """Shared column-selection logic for ``export_results()`` AND
+        ``_write_partial_export()`` -- factored out so a partial (mid-run)
+        export and the final completed export can never independently drift
+        on which strategies/columns qualify.
+
+        Restricts to strategies that actually produced at least one trained
+        model, rather than every module that merely satisfied step 3's
+        required_features check (or even declared meta_label_features -- see
+        step_3_generate_primary_signals's KNOWN GAP docstring for
+        cross_sectional_momentum, which declares features but never trains:
+        its rank lookup misses on every row, so its Signal column is
+        unconditionally NaN). Several registered modules pass step 3's check
+        with an empty required_features list but actually score off
+        SignalContext fields this backfiller's dummy context never populates
+        (real dividend yield, sortino ratio, ...) -- their Signal column is
+        likewise unconditionally NaN. Including any such column in the
+        mandatory `dropna()` subset downstream would zero out every exported
+        row the moment one such module lands in self.active_strategies,
+        silently producing an empty CSV/summary regardless of how much real,
+        trainable data timeseries_momentum et al. actually have.
+
+        Returns ``(trainable_strategies, export_cols)``.
+        """
+        from signals.registry import global_registry
+
+        def _has_trained_model(name: str) -> bool:
+            module = global_registry.get(name)
+            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
+            return any(f"{name}_{h}d" in self.models for h in horizons_raw)
+
+        trainable_strategies = [name for name in self.active_strategies if _has_trained_model(name)]
+
+        export_cols = ["Close"] + [f"{m}_Signal" for m in trainable_strategies]
+        for model_type in trainable_strategies:
+            module = global_registry.get(model_type)
+            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
+            for h in horizons_raw:
+                prob_col = f"{model_type}_Meta_Prob_{h}d"
+                if prob_col in self.data.columns:
+                    export_cols.append(prob_col)
+
+        return trainable_strategies, export_cols
+
+    def _write_partial_export(self) -> None:
+        """Write a RUNNING partial export covering only the (model_type,
+        horizon) combos trained so far in step 5, to files SEPARATE from the
+        canonical output -- ``agentic_forecast_backfill.partial.csv`` /
+        ``agentic_forecast_summary.partial.json`` under ``settings.OUTPUT_DIR``.
+
+        Deliberately NEVER writes to the canonical
+        ``agentic_forecast_backfill.csv``/``agentic_forecast_summary.json``
+        filenames -- those stay exclusively the product of a genuinely
+        COMPLETED run via ``export_results()``, since ``GET
+        /pilots/forecast_backfill`` (``api/pilots_api.py``) reads
+        ``agentic_forecast_summary.json`` as "the last completed run" and
+        must never be confused by in-progress data.
+
+        Mirrors ``export_results()``'s column-selection/dropna logic exactly
+        (via the shared ``_trainable_export_columns()`` helper), restricted
+        to whatever's trained AT THE MOMENT this is called -- called from
+        step 5's loop immediately after each combo's model + inference are
+        both ready, so a deadline-triggered SIGKILL landing between two
+        combos still leaves the previous combo's real data on disk, and
+        ``summary_payload["combos_trained"]`` tells a reader exactly which
+        combos that partial file actually covers.
+
+        Writes NOTHING (no partial files at all) when zero combos have
+        trained yet -- a run killed before any combo finishes (steps 1-4)
+        must stay honestly "nothing was saved," never an empty or
+        placeholder file.
+
+        Never raises: a filesystem failure mid-checkpoint must never crash
+        the training loop (CONSTRAINT #6) -- logged at WARNING instead.
+        """
+        try:
+            trainable_strategies, export_cols = self._trainable_export_columns()
+            if not trainable_strategies:
+                return
+
+            output_dir = Path(settings.OUTPUT_DIR)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            out_csv = output_dir / "agentic_forecast_backfill.partial.csv"
+            out_json = output_dir / "agentic_forecast_summary.partial.json"
+
+            output_df = self.data[export_cols].dropna()
+            output_df.to_csv(out_csv)
+
+            summary_payload = {
+                "status": "partial",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "tickers": self.tickers,
+                "horizons": self.horizons,
+                "metrics": dict(self.metrics),
+                "total_rows": len(output_df),
+                "csv_path": str(out_csv),
+                # Non-empty iff step_1_fetch_data dropped tickers due to missing data.
+                "dropped_tickers": list(self.dropped_tickers),
+                # Which (model_type, horizon) combos this partial file's
+                # columns actually reflect -- distinct from `metrics.keys()`
+                # in intent (both currently hold the same keys), kept as its
+                # own explicit field so a consumer never has to infer combo
+                # coverage from the metrics dict's shape.
+                "combos_trained": sorted(self.models.keys()),
+            }
+            with open(out_json, "w") as f:
+                json.dump(summary_payload, f, indent=2)
+        except Exception as exc:  # noqa: BLE001 - checkpointing must never crash training (CONSTRAINT #6)
+            logger.warning("Failed to write partial forecast-backfill export: %s", exc)
 
     def export_results(self, filename: str = "agentic_forecast_backfill.csv") -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """Export backfilled forecasts dataset and summary JSON metadata."""
@@ -793,39 +989,7 @@ class AgenticForecastBackfiller:
         out_csv = output_dir / filename
         out_json = output_dir / "agentic_forecast_summary.json"
 
-        from signals.registry import global_registry
-
-        # Restrict the exported columns to strategies that actually produced
-        # at least one trained model, rather than every module that merely
-        # satisfied step 3's required_features check (or even declared
-        # meta_label_features -- see step_3_generate_primary_signals's KNOWN
-        # GAP docstring for cross_sectional_momentum, which declares features
-        # but never trains: its rank lookup misses on every row, so its
-        # Signal column is unconditionally NaN). Several registered modules
-        # pass step 3's check with an empty required_features list but
-        # actually score off SignalContext fields this backfiller's dummy
-        # context never populates (real dividend yield, sortino ratio, ...) --
-        # their Signal column is likewise unconditionally NaN. Including any
-        # such column in the mandatory `dropna()` subset below would zero out
-        # every exported row the moment one such module lands in
-        # self.active_strategies, silently producing an empty CSV/summary
-        # regardless of how much real, trainable data timeseries_momentum et
-        # al. actually have.
-        def _has_trained_model(name: str) -> bool:
-            module = global_registry.get(name)
-            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
-            return any(f"{name}_{h}d" in self.models for h in horizons_raw)
-
-        trainable_strategies = [name for name in self.active_strategies if _has_trained_model(name)]
-
-        export_cols = ["Close"] + [f"{m}_Signal" for m in trainable_strategies]
-        for model_type in trainable_strategies:
-            module = global_registry.get(model_type)
-            horizons_raw = (getattr(module, "meta_label_horizons", None) or self.horizons) if module else self.horizons
-            for h in horizons_raw:
-                prob_col = f"{model_type}_Meta_Prob_{h}d"
-                if prob_col in self.data.columns:
-                    export_cols.append(prob_col)
+        trainable_strategies, export_cols = self._trainable_export_columns()
 
         output_df = self.data[export_cols].dropna()
         output_df.to_csv(out_csv)

@@ -359,6 +359,45 @@ class TestDeadlineEnforcement:
         assert job._process.poll() is not None  # confirmed dead, not merely abandoned
         assert forecast_backfill_job.get_active_job_id() is None
 
+    def test_partial_summary_survives_into_timeout_state_when_progress_was_observed(self, monkeypatch):
+        """A 'progress' event received (and recorded onto
+        job.partial_summary by _drain_events) BEFORE the deadline
+        SIGTERM/SIGKILLs the worker must survive into the terminal
+        'timeout' state -- _enforce_deadline never touches
+        partial_summary, so whatever _drain_events last recorded is
+        exactly what's still there after the kill. This is the whole point
+        of Fix 3's events-channel half: a SIGKILL can land between
+        filesystem writes, but the parent's last-received event survives
+        it."""
+        _set_behavior(monkeypatch, "hang_with_progress")
+        job = forecast_backfill_job.start_job({})
+        _wait_until_terminal(job, timeout=10.0)
+
+        assert job.state == "timeout"
+        assert job.partial_summary == {
+            "trained": ["timeseries_momentum_10d"],
+            "metrics_so_far": {
+                "timeseries_momentum_10d": {
+                    "accuracy": 0.55,
+                    "auc": 0.58,
+                    "n_train": 120,
+                }
+            },
+        }
+
+    def test_partial_summary_is_none_when_no_progress_event_was_observed(self, monkeypatch):
+        """A worker that hangs before ever emitting a 'progress' event
+        (e.g. stuck in an early phase, before any step-5 combo finishes)
+        must leave partial_summary at its None default once timed out --
+        the same honest 'nothing was saved' posture the filesystem side
+        (_write_partial_export) guarantees."""
+        _set_behavior(monkeypatch, "hang")
+        job = forecast_backfill_job.start_job({})
+        _wait_until_terminal(job, timeout=10.0)
+
+        assert job.state == "timeout"
+        assert job.partial_summary is None
+
 
 # ---------------------------------------------------------------------------
 # serialize_job
@@ -381,8 +420,37 @@ class TestSerializeJob:
         assert payload["error_type"] is None
         assert payload["summary"] == {"status": "completed", "total_rows": 3}
         assert payload["sample_rows"] == 3
+        assert payload["partial_summary"] is None  # the 'success' stub never emits a 'progress' event
         assert isinstance(payload["seconds_remaining"], float)
 
         # JSON-safe -- must round-trip through json.dumps without a TypeError,
         # exactly as it will when FastAPI serializes it for a real response.
         json.dumps(payload)
+
+    def test_serialize_job_reflects_partial_summary_after_a_progress_event(self, monkeypatch):
+        """serialize_job() must surface whatever partial_summary a
+        'progress' event populated, even for a still-'running' job (not
+        only a terminal one) -- this is what lets a poller show real
+        interim progress while a run is still in flight."""
+        _set_behavior(monkeypatch, "hang_with_progress")
+        job = forecast_backfill_job.start_job({})
+        try:
+            deadline = time.time() + 5.0
+            while time.time() < deadline and job.partial_summary is None:
+                time.sleep(0.05)
+
+            payload = forecast_backfill_job.serialize_job(job)
+            assert payload["state"] == "running"
+            assert payload["partial_summary"] == {
+                "trained": ["timeseries_momentum_10d"],
+                "metrics_so_far": {
+                    "timeseries_momentum_10d": {
+                        "accuracy": 0.55,
+                        "auc": 0.58,
+                        "n_train": 120,
+                    }
+                },
+            }
+            json.dumps(payload)
+        finally:
+            forecast_backfill_job.cancel_job(job.job_id)  # tidy up the hung child
