@@ -5,7 +5,6 @@ export function SettingsCacheLongShort() {
   return (
     <GenericSettingsEditor
       title="Cache Long/Short Strategy"
-      settingsKey="cache-long-short"
       subtitle="Configure Cache Long/Short strategy parameters, thresholds, and limits."
       backTo="/settings"
       fetchSettings={() => api.getCacheLongShortSettings()}

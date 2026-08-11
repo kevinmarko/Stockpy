@@ -64,7 +64,7 @@ export function PromptRegistry() {
         {!loading && !error && data && (
           <div style={{ flex: 1, minHeight: 0 }}>
             <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
-              <div key="notices" className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)", overflow: "auto", cursor: "grab" }}>
+              <div key="notices" className="card card-pad drag-handle" style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)", overflow: "auto" }}>
                 <Notice variant="info" data-testid="prompt-security-banner">
                   <span aria-hidden>🛡️</span>
                   <span>
@@ -85,14 +85,14 @@ export function PromptRegistry() {
                 )}
               </div>
 
-              <div key="sync" className="card card-pad drag-handle" style={{ display: "flex", alignItems: "center", cursor: "grab", overflow: "hidden" }}>
+              <div key="sync" className="card card-pad drag-handle" style={{ display: "flex", alignItems: "center", overflow: "hidden" }}>
                 <div onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
                   <SyncNowControl registryEnabled={data.enabled} onSynced={reload} />
                 </div>
               </div>
 
               <div key="table" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
-                <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)", cursor: "grab" }}>Registered Prompts</div>
+                <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>Registered Prompts</div>
                 <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
                   {data.prompts.length === 0 ? (
                     <EmptyState

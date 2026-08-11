@@ -157,7 +157,7 @@ function HealthCard({
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", wordBreak: "break-word" }}>
             {row.pilot_name}
@@ -319,7 +319,7 @@ function AiDisagreementSection() {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>🔍 AI Verdict Disagreements</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -377,7 +377,7 @@ function GravityAuditSection() {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>🛡️ Gravity Audit</h2>
         <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
           The platform's structural + AI-cross-checked self-audit.
@@ -591,7 +591,7 @@ export function StrategyHealth() {
               ))}
               <div key="validation-trend">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                     <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Cross-strategy validation</h2>
                   </div>
                   <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>

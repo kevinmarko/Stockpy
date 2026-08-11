@@ -298,7 +298,7 @@ export function Console() {
           <div key="quickLaunchers">
             {/* Quick Launchers */}
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Quick Launchers</h2>
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -388,7 +388,7 @@ export function Console() {
 
           <div key="systemResources">
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>System Resources</h2>
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -403,7 +403,7 @@ export function Console() {
 
           <div key="jobHistory">
             <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+              <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                 <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Jobs launched this session</h2>
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>

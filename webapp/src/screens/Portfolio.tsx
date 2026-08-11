@@ -12,7 +12,6 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
-// removed DynamicGrid imports
 import { PerfLine } from "../components/charts";
 import { RangeToggle } from "../components/RangeToggle";
 import { TabGuide } from "../components/TabGuide";

@@ -269,7 +269,7 @@ function BriefingsSection({ files, onReload }: { files: ReportFile[]; onReload: 
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>📝 Daily briefings</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -362,7 +362,7 @@ export function ReportLibrary() {
             <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
               <div key="daily-report">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                     <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>📰 Daily report</h2>
                   </div>
                   <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -379,7 +379,7 @@ export function ReportLibrary() {
 
               <div key="orchestrator-dashboards">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                     <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>📊 Orchestrator dashboards</h2>
                     <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
                       Only refresh on a manual main_orchestrator.py run — their modified
@@ -405,7 +405,7 @@ export function ReportLibrary() {
 
               <div key="validation-reports">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+                  <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
                     <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>✅ Validation reports</h2>
                   </div>
                   <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>

@@ -55,10 +55,9 @@ afterEach(() => {
   cleanup();
   // Clear real jsdom localStorage between tests. Previously a no-op gap
   // (only the DOM was cleaned up) that got materially more consequential
-  // once DynamicGrid gave ~23 screens their own real localStorage reads/
-  // writes on mount -- one test file's persisted grid layout could leak
-  // into an unrelated later test in the same worker, producing flaky,
-  // non-deterministic full-suite-only failures that never reproduce when
-  // a file is run in isolation.
+  // once persistence was used across many screens; one test file's persisted
+  // state could leak into an unrelated later test in the same worker,
+  // producing flaky, non-deterministic full-suite-only failures that
+  // never reproduce when a file is run in isolation.
   localStorage.clear();
 });

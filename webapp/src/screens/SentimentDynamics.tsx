@@ -129,7 +129,6 @@ function HeadlineFeed({
         style={{
           padding: "var(--s-3)",
           borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
-          cursor: "grab",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
@@ -229,7 +228,7 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
       </div>
 
       <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-        <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+        <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
           <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Interpretation</h2>
         </div>
         <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -300,7 +299,7 @@ function SentimentVixChart({ symbol }: { symbol: string }) {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="sentiment-vix-chart">
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Sentiment vs. VIX</h2>
         <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
           Archived daily news sentiment for {symbol} alongside the CBOE Volatility

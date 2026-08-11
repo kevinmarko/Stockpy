@@ -95,35 +95,9 @@ function buildBaseline(groups: TunablesResponse["groups"]): Record<string, EditV
   return out;
 }
 
-/**
- * Grid-row height for a settings group's card, scaled to its actual field
- * count instead of a flat constant. Every group used to get the same `h: 4`
- * (4 grid rows) regardless of how many fields it held — the underlying grid
- * library does not auto-grow an item to fit its content, so a group with more
- * than a couple of fields was a real content-clipping risk. `TunableGroupCard`'s
- * own body already scrolls internally (`overflow: "auto"`) as a floor, but a
- * two-line internal scrollbar for a dozen fields is still bad UX — sizing the
- * card itself to roughly fit its fields is the actual fix. Base rows cover the
- * header + card padding; two rows per field is a rough fit for a labeled
- * input/toggle plus its hint/description text at `DynamicGrid`'s default
- * `rowHeight` (30px). Capped so one outsized group can't push every other card
- * off-screen — the internal scroll floor still catches the rest.
- */
-
 export interface GenericSettingsEditorProps {
   title: string;
   subtitle: ReactNode;
-  /**
-   * Stable, unique, kebab-case identifier for this screen's saved grid
-   * layout (`grid-layout-settings-<settingsKey>` in localStorage). Deliberately
-   * separate from `title` — the human-readable display title is expected to
-   * change over time (copy edits, rebranding), and deriving the persistence
-   * key from it meant a title rename silently orphaned every operator's saved
-   * layout for that screen. Callers pass their route segment under
-   * `/settings/*` (e.g. "sentiment", "etf-transmission", "tunables") so the
-   * key tracks the screen's identity, not its copy.
-   */
-  settingsKey: string;
   backTo?: string;
   fetchSettings: () => Promise<TunablesResponse>;
   updateSettings: (
@@ -152,7 +126,6 @@ export interface GenericSettingsEditorProps {
 export function GenericSettingsEditor({
   title,
   subtitle,
-  settingsKey,
   backTo = "/settings",
   fetchSettings,
   updateSettings,
@@ -247,7 +220,6 @@ export function GenericSettingsEditor({
       )}
       {!loading && !error && data && hasFields && (
         <SettingsForm
-          settingsKey={settingsKey}
           data={data}
           onReload={reload}
           updateSettings={updateSettings}
@@ -270,7 +242,6 @@ function SettingsForm({
   lastResult,
   onResult,
 }: {
-  settingsKey: string;
   data: TunablesResponse;
   onReload: () => void;
   updateSettings: (
@@ -364,16 +335,6 @@ function SettingsForm({
     [flatFields, dirtyKeys],
   );
   const [confirmOpen, setConfirmOpen] = useState(false);
-
-  // Two-column masonry-style packing: each group's height is sized to its own
-  // field count (see `computeGroupHeight`) rather than a flat constant, so the
-  // running per-column `y` offset has to be tracked explicitly instead of the
-  // old `Math.floor(idx / 2) * 4` (which only worked because every item was
-  // the same fixed height). `DynamicGrid`'s vertical compactor still resolves
-  // any remaining slack once real content mounts; this is only the sane
-  // starting point used the first time a screen renders (before an operator's
-  // own dragged/resized layout takes over from localStorage).
-
 
   const buildPayload = () => {
     const payload: Record<string, number | boolean | string> = {};
@@ -497,7 +458,7 @@ function SettingsForm({
           })}
           {dangerZone && (
             <div key="danger-zone" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-              <div className="drag-handle" style={{ background: "transparent", cursor: "grab", height: "20px", display: "flex", justifyContent: "center", alignItems: "center" }}>
+              <div className="drag-handle" style={{ background: "transparent", height: "20px", display: "flex", justifyContent: "center", alignItems: "center" }}>
                 <div style={{ width: "40px", height: "4px", background: "var(--border)", borderRadius: "2px" }} />
               </div>
               <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>

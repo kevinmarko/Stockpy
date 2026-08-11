@@ -1151,13 +1151,13 @@ export function Observability() {
         </div>
       ) : (
         <div style={{ marginTop: "var(--s-4)" }}>
-          {/* Fixed, non-draggable, rendered above the fold and OUTSIDE the
-              DynamicGrid entirely -- the screen's one "does anything need a
+          {/* Rendered above the fold, before the portfolio-risk/equity
+              section below -- the screen's one "does anything need a
               look right now" answer plus its one real control (the macro-
               gate toggle; the ETF-transmission config link below is the
-              other) must never be draggable, resizable, or hidden behind the
-              collapsed disclosure below. See AttentionStripSection's and
-              MacroGateControl's doc comments for the full rationale. */}
+              other) must never be hidden behind the collapsed disclosure
+              below. See AttentionStripSection's and MacroGateControl's doc
+              comments for the full rationale. */}
           <AttentionStripSection items={attentionItems} />
 
           <section className="card card-pad" style={{ marginBottom: "var(--s-4)" }} id="macro-gate">
@@ -1165,15 +1165,14 @@ export function Observability() {
             <RegimeBadgeRow regime={data.regime} onChanged={reload} />
           </section>
 
-          {/* Portfolio risk + equity stay genuinely draggable/resizable
-              DynamicGrid tiles -- the one part of the redesign worth keeping,
-              since these two are the sections an operator plausibly wants to
-              rearrange or resize relative to each other. */}
+          {/* Portfolio risk + equity are grouped together, above the
+              collapsed disclosure below -- these two are the sections an
+              operator most plausibly wants to compare against each other. */}
           <div style={{ marginBottom: "var(--s-4)" }}>
             <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
               <div key="portfolioRisk">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ cursor: "grab" }}>
+                  <div className="drag-handle">
                     <SectionHeading id="portfolio-risk" title="Portfolio risk" sub="Over the full account equity history" />
                   </div>
                   <div style={{ padding: "0 var(--s-3) var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -1228,7 +1227,7 @@ export function Observability() {
 
               <div key="equity">
                 <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                  <div className="drag-handle" style={{ cursor: "grab" }}>
+                  <div className="drag-handle">
                     <SectionHeading title="Equity & drawdown" />
                   </div>
                   <div style={{ padding: "0 var(--s-3) var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -1255,13 +1254,10 @@ export function Observability() {
 
           {/* Everything below is detail, not "does anything need a look" --
               AttentionStripSection above already answers that. Collapsed by
-              default and kept entirely OUTSIDE the DynamicGrid (not a grid
-              item at all) -- matching this screen's pre-DynamicGrid
-              structure. A native <details> (this codebase's own established
-              collapsible idiom) rather than a bespoke component or a grid
-              tile: keyboard/screen-reader support for free, and dragging or
-              resizing an accordion of eleven-plus sections adds no value
-              over just collapsing it. */}
+              default, in normal document flow rather than a grid item. A
+              native <details> (this codebase's own established collapsible
+              idiom) rather than a bespoke component: keyboard/screen-reader
+              support for free. */}
           <details className="card" style={{ marginTop: "var(--s-4)" }} data-testid="background-telemetry">
             <summary
               style={{

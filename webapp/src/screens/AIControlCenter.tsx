@@ -129,7 +129,7 @@ function CapabilityToggles({ data, onSaved }: { data: LlmStatus; onSaved: () => 
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Capabilities</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -287,7 +287,7 @@ const LLM_BADGE_LABEL: Record<LlmCapabilityRow["status"], string> = {
 function TelemetrySection({ data }: { data: LlmStatus }) {
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Provider telemetry</h2>
         <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
           What happened on the last real call to each provider.
