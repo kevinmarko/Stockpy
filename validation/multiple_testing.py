@@ -155,6 +155,19 @@ class FamilyDSRResult:
         <= ``dsr_single_strategy`` for the same inputs, since a larger
         ``n_trials`` raises the expected-max-Sharpe-under-the-null term,
         which strictly deflates the resulting DSR.
+    family_correction_applied : bool
+        ``False`` when ``n_trials_family`` <= 1 AND
+        ``settings.VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED`` is not
+        set — the exact condition under which
+        ``validation.metrics.deflated_sharpe_ratio`` takes its legacy
+        single-trial shortcut (``return 1.0``) rather than a real
+        computation, so ``dsr_family_corrected`` in that case is NOT a
+        genuine family-wide multiple-testing correction, just the
+        no-selection-bias no-op value. ``True`` whenever a real computation
+        ran (``n_trials_family`` > 1, or the single-trial correction setting
+        is enabled). See ``deflated_sharpe_family``'s own docstring for the
+        full explanation and ``validation/metrics.py``'s
+        ``VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED`` precedent.
     """
     strategy_id: str
     sharpe_observed: float
@@ -162,6 +175,7 @@ class FamilyDSRResult:
     n_trials_family: int
     dsr_single_strategy: float
     dsr_family_corrected: float
+    family_correction_applied: bool = True
 
 
 def deflated_sharpe_family(
@@ -205,6 +219,26 @@ def deflated_sharpe_family(
         statistics already on hand — callers needing per-strategy moments
         can call ``deflated_sharpe_ratio`` directly per row instead.
 
+    Family-wide no-op edge case
+    ----------------------------
+    ``deflated_sharpe_ratio`` treats ``n_trials <= 1`` as "no selection bias"
+    and takes a legacy shortcut, returning ``1.0`` outright UNLESS
+    ``settings.VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED`` is set (see
+    that function's own docstring in ``validation/metrics.py`` for the full
+    rationale — several ``STRATEGY_REGISTRY`` strategies currently recorded
+    ``deployable=True`` rely on this exact legacy behavior). This function
+    reuses ``deflated_sharpe_ratio`` verbatim rather than reimplementing that
+    logic, so when ``n_trials_family_total`` (the sum of every strategy's own
+    trial count) is itself <= 1 — a family with no measured trials, or a
+    single strategy with a single trial — ``dsr_family_corrected`` inherits
+    that same no-op unless the setting is enabled: it silently comes back as
+    ``1.0``, which looks like "a real family-wide correction was applied and
+    found no overfitting risk" but is actually "no correction ran at all".
+    To avoid that misrepresentation, this case is surfaced explicitly: a
+    WARNING is logged once per call, and every returned result's
+    ``family_correction_applied`` is set to ``False`` (see that field's own
+    docstring on ``FamilyDSRResult``).
+
     Returns
     -------
     List[FamilyDSRResult]
@@ -236,6 +270,32 @@ def deflated_sharpe_family(
         )
 
     n_trials_family_total = int(sum(int(t) for t in n_trials_per_strategy))
+
+    # Mirror validation/metrics.py::deflated_sharpe_ratio's own
+    # VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED read (opt-in, default
+    # False) rather than reinventing a parallel mechanism — this is exactly
+    # the setting that decides whether an n_trials<=1 call gets a real
+    # computation or the legacy `return 1.0` shortcut.
+    try:
+        from settings import settings as _mt_settings
+        single_trial_correction_enabled = bool(
+            getattr(_mt_settings, "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED", False)
+        )
+    except Exception:  # noqa: BLE001 - never let a settings read block validation
+        single_trial_correction_enabled = False
+
+    family_correction_applied = n_trials_family_total > 1 or single_trial_correction_enabled
+    if not family_correction_applied:
+        logger.warning(
+            "deflated_sharpe_family: n_trials_family_total=%d <= 1 and "
+            "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED is not set -- "
+            "dsr_family_corrected is deflated_sharpe_ratio's legacy "
+            "single-trial no-op (1.0), NOT a genuine family-wide "
+            "multiple-testing correction. Supply real per-strategy trial "
+            "counts, or set VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED, "
+            "to get an actual correction.",
+            n_trials_family_total,
+        )
 
     results: List[FamilyDSRResult] = []
     for sid, sr, n_own in zip(strategy_ids, sharpe_ratios, n_trials_per_strategy):
@@ -279,6 +339,7 @@ def deflated_sharpe_family(
                 n_trials_family=n_trials_family_total,
                 dsr_single_strategy=dsr_own,
                 dsr_family_corrected=dsr_family,
+                family_correction_applied=family_correction_applied,
             )
         )
 
