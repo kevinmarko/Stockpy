@@ -23,7 +23,7 @@ class TestColdStart:
         )
         assert result["generated_at"] is None
         assert result["candidates"] == []
-        assert result["scan_configs"] == []
+        assert len(result["scan_configs"]) == 10
         assert result["reason"] is not None
 
     def test_no_artifact_but_configs_exist_reflects_them(self, tmp_path):
@@ -35,8 +35,8 @@ class TestColdStart:
             scan_config_path=_configs_path(tmp_path),
         )
         assert result["candidates"] == []
-        assert len(result["scan_configs"]) == 1
-        assert result["scan_configs"][0]["name"] == "breakout"
+        assert len(result["scan_configs"]) == 11
+        assert result["scan_configs"][-1]["name"] == "breakout"
         assert result["reason"] is not None
 
     def test_corrupt_candidates_file_never_raises(self, tmp_path):

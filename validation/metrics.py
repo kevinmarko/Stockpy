@@ -69,9 +69,25 @@ def deflated_sharpe_ratio(
     Returns:
         DSR value (float between 0 and 1), indicating the probability that the true SR is > 0.
     """
-    if n_trials <= 1:
-        return 1.0  # No selection bias if only one trial
-    
+    single_trial = n_trials <= 1
+    if single_trial:
+        # settings.VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED (opt-in,
+        # default False -- see settings.py for the full honesty writeup):
+        # the legacy shortcut below (`return 1.0`) skips the entire DSR
+        # calculation for a single-trial strategy, which is directly relied
+        # on today by several STRATEGY_REGISTRY strategies currently
+        # recorded deployable=True. Reproduce it byte-for-byte unless the
+        # flag is explicitly on.
+        try:
+            from settings import settings as _dsr_settings
+            correction_enabled = bool(
+                getattr(_dsr_settings, "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED", False)
+            )
+        except Exception:  # noqa: BLE001 - never let a settings read block validation
+            correction_enabled = False
+        if not correction_enabled:
+            return 1.0  # No selection bias if only one trial (legacy shortcut)
+
     # 1. Convert annualized SR and variance to non-annualized daily/monthly equivalent
     # SR_daily = SR_annual / sqrt(freq)
     sr_hat = sr_observed / np.sqrt(freq)
@@ -79,30 +95,44 @@ def deflated_sharpe_ratio(
 
     # Euler-Mascheroni constant
     euler = 0.57721566490153286
-    
-    # 2. Estimate expected maximum Sharpe ratio under null hypothesis (SR_0)
-    # Using Bailey-Lopez de Prado approximation
-    z_n = norm.ppf(1.0 - 1.0 / n_trials)
-    z_ne = norm.ppf(1.0 - 1.0 / (n_trials * np.e))
-    # Deal with infinite values for small n_trials or edge cases
-    if np.isinf(z_n) or np.isnan(z_n):
-        z_n = 0.0
-    if np.isinf(z_ne) or np.isnan(z_ne):
-        z_ne = 0.0
-        
-    sr_0 = np.sqrt(var_sr) * ((1.0 - euler) * z_n + euler * z_ne)
+
+    if single_trial:
+        # Correction enabled: with genuinely only one trial there is no
+        # multiple-testing selection bias to deflate for, so the expected
+        # maximum Sharpe ratio under the null is 0 -- not the
+        # multiple-testing-inflated sqrt(var_sr) * (...) term below (which
+        # would be meaningless with n_trials=1 anyway; z_n = norm.ppf(1 - 1/1)
+        # = norm.ppf(0) = -inf, already guarded to 0.0 by the branch below,
+        # silently producing a mild positive bias rather than the correct 0).
+        sr_0 = 0.0
+    else:
+        # 2. Estimate expected maximum Sharpe ratio under null hypothesis (SR_0)
+        # Using Bailey-Lopez de Prado approximation
+        z_n = norm.ppf(1.0 - 1.0 / n_trials)
+        z_ne = norm.ppf(1.0 - 1.0 / (n_trials * np.e))
+        # Deal with infinite values for small n_trials or edge cases
+        if np.isinf(z_n) or np.isnan(z_n):
+            z_n = 0.0
+        if np.isinf(z_ne) or np.isnan(z_ne):
+            z_ne = 0.0
+
+        sr_0 = np.sqrt(var_sr) * ((1.0 - euler) * z_n + euler * z_ne)
 
     # 3. Calculate DSR test statistic Z
     # Z = (sr_hat - sr_0) * sqrt(T - 1) / sqrt(1 - skew * sr_hat + ((kurt - 1)/4) * sr_hat^2)
     # Note: kurtosis must be the non-excess kurtosis (so if excess kurtosis is used, add 3.0)
     # The standard scipy.stats.kurtosis returns excess, so we assume the input is non-excess.
     denominator = np.sqrt(1.0 - skew * sr_hat + ((kurtosis - 1.0) / 4.0) * (sr_hat ** 2))
-    
-    if denominator == 0 or np.isnan(denominator):
+
+    # Degenerate-std guard convention (see this repo's documented convention):
+    # a near-zero-but-not-exact denominator is floating-point noise, not a
+    # genuine zero; dividing by it would explode z_stat into an absurd,
+    # unbounded value instead of the honest NaN.
+    if np.isnan(denominator) or denominator < 1e-12:
         return np.nan
-        
+
     z_stat = ((sr_hat - sr_0) * np.sqrt(n_observations - 1)) / denominator
-    
+
     return float(norm.cdf(z_stat))
 
 def probability_of_backtest_overfitting(
@@ -192,9 +222,6 @@ def run_cpcv_evaluation(
     oos_sharpe_matrix = []
     all_trials_by_path: List[List[Dict[str, Any]]] = []
 
-    # Store all path returns for the best strategy
-    best_strategy_oos_returns = []
-
     logger.info("Executing CPCV path evaluation...")
 
     for train_idx, test_idx, path_id in cv.split(X, y, t1):
@@ -242,13 +269,12 @@ def run_cpcv_evaluation(
             "returns": best_trial["test_returns"].tolist(),
             "params": best_trial["params"]
         })
-        best_strategy_oos_returns.extend(best_trial["test_returns"].tolist())
 
     _empty_result = {
         "paths": [], "dsr": 0.0, "pbo": 1.0, "mean_oos_sharpe": 0.0, "distribution": np.array([]),
         "mean_oos_max_dd": float("nan"), "mean_oos_sortino": float("nan"),
         "mean_oos_hit_rate": float("nan"), "mean_oos_avg_trade_pct": float("nan"),
-        "mean_oos_turnover": float("nan"),
+        "mean_oos_turnover": float("nan"), "mean_oos_return": float("nan"),
     }
     if not is_sharpe_matrix:
         return _empty_result
@@ -265,8 +291,24 @@ def run_cpcv_evaluation(
     best_overall_idx = np.argmax(mean_is_sharpes)
     best_overall_oos_sharpes = oos_sharpe_matrix[:, best_overall_idx]
 
-    # Calculate returns skew/kurtosis of the selected strategy (all merged OOS returns)
-    all_oos_returns = pd.Series(best_strategy_oos_returns)
+    # Calculate returns skew/kurtosis of the selected strategy (all merged OOS
+    # returns) -- MUST come from the SAME trial selection (best_overall_idx,
+    # the single trial with the best MEAN in-sample Sharpe across all paths)
+    # that sr_observed uses below, not the per-path best_is_idx "winners"
+    # (which back paths_data's own per-path report table -- a legitimate,
+    # separate use of a per-path-varying selection). Mixing the two would
+    # have the DSR test statistic's tail-shape terms (skew/kurtosis) describe
+    # a different, path-varying set of trials than the one its own
+    # sr_observed represents -- an internally inconsistent DSR input.
+    selected_oos_returns: List[float] = []
+    for trials in all_trials_by_path:
+        if best_overall_idx >= len(trials):
+            continue
+        selected_test_returns = trials[best_overall_idx].get("test_returns")
+        if selected_test_returns is None or len(selected_test_returns) == 0:
+            continue
+        selected_oos_returns.extend(selected_test_returns.tolist())
+    all_oos_returns = pd.Series(selected_oos_returns)
     skew = all_oos_returns.skew() if len(all_oos_returns) > 2 else 0.0
     kurt = all_oos_returns.kurtosis() + 3.0 if len(all_oos_returns) > 2 else 3.0 # convert to non-excess
 
@@ -277,11 +319,34 @@ def run_cpcv_evaluation(
     sr_observed = np.mean(best_overall_oos_sharpes)
     n_trials = is_sharpe_matrix.shape[1]
 
-    # Variance of Sharpe ratios across all trials
+    # Variance of Sharpe ratios across all trials.
     sr_variance = np.var(mean_is_sharpes)
-    if sr_variance == 0:
+    # Degenerate-std guard convention: a near-zero-but-not-exact variance
+    # (floating-point noise from near-identical trial Sharpes) must not be
+    # treated as "genuinely zero" -- but it also must not be left as literal
+    # noise feeding a division downstream in deflated_sharpe_ratio, so it is
+    # floored to a small positive value (unlike the NaN-return convention
+    # used for a degenerate ratio DENOMINATOR elsewhere in this module,
+    # sr_variance is itself a numerator input to a sqrt(), so flooring
+    # rather than propagating NaN preserves a defined DSR here).
+    if sr_variance < 1e-12:
         sr_variance = 1e-6
 
+    # n_observations=len(X) uses the FULL backtest sample length as the DSR
+    # test statistic's effective-sample-size stand-in (T), not the length of
+    # any single CPCV path's own OOS slice. Reviewed and deliberately left
+    # as-is: DSR's sqrt(T - 1) term calibrates how much sampling noise to
+    # expect around sr_observed, and per-path OOS length varies mechanically
+    # with n_splits/n_test_splits (an implementation choice unrelated to how
+    # much real data backs the estimate), while CPCV's combinatorial paths
+    # are constructed so that, taken together (purging/embargo aside), they
+    # draw on very close to the entire dataset -- so len(X) is a more stable,
+    # not an obviously wrong, proxy for the estimate's true information
+    # content. Using total observations T as the DSR sample-size term is not
+    # unusual in DSR implementations that evaluate a strategy across
+    # resampled/combinatorial folds rather than a single held-out slice. Not
+    # changed by this pass; flag if a live-data re-verification surfaces
+    # evidence this materially overstates confidence for a specific strategy.
     dsr = deflated_sharpe_ratio(
         sr_observed=sr_observed,
         n_trials=n_trials,
@@ -304,6 +369,7 @@ def run_cpcv_evaluation(
     per_path_hit_rate: List[float] = []
     per_path_avg_trade: List[float] = []
     per_path_turnover: List[float] = []
+    per_path_mean_return: List[float] = []
     for trials in all_trials_by_path:
         if best_overall_idx >= len(trials):
             continue
@@ -326,6 +392,12 @@ def run_cpcv_evaluation(
         per_path_hit_rate.append(float((oos_returns[trade_days] > 0).mean()) if trade_days.any() else np.nan)
         per_path_avg_trade.append(float(oos_returns[trade_days].mean()) if trade_days.any() else np.nan)
         per_path_turnover.append(float(selected_trial.get("turnover", 0.05)))
+        # UNCONDITIONAL per-path mean return (every day in the OOS slice, not
+        # just trade_days) -- matches the harness's own non-OOS-gate Calmar
+        # convention (full_returns.mean(), an unconditional mean), unlike
+        # per_path_avg_trade above (conditional on trade_days, which serves a
+        # different, deliberately trade-conditional metric).
+        per_path_mean_return.append(float(oos_returns.mean()))
 
     def _nanmean_or(values: List[float], default: float) -> float:
         # All-NaN input (e.g. a strategy with zero down-days ever, so every
@@ -341,6 +413,7 @@ def run_cpcv_evaluation(
     mean_oos_hit_rate = _nanmean_or(per_path_hit_rate, 0.0)
     mean_oos_avg_trade_pct = _nanmean_or(per_path_avg_trade, 0.0)
     mean_oos_turnover = _nanmean_or(per_path_turnover, 0.05)
+    mean_oos_return = _nanmean_or(per_path_mean_return, float("nan"))
 
     return {
         "paths": paths_data,
@@ -353,4 +426,11 @@ def run_cpcv_evaluation(
         "mean_oos_hit_rate": mean_oos_hit_rate,
         "mean_oos_avg_trade_pct": mean_oos_avg_trade_pct,
         "mean_oos_turnover": mean_oos_turnover,
+        # UNCONDITIONAL mean per-day OOS return (mean of each CPCV path's own
+        # oos_returns.mean() -- every day, not just trade_days), consumed by
+        # validation/harness.py's OOS-gate Calmar so it matches the non-gated
+        # Calmar's own unconditional-mean convention rather than mixing a
+        # trade-conditional mean (mean_oos_avg_trade_pct) into a
+        # full-period-annualized ratio.
+        "mean_oos_return": mean_oos_return,
     }

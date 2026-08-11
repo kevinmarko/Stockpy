@@ -536,8 +536,22 @@ def apply_portfolio_gross_cap(
     # Both paths apply one uniform scalar -- recover it from the first
     # finite non-zero name for telemetry (rather than re-deriving it, to
     # stay agnostic to which branch ran).
+    #
+    # On the cov-matrix path, `portfolio_vol_target` ZEROES OUT any symbol
+    # missing from `cov_matrix` (its own correct behavior for unknowable
+    # risk -- see that function's docstring), which is NOT the uniform
+    # portfolio-gross scalar this loop is trying to recover. If such a
+    # coverage-gap symbol happens to be first in iteration order, naively
+    # dividing its zeroed `scaled` value by its `raw` weight recovers a
+    # false `scale_factor=0.0` (-> a false `was_capped=True`) instead of the
+    # real uniform scalar. Restrict the recovery loop to symbols actually
+    # present in `cov_matrix` so a coverage gap can never be misread as a
+    # cap event.
+    cov_symbols = set(cov_matrix.index) if cov_matrix is not None else None
     scale_factor = 1.0
     for symbol, raw in finite_weights.items():
+        if cov_symbols is not None and symbol not in cov_symbols:
+            continue
         if abs(raw) > epsilon:
             scale_factor = scaled.get(symbol, 0.0) / raw
             break

@@ -7,7 +7,7 @@ import { Button, EmptyState, ErrorState, Loading, Notice, Select, Table } from "
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
 import { theme } from "../theme";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * Prompt Registry — version control for every AI-facing instruction. Ports
@@ -51,11 +51,6 @@ export function PromptRegistry() {
           <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
             <h1 className="screen-title" style={{ margin: 0 }}>Prompt Registry</h1>
           </div>
-        </div>
-        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
-          <button type="button" className="btn btn-neutral" onClick={() => resetGridLayout("prompt-registry")}>
-            Reset Layout
-          </button>
         </div>
       </div>
       <p className="screen-sub">

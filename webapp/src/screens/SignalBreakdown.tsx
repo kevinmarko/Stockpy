@@ -11,7 +11,7 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { Button, ErrorState, Loading, Table, Tile } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import { fmtNum } from "../format";
 import { pnlColor, theme } from "../theme";
 import { exportCsv } from "../utils/csv";
@@ -278,7 +278,6 @@ export function SignalBreakdown() {
             advisory engine; the module split from the signal aggregator.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("signal-breakdown")}>Reset Layout</Button>
       </div>
 
       <TabGuide tabKey="signals" />

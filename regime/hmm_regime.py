@@ -182,7 +182,13 @@ class HMMRegimeDetector:
         X = features_df.to_numpy(dtype=float)
         self.feature_means_ = X.mean(axis=0)
         self.feature_stds_ = X.std(axis=0)
-        self.feature_stds_[self.feature_stds_ == 0.0] = 1.0
+        # Degenerate-std guard (repo convention, docs/CLAUDE.md): a near-constant
+        # (not necessarily bit-identical) feature column produces a std that is
+        # near-zero but not exactly 0.0 due to floating-point noise; an exact
+        # `== 0.0` check lets that near-zero value through and explodes the
+        # scaled feature. Guard with `< 1e-12`, matching every other ratio-over-
+        # std computation in this codebase.
+        self.feature_stds_[self.feature_stds_ < 1e-12] = 1.0
         X_scaled = (X - self.feature_means_) / self.feature_stds_
 
         model = GaussianHMM(

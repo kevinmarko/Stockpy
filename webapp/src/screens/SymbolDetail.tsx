@@ -35,7 +35,7 @@ import { realizableTheta, effectiveIvr } from "../optionsHonesty";
 import { useState } from "react";
 import type { DecisionEntry } from "../api/types";
 import ActiveTraderLadder from "../components/ActiveTraderLadder";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 
 /** News sentiment (FinBERT, ~[-1,1]) → colored bullish/neutral/bearish badge. */
 function NewsBadge({ value }: { value: number | null }) {
@@ -332,7 +332,6 @@ export function SymbolDetail() {
           <div className="num" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
             {fmtUsd(identity.price)}
           </div>
-          <Button variant="neutral" onClick={() => resetGridLayout("symbol-detail")}>Reset Layout</Button>
         </div>
       </div>
 

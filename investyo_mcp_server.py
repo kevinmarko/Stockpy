@@ -2546,6 +2546,7 @@ def get_options_directive(symbol: str) -> str:
     """
     import json
     import math
+    import os
 
     try:
         from technical_options_engine import build_premium_directive, validate_directive_integrity
@@ -2573,11 +2574,58 @@ def get_options_directive(symbol: str) -> str:
             spot_price = float(bars["Close"].iloc[-1])
             is_stale = True
 
+        # Macro proxy (vix/market_regime) so the VRP regime gate (VIX>=30 /
+        # CREDIT EVENT) fires the same way it does for every other production
+        # caller of build_premium_directive — sourced from the persisted
+        # output/state_snapshot.json, mirroring get_regime_status's own
+        # snapshot read above. Neutral defaults ("no override") when the
+        # snapshot is missing/malformed, never a fabricated stress signal.
+        _MACRO_DEFAULT_VIX = 15.0
+        _MACRO_DEFAULT_REGIME = "RISK ON"
+
+        class _MacroProxy:
+            """MacroEconomicDTO-shaped stub (.vix/.market_regime only). Mirrors
+            gui/panels/options_matrix.py::_MacroProxy / options_ondemand.py::_MacroProxy."""
+
+            def __init__(self, vix: float, market_regime: str):
+                self.vix = vix
+                self.market_regime = market_regime
+
+        snap = None
+        try:
+            from settings import settings as _settings
+            snap_path = os.path.join(str(_settings.OUTPUT_DIR), "state_snapshot.json")
+        except Exception:
+            snap_path = os.path.join("output", "state_snapshot.json")
+        if snap_path and os.path.exists(snap_path):
+            try:
+                with open(snap_path, "r", encoding="utf-8") as fh:
+                    snap = json.load(fh)
+            except Exception:
+                snap = None
+
+        vix_val = _MACRO_DEFAULT_VIX
+        regime_val = _MACRO_DEFAULT_REGIME
+        if isinstance(snap, dict):
+            raw_vix = snap.get("vix")
+            try:
+                vix_val = float(raw_vix) if raw_vix is not None else _MACRO_DEFAULT_VIX
+            except (TypeError, ValueError):
+                vix_val = _MACRO_DEFAULT_VIX
+            regime_val = str(snap.get("market_regime") or _MACRO_DEFAULT_REGIME)
+
+        macro_proxy = _MacroProxy(vix_val, regime_val)
+
         # true_ivr_enabled is left at its default (None) — build_premium_directive
         # reads settings.OPTIONS_TRUE_IVR_ENABLED itself, so this tool picks up
         # the live flag with no extra plumbing here.
         directive = build_premium_directive(
-            sym, bars, spot_price=spot_price, is_stale=is_stale
+            sym,
+            bars,
+            spot_price=spot_price,
+            is_stale=is_stale,
+            macro_dto=macro_proxy,
+            vrp=None,  # VRP requires an options chain — left None to skip that gate
         )
         if not isinstance(directive, dict) or not directive:
             return f"Options directive engine returned no result for {sym}."

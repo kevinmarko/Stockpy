@@ -248,26 +248,35 @@ class RunResult:
 # ---------------------------------------------------------------------------
 
 def _load_watchlist() -> List[str]:
-    """Return uppercase tickers from WATCHLIST env var or watchlist.txt.
+    """Return the union of uppercase tickers from WATCHLIST env var and watchlist.txt.
 
-    WATCHLIST env var (comma-separated) takes precedence over the file.
-    Returns an empty list when neither source is configured.
+    Both sources are read (when present) and merged/deduped -- neither one
+    takes precedence over the other. Returns an empty list when neither
+    source is configured.
     """
+    # dict.fromkeys preserves first-seen order while deduping -- env-var
+    # tickers first, then file tickers, matching the order each source is read.
+    tickers: dict = {}
+
     env_val = os.environ.get("WATCHLIST", "").strip()
     if env_val:
-        return [t.strip().upper() for t in env_val.split(",") if t.strip()]
+        for t in env_val.split(","):
+            t = t.strip().upper()
+            if t:
+                tickers[t] = None
 
     wl_path = Path(WATCHLIST_FILE)
     if wl_path.exists():
-        tickers = [
+        file_tickers = [
             line.strip().upper()
             for line in wl_path.read_text().splitlines()
             if line.strip() and not line.startswith("#")
         ]
-        logger.info("Loaded %d tickers from %s.", len(tickers), WATCHLIST_FILE)
-        return tickers
+        logger.info("Loaded %d tickers from %s.", len(file_tickers), WATCHLIST_FILE)
+        for t in file_tickers:
+            tickers[t] = None
 
-    return []
+    return list(tickers.keys())
 
 
 def _load_tickers_from_sheet2() -> List[str]:
@@ -292,13 +301,17 @@ def _load_tickers_from_sheet2() -> List[str]:
         return []
 
 
+from pilots.discovery import discovery
+
 def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     """Return the evaluation universe: held symbols ∪ watchlist, deduped, sorted.
 
-    Priority order when building the universe:
+    priority order when building the universe:
       1. Robinhood held positions (always included when available).
       2. WATCHLIST env var or watchlist.txt (always merged in when present).
-      3. Google Sheet → Sheet2 column A (fallback only when 1 + 2 are both empty).
+      3. Discovered scan candidates from `scan_candidates.json` (always merged).
+      4. `settings.DEFAULT_TICKERS` (fallback if 1+2+3 are empty).
+      5. Google Sheet → Sheet2 column A (fallback only when 1+2+3+4 are empty).
 
     When ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` is on, `combined` is
     additionally subtracted by whatever
@@ -307,12 +320,22 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     ``rating/symbol_rating.py::should_exclude``). Held symbols are never
     dropped, and the lookup fails OPEN: any exception leaves `combined`
     untouched and only logs a warning (CONSTRAINT #6). Applied once, before
-    the Sheet2 fallback, so exclusion is honored whether or not that
-    fallback ends up running.
+    the fallback, so exclusion is honored whether or not that fallback runs.
     """
     held = set(snapshot.positions.keys())
     watchlist = set(_load_watchlist())
-    combined = held | watchlist
+
+    # 3. Discovered candidates
+    discovered = set()
+    try:
+        candidates = discovery(limit=None).get("candidates", [])
+        discovered = {c["symbol"].upper().strip() for c in candidates if c.get("symbol")}
+        if discovered:
+            logger.info("Loaded %d candidates from scan discovery.", len(discovered))
+    except Exception as exc:
+        logger.warning("Failed to load discovery candidates: %s", exc)
+
+    combined = held | watchlist | discovered
 
     if settings.SYMBOL_RATING_AUTO_DROP_ENABLED:
         try:
@@ -332,20 +355,25 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
             )
 
     if not combined:
-        sheet2 = set(_load_tickers_from_sheet2())
-        if sheet2:
-            logger.info(
-                "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
-                len(sheet2),
-            )
-        combined = sheet2
+        if settings.DEFAULT_TICKERS:
+            combined = set(t.upper() for t in settings.DEFAULT_TICKERS)
+            logger.info("Using %d DEFAULT_TICKERS as fallback universe.", len(combined))
+        else:
+            sheet2 = set(_load_tickers_from_sheet2())
+            if sheet2:
+                logger.info(
+                    "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
+                    len(sheet2),
+                )
+            combined = sheet2
 
     universe = sorted(combined)
     logger.info(
-        "Universe: %d symbols (%d held, %d watchlist-only).",
+        "Universe: %d symbols (%d held, %d watchlist-only, %d discovered).",
         len(universe),
         len(held),
-        len(combined - held),
+        len((watchlist - held) - discovered),
+        len(discovered - held),
     )
     return universe
 

@@ -319,24 +319,24 @@ class OptionsPricingRecommender:
                 short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'call')
                 
                 directive["Legs"] = [
-                    {"Side": "Long", "Type": "Call", "Strike": k_long, "Price": round(long_metrics['Price'], 2)},
-                    {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2)}
+                    {"Side": "Long", "Type": "Call", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)},
+                    {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
                 ]
                 directive["Net_Premium"] = round((long_metrics['Price'] - short_metrics['Price']) * -1.0, 2)
 
             elif trend_bias == 'Bearish':
                 directive["Strategy"] = "Put Debit Spread"
                 directive["Action"] = "Buy to Open"
-                
+
                 k_long = self.find_strike_for_delta(-ATM_DELTA_TARGET, T, sigma, 'put')
                 long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'put')
-                
+
                 k_short = self.find_strike_for_delta(-SHORT_DELTA_TARGET, T, sigma, 'put')
                 short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'put')
-                
+
                 directive["Legs"] = [
-                    {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2)},
-                    {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2)}
+                    {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)},
+                    {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
                 ]
                 directive["Net_Premium"] = round((long_metrics['Price'] - short_metrics['Price']) * -1.0, 2)
             else:
@@ -371,8 +371,8 @@ class OptionsPricingRecommender:
                 short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'put')
                 
                 directive["Legs"] = [
-                    {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2)},
-                    {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2)}
+                    {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)},
+                    {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
                 ]
                 directive["Net_Premium"] = round((long_metrics['Price'] - short_metrics['Price']) * -1.0, 2)
             else:

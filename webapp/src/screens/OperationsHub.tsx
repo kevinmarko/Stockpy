@@ -1,8 +1,7 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
-import { Button } from "../components/ui";
+import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * OperationsHub — landing screen for the "Operations" nav section (see
@@ -61,7 +60,6 @@ export function OperationsHub() {
             The platform and pipeline itself, not a symbol or your money.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("operations-hub")}>Reset Layout</Button>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-3)" }}>

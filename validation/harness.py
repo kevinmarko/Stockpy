@@ -800,8 +800,17 @@ class StrategyValidationHarness:
             sharpe = cpcv_results["mean_oos_sharpe"]
             max_dd = cpcv_results["mean_oos_max_dd"]
             sortino = cpcv_results["mean_oos_sortino"]
+            # Match the non-OOS-gate Calmar's UNCONDITIONAL-mean convention
+            # (full_returns.mean() above, averaged over every day) -- using
+            # mean_oos_avg_trade_pct here would mix a trade-CONDITIONAL mean
+            # (averaged only over days a trade actually occurred) into a
+            # full-period (*252) annualization, silently overstating Calmar
+            # for any strategy that doesn't trade every day.
+            # mean_oos_return is validation/metrics.py::run_cpcv_evaluation's
+            # unconditional per-path-mean-return aggregate, purpose-built to
+            # mirror full_returns.mean() for exactly this calculation.
             calmar = (
-                (cpcv_results["mean_oos_avg_trade_pct"] * 252 / max_dd)
+                (cpcv_results["mean_oos_return"] * 252 / max_dd)
                 if (not np.isnan(max_dd) and max_dd >= 1e-12) else np.nan
             )
             hit_rate = cpcv_results["mean_oos_hit_rate"]

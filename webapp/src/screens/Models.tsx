@@ -7,7 +7,7 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useTrainingStatus } from "../hooks/useTrainingStatus";
 import { Button, DeployableBadge, ErrorState, Loading, MetricBadge, InfoTip, Notice, Select } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
@@ -348,11 +348,6 @@ export function Models() {
           <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)" }}>
             <h1 className="screen-title" style={{ margin: 0 }}>The models</h1>
           </div>
-        </div>
-        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
-          <button type="button" className="btn btn-neutral" onClick={() => resetGridLayout("models")}>
-            Reset Layout
-          </button>
         </div>
       </div>
       <p className="screen-sub">

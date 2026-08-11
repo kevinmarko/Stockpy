@@ -51,6 +51,7 @@ def _forecast_one(
     train_close: pd.Series,
     start_price: float,
     horizon: int,
+    embargo_days: int = 0,
 ) -> float:
     """Dispatch a single point forecast to ``engine``'s public methods.
 
@@ -59,6 +60,26 @@ def _forecast_one(
     to ``0.0`` — the same sentinel-failure convention ``run_arima`` /
     ``run_holt_winters_grid_search`` already use, so callers filter it out
     identically regardless of which model produced it.
+
+    ``embargo_days`` handling (Finding 11 — real embargo/purge gap):
+    MC is anchored at the real anchor price (``start_price``, the caller's
+    ``Close[t]``) and projects ``horizon`` days forward from there, so it is
+    correctly unaffected by how far back the training window itself ends —
+    ``embargo_days`` is not applied to its ``horizon``. ARIMA/HW, by
+    contrast, forecast ``horizon`` days forward from ``train_close``'s OWN
+    last observation, which — once ``_walk_forward_symbol`` starts purging
+    the ``embargo_days`` bars immediately before the anchor — sits
+    ``embargo_days`` days earlier than it used to. Passing the unadjusted
+    ``horizon`` in that case would silently ask these two models to
+    extrapolate to a point in time that is ``embargo_days`` days short of
+    the actual realized outcome (``Close[t + horizon]``) being compared
+    against, injecting a systematic bias of `slope * embargo_days` into
+    every MASE/RMSE cell — not a purge/embargo effect at all, just a
+    mismatched target. Adding ``embargo_days`` back onto ``horizon`` for
+    these two models keeps the forecast target anchored at the same real
+    calendar distance from ``train_close``'s end regardless of
+    ``embargo_days``, preserving the pre-embargo train-end-to-target
+    relationship exactly.
     """
     try:
         if model == "MC":
@@ -72,9 +93,11 @@ def _forecast_one(
             )
             return float(mean_price)
         elif model == "ARIMA":
-            return float(engine.run_arima(train_close.values, days_forward=horizon))
+            train_anchored_horizon = horizon + max(0, embargo_days)
+            return float(engine.run_arima(train_close.values, days_forward=train_anchored_horizon))
         elif model == "HW":
-            return float(engine.run_holt_winters_grid_search(train_close, horizon))
+            train_anchored_horizon = horizon + max(0, embargo_days)
+            return float(engine.run_holt_winters_grid_search(train_close, train_anchored_horizon))
         else:
             logger.debug("Unrecognized model %r in _forecast_one; returning 0.0", model)
             return 0.0
@@ -93,10 +116,22 @@ def _walk_forward_symbol(
     """Expanding-window walk-forward over one symbol's ``Close`` series.
 
     For each anchor index ``t`` (stepped by ``config.step_days``), the
-    training window is ``Close[max(0, t - lookback_days) : t]`` — strictly
-    excluding index ``t`` itself, so the model never sees the anchor price
-    or anything at/after it. The realized outcome is ``Close[t + horizon]``,
-    which must actually exist in the series or the anchor is skipped.
+    training window is ``Close[max(0, train_end - lookback_days) : train_end]``
+    where ``train_end = t - config.embargo_days`` — a genuine purge/embargo
+    gap of ``embargo_days`` bars immediately preceding the anchor is excluded
+    from training (on top of the training window already strictly excluding
+    index ``t`` itself via slicing), so the model never sees the anchor price,
+    the embargoed bars right before it, or anything at/after it. The realized
+    outcome is ``Close[t + horizon]``, which must actually exist in the series
+    or the anchor is skipped. ``_forecast_one`` separately compensates
+    ARIMA/HW's own forecast horizon for this shifted train end (see its
+    docstring) so the purge gap changes WHICH training rows are used, never
+    WHAT future point is being forecast/compared against. With a nonzero
+    ``embargo_days`` (the ``BacktestConfig`` default is 5), a symbol whose
+    available pre-anchor history is itself close to ``min_train_bars`` may
+    now legitimately yield fewer/no observations at an early anchor than
+    before this gap was enforced — that is the correction actually taking
+    effect, not a bug.
 
     Anchors whose model produces a non-finite or non-positive forecast
     (the models' own sentinel failure value, ``0.0``, or any other
@@ -122,8 +157,15 @@ def _walk_forward_symbol(
 
     for t in range(first_anchor, last_anchor + 1, max(1, config.step_days)):
         try:
-            train_start = max(0, t - config.lookback_days)
-            train = close.iloc[train_start:t]  # strictly excludes index t
+            # Purge/embargo gap: the training window ends `embargo_days`
+            # bars before the anchor, not at the anchor itself, so no
+            # training observation can carry information that overlaps
+            # with (or leaks from) the test anchor's immediate neighborhood.
+            train_end = t - config.embargo_days
+            train_start = max(0, train_end - config.lookback_days)
+            if train_end <= train_start:
+                continue
+            train = close.iloc[train_start:train_end]
             if len(train) < config.min_train_bars:
                 continue
 
@@ -132,7 +174,10 @@ def _walk_forward_symbol(
             if not np.isfinite(start_price) or not np.isfinite(y_true):
                 continue
 
-            y_pred = _forecast_one(engine, model, train, start_price, horizon)
+            y_pred = _forecast_one(
+                engine, model, train, start_price, horizon,
+                embargo_days=config.embargo_days,
+            )
             if not np.isfinite(y_pred) or y_pred <= 0:
                 # Model sentinel failure (0.0) or degenerate output — never
                 # fabricate an error observation from it.

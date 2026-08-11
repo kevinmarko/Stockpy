@@ -84,6 +84,16 @@ export function FollowModal({
   const mode = result?.mode ?? "review";
   const modeInfo = MODE_LABEL[mode] ?? MODE_LABEL.review;
 
+  // The real sum of planned target notionals -- the honest "what was
+  // actually allocated" figure. result.follow.amount is always the raw
+  // requested amount (see the comment at its usage site below), so it must
+  // never be presented as "allocated" on its own.
+  const allocatedTotal =
+    result?.planned_intents.reduce((sum, it) => sum + it.target_notional, 0) ?? 0;
+  // A cent of slack absorbs floating-point rounding across per-symbol
+  // target_notional values, not a fabricated tolerance for a real gap.
+  const wasReduced = !!result && result.follow.amount - allocatedTotal > 0.01;
+
   return (
     <div
       className="sheet-backdrop"
@@ -183,9 +193,44 @@ export function FollowModal({
           <>
             <h2 style={{ margin: "0 0 var(--s-0-5)", fontSize: "var(--t-title)" }}>Queue preview</h2>
             <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0 }}>
-              {fmtUsd(result.follow.amount)} allocated to {pilot.name} across{" "}
+              {fmtUsd(allocatedTotal)} allocated to {pilot.name} across{" "}
               {result.planned_intents.length} planned orders.
             </p>
+
+            {/* result.follow.amount is always the raw REQUESTED amount (the
+                backend never rewrites the persisted follow record) -- it is
+                NOT what was actually planned whenever sizing and/or the
+                per-order notional cap reduced the allocation. Showing the
+                requested figure as "allocated" would misstate what actually
+                happened, so the headline above uses the real sum of planned
+                target notionals instead. This notice surfaces the gap
+                honestly without over-attributing it to one specific cause:
+                either the position-sizing ceiling (below) or the per-order
+                notional cap (already shown further down) could be the
+                reason, and this UI has no reliable way to isolate which. */}
+            {wasReduced && (
+              <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
+                <span>🛡️</span>
+                <span>
+                  Your requested {fmtUsd(result.follow.amount)} was reduced to{" "}
+                  {fmtUsd(allocatedTotal)} by this Pilot's position-sizing and/or
+                  per-order limits.
+                </span>
+              </Notice>
+            )}
+
+            {/* Always visible (not conditional on wasReduced) -- states the
+                sizing ceiling in effect this cycle as a plain fact, never a
+                causal claim about why any particular reduction happened. */}
+            {result.sizing_path && (
+              <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
+                Sizing this cycle:{" "}
+                {result.kelly_weight != null
+                  ? `${fmtPct(result.kelly_weight, 1, { fromFraction: true })} of account equity`
+                  : "unavailable"}{" "}
+                ({result.sizing_path}).
+              </p>
+            )}
 
             <div
               style={{

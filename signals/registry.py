@@ -4,22 +4,53 @@ InvestYo Quant Platform - Signal Registry
 Manages the registration and execution of pluggable SignalModules.
 """
 
+import logging
 from typing import Dict
 import pandas as pd
 
 from signals.base import SignalModule, SignalContext, SignalOutput
 
+logger = logging.getLogger(__name__)
+
 
 class SignalRegistry:
     """Registry that maintains and executes pluggable signal modules."""
-    
+
     def __init__(self):
         self._modules: Dict[str, SignalModule] = {}
 
     def register(self, module: SignalModule) -> None:
-        """Registers a signal module instance."""
+        """Registers a signal module instance.
+
+        Finding 13 fix: previously this silently overwrote any existing
+        entry under ``module.name`` with no signal to the caller -- a
+        double-registration (e.g. two modules accidentally sharing a name,
+        or the same module registered twice) would silently drop the first
+        registration rather than being caught, violating this codebase's
+        "never silently drop, skip, or double-register a module" convention
+        (see the Branch Workflow / registry conventions notes). Raises
+        ``ValueError`` naming the exact colliding name instead.
+        """
         if not module.name:
             raise ValueError("Signal module must have a non-empty 'name' attribute.")
+        if module.name in self._modules:
+            existing = self._modules[module.name]
+            if existing is module:
+                # Re-registering the exact same instance is a harmless no-op
+                # (e.g. a module re-imported under two different import
+                # paths that both resolve to the same object) -- not a real
+                # collision, so this does not raise.
+                logger.warning(
+                    "SignalRegistry.register: module '%s' was already registered "
+                    "(same instance) -- ignoring duplicate registration.",
+                    module.name,
+                )
+                return
+            raise ValueError(
+                f"Signal module name collision: '{module.name}' is already registered "
+                f"(existing={existing!r}, new={module!r}). Every SignalModule must have "
+                "a unique 'name' -- rename one of the two modules."
+            )
         self._modules[module.name] = module
 
     def get(self, name: str) -> SignalModule:

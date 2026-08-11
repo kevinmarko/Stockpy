@@ -2225,6 +2225,35 @@ class HistoricalStore:
         except Exception as exc:
             logger.warning("HistoricalStore.save_finbert_scores failed: %s", exc)
 
+    def count_finbert_scores(self, since: Optional[datetime] = None) -> int:
+        """Return the number of rows in ``finbert_score_cache``, optionally
+        restricted to ``scored_at >= since``.
+
+        Uses the exact same raw-connection read pattern as
+        :meth:`get_finbert_score` (``session_scope`` + ``get_dbapi_connection``,
+        under ``self._lock``). Dead-letter resilient (CONSTRAINT #6): returns
+        ``0`` and logs a WARNING on any DB error, never raises.
+        """
+        try:
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    if since is not None:
+                        row = conn.execute(
+                            "SELECT COUNT(*) FROM finbert_score_cache WHERE scored_at >= ?",
+                            (since.isoformat(),),
+                        ).fetchone()
+                    else:
+                        row = conn.execute(
+                            "SELECT COUNT(*) FROM finbert_score_cache"
+                        ).fetchone()
+            return int(row[0]) if row is not None and row[0] is not None else 0
+        except Exception as exc:
+            logger.warning("HistoricalStore.count_finbert_scores failed: %s", exc)
+            return 0
+
     # ─────────────────────────────────────────────────────────────────────────
     # Public API — etf_holdings (ETF constituent-holdings cache)
     # ─────────────────────────────────────────────────────────────────────────
@@ -3180,7 +3209,9 @@ class HistoricalStore:
 
         Returns ``{}`` on any failure or when no rows exist for the day
         (CONSTRAINT #6 -- never raises). Each per-symbol dict has keys
-        ``credibility_weighted_sentiment`` (mean ``final_weighted_score``),
+        ``credibility_weighted_sentiment`` (a genuine credibility-WEIGHTED
+        mean -- ``sum(final_weighted_score) / sum(credibility_weight)``, NOT
+        a plain per-document mean; see the Finding 5 note below),
         ``bot_activity_ratio`` (mean ``is_bot``), and
         ``aggregated_source_credibility`` (mean ``credibility_weight``,
         ``NaN``-safe when every row for that symbol has a ``NULL`` weight).
@@ -3190,6 +3221,28 @@ class HistoricalStore:
         whose ``as_of`` rolled to ``t+1`` at write time is simply absent from
         a query for trading day ``t``, so it can never influence day ``t``'s
         aggregate.
+
+        Finding 5 fix (document-count-flooding gameability)
+        -----------------------------------------------------
+        ``final_weighted_score`` is already ``raw_sentiment_score *
+        credibility_weight`` per document (see
+        ``data/sentiment_sources.py::CompositeSentimentSource._archive``).
+        A plain ``.mean()`` over that column divides by document COUNT, not
+        by total credibility WEIGHT -- so a flood of many low-credibility
+        documents (``credibility_weight`` floored at 0.1, never zero; see
+        ``signals/credibility.py``) dilutes the aggregate toward the flood's
+        own direction in proportion to how many of them there are, rather
+        than how much credibility-weighted evidence they actually carry.
+        Dividing by ``sum(credibility_weight)`` instead is the textbook
+        weighted-mean correction: each document's influence on the aggregate
+        is proportional to its own credibility weight, not to "one vote per
+        document" -- a large volume of low-credibility documents now needs a
+        correspondingly large total WEIGHT (not just a large COUNT) to move
+        the aggregate as far as a handful of high-credibility documents can.
+        Symbols with zero total credibility weight for the day (should not
+        occur in practice given the 0.1 floor, but guarded defensively) fall
+        back to ``NaN`` rather than a division-by-zero crash or a fabricated
+        0.0 (CONSTRAINT #4).
         """
         try:
             from db_config import session_scope, get_dbapi_connection
@@ -3212,21 +3265,29 @@ class HistoricalStore:
                 rows, columns=["symbol", "final_weighted_score", "is_bot", "credibility_weight"]
             )
             grouped = df.groupby("symbol").agg(
-                credibility_weighted_sentiment=("final_weighted_score", "mean"),
+                summed_final_weighted_score=("final_weighted_score", "sum"),
+                summed_credibility_weight=("credibility_weight", "sum"),
                 bot_activity_ratio=("is_bot", "mean"),
                 aggregated_source_credibility=("credibility_weight", "mean"),
             )
-            return {
-                str(symbol): {
-                    "credibility_weighted_sentiment": float(row["credibility_weighted_sentiment"]),
+            result: Dict[str, Dict[str, float]] = {}
+            for symbol, row in grouped.iterrows():
+                weight_sum = row["summed_credibility_weight"]
+                if pd.notna(weight_sum) and weight_sum > 1e-12:
+                    credibility_weighted_sentiment = float(
+                        row["summed_final_weighted_score"] / weight_sum
+                    )
+                else:
+                    credibility_weighted_sentiment = float("nan")
+                result[str(symbol)] = {
+                    "credibility_weighted_sentiment": credibility_weighted_sentiment,
                     "bot_activity_ratio": float(row["bot_activity_ratio"]),
                     "aggregated_source_credibility": (
                         float(row["aggregated_source_credibility"])
                         if pd.notna(row["aggregated_source_credibility"]) else float("nan")
                     ),
                 }
-                for symbol, row in grouped.iterrows()
-            }
+            return result
         except Exception as exc:
             logger.warning("HistoricalStore.get_sentiment_aggregate_by_symbol failed: %s", exc)
             return {}

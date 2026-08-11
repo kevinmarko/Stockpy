@@ -269,6 +269,101 @@ def test_options_404_no_bars(monkeypatch):
     assert resp.status_code == 404
 
 
+def test_options_passes_macro_proxy_and_vrp_none_from_snapshot(monkeypatch):
+    """Finding 6 regression: previously this endpoint called
+    ``build_premium_directive(symbol, bars, spot_price=..., is_stale=...)``
+    with NO ``macro_dto``/``vrp`` -- the VRP regime gate (VIX>=30 / CREDIT
+    EVENT) inside the engine silently never fired, matching the 4 other
+    production callers is what fixes this. Verify the endpoint now threads a
+    ``_MacroProxy`` built from the persisted state snapshot's vix/market_regime,
+    plus an explicit ``vrp=None``, exactly like
+    options_ondemand.py/reporting/options_snapshot.py/gui/panels/options_matrix.py."""
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider(quote=_quote()))
+    monkeypatch.setattr(
+        metrics_api, "load_snapshot", lambda: {"vix": 35.0, "market_regime": "CREDIT EVENT"}
+    )
+
+    captured = {}
+
+    def _fake_directive(symbol, df, *, spot_price, is_stale=False, **kw):
+        captured.update(kw)
+        return {"Strategy": "Cash", "Action": "Wait", "Net_Premium": 0.0}
+
+    monkeypatch.setattr(metrics_api, "build_premium_directive", _fake_directive)
+    monkeypatch.setattr(
+        metrics_api, "validate_directive_integrity",
+        lambda d: {"ok": True, "issues": []},
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/options/AAPL")
+    assert resp.status_code == 200
+    assert "macro_dto" in captured
+    macro_dto = captured["macro_dto"]
+    assert macro_dto.vix == 35.0
+    assert macro_dto.market_regime == "CREDIT EVENT"
+    assert captured.get("vrp") is None
+
+
+def test_options_macro_proxy_neutral_default_without_snapshot(monkeypatch):
+    """No persisted snapshot -> neutral defaults (vix=15.0/"RISK ON"), matching
+    ``options_ondemand.py``'s MACRO_DEFAULT_VIX/MACRO_DEFAULT_REGIME -- "no
+    override" rather than silently gating everything to Cash/Wait."""
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider(quote=_quote()))
+    monkeypatch.setattr(metrics_api, "load_snapshot", lambda: None)
+
+    captured = {}
+
+    def _fake_directive(symbol, df, *, spot_price, is_stale=False, **kw):
+        captured.update(kw)
+        return {"Strategy": "Put Credit Spread", "Net_Premium": 1.0}
+
+    monkeypatch.setattr(metrics_api, "build_premium_directive", _fake_directive)
+    monkeypatch.setattr(
+        metrics_api, "validate_directive_integrity",
+        lambda d: {"ok": True, "issues": []},
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/options/AAPL")
+    assert resp.status_code == 200
+    macro_dto = captured["macro_dto"]
+    assert macro_dto.vix == 15.0
+    assert macro_dto.market_regime == "RISK ON"
+    assert captured.get("vrp") is None
+
+
+def test_options_real_engine_gates_high_vix_snapshot_to_cash_wait(monkeypatch):
+    """End-to-end (no mocked engine): the persisted snapshot's VIX >= 30 must
+    genuinely gate the real ``technical_options_engine.build_premium_directive``
+    call to Cash/Wait, proving the wiring fix has a real effect and not just a
+    passed-but-ignored kwarg."""
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider(quote=_quote()))
+    monkeypatch.setattr(
+        metrics_api, "load_snapshot", lambda: {"vix": 35.0, "market_regime": "RISK ON"}
+    )
+    # Force the HIGH IVR REGIME branch deterministically regardless of the
+    # synthetic bars' realized-vol-derived IVR proxy, so the only thing that
+    # can be varying the outcome is the VRP regime gate under test.
+    from technical_options_engine import build_premium_directive as _real_directive
+
+    def _real_directive_low_threshold(*args, **kwargs):
+        kwargs.setdefault("ivr_sell_threshold", 0.0)
+        return _real_directive(*args, **kwargs)
+
+    monkeypatch.setattr(metrics_api, "build_premium_directive", _real_directive_low_threshold)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/options/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["Strategy"] == "Cash"
+    assert body["Action"] == "Wait"
+
+
 # ---------------------------------------------------------------------------
 # GET /metrics/models/comparison  (honesty: no fabricated performance curve)
 # ---------------------------------------------------------------------------
@@ -567,6 +662,135 @@ def test_sentiment_404_no_bars(monkeypatch):
     monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: None)
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/metrics/sentiment/ZZZZ")
+    assert resp.status_code == 404
+
+
+def _canned_catalyst_details() -> dict:
+    return {
+        "symbol": "AAPL",
+        "headlines": [
+            {
+                "title": "Apple beats and raises guidance",
+                "publisher": "example.com",
+                "url": "https://example.com/aapl-1",
+                "published_at": "2026-08-01T09:30:00+00:00",
+                "score": 0.6,
+                "probabilities": {"positive": 0.8, "neutral": 0.15, "negative": 0.05},
+            },
+        ],
+        "earnings_catalyst": {
+            "next_earnings_date": "2026-09-01",
+            "hours_to_earnings": 500.0,
+            "status": "normal",
+            "multiplier": 1.0,
+        },
+        "provider_used": "fmp",
+        "source_breakdown": {"example.com": 1},
+        "raw_sentiment_avg": 0.6,
+        "dampened_sentiment_score": 0.6,
+    }
+
+
+def test_sentiment_includes_news_catalyst_fields(monkeypatch):
+    """GET /metrics/sentiment/{symbol} merges
+    get_symbol_news_catalyst_details() (run concurrently via asyncio.gather)
+    into the response -- headlines / earnings_catalyst / provider_used (and
+    the supporting source_breakdown / raw_sentiment_avg /
+    dampened_sentiment_score fields) all surface."""
+    from sentiment_risk_engine import SentimentResult
+
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+
+    canned_sentiment = SentimentResult(
+        ticker="AAPL",
+        date=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        sentiment_score=0.4,
+        sentiment_intensity=0.7,
+        credibility_score=0.85,
+        volatility_persistence=0.9,
+        source="antigravity_agent",
+    )
+    monkeypatch.setattr(metrics_api, "SentimentRiskEngine", lambda: _FakeSentimentEngine(canned_sentiment))
+    monkeypatch.setattr(
+        metrics_api, "get_symbol_news_catalyst_details", lambda symbol: _canned_catalyst_details()
+    )
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Antigravity-agent fields untouched by the merge.
+    assert body["sentiment_score"] == 0.4
+    assert body["source"] == "antigravity_agent"
+
+    # New news-catalyst fields.
+    assert len(body["headlines"]) == 1
+    assert body["headlines"][0]["publisher"] == "example.com"
+    assert body["headlines"][0]["probabilities"]["positive"] == 0.8
+    assert body["earnings_catalyst"]["status"] == "normal"
+    assert body["earnings_catalyst"]["multiplier"] == 1.0
+    assert body["provider_used"] == "fmp"
+    assert body["source_breakdown"] == {"example.com": 1}
+    assert body["raw_sentiment_avg"] == 0.6
+    assert body["dampened_sentiment_score"] == 0.6
+
+
+def test_sentiment_news_catalyst_failure_degrades_gracefully(monkeypatch):
+    """A news-catalyst-helper failure must NOT break the whole response --
+    it degrades to headlines: [], earnings_catalyst: None, provider_used:
+    "none", while the Antigravity-agent sentiment fields are unaffected."""
+    from sentiment_risk_engine import SentimentResult
+
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+
+    canned_sentiment = SentimentResult(
+        ticker="AAPL",
+        date=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        sentiment_score=0.4,
+        sentiment_intensity=0.7,
+        credibility_score=0.85,
+        volatility_persistence=0.9,
+        source="antigravity_agent",
+    )
+    monkeypatch.setattr(metrics_api, "SentimentRiskEngine", lambda: _FakeSentimentEngine(canned_sentiment))
+
+    def _raise(symbol):
+        raise RuntimeError("simulated news catalyst failure")
+
+    monkeypatch.setattr(metrics_api, "get_symbol_news_catalyst_details", _raise)
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["sentiment_score"] == 0.4
+    assert body["source"] == "antigravity_agent"
+    assert body["headlines"] == []
+    assert body["earnings_catalyst"] is None
+    assert body["provider_used"] == "none"
+
+
+def test_sentiment_agent_failure_still_404s_even_with_catalyst_ok(monkeypatch):
+    """A SentimentRiskEngine failure still 404s (existing contract)
+    regardless of whether the concurrently-run news-catalyst call succeeds."""
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+
+    class _FailingEngine:
+        async def get_live_sentiment(self, ticker, date, returns):
+            raise RuntimeError("simulated engine failure")
+
+    monkeypatch.setattr(metrics_api, "SentimentRiskEngine", lambda: _FailingEngine())
+    monkeypatch.setattr(
+        metrics_api, "get_symbol_news_catalyst_details", lambda symbol: _canned_catalyst_details()
+    )
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/AAPL")
     assert resp.status_code == 404
 
 

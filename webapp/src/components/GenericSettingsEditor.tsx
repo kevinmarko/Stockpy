@@ -27,7 +27,7 @@ import { TunableGroupCard } from "./TunableGroupCard";
 import { Modal } from "./Modal";
 import { theme } from "../theme";
 import { TagInput } from "./TagInput";
-import { DynamicGrid, resetGridLayout } from "./DynamicGrid";
+import { DynamicGrid } from "./DynamicGrid";
 import {
   buildConfirmMap,
   dangerousKeysIn,
@@ -205,11 +205,6 @@ export function GenericSettingsEditor({
             <h1 className="screen-title" style={{ margin: 0 }}>{title}</h1>
           </div>
           <p className="screen-sub" style={{ marginTop: "var(--s-1)" }}>{subtitle}</p>
-        </div>
-        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
-          <button type="button" className="btn btn-neutral" onClick={() => resetGridLayout(`settings-${settingsKey}`)}>
-            Reset Layout
-          </button>
         </div>
       </div>
 

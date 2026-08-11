@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Children, isValidElement } from 'react';
+import { useEffect, useMemo, useState, Children, isValidElement } from 'react';
 import {
   ResponsiveGridLayout,
   useContainerWidth,
@@ -15,7 +15,17 @@ export interface DynamicGridProps {
   defaultLayouts: ResponsiveLayouts;
   children: React.ReactNode;
   rowHeight?: number;
+  /**
+   * @deprecated Dragging is permanently disabled (see the module doc
+   * comment on `DynamicGrid` below) -- this prop is accepted for call-site
+   * compatibility but no longer wired to anything.
+   */
   draggableHandle?: string;
+  /**
+   * @deprecated Resizing is permanently disabled (see the module doc
+   * comment on `DynamicGrid` below) -- this prop is accepted for call-site
+   * compatibility but no longer wired to anything.
+   */
   isResizable?: boolean;
 }
 
@@ -43,16 +53,16 @@ function getChildKeys(children: React.ReactNode): string[] {
  * Reconciles a saved localStorage layout blob against the actual set of grid
  * item keys currently present in `children`.
  *
- * Several DynamicGrid consumers (OptionsMatrix, StrategyMatrix, PairsRadar,
- * Comparison, SymbolDetail, SignalBreakdown, PipelineDashboard, Portfolio)
- * generate their grid items from live, day-to-day-changing data -- a layout
- * saved on a day with 8 items is silently wrong once the list has 12. This
- * function is the fix: for every breakpoint present in the saved layout, it
- * keeps the saved position/size for any key still present in `children`,
- * drops any saved entry whose key is no longer present (stale item), and
- * auto-places any child key with no saved entry (a genuinely new item)
- * below the current content, non-overlapping, using that key's
- * `defaultLayouts` template (`w`/`h`/`minW`/`minH`) when available.
+ * Historically used to reconcile a user's dragged/resized layout (saved to
+ * localStorage) against live, day-to-day-changing data -- a layout saved on
+ * a day with 8 items would otherwise be silently wrong once the list has 12.
+ * `DynamicGrid` no longer persists or reads a saved layout (dragging/
+ * resizing/reordering were removed -- see its own doc comment), so in
+ * practice it now always calls this with `savedLayoutRaw=null`, which
+ * short-circuits to `defaultLayouts` verbatim below. The function is kept
+ * intact and exported as-is (rather than deleted) because it's still real,
+ * independently-tested logic, and deleting it would be a pointless diff on
+ * top of an already-large change.
  *
  * Pure and side-effect free (including its own JSON parsing) so it is
  * directly unit-testable without rendering anything -- see
@@ -135,15 +145,24 @@ export function reconcileLayout(
 }
 
 /**
- * A wrapper around react-grid-layout that handles saving/loading from localStorage.
+ * A wrapper around react-grid-layout used purely for its responsive,
+ * multi-column placement of cards/tables -- NOT for end-user drag/resize/
+ * reorder interaction, which this component deliberately does not offer.
+ *
+ * Dragging, resizing, the old "Reorder Widgets" toggle mode, and layout
+ * persistence to localStorage were all removed (2026-08): they were the
+ * root cause of a long string of regressions (click/drag bubbling
+ * conflicts, infinite re-render loops on mount, stale/broken saved
+ * layouts) across the ~30 screens that use this component, and were
+ * removed at the operator's request rather than patched further. Every
+ * screen now always renders at its author-supplied `defaultLayouts`
+ * arrangement -- static, with no per-user drift.
  */
 export function DynamicGrid({
   layoutKey,
   defaultLayouts,
   children,
   rowHeight = 30,
-  draggableHandle = '.drag-handle',
-  isResizable = true
 }: DynamicGridProps) {
   const { width, containerRef, mounted } = useContainerWidth();
   const isTest = typeof process !== "undefined" && process.env.NODE_ENV === "test" && !process.env.TEST_RENDER_DYNAMIC_GRID;
@@ -153,8 +172,8 @@ export function DynamicGrid({
   // literal -- a fresh reference on every parent re-render -- so we
   // deliberately key off this derived signature (and `layoutKey`) rather
   // than the `defaultLayouts` object reference itself, otherwise a screen
-  // polling live data every few seconds would re-read localStorage and
-  // reset layout state on every poll.
+  // polling live data every few seconds would recompute layout state on
+  // every poll.
   const childKeys = useMemo(() => getChildKeys(children), [children]);
   const childKeysSignature = childKeys.join('|');
 
@@ -170,105 +189,19 @@ export function DynamicGrid({
   // enough in practice to trip React's "Maximum update depth exceeded"
   // safety net on mount, on every single DynamicGrid instance. Resolving
   // `layouts` via this effect instead (matching this component's original,
-  // verified-safe pre-reconciliation behavior) delays RGL's first mount
-  // until after that settling window has already passed.
+  // verified-safe behavior) delays RGL's first mount until after that
+  // settling window has already passed.
   const [layouts, setLayouts] = useState<ResponsiveLayouts | null>(null);
-  const [isMobile, setIsMobile] = useState(false);
-  const [isReorderMode, setIsReorderMode] = useState(false);
-  const [currentBreakpoint, setCurrentBreakpoint] = useState<string>('lg');
-
-  const moveWidget = (key: string, offset: -1 | 1) => {
-    setLayouts(prevLayouts => {
-      if (!prevLayouts) return prevLayouts;
-      const bpLayout = prevLayouts[currentBreakpoint];
-      if (!bpLayout) return prevLayouts;
-
-      const sorted = [...bpLayout].sort((a, b) => {
-        if (a.y !== b.y) return a.y - b.y;
-        return a.x - b.x;
-      });
-
-      const currentIndex = sorted.findIndex(item => item.i === key);
-      if (currentIndex === -1) return prevLayouts;
-      
-      const targetIndex = currentIndex + offset;
-      if (targetIndex < 0 || targetIndex >= sorted.length) return prevLayouts;
-
-      const a = sorted[currentIndex];
-      const b = sorted[targetIndex];
-      
-      const nextBpLayout = bpLayout.map(item => {
-        if (item.i === a.i) return { ...item, x: b.x, y: b.y };
-        if (item.i === b.i) return { ...item, x: a.x, y: a.y };
-        return item;
-      });
-
-      const newLayouts = { ...prevLayouts, [currentBreakpoint]: nextBpLayout };
-      localStorage.setItem(`grid-layout-${layoutKey}`, JSON.stringify(newLayouts));
-      return newLayouts;
-    });
-  };
 
   useEffect(() => {
-    const saved = localStorage.getItem(`grid-layout-${layoutKey}`);
-    setLayouts(reconcileLayout(saved, defaultLayouts, childKeys));
+    // No saved layout is ever read (persistence was removed) -- always
+    // resolve to `defaultLayouts`, reconciled only for the (rare) case of a
+    // child key with no matching `defaultLayouts` entry.
+    setLayouts(reconcileLayout(null, defaultLayouts, childKeys));
     // Intentionally NOT depending on `defaultLayouts`/`children` by
     // reference -- see the comment on `childKeysSignature` above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutKey, childKeysSignature]);
-
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
-
-  // react-grid-layout calls onLayoutChange not only on a real user drag/
-  // resize, but also whenever it recomputes layout for ANY reason --
-  // mounting, a width change as `useContainerWidth`'s ResizeObserver
-  // settles, our own reconciliation effect calling setLayouts, internal
-  // compaction, etc. Measured directly: under real-world timing/CPU
-  // variance, this recomputation can genuinely fail to converge within
-  // React's re-render safety budget on mount, throwing "Maximum update
-  // depth exceeded" -- confirmed to still happen intermittently (varies
-  // run to run, machine to machine) even after excluding onLayoutChange
-  // calls that are merely RGL re-reporting an unchanged layout (that
-  // exact-value dedup alone isn't sufficient, since a width that's
-  // genuinely still settling produces genuinely different x/y values on
-  // each pass, not just re-enriched-but-equal ones).
-  //
-  // The robust fix is to stop treating onLayoutChange as a general
-  // "layout changed, please persist" signal at all. Instead, only ever
-  // write back to `layouts` state (and localStorage) while a real user
-  // drag or resize gesture is actively in progress -- tracked via
-  // onDragStart/onDragStop/onResizeStart/onResizeStop, which fire only
-  // for genuine pointer-driven interaction, never for mount/width/
-  // reconciliation-driven recomputation. This makes a feedback loop
-  // through onLayoutChange structurally impossible regardless of *why*
-  // RGL recomputes outside of that window, rather than trying to
-  // out-guess every possible non-user-driven trigger.
-  const isInteractingRef = useRef(false);
-  const beginInteraction = () => {
-    isInteractingRef.current = true;
-  };
-  // Deferred (not synchronous) so that a same-tick onLayoutChange firing
-  // as part of the same drag/resize-stop event batch still observes
-  // isInteractingRef as true -- RGL's own onDragStop/onResizeStop vs.
-  // onLayoutChange firing order isn't a contract this component can rely
-  // on, so the flag is cleared one tick later instead of immediately.
-  const endInteraction = () => {
-    setTimeout(() => {
-      isInteractingRef.current = false;
-    }, 0);
-  };
-  const onLayoutChange = (_currentLayout: any, allLayouts: ResponsiveLayouts) => {
-    if (!isInteractingRef.current) return;
-    setLayouts(allLayouts);
-    localStorage.setItem(`grid-layout-${layoutKey}`, JSON.stringify(allLayouts));
-  };
 
   if (isTest) {
     return <div data-testid={`grid-${layoutKey}`} style={{ display: 'flex', flexDirection: 'column' }}>{children}</div>;
@@ -278,84 +211,24 @@ export function DynamicGrid({
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 16px 8px' }}>
-        <button 
-          type="button"
-          onClick={() => setIsReorderMode(p => !p)}
-          className={`btn btn-sm ${isReorderMode ? 'btn-primary' : 'btn-neutral'}`}
-          aria-pressed={isReorderMode}
-        >
-          {isReorderMode ? 'Done Reordering' : 'Reorder Widgets'}
-        </button>
-      </div>
       <div style={{ flex: 1, position: 'relative' }}>
         {mounted && (
         <ResponsiveGridLayout
           className="dynamic-grid"
           layouts={layouts}
-          onLayoutChange={onLayoutChange}
           width={width}
           breakpoints={{ lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 }}
           cols={{ lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 }}
           rowHeight={rowHeight}
           margin={[16, 16]}
-          dragConfig={{ enabled: !isMobile, handle: draggableHandle }}
-          resizeConfig={{ enabled: !isMobile && isResizable }}
+          dragConfig={{ enabled: false }}
+          resizeConfig={{ enabled: false }}
           compactor={verticalCompactor}
-          onDragStart={beginInteraction}
-          onDragStop={endInteraction}
-          onResizeStart={beginInteraction}
-          onResizeStop={endInteraction}
-          onBreakpointChange={(newBp) => setCurrentBreakpoint(newBp)}
         >
-          {Children.map(children, (child) => {
-            if (!isValidElement(child)) return child;
-            const key = String(child.key);
-            return (
-              <div key={key}>
-                {isReorderMode && (
-                  <div 
-                    style={{ 
-                      position: 'absolute', inset: 0, zIndex: 50, 
-                      background: 'rgba(0,0,0,0.7)', 
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16,
-                      borderRadius: 'var(--r-md)'
-                    }}
-                  >
-                    <button 
-                      className="btn btn-neutral" 
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); moveWidget(key, -1); }}
-                      aria-label={`Move widget ${key} up`}
-                    >
-                      ↑ Up
-                    </button>
-                    <button 
-                      className="btn btn-neutral" 
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); moveWidget(key, 1); }}
-                      aria-label={`Move widget ${key} down`}
-                    >
-                      ↓ Down
-                    </button>
-                  </div>
-                )}
-                <div style={{ height: '100%', width: '100%', pointerEvents: isReorderMode ? 'none' : 'auto' }}>
-                  {child}
-                </div>
-              </div>
-            );
-          })}
+          {children}
         </ResponsiveGridLayout>
       )}
       </div>
     </div>
   );
-}
-
-export function resetGridLayout(layoutKey: string) {
-  const confirmed = window.confirm(
-    "Reset this screen's layout to default? Any unsaved changes on this screen will be lost."
-  );
-  if (!confirmed) return;
-  localStorage.removeItem(`grid-layout-${layoutKey}`);
-  window.location.reload();
 }

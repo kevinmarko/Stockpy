@@ -277,14 +277,27 @@ def reconcile(
     fills carry exact execution prices/quantities that need not equal the
     intended qty (BUY intents are notional-based, sells may partially fill).
 
+    Within a shared key, a genuine "match" additionally requires the
+    aggregated placed quantity to be within ``_QTY_MATCH_TOLERANCE`` of the
+    aggregated fill quantity — but ONLY when every placed-ledger entry for
+    that key carries a known ``qty`` (i.e. was NOT a purely notional-based
+    intent, whose realized share count legitimately can't be predicted in
+    advance — see the docstring paragraph above). When a known aggregate
+    quantity diverges from the fill quantity beyond tolerance (e.g. placed
+    100 shares, only 3 actually filled), that key is NOT silently counted
+    as matched (nor folded into ``unmatched_placed``/``unexpected_fills``,
+    which would misrepresent it as "no fill at all") — it is surfaced in its
+    own honest ``quantity_mismatch`` bucket.
+
     Returns a structured report::
 
         {
           "placed_count": int,          # placed-ledger entries considered
-          "filled_matched": int,        # ledger entries with a matching fill
-          "unmatched_placed": [ ... ],  # ledger entries with NO matching fill
-          "unexpected_fills": [ ... ],  # fills with NO matching ledger entry
-          "ok": bool,                   # True iff no unmatched/unexpected
+          "filled_matched": int,        # keys with a matching (within-tolerance) fill
+          "unmatched_placed": [ ... ],  # ledger entries with NO matching fill key
+          "unexpected_fills": [ ... ],  # fills with NO matching ledger key
+          "quantity_mismatch": [ ... ], # shared keys whose known qty diverges beyond tolerance
+          "ok": bool,                   # True iff no unmatched/unexpected/mismatched
         }
 
     Never raises: on any failure it returns an error-shaped report with
@@ -292,12 +305,13 @@ def reconcile(
     """
     try:
         placed = read_placed_ledger(output_dir)
-        placed_keys = {
-            rec.get("dedup_key") or make_dedup_key(
+        placed_by_key: Dict[str, List[Dict[str, Any]]] = {}
+        for rec in placed:
+            key = rec.get("dedup_key") or make_dedup_key(
                 rec.get("symbol", ""), rec.get("side", ""), rec.get("ts"),
             )
-            for rec in placed
-        }
+            placed_by_key.setdefault(key, []).append(rec)
+        placed_keys = set(placed_by_key.keys())
 
         # Reuse the existing FIFO-source fetch (READ ONLY) — do NOT reimplement.
         from data.robinhood_orders import fetch_filled_orders
@@ -313,7 +327,41 @@ def reconcile(
             key = make_dedup_key(f.symbol, f.side, f.timestamp)
             fill_keys.setdefault(key, []).append(f)
 
-        matched_keys = placed_keys & set(fill_keys.keys())
+        shared_keys = placed_keys & set(fill_keys.keys())
+
+        matched_keys: set = set()
+        quantity_mismatch: List[Dict[str, Any]] = []
+        for key in shared_keys:
+            group = placed_by_key[key]
+            known_qtys = [rec.get("qty") for rec in group if rec.get("qty") is not None]
+            fill_qty_total = round(sum(getattr(x, "quantity", 0.0) for x in fill_keys[key]), 8)
+
+            if len(known_qtys) == len(group):
+                # Every placed record for this key carries a known intended
+                # qty (e.g. a SELL of a known position), so a real
+                # tolerance-gated comparison against the actual fill qty is
+                # meaningful.
+                placed_qty_total = round(sum(known_qtys), 8)
+                if abs(placed_qty_total - fill_qty_total) <= _QTY_MATCH_TOLERANCE:
+                    matched_keys.add(key)
+                else:
+                    symbol = key.split(":")[1] if ":" in key else ""
+                    side = key.split(":")[2] if key.count(":") >= 2 else ""
+                    quantity_mismatch.append({
+                        "dedup_key": key,
+                        "symbol": symbol,
+                        "side": side,
+                        "placed_qty": placed_qty_total,
+                        "filled_qty": fill_qty_total,
+                        "diff": round(placed_qty_total - fill_qty_total, 8),
+                    })
+            else:
+                # At least one placed record for this key has no known qty
+                # (a notional-based BUY intent) — the realized fill quantity
+                # legitimately can't be predicted in advance, so key
+                # presence alone remains the honest match criterion here,
+                # exactly as before this fix.
+                matched_keys.add(key)
 
         unmatched_placed = [
             rec for rec in placed
@@ -334,12 +382,13 @@ def reconcile(
             if key not in placed_keys
         ]
 
-        ok = not unmatched_placed and not unexpected_fills
+        ok = not unmatched_placed and not unexpected_fills and not quantity_mismatch
         return {
             "placed_count": len(placed),
             "filled_matched": len(matched_keys),
             "unmatched_placed": unmatched_placed,
             "unexpected_fills": unexpected_fills,
+            "quantity_mismatch": quantity_mismatch,
             "ok": ok,
         }
     except Exception as exc:
@@ -349,6 +398,7 @@ def reconcile(
             "filled_matched": 0,
             "unmatched_placed": [],
             "unexpected_fills": [],
+            "quantity_mismatch": [],
             "ok": False,
             "error": str(exc),
         }
