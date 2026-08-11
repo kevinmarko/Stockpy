@@ -2594,6 +2594,8 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
         # "not configured" rather than "$0.00"); min_amount is the PWA's dollar floor.
         "notional_cap": float(settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER),
         "min_amount": float(settings.FOLLOW_MIN_AMOUNT),
+        "sizing_path": plan.get("sizing_path"),
+        "kelly_weight": plan.get("kelly_weight"),
         "notice": notice,
     }
     if note is not None:

@@ -51,6 +51,19 @@ class AsyncDataFetchStep(PipelineStep):
 
         settings.warn_if_fred_key_leaked(telemetry)
 
+        # Merge discovered candidates
+        from pilots.discovery import discovery
+        try:
+            candidates = discovery(limit=None).get("candidates", [])
+            discovered_symbols = [c["symbol"].upper().strip() for c in candidates if c.get("symbol")]
+            if discovered_symbols:
+                telemetry.info(f"Loaded {len(discovered_symbols)} candidates from scan discovery.")
+        except Exception as exc:
+            telemetry.warning(f"Failed to load discovery candidates: {exc}")
+            discovered_symbols = []
+
+        base_symbols = discovered_symbols if discovered_symbols else list(settings.DEFAULT_TICKERS)
+
         # Initialize data engine
         de = ctx.market
         if de is None:
@@ -58,14 +71,14 @@ class AsyncDataFetchStep(PipelineStep):
             if creds_exist:
                 settings.ensure_fred_configured()
                 de = DataEngine(settings.FRED_API_KEY)
-                ctx.symbols = list(settings.DEFAULT_TICKERS)
+                ctx.symbols = base_symbols
             else:
                 telemetry.warning("credentials.json not found. Operating with deterministic MockDataEngine.")
                 de = MockDataEngine()
                 ctx.symbols = ["AAPL"]
             ctx.market = de
         else:
-            ctx.symbols = list(settings.DEFAULT_TICKERS)
+            ctx.symbols = base_symbols
 
         # Integrate Robinhood Holdings
         rh_positions = {}

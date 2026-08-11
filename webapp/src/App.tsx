@@ -47,6 +47,7 @@ import { Console } from "./screens/Console";
 import { ReportLibrary } from "./screens/ReportLibrary";
 import { PromptRegistry } from "./screens/PromptRegistry";
 import { AgenticTrading } from "./screens/AgenticTrading";
+import { PilotsManager } from "./screens/PilotsManager";
 import { ResearchHub } from "./screens/ResearchHub";
 import { TradingHub } from "./screens/TradingHub";
 import { OperationsHub } from "./screens/OperationsHub";
@@ -250,6 +251,7 @@ export default function App() {
                   <Route path="/console" element={<Console />} />
                   <Route path="/operations/reports" element={<ReportLibrary />} />
                   <Route path="/agentic" element={<AgenticTrading />} />
+                  <Route path="/pilots-manager" element={<PilotsManager />} />
                   <Route path="/research" element={<ResearchHub />} />
                   <Route path="/trading" element={<TradingHub />} />
                   <Route path="/operations" element={<OperationsHub />} />

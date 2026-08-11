@@ -6202,6 +6202,12 @@ export const mockApi = {
     const prior = existing.find((f) => f.pilot_id === id);
     const follow: Follow = {
       pilot_id: id,
+      // Matches the real backend exactly: `follow.amount` is always the
+      // raw requested amount (FollowsStore().upsert(pilot_id, body.amount)
+      // in api/pilots_api.py) -- it is NEVER the Kelly-clamped amount. The
+      // clamped figure only exists as the sum of `planned_intents[].
+      // target_notional` below; that discrepancy is exactly what
+      // FollowModal.tsx's "capped" notice exists to surface honestly.
       amount,
       created_at: prior?.created_at ?? now,
       updated_at: now,
@@ -6214,10 +6220,24 @@ export const mockApi = {
     if (amount > 0) next.push(follow);
     writeFollows(next);
 
+    // Kelly-ceiling sizing simulation (mirrors pilots/mirror.py's
+    // plan_follow) -- a deliberately simplified, deterministic stand-in for
+    // the real bootstrap-Kelly/vol-target math, not a replication of it.
+    // MOCK_TOTAL_EQUITY matches getPortfolioSummary's mock fixture so the
+    // implied kelly_weight fraction stays internally consistent.
+    const MOCK_TOTAL_EQUITY = 48213.55;
+    const MOCK_KELLY_CEILING = 1800; // deliberately below the $2500 quick-chip, above $1000
+    const kellyWeight = +(MOCK_KELLY_CEILING / MOCK_TOTAL_EQUITY).toFixed(4);
+    const capped = amount > MOCK_KELLY_CEILING;
+    const allocated = capped ? MOCK_KELLY_CEILING : amount;
+    const sizingPath = capped
+      ? "vol_target_fallback_no_scalein(n=0)"
+      : "bootstrap_kelly_5th_pct(n=45,k5=0.09,k50=0.14,k95=0.21)";
+
     const planned = p.holdings.map((hd) => ({
       symbol: hd.symbol,
       side: "BUY" as const,
-      target_notional: +Math.min(amount * hd.weight, NOTIONAL_CAP).toFixed(2),
+      target_notional: +Math.min(allocated * hd.weight, NOTIONAL_CAP).toFixed(2),
       weight: hd.weight,
       conviction: +(0.55 + hd.score * 0.35).toFixed(2),
       allow_place: false, // mock is review-mode; nothing is ever placeable
@@ -6230,6 +6250,8 @@ export const mockApi = {
       queue_written: amount > 0,
       notional_cap: NOTIONAL_CAP,
       min_amount: MIN_AMOUNT,
+      sizing_path: amount > 0 ? sizingPath : undefined,
+      kelly_weight: amount > 0 ? kellyWeight : undefined,
       notice:
         "This creates a gated, paper-first order queue that you must confirm. No order is placed automatically.",
     });

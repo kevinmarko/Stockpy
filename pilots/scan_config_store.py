@@ -59,6 +59,90 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _default_scans() -> List[Dict[str, Any]]:
+    """Build the seeded default scan configs, timestamped at call time.
+
+    A plain module-level list would freeze ``created_at``/``updated_at`` at
+    process-import time (whenever this module was first imported) rather than
+    the moment a fresh store is actually seeded — every operator's first-ever
+    scan config would carry a stale, misleading timestamp. Called fresh from
+    ``ScanConfigStore._load()``'s seeding branch instead.
+    """
+    now = _utc_now_iso()
+    return [
+        {
+            "name": "momentum-leaders",
+            "filters": {"min_relative_volume": 1.5, "min_price": 5, "min_volume": 1000000},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "trend-follower",
+            "filters": {"price_above_sma200": True, "roc_12m_min": 0.1, "min_price": 5},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "dip-buyer",
+            "filters": {"rsi2_max": 10, "price_above_sma200": True, "min_price": 5},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "edge-and-volatility",
+            "filters": {"iv_rank_min": 50, "min_options_volume": 500},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "multifactor",
+            "filters": {"min_market_cap": 300000000, "roe_min": 0.15, "pe_ratio_max": 20},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "forecast-aligned",
+            "filters": {"analyst_rating_min": 4.0, "min_price": 5, "min_volume": 500000},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "news-catalyst",
+            "filters": {"unusual_volume": True, "social_sentiment_min": 70},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "risk-adjusted",
+            "filters": {"beta_max": 1.0, "max_drawdown_52w": -0.2},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "dividend-income",
+            "filters": {"dividend_yield_min": 0.03, "payout_ratio_max": 0.6},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "balanced-blend",
+            "filters": {"composite_score_min": 80, "min_price": 10, "min_volume": 1000000},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+    ]
+
+
 class ScanConfigStore:
     """Read/write the local ``scan_configs.json`` store.
 
@@ -76,13 +160,21 @@ class ScanConfigStore:
         self,
         path: Optional[str] = None,
         clock: Optional[Callable[[], str]] = None,
+        seed_defaults: bool = True,
     ) -> None:
         self._path = Path(path) if path is not None else settings.OUTPUT_DIR / "scan_configs.json"
         self._clock: Callable[[], str] = clock or _utc_now_iso
+        self._seed_defaults = seed_defaults
 
     def _load(self) -> List[Dict[str, Any]]:
         """Return the raw scan-config list; empty on missing/corrupt file (never raises)."""
         if not self._path.exists():
+            if self._seed_defaults:
+                # Seed default scans on first run, timestamped now (not at
+                # module-import time -- see _default_scans()'s docstring).
+                defaults = _default_scans()
+                self._save(defaults)
+                return list(defaults)
             return []
         try:
             with self._path.open("r", encoding="utf-8") as fh:

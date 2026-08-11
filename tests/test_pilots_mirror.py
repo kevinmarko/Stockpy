@@ -18,9 +18,11 @@ Coverage
 from __future__ import annotations
 
 import ast
+import copy
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from pilots.catalog import get_pilot
@@ -31,6 +33,16 @@ from pilots.mirror import (
     plan_follow,
 )
 from pilots.scoring import load_snapshot, pilot_holdings
+
+# Captured at module-import time, before any per-test monkeypatching of
+# sizing.kelly.kelly_sizing_for_strategy can occur -- a `from sizing.kelly
+# import kelly_sizing_for_strategy` done INSIDE a test body would instead
+# pick up whatever the autouse `_kelly_ceiling_unbounded` fixture already
+# patched it to (fixture setup runs before the test body).
+from sizing.kelly import kelly_sizing_for_strategy as _REAL_KELLY_SIZING_FOR_STRATEGY
+from sizing.kelly import (
+    estimate_win_rate_and_payoff_per_strategy as _REAL_ESTIMATE_WIN_RATE_AND_PAYOFF,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "state_snapshot.json"
 MIRROR_SRC = Path(__file__).parent.parent / "pilots" / "mirror.py"
@@ -103,6 +115,37 @@ def _no_cap(monkeypatch):
     """Default every test to an UNSET per-order cap unless it sets one itself."""
     from settings import settings
     monkeypatch.setattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _kelly_ceiling_unbounded(monkeypatch):
+    """Neutralize ``plan_follow``'s Kelly-ceiling sizing block for every test in
+    this file except the dedicated Kelly-sizing tests (``TestKellyCeilingSizing``),
+    which restore the real functions locally.
+
+    ``plan_follow`` sizes each follow against ``strategy_id=f"Follow:{pilot.id}"``
+    -- a strategy_id that, by construction, is brand-new (zero closed trades) in
+    every test environment reachable from this suite, so
+    ``plan_follow`` always takes its cold-start branch and never even reaches
+    ``kelly_sizing_for_strategy`` (it calls
+    ``estimate_win_rate_and_payoff_per_strategy`` first to decide which branch
+    to take -- see the cold-start-bypass comment in ``pilots/mirror.py``).
+    Patch that first-decision call to report a fully warm strategy so the
+    (also-stubbed) unbounded ``kelly_sizing_for_strategy`` below is what
+    actually runs, keeping every test in this file that predates Kelly sizing
+    (proportional-split / retention / alert / mode behavior) unaffected by it.
+    """
+    import sizing.kelly as kelly_mod
+    monkeypatch.setattr(
+        kelly_mod, "estimate_win_rate_and_payoff_per_strategy",
+        lambda *a, **k: (0.6, 1.5, 999),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        kelly_mod, "kelly_sizing_for_strategy",
+        lambda *a, **k: (1.0, "test_stub_unbounded"),
+        raising=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -724,9 +767,207 @@ class TestPilotScopedAlert:
         monkeypatch.setattr(alerts_mod, "send_alert", _boom, raising=True)
 
         result = plan_follow(pilot, _AMOUNT, account, snapshot=snapshot, output_dir=tmp_path)
-        assert set(result.keys()) == {"planned_intents", "mode", "queue_written"}
+        assert set(result.keys()) == {"planned_intents", "mode", "queue_written", "sizing_path", "kelly_weight"}
         assert result["mode"] == "off"
         assert result["planned_intents"]  # preview still returned despite alert failure
+
+
+# ---------------------------------------------------------------------------
+# Kelly-ceiling sizing (plan_follow) — regression coverage for two bugs:
+#
+# 1. `execution.transactions_store` -> `transactions_store` import-path bug
+#    that previously made this entire block silently no-op (caught by the
+#    surrounding `except Exception`, always yielding sizing_path="kelly_error",
+#    kelly_weight=0.0 -- never actually clamping anything).
+# 2. Once (1) was fixed, a second bug surfaced: kelly_sizing_for_strategy's
+#    own cold-start scale-in (min(1.0, n_trades / MIN_TRADES_REQUIRED))
+#    permanently zeroed the ceiling on every first-ever Follow of any Pilot
+#    (n_trades=0 by definition for a brand-new Follow relationship), so no
+#    position could ever be opened and n_trades could never grow -- a
+#    deadlock. plan_follow now bypasses that scale-in for cold-start Follows
+#    and caps on the raw vol-target weight instead (a Pilot's edge is already
+#    proven by the deployability gate before it's followable, unlike the
+#    brand-new untested autonomous strategy that derate was designed for).
+# ---------------------------------------------------------------------------
+
+class _ClosedTradesStore:
+    """A ``TransactionsStore`` stand-in with a controllable ``closed_trades_df()``."""
+
+    def __init__(self, df: pd.DataFrame) -> None:
+        self._df = df
+
+    def closed_trades_df(self) -> pd.DataFrame:
+        return self._df
+
+
+def _cold_start_trades(strategy_id: str, n: int = 15) -> pd.DataFrame:
+    """``n`` (< MIN_TRADES_REQUIRED=30, i.e. still "cold start") closed trades
+    for ``strategy_id``: 10 winners at +5%, 5 losers at -2%, all long."""
+    rows = []
+    for i in range(n):
+        win = i < (2 * n) // 3
+        entry = 100.0
+        exit_ = entry * (1.05 if win else 0.98)
+        rows.append({
+            "symbol": "NVDA",
+            "side": "long",
+            "strategy": strategy_id,
+            "entry_price": entry,
+            "exit_price": exit_,
+        })
+    return pd.DataFrame(rows)
+
+
+def _snapshot_with_vol(snapshot: dict, vol: float = 0.20) -> dict:
+    """A deep copy of ``snapshot`` with ``Realized_Vol_60D`` populated on every
+    signal row -- the committed fixture carries no vol data at all, which
+    would otherwise always route ``kelly_sizing_for_strategy``'s cold-start
+    fallback straight to the vol-unavailable branch (``cold_start_no_vol``,
+    weight forced to 0.0) regardless of trade count."""
+    snap = copy.deepcopy(snapshot)
+    for sig in snap.get("signals", []):
+        sig["Realized_Vol_60D"] = vol
+    return snap
+
+
+class TestKellyCeilingSizing:
+    def test_correct_transactions_store_module_is_imported(
+        self, pilot, account, snapshot, tmp_path, monkeypatch
+    ):
+        """Regression test for the import-path bug: pilots/mirror.py must
+        construct `transactions_store.TransactionsStore` (the real module,
+        class at repo root) -- NOT the nonexistent `execution.transactions_store`.
+        A wrong import raises ModuleNotFoundError on every call, silently
+        caught, and always yields sizing_path="kelly_error". Patching the
+        correct module path and asserting it was actually called is the only
+        way to catch a regression back to the wrong path (a wrong path would
+        never call this mock at all -- the exception would fire first)."""
+        import sizing.kelly as kelly_mod
+
+        monkeypatch.setattr(
+            kelly_mod, "kelly_sizing_for_strategy",
+            _REAL_KELLY_SIZING_FOR_STRATEGY, raising=True,
+        )
+
+        calls = []
+
+        class _SpyStore(_ClosedTradesStore):
+            def __init__(self):
+                super().__init__(pd.DataFrame())
+                calls.append(True)
+
+        monkeypatch.setattr("transactions_store.TransactionsStore", _SpyStore, raising=True)
+
+        result = plan_follow(pilot, _AMOUNT, account, snapshot=snapshot, output_dir=tmp_path)
+
+        assert calls, "transactions_store.TransactionsStore was never constructed"
+        # The real sizing function ran to completion (no exception swallowed):
+        # a wrong import path always produces sizing_path == "kelly_error".
+        assert result["sizing_path"] != "kelly_error"
+        assert result["kelly_weight"] is not None
+
+    def test_cold_start_vol_target_fallback_clamps_amount(
+        self, pilot, account, snapshot, tmp_path, monkeypatch
+    ):
+        """The cold-start (< MIN_TRADES_REQUIRED) vol-target fallback path
+        actually runs (not kelly_error) and its resulting kelly_weight genuinely
+        hard-caps a requested amount that exceeds kelly_weight * total_equity,
+        while leaving a smaller request untouched.
+
+        Cold-start Follows deliberately bypass kelly_sizing_for_strategy's own
+        n_trades-based scale-in (see pilots/mirror.py's plan_follow comment):
+        that ramp is designed for a brand-new AUTONOMOUS strategy earning trust
+        from zero, but a Pilot's edge is already proven by the deployability
+        gate before it's ever followable, and a Follow starts at n_trades=0 by
+        definition -- so the ramp would permanently zero the ceiling on every
+        first-ever follow. The raw (unscaled) vol-target weight is used
+        instead."""
+        import sizing.kelly as kelly_mod
+
+        monkeypatch.setattr(
+            kelly_mod, "kelly_sizing_for_strategy",
+            _REAL_KELLY_SIZING_FOR_STRATEGY, raising=True,
+        )
+        # Also restore the real cold/warm decision function -- the autouse
+        # `_kelly_ceiling_unbounded` fixture stubs it to always report "warm"
+        # (n=999) so every other test in this file is unaffected by Kelly
+        # sizing. This test needs the REAL decision against the n=15-trade
+        # spy store below to actually exercise the cold-start branch.
+        monkeypatch.setattr(
+            kelly_mod, "estimate_win_rate_and_payoff_per_strategy",
+            _REAL_ESTIMATE_WIN_RATE_AND_PAYOFF, raising=True,
+        )
+
+        strategy_id = f"Follow:{pilot.id}"
+        trades = _cold_start_trades(strategy_id, n=15)
+        vol_snapshot = _snapshot_with_vol(snapshot, vol=0.20)
+
+        monkeypatch.setattr(
+            "transactions_store.TransactionsStore",
+            lambda: _ClosedTradesStore(trades),
+            raising=True,
+        )
+
+        # weight = volatility_target_weight(0.20, target_vol=0.10, max_leverage=2.0)
+        #        = 0.10 / 0.20 = 0.5  (no cold-start scale-in applied)
+        # kelly_weight = 0.5 -> ceiling = 0.5 * 250_000 = 125_000
+        expected_ceiling = 125_000.0
+
+        # Case 1: requested amount ($200k) exceeds the ceiling -> clamped.
+        over_result = plan_follow(
+            pilot, 200_000.0, account, snapshot=vol_snapshot, output_dir=tmp_path
+        )
+        assert over_result["sizing_path"] is not None
+        assert over_result["sizing_path"] != "kelly_error"
+        assert over_result["sizing_path"].startswith("vol_target_fallback_no_scalein")
+        assert over_result["kelly_weight"] == pytest.approx(0.5, rel=1e-6)
+        over_total = sum(i["target_notional"] for i in over_result["planned_intents"])
+        assert over_total == pytest.approx(expected_ceiling, rel=1e-3)
+        assert over_total < 200_000.0
+
+        # Case 2: requested amount ($10k) is under the ceiling -> untouched.
+        under_result = plan_follow(
+            pilot, _AMOUNT, account, snapshot=vol_snapshot, output_dir=tmp_path
+        )
+        assert under_result["kelly_weight"] == pytest.approx(0.5, rel=1e-6)
+        under_total = sum(i["target_notional"] for i in under_result["planned_intents"])
+        assert under_total == pytest.approx(_AMOUNT, rel=1e-3)
+
+    def test_warm_strategy_uses_real_bootstrap_kelly_not_vol_target(
+        self, pilot, account, snapshot, tmp_path, monkeypatch
+    ):
+        """Once >= MIN_TRADES_REQUIRED real Follow trades exist, plan_follow
+        must route through the actual bootstrap-Kelly path (not the vol-target
+        bypass, and not the scale-in-derated fallback) -- the cold-start bypass
+        above must not leak into the warm case."""
+        import sizing.kelly as kelly_mod
+
+        monkeypatch.setattr(
+            kelly_mod, "kelly_sizing_for_strategy",
+            _REAL_KELLY_SIZING_FOR_STRATEGY, raising=True,
+        )
+        monkeypatch.setattr(
+            kelly_mod, "estimate_win_rate_and_payoff_per_strategy",
+            _REAL_ESTIMATE_WIN_RATE_AND_PAYOFF, raising=True,
+        )
+
+        strategy_id = f"Follow:{pilot.id}"
+        # 40 trades, evenly winning, to guarantee a valid (non-NaN) bootstrap.
+        trades = _cold_start_trades(strategy_id, n=40)
+        vol_snapshot = _snapshot_with_vol(snapshot, vol=0.20)
+
+        monkeypatch.setattr(
+            "transactions_store.TransactionsStore",
+            lambda: _ClosedTradesStore(trades),
+            raising=True,
+        )
+
+        result = plan_follow(
+            pilot, _AMOUNT, account, snapshot=vol_snapshot, output_dir=tmp_path
+        )
+        assert result["sizing_path"] is not None
+        assert result["sizing_path"] != "kelly_error"
+        assert not result["sizing_path"].startswith("vol_target_fallback_no_scalein")
 
 
 # ---------------------------------------------------------------------------

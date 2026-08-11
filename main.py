@@ -292,13 +292,17 @@ def _load_tickers_from_sheet2() -> List[str]:
         return []
 
 
+from pilots.discovery import discovery
+
 def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     """Return the evaluation universe: held symbols ∪ watchlist, deduped, sorted.
 
-    Priority order when building the universe:
+    priority order when building the universe:
       1. Robinhood held positions (always included when available).
       2. WATCHLIST env var or watchlist.txt (always merged in when present).
-      3. Google Sheet → Sheet2 column A (fallback only when 1 + 2 are both empty).
+      3. Discovered scan candidates from `scan_candidates.json` (always merged).
+      4. `settings.DEFAULT_TICKERS` (fallback if 1+2+3 are empty).
+      5. Google Sheet → Sheet2 column A (fallback only when 1+2+3+4 are empty).
 
     When ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` is on, `combined` is
     additionally subtracted by whatever
@@ -307,12 +311,22 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     ``rating/symbol_rating.py::should_exclude``). Held symbols are never
     dropped, and the lookup fails OPEN: any exception leaves `combined`
     untouched and only logs a warning (CONSTRAINT #6). Applied once, before
-    the Sheet2 fallback, so exclusion is honored whether or not that
-    fallback ends up running.
+    the fallback, so exclusion is honored whether or not that fallback runs.
     """
     held = set(snapshot.positions.keys())
     watchlist = set(_load_watchlist())
-    combined = held | watchlist
+
+    # 3. Discovered candidates
+    discovered = set()
+    try:
+        candidates = discovery(limit=None).get("candidates", [])
+        discovered = {c["symbol"].upper().strip() for c in candidates if c.get("symbol")}
+        if discovered:
+            logger.info("Loaded %d candidates from scan discovery.", len(discovered))
+    except Exception as exc:
+        logger.warning("Failed to load discovery candidates: %s", exc)
+
+    combined = held | watchlist | discovered
 
     if settings.SYMBOL_RATING_AUTO_DROP_ENABLED:
         try:
@@ -332,20 +346,25 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
             )
 
     if not combined:
-        sheet2 = set(_load_tickers_from_sheet2())
-        if sheet2:
-            logger.info(
-                "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
-                len(sheet2),
-            )
-        combined = sheet2
+        if settings.DEFAULT_TICKERS:
+            combined = set(t.upper() for t in settings.DEFAULT_TICKERS)
+            logger.info("Using %d DEFAULT_TICKERS as fallback universe.", len(combined))
+        else:
+            sheet2 = set(_load_tickers_from_sheet2())
+            if sheet2:
+                logger.info(
+                    "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
+                    len(sheet2),
+                )
+            combined = sheet2
 
     universe = sorted(combined)
     logger.info(
-        "Universe: %d symbols (%d held, %d watchlist-only).",
+        "Universe: %d symbols (%d held, %d watchlist-only, %d discovered).",
         len(universe),
         len(held),
-        len(combined - held),
+        len((watchlist - held) - discovered),
+        len(discovered - held),
     )
     return universe
 

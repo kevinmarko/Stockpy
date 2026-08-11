@@ -88,6 +88,39 @@ describe("FollowModal (real mock API)", () => {
     expect(onFollowed).toHaveBeenCalledTimes(1);
   });
 
+  it("uncapped: the allocated headline matches the requested amount, and no reduction notice appears", async () => {
+    const user = userEvent.setup();
+    render(<FollowModal pilot={PILOT} onClose={vi.fn()} />);
+
+    // Default amount (500) is well under the mock's Kelly ceiling ($1,800).
+    await user.click(screen.getByRole("button", { name: "Preview queue" }));
+
+    expect(await screen.findByText("Queue preview")).toBeInTheDocument();
+    expect(screen.getByText(/\$500\.00 allocated to Trend Follower/)).toBeInTheDocument();
+    expect(screen.queryByText(/was reduced to/)).not.toBeInTheDocument();
+    // The informational sizing line is still shown unconditionally.
+    expect(screen.getByText(/Sizing this cycle:/)).toBeInTheDocument();
+  });
+
+  it("capped: the allocated headline reflects the real (reduced) total, never the raw requested amount, with an honest reduction notice", async () => {
+    const user = userEvent.setup();
+    render(<FollowModal pilot={PILOT} onClose={vi.fn()} />);
+
+    // $2500 quick-chip exceeds the mock's Kelly ceiling ($1,800).
+    await user.click(screen.getByRole("button", { name: "$2500" }));
+    await user.click(screen.getByRole("button", { name: "Preview queue" }));
+
+    expect(await screen.findByText("Queue preview")).toBeInTheDocument();
+    // The headline must show the real, reduced allocated total ($1,800) --
+    // never the raw $2,500 the operator typed, which is what the pre-fix
+    // code displayed (result.follow.amount is always the unclamped request).
+    expect(screen.getByText(/\$1,800\.00 allocated to Trend Follower/)).toBeInTheDocument();
+    expect(screen.queryByText(/\$2,500\.00 allocated/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Your requested \$2,500\.00 was reduced to \$1,800\.00/)
+    ).toBeInTheDocument();
+  });
+
   it("below the minimum allocation, Preview queue is disabled with a min-amount hint", async () => {
     const user = userEvent.setup();
     render(<FollowModal pilot={PILOT} onClose={vi.fn()} />);
