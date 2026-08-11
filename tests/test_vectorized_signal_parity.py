@@ -53,6 +53,7 @@ from signals.sortino_drawdown import SortinoDrawdownSignal
 from signals.aggregator import SignalAggregator
 from signals.registry import global_registry, SignalRegistry
 from signals.base import SignalModule
+from signals.cross_sectional_momentum import CrossSectionalMomentumSignal
 
 from tests.test_signal_module_contracts import _signal_context, _realistic_row
 
@@ -413,3 +414,100 @@ def test_aggregate_vectorized_failure_falls_back_to_empty_dict_not_raise(monkeyp
     final_score, _, _, _, outputs, meta = aggregator.aggregate(universe_df.loc["A"], ctx)
     assert isinstance(final_score, float)
     assert isinstance(outputs, dict)
+
+
+# ============================================================================
+# Section 5 -- cross_sectional_momentum vectorized-path regression (Finding 2)
+#
+# Before the fix, pipeline/production_steps.py's vec_df carried a 'ticker'
+# column but never a 'Symbol' column, and its SignalContext was built
+# without xsec_percentile_ranks -- so CrossSectionalMomentumSignal.compute()
+# 's `row.get("Symbol", "")` always resolved to "" and its lookup into
+# context.xsec_percentile_ranks always missed, silently contributing exactly
+# 0.0 for every ticker, every cycle, in the live vectorized path (the module
+# has no compute_vectorized() override of its own, so it runs through
+# SignalModule's default `df.apply(lambda row: self.compute(row, context))`
+# fallback, making it especially easy for a missing DataFrame column to go
+# unnoticed). This section builds a universe with a REAL rank spread (not
+# all zeros/all-neutral, which is exactly what the bug produced) plus both
+# ingredients the production fix now supplies, and proves the vectorized
+# path and the scalar path agree.
+# ============================================================================
+
+class TestCrossSectionalMomentumVectorizedParity:
+    def _universe_with_rank_spread(self):
+        """5 tickers with a genuine, non-degenerate cross-sectional rank
+        spread -- the fixture the pre-fix bug (uniform score=0.0 for every
+        ticker) would have failed against."""
+        ranks = {"A": 0.1, "B": 0.3, "C": 0.5, "D": 0.7, "E": 0.9}
+        rows = []
+        for ticker in ranks:
+            row = _realistic_row().to_dict()
+            row["Symbol"] = ticker
+            rows.append(row)
+        universe_df = pd.DataFrame(rows, index=list(ranks.keys()))
+        return universe_df, ranks
+
+    def test_symbol_column_and_ranks_produce_a_real_score_spread_not_uniform_zero(self):
+        """Sanity check on the fixture itself: with the Symbol column
+        present and xsec_percentile_ranks populated, scores must actually
+        vary across the extreme-rank tickers -- pinning the bug's exact
+        symptom (a uniform, silently-neutral 0.0) as the negative case."""
+        universe_df, ranks = self._universe_with_rank_spread()
+        ctx = _signal_context()
+        ctx.xsec_percentile_ranks = ranks
+
+        module = CrossSectionalMomentumSignal()
+        vec_out = module.compute_vectorized(universe_df, ctx)
+
+        scores = vec_out["score"].tolist()
+        assert len(set(round(s, 6) for s in scores)) > 1, (
+            f"expected a real spread of scores, got uniform {scores} "
+            "(this is exactly what the Finding 2 bug produced)"
+        )
+        assert vec_out.loc["A", "score"] < 0, "lowest-rank ticker must score bearish"
+        assert vec_out.loc["E", "score"] > 0, "highest-rank ticker must score bullish"
+
+    def test_vectorized_score_matches_scalar_score_per_ticker(self):
+        universe_df, ranks = self._universe_with_rank_spread()
+        ctx = _signal_context()
+        ctx.xsec_percentile_ranks = ranks
+
+        module = CrossSectionalMomentumSignal()
+        vec_out = module.compute_vectorized(universe_df, ctx)
+
+        for ticker in universe_df.index:
+            row = universe_df.loc[ticker]
+            scalar_out = module.compute(row, ctx)
+            assert math.isclose(scalar_out.score, vec_out.loc[ticker, "score"], abs_tol=ABS_TOL), (
+                f"{ticker}: scalar={scalar_out.score} vs vectorized={vec_out.loc[ticker, 'score']}"
+            )
+
+    def test_aggregate_vectorized_end_to_end_reflects_real_ranks_not_silently_zeroed(self):
+        """The deepest form of this regression check: goes through
+        SignalAggregator.aggregate_vectorized() -- what pipeline/
+        production_steps.py actually calls -- and confirms
+        cross_sectional_momentum's contribution in `outputs` genuinely
+        reflects the real rank spread and matches the scalar aggregate(),
+        rather than being silently neutral for every ticker."""
+        universe_df, ranks = self._universe_with_rank_spread()
+        ctx = _signal_context()
+        ctx.xsec_percentile_ranks = ranks
+
+        vectorized_results = SignalAggregator(global_registry).aggregate_vectorized(universe_df, ctx)
+
+        for ticker in universe_df.index:
+            _, _, _, _, vec_outputs, _ = vectorized_results[ticker]
+            assert "cross_sectional_momentum" in vec_outputs
+
+            scalar_result = SignalAggregator(global_registry).aggregate(universe_df.loc[ticker], ctx)
+            _, _, _, _, scalar_outputs, _ = scalar_result
+
+            assert math.isclose(
+                vec_outputs["cross_sectional_momentum"].score,
+                scalar_outputs["cross_sectional_momentum"].score,
+                abs_tol=ABS_TOL,
+            ), f"{ticker}: cross_sectional_momentum vec vs scalar diverged"
+
+        assert vectorized_results["A"][4]["cross_sectional_momentum"].score < 0
+        assert vectorized_results["E"][4]["cross_sectional_momentum"].score > 0
