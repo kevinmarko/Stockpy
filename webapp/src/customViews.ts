@@ -56,41 +56,82 @@ export interface CustomView {
 
 const STORAGE_KEY = "stockpy.custom-views:v1";
 
+/** The full, canonical set of widget keys, in stable display/migration
+ * order. Single source of truth shared by `loadFromStorage` (legacy-data
+ * migration), `importViews` (foreign-file ingestion), and the fallback
+ * branch of `addOrUpdateView` -- previously each of these re-declared its
+ * own local copy of this list (or, in `CreateDataApp.tsx`, derived it via
+ * `Object.keys(WIDGET_LABELS) as any`), which is exactly the kind of
+ * "three independent sources of truth that can drift" this codebase's own
+ * conventions warn against. */
+const ALL_WIDGET_KEYS: (keyof CustomViewWidgets)[] = [
+  "edgeByStrategy", "symbolOverlay", "aiChat", "pilotsTable", "sentimentMini",
+  "portfolioHeat", "optionsDirective", "signalBreakdown", "macroRegime",
+];
+
+/** Coerces an arbitrary (possibly foreign, possibly hand-edited) value into
+ * a well-formed `CustomViewWidgets` -- exactly the known 9 keys, each a real
+ * boolean. Unknown keys are dropped; a missing/malformed key defaults to
+ * `false` rather than crashing the whole import (CONSTRAINT #6-style
+ * degrade, applied to client-side schema drift). */
+function sanitizeWidgets(raw: any): CustomViewWidgets {
+  const out = {} as CustomViewWidgets;
+  for (const k of ALL_WIDGET_KEYS) {
+    out[k] = Boolean(raw && raw[k]);
+  }
+  return out;
+}
+
+/** Reconciles a candidate `widgetOrder` against the widgets that are
+ * actually active. `CustomView.tsx` renders `widgetOrder` alone -- it does
+ * NOT cross-check `widgets` -- so `widgetOrder` must be kept in sync with
+ * `widgets` at every write path, not just the in-app editor's. Any active
+ * widget the candidate order didn't mention (missing field, hand-edited
+ * JSON, a widget added to `CustomViewWidgets` after the file was exported)
+ * is appended in canonical order rather than silently dropped -- a widget
+ * the operator explicitly enabled must still render somewhere. */
+function sanitizeWidgetOrder(raw: any, widgets: CustomViewWidgets): (keyof CustomViewWidgets)[] {
+  const fromRaw: (keyof CustomViewWidgets)[] = Array.isArray(raw)
+    ? raw.filter((k: any): k is keyof CustomViewWidgets => ALL_WIDGET_KEYS.includes(k) && widgets[k as keyof CustomViewWidgets])
+    : [];
+  const missing = ALL_WIDGET_KEYS.filter((k) => widgets[k] && !fromRaw.includes(k));
+  return [...fromRaw, ...missing];
+}
+
+/** Same fallback-ID shape `addOrUpdateView` always used, factored out so
+ * `importViews` (which must never trust a foreign file's `id` -- see that
+ * function's doc) generates new views the same way. */
+function makeId(slug: string): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function loadFromStorage(): CustomView[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    
-    // Canonical order for deterministic legacy migration
-    const canonicalOrder: (keyof CustomViewWidgets)[] = [
-      "edgeByStrategy", "symbolOverlay", "aiChat", "pilotsTable", "sentimentMini", "portfolioHeat", "optionsDirective", "signalBreakdown", "macroRegime"
-    ];
 
-    // Migration: populate widgetOrder and widgetConfigs if missing
-    return parsed.map((view: any) => {
-      // Check for array to ensure idempotency and skip re-deriving if it already exists
-      let widgetOrder = Array.isArray(view.widgetOrder) ? view.widgetOrder : undefined;
-      
-      if (!widgetOrder && view.widgets) {
-        // Derive order from widgets boolean map using stable canonical order
-        widgetOrder = canonicalOrder.filter(k => view.widgets[k]);
-        // Note: We don't eagerly write back to localStorage here. 
-        // This is an intentional in-memory migration that saves natively on the operator's next write.
-      }
-
-      // Filter out any malformed/unknown keys from widgetOrder
-      if (widgetOrder) {
-        widgetOrder = widgetOrder.filter((k: any) => canonicalOrder.includes(k as keyof CustomViewWidgets));
-      }
-
-      return {
-        ...view,
-        widgetOrder: widgetOrder || [],
-        widgetConfigs: view.widgetConfigs || {}
-      };
-    }) as CustomView[];
+    // Migration: populate widgetOrder/widgetConfigs for pre-existing views
+    // saved before those fields existed, and reconcile+sanitize both fields
+    // for every view (idempotent -- a view that already has a well-formed
+    // widgetOrder/widgets round-trips unchanged). A row missing a real
+    // id/slug (never produced by this module's own writers, but possible
+    // from manually-edited localStorage) is dropped rather than kept: every
+    // other write path assumes `id` is a stable, unique, non-empty key
+    // (React list keys, removeView, loadViewForEditing, duplicateView).
+    return parsed
+      .filter((view: any) => view && typeof view.id === "string" && view.id && typeof view.slug === "string" && view.slug)
+      .map((view: any): CustomView => {
+        const widgets = sanitizeWidgets(view.widgets);
+        return {
+          ...view,
+          widgets,
+          widgetOrder: sanitizeWidgetOrder(view.widgetOrder, widgets),
+          widgetConfigs: view.widgetConfigs && typeof view.widgetConfigs === "object" ? view.widgetConfigs : {},
+        };
+      });
   } catch {
     // Corrupt/unavailable storage degrades to "no saved views" -- never throws.
     return [];
@@ -227,7 +268,7 @@ export function addOrUpdateView(input: {
     views = views.map((v) => (v.id === existing.id ? view : v));
   } else {
     view = {
-      id: typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${slug}-${now}`,
+      id: makeId(slug),
       name,
       slug,
       widgets: input.widgets,
@@ -251,36 +292,62 @@ export function removeView(id: string): { persisted: boolean } {
   return { persisted };
 }
 
+/**
+ * Ingests a JSON file (as produced by `handleExport` in CreateDataApp.tsx,
+ * or hand-edited/foreign) as an array of views. A view whose (recomputed,
+ * not trusted-as-is) slug matches an existing view overwrites it IN PLACE
+ * -- same `id`/`createdAt` preserved, matching `addOrUpdateView`'s own
+ * update-in-place convention -- so importing an edited export of a view you
+ * already have renames/updates it rather than duplicating it under a second
+ * id. A genuinely new slug is appended as a brand-new view with a FRESH,
+ * locally-generated id: the file's own `id` field is never trusted, because
+ * two independently-exported files (e.g. from two browsers, or a hand-built
+ * file) can easily collide on an id that was never meant to be globally
+ * unique, and `id` uniqueness is an invariant the rest of this module (plus
+ * every caller: React list keys, removeView, loadViewForEditing,
+ * duplicateView) depends on unconditionally.
+ */
 export function importViews(jsonString: string): { importedCount: number; persisted: boolean; error?: string } {
   try {
     const parsed = JSON.parse(jsonString);
     if (!Array.isArray(parsed)) throw new Error("Invalid format: expected array of views");
-    
-    // Quick validation
-    const validViews = parsed.filter(v => v && typeof v.name === "string" && typeof v.slug === "string" && v.widgets);
-    if (validViews.length === 0) throw new Error("No valid views found in the imported file");
 
-    // Merge logic: if a slug exists, we can either overwrite or keep existing.
-    // Let's overwrite existing for simplicity, or append if new.
+    // Quick validation -- only `name` and `widgets` are load-bearing here;
+    // `slug` is always recomputed from `name` below rather than trusted,
+    // since a hand-edited file can easily have the two drift.
+    const validRaw = parsed.filter((v) => v && typeof v.name === "string" && v.name.trim().length > 0 && v.widgets);
+    if (validRaw.length === 0) throw new Error("No valid views found in the imported file");
+
+    const now = new Date().toISOString();
     let importedCount = 0;
-    for (const view of validViews) {
-      const widgetOrder = view.widgetOrder || (Object.keys(view.widgets) as (keyof CustomViewWidgets)[]).filter(k => view.widgets[k]);
-      const widgetConfigs = view.widgetConfigs || {};
-      
-      const existingIdx = views.findIndex(v => v.slug === view.slug);
-      const migratedView: CustomView = {
-        ...view,
-        widgetOrder,
-        widgetConfigs
-      };
-      
+    // Builds a NEW array at every step (never `views.push`/`views[i] = ...`
+    // in place) -- `useSyncExternalStore` decides whether to re-render by
+    // `Object.is`-comparing the previous snapshot to `getSnapshot()`'s
+    // return value, so mutating the existing `views` array in place makes
+    // every subscriber's snapshot compare EQUAL even after `notify()` fires,
+    // and the sidebar/list silently does not update until something else
+    // (e.g. a route change) forces a fresh render. Caught by a real UI test
+    // driving the actual file-input -> FileReader -> importViews path, not
+    // by inspecting localStorage alone (which reads the same either way).
+    let nextViews = views;
+    for (const raw of validRaw) {
+      const name = String(raw.name).trim();
+      const slug = slugify(name);
+      const widgets = sanitizeWidgets(raw.widgets);
+      const widgetOrder = sanitizeWidgetOrder(raw.widgetOrder, widgets);
+      const widgetConfigs = raw.widgetConfigs && typeof raw.widgetConfigs === "object" ? raw.widgetConfigs : {};
+
+      const existingIdx = nextViews.findIndex((v) => v.slug === slug);
       if (existingIdx >= 0) {
-        views[existingIdx] = migratedView;
+        const existing = nextViews[existingIdx];
+        const updated = { ...existing, name, slug, widgets, widgetOrder, widgetConfigs, updatedAt: now };
+        nextViews = nextViews.map((v, i) => (i === existingIdx ? updated : v));
       } else {
-        views.push(migratedView);
+        nextViews = [...nextViews, { id: makeId(slug), name, slug, widgets, widgetOrder, widgetConfigs, createdAt: now, updatedAt: now }];
       }
       importedCount++;
     }
+    views = nextViews;
 
     const persisted = persist();
     notify();

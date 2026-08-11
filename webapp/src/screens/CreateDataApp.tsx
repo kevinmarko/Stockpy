@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router";
 import toast from "react-hot-toast";
-import { LayoutTemplate, Trash2, Edit2, Copy, Download, Upload, GripVertical, Settings } from "lucide-react";
+import { LayoutTemplate, Trash2, Edit2, Copy, Download, Upload, GripVertical, Settings, ArrowUp, ArrowDown } from "lucide-react";
 import { Reorder } from "framer-motion";
 import { Button, EmptyState, Input } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
@@ -28,6 +28,23 @@ const WIDGET_LABELS: Record<keyof CustomViewWidgets, string> = {
   signalBreakdown: "Signal breakdown mini-chart",
   macroRegime: "Macro regime banner",
 };
+
+// Single source of truth for "all 9 widget keys, in stable order" -- shared
+// with customViews.ts's own copy of this list (previously each of the two
+// files re-derived it independently: this one via `Object.keys(WIDGET_LABELS)
+// as any`, that one via a hand-written array -- exactly the kind of
+// two-sources-that-can-drift setup this codebase's conventions warn against
+// elsewhere). `as const` + the `Record<keyof CustomViewWidgets, string>` type
+// on WIDGET_LABELS above is what keeps this list exhaustive at compile time.
+const ALL_WIDGET_KEYS = Object.keys(WIDGET_LABELS) as (keyof CustomViewWidgets)[];
+
+/** Cosmetic-only id fragment for template buttons' `data-testid` -- NOT the
+ * same as customViews.ts's `slugify` (that one governs the real, persisted
+ * `/app/:slug` route and has its own collision-avoidance rules; this one
+ * only needs to be stable and readable for tests). */
+function slugifyForTestId(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
 
 const WIDGET_CATEGORIES = {
   "Visualizations & Charts": ["edgeByStrategy", "symbolOverlay", "sentimentMini", "signalBreakdown"] as const,
@@ -105,7 +122,7 @@ export function CreateDataApp() {
   const [widgets, setWidgets] = useState<CustomViewWidgets>(DEFAULT_WIDGETS);
   
   // masterOrder keeps all widgets ordered, active or not, so toggling remembers position.
-  const [masterOrder, setMasterOrder] = useState<(keyof CustomViewWidgets)[]>(Object.keys(WIDGET_LABELS) as any);
+  const [masterOrder, setMasterOrder] = useState<(keyof CustomViewWidgets)[]>(ALL_WIDGET_KEYS);
   
   // widgetOrder is derived for rendering the Reorder list
   const widgetOrder = masterOrder.filter(k => widgets[k]);
@@ -132,15 +149,33 @@ export function CreateDataApp() {
     setMasterOrder([...newActiveOrder, ...inactive]);
   };
 
+  // Keyboard/pointer-accessible alternative to the drag handle -- framer-motion's
+  // Reorder.Group has no keyboard interaction of its own, which would otherwise
+  // make widget ordering entirely unreachable without a mouse/touch drag.
+  const moveWidget = (key: keyof CustomViewWidgets, direction: -1 | 1) => {
+    const idx = widgetOrder.indexOf(key);
+    const nextIdx = idx + direction;
+    if (idx < 0 || nextIdx < 0 || nextIdx >= widgetOrder.length) return;
+    const next = [...widgetOrder];
+    [next[idx], next[nextIdx]] = [next[nextIdx], next[idx]];
+    handleReorder(next);
+  };
+
   const applyTemplate = (template: typeof TEMPLATES[0]) => {
+    // Applying a template always starts a fresh view -- if the operator was
+    // mid-edit of an existing saved view, silently keeping `editingId` set
+    // would turn "Use Template" into "overwrite the view I was editing with
+    // this template" on the next Save, which is not what the button says it
+    // does. Discard the in-progress edit explicitly instead.
+    setEditingId(null);
     setName(template.name);
     setWidgets(template.widgets as CustomViewWidgets);
-    
+
     // Reconstruct masterOrder placing the template's order first
     const active = template.widgetOrder;
     const inactive = masterOrder.filter(k => !active.includes(k));
     setMasterOrder([...active, ...inactive]);
-    
+
     setWidgetConfigs({});
   };
 
@@ -179,7 +214,7 @@ export function CreateDataApp() {
     setEditingId(null);
     setName("");
     setWidgets(DEFAULT_WIDGETS);
-    setMasterOrder(Object.keys(WIDGET_LABELS) as any);
+    setMasterOrder(ALL_WIDGET_KEYS);
     setWidgetConfigs({});
     navigate(`/app/${view.slug}`);
   };
@@ -276,7 +311,13 @@ export function CreateDataApp() {
 
           <div style={{ display: 'flex', gap: "var(--s-2)", marginBottom: "var(--s-4)", flexWrap: 'wrap' }}>
             {TEMPLATES.map(t => (
-              <Button key={t.name} variant="neutral" onClick={() => applyTemplate(t)} style={{ fontSize: "var(--t-caption)" }}>
+              <Button
+                key={t.name}
+                variant="neutral"
+                onClick={() => applyTemplate(t)}
+                style={{ fontSize: "var(--t-caption)" }}
+                data-testid={`use-template-${slugifyForTestId(t.name)}`}
+              >
                 Use {t.name}
               </Button>
             ))}
@@ -330,7 +371,7 @@ export function CreateDataApp() {
               setEditingId(null);
               setName("");
               setWidgets(DEFAULT_WIDGETS);
-              setMasterOrder(Object.keys(WIDGET_LABELS) as any);
+              setMasterOrder(ALL_WIDGET_KEYS);
               setWidgetConfigs({});
             }} style={{ marginLeft: "var(--s-2)" }}>
               Cancel Edit
@@ -348,14 +389,14 @@ export function CreateDataApp() {
             </label>
           </div>
           <p style={{ fontSize: "var(--t-caption)", color: theme.textMuted, marginBottom: "var(--s-3)" }}>
-            Drag to reorder widgets. Configuration settings apply when saved.
+            Drag to reorder widgets, or use the arrow buttons.
           </p>
-          
+
           {widgetOrder.length === 0 ? (
             <EmptyState title="No widgets selected" hint="Check a widget on the left to add it." />
           ) : (
             <Reorder.Group axis="y" values={widgetOrder} onReorder={handleReorder} style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-              {widgetOrder.map((key) => (
+              {widgetOrder.map((key, idx) => (
                 <Reorder.Item key={key} value={key} style={{
                   background: theme.surface2,
                   border: `1px solid ${theme.border}`,
@@ -367,17 +408,40 @@ export function CreateDataApp() {
                 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: "var(--s-2)" }}>
-                      <GripVertical size={16} color={theme.textMuted} />
+                      <GripVertical size={16} color={theme.textMuted} aria-hidden />
                       <span style={{ fontSize: "var(--t-caption)", fontWeight: 500 }}>{WIDGET_LABELS[key]}</span>
                     </div>
-                    {key === "symbolOverlay" && (
-                      <Button variant="neutral" onClick={() => {
-                        setTempConfig(widgetConfigs[key] || {});
-                        setConfigModalWidget(key);
-                      }} title="Configure Widget">
-                        <Settings size={14} />
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1)" }}>
+                      {/* Keyboard/pointer-accessible alternative to the drag
+                          handle above -- framer-motion's Reorder.Group has no
+                          keyboard interaction of its own. */}
+                      <Button
+                        variant="neutral"
+                        onClick={() => moveWidget(key, -1)}
+                        disabled={idx === 0}
+                        aria-label={`Move ${WIDGET_LABELS[key]} up`}
+                        data-testid={`widget-move-up-${key}`}
+                      >
+                        <ArrowUp size={14} />
                       </Button>
-                    )}
+                      <Button
+                        variant="neutral"
+                        onClick={() => moveWidget(key, 1)}
+                        disabled={idx === widgetOrder.length - 1}
+                        aria-label={`Move ${WIDGET_LABELS[key]} down`}
+                        data-testid={`widget-move-down-${key}`}
+                      >
+                        <ArrowDown size={14} />
+                      </Button>
+                      {key === "symbolOverlay" && (
+                        <Button variant="neutral" onClick={() => {
+                          setTempConfig(widgetConfigs[key] || {});
+                          setConfigModalWidget(key);
+                        }} title="Configure widget" aria-label={`Configure ${WIDGET_LABELS[key]}`}>
+                          <Settings size={14} />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   {livePreview && (
                     <div style={{ marginTop: "var(--s-3)", pointerEvents: "none", opacity: 0.8 }}>
@@ -410,8 +474,15 @@ export function CreateDataApp() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: "var(--s-3)" }}>
             <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Your Data Apps</h2>
             <div>
-              <input type="file" accept=".json" style={{ display: 'none' }} ref={fileInputRef} onChange={handleImport} />
-              <Button variant="neutral" onClick={() => fileInputRef.current?.click()}>
+              <input
+                type="file"
+                accept=".json"
+                style={{ display: 'none' }}
+                ref={fileInputRef}
+                onChange={handleImport}
+                data-testid="data-app-import-file-input"
+              />
+              <Button variant="neutral" onClick={() => fileInputRef.current?.click()} data-testid="data-app-import-trigger">
                 <span aria-hidden style={{ display: "inline-flex", alignItems: "center", gap: "var(--s-1-5)" }}>
                   <Upload size={14} strokeWidth={2.5} /> Import JSON
                 </span>
@@ -452,13 +523,31 @@ export function CreateDataApp() {
                     <Button variant="neutral" onClick={() => navigate(`/app/${v.slug}`)} data-testid={`data-app-open-${v.slug}`} title="Open View">
                       Open
                     </Button>
-                    <Button variant="neutral" onClick={() => loadViewForEditing(v)} title="Edit View">
+                    <Button
+                      variant="neutral"
+                      onClick={() => loadViewForEditing(v)}
+                      title="Edit view"
+                      aria-label={`Edit ${v.name}`}
+                      data-testid={`data-app-edit-${v.slug}`}
+                    >
                       <span aria-hidden style={{ display: "inline-flex", alignItems: "center" }}><Edit2 size={16} strokeWidth={2.5} /></span>
                     </Button>
-                    <Button variant="neutral" onClick={() => duplicateView(v)} title="Duplicate View">
+                    <Button
+                      variant="neutral"
+                      onClick={() => duplicateView(v)}
+                      title="Duplicate view"
+                      aria-label={`Duplicate ${v.name}`}
+                      data-testid={`data-app-duplicate-${v.slug}`}
+                    >
                       <span aria-hidden style={{ display: "inline-flex", alignItems: "center" }}><Copy size={16} strokeWidth={2.5} /></span>
                     </Button>
-                    <Button variant="neutral" onClick={() => handleExport(v)} title="Export View as JSON">
+                    <Button
+                      variant="neutral"
+                      onClick={() => handleExport(v)}
+                      title="Export view as JSON"
+                      aria-label={`Export ${v.name} as JSON`}
+                      data-testid={`data-app-export-${v.slug}`}
+                    >
                       <span aria-hidden style={{ display: "inline-flex", alignItems: "center" }}><Download size={16} strokeWidth={2.5} /></span>
                     </Button>
                     <Button
