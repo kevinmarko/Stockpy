@@ -518,41 +518,57 @@ class SignalAggregator:
         clamped_mlp_columns: Dict[str, pd.Series] = {}
 
         for name, df_out in outputs.items():
-            if name in settings.DISABLED_SIGNAL_MODULES:
-                continue
-
+            # Finding 4 fix: gating (DISABLED_SIGNAL_MODULES / is_active_in_regime)
+            # must match aggregate()'s row-wise contract exactly -- a gated
+            # module's raw compute() output STILL lands in the returned
+            # outputs dict for introspection (see StrategyEngine's
+            # `outputs.get('regime_multiplier')` consumer, which would
+            # otherwise silently see a neutral 1.0 multiplier whenever the
+            # module happens to be gated on this path only). Only the
+            # WEIGHTED score contribution and the meta-label composite input
+            # stay conditional on the module passing both gates.
+            is_disabled = name in settings.DISABLED_SIGNAL_MODULES
             module = self.registry.get(name)
-            if not module.is_active_in_regime(context.macro):
-                continue
-
-            weight = effective_weights.get(name, 0.0)
-
-            contribs = df_out['score'] * weight
-            final_scores += contribs
-
-            # Vectorize Meta Label Proba
-            if meta_registry.has(name):
-                try:
-                    feat_df = universe_df.copy()
-                    feat_df["primary_score"] = df_out['score']
-                    labeler = meta_registry._labelers.get(name)
-                    if labeler:
-                        mlps = labeler.predict_proba(feat_df)
-                        df_out['meta_label_proba'] = mlps
-                except Exception as exc:
-                    logger.warning(
-                        "MetaLabelerRegistry vectorized predict failed: %s — defaulting to 1.0.", exc
-                    )
+            is_regime_active = module.is_active_in_regime(context.macro)
+            gated = is_disabled or not is_regime_active
 
             # `df_out['meta_label_proba']` already carries the SignalOutput
             # placeholder default (1.0) for every ticker when no MetaLabeler
             # is registered for `name` (see signals/base.py's vectorized
             # DataFrame construction) — matching the row-wise `aggregate()`
-            # fallback above, not a fail-closed 0.0.
+            # fallback above, not a fail-closed 0.0. This is also the raw
+            # value used to build a GATED module's SignalOutput below, since
+            # a gated module never reaches the MetaLabelerRegistry lookup
+            # (mirroring aggregate(), which only ever queries the registry
+            # after its own gating `continue`).
             mlp_raw = df_out.get('meta_label_proba', pd.Series(1.0, index=universe_df.index)).astype(float)
-            clamped_mlp_columns[name] = mlp_raw.clip(lower=1e-9, upper=1.0)
 
-            # Per-ticker SignalOutput construction + explanation-line parsing.
+            if not gated:
+                weight = effective_weights.get(name, 0.0)
+
+                contribs = df_out['score'] * weight
+                final_scores += contribs
+
+                # Vectorize Meta Label Proba
+                if meta_registry.has(name):
+                    try:
+                        feat_df = universe_df.copy()
+                        feat_df["primary_score"] = df_out['score']
+                        labeler = meta_registry._labelers.get(name)
+                        if labeler:
+                            mlps = labeler.predict_proba(feat_df)
+                            df_out['meta_label_proba'] = mlps
+                            mlp_raw = df_out['meta_label_proba'].astype(float)
+                    except Exception as exc:
+                        logger.warning(
+                            "MetaLabelerRegistry vectorized predict failed: %s — defaulting to 1.0.", exc
+                        )
+
+                clamped_mlp_columns[name] = mlp_raw.clip(lower=1e-9, upper=1.0)
+
+            # Per-ticker SignalOutput construction happens for EVERY module,
+            # regardless of gating -- matching aggregate()'s unconditional
+            # `outputs = self.registry.compute_all(...)` contract (Finding 4).
             # `out_obj.meta_label_proba` stores the RAW (unclamped) value —
             # matching `aggregate()`'s single-row path, which stores
             # `float(mlp_val)` before ever computing its clamped `mlp` local.
@@ -570,6 +586,13 @@ class SignalAggregator:
                     meta_label_proba=float(mlp_val),
                 )
                 per_ticker_outputs[ticker][name] = out_obj
+
+                # A gated module's explanation lines are not surfaced in
+                # score_log/warnings/details -- matching aggregate(), which
+                # only parses `output.explanation` after its own gating
+                # `continue`.
+                if gated:
+                    continue
 
                 if out_obj.explanation:
                     lines = out_obj.explanation.strip().split("\n")

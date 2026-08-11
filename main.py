@@ -248,26 +248,35 @@ class RunResult:
 # ---------------------------------------------------------------------------
 
 def _load_watchlist() -> List[str]:
-    """Return uppercase tickers from WATCHLIST env var or watchlist.txt.
+    """Return the union of uppercase tickers from WATCHLIST env var and watchlist.txt.
 
-    WATCHLIST env var (comma-separated) takes precedence over the file.
-    Returns an empty list when neither source is configured.
+    Both sources are read (when present) and merged/deduped -- neither one
+    takes precedence over the other. Returns an empty list when neither
+    source is configured.
     """
+    # dict.fromkeys preserves first-seen order while deduping -- env-var
+    # tickers first, then file tickers, matching the order each source is read.
+    tickers: dict = {}
+
     env_val = os.environ.get("WATCHLIST", "").strip()
     if env_val:
-        return [t.strip().upper() for t in env_val.split(",") if t.strip()]
+        for t in env_val.split(","):
+            t = t.strip().upper()
+            if t:
+                tickers[t] = None
 
     wl_path = Path(WATCHLIST_FILE)
     if wl_path.exists():
-        tickers = [
+        file_tickers = [
             line.strip().upper()
             for line in wl_path.read_text().splitlines()
             if line.strip() and not line.startswith("#")
         ]
-        logger.info("Loaded %d tickers from %s.", len(tickers), WATCHLIST_FILE)
-        return tickers
+        logger.info("Loaded %d tickers from %s.", len(file_tickers), WATCHLIST_FILE)
+        for t in file_tickers:
+            tickers[t] = None
 
-    return []
+    return list(tickers.keys())
 
 
 def _load_tickers_from_sheet2() -> List[str]:

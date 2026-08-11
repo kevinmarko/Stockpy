@@ -361,6 +361,48 @@ class TestWriteReport:
 
 
 # ---------------------------------------------------------------------------
+# TestMainCLISingleStep
+# ---------------------------------------------------------------------------
+
+
+class TestMainCLISingleStep:
+    """Regression for Finding 14: the CLI's single-step path (``python -m
+    engine.gravity_ai_runner <STEP>``) used to hardcode ``enabled=False`` on
+    the persisted/printed RunReport regardless of the real
+    settings.GRAVITY_AI_RUNNER_ENABLED value that run_step() independently
+    used to decide whether to construct real providers -- so the report
+    could claim the audit ran disabled while it actually ran enabled (or
+    vice versa)."""
+
+    def _run_single_step_main(self, monkeypatch, tmp_path, capsys, *, enabled: bool):
+        # Never touch real Claude/Gemini providers regardless of the flag.
+        monkeypatch.setattr(runner, "_claude_provider", lambda: None)
+        monkeypatch.setattr(runner, "_gemini_provider", lambda: None)
+        # gravity_ai_runner.py reads settings via a lazy `from settings import
+        # settings as _s` inside each function (no module-level binding to
+        # patch on `runner` itself) -- patch the real singleton attribute.
+        import settings as settings_module
+
+        monkeypatch.setattr(
+            settings_module.settings, "GRAVITY_AI_RUNNER_ENABLED", enabled, raising=False
+        )
+
+        out_path = tmp_path / "report.json"
+        rc = runner.main(["1", "--json", "--output", str(out_path)])
+        assert rc == 0
+        captured = capsys.readouterr()
+        return json.loads(captured.out)
+
+    def test_single_step_report_enabled_true_matches_setting(self, monkeypatch, tmp_path, capsys):
+        report = self._run_single_step_main(monkeypatch, tmp_path, capsys, enabled=True)
+        assert report["enabled"] is True
+
+    def test_single_step_report_enabled_false_matches_setting(self, monkeypatch, tmp_path, capsys):
+        report = self._run_single_step_main(monkeypatch, tmp_path, capsys, enabled=False)
+        assert report["enabled"] is False
+
+
+# ---------------------------------------------------------------------------
 # TestNoTopLevelLLMImport / TestNoOrderCode
 # ---------------------------------------------------------------------------
 
