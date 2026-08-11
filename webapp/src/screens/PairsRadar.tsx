@@ -22,7 +22,7 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, Loading, Notice } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -324,9 +324,6 @@ export function PairsRadar() {
             Cointegrated stat-arb candidates and their current spread state. Advisory
             only — no orders are placed.
           </p>
-        </div>
-        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
-          <Button variant="neutral" onClick={() => resetGridLayout("pairs-radar")}>Reset Layout</Button>
         </div>
       </div>
 

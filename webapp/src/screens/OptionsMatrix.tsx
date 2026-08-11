@@ -13,7 +13,7 @@ import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import { chartAxisLine, chartAxisTick, chartGridProps } from "../components/charts";
 import { fmtNum, fmtPct, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
@@ -1029,7 +1029,6 @@ export function OptionsMatrix() {
           </div>
         </div>
         <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)", alignItems: "center" }}>
-          <Button variant="neutral" onClick={() => resetGridLayout("options-matrix")}>Reset Layout</Button>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
           <Button
             onClick={() => openChat(buildOptionsContextText(directives))}

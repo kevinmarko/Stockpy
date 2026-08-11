@@ -7,7 +7,7 @@ import { ErrorState, Loading, MetricBadge, Notice, Select, StaleDataNotice } fro
 import { Toggle } from "../components/Toggle";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * AI Control Center — the write path over GET/PUT /llm/setting for the 5 AI
@@ -63,9 +63,6 @@ export function AIControlCenter() {
             happened on the last real call.
           </p>
         </div>
-        <button className="reset-layout-btn" onClick={() => resetGridLayout("ai-control-layout")} title="Reset grid layout">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-        </button>
       </div>
 
       {loading && <Loading lines={5} />}

@@ -3,7 +3,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api } from "../api/client";
 import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, Notice, Button, DeployableBadge } from "../components/ui";
+import { ErrorState, Loading, Notice, DeployableBadge } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
@@ -13,7 +13,7 @@ import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from 
 import { FollowModal } from "./FollowModal";
 import { seriesColor, theme } from "../theme";
 import { fmtNum, fmtPct, fmtUsd } from "../format";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 
 const defaultComparisonLayouts = {
   lg: [
@@ -201,11 +201,8 @@ export function Comparison() {
 
   return (
     <div className="screen" data-testid="comparison-screen">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-4)" }}>
+      <div style={{ marginBottom: "var(--s-4)" }}>
         <h1 className="screen-title" data-testid="comparison-title" style={{ margin: 0 }}>Pilot Strategy Comparison</h1>
-        <Button variant="neutral" onClick={() => resetGridLayout("comparison")}>
-          Reset Layout
-        </Button>
       </div>
 
       <TabGuide tabKey="compare" />

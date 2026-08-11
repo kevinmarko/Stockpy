@@ -2,18 +2,18 @@
  * DynamicGrid.test.tsx — covers the stale-layout reconciliation fix
  * (`reconcileLayout`, an exported pure function so it can be exercised
  * directly without rendering the real react-grid-layout under jsdom) plus a
- * couple of thin component-level smoke tests for `resetGridLayout`'s new
- * confirmation guard.
+ * component-level smoke test confirming drag/resize are permanently
+ * disabled (2026-08 -- see the doc comment on `DynamicGrid` itself).
  *
  * `DynamicGrid` itself renders a plain `<div>` under Vitest (the existing
  * `isTest` bypass, left as-is) since react-grid-layout's real DOM
  * measurement doesn't work under jsdom -- so the reconciliation logic is
  * tested at the function level, which is exactly why it was extracted.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { ResponsiveLayouts } from "react-grid-layout";
-import { reconcileLayout, resetGridLayout, DynamicGrid } from "./DynamicGrid";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { reconcileLayout, DynamicGrid } from "./DynamicGrid";
+import { render, screen } from "@testing-library/react";
 
 vi.mock("react-grid-layout", async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-grid-layout')>();
@@ -137,51 +137,6 @@ describe("reconcileLayout", () => {
   });
 });
 
-describe("resetGridLayout", () => {
-  let reloadSpy: ReturnType<typeof vi.fn>;
-  let removeItemSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    reloadSpy = vi.fn();
-    Object.defineProperty(window, "location", {
-      value: { ...window.location, reload: reloadSpy },
-      writable: true,
-    });
-    removeItemSpy = vi.spyOn(window.localStorage.__proto__, "removeItem");
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("does nothing when the user cancels the confirmation", () => {
-    vi.spyOn(window, "confirm").mockReturnValue(false);
-
-    resetGridLayout("options-matrix");
-
-    expect(removeItemSpy).not.toHaveBeenCalled();
-    expect(reloadSpy).not.toHaveBeenCalled();
-  });
-
-  it("clears storage and reloads once the user confirms", () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-
-    resetGridLayout("options-matrix");
-
-    expect(removeItemSpy).toHaveBeenCalledWith("grid-layout-options-matrix");
-    expect(reloadSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("asks a clear confirmation question before doing anything destructive", () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-
-    resetGridLayout("strategy-matrix");
-
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy.mock.calls[0][0]).toMatch(/reset/i);
-  });
-});
-
 describe("DynamicGrid component rendering", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -192,28 +147,31 @@ describe("DynamicGrid component rendering", () => {
     delete process.env.TEST_RENDER_DYNAMIC_GRID;
   });
 
-  it("disables drag on mobile screens", () => {
-    // Mock mobile screen width
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 500 });
-    window.dispatchEvent(new Event('resize'));
+  it("always disables drag and resize, regardless of viewport width", () => {
+    for (const width of [500, 1200]) {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: width });
+      window.dispatchEvent(new Event('resize'));
 
-    render(
-      <DynamicGrid layoutKey="test" defaultLayouts={defaultLayouts}>
-        <div key="AAPL">Apple</div>
-        <div key="MSFT">Microsoft</div>
-        <div key="GOOG">Google</div>
-      </DynamicGrid>
-    );
+      const { unmount } = render(
+        <DynamicGrid layoutKey="test" defaultLayouts={defaultLayouts}>
+          <div key="AAPL">Apple</div>
+          <div key="MSFT">Microsoft</div>
+          <div key="GOOG">Google</div>
+        </DynamicGrid>
+      );
 
-    const rgl = screen.getByTestId("mock-rgl");
-    // dragConfig={{ enabled: !isMobile }} means enabled should be false
-    expect(rgl.getAttribute("data-drag-enabled")).toBe("false");
+      const rgl = screen.getByTestId("mock-rgl");
+      expect(rgl.getAttribute("data-drag-enabled")).toBe("false");
+      expect(rgl.getAttribute("data-resize-enabled")).toBe("false");
+      unmount();
+    }
   });
 
-  it("enables drag on desktop screens", () => {
-    // Mock desktop screen width
-    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1200 });
-    window.dispatchEvent(new Event('resize'));
+  it("never reads or writes a saved layout to localStorage", () => {
+    localStorage.setItem(
+      "grid-layout-test",
+      JSON.stringify({ lg: [{ i: "AAPL", x: 4, y: 4, w: 4, h: 4 }] })
+    );
 
     render(
       <DynamicGrid layoutKey="test" defaultLayouts={defaultLayouts}>
@@ -223,11 +181,14 @@ describe("DynamicGrid component rendering", () => {
       </DynamicGrid>
     );
 
-    const rgl = screen.getByTestId("mock-rgl");
-    expect(rgl.getAttribute("data-drag-enabled")).toBe("true");
+    // The stale saved blob is ignored entirely -- rendering never consults
+    // or rewrites it, so it's untouched after mount.
+    expect(localStorage.getItem("grid-layout-test")).toBe(
+      JSON.stringify({ lg: [{ i: "AAPL", x: 4, y: 4, w: 4, h: 4 }] })
+    );
   });
 
-  it("toggles reorder overlay and moves items via up/down buttons", () => {
+  it("no longer renders a 'Reorder Widgets' toggle", () => {
     render(
       <DynamicGrid layoutKey="test" defaultLayouts={defaultLayouts}>
         <div key="AAPL">Apple</div>
@@ -236,28 +197,6 @@ describe("DynamicGrid component rendering", () => {
       </DynamicGrid>
     );
 
-    // Click Reorder Widgets toggle
-    const reorderBtn = screen.getByRole("button", { name: /Reorder Widgets/i });
-    fireEvent.click(reorderBtn);
-
-    // Overlay buttons should appear
-    const moveAaplDown = screen.getByRole("button", { name: /Move widget AAPL down/i });
-    expect(moveAaplDown).toBeTruthy();
-
-    // Click down to move AAPL down (should swap with MSFT)
-    fireEvent.click(moveAaplDown);
-
-    // The layout state updates internally. The result is saved to localStorage.
-    const saved = localStorage.getItem("grid-layout-test");
-    expect(saved).not.toBeNull();
-    const parsed = JSON.parse(saved!);
-    
-    const aapl = parsed.lg.find((i: any) => i.i === "AAPL");
-    const msft = parsed.lg.find((i: any) => i.i === "MSFT");
-    
-    // MSFT was at x: 4, AAPL was at x: 0
-    // After moving AAPL down (right), AAPL should be at x: 4, MSFT at x: 0
-    expect(aapl.x).toBe(4);
-    expect(msft.x).toBe(0);
+    expect(screen.queryByRole("button", { name: /Reorder Widgets/i })).toBeNull();
   });
 });

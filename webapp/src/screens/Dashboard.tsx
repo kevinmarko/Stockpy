@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { Portfolio, PilotSummary, PerfRange, CurvePoint, ObservabilitySummary } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
-import { ErrorState, Loading, Notice, Tile, Button } from "../components/ui";
+import { ErrorState, Loading, Notice, Tile } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { TabGuide } from "../components/TabGuide";
 import { ActivityFeed } from "../components/ActivityFeed";
@@ -14,7 +14,7 @@ import { RangeToggle } from "../components/RangeToggle";
 import { theme } from "../theme";
 import { fmtUsd, fmtSignedUsd } from "../format";
 import { deriveAttentionItems } from "../observabilityAttention";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 
 const defaultDashboardLayouts = {
   lg: [
@@ -101,11 +101,8 @@ export function Dashboard() {
 
   return (
     <div className="screen" data-testid="dashboard-screen">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-4)" }}>
+      <div style={{ marginBottom: "var(--s-4)" }}>
         <h1 className="screen-title" data-testid="dashboard-title">Dashboard</h1>
-        <Button variant="neutral" onClick={() => resetGridLayout("dashboard")}>
-          Reset Layout
-        </Button>
       </div>
 
       <TabGuide tabKey="dashboard" />

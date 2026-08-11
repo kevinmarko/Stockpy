@@ -10,8 +10,7 @@ import { SymbolInput } from "../components/SymbolInput";
 import { RecommendedStocks } from "../components/RecommendedStocks";
 import { MarketDataHealth } from "../components/MarketDataHealth";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
-import { Button } from "../components/ui";
+import { DynamicGrid } from "../components/DynamicGrid";
 import { fmtNum } from "../format";
 import { theme } from "../theme";
 
@@ -146,7 +145,6 @@ export function DataExplorer() {
             Manage which stocks are tracked in <Link to="/settings">Settings</Link>.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("data-explorer")}>Reset Layout</Button>
       </div>
 
       <TabGuide tabKey="data-explorer" />

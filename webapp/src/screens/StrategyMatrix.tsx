@@ -19,7 +19,7 @@ import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice } from "../components/ui";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
+import { DynamicGrid } from "../components/DynamicGrid";
 import { Modal } from "../components/Modal";
 import { Toggle } from "../components/Toggle";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
@@ -96,9 +96,6 @@ export function StrategyMatrix() {
             Per-module weights and enabled state for the signal aggregator. Advisory
             only — tuning changes what the platform recommends, never places an order.
           </p>
-        </div>
-        <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-4)" }}>
-          <Button variant="neutral" onClick={() => resetGridLayout("strategy-matrix")}>Reset Layout</Button>
         </div>
       </div>
 
