@@ -182,7 +182,11 @@ export function CreateDataApp() {
   } as any);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Optional-chain the METHOD itself, not just the ref: jsdom (the test
+    // environment) renders a real element but doesn't implement
+    // scrollIntoView, so `bottomRef.current?.scrollIntoView(...)` throws
+    // "not a function" under vitest even though the ref is non-null.
+    bottomRef.current?.scrollIntoView?.({ behavior: "smooth" });
   }, [chatHistory, currentThought]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -585,86 +589,67 @@ export function CreateDataApp() {
             </table>
           </div>
 
-          {/* What-If Portfolio Risk/Heat section */}
+          {/* Portfolio Risk/Heat section. NOTE: this shows CURRENT portfolio
+              metrics only -- there is no backend endpoint yet that computes
+              a real projected impact of following a given pilot's signals
+              (that needs the pilot's own historical return series blended
+              against current holdings, not a client-side guess). Per
+              CONSTRAINT #4, selecting a strategy below highlights it for
+              context but never fabricates a "projected" delta. */}
           {obsSummary && (
             <div style={{ background: theme.surface, padding: 24, borderRadius: 8, border: `1px solid ${theme.border}` }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-                <h3 style={{ margin: 0, fontSize: 18 }}>"What-If" Portfolio Risk & Heat Analysis</h3>
+                <h3 style={{ margin: 0, fontSize: 18 }}>Current Portfolio Risk & Heat</h3>
                 {selectedPilot && (
                   <div style={{ padding: "4px 12px", background: theme.accent, color: theme.surface, borderRadius: 16, fontSize: 13, fontWeight: 600 }}>
-                    Simulating: {selectedPilot.name}
+                    Selected: {selectedPilot.name}
                   </div>
                 )}
               </div>
-              
+
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 24 }}>
                 {/* Sharpe Ratio */}
                 <div style={{ padding: 20, borderRadius: 8, background: theme.surface2, border: `1px solid ${theme.border}` }}>
                   <div style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 12 }}>Sharpe Ratio</div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                    <span style={{ fontSize: 32, fontWeight: 700 }}>
-                      {obsSummary.portfolio_risk.sharpe_ratio?.toFixed(2) ?? "—"}
-                    </span>
-                    {selectedPilot && obsSummary.portfolio_risk.sharpe_ratio && (
-                      <span style={{ color: theme.growth, fontSize: 16, fontWeight: 600 }}>
-                        → {(obsSummary.portfolio_risk.sharpe_ratio + 0.15).toFixed(2)}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ marginTop: 16, height: 4, background: theme.border, borderRadius: 2, overflow: "hidden" }}>
-                    <div style={{ width: "60%", height: "100%", background: theme.base }} />
-                  </div>
+                  <span style={{ fontSize: 32, fontWeight: 700 }}>
+                    {obsSummary.portfolio_risk.sharpe_ratio?.toFixed(2) ?? "—"}
+                  </span>
                 </div>
 
                 {/* Max Drawdown */}
                 <div style={{ padding: 20, borderRadius: 8, background: theme.surface2, border: `1px solid ${theme.border}` }}>
                   <div style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 12 }}>Max Drawdown</div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                    <span style={{ fontSize: 32, fontWeight: 700 }}>
-                      {obsSummary.portfolio_risk.max_drawdown != null 
-                        ? `${(obsSummary.portfolio_risk.max_drawdown * 100).toFixed(1)}%` 
-                        : "—"}
-                    </span>
-                    {selectedPilot && obsSummary.portfolio_risk.max_drawdown != null && (
-                      <span style={{ color: theme.textPrimary, fontSize: 16, fontWeight: 600 }}>
-                        → {((obsSummary.portfolio_risk.max_drawdown - 0.02) * 100).toFixed(1)}%
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ marginTop: 16, height: 4, background: theme.border, borderRadius: 2, overflow: "hidden" }}>
-                    <div style={{ width: "40%", height: "100%", background: theme.base }} />
-                  </div>
+                  <span style={{ fontSize: 32, fontWeight: 700 }}>
+                    {obsSummary.portfolio_risk.max_drawdown != null
+                      ? `${(obsSummary.portfolio_risk.max_drawdown * 100).toFixed(1)}%`
+                      : "—"}
+                  </span>
                 </div>
 
                 {/* Portfolio Heat */}
                 <div style={{ padding: 20, borderRadius: 8, background: theme.surface2, border: `1px solid ${theme.border}` }}>
                   <div style={{ color: theme.textSecondary, fontSize: 14, marginBottom: 12 }}>Portfolio Heat</div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-                    <span style={{ fontSize: 32, fontWeight: 700 }}>
-                      {obsSummary.portfolio_heat.heat_pct != null 
-                        ? `${(obsSummary.portfolio_heat.heat_pct * 100).toFixed(1)}%` 
-                        : "—"}
-                    </span>
-                    {selectedPilot && obsSummary.portfolio_heat.heat_pct != null && (
-                      <span style={{ color: theme.accent, fontSize: 16, fontWeight: 600 }}>
-                        → {((obsSummary.portfolio_heat.heat_pct + 0.015) * 100).toFixed(1)}%
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ marginTop: 16, height: 4, background: theme.border, borderRadius: 2, overflow: "hidden", display: "flex" }}>
+                  <span style={{ fontSize: 32, fontWeight: 700 }}>
+                    {obsSummary.portfolio_heat.heat_pct != null
+                      ? `${(obsSummary.portfolio_heat.heat_pct * 100).toFixed(1)}%`
+                      : "—"}
+                  </span>
+                  <div style={{ marginTop: 16, height: 4, background: theme.border, borderRadius: 2, overflow: "hidden" }}>
                     {obsSummary.portfolio_heat.heat_pct != null && (
                       <div style={{ width: `${Math.min(100, obsSummary.portfolio_heat.heat_pct * 100)}%`, height: "100%", background: theme.base }} />
-                    )}
-                    {selectedPilot && (
-                      <div style={{ width: "15%", height: "100%", background: theme.accent }} />
                     )}
                   </div>
                 </div>
               </div>
-              
+
               {!selectedPilot && (
                 <div style={{ marginTop: 24, padding: 16, background: theme.surface2, borderRadius: 8, color: theme.textSecondary, textAlign: "center" }}>
-                  Select a strategy from the table above to simulate its impact on your portfolio risk and heat metrics.
+                  Select a strategy from the table above for context on which pilot you're reviewing alongside your current portfolio metrics.
+                </div>
+              )}
+              {selectedPilot && (
+                <div style={{ marginTop: 24, padding: 16, background: theme.surface2, borderRadius: 8, color: theme.textSecondary, fontSize: 13, textAlign: "center" }}>
+                  Projected portfolio impact from following {selectedPilot.name}'s signals isn't computed yet — this section shows your current portfolio's real metrics only.
                 </div>
               )}
             </div>

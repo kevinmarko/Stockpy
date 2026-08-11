@@ -1252,8 +1252,10 @@ class TestProviderAgnosticDispatchers:
     # -----------------------------------------------------------------
 
     def test_headlines_fmp_disabled_falls_to_finnhub(self):
-        """FMP_NEWS_ENABLED defaults False -- straight to the Finnhub path,
-        and whatever Finnhub returns comes back unchanged."""
+        """FMP_NEWS_ENABLED defaults False -- straight to the Finnhub path;
+        whatever Finnhub returns comes back tagged with "_provider": "finnhub"
+        (used by get_symbol_news_catalyst_details's provider_used field),
+        otherwise unchanged."""
         mock_client = MagicMock()
         mock_client.company_news.return_value = [
             {"headline": "Finnhub headline one", "datetime": 1234567890}
@@ -1261,7 +1263,9 @@ class TestProviderAgnosticDispatchers:
         with patch("settings.settings.FMP_NEWS_ENABLED", False):
             with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                 result = fetch_company_headlines("AAPL", 7)
-        assert result == [{"headline": "Finnhub headline one", "datetime": 1234567890}]
+        assert result == [
+            {"headline": "Finnhub headline one", "datetime": 1234567890, "_provider": "finnhub"}
+        ]
 
     def test_headlines_fmp_enabled_short_circuits_finnhub(self):
         """FMP enabled + keyed and the FMP fetch returns real items -> those
@@ -1298,7 +1302,9 @@ class TestProviderAgnosticDispatchers:
                 with patch("data.fmp_client.stock_news", return_value=[]):
                     with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                         result = fetch_company_headlines("AAPL", 7)
-        assert result == [{"headline": "Finnhub fallback headline", "datetime": 555}]
+        assert result == [
+            {"headline": "Finnhub fallback headline", "datetime": 555, "_provider": "finnhub"}
+        ]
 
     def test_headlines_fmp_unavailable_falls_through_to_finnhub(self):
         """FMP enabled + keyed but stock_news() raises FMPUnavailable ->
@@ -1317,7 +1323,9 @@ class TestProviderAgnosticDispatchers:
                 ):
                     with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
                         result = fetch_company_headlines("AAPL", 7)
-        assert result == [{"headline": "Finnhub fallback after FMP outage", "datetime": 999}]
+        assert result == [
+            {"headline": "Finnhub fallback after FMP outage", "datetime": 999, "_provider": "finnhub"}
+        ]
 
     def test_headlines_neither_provider_available_returns_empty(self):
         """FMP disabled AND no Finnhub client -> [], never raises."""
@@ -1792,7 +1800,10 @@ class TestGetSymbolNewsCatalystDetails:
 
         assert res["symbol"] == "AAPL"
         assert len(res["headlines"]) == 2
-        assert res["headlines"][0]["source"] == "fmp"
+        # get_symbol_news_catalyst_details returns "publisher" (matching the
+        # frontend's HeadlineSentimentItem contract in webapp/src/api/types.ts),
+        # not "source" -- the latter is only the raw upstream item's field.
+        assert res["headlines"][0]["publisher"] == "fmp"
         assert "probabilities" in res["headlines"][0]
         assert res["source_breakdown"] == {"fmp": 1, "finnhub": 1}
         assert res["raw_sentiment_avg"] is not None

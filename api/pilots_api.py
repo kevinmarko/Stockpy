@@ -108,7 +108,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from dotenv import load_dotenv as _load_dotenv
@@ -545,6 +545,20 @@ def require_rag_query_enabled() -> None:
         raise HTTPException(
             status_code=403,
             detail="RAG query is disabled (RAG_QUERY_API_ENABLED=false).",
+        )
+
+
+def require_data_app_chat_enabled() -> None:
+    """FAIL-CLOSED master-switch guard for ``GET /chat/stream``. A DEDICATED
+    flag (``settings.DATA_APP_CHAT_ENABLED``), NOT ``AI_GENERATION_API_ENABLED``:
+    same reasoning as ``require_rag_query_enabled`` immediately above -- this
+    is a real, paid Gemini call, otherwise reachable behind
+    ``require_command_token`` alone, so it gets the identical fail-closed
+    treatment rather than riding in on a sibling flag."""
+    if not settings.DATA_APP_CHAT_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Data App chat is disabled (DATA_APP_CHAT_ENABLED=false).",
         )
 
 
@@ -5458,32 +5472,86 @@ def approve_cls_bulk(body: CacheLongShortApproveBulkRequest) -> Dict[str, Any]:
 class DataAppCreationForm(BaseModel):
     name: str
 
+
 @app.post("/data-app/create", dependencies=[Depends(require_command_token)])
 def create_data_app(form: DataAppCreationForm) -> Dict[str, Any]:
+    """V1 stub: acknowledges a Data App creation request. Does not persist
+    anything server-side yet -- there is no Data App data model in this repo
+    (see `save_data_app` below for the same caveat on the "Save to
+    Dashboard" flow, which is likewise frontend-only/session-scoped today).
+    Kept deliberately honest rather than claiming durable storage that
+    doesn't exist."""
     return {"status": "success", "name": form.name}
+
 
 @app.post("/data-app/save", dependencies=[Depends(require_command_token)])
 def save_data_app(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """V1 stub -- see `create_data_app` docstring. The webapp persists the
+    resulting nav entry to `localStorage` on its side (survives a reload);
+    there is still no server-side Data App store, so it does not survive a
+    different device/browser or a cleared localStorage."""
     return {"status": "success", "saved_app": payload.get("name", "Untitled App")}
 
-from fastapi.responses import StreamingResponse
-import asyncio
 
-@app.get("/chat/stream", dependencies=[Depends(require_read_token)])
-async def chat_stream(query: str = ""):
+def _sse_message(text_type: str, text: str) -> str:
+    """Format one Server-Sent Event frame for `/chat/stream`. Centralizing
+    this avoids re-typing the `event: message\\ndata: ...\\n\\n` envelope
+    (and the nested json.dumps) at every yield site."""
+    payload = json.dumps({"system_message": {"text_type": text_type, "text": text}})
+    return f"event: message\ndata: {payload}\n\n"
+
+
+_CHAT_QUERY_MAX_LENGTH = 2000
+
+
+@app.get(
+    "/chat/stream",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_data_app_chat_enabled),
+    ],
+)
+async def chat_stream(
+    query: str = Query(default="", max_length=_CHAT_QUERY_MAX_LENGTH),
+):
+    """SSE-streams a raw Gemini completion for the Create Data App screen's
+    chat assistant.
+
+    Fail-closed command token (``require_command_token``) STACKED with the
+    dedicated ``DATA_APP_CHAT_ENABLED`` master switch (``require_data_app_chat_enabled``)
+    -- this is a real, paid LLM call, not a read, so it does not sit behind
+    ``require_read_token`` alone (matches the ``/rag/query`` precedent
+    immediately above). ``query`` is capped at `_CHAT_QUERY_MAX_LENGTH`
+    characters and rejected outright when blank, so a stray/empty request
+    can't burn a paid API call for nothing.
+
+    Scope note: this forwards ``query`` to Gemini with no system prompt, no
+    tool/function-calling, and no injected platform context (portfolio,
+    pilots, holdings) -- it is a bare LLM pass-through, not an agent with
+    access to this platform's data or actions. The "Follow: <pilot_id>"
+    button the frontend renders from markdown output only works if the
+    model happens to emit that exact literal string; there is no tool call
+    backing it. Treat this as a v1 scaffold for the chat UI, not a working
+    data agent yet."""
+    query = query.strip()
+    if not query:
+        async def _empty_gen():
+            yield _sse_message("FINAL_RESPONSE", "Error: query must not be empty.")
+        return StreamingResponse(_empty_gen(), media_type="text/event-stream")
+
     async def event_generator():
         if not settings.GEMINI_API_KEY:
-            yield f'event: message\ndata: {json.dumps({"system_message": {"text_type": "FINAL_RESPONSE", "text": "Error: GEMINI_API_KEY is not set in environment."}})}\n\n'
+            yield _sse_message("FINAL_RESPONSE", "Error: GEMINI_API_KEY is not set in environment.")
             return
 
         try:
             from google import genai
             client = genai.Client(api_key=settings.GEMINI_API_KEY)
         except ImportError:
-            yield f'event: message\ndata: {json.dumps({"system_message": {"text_type": "FINAL_RESPONSE", "text": "Error: google-genai SDK is not installed."}})}\n\n'
+            yield _sse_message("FINAL_RESPONSE", "Error: google-genai SDK is not installed.")
             return
 
-        yield f'event: message\ndata: {json.dumps({"system_message": {"text_type": "THOUGHT", "text": "Querying Gemini..."}})}\n\n'
+        yield _sse_message("THOUGHT", "Querying Gemini...")
 
         try:
             response = await client.aio.models.generate_content_stream(
@@ -5492,21 +5560,9 @@ async def chat_stream(query: str = ""):
             )
             async for chunk in response:
                 if chunk.text:
-                    payload = json.dumps({
-                        "system_message": {
-                            "text_type": "FINAL_RESPONSE",
-                            "text": chunk.text
-                        }
-                    })
-                    yield f'event: message\ndata: {payload}\n\n'
+                    yield _sse_message("FINAL_RESPONSE", chunk.text)
         except Exception as exc:
             logger.error("chat_stream Gemini API error: %s", exc)
-            payload = json.dumps({
-                "system_message": {
-                    "text_type": "FINAL_RESPONSE",
-                    "text": f"\n\nError calling Gemini: {exc}"
-                }
-            })
-            yield f'event: message\ndata: {payload}\n\n'
+            yield _sse_message("FINAL_RESPONSE", f"\n\nError calling Gemini: {exc}")
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

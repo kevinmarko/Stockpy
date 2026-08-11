@@ -3282,6 +3282,25 @@ class Settings(BaseSettings):
             "GUI-writable by operator decision (2026-08-08)."
         ),
     )
+    # Master switch for the Pilots API's Data App chat endpoint (GET
+    # /chat/stream -- SSE-streams a raw, unguided Gemini call for the
+    # "Create Data App" screen's chat assistant). A DEDICATED flag, NOT
+    # AI_GENERATION_API_ENABLED: that flag's own description enumerates the
+    # three /data/ai/{commentary,chart,research}/{symbol} endpoints on the
+    # Data API it gates -- reusing it here would silently widen its
+    # documented scope to a different service. Same risk class as
+    # RAG_QUERY_API_ENABLED (a real, paid LLM call, otherwise reachable
+    # behind require_command_token alone), so it gets the identical
+    # fail-closed treatment. On by default per the 2026-08-07 convention.
+    DATA_APP_CHAT_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Enables GET /chat/stream on the Pilots API (Gemini-backed chat "
+            "for the Create Data App screen, a paid LLM call). On by default "
+            "-- see AI_GENERATION_API_ENABLED for the same risk-class "
+            "reasoning. GUI-writable by operator decision."
+        ),
+    )
     # Master switch for the Pilots API's Macro Regime Gate WRITE endpoint
     # (api/pilots_api.py PUT /observability/macro-gate -- flips
     # MACRO_REGIME_GATE_ENABLED itself to .env). A DEDICATED flag, not

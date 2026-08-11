@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 261,
+    "live_safe": 262,
     "no_op": 2,
     "restart_required": 90,
-    "total": 353
+    "total": 354
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3100,
+      "line": 3118,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4146,
+      "line": 4164,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4251,
+      "line": 4269,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 357,
+  "files_scanned": 358,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -180,6 +180,7 @@
     "CORRELATION_CLUSTER_LOOKBACK_DAYS",
     "CORRELATION_CLUSTER_THRESHOLD",
     "DAEMON_SHUTDOWN_TIMEOUT_SECONDS",
+    "DATA_APP_CHAT_ENABLED",
     "DATA_FETCH_MAX_CONCURRENCY",
     "DATA_FRESHNESS_TTL_SECONDS",
     "DEAD_LETTER_RETRY_ENABLED",
@@ -409,13 +410,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 727,
+    "attr": 730,
     "factory_param": 4,
     "getattr_const": 250,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 220,
+    "attr": 221,
     "factory_param": 4,
     "getattr_const": 153,
     "os_environ": 18
@@ -612,7 +613,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/metrics_api.py:70",
+        "site": "api/metrics_api.py:71",
         "via": []
       },
       {
@@ -621,7 +622,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:319",
+        "site": "api/pilots_api.py:320",
         "via": []
       },
       {
@@ -1291,7 +1292,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4628",
+        "site": "api/pilots_api.py:4646",
         "via": []
       }
     ],
@@ -1302,7 +1303,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4627",
+        "site": "api/pilots_api.py:4645",
         "via": []
       }
     ],
@@ -1313,7 +1314,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4772",
+        "site": "api/pilots_api.py:4790",
         "via": []
       },
       {
@@ -1388,7 +1389,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4752",
+        "site": "api/pilots_api.py:4770",
         "via": []
       },
       {
@@ -1432,7 +1433,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:609",
+        "site": "api/pilots_api.py:624",
         "via": []
       }
     ],
@@ -2447,7 +2448,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:604",
+        "site": "api/pilots_api.py:619",
         "via": []
       },
       {

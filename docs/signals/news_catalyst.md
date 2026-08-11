@@ -11,7 +11,7 @@
 history no free vendor supplies historically — fabricating a headline archive would
 violate CONSTRAINT #4. The Pilot's telemetry (archived score count, 7-day headline volume,
 and universe score distribution) is exposed safely via `GET /pilots/{pilot_id}` using
-a dependency-light read helper (`api/pilots/news_catalyst.py`), honoring the API
+a dependency-light read helper (`pilots/news_catalyst.py`), honoring the API
 AST guard invariants. Live sentiment dynamics are visualized in the Pilots PWA.
 
 **Multi-source credibility blend (Sentiment Pipeline Phase 3-4, 2026-07):** `compute()`'s
@@ -309,7 +309,7 @@ tab via `research_engine.compute_correlation_clusters()`, not by this module.
 ## Pilot Telemetry & API Integration
 
 The `news-catalyst` Pilot's specific telemetry is exposed via `GET /pilots/{pilot_id}`
-by the `api/pilots/news_catalyst.py` dependency-light read helper. This helper honors
+by the `pilots/news_catalyst.py` dependency-light read helper. This helper honors
 the strict AST-guard invariants of `api/pilots_api.py` (preventing heavy signal/engine
 imports on the web path).
 

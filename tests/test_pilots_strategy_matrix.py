@@ -472,4 +472,14 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # __main__), so importing it here is safe and does not pull `signals`
         # or any AST-forbidden heavy engine onto the API import path.
         allowed = allowed | {"prompt_registry"}
+    if module_name == "news_catalyst":
+        # pilots.news_catalyst reads data.historical_store.HistoricalStore
+        # (readonly=True) directly for finbert_score_cache telemetry
+        # (archived_score_count, headline_volume_7d) via db_config's
+        # session_scope/get_dbapi_connection helpers -- the same
+        # dependency-light SQLAlchemy-only pattern as pilots.sector_selection
+        # above, confirmed by inspection to import none of the AST-forbidden
+        # heavy engines and not `signals`. `datetime` computes the 7-day
+        # lookback cutoff for the volume query.
+        allowed = allowed | {"data", "datetime", "db_config"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"

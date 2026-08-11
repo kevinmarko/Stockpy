@@ -734,6 +734,7 @@ def get_symbol_news_catalyst_details(
             "multiplier": multiplier,
         },
         "provider_used": provider_used,
+        "source_breakdown": source_counts,
         "raw_sentiment_avg": round(avg_raw, 4),
         "dampened_sentiment_score": round(dampened_score, 4),
     }

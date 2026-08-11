@@ -88,8 +88,81 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/settings", label: "Settings", ico: Settings, match: (p) => p.startsWith("/settings"), section: "settings" },
 ];
 
+// ---------------------------------------------------------------------------
+// Dynamic nav items (Save to Dashboard from Create Data App).
+//
+// A `NavItem`'s `ico`/`match` fields aren't serializable (a React component
+// reference and a closure), so only `{to, label}` is persisted -- `ico` is
+// always LayoutTemplate and `match` is always a startsWith(to) check for a
+// restored item, matching what CreateDataApp.tsx already passes when it
+// first creates one. This is enough to survive a page reload (localStorage,
+// same device/browser); it is NOT synced anywhere server-side -- a
+// different device/browser, or a cleared localStorage, won't see it. See
+// `create_data_app`/`save_data_app` in api/pilots_api.py for the matching
+// backend-side caveat (no Data App data model exists yet either).
+// ---------------------------------------------------------------------------
+
+const _DYNAMIC_NAV_STORAGE_KEY = "investyo.dynamicNavItems.v1";
+
+interface _StoredDynamicNavItem {
+  to: string;
+  label: string;
+}
+
+function _readStoredDynamicNavItems(): _StoredDynamicNavItem[] {
+  try {
+    const raw = window.localStorage.getItem(_DYNAMIC_NAV_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (x): x is _StoredDynamicNavItem =>
+        x && typeof x.to === "string" && typeof x.label === "string"
+    );
+  } catch {
+    // Unavailable (SSR/private-browsing) or corrupt -- degrade to "nothing
+    // saved yet" rather than throwing.
+    return [];
+  }
+}
+
+function _writeStoredDynamicNavItems(items: _StoredDynamicNavItem[]) {
+  try {
+    window.localStorage.setItem(_DYNAMIC_NAV_STORAGE_KEY, JSON.stringify(items));
+  } catch {
+    // Best-effort only -- a full/unavailable localStorage must not break
+    // the in-memory nav update that already happened.
+  }
+}
+
+/** Restore any previously-saved Data Apps into NAV_ITEMS. Call once at
+ * startup (App.tsx). Safe to call more than once -- later calls are no-ops
+ * because the `to` path already exists in NAV_ITEMS. */
+export function restoreDynamicNavItems() {
+  for (const stored of _readStoredDynamicNavItems()) {
+    if (NAV_ITEMS.some((it) => it.to === stored.to)) continue;
+    NAV_ITEMS.push({
+      to: stored.to,
+      label: stored.label,
+      ico: LayoutTemplate,
+      match: (p) => p.startsWith(stored.to),
+      section: "operations",
+    });
+  }
+}
+
 export function addDynamicNavItem(item: NavItem) {
-  NAV_ITEMS.push(item);
+  const existingIdx = NAV_ITEMS.findIndex((it) => it.to === item.to);
+  if (existingIdx >= 0) {
+    NAV_ITEMS[existingIdx] = item;
+  } else {
+    NAV_ITEMS.push(item);
+  }
+
+  const stored = _readStoredDynamicNavItems().filter((s) => s.to !== item.to);
+  stored.push({ to: item.to, label: item.label });
+  _writeStoredDynamicNavItems(stored);
+
   window.dispatchEvent(new Event("navItemsChanged"));
 }
 

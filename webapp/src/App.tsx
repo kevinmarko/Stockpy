@@ -6,6 +6,7 @@ import {
   useLocation,
   useNavigate,
 } from "react-router";
+import { restoreDynamicNavItems } from "./navigation";
 import { Dashboard } from "./screens/Dashboard";
 import { Comparison } from "./screens/Comparison";
 import { Marketplace } from "./screens/Marketplace";
@@ -177,6 +178,12 @@ function ChatButton({ isOpen, onOpen, onClose }: { isOpen: boolean; onOpen: () =
     </button>
   );
 }
+
+// Module-scope, not inside the component: this must populate NAV_ITEMS
+// before the first render (Sidebar/BottomNav read the plain module-level
+// array directly, not React state) so a saved Data App is present on the
+// very first paint after a reload instead of flashing in a tick later.
+restoreDynamicNavItems();
 
 export default function App() {
   const [done, setDone] = useState(() => readOnboarding().completed);

@@ -377,6 +377,11 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "reachable behind the command token alone — same risk class as "
         "AI_GENERATION_API_ENABLED."
     ),
+    "DATA_APP_CHAT_ENABLED": (
+        "Gates GET /chat/stream, a paid external LLM call (Gemini) otherwise "
+        "reachable behind the command token alone — same risk class as "
+        "AI_GENERATION_API_ENABLED / RAG_QUERY_API_ENABLED."
+    ),
     "STRATEGY_WRITES_ENABLED": (
         "Gates PUT /strategy/modules — signal weights and the "
         "disabled-module set, which changes WHAT THE PLATFORM RECOMMENDS."
