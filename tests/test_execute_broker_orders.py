@@ -187,6 +187,7 @@ def _install_enabled_broker_stack(
     import transactions_store as ts_mod
 
     monkeypatch.setattr(main_orchestrator.settings, "ADVISORY_ONLY", False, raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "BROKER_BACKEND", "alpaca", raising=False)
     monkeypatch.setattr(alpaca_mod, "AlpacaBroker", lambda *a, **k: broker)
     monkeypatch.setattr(ts_mod, "TransactionsStore", lambda *a, **k: ts_store)
     monkeypatch.setattr(risk_mod, "PreTradeRiskGate", lambda *a, **k: _PassThroughRiskGate())
@@ -484,3 +485,40 @@ def test_priority_queue_enabled_kill_switch_still_aborts_remaining_drain(monkeyp
     assert broker.submitted == [], "no order may reach the broker when kill switch is active"
     crit = " ".join(str(c.args[0]) for c in telemetry_mock.critical.call_args_list if c.args)
     assert "Kill switch" in crit
+
+def test_execute_broker_orders_fmp_paper_live_fallback():
+    from main_orchestrator import _execute_broker_orders
+    from settings import settings
+    import pandas as pd
+    from unittest.mock import patch
+    
+    original_broker = getattr(settings, "BROKER_BACKEND", "alpaca")
+    original_advisory = getattr(settings, "ADVISORY_ONLY", True)
+    original_paper = getattr(settings, "ALPACA_PAPER", True)
+    
+    settings.BROKER_BACKEND = "fmp_paper"
+    settings.ADVISORY_ONLY = False
+    settings.ALPACA_PAPER = False
+    
+    try:
+        with patch("main_orchestrator.telemetry.error") as mock_err, \
+             patch("observability.alerts.send_alert") as mock_alert, \
+             patch("execution.alpaca_broker.AlpacaBroker") as mock_broker, \
+             patch("execution.order_manager.OrderManager") as mock_om, \
+             patch("transactions_store.TransactionsStore") as mock_ts, \
+             patch("execution.risk_gate.PreTradeRiskGate") as mock_rg:
+             
+            from unittest.mock import AsyncMock
+            mock_broker.return_value.get_open_positions = AsyncMock(return_value=[])
+            mock_om.return_value.reconcile_state = AsyncMock()
+            mock_om.return_value.reconcile_state.return_value.has_drift = False
+            
+            import asyncio
+            asyncio.run(_execute_broker_orders(pd.DataFrame(), dry_run=False))
+            mock_err.assert_called_once()
+            mock_alert.assert_called_once()
+            mock_broker.assert_called_once()
+    finally:
+        settings.BROKER_BACKEND = original_broker
+        settings.ADVISORY_ONLY = original_advisory
+        settings.ALPACA_PAPER = original_paper

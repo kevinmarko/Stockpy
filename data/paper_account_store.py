@@ -147,6 +147,24 @@ class PaperAccountStore:
                 ))
         return results
 
+    def reset_account(self) -> None:
+        """
+        Deletes all PaperPosition and PaperOrder rows. Resets cash balance to FMP_PAPER_STARTING_CASH.
+        """
+        if self._readonly:
+            raise RuntimeError("Cannot reset account in readonly mode.")
+            
+        with session_scope(self.Session) as session:
+            session.query(PaperPosition).delete()
+            session.query(PaperOrder).delete()
+            
+            acc = session.query(PaperAccount).filter_by(id=1).with_for_update().first()
+            if acc:
+                acc.cash_balance = settings.FMP_PAPER_STARTING_CASH
+            else:
+                acc = PaperAccount(id=1, cash_balance=settings.FMP_PAPER_STARTING_CASH)
+                session.add(acc)
+
     def apply_fill(
         self, 
         client_order_id: str,
@@ -264,3 +282,52 @@ class PaperAccountStore:
                     error_message=None
                 ))
         return results
+
+    def get_full_orders(self, status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        if self._readonly:
+            try:
+                insp = inspect(self.engine)
+                if not insp.has_table("paper_orders"):
+                    return []
+            except Exception:
+                return []
+
+        results = []
+        with session_scope(self.Session) as session:
+            q = session.query(PaperOrder)
+            if status:
+                q = q.filter_by(status=status)
+            q = q.order_by(PaperOrder.timestamp.desc()).limit(limit)
+            
+            for po in q.all():
+                ts = po.timestamp.replace(tzinfo=timezone.utc)
+                results.append({
+                    "order_id": po.client_order_id,
+                    "symbol": po.symbol,
+                    "side": po.side.upper(),
+                    "qty": po.qty,
+                    "price": po.filled_avg_price or 0.0,
+                    "status": po.status,
+                    "filled_qty": po.filled_qty,
+                    "filled_avg_price": po.filled_avg_price,
+                    "created_at": ts.isoformat()
+                })
+        return results
+
+    def reset_account(self) -> None:
+        """
+        Deletes all PaperPosition and PaperOrder rows. Resets cash balance to FMP_PAPER_STARTING_CASH.
+        """
+        if self._readonly:
+            raise RuntimeError("Cannot reset account in readonly mode.")
+            
+        with session_scope(self.Session) as session:
+            session.query(PaperPosition).delete()
+            session.query(PaperOrder).delete()
+            
+            acc = session.query(PaperAccount).filter_by(id=1).with_for_update().first()
+            if acc:
+                acc.cash_balance = settings.FMP_PAPER_STARTING_CASH
+            else:
+                acc = PaperAccount(id=1, cash_balance=settings.FMP_PAPER_STARTING_CASH)
+                session.add(acc)

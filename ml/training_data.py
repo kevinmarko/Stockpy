@@ -208,7 +208,20 @@ def _causal_rsi(close: pd.Series, length: int) -> float:
     return float(100.0 - (100.0 / (1.0 + rs)))
 
 
-def _pit_ticker_row(close: pd.Series) -> dict:
+def _load_all_paper_orders() -> pd.DataFrame:
+    try:
+        from data.paper_account_store import PaperAccountStore
+        store = PaperAccountStore(readonly=True)
+        orders = pd.read_sql_table("paper_orders", con=store.engine)
+        if not orders.empty and "timestamp" in orders.columns:
+            orders["timestamp"] = pd.to_datetime(orders["timestamp"])
+        return orders
+    except Exception as exc:
+        logger.warning("training_data: failed to load paper orders: %s", exc)
+        return pd.DataFrame()
+
+
+def _pit_ticker_row(close: pd.Series, symbol: Optional[str] = None, as_of_date: Optional[pd.Timestamp] = None, paper_orders: Optional[pd.DataFrame] = None) -> dict:
     """Compute the dashboard-shaped raw feature inputs from a PIT close series.
 
     ``close`` must already be sliced to bars STRICTLY BEFORE ``as_of_date``.
@@ -264,6 +277,33 @@ def _pit_ticker_row(close: pd.Series) -> dict:
         row["GARCH_Vol"] = garch_proxy if np.isfinite(garch_proxy) else float("nan")
     else:
         row["GARCH_Vol"] = float("nan")
+
+    # Paper Execution Features
+    if paper_orders is not None and not paper_orders.empty and symbol and as_of_date:
+        # Coerce as_of_date to tz-naive to match paper_orders timestamp, if necessary
+        as_of_naive = as_of_date.tz_localize(None) if as_of_date.tz is not None else as_of_date
+        start_date = as_of_naive - pd.Timedelta(days=30)
+        
+        # Filter for this symbol and trailing 30d window strictly BEFORE as_of_date
+        mask = (
+            (paper_orders["symbol"] == symbol) & 
+            (paper_orders["timestamp"] < as_of_naive) & 
+            (paper_orders["timestamp"] >= start_date)
+        )
+        slice_orders = paper_orders[mask]
+        
+        if len(slice_orders) > 0:
+            row["paper_has_history_30d"] = 1.0
+            
+            total_qty = slice_orders["qty"].sum()
+            filled_qty = slice_orders["filled_qty"].sum()
+            row["paper_fill_rate_30d"] = float(filled_qty / total_qty) if total_qty > 0 else np.nan
+        else:
+            row["paper_has_history_30d"] = 0.0
+            row["paper_fill_rate_30d"] = np.nan
+    else:
+        row["paper_has_history_30d"] = 0.0
+        row["paper_fill_rate_30d"] = np.nan
 
     return row
 
@@ -441,6 +481,7 @@ def build_training_panel(
     store = PITFeatureStore()
 
     # ── 3. Walk each as-of date; build + persist a PIT feature frame ────────────
+    paper_orders = _load_all_paper_orders()
     per_date_frames: list[pd.DataFrame] = []
     kept_dates: list[pd.Timestamp] = []
     for as_of_date in as_of_dates:
@@ -451,7 +492,7 @@ def build_training_panel(
                 prior = close.loc[close.index < as_of_date]
                 if prior.empty:
                     continue
-                row = _pit_ticker_row(prior)
+                row = _pit_ticker_row(prior, symbol, as_of_date, paper_orders)
                 # PIT fundamentals: report_date <= as_of_date (local DB read,
                 # no network — see data/historical_store.py; degrades to
                 # all-NaN per-symbol on any failure, never aborts the date).

@@ -1578,3 +1578,28 @@ class TestAlertChannelsReachable:
         assert results[0].passed
         assert results[0].warning
         assert all(r.passed for r in results)  # exit-code-relevant condition
+
+def test_check_broker_backend_matches_live_intent():
+    from scripts.preflight_check import check_broker_backend_matches_live_intent
+    from settings import settings
+    
+    original_broker = getattr(settings, "BROKER_BACKEND", "alpaca")
+    original_paper = getattr(settings, "ALPACA_PAPER", True)
+    
+    try:
+        settings.BROKER_BACKEND = "fmp_paper"
+        settings.ALPACA_PAPER = False
+        res = check_broker_backend_matches_live_intent()
+        assert not res.passed
+        
+        settings.ALPACA_PAPER = True
+        res = check_broker_backend_matches_live_intent()
+        assert res.passed
+        
+        settings.BROKER_BACKEND = "alpaca"
+        settings.ALPACA_PAPER = False
+        res = check_broker_backend_matches_live_intent()
+        assert res.passed
+    finally:
+        settings.BROKER_BACKEND = original_broker
+        settings.ALPACA_PAPER = original_paper

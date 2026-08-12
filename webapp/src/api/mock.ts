@@ -190,6 +190,9 @@ import type {
   CacheLongShortDashboard,
   CacheLongShortPendingTrade,
   CacheLongShortApproveBulkResult,
+  PaperBrokerAccount,
+  PaperBrokerPosition,
+  PaperBrokerOrder,
 } from "./types";
 
 const SECTORS = [
@@ -1838,6 +1841,7 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
 // FEATURE_FLAGS_TUNABLE_DEFS) serves every one of them, exercising the
 // typed-confirmation flow for all 20 in mock mode.
 const MOCK_DANGEROUS_KEYS = new Set([
+  "BROKER_BACKEND",
   "ADVISORY_ONLY",
   "DRY_RUN",
   "ROBINHOOD_EXECUTION_MODE",
@@ -8271,7 +8275,39 @@ export const mockApi = {
       count: lotIds.length
     });
   },
+  async getPaperBrokerAccount() {
+    return paperAccount;
+  },
+  async getPaperBrokerPositions() {
+    return paperPositions;
+  },
+  async getPaperBrokerOrders(_limit?: number) {
+    return paperOrders;
+  },
+  async resetPaperBroker(cash: number) {
+    paperAccount = { equity: cash, cash: cash, buying_power: cash };
+    paperPositions = [];
+    paperOrders = [];
+    return { status: "reset", cash };
+  },
+  async getPaperBrokerSettings() {
+    return buildTunablesResponse(
+      PAPER_BROKER_TUNABLE_DEFS,
+      "mock_paper_broker_tunables",
+      "mock_paper_broker_drift"
+    );
+  },
+  async updatePaperBrokerSettings(update: any, confirm?: any) {
+    return applyTunablesGeneric(
+      update,
+      PAPER_BROKER_TUNABLE_DEFS,
+      "mock_paper_broker_tunables",
+      "mock_paper_broker_drift",
+      confirm
+    );
+  },
 };
+
 
 // ---------------------------------------------------------------------------
 // Report Library (G5) + Dead-Letter Queue (G6) fixtures.
@@ -8505,4 +8541,49 @@ export const MOCK_META = {
   sectors: SECTORS,
 };
 
+
+
+const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
+  {
+    group: "Paper Broker",
+    key: "PAPER_BROKER_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description: "If enabled, orders are processed against live market prices and tracked in a simulated portfolio rather than sent to a real brokerage.",
+  },
+  {
+    group: "Paper Broker",
+    key: "PAPER_BROKER_INITIAL_CASH",
+    type: "number",
+    value: 100000.0,
+    default: 100000.0,
+    min: 0,
+    description: "The starting cash balance when resetting the paper trading account.",
+  },
+  {
+    group: "Paper Broker",
+    key: "PAPER_BROKER_SLIPPAGE_BPS",
+    type: "number",
+    value: 5,
+    default: 5,
+    min: 0,
+    max: 500,
+    step: 1,
+    description: "Basis points of simulated slippage applied to market orders.",
+  },
+  {
+    group: "Paper Broker",
+    key: "BROKER_BACKEND",
+    type: "string",
+    value: "PAPER",
+    default: "PAPER",
+    options: ["PAPER", "ALPACA", "ROBINHOOD"],
+    description: "The execution engine to use. WARNING: Changing this to a real broker will route orders to real markets.",
+  },
+];
+
+let paperAccount: PaperBrokerAccount = { equity: 0, cash: 0, buying_power: 0 };
+let paperPositions: PaperBrokerPosition[] = [];
+let paperOrders: PaperBrokerOrder[] = [];
 

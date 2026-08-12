@@ -513,6 +513,13 @@ def require_macro_gate_writes_enabled() -> None:
             detail="Macro gate writes are disabled (MACRO_GATE_WRITES_ENABLED=false).",
         )
 
+def require_paper_broker_writes_enabled() -> None:
+    if not settings.PAPER_BROKER_WRITES_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Paper broker writes are disabled (PAPER_BROKER_WRITES_ENABLED=false)."
+        )
+
 def require_cache_long_short_writes_enabled() -> None:
     """FAIL-CLOSED master-switch guard for ``POST /pilots/cache-long-short/*``
     write endpoints (start, approve-bulk) -- persists a new tracked position
@@ -4715,6 +4722,23 @@ _SENTIMENT_INDEX = {
     for key, kind, extras in _specs
 }
 
+_PAPER_BROKER_GROUPS = [
+    (
+        "Paper Broker Configuration",
+        [
+            ("BROKER_BACKEND", "str", {}),
+            ("FMP_PAPER_STARTING_CASH", "float", {"min": 0.0, "max": 10000000.0, "step": 1000.0}),
+            ("PAPER_BROKER_WRITES_ENABLED", "bool", {}),
+        ],
+    ),
+]
+
+_PAPER_BROKER_INDEX = {
+    key: (kind, extras)
+    for _group, _specs in _PAPER_BROKER_GROUPS
+    for key, kind, extras in _specs
+}
+
 _CACHE_LONG_SHORT_GROUPS = [
     (
         "Cache Long/Short Overlay",
@@ -4930,6 +4954,28 @@ def get_settings_cache_long_short() -> Dict[str, Any]:
 def put_settings_cache_long_short(body: TunablesUpdateRequest) -> Dict[str, Any]:
     """Update Cache Long/Short configuration in .env."""
     return _validate_and_write_payload(body.values, _CACHE_LONG_SHORT_INDEX, confirm=body.confirm)
+
+@app.get("/settings/paper-broker", dependencies=[Depends(require_read_token)])
+def get_settings_paper_broker() -> Dict[str, Any]:
+    return _settings_editor_payload(_PAPER_BROKER_GROUPS, _PAPER_BROKER_INDEX)
+
+@app.put(
+    "/settings/paper-broker",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+@app.patch(
+    "/settings/paper-broker",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_general_settings_writes_enabled),
+    ],
+)
+def put_settings_paper_broker(body: TunablesUpdateRequest) -> Dict[str, Any]:
+    return _validate_and_write_payload(body.values, _PAPER_BROKER_INDEX, confirm=body.confirm)
+
 
 # A handful of the DANGEROUS_KEYS-tier fields are not plain booleans and
 # need the same enum/json treatment their OTHER editors already give them
@@ -5494,3 +5540,25 @@ def approve_cls_bulk(body: CacheLongShortApproveBulkRequest) -> Dict[str, Any]:
     store = CacheLongShortStore()
     store.approve_tax_lots(body.lot_ids)
     return {"status": "approved", "count": len(body.lot_ids)}
+
+@app.get("/pilots/paper-broker/account", dependencies=[Depends(require_read_token)])
+def get_paper_broker_account() -> Dict[str, Any]:
+    from pilots.paper_broker import get_account
+    return get_account()
+
+@app.get("/pilots/paper-broker/positions", dependencies=[Depends(require_read_token)])
+def get_paper_broker_positions() -> List[Dict[str, Any]]:
+    from pilots.paper_broker import get_positions
+    return get_positions()
+
+@app.get("/pilots/paper-broker/orders", dependencies=[Depends(require_read_token)])
+def get_paper_broker_orders(status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    from pilots.paper_broker import get_orders
+    return get_orders(status=status, limit=limit)
+
+@app.post("/pilots/paper-broker/reset", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
+def post_paper_broker_reset() -> Dict[str, Any]:
+    from data.paper_account_store import PaperAccountStore
+    store = PaperAccountStore()
+    store.reset_account()
+    return {"status": "ok", "message": "Paper account reset"}

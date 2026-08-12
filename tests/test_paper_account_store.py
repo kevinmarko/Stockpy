@@ -109,3 +109,27 @@ def test_readonly_degradation(readonly_store):
     
     orders = readonly_store.get_orders()
     assert len(orders) == 0
+
+def test_reset_account_readonly():
+    from data.paper_account_store import PaperAccountStore
+    store = PaperAccountStore(readonly=True)
+    with pytest.raises(RuntimeError, match="Cannot reset account in readonly mode"):
+        store.reset_account()
+
+def test_reset_account_clears_data(tmp_path):
+    import os
+    from settings import settings
+    from data.paper_account_store import PaperAccountStore
+    db_path = tmp_path / "test_reset.db"
+    store = PaperAccountStore(f"sqlite:///{db_path}")
+    
+    # Needs to ensure table exists and can apply fill
+    store.apply_fill("123", "AAPL", "buy", 10, 150.0, 0.0)
+    
+    # Reset
+    store.reset_account()
+    
+    assert len(store.get_open_positions()) == 0
+    assert len(store.get_orders()) == 0
+    account = store.get_account()
+    assert account.cash == settings.FMP_PAPER_STARTING_CASH

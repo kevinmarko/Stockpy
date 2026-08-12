@@ -178,13 +178,16 @@ class Settings(BaseSettings):
         "constructed. Only takes effect when BROKER_BACKEND='fmp_paper'.",
     )
     BROKER_BACKEND: str = Field(
-        default="alpaca",
+        default="fmp_paper",
         description="Selects the active broker backend in main_orchestrator.py's "
-        "_execute_broker_orders ('alpaca' (default, today's exact behavior) or "
-        "'fmp_paper' — see execution/fmp_paper_broker.py). Defaults to 'alpaca' "
-        "so this is purely additive: nothing about ALPACA_PAPER's existing "
-        "behavior changes for any existing deployment unless an operator "
-        "explicitly opts into 'fmp_paper'.",
+        "_execute_broker_orders. Defaults to 'fmp_paper'. Note: main_orchestrator.py "
+        "includes a runtime force-fallback guard if fmp_paper is used while going_live, "
+        "and check_broker_backend_matches_live_intent in scripts/preflight_check.py will "
+        "block any attempt to start the pipeline in this configuration.",
+    )
+    PAPER_BROKER_WRITES_ENABLED: bool = Field(
+        default=True,
+        description="Gates POST /pilots/paper-broker/reset endpoint. If False, resets are blocked."
     )
     STATE_API_TOKEN: Optional[str] = Field(
         default=None,

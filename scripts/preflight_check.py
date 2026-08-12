@@ -612,6 +612,22 @@ def check_alpaca_configured() -> CheckResult:
     return CheckResult(name, True, "ALPACA_API_KEY and ALPACA_SECRET_KEY are configured")
 
 
+def check_broker_backend_matches_live_intent() -> CheckResult:
+    """
+    Verifies that BROKER_BACKEND='fmp_paper' is not active when live trading is intended.
+    """
+    if getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper" and not getattr(settings, "ALPACA_PAPER", True):
+        return CheckResult(
+            name="broker_backend_matches_live_intent",
+            passed=False,
+            reason="BROKER_BACKEND='fmp_paper' is active but ALPACA_PAPER is False. Set BROKER_BACKEND='alpaca' for live trading, or enable ALPACA_PAPER to stay in paper mode."
+        )
+    return CheckResult(
+        name="broker_backend_matches_live_intent",
+        passed=True,
+        reason="BROKER_BACKEND is compatible with live trading intent."
+    )
+
 def check_macro_regime_gate_enabled() -> CheckResult:
     """Fail if the macro regime gate is disabled while live trading is configured.
 
@@ -1272,6 +1288,7 @@ ALL_CHECKS = [
     check_robinhood_session_present,
     check_alpaca_configured,
     check_macro_regime_gate_enabled,
+    check_broker_backend_matches_live_intent,
     check_alpaca_paper_mode,
     check_dry_run_disabled,
     check_env_not_committed,

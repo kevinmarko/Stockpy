@@ -437,7 +437,16 @@ async def _execute_broker_orders(
         from execution.risk_gate import PreTradeRiskGate, RiskContext
         from transactions_store import TransactionsStore
 
-        if getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper":
+        broker_backend = getattr(settings, "BROKER_BACKEND", "alpaca")
+        going_live = not getattr(settings, "ADVISORY_ONLY", True) and not getattr(settings, "ALPACA_PAPER", True)
+        if broker_backend == "fmp_paper" and going_live:
+            from observability.alerts import send_alert, AlertLevel
+            msg = "BROKER_BACKEND='fmp_paper' is invalid for live trading. Forcing 'alpaca' fallback."
+            telemetry.error(msg)
+            send_alert(level="CRITICAL", message=msg)
+            broker_backend = "alpaca"
+            
+        if broker_backend == "fmp_paper":
             from execution.fmp_paper_broker import FMPPaperBroker
             broker = FMPPaperBroker()
         else:
