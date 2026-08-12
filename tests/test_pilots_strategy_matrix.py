@@ -390,7 +390,7 @@ def _import_roots(source: str) -> set:
 
 @pytest.mark.parametrize(
     "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst", "paper_broker"],
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst", "paper_broker", "live_trade_proposals"],
 )
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
@@ -479,6 +479,13 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"data", "datetime"}
     if module_name == "paper_broker":
         allowed = allowed | {"data"}
+    if module_name == "live_trade_proposals":
+        # pilots.live_trade_proposals mirrors pilots.paper_broker's exact
+        # pattern (settings + a dependency-light store module), except its
+        # store, execution.live_trade_proposals_store, lives under
+        # `execution/` rather than `data/` -- so the extra allowed import
+        # root here is `execution`, not `data`.
+        allowed = allowed | {"execution"}
     if module_name == "prompt_registry":
         # pilots.prompt_registry wraps prompt_registry.registry.get_registry()
         # (and prompt_registry.cache / prompt_registry.__main__ for baseline

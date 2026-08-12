@@ -14,8 +14,8 @@
   "counts": {
     "live_safe": 268,
     "no_op": 2,
-    "restart_required": 90,
-    "total": 360
+    "restart_required": 92,
+    "total": 362
   },
   "dynamic_sites": [
     {
@@ -1748,6 +1748,28 @@
         "via": []
       }
     ],
+    "LIVE_TRADE_APPROVAL_ENABLED": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "settings_keysets.py:305",
+        "via": []
+      }
+    ],
+    "LIVE_TRADE_EXECUTION_ENABLED": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "settings_keysets.py:299",
+        "via": []
+      }
+    ],
     "LOG_LEVEL": [
       {
         "discarded": false,
@@ -2546,7 +2568,7 @@
     "closure_value": 1,
     "cross_module_init_helper": 59,
     "decorator_arg": 13,
-    "dynamic_name_literal_unattributable": 7,
+    "dynamic_name_literal_unattributable": 9,
     "indirect_init_helper_d1": 11,
     "init_body": 6,
     "init_self_assign": 41,
@@ -2559,6 +2581,8 @@
     "EDGAR_FULLTEXT_FORMS",
     "ETF_HOLDINGS_TICKERS",
     "FMP_ECON_INDICATORS",
+    "LIVE_TRADE_APPROVAL_ENABLED",
+    "LIVE_TRADE_EXECUTION_ENABLED",
     "PROMPT_REGISTRY_REFRESH_SECONDS"
   ],
   "status": "ok"

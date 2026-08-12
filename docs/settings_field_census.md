@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `2091206b24c7cedbbd44d4fc9d05adcc05c0007e`
+- Measured at commit: `6add45a1a897b21bc66932d17b8f72b8326dcf6e`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -14,11 +14,11 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 
 ## 1. Field-type breakdown
 
-`len(Settings.model_fields)` = **360**
+`len(Settings.model_fields)` = **362**
 
 | Annotation | Count |
 |---|---|
-| `bool` | 103 |
+| `bool` | 105 |
 | `int` | 97 |
 | `float` | 61 |
 | `Optional[str]` | 46 |
@@ -31,7 +31,7 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 | `dict[str, str]` | 1 |
 | `list[int]` | 1 |
 
-Fields whose name ends in `_ENABLED`: **92**
+Fields whose name ends in `_ENABLED`: **94**
 
 Distinct `dict[...]` shapes: **4**
 
@@ -49,7 +49,7 @@ kind-derivation switch over the categories above is currently total.
 
 | Name | len() | len(set()) | Note |
 |---|---|---|---|
-| `ALLOWED_KEYS` | 311 | 311 | 0 duplicate entries (clean) |
+| `ALLOWED_KEYS` | 313 | 313 | 0 duplicate entries (clean) |
 | `SECRET_KEYS` | 43 | 43 | 0 duplicate entries |
 | `_JSON_KEYS` | 12 | 12 | frozenset |
 | `EXCLUDED_FROM_GUI` | 8 | 8 | frozenset; third classification bucket |
@@ -63,7 +63,7 @@ Every `Settings.model_fields` name classified into exactly one bucket.
 | Bucket | Count | Definition |
 |---|---|---|
 | `SECRET` | 41 | in `env_io.SECRET_KEYS` |
-| `IN_ALLOWED_KEYS` | 311 | in `env_io.ALLOWED_KEYS` |
+| `IN_ALLOWED_KEYS` | 313 | in `env_io.ALLOWED_KEYS` |
 | `UNCLASSIFIED` | 8 | in neither |
 
 Of the 8 `UNCLASSIFIED` fields, **8** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
@@ -72,14 +72,14 @@ Of the 8 `UNCLASSIFIED` fields, **8** are accounted for by the third `EXCLUDED_F
 
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
-| `ALERT_FILE_PATH` | L1315 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L4535 | yes | Path to the gcloud binary for environment integrations. |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L3829 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L3714 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
-| `OUTPUT_DIR` | L1564 | yes | Directory for generated reports. |
-| `PROMPT_CACHE_DIR` | L3981 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
-| `SYNC_WATCHLIST_FILES` | L1569 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L3599 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `ALERT_FILE_PATH` | L1340 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
+| `GCLOUD_BIN` | L4560 | yes | Path to the gcloud binary for environment integrations. |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L3854 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L3739 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `OUTPUT_DIR` | L1589 | yes | Directory for generated reports. |
+| `PROMPT_CACHE_DIR` | L4006 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `SYNC_WATCHLIST_FILES` | L1594 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
+| `WATCH_RULES_FILE` | L3624 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -121,17 +121,17 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 | Field | Marker site(s) | In `ALLOWED_KEYS` now | In `SECRET_KEYS` | Claim holds |
 |---|---|---|---|---|
-| `FMP_API_KEY` | `settings.py:596` | no | yes | yes |
-| `FOLLOW_API_TOKEN` | `settings.py:228` | no | yes | yes |
-| `JULES_API_KEY` | `settings.py:401` | no | yes | yes |
-| `MCP_HTTP_BEARER_TOKEN` | `settings.py:242` | no | yes | yes |
-| `MCP_OAUTH_PASSWORD` | `settings.py:290` | no | yes | yes |
-| `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:209` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:3946` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:3954` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:3938` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:3930` | no | yes | yes |
-| `STATE_API_TOKEN` | `settings.py:201` | no | yes | yes |
+| `FMP_API_KEY` | `settings.py:621` | no | yes | yes |
+| `FOLLOW_API_TOKEN` | `settings.py:253` | no | yes | yes |
+| `JULES_API_KEY` | `settings.py:426` | no | yes | yes |
+| `MCP_HTTP_BEARER_TOKEN` | `settings.py:267` | no | yes | yes |
+| `MCP_OAUTH_PASSWORD` | `settings.py:315` | no | yes | yes |
+| `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:234` | no | yes | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:3971` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:3979` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:3963` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:3955` | no | yes | yes |
+| `STATE_API_TOKEN` | `settings.py:226` | no | yes | yes |
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
@@ -228,9 +228,9 @@ _S.settings, _bl_settings, _dsr_settings, _live_settings, _mt_settings, _oos_gat
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
 
-Fields reached by at least one form: **351** of 360.
+Fields reached by at least one form: **351** of 362.
 
-### Fields with NO statically-attributable read — **9**
+### Fields with NO statically-attributable read — **11**
 
 **These are not necessarily dead.** A field whose name is passed as a *string literal* to a
 factory that then does a dynamic `getattr` is read at runtime while being invisible to every
@@ -239,11 +239,13 @@ referenced by name somewhere and is probably read dynamically.
 
 | Field | Name-literal sites | Verdict |
 |---|---|---|
-| `AI_GENERATION_API_ENABLED` | `api/data_api.py:188`, `settings_keysets.py:332` | likely read dynamically |
+| `AI_GENERATION_API_ENABLED` | `api/data_api.py:188`, `settings_keysets.py:345` | likely read dynamically |
 | `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4686` | likely read dynamically |
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4685` | likely read dynamically |
 | `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4848`, `gui/panels/settings_manager.py:126` | likely read dynamically |
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4827`, `gui/panels/settings_manager.py:162` | likely read dynamically |
+| `LIVE_TRADE_APPROVAL_ENABLED` | `settings_keysets.py:305` | likely read dynamically |
+| `LIVE_TRADE_EXECUTION_ENABLED` | `settings_keysets.py:299` | likely read dynamically |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11020` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
