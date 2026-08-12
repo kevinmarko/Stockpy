@@ -512,10 +512,18 @@ class EvaluationEngine:
 
         # 1. Evaluate MAE / MFE / Edge Ratio / Slippage against real trade history
         eval_results = {}
-        for idx, row in df.iterrows():
+
+        # Batch fetch trade histories
+        symbols_to_fetch = df['Symbol'].dropna().unique().tolist()
+        batch_histories = store.get_trade_histories_batch(symbols_to_fetch) if hasattr(store, 'get_trade_histories_batch') else {}
+
+        for idx, row in df.to_dict('index').items():
             symbol = row['Symbol']
-            # Find trade history for this symbol
-            trade_df = store.get_trade_history(symbol)
+            # Find trade history for this symbol from batched result
+            if hasattr(store, 'get_trade_histories_batch'):
+                 trade_df = batch_histories.get(symbol.upper().strip(), pd.DataFrame())
+            else:
+                 trade_df = store.get_trade_history(symbol)
             
             entry_price = np.nan
             mae = np.nan

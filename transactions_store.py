@@ -160,6 +160,32 @@ class TransactionsStore:
         finally:
             session.close()
 
+    def get_trade_histories_batch(self, symbols: list) -> dict:
+        """Returns trade histories for multiple symbols in a single query."""
+        session = self.Session()
+        try:
+            upper_symbols = [s.upper().strip() for s in symbols if s]
+            if not upper_symbols:
+                return {}
+
+            query = session.query(Trade).filter(Trade.symbol.in_(upper_symbols))
+            df = pd.read_sql(query.statement, self.engine)
+
+            histories = {}
+            if not df.empty:
+                for sym, group in df.groupby('symbol'):
+                    histories[sym] = group.copy()
+
+            for sym in upper_symbols:
+                if sym not in histories:
+                    histories[sym] = pd.DataFrame()
+            return histories
+        except Exception as exc:
+            logger.debug("get_trade_histories_batch: %s", exc)
+            return {s.upper().strip(): pd.DataFrame() for s in symbols if s}
+        finally:
+            session.close()
+
 
 class _OfflineTransactionsStore:
     """Read-only stand-in used when the configured DB backend is unreachable.
@@ -194,3 +220,6 @@ class _OfflineTransactionsStore:
 
     def get_trade_history(self, symbol: str) -> pd.DataFrame:
         return pd.DataFrame()
+
+    def get_trade_histories_batch(self, symbols: list) -> dict:
+        return {s.upper().strip(): pd.DataFrame() for s in symbols if s}
