@@ -635,7 +635,7 @@ function ScheduleSection({
                         the daemon keeps its stale value until restarted too. Show a fixed,
                         always-visible caveat instead of trusting `liveness.applies` for
                         this specific field. */}
-                    <span style={{ display: "block", color: "var(--text-info)", marginTop: 2 }}>
+                    <span style={{ display: "block", color: theme.accent, marginTop: 2 }}>
                       Applies immediately only to the process handling this request. A
                       plain <code>main.py --interval</code> process, or a daemon running
                       behind a separate Pilots API without RUNTIME_FLAGS_REFRESH_ENABLED,
