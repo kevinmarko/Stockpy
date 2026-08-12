@@ -33,7 +33,6 @@ export function FmpSettings() {
   return (
     <GenericSettingsEditor
       title="Financial Modeling Prep (FMP)"
-      settingsKey="fmp"
       subtitle="Configure FMP API credentials, timeouts, retries, primary data feeds (quotes, bars, fundamentals), and diagnostic supplement feeds."
       backTo="/settings"
       fetchSettings={() => api.getFmpSettings()}

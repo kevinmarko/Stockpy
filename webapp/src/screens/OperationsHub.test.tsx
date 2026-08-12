@@ -12,6 +12,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it } from "vitest";
 import { OperationsHub } from "./OperationsHub";
 import { TAB_HELP } from "../help/helpContent";
+import { NAV_ITEMS } from "../navigation";
 
 function renderHub(initialPath = "/operations") {
   return render(
@@ -22,6 +23,7 @@ function renderHub(initialPath = "/operations") {
         <Route path="/pipeline" element={<div>Pipeline landing</div>} />
         <Route path="/console" element={<div>Console landing</div>} />
         <Route path="/help" element={<div>Help landing</div>} />
+        <Route path="/create-data-app" element={<div>Create Data App landing</div>} />
       </Routes>
     </MemoryRouter>
   );
@@ -40,6 +42,23 @@ describe("OperationsHub screen", () => {
     renderHub();
     for (const label of ["Mission Control", "Pipeline", "Console", "Help & Glossary"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("renders a card for Create Data App and navigates to it", async () => {
+    const user = userEvent.setup();
+    renderHub();
+    expect(screen.getByText("Create Data App")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Create Data App/ }));
+    expect(await screen.findByText("Create Data App landing")).toBeInTheDocument();
+  });
+
+  it("REGRESSION: every operations-section NAV_ITEMS entry has a matching hub card -- catches the exact gap Console/Report Library/Create Data App each individually hit (a route reachable from Sidebar/BottomNav but with no card here)", () => {
+    renderHub();
+    const operationsItems = NAV_ITEMS.filter((it) => it.section === "operations");
+    expect(operationsItems.length).toBeGreaterThan(0);
+    for (const item of operationsItems) {
+      expect(screen.getByText(item.label)).toBeInTheDocument();
     }
   });
 

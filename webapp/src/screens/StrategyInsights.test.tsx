@@ -81,14 +81,14 @@ describe("Strategy Insights screen", () => {
 
     // Edge per strategy — two stacked single-axis bar charts (never one
     // dual-axis chart).
-    expect(await screen.findByTestId("strategy-insights-edge-chart")).toBeInTheDocument();
+    expect(await screen.findByTestId("edge-by-strategy-chart")).toBeInTheDocument();
     expect(screen.getByText("Mean edge ratio by strategy")).toBeInTheDocument();
     expect(screen.getByText("Trade count by strategy")).toBeInTheDocument();
 
     // Price history + decision overlay, real functional symbol select.
-    const select = await screen.findByTestId("strategy-insights-symbol-select");
+    const select = await screen.findByTestId("symbol-signal-overlay-symbol-select");
     expect(select).toBeInTheDocument();
-    expect(await screen.findByTestId("strategy-insights-price-chart")).toBeInTheDocument();
+    expect(await screen.findByTestId("symbol-signal-overlay-chart")).toBeInTheDocument();
 
     // Strategies table.
     expect(await screen.findByTestId("strategy-insights-table")).toBeInTheDocument();
@@ -108,12 +108,12 @@ describe("Strategy Insights screen", () => {
     const barsSpy = vi.spyOn(api, "getDataBars");
     renderScreen();
 
-    const select = (await screen.findByTestId("strategy-insights-symbol-select")) as HTMLSelectElement;
-    await screen.findByTestId("strategy-insights-price-chart");
+    const select = (await screen.findByTestId("symbol-signal-overlay-symbol-select")) as HTMLSelectElement;
+    await screen.findByTestId("symbol-signal-overlay-chart");
     expect(barsSpy).toHaveBeenCalledWith("AAPL", 252);
 
     await user.selectOptions(select, "MSFT");
-    expect(await screen.findByTestId("strategy-insights-price-chart")).toBeInTheDocument();
+    expect(await screen.findByTestId("symbol-signal-overlay-chart")).toBeInTheDocument();
     expect(barsSpy).toHaveBeenCalledWith("MSFT", 252);
   });
 

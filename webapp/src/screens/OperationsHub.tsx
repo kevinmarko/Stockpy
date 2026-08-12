@@ -1,11 +1,10 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
-import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * OperationsHub — landing screen for the "Operations" nav section (see
- * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 5
+ * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 6
  * screens as clickable cards; someone else wires the section-header tap that
  * routes here. This screen owns only its own content and navigation.
  *
@@ -27,6 +26,14 @@ import { DynamicGrid } from "../components/DynamicGrid";
  * Console was -- built read-only against `output/`/`reports/` artifacts, not
  * a `.env`-write surface, so it belongs here alongside Console/Pipeline
  * rather than under Settings.
+ *
+ * Create Data App (parity gap G11, caught by review) is the same shape
+ * again: navigation.tsx's NAV_ITEMS gained it under the "operations"
+ * section, but this hub's CARDS array is hand-maintained separately and
+ * doesn't auto-derive from NAV_ITEMS, so it silently missed the addition --
+ * exactly the reachable-in-Sidebar-but-not-here gap this file already fixed
+ * twice for Console/Report Library. No test enforces NAV_ITEMS/CARDS parity
+ * yet; this comment is the only guard until one exists.
  */
 interface HubCard {
   to: string;
@@ -46,6 +53,7 @@ const CARDS: HubCard[] = [
     ico: "❓",
     description: "Search the platform's full glossary of terms, metrics, and gates -- every definition each screen's own \"How this works\" panel draws from, in one searchable place.",
   },
+  { to: "/create-data-app", label: "Create Data App", ico: "🧩", description: TAB_HELP["create-data-app"].description },
 ];
 
 export function OperationsHub() {
@@ -63,20 +71,7 @@ export function OperationsHub() {
       </div>
 
       <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-3)" }}>
-        <DynamicGrid
-          layoutKey="operations-hub"
-          defaultLayouts={{
-            lg: CARDS.map((c, i) => ({
-              i: c.to,
-              x: (i % 2) * 6,
-              y: Math.floor(i / 2) * 2,
-              w: 6,
-              h: 2,
-              minW: 4,
-              minH: 2,
-            })),
-          }}
-        >
+        <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
           {CARDS.map((c) => (
             <div key={c.to}>
               <div className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
@@ -85,7 +80,6 @@ export function OperationsHub() {
                   style={{
                     padding: "var(--s-3)",
                     borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
-                    cursor: "grab",
                     display: "flex",
                     alignItems: "center",
                     gap: "var(--s-2)"
@@ -117,7 +111,7 @@ export function OperationsHub() {
               </div>
             </div>
           ))}
-        </DynamicGrid>
+        </div>
       </div>
     </div>
   );

@@ -1,7 +1,6 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
-import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * TradingHub.tsx — landing screen for the "Trading Tools" nav section
@@ -40,11 +39,9 @@ function HubCardRow({ card, onOpen }: { card: HubCard; onOpen: () => void }) {
   return (
     <div className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
       <div
-        className="drag-handle"
         style={{
           padding: "var(--s-3)",
           borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
-          cursor: "grab",
           display: "flex",
           alignItems: "center",
           gap: "var(--s-2)"
@@ -104,19 +101,12 @@ export function TradingHub() {
         </div>
       </div>
 
-      <div style={{ marginTop: "var(--s-3)" }}>
-        <DynamicGrid
-          layoutKey="trading-hub"
-          defaultLayouts={{
-            lg: CARDS.map((card, i) => ({ i: card.to, x: (i % 3) * 4, y: Math.floor(i / 3) * 2, w: 4, h: 2, minW: 3, minH: 2 })),
-          }}
-        >
-          {CARDS.map((card) => (
-            <div key={card.to}>
-              <HubCardRow card={card} onOpen={() => nav(card.to)} />
-            </div>
-          ))}
-        </DynamicGrid>
+      <div style={{ marginTop: "var(--s-3)", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "var(--s-4)", alignItems: "stretch" }}>
+        {CARDS.map((card) => (
+          <div key={card.to} style={{ minHeight: "160px" }}>
+            <HubCardRow card={card} onOpen={() => nav(card.to)} />
+          </div>
+        ))}
       </div>
     </div>
   );

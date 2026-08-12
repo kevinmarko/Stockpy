@@ -349,6 +349,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_NEWS_PAGE_LIMIT",                # int  — articles per /news/stock page
     "FMP_NEWS_MAX_PAGES",                 # int  — pagination ceiling per symbol per call
     "FMP_MAX_SECONDS_PER_CYCLE",          # float — per-cycle wall-clock budget
+    # Jules coding-agent API (data/jules_client.py). The credential itself
+    # (JULES_API_KEY) is in SECRET_KEYS — CONSTRAINT #3, never GUI-writable.
+    "JULES_ENABLED",                      # bool — Jules coding-agent master switch; also a DANGEROUS_KEYS member (settings_keysets.py)
+    "JULES_REQUEST_TIMEOUT_SECONDS",      # int — HTTP timeout for data/jules_client.py requests
     # Robinhood execution bridge & portfolio controls
     "ROBINHOOD_EXECUTION_MODE",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
@@ -665,6 +669,9 @@ SECRET_KEYS: tuple[str, ...] = (
     # masked in the GUI, never GUI-writable; hand-edit .env to set/rotate it.
     # Its 24 non-secret operational tunables live in ALLOWED_KEYS above.
     "FMP_API_KEY",
+    # Jules coding-agent API credential (data/jules_client.py). CONSTRAINT #3 —
+    # masked in the GUI, never GUI-writable; hand-edit .env to set/rotate it.
+    "JULES_API_KEY",
     # --- 2026-08 allowlist audit residual (post PR #560 merge) ----------------
     # alerting_mcp/notifier.py family (distinct from observability/alerts.py's
     # ALERT_SMTP_HOST/ALERT_WEBHOOK_URL/NTFY_TOPIC, all already secret above) —

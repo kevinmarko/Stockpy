@@ -252,12 +252,16 @@ make verify          # env check → test suite → one live cycle → print sum
 pytest                                      # full test suite
 pytest tests/test_pipeline_smoke.py -v     # end-to-end smoke tests only
 make smoke                                  # same
+python scripts/bug_hunter.py                # unified bug hunter scan (AST audit, webapp parity, pytest)
+python scripts/bug_hunter.py --quick        # fast bug hunter scan (AST audit + webapp typecheck)
 streamlit run gui/app.py                    # legacy Command Center GUI (10 tabs, incl. Observability) — decommissioned, see "Launching"
 python scripts/preflight_check.py           # pre-live readiness gate (exit 0 = pass)
 python scripts/preflight_check.py --json    # machine-readable output
 python -m execution.kill_switch --status    # check / toggle the advisory pause gate
 python3 -m validation.harness --strategy <name> --start YYYY-MM-DD --end YYYY-MM-DD
 ```
+
+For the complete bug hunting SOP, 4-tier severity model, and verification framework, see [`docs/BUG_HUNTING_PROCESS.md`](docs/BUG_HUNTING_PROCESS.md).
 
 ---
 

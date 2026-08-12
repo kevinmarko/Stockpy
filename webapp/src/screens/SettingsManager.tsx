@@ -26,7 +26,6 @@ export function SettingsManager() {
   return (
     <GenericSettingsEditor
       title="Runtime tunables"
-      settingsKey="tunables"
       subtitle="General platform settings (sizing, forecasting, data). Advisory only — tuning changes what the platform computes and recommends, never places an order."
       backTo="/settings"
       fetchSettings={() => api.getTunables()}

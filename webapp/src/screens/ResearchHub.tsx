@@ -1,7 +1,6 @@
 import { useNavigate } from "react-router";
 import { TAB_HELP } from "../help/helpContent";
 import { theme } from "../theme";
-import { DynamicGrid } from "../components/DynamicGrid";
 
 /**
  * ResearchHub — landing screen for the "Research" nav section (see
@@ -64,62 +63,45 @@ export function ResearchHub() {
         </div>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-4)" }}>
-        <DynamicGrid
-          layoutKey="research-hub"
-          defaultLayouts={{
-            lg: CARDS.map((c, i) => ({
-              i: c.to,
-              x: (i % 3) * 4,
-              y: Math.floor(i / 3) * 3,
-              w: 4,
-              h: 3,
-              minW: 3,
-              minH: 2,
-            })),
-          }}
-        >
-          {CARDS.map((c) => (
-            <div key={c.to}>
-              <div className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-                <div
-                  className="drag-handle"
-                  style={{
-                    padding: "var(--s-3)",
-                    borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
-                    cursor: "grab",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "var(--s-2)"
-                  }}
-                >
-                  <span aria-hidden style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>
-                    {c.ico}
-                  </span>
-                  <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{c.label}</div>
-                </div>
-                <div
-                  role="button"
-                  aria-label={c.label}
-                  tabIndex={0}
-                  onClick={() => nav(c.to)}
-                  onKeyDown={(e) => e.key === "Enter" && nav(c.to)}
-                  style={{
-                    padding: "var(--s-3)",
-                    flex: 1,
-                    overflow: "auto",
-                    color: theme.textMuted,
-                    fontSize: "var(--t-label)",
-                    lineHeight: 1.5,
-                    cursor: "pointer"
-                  }}
-                >
-                  {c.description}
-                </div>
+      <div style={{ flex: 1, minHeight: 0, marginTop: "var(--s-4)", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "var(--s-4)", alignContent: "start" }}>
+        {CARDS.map((c) => (
+          <div key={c.to} style={{ minHeight: "200px" }}>
+            <div className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
+              <div
+                style={{
+                  padding: "var(--s-3)",
+                  borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "var(--s-2)"
+                }}
+              >
+                <span aria-hidden style={{ fontSize: "var(--t-display)", lineHeight: 1 }}>
+                  {c.ico}
+                </span>
+                <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)" }}>{c.label}</div>
+              </div>
+              <div
+                role="button"
+                aria-label={c.label}
+                tabIndex={0}
+                onClick={() => nav(c.to)}
+                onKeyDown={(e) => e.key === "Enter" && nav(c.to)}
+                style={{
+                  padding: "var(--s-3)",
+                  flex: 1,
+                  overflow: "auto",
+                  color: theme.textMuted,
+                  fontSize: "var(--t-label)",
+                  lineHeight: 1.5,
+                  cursor: "pointer"
+                }}
+              >
+                {c.description}
               </div>
             </div>
-          ))}
-        </DynamicGrid>
+          </div>
+        ))}
       </div>
     </div>
   );

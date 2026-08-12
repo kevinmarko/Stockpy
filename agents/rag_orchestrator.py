@@ -165,9 +165,9 @@ def retrieve_documents(state: RAGState) -> Dict[str, Any]:
         model = SentenceTransformer("all-MiniLM-L6-v2")
         query_vector = model.encode(state["query"]).tolist()
 
-        hits = client.search(
+        response = client.query_points(
             collection_name=collection,
-            query_vector=query_vector,
+            query=query_vector,
             limit=10,
             with_payload=True,
         )
@@ -183,7 +183,7 @@ def retrieve_documents(state: RAGState) -> Dict[str, Any]:
                 "relevance_score": float(h.score),
                 "ticker": h.payload.get("ticker", ""),
             }
-            for h in hits
+            for h in response.points
         ]
         return {"retrieved_docs": docs}
 

@@ -1572,10 +1572,9 @@ button:focus-visible {
   }
 }
 
-/* DynamicGrid card headers (2026-08): dragging was removed from DynamicGrid
-   (see webapp/src/components/DynamicGrid.tsx), but dozens of screens still
+/* Card headers (2026-08): dozens of screens still
    set `cursor: "grab"` inline on their `.drag-handle` header elements --
-   left over from when grabbing a header actually dragged the card. An
+   left over from when grabbing a header dragged the card in a grid layout. An
    inline style needs `!important` to override here. `.drag-handle` still
    has a real, unrelated job (the click/navigation-target split covered by
    ResearchHub.test.tsx/TradingHub.test.tsx) -- this only removes the

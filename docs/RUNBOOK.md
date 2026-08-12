@@ -369,6 +369,8 @@ Run this EVERY trading morning before 09:00 ET:
 
 ## 3. Incident Response
 
+For systematic bug diagnosis, vulnerability classification, and root-cause investigation protocols, follow the [Stockpy Bug Hunting Process](BUG_HUNTING_PROCESS.md). Run `python scripts/bug_hunter.py` to execute automated static AST checks, webapp typechecks, and test verification gates.
+
 ### 3.1 Stale Account Snapshot
 
 **Symptom**: Holdings & P&L panel shows `Snapshot age: Xh` > 20 h, or

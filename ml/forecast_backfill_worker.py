@@ -28,6 +28,21 @@ finished -- then exactly one terminal event:
 ``{"event":"result","ok":true,"summary":{...},"sample_rows":N}`` or
 ``{"event":"result","ok":false,"error":str,"error_type":"value_error"|"unexpected"}``.
 
+During step 5 (the phase most likely to run past the deadline on the real
+~515-ticker universe), one additional
+``{"event":"progress","trained":[<model_key>, ...],"metrics_so_far":{...}}``
+event is emitted after EACH (model_type, horizon) combo finishes training --
+wired via ``AgenticForecastBackfiller``'s optional ``on_combo_trained``
+callback. ``trained`` and the keys of ``metrics_so_far`` are always the same
+set (``metrics_so_far`` is the cumulative ``self.metrics`` snapshot the
+engine hands the callback); ``trained`` is kept as its own explicit sorted
+list so a consumer never has to infer combo coverage from a dict's shape.
+This is what lets the parent (``ml/forecast_backfill_job.py``) still report
+honest partial progress if the events pipe's last-received event is a
+``progress`` one at the moment a deadline SIGKILLs this process -- a kill can
+land between filesystem writes, but the parent's last-received event
+survives it.
+
 Per ``AgenticForecastBackfiller``'s own docstrings, only
 ``step_2_calculate_technical_features`` raises on its own (``ValueError`` on
 zero usable tickers) -- steps 1, 3, 4, 5, and 6 all degrade internally
@@ -100,8 +115,17 @@ def _run(params: Dict[str, Any], emit) -> int:
     def _phase(name: str, step: int) -> None:
         emit({"event": "phase", "phase": name, "step": step, "total_steps": _TOTAL_STEPS})
 
+    def _on_combo_trained(model_key: str, metrics_so_far: Dict[str, Any]) -> None:
+        emit(
+            {
+                "event": "progress",
+                "trained": sorted(metrics_so_far.keys()),
+                "metrics_so_far": metrics_so_far,
+            }
+        )
+
     try:
-        engine = AgenticForecastBackfiller(**params)
+        engine = AgenticForecastBackfiller(on_combo_trained=_on_combo_trained, **params)
 
         _phase(*_PHASES[0])
         engine.step_1_fetch_data()

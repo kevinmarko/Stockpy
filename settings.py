@@ -381,6 +381,49 @@ class Settings(BaseSettings):
             "an absent key only disables the news catalyst signal (no crash)."
         ),
     )
+    # --- Jules coding-agent API (data/jules_client.py) --------------------
+    # Google's Jules (https://jules.googleapis.com) — an external, autonomous
+    # coding agent that can be pointed at a connected GitHub repo and, in
+    # AUTO_CREATE_PR mode, opens a real unsupervised PR when it finishes. See
+    # docs/JULES_INTEGRATION.md for the full setup/safety writeup.
+    JULES_API_KEY: Optional[str] = Field(
+        default=None,
+        description=(
+            "Jules coding-agent API key (https://jules.google.com — see "
+            "docs/JULES_INTEGRATION.md). SECRET — masked in the GUI, never "
+            "GUI-writable (CONSTRAINT #3). When absent, data/jules_client.py "
+            "short-circuits every request with zero network cost and both "
+            "list_jules_sources/dispatch_jules_task degrade to a clear "
+            "'not configured' message — no crash. Setting it alone changes "
+            "NOTHING: JULES_ENABLED must also be explicitly turned on."
+        ),
+    )
+    JULES_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the Jules coding-agent integration "
+            "(data/jules_client.py, investyo_mcp_server.py's "
+            "list_jules_sources/dispatch_jules_task tools, "
+            "scripts/jules_dispatch.py). Default False and deliberately NOT "
+            "covered by the 2026-08-07 'new admin/write capabilities default "
+            "True' policy: that policy applies to internal Stockpy "
+            "capabilities gated behind this platform's own command tokens; "
+            "Jules is a third-party autonomous agent that opens real PRs on "
+            "the operator's actual GitHub repo, with no internal trust "
+            "boundary standing between 'flag on' and 'PR created' beyond "
+            "each dispatch call's own confirm=True argument. This field is "
+            "also a settings_keysets.DANGEROUS_KEYS member — flipping it "
+            "requires typed confirmation through any settings editor that "
+            "exposes it, on top of the per-call confirm gate."
+        ),
+    )
+    JULES_REQUEST_TIMEOUT_SECONDS: int = Field(
+        default=30,
+        description=(
+            "HTTP timeout (seconds) for every data/jules_client.py request "
+            "(list_sources, dispatch_session)."
+        ),
+    )
     # TTL (seconds) for the in-process quote cache in CompositeProvider.
     # Prevents redundant network calls within a single refresh cycle.
     # Quotes must NOT be persisted to disk — cache is in-process only.
@@ -4319,7 +4362,7 @@ class Settings(BaseSettings):
         ),
     )
     FORECAST_BACKFILL_DEADLINE_SECONDS: int = Field(
-        default=1800,
+        default=5400,
         description=(
             "Hard wall-clock deadline for one forecast-backfill run, from "
             "worker start to a terminal result. The worker process group is "
@@ -4327,7 +4370,18 @@ class Settings(BaseSettings):
             "relative to data/robinhood_login.py's RH_LOGIN_DEADLINE_SECONDS "
             "(180s, bounded by how long a human will wait for a push "
             "notification) -- this job is a CPU-bound multi-ticker, "
-            "multi-horizon model training run, not a human-approval wait."
+            "multi-horizon model training run, not a human-approval wait. "
+            "Sized (90 minutes) to cover a full run over today's real "
+            "operator universe (~500 tickers), not just a small test "
+            "fixture -- ml/forecast_backfill.py's AgenticForecastBackfiller "
+            "genuinely exceeded the prior 1800s (30 min) default at that "
+            "scale because two of its stages are not yet "
+            "vectorized/checkpointed. This sandbox has no live-market "
+            "network access to precisely re-measure full-universe runtime, "
+            "so this is a deliberately generous, documented safety margin "
+            "rather than a tightly-tuned number. It remains a hard backstop "
+            "even after the pipeline's own perf fixes land -- a stuck "
+            "worker must still be reaped eventually."
         ),
     )
 
@@ -4459,7 +4513,7 @@ class Settings(BaseSettings):
     #    device-approval push" section.
     #  - KEY was a false positive: the auditor's undeclared_env_var check is
     #    a raw regex over file text (not AST-based), and it matched the
-    #    literal string `os.environ.get("KEY")` inside a comment in
+    #    literal string `os.environ.get("key")` inside a comment in
     #    scripts/measure_settings_census.py illustrating that script's own
     #    pattern-matching, not a real env var read anywhere in the codebase.
     WATCHLIST: str = Field(

@@ -45,3 +45,11 @@ class OvernightGuardrails:
             "reasons": reasons,
             "max_weight": self.max_overnight_weight,
         }
+
+
+# NOTE: the auditor's LOW `orphaned_module` finding on this file is expected and accurate —
+# see the module docstring above: this class is genuinely not yet wired into
+# risk_gate.py/order_manager.py, by deliberate design pending a separate operator decision.
+# Do not silence it by re-adding a fake dunder-main entry-point stub (the auditor's
+# _is_entrypoint check does a literal source substring match, so even a comment
+# containing that guard's exact text would fool it — write around it, as done here).

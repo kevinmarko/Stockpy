@@ -144,6 +144,10 @@ class _FakeHit:
         self.score = score
         self.payload = {"title": title, "content": content, "ticker": ticker}
 
+class _FakeResponse:
+    def __init__(self, points):
+        self.points = points
+
 
 class TestRetrieveDocuments:
     def test_no_sentence_transformers_returns_no_documents_not_random_search(self, monkeypatch):
@@ -158,9 +162,9 @@ class TestRetrieveDocuments:
             def __init__(self, url, timeout):
                 pass
 
-            def search(self, **kwargs):
+            def query_points(self, **kwargs):
                 search_called["n"] += 1
-                return [_FakeHit(0.9)]
+                return _FakeResponse([_FakeHit(0.9)])
 
         monkeypatch.setattr(rag_orchestrator, "QdrantClient", _FakeQdrantClient)
 
@@ -191,8 +195,8 @@ class TestRetrieveDocuments:
             def __init__(self, url, timeout):
                 pass
 
-            def search(self, **kwargs):
-                return [_FakeHit(0.87, title="Oil prices rally", ticker="XOM")]
+            def query_points(self, **kwargs):
+                return _FakeResponse([_FakeHit(0.87, title="Oil prices rally", ticker="XOM")])
 
         monkeypatch.setattr(rag_orchestrator, "QdrantClient", _FakeQdrantClient)
 

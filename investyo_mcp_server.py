@@ -813,6 +813,118 @@ def run_platform_tests() -> str:
         return "Error: pytest is not installed or not found in PATH."
 
 @mcp.tool()
+def run_bug_hunter(quick: bool = False, fail_on: str = "HIGH") -> str:
+    """
+    Runs the unified Stockpy Bug Hunter CLI to scan for bugs, secret leaks, 
+    circular dependencies, and test regressions.
+    
+    Args:
+        quick: If True, skips heavy tests like Gravity AI Review Suite and validation harness checks.
+        fail_on: Minimum severity to trigger a failure (CRITICAL, HIGH, MEDIUM, LOW, NONE). Default is HIGH.
+    """
+    cmd = [sys.executable, "scripts/bug_hunter.py", "--fail-on", fail_on]
+    if quick:
+        cmd.append("--quick")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=900
+        )
+        return f"Bug Hunter completed successfully (PASS):\n{result.stdout}"
+    except subprocess.CalledProcessError as e:
+        return f"Bug Hunter found issues (FAIL - exit code {e.returncode}):\n{e.stdout}\n{e.stderr}"
+    except subprocess.TimeoutExpired:
+        return "Bug Hunter timed out after 15 minutes."
+    except FileNotFoundError:
+        return "Error: python or scripts/bug_hunter.py not found."
+
+@mcp.tool()
+def list_jules_sources() -> str:
+    """
+    Lists the GitHub repositories connected to this Jules coding-agent account.
+
+    Read-only -- no side effects. Requires JULES_ENABLED=true and JULES_API_KEY
+    to be set; returns a clear message (not an error) if either is missing.
+    """
+    from data.jules_client import list_sources, JulesUnavailable
+
+    try:
+        sources = list_sources()
+    except JulesUnavailable as e:
+        return str(e)
+
+    lines = ["# Jules Connected Sources\n"]
+    source_list = sources.get("sources", []) if isinstance(sources, dict) else []
+    if not source_list:
+        lines.append("No connected sources found.")
+    else:
+        for src in source_list:
+            name = src.get("name", "unknown") if isinstance(src, dict) else str(src)
+            gh = src.get("githubRepo", {}) if isinstance(src, dict) else {}
+            owner = gh.get("owner", "?")
+            repo = gh.get("repo", "?")
+            lines.append(f"- **{owner}/{repo}** (`{name}`)")
+
+    lines.append("\n```json")
+    lines.append(json.dumps(sources, indent=2, default=str))
+    lines.append("```")
+    return "\n".join(lines)
+
+@mcp.tool()
+def dispatch_jules_task(prompt: str, title: str, source: str, branch: str = "main", confirm: bool = False) -> str:
+    """
+    Dispatches an autonomous Jules coding-agent session against a connected
+    GitHub repo. Jules will write code and, on completion, automatically open
+    a real PR on that repo -- UNSUPERVISED, with no human review before the PR
+    is created (review happens at merge time, same as any other PR).
+
+    SAFETY: requires confirm=True. This must NEVER be set without the
+    operator's EXPLICIT go-ahead for this exact prompt/branch/title in the
+    current conversation -- "the operator asked me to set up Jules" earlier
+    is not blanket authorization to dispatch sessions autonomously later.
+    Also requires JULES_ENABLED=true (a dangerous/typed-confirmation-gated
+    setting) and a valid JULES_API_KEY.
+
+    Args:
+        prompt: The task instructions for Jules.
+        title: Short title for the Jules session / resulting PR.
+        source: The Jules source name to target, e.g. "sources/github/OWNER/REPO"
+            (call list_jules_sources() first to see what's connected -- an
+            unrecognized source is rejected).
+        branch: The starting branch Jules should branch from. Default "main".
+        confirm: Must be explicitly True. Required safety gate -- see above.
+    """
+    if not confirm:
+        return (
+            "confirmation required: dispatching a Jules session opens a real, "
+            "unsupervised PR on the target repo. Re-call with confirm=True "
+            "only after the operator has explicitly approved THIS "
+            "prompt/branch/title."
+        )
+
+    from data.jules_client import dispatch_session, JulesUnavailable
+
+    try:
+        result = dispatch_session(prompt=prompt, source=source, branch=branch, title=title)
+    except JulesUnavailable as e:
+        return str(e)
+
+    session_name = result.get("name", "unknown") if isinstance(result, dict) else "unknown"
+    lines = [
+        f"Jules session dispatched successfully against '{source}' (branch '{branch}').",
+        f"- **Session**: {session_name}",
+        f"- **Title**: {title}",
+        "\n```json",
+        json.dumps(result, indent=2, default=str),
+        "```",
+    ]
+    return "\n".join(lines)
+
+@mcp.tool()
 def query_investyo_db(sql_query: str) -> str:
     """
     Executes a read-only SELECT (or WITH-CTE SELECT) query against the platform database.

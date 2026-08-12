@@ -25,6 +25,13 @@ the child gets the full parent environment):
                     any test's FORECAST_BACKFILL_DEADLINE_SECONDS override.
                     The parent kills this process (via its deadline
                     enforcer or cancel_job()) -- it never exits on its own.
+  hang_with_progress -- emit the 'backtraining' phase event, then ONE
+                    {"event":"progress",...} event (mirroring
+                    ml/forecast_backfill_worker.py's on_combo_trained-driven
+                    event), then sleep far longer than any test's deadline
+                    override, same as 'hang'. Exercises
+                    BackfillJobState.partial_summary surviving into the
+                    terminal 'timeout' state after a real SIGKILL.
   no_result      -- emit the first phase event, then exit immediately
                     WITHOUT ever emitting a 'result' event -- exercises
                     _drain_events' EOF-with-no-result fallback.
@@ -94,6 +101,24 @@ def main(argv=None) -> int:
 
         if behavior == "hang":
             emit({"event": "phase", "phase": "fetching_data", "step": 1, "total_steps": 7})
+            time.sleep(3600)
+            return 0
+
+        if behavior == "hang_with_progress":
+            emit({"event": "phase", "phase": "backtraining", "step": 5, "total_steps": 7})
+            emit(
+                {
+                    "event": "progress",
+                    "trained": ["timeseries_momentum_10d"],
+                    "metrics_so_far": {
+                        "timeseries_momentum_10d": {
+                            "accuracy": 0.55,
+                            "auc": 0.58,
+                            "n_train": 120,
+                        }
+                    },
+                }
+            )
             time.sleep(3600)
             return 0
 

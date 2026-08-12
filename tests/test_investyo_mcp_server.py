@@ -1396,6 +1396,119 @@ class TestRunPlatformTests:
         assert "AssertionError" in result
 
 
+class TestRunBugHunter:
+    def test_success(self, monkeypatch):
+        captured = {}
+        def _mock_run(cmd, **k):
+            captured["cmd"] = cmd
+            return type("Obj", (object,), {"stdout": "Bug hunter pass", "returncode": 0})()
+            
+        monkeypatch.setattr(subprocess, "run", _mock_run)
+        res = srv.run_bug_hunter(quick=True, fail_on="CRITICAL")
+        assert "Bug Hunter completed successfully (PASS)" in res
+        assert "Bug hunter pass" in res
+        assert "--quick" in captured["cmd"]
+        assert "--fail-on" in captured["cmd"]
+        assert "CRITICAL" in captured["cmd"]
+
+    def test_failure(self, monkeypatch):
+        def _raise(*a, **k):
+            raise subprocess.CalledProcessError(1, ["python", "scripts/bug_hunter.py"], output="fail", stderr="err")
+
+        monkeypatch.setattr(subprocess, "run", _raise)
+        res = srv.run_bug_hunter()
+        assert "Bug Hunter found issues (FAIL" in res
+        assert "err" in res
+
+
+class TestListJulesSources:
+    def test_success(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        fake_sources = {
+            "sources": [
+                {"name": "sources/github/acme/widgets", "githubRepo": {"owner": "acme", "repo": "widgets"}},
+            ]
+        }
+        monkeypatch.setattr(jules_mod, "list_sources", lambda: fake_sources)
+
+        result = srv.list_jules_sources()
+
+        assert "acme/widgets" in result
+        assert "sources/github/acme/widgets" in result
+
+    def test_unavailable_returns_string_not_exception(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        def _raise():
+            raise jules_mod.JulesUnavailable("boom")
+
+        monkeypatch.setattr(jules_mod, "list_sources", _raise)
+
+        result = srv.list_jules_sources()
+
+        assert "boom" in result
+
+
+class TestDispatchJulesTask:
+    def test_confirm_false_does_not_dispatch(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        called = {"count": 0}
+
+        def _dispatch(*a, **k):
+            called["count"] += 1
+            return {}
+
+        monkeypatch.setattr(jules_mod, "dispatch_session", _dispatch)
+
+        result = srv.dispatch_jules_task(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+            confirm=False,
+        )
+
+        assert "confirmation required" in result
+        assert called["count"] == 0
+
+    def test_confirm_true_success(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        fake_result = {"name": "sessions/abc123"}
+        monkeypatch.setattr(jules_mod, "dispatch_session", lambda **k: fake_result)
+
+        result = srv.dispatch_jules_task(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+            confirm=True,
+        )
+
+        assert "sessions/abc123" in result
+        assert "dispatched successfully" in result
+
+    def test_confirm_true_unavailable_returns_string_not_exception(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        def _raise(**k):
+            raise jules_mod.JulesUnavailable("nope")
+
+        monkeypatch.setattr(jules_mod, "dispatch_session", _raise)
+
+        result = srv.dispatch_jules_task(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+            confirm=True,
+        )
+
+        assert "nope" in result
+
+
 class TestTriggerEdgarBackfillTimeoutPattern:
     def test_success(self, monkeypatch):
         monkeypatch.setattr(

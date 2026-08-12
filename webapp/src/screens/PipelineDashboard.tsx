@@ -13,7 +13,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import toast from "react-hot-toast";
-import { DynamicGrid } from "../components/DynamicGrid";
 import { api, ApiError } from "../api/client";
 import type {
   ControlStatus,
@@ -78,7 +77,7 @@ function StatusBanner({ status }: { status: ControlStatusOnline }) {
   const running = status.is_running;
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)", padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)", padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <span
           aria-hidden
           style={{
@@ -145,7 +144,7 @@ function StatusBanner({ status }: { status: ControlStatusOnline }) {
 function DaemonOfflineNotice() {
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)", padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ display: "flex", alignItems: "center", gap: "var(--s-2-5)", padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <span
           aria-hidden
           style={{ width: 12, height: 12, borderRadius: "50%", flex: "0 0 auto", background: theme.textMuted }}
@@ -224,7 +223,7 @@ function Controls({
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ margin: "0", fontSize: "var(--t-title)" }}>Trigger a run</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -345,7 +344,7 @@ function RunsTable({ runs }: { runs: RunRecord[] }) {
 function RunHistory({ runs }: { runs: RunRecord[] }) {
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ margin: "0", fontSize: "var(--t-title)" }}>Run history</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflowX: "auto" }}>
@@ -396,7 +395,6 @@ function DurableRunHistory({
           gap: "var(--s-2)",
           padding: "var(--s-3)",
           borderBottom: `1px solid rgba(255, 255, 255, 0.08)`,
-          cursor: "grab",
         }}
       >
         <div>
@@ -545,7 +543,7 @@ function DeadLetterQueueSection() {
 
   return (
     <section className="card card-pad" data-testid="dead-letter-section" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ margin: "0", fontSize: "var(--t-title)" }}>Dead-letter queue</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -673,18 +671,7 @@ export function PipelineDashboard() {
         <ErrorState message={error} status={httpStatus} onRetry={reload} />
       ) : data ? (
         <div style={{ flex: 1, minHeight: 0 }}>
-          <DynamicGrid
-            layoutKey="pipeline"
-            defaultLayouts={{
-              lg: [
-                { i: "status", x: 0, y: 0, w: 6, h: 2, minW: 4, minH: 2 },
-                { i: "controls", x: 6, y: 0, w: 6, h: 2, minW: 4, minH: 2 },
-                { i: "history", x: 0, y: 2, w: 6, h: 4, minW: 4, minH: 3 },
-                { i: "durableHistory", x: 6, y: 2, w: 6, h: 4, minW: 4, minH: 3 },
-                { i: "deadLetter", x: 0, y: 6, w: 12, h: 4, minW: 6, minH: 3 },
-              ],
-            }}
-          >
+          <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
             {data.daemon_alive ? (
               <div key="status"><StatusBanner status={data} /></div>
             ) : (
@@ -706,7 +693,7 @@ export function PipelineDashboard() {
             <div key="deadLetter">
               <DeadLetterQueueSection />
             </div>
-          </DynamicGrid>
+          </div>
         </div>
       ) : null}
     </div>
