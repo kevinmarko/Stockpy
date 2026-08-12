@@ -5,38 +5,9 @@ import { LayoutTemplate, Trash2, Edit2, Copy, Download, Upload, GripVertical, Se
 import { Reorder } from "framer-motion";
 import { Button, EmptyState, Input } from "../components/ui";
 import { TabGuide } from "../components/TabGuide";
-import { useCustomViews, type CustomViewWidgets, type CustomView } from "../customViews";
+import { useCustomViews, slugify, getViewById, type CustomViewWidgets, type CustomView } from "../customViews";
+import { WIDGET_LABELS, ALL_WIDGET_KEYS, WIDGET_COMPONENTS, type NonChatWidgetKey } from "../widgetRegistry";
 import { theme } from "../theme";
-
-import { EdgeByStrategyChart } from "../components/EdgeByStrategyChart";
-import { SymbolSignalOverlayChart } from "../components/SymbolSignalOverlayChart";
-import { PilotsTableWidget } from "../components/PilotsTableWidget";
-import { SentimentMiniChart } from "../components/SentimentMiniChart";
-import { PortfolioHeatWidget } from "../components/PortfolioHeatWidget";
-import { OptionsDirectiveSummary } from "../components/OptionsDirectiveSummary";
-import { SignalBreakdownMiniWidget } from "../components/SignalBreakdownMiniWidget";
-import { MacroRegimeBanner } from "../components/MacroRegimeBanner";
-
-const WIDGET_LABELS: Record<keyof CustomViewWidgets, string> = {
-  edgeByStrategy: "Edge-by-strategy chart",
-  symbolOverlay: "Symbol price + signal overlay chart",
-  aiChat: "“Ask AI about this view” chat shortcut",
-  pilotsTable: "Pilots holdings table",
-  sentimentMini: "Sentiment history mini-chart",
-  portfolioHeat: "Portfolio heat gauge",
-  optionsDirective: "Options directive summary",
-  signalBreakdown: "Signal breakdown mini-chart",
-  macroRegime: "Macro regime banner",
-};
-
-// Single source of truth for "all 9 widget keys, in stable order" -- shared
-// with customViews.ts's own copy of this list (previously each of the two
-// files re-derived it independently: this one via `Object.keys(WIDGET_LABELS)
-// as any`, that one via a hand-written array -- exactly the kind of
-// two-sources-that-can-drift setup this codebase's conventions warn against
-// elsewhere). `as const` + the `Record<keyof CustomViewWidgets, string>` type
-// on WIDGET_LABELS above is what keeps this list exhaustive at compile time.
-const ALL_WIDGET_KEYS = Object.keys(WIDGET_LABELS) as (keyof CustomViewWidgets)[];
 
 /** Cosmetic-only id fragment for template buttons' `data-testid` -- NOT the
  * same as customViews.ts's `slugify` (that one governs the real, persisted
@@ -112,6 +83,28 @@ const DEFAULT_WIDGETS: CustomViewWidgets = {
   macroRegime: false,
 };
 
+
+/**
+ * Renders one widget's live-preview content in the right-column layout
+ * preview. `aiChat` is intentionally not in `WIDGET_COMPONENTS` -- it needs
+ * the real `useChat()` context, so this preview shows a static, non-
+ * interactive placeholder instead of the real chat button `CustomView.tsx`
+ * renders. See widgetRegistry.tsx's module doc for the full reasoning.
+ */
+function renderWidgetPreview(key: keyof CustomViewWidgets, config: any) {
+  if (key === "aiChat") {
+    return (
+      <div style={{ padding: "var(--s-3)", border: `1px solid ${theme.border}`, borderRadius: 8 }}>
+        <h3 style={{ margin: "0 0 var(--s-2)" }}>Ask AI</h3>
+        <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>[Chat Preview]</p>
+      </div>
+    );
+  }
+  const entry = WIDGET_COMPONENTS[key as NonChatWidgetKey];
+  if (!entry) return null;
+  const { Component } = entry;
+  return <Component {...config} />;
+}
 
 export function CreateDataApp() {
   const navigate = useNavigate();
@@ -192,9 +185,27 @@ export function CreateDataApp() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  /**
+   * A naive constant `${v.name} - Copy` collides with itself on a second
+   * click: storage keys off `slugify(name)`, so `addOrUpdateView`'s own
+   * "no id given -> find by slug" rule treats the second call as an UPDATE
+   * of the first duplicate rather than a new, third view (the second click
+   * silently overwrote the first copy instead of producing a "- Copy 2").
+   * Mirrors `addOrUpdateView`'s own rename-collision check (find an existing
+   * view whose slug matches the candidate) rather than inventing a new
+   * collision rule -- keep incrementing the suffix until a free slug is
+   * found.
+   */
   const duplicateView = (v: CustomView) => {
+    let candidateName = `${v.name} - Copy`;
+    let suffix = 2;
+    while (views.some((existing) => slugify(existing.name) === slugify(candidateName))) {
+      candidateName = `${v.name} - Copy ${suffix}`;
+      suffix++;
+    }
+
     const { view, persisted } = addOrUpdateView({
-      name: `${v.name} - Copy`,
+      name: candidateName,
       widgets: v.widgets,
       widgetOrder: v.widgetOrder,
       widgetConfigs: v.widgetConfigs,
@@ -245,6 +256,13 @@ export function CreateDataApp() {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
+
+    // Snapshot the currently-edited view's `updatedAt` (if any) BEFORE the
+    // import runs, so we can tell afterward whether the import actually
+    // touched it -- `getViewById` reads live module state, not this
+    // component's stale render-time `views`.
+    const editingBefore = editingId ? getViewById(editingId) : undefined;
+
     reader.onload = (event) => {
       const text = event.target?.result as string;
       const { importedCount, persisted, error } = importViews(text);
@@ -256,7 +274,25 @@ export function CreateDataApp() {
         } else {
           toast.success(`Imported ${importedCount} view(s) for this session only.`);
         }
+
+        // If the view currently open in the editor was one of the ones this
+        // import just overwrote (`importViews` preserves `id` and stamps a
+        // fresh `updatedAt` for a slug match), the in-form state is now
+        // stale -- a subsequent Save would silently clobber the import that
+        // just landed. Refresh the form from the freshly-imported version
+        // instead of leaving that trap in place.
+        if (editingBefore) {
+          const refreshed = getViewById(editingBefore.id);
+          if (refreshed && refreshed.updatedAt !== editingBefore.updatedAt) {
+            loadViewForEditing(refreshed);
+            toast(`"${refreshed.name}" was just updated by this import -- the editor was refreshed to match.`, { icon: "ℹ️" });
+          }
+        }
       }
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    };
+    reader.onerror = () => {
+      toast.error("Failed to read the file. Please try again.");
       if (fileInputRef.current) fileInputRef.current.value = "";
     };
     reader.readAsText(file);
@@ -445,20 +481,7 @@ export function CreateDataApp() {
                   </div>
                   {livePreview && (
                     <div style={{ marginTop: "var(--s-3)", pointerEvents: "none", opacity: 0.8 }}>
-                      {key === "edgeByStrategy" && <EdgeByStrategyChart {...(widgetConfigs[key] || {})} />}
-                      {key === "symbolOverlay" && <SymbolSignalOverlayChart {...(widgetConfigs[key] || {})} />}
-                      {key === "pilotsTable" && <PilotsTableWidget {...(widgetConfigs[key] || {})} />}
-                      {key === "sentimentMini" && <SentimentMiniChart {...(widgetConfigs[key] || {})} />}
-                      {key === "portfolioHeat" && <PortfolioHeatWidget {...(widgetConfigs[key] || {})} />}
-                      {key === "optionsDirective" && <OptionsDirectiveSummary {...(widgetConfigs[key] || {})} />}
-                      {key === "signalBreakdown" && <SignalBreakdownMiniWidget {...(widgetConfigs[key] || {})} />}
-                      {key === "macroRegime" && <MacroRegimeBanner {...(widgetConfigs[key] || {})} />}
-                      {key === "aiChat" && (
-                        <div style={{ padding: "var(--s-3)", border: `1px solid ${theme.border}`, borderRadius: 8 }}>
-                          <h3 style={{ margin: "0 0 var(--s-2)" }}>Ask AI</h3>
-                          <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>[Chat Preview]</p>
-                        </div>
-                      )}
+                      {renderWidgetPreview(key, widgetConfigs[key] || {})}
                     </div>
                   )}
                 </Reorder.Item>

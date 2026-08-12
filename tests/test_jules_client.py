@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from data.jules_client import (
+    JulesConfirmationRequired,
     JulesUnavailable,
     _check_dispatch_dedup,
     _compute_dedup_key,
@@ -173,16 +174,99 @@ class TestListSourcesFailure:
                 list_sources()
 
 
+class TestListSourcesMalformedJSON:
+    """Fix #1: a malformed/empty 2xx body must degrade to JulesUnavailable,
+    never escape as a raw JSONDecodeError -- ``response.json()`` was
+    previously called OUTSIDE the try/except wrapping the raw request."""
+
+    def test_malformed_json_body_raises_jules_unavailable_not_json_decode_error(self):
+        resp = _resp(200, {})
+        resp.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+        with patch("data.jules_client.requests.get", return_value=resp):
+            with pytest.raises(JulesUnavailable, match="malformed JSON"):
+                list_sources()
+
+    def test_empty_body_json_decode_error_does_not_escape_raw(self):
+        """Same failure mode as an empty 2xx response body (e.g. a proxy
+        returning ``200`` with no content) -- must still be a
+        JulesUnavailable, not an uncaught exception of any other type."""
+        resp = _resp(200, {})
+        resp.json.side_effect = ValueError("No JSON object could be decoded")
+        with patch("data.jules_client.requests.get", return_value=resp):
+            try:
+                list_sources()
+                pytest.fail("expected JulesUnavailable to be raised")
+            except JulesUnavailable:
+                pass
+
+
+class TestFormatSourcesNullSources:
+    """Fix #3: an explicit ``{"sources": null}`` must degrade to an empty
+    list, not crash -- ``.get("sources", [])`` only supplies the default
+    when the key is ABSENT, not when its value is ``None``."""
+
+    def test_explicit_null_sources_key_yields_empty_list(self):
+        from data.jules_client import format_sources
+
+        assert format_sources({"sources": None}) == []
+
+    def test_missing_sources_key_yields_empty_list(self):
+        from data.jules_client import format_sources
+
+        assert format_sources({}) == []
+
+    def test_non_dict_response_yields_empty_list(self):
+        from data.jules_client import format_sources
+
+        assert format_sources(None) == []  # type: ignore[arg-type]
+
+    def test_normal_payload_still_formats_correctly(self):
+        from data.jules_client import format_sources
+
+        result = format_sources(SOURCES_PAYLOAD)
+        assert result == [
+            {"name": "sources/github/acme/widgets", "owner": "acme", "repo": "widgets"}
+        ]
+
+    def test_unnamed_source_falls_back_to_canonical_string(self):
+        from data.jules_client import format_sources
+
+        result = format_sources({"sources": [{"githubRepo": {"owner": "acme", "repo": "x"}}]})
+        assert result[0]["name"] == "unknown"
+
+
+class TestDispatchSessionNullSources:
+    """Fix #3, from dispatch_session()'s own perspective: an explicit
+    ``{"sources": null}`` GET /sources response must not crash the known-
+    sources membership check with a TypeError on ``None`` iteration."""
+
+    def test_null_sources_degrades_to_source_not_connected_not_type_error(
+        self, isolated_output_dir
+    ):
+        with patch(
+            "data.jules_client.requests.get", return_value=_resp(200, {"sources": None})
+        ), patch("data.jules_client.requests.post") as post:
+            with pytest.raises(JulesUnavailable, match="not in the connected Jules sources"):
+                dispatch_session(
+                    "do the thing",
+                    "sources/github/acme/widgets",
+                    "main",
+                    "Title",
+                    confirm=True,
+                )
+        post.assert_not_called()
+
+
 class TestDispatchSessionGates:
     def test_raises_when_jules_disabled(self, monkeypatch, isolated_output_dir):
         monkeypatch.setattr(settings, "JULES_ENABLED", False, raising=False)
         with pytest.raises(JulesUnavailable, match="disabled"):
-            dispatch_session("do the thing", "sources/github/acme/widgets", "main", "Title")
+            dispatch_session("do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
 
     def test_raises_when_api_key_unset(self, monkeypatch, isolated_output_dir):
         monkeypatch.setattr(settings, "JULES_API_KEY", None, raising=False)
         with pytest.raises(JulesUnavailable, match="JULES_API_KEY"):
-            dispatch_session("do the thing", "sources/github/acme/widgets", "main", "Title")
+            dispatch_session("do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
 
     def test_raises_when_source_not_connected(self, isolated_output_dir):
         with patch(
@@ -190,9 +274,87 @@ class TestDispatchSessionGates:
         ), patch("data.jules_client.requests.post") as post:
             with pytest.raises(JulesUnavailable, match="not in the connected Jules sources"):
                 dispatch_session(
-                    "do the thing", "sources/github/other/repo", "main", "Title"
+                    "do the thing", "sources/github/other/repo", "main", "Title", confirm=True)
+        post.assert_not_called()
+
+
+class TestDispatchSessionConfirmGate:
+    """Fix #4: the ``confirm=True`` safety gate must be enforced INSIDE
+    dispatch_session() itself, not only by caller convention -- so a future
+    third caller cannot bypass it by forgetting its own pre-check."""
+
+    def test_confirm_false_raises_without_any_network_call(self, isolated_output_dir):
+        with patch("data.jules_client.requests.get") as get, patch(
+            "data.jules_client.requests.post"
+        ) as post:
+            with pytest.raises(JulesConfirmationRequired):
+                dispatch_session(
+                    "do the thing",
+                    "sources/github/acme/widgets",
+                    "main",
+                    "Title",
+                    confirm=False,
+                )
+        get.assert_not_called()
+        post.assert_not_called()
+
+    def test_confirm_omitted_defaults_to_false_and_raises(self, isolated_output_dir):
+        """``confirm`` defaults to ``False`` -- omitting it entirely must be
+        just as refused as passing it explicitly False."""
+        with patch("data.jules_client.requests.post") as post:
+            with pytest.raises(JulesConfirmationRequired):
+                dispatch_session(
+                    "do the thing", "sources/github/acme/widgets", "main", "Title"
                 )
         post.assert_not_called()
+
+    def test_confirm_required_error_is_a_jules_unavailable(self, isolated_output_dir):
+        """JulesConfirmationRequired subclasses JulesUnavailable so every
+        existing ``except JulesUnavailable`` caller boundary keeps working
+        unchanged for this new failure mode too."""
+        with pytest.raises(JulesUnavailable):
+            dispatch_session(
+                "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=False
+            )
+
+    def test_confirm_true_still_required_to_be_exactly_true(self, isolated_output_dir):
+        """A truthy-but-not-``True`` value (e.g. the string ``"yes"``) must
+        still be refused -- this is an explicit-opt-in gate, not a generic
+        truthiness check."""
+        with patch("data.jules_client.requests.post") as post:
+            with pytest.raises(JulesConfirmationRequired):
+                dispatch_session(
+                    "do the thing",
+                    "sources/github/acme/widgets",
+                    "main",
+                    "Title",
+                    confirm="yes",  # type: ignore[arg-type]
+                )
+        post.assert_not_called()
+
+
+class TestDispatchSessionMalformedJSON:
+    """Fix #1: same JulesUnavailable degrade as list_sources(), but on the
+    POST /sessions response -- and the ledger must NOT gain an entry for a
+    dispatch whose response body could not even be parsed."""
+
+    def test_malformed_post_response_raises_jules_unavailable(self, isolated_output_dir):
+        post_resp = _resp(200, {})
+        post_resp.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+        with patch(
+            "data.jules_client.requests.get", return_value=_resp(200, SOURCES_PAYLOAD)
+        ), patch("data.jules_client.requests.post", return_value=post_resp):
+            with pytest.raises(JulesUnavailable, match="malformed JSON"):
+                dispatch_session(
+                    "do the thing",
+                    "sources/github/acme/widgets",
+                    "main",
+                    "Title",
+                    confirm=True,
+                )
+
+        ledger_path = isolated_output_dir / "jules_dispatched.jsonl"
+        assert not ledger_path.exists()
 
 
 class TestDispatchSessionSuccess:
@@ -204,8 +366,7 @@ class TestDispatchSessionSuccess:
             return_value=_resp(200, SESSION_PAYLOAD),
         ) as post:
             result = dispatch_session(
-                "do the thing", "sources/github/acme/widgets", "main", "Title"
-            )
+                "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
 
         assert result == SESSION_PAYLOAD
         assert post.call_count == 1
@@ -236,8 +397,7 @@ class TestDispatchSessionSuccess:
             return_value=_resp(200, SESSION_PAYLOAD),
         ) as post:
             dispatch_session(
-                "do the thing", "sources/github/acme/widgets", "main", "Title"
-            )
+                "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
         kwargs = post.call_args.kwargs
         assert kwargs["headers"]["X-Goog-Api-Key"] == "test-jules-key"
         assert kwargs["headers"]["Content-Type"] == "application/json"
@@ -253,8 +413,7 @@ class TestDispatchSessionFailure:
         ):
             with pytest.raises(JulesUnavailable):
                 dispatch_session(
-                    "do the thing", "sources/github/acme/widgets", "main", "Title"
-                )
+                    "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
         ledger_path = isolated_output_dir / "jules_dispatched.jsonl"
         assert not ledger_path.exists()
 
@@ -269,8 +428,7 @@ class TestDispatchSessionFailure:
         ):
             with pytest.raises(JulesUnavailable, match="transport error"):
                 dispatch_session(
-                    "do the thing", "sources/github/acme/widgets", "main", "Title"
-                )
+                    "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
 
 
 class TestDispatchSessionDedup:
@@ -284,14 +442,12 @@ class TestDispatchSessionDedup:
             return_value=_resp(200, SESSION_PAYLOAD),
         ) as post:
             dispatch_session(
-                "do the thing", "sources/github/acme/widgets", "main", "Title"
-            )
+                "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
             assert post.call_count == 1
 
             with pytest.raises(JulesUnavailable, match="already recorded today"):
                 dispatch_session(
-                    "do the thing", "sources/github/acme/widgets", "main", "Title"
-                )
+                    "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
             # Second dispatch refused before ever reaching the network.
             assert post.call_count == 1
 
@@ -303,15 +459,13 @@ class TestDispatchSessionDedup:
             return_value=_resp(200, SESSION_PAYLOAD),
         ) as post:
             dispatch_session(
-                "do the thing", "sources/github/acme/widgets", "main", "Title"
-            )
+                "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
             dispatch_session(
                 "do the thing",
                 "sources/github/acme/widgets",
                 "main",
                 "Title",
-                force=True,
-            )
+                force=True, confirm=True)
             assert post.call_count == 2
 
         ledger_path = isolated_output_dir / "jules_dispatched.jsonl"
@@ -362,7 +516,7 @@ class TestDispatchSessionDedup:
             "data.jules_client.requests.post",
             return_value=_resp(200, SESSION_PAYLOAD),
         ) as post:
-            dispatch_session(prompt, source, branch, title)
+            dispatch_session(prompt, source, branch, title, confirm=True)
         assert post.call_count == 1
 
         lines = ledger_path.read_text(encoding="utf-8").strip().splitlines()
@@ -416,6 +570,77 @@ class TestDedupLedgerResilience:
             return_value=_resp(200, SESSION_PAYLOAD),
         ):
             result = dispatch_session(
-                "do the thing", "sources/github/acme/widgets", "main", "Title"
-            )
+                "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True)
         assert result == SESSION_PAYLOAD
+
+
+class TestDispatchLedgerLock:
+    """Fix #2: the dedup-check -> POST -> ledger-write sequence is wrapped
+    in ``_dispatch_lock()`` so two concurrent/retried calls cannot both pass
+    the dedup check before either one records its dispatch."""
+
+    def test_lock_file_does_not_survive_a_successful_dispatch(self, isolated_output_dir):
+        """The lock file is created and removed around the critical section
+        -- it must not be left behind after a normal dispatch."""
+        with patch(
+            "data.jules_client.requests.get", return_value=_resp(200, SOURCES_PAYLOAD)
+        ), patch(
+            "data.jules_client.requests.post",
+            return_value=_resp(200, SESSION_PAYLOAD),
+        ):
+            dispatch_session(
+                "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True
+            )
+        lock_path = isolated_output_dir / "jules_dispatched.jsonl.lock"
+        assert not lock_path.exists()
+
+    def test_lock_file_does_not_survive_a_failed_dispatch(self, isolated_output_dir):
+        """The lock must be released even when the critical section raises
+        (e.g. a duplicate dedup_key) -- otherwise one failed call would
+        permanently wedge every future dispatch."""
+        with patch(
+            "data.jules_client.requests.get", return_value=_resp(200, SOURCES_PAYLOAD)
+        ), patch(
+            "data.jules_client.requests.post",
+            return_value=_resp(200, SESSION_PAYLOAD),
+        ):
+            dispatch_session(
+                "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True
+            )
+            with pytest.raises(JulesUnavailable, match="already recorded today"):
+                dispatch_session(
+                    "do the thing", "sources/github/acme/widgets", "main", "Title", confirm=True
+                )
+        lock_path = isolated_output_dir / "jules_dispatched.jsonl.lock"
+        assert not lock_path.exists()
+
+    def test_held_lock_causes_second_caller_to_time_out(self, isolated_output_dir, monkeypatch):
+        """A lock file already held by "another process" (simulated by
+        creating it directly, never releasing it) must make a concurrent
+        dispatch raise JulesUnavailable rather than block forever or race
+        past the dedup check."""
+        import os as _os
+
+        import data.jules_client as jules_client_module
+
+        monkeypatch.setattr(jules_client_module, "_LOCK_ACQUIRE_TIMEOUT_SECONDS", 0.2)
+        monkeypatch.setattr(jules_client_module, "_LOCK_POLL_INTERVAL_SECONDS", 0.02)
+
+        lock_path = isolated_output_dir / "jules_dispatched.jsonl.lock"
+        fd = _os.open(str(lock_path), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY)
+        try:
+            with patch(
+                "data.jules_client.requests.get", return_value=_resp(200, SOURCES_PAYLOAD)
+            ), patch("data.jules_client.requests.post") as post:
+                with pytest.raises(JulesUnavailable, match="Timed out waiting"):
+                    dispatch_session(
+                        "do the thing",
+                        "sources/github/acme/widgets",
+                        "main",
+                        "Title",
+                        confirm=True,
+                    )
+            post.assert_not_called()
+        finally:
+            _os.close(fd)
+            _os.unlink(lock_path)
