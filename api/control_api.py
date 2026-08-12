@@ -738,10 +738,15 @@ def stream_job_logs(
             return lines, f.tell()
 
     def _check_size(path):
-        import os
         try:
             return os.stat(path).st_size
-        except FileNotFoundError:
+        except OSError as exc:
+            # Broader than FileNotFoundError on purpose: a dropped network
+            # mount or a permission change mid-stream must degrade to "no
+            # new data this tick" (and get logged) rather than propagate out
+            # of asyncio.to_thread and crash the SSE generator outright.
+            if not isinstance(exc, FileNotFoundError):
+                logger.warning("stream_job_logs: stat failed for %s: %s", path, exc)
             return -1
 
     async def log_event_generator():
