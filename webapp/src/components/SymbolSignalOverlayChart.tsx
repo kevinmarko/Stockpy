@@ -48,6 +48,21 @@ export function SymbolSignalOverlayChart({ defaultTicker }: { defaultTicker?: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbols]);
 
+  // `useState(defaultTicker || ...)` above only ever reads `defaultTicker`
+  // at MOUNT -- a later change to the prop (the operator edits this widget's
+  // config in the Configure modal, or opens a different saved view whose
+  // config carries a different `defaultTicker`, both of which re-render this
+  // same mounted component with a new prop rather than remounting it) was
+  // silently ignored: the `symbols` effect above only resets `symbol` when it
+  // falls OUT of the current `symbols` list, which rarely happens since
+  // `defaultTicker` is unioned INTO `symbols` rather than replacing anything.
+  // This effect reacts to the prop itself, and ONLY the prop -- it must not
+  // re-fire on `symbol` changes, or it would stomp the operator's own manual
+  // in-widget symbol selection on every unrelated re-render.
+  useEffect(() => {
+    if (defaultTicker) setSymbol(defaultTicker);
+  }, [defaultTicker]);
+
   const bars = useApi<Bar[]>(() => api.getDataBars(symbol, 252), [symbol]);
   const decisions = useApi<DecisionEntry[]>(
     () => api.getDecisions({ symbol, limit: 100 }),
