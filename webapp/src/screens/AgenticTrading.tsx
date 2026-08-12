@@ -7,7 +7,7 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useBrokerageLoginJob } from "../hooks/useBrokerageLoginJob";
 import { useDebounce } from "../hooks/useDebounce";
 import { usePersistedState } from "../hooks/usePersistedState";
-import { useExecutionMode } from "../components/ExecutionModeContext";
+import { useExecutionMode } from "../hooks/useExecutionMode";
 import type {
   AgenticDiscovery,
   AgenticStatus,

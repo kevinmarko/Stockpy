@@ -14,7 +14,7 @@ import {
 import { theme } from "../theme";
 import { Button } from "./ui";
 import { api } from "../api/client";
-import { loadUniverse } from "./SymbolInput";
+import { loadUniverse } from "./universeCache";
 
 interface CommandPaletteModalProps {
   isOpen: boolean;

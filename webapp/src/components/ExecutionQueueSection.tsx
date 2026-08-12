@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { useExecutionMode } from "./ExecutionModeContext";
+import { useExecutionMode } from "../hooks/useExecutionMode";
 import type { ExecutionQueue, ExecutionQueueIntent, DecisionCreateRequest } from "../api/types";
 import { EmptyState, ErrorState, Loading, StaleDataNotice, Notice } from "./ui";
 import { timeAgo } from "../format";
