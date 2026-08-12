@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "92db910d47d8c4bec39f16dccfa8f92494146c66",
+    "git_commit": "a4e0bbef0f6e78d7261a21cc0f29221377a8bf25",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -834,17 +834,17 @@
       "FORECAST_BACKFILL_CLASSIFIER_TYPE": 4330,
       "FORECAST_BACKFILL_ENABLED": 4349,
       "FORECAST_BACKFILL_DEADLINE_SECONDS": 4364,
-      "CACHE_LONG_SHORT_ENABLED": 4437,
-      "CACHE_LONG_SHORT_WRITES_ENABLED": 4448,
-      "CACHE_LONG_SHORT_MIN_CORRELATION": 4461,
-      "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT": 4462,
-      "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS": 4463,
-      "CACHE_LONG_SHORT_PROXY_CANDIDATES": 4464,
-      "WATCHLIST": 4508,
-      "GCLOUD_BIN": 4512,
-      "GRAVITY_REQUIRE_NATIVE": 4516,
-      "QDRANT_COLLECTION": 4520,
-      "QDRANT_URL": 4524
+      "CACHE_LONG_SHORT_ENABLED": 4448,
+      "CACHE_LONG_SHORT_WRITES_ENABLED": 4459,
+      "CACHE_LONG_SHORT_MIN_CORRELATION": 4472,
+      "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT": 4473,
+      "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS": 4474,
+      "CACHE_LONG_SHORT_PROXY_CANDIDATES": 4475,
+      "WATCHLIST": 4519,
+      "GCLOUD_BIN": 4523,
+      "GRAVITY_REQUIRE_NATIVE": 4527,
+      "QDRANT_COLLECTION": 4531,
+      "QDRANT_URL": 4535
     }
   },
   "env_io_lists": {
@@ -1286,7 +1286,7 @@
       {
         "field": "GCLOUD_BIN",
         "in_excluded_from_gui": true,
-        "settings_py_line": 4512,
+        "settings_py_line": 4523,
         "description": "Path to the gcloud binary for environment integrations."
       },
       {
@@ -2918,10 +2918,10 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 688,
+      "total_reads": 689,
       "distinct_fields": 221,
       "counts": {
-        "OUTPUT_DIR": 124,
+        "OUTPUT_DIR": 125,
         "SIGNAL_WEIGHTS": 21,
         "DASHBOARD_REFRESH_SECONDS": 18,
         "DISABLED_SIGNAL_MODULES": 14,
