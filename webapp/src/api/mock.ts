@@ -8632,43 +8632,44 @@ export const MOCK_META = {
 
 
 
+// Mirrors the real api/pilots_api.py::_PAPER_BROKER_GROUPS exactly (field
+// names, types, and defaults) -- this fixture previously invented fields
+// (PAPER_BROKER_ENABLED, PAPER_BROKER_INITIAL_CASH, PAPER_BROKER_SLIPPAGE_BPS)
+// that don't exist in settings.py at all, and gave BROKER_BACKEND a fake
+// "PAPER"/"ALPACA"/"ROBINHOOD" enum with a "ROBINHOOD" option that doesn't
+// actually work (BROKER_BACKEND recognizes only "alpaca"/"fmp_paper" today;
+// "robinhood" is a documented-but-not-yet-implemented reserved value that
+// falls through to "alpaca" -- see docs/architecture/execution.md's "Future
+// extension point" section). A mock-mode operator exercising this screen was
+// seeing a fictional, unsafe-looking control surface that bore no relation
+// to what a real write would do.
 const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
   {
-    group: "Paper Broker",
-    key: "PAPER_BROKER_ENABLED",
-    type: "boolean",
-    value: true,
-    default: true,
-    description: "If enabled, orders are processed against live market prices and tracked in a simulated portfolio rather than sent to a real brokerage.",
+    group: "Paper Broker Configuration",
+    key: "BROKER_BACKEND",
+    type: "string",
+    value: "fmp_paper",
+    default: "fmp_paper",
+    description: "Selects the active broker backend ('alpaca' or 'fmp_paper'). Defaults to 'fmp_paper'. A runtime guard forces 'alpaca' if 'fmp_paper' is used while genuinely going live. 'robinhood' is reserved for a future automated broker; any unrecognized value falls through to 'alpaca'.",
   },
   {
-    group: "Paper Broker",
-    key: "PAPER_BROKER_INITIAL_CASH",
+    group: "Paper Broker Configuration",
+    key: "FMP_PAPER_STARTING_CASH",
     type: "number",
     value: 100000.0,
     default: 100000.0,
     min: 0,
-    description: "The starting cash balance when resetting the paper trading account.",
+    max: 10000000,
+    step: 1000,
+    description: "Starting cash balance seeded into a fresh paper trading account the first time it's constructed. Only takes effect when BROKER_BACKEND='fmp_paper'.",
   },
   {
-    group: "Paper Broker",
-    key: "PAPER_BROKER_SLIPPAGE_BPS",
-    type: "number",
-    value: 5,
-    default: 5,
-    min: 0,
-    max: 500,
-    step: 1,
-    description: "Basis points of simulated slippage applied to market orders.",
-  },
-  {
-    group: "Paper Broker",
-    key: "BROKER_BACKEND",
-    type: "string",
-    value: "PAPER",
-    default: "PAPER",
-    options: ["PAPER", "ALPACA", "ROBINHOOD"],
-    description: "The execution engine to use. WARNING: Changing this to a real broker will route orders to real markets.",
+    group: "Paper Broker Configuration",
+    key: "PAPER_BROKER_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description: "Gates POST /pilots/paper-broker/reset. If false, resets are blocked.",
   },
 ];
 
