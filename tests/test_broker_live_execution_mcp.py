@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 import json
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -116,6 +117,95 @@ def test_execute_live_trade_notification_failure_does_not_block_proposal_creatio
     data = json.loads(result)
     assert data["status"] == "pending_confirmation"
     assert _store().get_by_token(data["confirmation_token"]) is not None
+
+
+# ---------------------------------------------------------------------------
+# confirm_live_trade -- LIVE_TRADE_EXECUTION_ENABLED is a genuine kill switch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_confirm_live_trade_disabled_refuses_an_already_approved_proposal(monkeypatch):
+    """The flag must be re-checked at confirm time, not just at proposal
+    creation -- otherwise flipping it off after a proposal is already
+    approved does nothing to stop it from executing."""
+    store = _store()
+    token = store.create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+    store.approve_proposal(token)
+
+    monkeypatch.setattr(settings, "LIVE_TRADE_EXECUTION_ENABLED", False)
+
+    with patch("broker_live_execution_mcp.OrderManager") as mock_om_cls:
+        result = await confirm_live_trade(token)
+
+    data = json.loads(result)
+    assert data["status"] == "error"
+    assert "disabled" in data["message"].lower()
+    mock_om_cls.assert_not_called()
+
+    # The approved proposal is untouched -- still approved, not consumed.
+    assert store.get_by_token(token).status == "approved"
+
+
+# ---------------------------------------------------------------------------
+# confirm_live_trade -- the double-submission race (claim_for_execution)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_confirm_live_trade_concurrent_calls_only_submit_once():
+    """The core regression test for the double-submission race: two
+    concurrent confirm_live_trade calls for the same approved proposal must
+    result in exactly ONE broker submission, not two. Before
+    claim_for_execution existed, both calls could read status=="approved"
+    before either wrote back a change."""
+    store = _store()
+    token = store.create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+    store.approve_proposal(token)
+
+    mock_broker = AsyncMock()
+    mock_broker.get_open_positions.return_value = []
+    mock_broker.get_account.return_value = AccountSnapshot(equity=1_000_000.0, cash=1_000_000.0, buying_power=1_000_000.0)
+    mock_broker.submit_order.return_value = OrderResult(
+        client_order_id="", broker_order_id="mock-order-1", status=OrderStatus.ACCEPTED,
+    )
+    mock_quote = MagicMock()
+    mock_quote.price = 150.0
+
+    with patch("broker_live_execution_mcp._get_broker", return_value=mock_broker), \
+         patch("data.market_data.get_provider") as mock_get_provider, \
+         patch.object(settings, "RISK_GATE_ENFORCE_MARKET_HOURS", False):
+        mock_get_provider.return_value.get_latest_quote.return_value = mock_quote
+
+        results = await asyncio.gather(
+            confirm_live_trade(token), confirm_live_trade(token)
+        )
+
+    datas = [json.loads(r) for r in results]
+    statuses = sorted(d["status"] for d in datas)
+    # Exactly one call succeeds; the other loses the claim race.
+    assert statuses == ["error", "success"]
+    mock_broker.submit_order.assert_awaited_once()
+    assert store.get_by_token(token).status == "executed"
+
+
+@pytest.mark.anyio
+async def test_claim_race_loser_reports_honest_message_not_a_false_pending():
+    """The losing side of the race must not report a misleading status --
+    confirm this explicitly rather than only checking the aggregate outcome
+    above."""
+    store = _store()
+    token = store.create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+    store.approve_proposal(token)
+    assert store.claim_for_execution(token) is True  # simulate another call winning first
+
+    with patch("broker_live_execution_mcp.OrderManager") as mock_om_cls:
+        result = await confirm_live_trade(token)
+
+    data = json.loads(result)
+    assert data["status"] == "error"
+    assert "executing" in data["message"] or "not yet executable" in data["message"].lower()
+    mock_om_cls.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

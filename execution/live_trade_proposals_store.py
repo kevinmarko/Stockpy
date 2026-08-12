@@ -42,6 +42,7 @@ _PENDING = "pending_approval"
 _APPROVED = "approved"
 _REJECTED = "rejected"
 _EXPIRED = "expired"
+_EXECUTING = "executing"
 _EXECUTED = "executed"
 _FAILED = "failed"
 
@@ -159,12 +160,20 @@ class LiveTradeProposalStore:
         return token
 
     def _lazily_expire(self, row: LiveTradeProposal) -> LiveTradeProposal:
-        """If ``row`` is still pending_approval but past its TTL, flip it to
-        ``expired`` and persist. Returns the (possibly updated, detached) row.
-        A readonly instance cannot persist the flip -- it returns the row with
-        the honest computed status without writing (the write-mode store will
-        catch it up on its own next read)."""
-        if row.status != _PENDING or row.expires_at >= _now():
+        """If ``row`` is still ``pending_approval`` OR ``approved`` but past
+        its TTL, flip it to ``expired`` and persist. Returns the (possibly
+        updated, detached) row. A readonly instance cannot persist the flip
+        -- it returns the row with the honest computed status without
+        writing (the write-mode store will catch it up on its own next
+        read).
+
+        ``approved`` is included deliberately, not just ``pending_approval``:
+        ``expires_at`` is never extended on approval (see ``_transition``
+        below), so the SAME 5-minute window that bounds "propose -> human
+        decides" also bounds "approved -> actually executed". Without this,
+        an approval from days ago would stay validly executable forever --
+        a stale decision with no freshness bound at all."""
+        if row.status not in (_PENDING, _APPROVED) or row.expires_at >= _now():
             return row
 
         if self._readonly:
@@ -179,25 +188,40 @@ class LiveTradeProposalStore:
             )
             if db_row is None:
                 return row
-            if db_row.status == _PENDING and db_row.expires_at < _now():
+            if db_row.status in (_PENDING, _APPROVED) and db_row.expires_at < _now():
                 db_row.status = _EXPIRED
             session.flush()
             session.refresh(db_row)
             session.expunge(db_row)
             return db_row
 
-    def approve_proposal(self, token: str, approved_by: str = "operator") -> LiveTradeProposal:
+    def _transition(
+        self,
+        token: str,
+        *,
+        from_statuses: tuple,
+        to_status: str,
+        extra_fields: Optional[dict] = None,
+    ) -> LiveTradeProposal:
+        """Shared read-modify-write state transition: raises
+        ``LiveTradeProposalNotFoundError`` if the token doesn't exist,
+        ``LiveTradeProposalAlreadyDecidedError`` if the row's current status
+        isn't one of ``from_statuses`` (lazily expiring a stale
+        pending/approved row first, so an expired proposal is correctly
+        reported as "already decided" rather than falsely matching).
+
+        NOT used by ``claim_for_execution`` -- that transition needs a
+        single atomic UPDATE (compare-and-swap), not a read-then-write,
+        to actually close the double-submission race between concurrent
+        ``confirm_live_trade`` calls. This helper is for the single-writer
+        approve/reject/mark_executed/mark_failed transitions, where a
+        read-then-write is safe because ``claim_for_execution`` is the sole
+        gate standing between "approved" and any broker submission.
+        """
         if self._readonly:
             raise RuntimeError(
-                "LiveTradeProposalStore is read-only; cannot approve a proposal."
+                f"LiveTradeProposalStore is read-only; cannot transition to {to_status!r}."
             )
-
-        row = self.get_by_token(token)
-        if row is None:
-            raise LiveTradeProposalNotFoundError(token)
-        if row.status != _PENDING:
-            raise LiveTradeProposalAlreadyDecidedError(token)
-
         with session_scope(self.Session) as session:
             db_row = (
                 session.query(LiveTradeProposal)
@@ -206,77 +230,75 @@ class LiveTradeProposalStore:
             )
             if db_row is None:
                 raise LiveTradeProposalNotFoundError(token)
-            if db_row.status != _PENDING:
+            if db_row.status in (_PENDING, _APPROVED) and db_row.expires_at < _now():
+                db_row.status = _EXPIRED
+            if db_row.status not in from_statuses:
                 raise LiveTradeProposalAlreadyDecidedError(token)
-            db_row.status = _APPROVED
-            db_row.approved_at = _now()
-            db_row.approved_by = approved_by
+            db_row.status = to_status
+            for key, value in (extra_fields or {}).items():
+                setattr(db_row, key, value)
             session.flush()
             session.refresh(db_row)
             session.expunge(db_row)
-            result = db_row
-        return result
+            return db_row
+
+    def approve_proposal(self, token: str, approved_by: str = "operator") -> LiveTradeProposal:
+        return self._transition(
+            token,
+            from_statuses=(_PENDING,),
+            to_status=_APPROVED,
+            extra_fields={"approved_at": _now(), "approved_by": approved_by},
+        )
 
     def reject_proposal(self, token: str, approved_by: str = "operator") -> LiveTradeProposal:
+        return self._transition(token, from_statuses=(_PENDING,), to_status=_REJECTED)
+
+    def claim_for_execution(self, token: str) -> bool:
+        """Atomically transitions an approved, non-expired proposal to
+        ``executing`` -- the single compare-and-swap operation that makes
+        concurrent or retried ``confirm_live_trade`` calls for the same
+        token safe. A single ``UPDATE ... WHERE status='approved'`` can only
+        ever match the row once; a second concurrent attempt sees 0 rows
+        matched, not a false positive.
+
+        Returns ``True`` iff THIS call won the claim. ``False`` means either
+        the proposal isn't in a claimable state (not approved, already
+        executing/executed/failed, or past its TTL) or another concurrent
+        call already claimed it first -- the caller (``confirm_live_trade``)
+        re-reads the row afterward to report an honest, current-status
+        message either way, so this method deliberately does not raise
+        ``LiveTradeProposalNotFoundError``/``LiveTradeProposalAlreadyDecidedError``
+        itself.
+        """
         if self._readonly:
-            raise RuntimeError(
-                "LiveTradeProposalStore is read-only; cannot reject a proposal."
-            )
-
-        row = self.get_by_token(token)
-        if row is None:
-            raise LiveTradeProposalNotFoundError(token)
-        if row.status != _PENDING:
-            raise LiveTradeProposalAlreadyDecidedError(token)
-
+            raise RuntimeError("LiveTradeProposalStore is read-only; cannot claim a proposal.")
         with session_scope(self.Session) as session:
-            db_row = (
+            updated = (
                 session.query(LiveTradeProposal)
-                .filter(LiveTradeProposal.token == token)
-                .first()
+                .filter(
+                    LiveTradeProposal.token == token,
+                    LiveTradeProposal.status == _APPROVED,
+                    LiveTradeProposal.expires_at > _now(),
+                )
+                .update({"status": _EXECUTING}, synchronize_session=False)
             )
-            if db_row is None:
-                raise LiveTradeProposalNotFoundError(token)
-            if db_row.status != _PENDING:
-                raise LiveTradeProposalAlreadyDecidedError(token)
-            db_row.status = _REJECTED
-            session.flush()
-            session.refresh(db_row)
-            session.expunge(db_row)
-            result = db_row
-        return result
+            return updated == 1
 
     def mark_executed(self, token: str, broker_order_id: str) -> None:
-        if self._readonly:
-            raise RuntimeError(
-                "LiveTradeProposalStore is read-only; cannot mark a proposal executed."
-            )
-        with session_scope(self.Session) as session:
-            db_row = (
-                session.query(LiveTradeProposal)
-                .filter(LiveTradeProposal.token == token)
-                .first()
-            )
-            if db_row is None:
-                raise LiveTradeProposalNotFoundError(token)
-            db_row.status = _EXECUTED
-            db_row.broker_order_id = broker_order_id
+        self._transition(
+            token,
+            from_statuses=(_EXECUTING,),
+            to_status=_EXECUTED,
+            extra_fields={"broker_order_id": broker_order_id},
+        )
 
     def mark_failed(self, token: str, error_message: str) -> None:
-        if self._readonly:
-            raise RuntimeError(
-                "LiveTradeProposalStore is read-only; cannot mark a proposal failed."
-            )
-        with session_scope(self.Session) as session:
-            db_row = (
-                session.query(LiveTradeProposal)
-                .filter(LiveTradeProposal.token == token)
-                .first()
-            )
-            if db_row is None:
-                raise LiveTradeProposalNotFoundError(token)
-            db_row.status = _FAILED
-            db_row.error_message = error_message
+        self._transition(
+            token,
+            from_statuses=(_EXECUTING,),
+            to_status=_FAILED,
+            extra_fields={"error_message": error_message},
+        )
 
     # -- reads ------------------------------------------------------------
     # Never raise (CONSTRAINT #6, dead-letter resilience) -- degrade to

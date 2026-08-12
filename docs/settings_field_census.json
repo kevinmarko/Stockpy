@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "f52d291b82f9e9c526c6d49956c77a253ef14496",
+    "git_commit": "124ef92da58434669eecd0da8a00195a31edada1",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3022,7 +3022,7 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 697,
+      "total_reads": 698,
       "distinct_fields": 225,
       "counts": {
         "OUTPUT_DIR": 125,
@@ -3122,6 +3122,7 @@
         "GRAVITY_AI_RUNNER_OUTPUT_PATH": 2,
         "JULES_ENABLED": 2,
         "JULES_REQUEST_TIMEOUT_SECONDS": 2,
+        "LIVE_TRADE_EXECUTION_ENABLED": 2,
         "LLM_COMMENTARY_ALERT_PROVIDER": 2,
         "LLM_COMMENTARY_ENABLED": 2,
         "LLM_COMMENTARY_RATIONALE_PROVIDER": 2,
@@ -3190,7 +3191,6 @@
         "HMM_RISK_OFF_BLOCK_THRESHOLD": 1,
         "JOBS_API_ENABLED": 1,
         "LIVE_TRADE_APPROVAL_ENABLED": 1,
-        "LIVE_TRADE_EXECUTION_ENABLED": 1,
         "LOG_LEVEL": 1,
         "MARKET_DATA_PROVIDER": 1,
         "MARKET_RISK_PREMIUM": 1,

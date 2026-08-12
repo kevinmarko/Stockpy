@@ -295,7 +295,12 @@ def test_get_by_token_does_not_expire_a_row_still_within_ttl():
     assert fetched.status == "pending_approval"
 
 
-def test_get_by_token_does_not_touch_an_already_decided_row():
+def test_get_by_token_expires_a_stale_approved_row():
+    """expires_at is never extended on approval (see _transition), so the
+    SAME 5-minute proposal-creation window also bounds "approved -> actually
+    executed" -- an approval from days ago must not stay validly executable
+    forever. This is the fix for the reviewed gap where an approved
+    proposal never expired."""
     store = LiveTradeProposalStore(db_url="sqlite:///:memory:")
     token = store.create_proposal(**_proposal())
     store.approve_proposal(token)
@@ -304,9 +309,11 @@ def test_get_by_token_does_not_touch_an_already_decided_row():
         row.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
         session.commit()
 
-    # Already approved -- expiry must not retroactively flip an approved row.
     fetched = store.get_by_token(token)
-    assert fetched.status == "approved"
+    assert fetched.status == "expired"
+
+    # And a stale approval can no longer be claimed for execution.
+    assert store.claim_for_execution(token) is False
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +325,7 @@ def test_mark_executed_sets_status_and_broker_order_id():
     store = LiveTradeProposalStore(db_url="sqlite:///:memory:")
     token = store.create_proposal(**_proposal())
     store.approve_proposal(token)
+    assert store.claim_for_execution(token) is True
     store.mark_executed(token, "broker-order-123")
 
     row = store.get_by_token(token)
@@ -329,11 +337,46 @@ def test_mark_failed_sets_status_and_error_message():
     store = LiveTradeProposalStore(db_url="sqlite:///:memory:")
     token = store.create_proposal(**_proposal())
     store.approve_proposal(token)
+    assert store.claim_for_execution(token) is True
     store.mark_failed(token, "insufficient buying power")
 
     row = store.get_by_token(token)
     assert row.status == "failed"
     assert row.error_message == "insufficient buying power"
+
+
+def test_mark_executed_requires_executing_status():
+    """mark_executed/mark_failed only transition FROM 'executing' -- they
+    can no longer be called directly on an 'approved' row that never went
+    through claim_for_execution, closing the guard gap where these two
+    methods previously skipped the pending/already-decided check that
+    approve_proposal/reject_proposal apply."""
+    store = LiveTradeProposalStore(db_url="sqlite:///:memory:")
+    token = store.create_proposal(**_proposal())
+    store.approve_proposal(token)
+    with pytest.raises(LiveTradeProposalAlreadyDecidedError):
+        store.mark_executed(token, "broker-order-123")
+
+
+def test_claim_for_execution_is_a_one_time_atomic_claim():
+    """The core regression test for the double-submission race: a second
+    claim attempt on the same token, after the first already won, must
+    fail -- this is what makes concurrent/retried confirm_live_trade calls
+    for the same approved proposal safe."""
+    store = LiveTradeProposalStore(db_url="sqlite:///:memory:")
+    token = store.create_proposal(**_proposal())
+    store.approve_proposal(token)
+
+    assert store.claim_for_execution(token) is True
+    # A second claim on the same (now "executing") proposal must lose.
+    assert store.claim_for_execution(token) is False
+
+
+def test_claim_for_execution_fails_on_non_approved_status():
+    store = LiveTradeProposalStore(db_url="sqlite:///:memory:")
+    token = store.create_proposal(**_proposal())
+    # Still pending_approval -- not yet approved, so no claim is possible.
+    assert store.claim_for_execution(token) is False
 
 
 def test_mark_executed_missing_token_raises():

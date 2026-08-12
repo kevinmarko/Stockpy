@@ -94,6 +94,11 @@ def execute_live_trade(symbol: str, side: str, qty: float, order_type: str = "ma
         )
     except ValueError as e:
         return json.dumps({"status": "error", "message": f"Invalid order parameters: {e}"})
+    except Exception as e:
+        # Broader than ValueError -- a DB/network outage on store construction
+        # (LiveTradeProposalStore() does an eager connection) or the write
+        # itself must degrade to an honest error, not crash this MCP tool.
+        return json.dumps({"status": "error", "message": f"Could not create proposal: {e}"})
 
     try:
         from observability.alerts import send_alert
@@ -134,22 +139,47 @@ async def confirm_live_trade(confirmation_token: str) -> str:
     ``OrderManager.submit_order_with_idempotency`` makes the gate a silent
     no-op (see execution/order_manager.py's documented behavior), which was
     a real safety gap on this live-order-placement path.
+
+    Re-checks ``settings.LIVE_TRADE_EXECUTION_ENABLED`` here too, not just in
+    ``execute_live_trade`` -- without this, flipping the flag off after a
+    proposal was already approved would not actually stop it from executing,
+    defeating its purpose as a kill switch.
+
+    Uses ``store.claim_for_execution`` (a single atomic compare-and-swap
+    UPDATE) rather than a plain ``proposal.status != "approved"`` check --
+    the plain check alone lets two concurrent/retried calls for the same
+    approved token both observe "approved" before either writes back a
+    change, both build an ``OrderManager`` with its own empty per-instance
+    idempotency state, and both submit to the broker. The claim is the only
+    thing that actually closes that race.
     """
     if not _rate_limiter.consume():
         return json.dumps({"status": "error", "message": "Rate limit exceeded. Try again later."})
+
+    if not settings.LIVE_TRADE_EXECUTION_ENABLED:
+        return json.dumps({
+            "status": "error",
+            "message": "Live trade execution is disabled (LIVE_TRADE_EXECUTION_ENABLED=false).",
+        })
 
     store = LiveTradeProposalStore()
     proposal = store.get_by_token(confirmation_token)
     if proposal is None:
         return json.dumps({"status": "error", "message": "Invalid or expired confirmation_token."})
 
-    if proposal.status != "approved":
+    if not store.claim_for_execution(confirmation_token):
+        # Lost the claim -- either it was never approved, was rejected,
+        # expired, or (the race this claim exists to close) another call
+        # already claimed/executed it first. Re-read for an honest,
+        # current-status message rather than trusting the pre-claim read.
+        current = store.get_by_token(confirmation_token)
+        current_status = current.status if current is not None else "unknown"
         return json.dumps({
             "status": "error",
             "message": (
-                f"Order not yet executable: current status is '{proposal.status}'. "
+                f"Order not yet executable: current status is '{current_status}'. "
                 "It must be approved by the operator via the Pilots PWA before "
-                "it can execute."
+                "it can execute, and can only be executed once."
             ),
         })
 

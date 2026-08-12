@@ -419,7 +419,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 762,
+    "attr": 763,
     "factory_param": 4,
     "getattr_const": 259,
     "os_environ": 25
@@ -839,7 +839,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "execution/live_trade_proposals_store.py:102",
+        "site": "execution/live_trade_proposals_store.py:103",
         "via": []
       },
       {
@@ -994,7 +994,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "execution/live_trade_proposals_store.py:107",
+        "site": "execution/live_trade_proposals_store.py:108",
         "via": []
       },
       {
@@ -1003,7 +1003,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "execution/live_trade_proposals_store.py:109",
+        "site": "execution/live_trade_proposals_store.py:110",
         "via": []
       },
       {
@@ -1194,7 +1194,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "execution/live_trade_proposals_store.py:107",
+        "site": "execution/live_trade_proposals_store.py:108",
         "via": []
       },
       {
@@ -1203,7 +1203,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "execution/live_trade_proposals_store.py:109",
+        "site": "execution/live_trade_proposals_store.py:110",
         "via": []
       },
       {
@@ -1967,7 +1967,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "execution/live_trade_proposals_store.py:107",
+        "site": "execution/live_trade_proposals_store.py:108",
         "via": []
       },
       {
