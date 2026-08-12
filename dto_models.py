@@ -10,6 +10,7 @@
 from typing import Optional, Dict, Any
 from datetime import datetime
 from functools import cached_property
+from dataclasses import dataclass
 import math
 import logging
 
@@ -387,8 +388,6 @@ class MacroEconomicDTO(BaseDTO):
     def __repr__(self) -> str:
         return f"<MacroEconomicDTO - Regime: {self.market_regime} (Spread: {self.credit_spread}%)>"
 
-
-from dataclasses import dataclass
 
 # =============================================================================
 # 4. EXECUTION RANGE PARAMETERS DTO

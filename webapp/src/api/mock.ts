@@ -1168,9 +1168,19 @@ interface _MockForecastBackfillJob {
   //   localStorage.setItem("stockpy.mock.forecast_backfill_failure", "1")  // next run fails partway through instead of succeeding
   //   localStorage.removeItem("stockpy.mock.forecast_backfill_failure")   // back to the happy path
   simulateFailure: boolean;
+  // Deterministic "deadline SIGKILL mid-training" trigger, same convention.
+  // Reproduces ml/forecast_backfill_job.py's _enforce_deadline path: a few
+  // step-5 combos already trained (real partial_summary.trained/
+  // metrics_so_far entries) before the kill, so the honest
+  // "partial results were saved" branch of backfillFailureMessage() is
+  // reachable by actually running the app, not only through the test suite:
+  //   localStorage.setItem("stockpy.mock.forecast_backfill_timeout", "1")  // next run times out with partial results
+  //   localStorage.removeItem("stockpy.mock.forecast_backfill_timeout")    // back to the happy path
+  simulateTimeout: boolean;
 }
 
 const FORECAST_BACKFILL_FAILURE_KEY = "stockpy.mock.forecast_backfill_failure";
+const FORECAST_BACKFILL_TIMEOUT_KEY = "stockpy.mock.forecast_backfill_timeout";
 
 function readForecastBackfillFailure(): boolean {
   try {
@@ -1178,6 +1188,30 @@ function readForecastBackfillFailure(): boolean {
   } catch {
     return false;
   }
+}
+
+function readForecastBackfillTimeout(): boolean {
+  try {
+    return localStorage.getItem(FORECAST_BACKFILL_TIMEOUT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Realistic partial checkpoint for the timeout-simulation branch below --
+ *  a subset of mockForecastBackfill()'s own metrics, matching the exact
+ *  {accuracy, auc, n_train, n_test, split_date, is_active} shape
+ *  ml/forecast_backfill.py actually writes to `self.metrics[model_key]`. */
+function mockForecastBackfillPartialSummary(): ForecastBackfillJob["partial_summary"] {
+  const metrics_so_far = {
+    timeseries_momentum_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 0, split_date: "CPCV", is_active: true },
+    timeseries_momentum_30d: { accuracy: 0.5340, auc: 0.5580, n_train: 9416, n_test: 0, split_date: "CPCV", is_active: true },
+    rsi2_mean_reversion_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 6820, n_test: 0, split_date: "CPCV", is_active: true },
+  };
+  return {
+    trained: Object.keys(metrics_so_far).sort(),
+    metrics_so_far,
+  };
 }
 
 let _mockForecastBackfillJobSeq = 0;
@@ -1239,6 +1273,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
       error_type: "cancelled",
       summary: null,
       sample_rows: null,
+      partial_summary: null,
       seconds_remaining: secondsRemaining,
     };
   }
@@ -1259,6 +1294,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
         error_type: null,
         summary: null,
         sample_rows: null,
+        partial_summary: null,
         seconds_remaining: secondsRemaining,
       };
     }
@@ -1272,6 +1308,51 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
       error_type: "value_error",
       summary: null,
       sample_rows: null,
+      // Killed/failed during step 2 (technical_features), well before step 5
+      // (backtraining) ever produces a progress event -- honestly null, not
+      // fabricated, matching ml/forecast_backfill_job.py's own contract.
+      partial_summary: null,
+      seconds_remaining: 0,
+    };
+  }
+
+  if (job.simulateTimeout) {
+    // Reproduces ml/forecast_backfill_job.py's _enforce_deadline: a running
+    // job that never reaches a "result" event before the deadline elapses is
+    // SIGKILLed and flipped to state: "timeout" -- but a few step-5 combos
+    // already trained (and were checkpointed via the on_combo_trained
+    // callback) before the kill, so partial_summary is honestly non-empty
+    // here, exercising backfillFailureMessage()'s "partial results were
+    // saved" branch.
+    if (elapsedSeconds < 10) {
+      return {
+        job_id: jobId,
+        state: "running",
+        phase,
+        step,
+        total_steps: TOTAL_STEPS,
+        error: null,
+        error_type: null,
+        summary: null,
+        sample_rows: null,
+        // The real backend only starts populating partial_summary once
+        // step-5 combos begin training (phase: "backtraining"), same as
+        // ml/forecast_backfill_worker.py's on_combo_trained callback.
+        partial_summary: elapsedSeconds >= 8 ? mockForecastBackfillPartialSummary() : null,
+        seconds_remaining: secondsRemaining,
+      };
+    }
+    return {
+      job_id: jobId,
+      state: "timeout",
+      phase: "backtraining",
+      step: 5,
+      total_steps: TOTAL_STEPS,
+      error: `Forecast backfill did not complete within the configured deadline.`,
+      error_type: "timeout",
+      summary: null,
+      sample_rows: null,
+      partial_summary: mockForecastBackfillPartialSummary(),
       seconds_remaining: 0,
     };
   }
@@ -1287,6 +1368,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
       error_type: null,
       summary: mockForecastBackfill(),
       sample_rows: 11080,
+      partial_summary: null,
       seconds_remaining: 0,
     };
   }
@@ -1301,6 +1383,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
     error_type: null,
     summary: null,
     sample_rows: null,
+    partial_summary: null,
     seconds_remaining: secondsRemaining,
   };
 }
@@ -2799,6 +2882,11 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
     group: "Diagnostic & Supplement Feeds", key: "FMP_SECTOR_SNAPSHOT_ENABLED", type: "boolean",
     value: false, default: false,
     description: "Fetch sector valuation & performance snapshots.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_UNIVERSE_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Use FMP's historical S&P 500 constituent-changes feed as the primary source for survivorship-bias reconstruction (Wikipedia demoted to fallback).",
   },
 ];
 
@@ -8190,6 +8278,7 @@ export const mockApi = {
       startedAt: Date.now(),
       cancelled: false,
       simulateFailure: readForecastBackfillFailure(),
+      simulateTimeout: readForecastBackfillTimeout(),
     };
     _mockForecastBackfillJobs[jobId] = job;
     return delay(_mockForecastBackfillJobStatus(jobId, job));

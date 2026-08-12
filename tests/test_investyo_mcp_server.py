@@ -1421,6 +1421,94 @@ class TestRunBugHunter:
         assert "err" in res
 
 
+class TestListJulesSources:
+    def test_success(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        fake_sources = {
+            "sources": [
+                {"name": "sources/github/acme/widgets", "githubRepo": {"owner": "acme", "repo": "widgets"}},
+            ]
+        }
+        monkeypatch.setattr(jules_mod, "list_sources", lambda: fake_sources)
+
+        result = srv.list_jules_sources()
+
+        assert "acme/widgets" in result
+        assert "sources/github/acme/widgets" in result
+
+    def test_unavailable_returns_string_not_exception(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        def _raise():
+            raise jules_mod.JulesUnavailable("boom")
+
+        monkeypatch.setattr(jules_mod, "list_sources", _raise)
+
+        result = srv.list_jules_sources()
+
+        assert "boom" in result
+
+
+class TestDispatchJulesTask:
+    def test_confirm_false_does_not_dispatch(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        called = {"count": 0}
+
+        def _dispatch(*a, **k):
+            called["count"] += 1
+            return {}
+
+        monkeypatch.setattr(jules_mod, "dispatch_session", _dispatch)
+
+        result = srv.dispatch_jules_task(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+            confirm=False,
+        )
+
+        assert "confirmation required" in result
+        assert called["count"] == 0
+
+    def test_confirm_true_success(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        fake_result = {"name": "sessions/abc123"}
+        monkeypatch.setattr(jules_mod, "dispatch_session", lambda **k: fake_result)
+
+        result = srv.dispatch_jules_task(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+            confirm=True,
+        )
+
+        assert "sessions/abc123" in result
+        assert "dispatched successfully" in result
+
+    def test_confirm_true_unavailable_returns_string_not_exception(self, monkeypatch):
+        import data.jules_client as jules_mod
+
+        def _raise(**k):
+            raise jules_mod.JulesUnavailable("nope")
+
+        monkeypatch.setattr(jules_mod, "dispatch_session", _raise)
+
+        result = srv.dispatch_jules_task(
+            prompt="fix the bug",
+            title="Fix bug",
+            source="sources/github/acme/widgets",
+            branch="main",
+            confirm=True,
+        )
+
+        assert "nope" in result
+
+
 class TestTriggerEdgarBackfillTimeoutPattern:
     def test_success(self, monkeypatch):
         monkeypatch.setattr(

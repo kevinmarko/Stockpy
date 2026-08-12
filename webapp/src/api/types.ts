@@ -3712,6 +3712,23 @@ export type ForecastBackfillPhase =
  *  parameters) or `"unexpected"` (a genuine training-time exception). */
 export type ForecastBackfillErrorType = "value_error" | "unexpected" | "timeout" | "cancelled" | null;
 
+/** Checkpoint snapshot from the last `{"event": "progress", ...}` NDJSON
+ *  event the backend drained off the worker's events pipe before the job
+ *  reached a terminal state -- mirrors `ml/forecast_backfill_job.py`'s
+ *  `BackfillJobState.partial_summary` exactly (emitted after each step-5
+ *  "backtraining" combo finishes training and its model is saved).
+ *  `trained` and the keys of `metrics_so_far` are always the same set --
+ *  `trained` is `sorted(metrics_so_far.keys())` on the backend. Always the
+ *  LAST progress event received, never accumulated across events (the
+ *  worker's own `metrics_so_far` is already the full cumulative snapshot at
+ *  emit time). A deadline SIGKILL (`_enforce_deadline`) never touches this
+ *  field, so whatever it last held survives the kill unchanged -- the whole
+ *  point of the checkpoint. */
+export interface ForecastBackfillPartialSummary {
+  trained: string[];
+  metrics_so_far: Record<string, ForecastBackfillModelMetrics>;
+}
+
 export interface ForecastBackfillJob {
   job_id: string;
   state: ForecastBackfillJobState;
@@ -3722,6 +3739,10 @@ export interface ForecastBackfillJob {
   error_type: ForecastBackfillErrorType;
   summary: ForecastBackfillSummary | null;
   sample_rows: number | null;
+  /** `null` when no `progress` event has ever been observed (e.g. the job
+   *  was killed during steps 1-4, before any step-5 combo finished) --
+   *  never fabricated. See `ForecastBackfillPartialSummary`. */
+  partial_summary: ForecastBackfillPartialSummary | null;
   seconds_remaining: number;
 }
 
