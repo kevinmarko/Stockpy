@@ -844,6 +844,26 @@ def check_kill_switch_inactive() -> CheckResult:
     return CheckResult(name, True, "Kill switch is inactive")
 
 
+def _paused_for_market_hours() -> bool:
+    """True when settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY (see main.py /
+    desktop/daemon_runtime.py's automatic-trigger gate) fully explains why
+    state_snapshot.json hasn't been refreshed recently -- i.e. we're currently
+    outside the 4am-8pm ET weekday window, so main.py --interval/the daemon
+    timer are legitimately skipping cycles rather than being down. Lazy
+    imports keep this module's own import graph unchanged for every caller
+    that never hits this branch; dead-letter by design (CONSTRAINT #6) -- any
+    failure here must never turn a real staleness failure into a falsely-
+    reassuring pass, so it degrades to False on any error."""
+    try:
+        from engine.advisory_agent import is_extended_hours
+
+        return bool(settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY) and not is_extended_hours(
+            datetime.now(timezone.utc)
+        )
+    except Exception:
+        return False
+
+
 def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
     """Verify that the pipeline state snapshot was written recently.
 
@@ -858,6 +878,13 @@ def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
     mode (where ``main_orchestrator.py`` writes both).  It is therefore NOT in
     ``_ADVISORY_AUTO_SKIP`` — it is the one check that replaces ``heartbeat_fresh``
     as the liveness gate when running in advisory mode.
+
+    ``settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY`` (default ``True``) makes
+    ``main.py --interval``/the daemon timer skip automatic cycles outside the
+    4am-8pm ET weekday window, so a stale snapshot found outside that window is
+    expected, not a sign the pipeline is down. When ``_paused_for_market_hours()``
+    confirms that's the case, staleness beyond ``max_age_hours`` degrades to a
+    warning-only PASS instead of a blocking failure.
     """
     name = "state_snapshot_fresh"
     snapshot_path = settings.OUTPUT_DIR / "state_snapshot.json"
@@ -879,6 +906,14 @@ def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
             mtime = snapshot_path.stat().st_mtime
             age = datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, tz=timezone.utc)
         if age > timedelta(hours=max_age_hours):
+            if _paused_for_market_hours():
+                return CheckResult(
+                    name, True,
+                    f"State snapshot is {age.total_seconds()/3600:.1f}h old (limit {max_age_hours}h) — "
+                    "automatic runs are currently paused outside market hours "
+                    "(ORCHESTRATOR_EXTENDED_HOURS_ONLY=True); not treated as a failure.",
+                    warning=True,
+                )
             return CheckResult(
                 name, False,
                 f"State snapshot is {age.total_seconds()/3600:.1f}h old (limit {max_age_hours}h) — "

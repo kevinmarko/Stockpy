@@ -2058,6 +2058,19 @@ class Settings(BaseSettings):
             "behavior everywhere."
         ),
     )
+    # Gate automatic interval-triggered pipeline cycles to extended market hours.
+    ORCHESTRATOR_EXTENDED_HOURS_ONLY: bool = Field(
+        default=True,
+        description=(
+            "Skip automatic interval-triggered pipeline cycles (daemon timer and "
+            "main.py --interval) outside the 4am-8pm ET weekday window "
+            "(engine.advisory_agent.is_extended_hours) -- not strict 9:30-16:00 RTH. "
+            "Manual/on-demand triggers (webapp buttons, API calls) are never gated. "
+            "No holiday calendar is applied (same known limitation as "
+            "is_us_market_open); default True fixes previously-unconditional 24/7 "
+            "automatic runs."
+        ),
+    )
     # Cross-process settings hot-reload: whether the persistent orchestrator
     # daemon (desktop/orchestrator_daemon.py) periodically re-checks
     # output/runtime_flags.json for changes written by ANOTHER process (e.g.

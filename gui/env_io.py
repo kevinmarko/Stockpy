@@ -165,6 +165,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # unreachable/misconfigured daemon (the response's own `applies` field
     # reflects which actually happened, never assumed).
     "ORCHESTRATOR_INTERVAL_SECONDS",
+    # Gate automatic pipeline runs to extended market hours.
+    "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
     # Cross-process settings hot-reload for the persistent orchestrator
     # daemon (desktop/orchestrator_daemon.py). Non-secret operational
     # tunables; a GUI bug here can only change how often/whether the daemon

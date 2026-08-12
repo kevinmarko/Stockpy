@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 270,
+    "live_safe": 271,
     "no_op": 2,
     "restart_required": 90,
-    "total": 362
+    "total": 363
   },
   "dynamic_sites": [
     {
@@ -56,14 +56,14 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4211,
+      "line": 4212,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4316,
+      "line": 4317,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -313,6 +313,7 @@
     "OPTIONS_TRUE_IVR_ENABLED",
     "ORCHESTRATOR_API_PORT",
     "ORCHESTRATOR_DAEMON_ENABLED",
+    "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
     "PAIRS_SNAPSHOT_ENABLED",
     "PAIRS_SNAPSHOT_MAX_PAIRS",
     "PAPER_BROKER_WRITES_ENABLED",
@@ -418,13 +419,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 758,
+    "attr": 762,
     "factory_param": 4,
     "getattr_const": 259,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 227,
+    "attr": 228,
     "factory_param": 4,
     "getattr_const": 157,
     "os_environ": 18
@@ -1345,7 +1346,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4693",
+        "site": "api/pilots_api.py:4694",
         "via": []
       }
     ],
@@ -1356,7 +1357,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4692",
+        "site": "api/pilots_api.py:4693",
         "via": []
       }
     ],
@@ -1367,7 +1368,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4855",
+        "site": "api/pilots_api.py:4856",
         "via": []
       },
       {
@@ -1442,7 +1443,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4834",
+        "site": "api/pilots_api.py:4835",
         "via": []
       },
       {
@@ -2568,7 +2569,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "main.py:261",
+        "site": "main.py:267",
         "via": []
       },
       {

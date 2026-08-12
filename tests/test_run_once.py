@@ -889,3 +889,78 @@ class TestRunResultImmutability:
         )
         required_keys = {"symbol", "stage", "error_type", "message", "timestamp"}
         assert required_keys.issubset(result.errors[0].keys())
+
+
+class TestIntervalCycleGate:
+    def _et(self, year: int, month: int, day: int, hour: int, minute: int = 0) -> datetime:
+        from zoneinfo import ZoneInfo
+        return datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("America/New_York")).astimezone(timezone.utc)
+
+    def test_interval_cycle_gated_when_gate_on_and_outside_hours(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
+        now_utc = self._et(2025, 6, 30, 2, 0)
+        assert m._interval_cycle_gated(now_utc) is True
+
+    def test_interval_cycle_gated_when_gate_on_and_inside_hours(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
+        now_utc = self._et(2025, 6, 30, 12, 0)
+        assert m._interval_cycle_gated(now_utc) is False
+
+    def test_interval_cycle_gated_when_gate_off_and_outside_hours(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", False)
+        now_utc = self._et(2025, 6, 30, 2, 0)
+        assert m._interval_cycle_gated(now_utc) is False
+
+
+class TestAgentLoopMarketHoursGate:
+    """Regression coverage for main.py --agent's use of _interval_cycle_gated
+    (a third automatic-trigger path, alongside --interval and the daemon
+    timer, that a prior review found was left completely ungated). Each test
+    drives exactly one _run_agent_loop iteration by mocking time.sleep to
+    invoke the loop's own captured SIGTERM handler, then confirms whether
+    run_cycle was actually called."""
+
+    def _drive_one_iteration(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(m.settings, "OUTPUT_DIR", tmp_path)
+        captured_handlers: Dict[Any, Any] = {}
+        monkeypatch.setattr(
+            m.signal, "signal",
+            lambda sig, handler: captured_handlers.__setitem__(sig, handler),
+        )
+
+        def _fake_sleep(_seconds):
+            captured_handlers[m.signal.SIGTERM](m.signal.SIGTERM, None)
+
+        monkeypatch.setattr(m.time, "sleep", _fake_sleep)
+
+    def test_run_cycle_not_called_when_gated(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        self._drive_one_iteration(monkeypatch, tmp_path)
+
+        run_cycle = MagicMock()
+        m._run_agent_loop(run_cycle=run_cycle)
+        run_cycle.assert_not_called()
+
+    def test_run_cycle_called_when_not_gated(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: True)
+        self._drive_one_iteration(monkeypatch, tmp_path)
+
+        fake_result = MagicMock()
+        fake_result.recommendations = []
+        run_cycle = MagicMock(return_value=fake_result)
+        m._run_agent_loop(run_cycle=run_cycle)
+        run_cycle.assert_called_once()
+
+    def test_run_cycle_called_when_gate_disabled(self, tmp_path, monkeypatch):
+        """Gate off -> always runs, regardless of the hour."""
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", False)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        self._drive_one_iteration(monkeypatch, tmp_path)
+
+        fake_result = MagicMock()
+        fake_result.recommendations = []
+        run_cycle = MagicMock(return_value=fake_result)
+        m._run_agent_loop(run_cycle=run_cycle)
+        run_cycle.assert_called_once()
