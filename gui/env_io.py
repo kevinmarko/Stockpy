@@ -726,6 +726,7 @@ EXCLUDED_FROM_GUI: frozenset[str] = frozenset(
     {
         # --- Filesystem paths -------------------------------------------------
         "OUTPUT_DIR",
+        "LOCAL_DATA_ROOT",
         "PROMPT_CACHE_DIR",
         "WATCH_RULES_FILE",
         "ALERT_FILE_PATH",

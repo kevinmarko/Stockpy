@@ -180,9 +180,16 @@ STORE_FILENAME = "runtime_flags.json"
 #: already imported, including in a subprocess.
 PATH_OVERRIDE_ENV_VAR = "INVESTYO_RUNTIME_FLAGS_PATH"
 
-#: Anchored to THIS FILE, which lives at the repo root next to ``settings.py``.
+#: Deliberate, documented duplication of ``settings.LOCAL_DATA_ROOT``'s own
+#: default literal (``Path.home() / ".stockpy_local"``). This module is a
+#: dependency-free stdlib-only leaf that must NEVER import ``settings`` (see
+#: the module docstring), so it cannot read ``settings.LOCAL_DATA_ROOT``
+#: directly -- exactly the same reason this module already re-derives the
+#: repo root independently rather than importing ``settings.OUTPUT_DIR``.
+#: ``tests/test_runtime_flags.py`` pins the two literals against each other
+#: so they cannot silently drift apart.
 #: Never CWD-relative, never an upward search. See the module docstring.
-DEFAULT_STORE_PATH = Path(__file__).resolve().parent / "output" / STORE_FILENAME
+DEFAULT_STORE_PATH = Path.home() / ".stockpy_local" / "output" / STORE_FILENAME
 
 
 @dataclass(frozen=True)
