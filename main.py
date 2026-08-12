@@ -213,6 +213,12 @@ def _reset_macro_engine_cache() -> None:
     _MACRO_ENGINE_CACHE.clear()
 
 
+def _interval_cycle_gated(now_utc: datetime) -> bool:
+    """True when an automatic interval cycle should be skipped (market-hours gate)."""
+    from engine.advisory_agent import is_extended_hours
+    return settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY and not is_extended_hours(now_utc)
+
+
 # ---------------------------------------------------------------------------
 # RunResult — immutable container for one full pipeline cycle
 # ---------------------------------------------------------------------------
@@ -1407,7 +1413,10 @@ def main() -> None:
 
         logger.info("Interval mode: market data refreshes every %ds.", args.interval)
         while not _shutdown:
-            _run_cycle()
+            if _interval_cycle_gated(datetime.now(timezone.utc)):
+                logger.debug("Market-hours gate: skipping interval cycle (outside 4am-8pm ET weekday window).")
+            else:
+                _run_cycle()
             if _shutdown:
                 break
             logger.info(

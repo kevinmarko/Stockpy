@@ -476,6 +476,56 @@ class TestGetRunUnknown:
 
 
 class TestTimerThread:
+    def test_interval_skips_run_when_outside_extended_hours_with_gate_on(self, monkeypatch):
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr("desktop.daemon_runtime.is_extended_hours", lambda _: False)
+        # default ORCHESTRATOR_EXTENDED_HOURS_ONLY is True
+        d = OrchestratorDaemon(interval_seconds=1)
+        d.start()
+        try:
+            time.sleep(1.5)
+            assert not any(
+                d.get_run(rid) is not None and d.get_run(rid).reason == "interval"
+                for rid in list(d._run_order)
+            )
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_interval_triggers_run_when_outside_extended_hours_with_gate_off(self, monkeypatch):
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr("desktop.daemon_runtime.is_extended_hours", lambda _: False)
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", False)
+        d = OrchestratorDaemon(interval_seconds=1)
+        d.start()
+        try:
+            saw_interval_run = _poll_until(
+                lambda: any(
+                    d.get_run(rid) is not None and d.get_run(rid).reason == "interval"
+                    for rid in list(d._run_order)
+                ),
+                timeout=3.0,
+            )
+            assert saw_interval_run, "no interval-triggered run completed within timeout"
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_interval_triggers_run_when_inside_extended_hours(self, monkeypatch):
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr("desktop.daemon_runtime.is_extended_hours", lambda _: True)
+        d = OrchestratorDaemon(interval_seconds=1)
+        d.start()
+        try:
+            saw_interval_run = _poll_until(
+                lambda: any(
+                    d.get_run(rid) is not None and d.get_run(rid).reason == "interval"
+                    for rid in list(d._run_order)
+                ),
+                timeout=3.0,
+            )
+            assert saw_interval_run, "no interval-triggered run completed within timeout"
+        finally:
+            d.shutdown(timeout=2.0)
+
     def test_interval_triggers_runs_and_stops_on_shutdown(self, monkeypatch):
         _fast_ok_main_body(monkeypatch)
         d = OrchestratorDaemon(interval_seconds=1)

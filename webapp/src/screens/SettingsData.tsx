@@ -6,6 +6,7 @@ import type {
   AutomationStatus,
   BrokerageStatus,
   ProgressState,
+  TunablesResponse,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
@@ -51,6 +52,11 @@ export function SettingsData() {
     data: brokerageData,
   } = useApi<BrokerageStatus>(() => api.getBrokerageStatus(), []);
 
+  const {
+    data: tunables,
+    reload: reloadTunables,
+  } = useApi<TunablesResponse>(() => api.getTunables(), []);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
       <div>
@@ -76,6 +82,8 @@ export function SettingsData() {
         error={scheduleError}
         httpStatus={scheduleHttpStatus}
         onRetry={reloadSchedule}
+        tunables={tunables}
+        onReloadTunables={reloadTunables}
       />
 
       <AutoRefreshSection brokerageStatus={brokerageData} />
@@ -547,13 +555,29 @@ function ScheduleSection({
   error,
   httpStatus,
   onRetry,
+  tunables,
+  onReloadTunables,
 }: {
   schedule: AutomationSchedule | null;
   loading: boolean;
   error: string | null;
   httpStatus: number | null;
   onRetry: () => void;
+  tunables?: TunablesResponse | null;
+  onReloadTunables?: () => void;
 }) {
+  const extendedHoursField = tunables?.groups
+    .flatMap((g) => g.fields)
+    .find((f) => f.key === "ORCHESTRATOR_EXTENDED_HOURS_ONLY");
+
+  const { run: updateTunable, pending: updatingTunables } = useMutation(
+    (val: boolean) => api.updateTunables({ ORCHESTRATOR_EXTENDED_HOURS_ONLY: val })
+  );
+
+  const handleUpdateTunable = async (val: boolean) => {
+    const res = await updateTunable(val);
+    if (res) onReloadTunables?.();
+  };
   return (
     <SectionCard title="Schedule">
       {loading && <Loading lines={2} />}
@@ -584,6 +608,30 @@ function ScheduleSection({
           )}
 
           <IntervalEditor schedule={schedule} onSaved={onRetry} />
+
+          {extendedHoursField && (
+            <div className="list" style={{ marginTop: "var(--s-3-5)" }}>
+              <div className="row" style={{ alignItems: "center" }}>
+                <div className="row-main">
+                  <span className="row-title">Extended Market Hours Only</span>
+                  <span className="row-sub">
+                    Skip automatic interval runs outside 4am-8pm ET weekdays.
+                    {extendedHoursField.liveness?.applies === "next_daemon_restart" && (
+                      <span style={{ display: "block", color: "var(--text-info)", marginTop: 2 }}>
+                        Restart daemon to apply.
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <Toggle
+                  label="Extended Market Hours Only"
+                  checked={Boolean(extendedHoursField.value)}
+                  onChange={(val) => handleUpdateTunable(val)}
+                  pending={updatingTunables}
+                />
+              </div>
+            </div>
+          )}
 
           <div style={{ marginTop: "var(--s-3-5)" }}>
             <div className="row-sub" style={{ marginBottom: "var(--s-1-5)" }}>

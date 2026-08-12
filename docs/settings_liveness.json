@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 263,
+    "live_safe": 264,
     "no_op": 2,
     "restart_required": 90,
-    "total": 355
+    "total": 356
   },
   "dynamic_sites": [
     {
@@ -307,6 +307,7 @@
     "OPTIONS_TRUE_IVR_ENABLED",
     "ORCHESTRATOR_API_PORT",
     "ORCHESTRATOR_DAEMON_ENABLED",
+    "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
     "PAIRS_SNAPSHOT_ENABLED",
     "PAIRS_SNAPSHOT_MAX_PAIRS",
     "PAPER_TRADING_START_DATE",
@@ -411,13 +412,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 738,
+    "attr": 740,
     "factory_param": 4,
     "getattr_const": 255,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 221,
+    "attr": 222,
     "factory_param": 4,
     "getattr_const": 155,
     "os_environ": 18
@@ -2507,7 +2508,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "main.py:261",
+        "site": "main.py:267",
         "via": []
       },
       {

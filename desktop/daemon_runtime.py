@@ -49,6 +49,7 @@ import runtime_flags
 from settings import settings, validate_interval_seconds
 from data_engine import DataEngine, MockDataEngine
 from reporting.progress import read_progress
+from engine.advisory_agent import is_extended_hours
 
 logger = logging.getLogger("OrchestratorDaemon")
 
@@ -611,6 +612,9 @@ class OrchestratorDaemon:
                 break
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.
+            if settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY and not is_extended_hours(datetime.now(timezone.utc)):
+                logger.debug("Market-hours gate: skipping interval cycle (outside 4am-8pm ET weekday window).")
+                continue
             self.trigger_run(reason="interval")
 
     # ------------------------------------------------------------------

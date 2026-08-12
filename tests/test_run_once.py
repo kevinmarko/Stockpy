@@ -872,3 +872,24 @@ class TestRunResultImmutability:
         )
         required_keys = {"symbol", "stage", "error_type", "message", "timestamp"}
         assert required_keys.issubset(result.errors[0].keys())
+
+
+class TestIntervalCycleGate:
+    def _et(self, year: int, month: int, day: int, hour: int, minute: int = 0) -> datetime:
+        from zoneinfo import ZoneInfo
+        return datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("America/New_York")).astimezone(timezone.utc)
+
+    def test_interval_cycle_gated_when_gate_on_and_outside_hours(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
+        now_utc = self._et(2025, 6, 30, 2, 0)
+        assert m._interval_cycle_gated(now_utc) is True
+
+    def test_interval_cycle_gated_when_gate_on_and_inside_hours(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
+        now_utc = self._et(2025, 6, 30, 12, 0)
+        assert m._interval_cycle_gated(now_utc) is False
+
+    def test_interval_cycle_gated_when_gate_off_and_outside_hours(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", False)
+        now_utc = self._et(2025, 6, 30, 2, 0)
+        assert m._interval_cycle_gated(now_utc) is False
