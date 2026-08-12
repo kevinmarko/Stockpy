@@ -2044,7 +2044,7 @@ class StrategyEvalStep(PipelineStep):
             vectorized_results = {}
         # -----------------------------------
 
-        for idx, row in ctx.dashboard_df.to_dict('index').items():
+        for row in ctx.dashboard_df.to_dict('records'):
             ticker = row['Symbol']
             price = row['Price']
             if not price or price == 0:
@@ -2609,7 +2609,7 @@ class BrokerExecutionStep(PipelineStep):
                     return _ticker, None
 
             _adv_rows = []
-            for _idx, _row in ctx.dashboard_df.to_dict('index').items():
+            for _row in ctx.dashboard_df.to_dict('records'):
                 _ticker = str(_row.get('Symbol', '')).upper()
                 if not _ticker:
                     continue

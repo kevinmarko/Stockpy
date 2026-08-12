@@ -45,7 +45,7 @@ import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.preprocessing import MinMaxScaler
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Dict, Any, Mapping, Optional, Tuple, Union
 
 # Suppress harmless warnings from statsmodels optimization
 warnings.filterwarnings("ignore")
@@ -1219,10 +1219,18 @@ class ForecastingEngine:
     # ORCHESTRATOR
     # =========================================================================
 
-    def generate_forecast(self, row: pd.Series, current_price: float, history_series: Optional[pd.Series] = None, history_df: Optional[pd.DataFrame] = None, precomputed_garch_annual_vol: Optional[float] = None) -> Dict[str, Any]:
+    def generate_forecast(self, row: Union[pd.Series, Mapping[str, Any]], current_price: float, history_series: Optional[pd.Series] = None, history_df: Optional[pd.DataFrame] = None, precomputed_garch_annual_vol: Optional[float] = None) -> Dict[str, Any]:
         """
         Generates forecasts and maps them to SCHEMA KEYS:
         Forecast_10, Forecast_30, Forecast_60, Forecast_90.
+
+        ``row`` only ever needs ``.get()`` lookups (``sector``/``Symbol``/
+        ``Ticker``) -- a plain dict works identically to a ``pd.Series`` here
+        and is what ``pipeline/production_steps.py``'s per-ticker forecasting
+        loop passes (sourced from ``DataFrame.to_dict('records')`` rather
+        than ``iterrows()``); ``engine/advisory.py``'s call site still passes
+        a real ``pd.Series``. Do not add ``.name``/``.index``/attribute-style
+        access here -- that would silently break the dict call path.
         """
         results = {
             'Target_Days': 60,

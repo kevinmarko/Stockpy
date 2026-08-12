@@ -568,3 +568,44 @@ class TestPortfolioHeatBreach:
         ee = _patched_ee()
         result = ee.evaluate_portfolio(self._df())
         assert (result["Portfolio_Heat"] > 0.06).all()
+
+
+# ===========================================================================
+# TestEvaluatePortfolioMalformedSymbol
+# ===========================================================================
+
+class TestEvaluatePortfolioMalformedSymbol:
+    """Regression pin for a code-review finding: the batch trade-history
+    lookup inside evaluate_portfolio() must degrade a NaN/non-string Symbol
+    to "no history" rather than raising AttributeError out of the whole
+    call -- one malformed row must never abort the run."""
+
+    def _df(self):
+        return pd.DataFrame({
+            "Symbol": ["AAPL", float("nan")],
+            "sector": ["Technology", "Technology"],
+            "position_size": [10000.0, 10000.0],
+            "stop_loss_pct": [0.02, 0.02],
+            "Relative_Strength": [0.05, 0.02],
+            "Action Signal": ["BUY", "HOLD"],
+            "Price": [180.0, 50.0],
+        })
+
+    def test_nan_symbol_row_does_not_raise(self):
+        ee = _patched_ee()
+        result = ee.evaluate_portfolio(self._df())
+        assert len(result) == 2
+
+    def test_nan_symbol_row_gets_nan_mae_mfe(self):
+        ee = _patched_ee()
+        result = ee.evaluate_portfolio(self._df())
+        nan_row = result[result["Symbol"].isna()]
+        assert len(nan_row) == 1
+        assert math.isnan(nan_row.iloc[0]["MAE"])
+        assert math.isnan(nan_row.iloc[0]["MFE"])
+
+    def test_other_rows_still_processed_normally(self):
+        ee = _patched_ee()
+        result = ee.evaluate_portfolio(self._df())
+        aapl_row = result[result["Symbol"] == "AAPL"]
+        assert len(aapl_row) == 1
