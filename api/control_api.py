@@ -737,24 +737,27 @@ def stream_job_logs(
                 lines.append(line)
             return lines, f.tell()
 
-    async def log_event_generator():
+    def _check_size(path):
         import os
+        try:
+            return os.stat(path).st_size
+        except FileNotFoundError:
+            return -1
+
+    async def log_event_generator():
         current_offset = max(0, resume_offset)
         last_sent = _time.monotonic()
         while True:
             sent_any = False
-            try:
-                st = os.stat(log_path)
-                if st.st_size > current_offset:
-                    lines, new_offset = await asyncio.to_thread(_read_lines_chunked, log_path, current_offset)
-                    if lines:
-                        for line in lines:
-                            scrubbed = redact_line(line.rstrip("\n"))
-                            yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
-                        current_offset = new_offset
-                        sent_any = True
-            except FileNotFoundError:
-                pass
+            size = await asyncio.to_thread(_check_size, log_path)
+            if size > current_offset:
+                lines, new_offset = await asyncio.to_thread(_read_lines_chunked, log_path, current_offset)
+                if lines:
+                    for line in lines:
+                        scrubbed = redact_line(line.rstrip("\n"))
+                        yield f"id: {current_offset}\ndata: {scrubbed}\n\n"
+                    current_offset = new_offset
+                    sent_any = True
 
             if not rec.handle.is_running():
                 # Stream final lines if any and stop
