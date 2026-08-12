@@ -50,7 +50,6 @@ from dto_models import (
     FundamentalDataDTO,
     MacroEconomicDTO,
     RobinhoodPositionDTO,
-    ExecutionRangeParameters,
 )
 from strategy_engine import StrategyEngine, apply_tactical_ranges
 from transactions_store import TransactionsStore
@@ -357,8 +356,7 @@ class TestKillSwitchOverlay:
 # ===========================================================================
 class TestApplyTacticalRanges:
     def test_buy_zone_branch(self):
-        params = ExecutionRangeParameters(current_price=100.00, safe_atr=2.00, chandelier_long=95.00, chandelier_short=110.00, graham_val=0.0)
-        out = apply_tactical_ranges("BUY", params)
+        out = apply_tactical_ranges("BUY", 100.00, 2.00, 95.00, 110.00, graham_val=0.0)
         m = _BUY_ZONE_RE.match(out)
         assert m is not None, f"unexpected: {out!r}"
         support, resistance = map(float, m.groups())
@@ -367,64 +365,55 @@ class TestApplyTacticalRanges:
         assert support < resistance
 
     def test_strong_buy_uses_same_buy_zone_branch(self):
-        params = ExecutionRangeParameters(current_price=50.00, safe_atr=1.00, chandelier_long=48.00, chandelier_short=55.00)
-        out = apply_tactical_ranges("STRONG BUY", params)
+        out = apply_tactical_ranges("STRONG BUY", 50.00, 1.00, 48.00, 55.00)
         assert _BUY_ZONE_RE.match(out), f"STRONG BUY should share the Buy Zone branch: {out!r}"
 
     def test_graham_number_caps_resistance(self):
         # graham_val (98.20) < computed resistance (99.00) -> resistance clamped to graham.
-        params = ExecutionRangeParameters(current_price=100.00, safe_atr=2.00, chandelier_long=95.00, chandelier_short=110.00, graham_val=98.20)
-        out = apply_tactical_ranges("BUY", params)
+        out = apply_tactical_ranges("BUY", 100.00, 2.00, 95.00, 110.00, graham_val=98.20)
         _, resistance = map(float, _BUY_ZONE_RE.match(out).groups())
         assert resistance == pytest.approx(98.20)
 
     def test_support_above_resistance_falls_back(self):
         # A large graham cap can drag resistance below support -> fallback S=price*0.95, R=price.
-        params = ExecutionRangeParameters(current_price=100.00, safe_atr=2.00, chandelier_long=95.00, chandelier_short=110.00, graham_val=90.00)
-        out = apply_tactical_ranges("BUY", params)
+        out = apply_tactical_ranges("BUY", 100.00, 2.00, 95.00, 110.00, graham_val=90.00)
         support, resistance = map(float, _BUY_ZONE_RE.match(out).groups())
         assert support == pytest.approx(95.00)   # 100 * 0.95
         assert resistance == pytest.approx(100.00)
 
     def test_hold_range_uses_chandelier_when_available(self):
-        params = ExecutionRangeParameters(current_price=100.00, safe_atr=2.00, chandelier_long=96.00, chandelier_short=0.0)
-        out = apply_tactical_ranges("HOLD", params)
+        out = apply_tactical_ranges("HOLD", 100.00, 2.00, 96.00, 0.0)
         support, resistance = map(float, _HOLD_RANGE_RE.match(out).groups())
         assert support == pytest.approx(96.00)          # chandelier_long
         assert resistance == pytest.approx(104.00)      # price + 2*ATR
 
     def test_hold_range_falls_back_to_atr_support(self):
-        params = ExecutionRangeParameters(current_price=100.00, safe_atr=2.00, chandelier_long=0.0, chandelier_short=0.0)
-        out = apply_tactical_ranges("HOLD", params)
+        out = apply_tactical_ranges("HOLD", 100.00, 2.00, 0.0, 0.0)
         support, resistance = map(float, _HOLD_RANGE_RE.match(out).groups())
         assert support == pytest.approx(96.00)          # price - 2*ATR
         assert resistance == pytest.approx(104.00)
 
     def test_risk_reduce_branch(self):
-        params = ExecutionRangeParameters(current_price=100.00, safe_atr=2.00, chandelier_long=94.00, chandelier_short=0.0)
-        out = apply_tactical_ranges("RISK REDUCE", params)
+        out = apply_tactical_ranges("RISK REDUCE", 100.00, 2.00, 94.00, 0.0)
         trim, stop = map(float, _TRIM_RE.match(out).groups())
         assert trim == pytest.approx(100.00 + 0.5 * 2.00)  # 101.00
         assert stop == pytest.approx(94.00)                # chandelier_long
 
     def test_risk_reduce_stop_falls_back_to_atr(self):
-        params = ExecutionRangeParameters(current_price=100.00, safe_atr=2.00, chandelier_long=0.0, chandelier_short=0.0)
-        out = apply_tactical_ranges("RISK REDUCE", params)
+        out = apply_tactical_ranges("RISK REDUCE", 100.00, 2.00, 0.0, 0.0)
         _, stop = map(float, _TRIM_RE.match(out).groups())
         assert stop == pytest.approx(100.00 - 1.0 * 2.00)  # 98.00
 
     def test_risk_reduce_stop_clamped_to_floor(self):
         # Pathological ATR would drive the stop negative -> clamp to >= $0.01.
-        params = ExecutionRangeParameters(current_price=1.00, safe_atr=10.00, chandelier_long=0.0, chandelier_short=0.0)
-        out = apply_tactical_ranges("RISK REDUCE", params)
+        out = apply_tactical_ranges("RISK REDUCE", 1.00, 10.00, 0.0, 0.0)
         _, stop = map(float, _TRIM_RE.match(out).groups())
         assert stop >= 0.01
 
     def test_risk_reduce_stale_chandelier_above_price_clamped_to_price(self):
         # Finding 9: a stale chandelier_long sitting ABOVE current_price is
         # not a sane hard stop -- clamp to current_price.
-        params = ExecutionRangeParameters(current_price=100.00, safe_atr=2.00, chandelier_long=150.00, chandelier_short=0.0)
-        out = apply_tactical_ranges("RISK REDUCE", params)
+        out = apply_tactical_ranges("RISK REDUCE", 100.00, 2.00, 150.00, 0.0)
         _, stop = map(float, _TRIM_RE.match(out).groups())
         assert stop == pytest.approx(100.00)
 
@@ -433,8 +422,7 @@ class TestApplyTacticalRanges:
         # (and even resistance) negative WITHOUT tripping the pre-existing
         # support > resistance guard (both are negative but support < resistance
         # numerically) -- must still fall back to the sane S=price*0.95, R=price pair.
-        params = ExecutionRangeParameters(current_price=5.00, safe_atr=12.00, chandelier_long=0.0, chandelier_short=0.0)
-        out = apply_tactical_ranges("BUY", params)
+        out = apply_tactical_ranges("BUY", 5.00, 12.00, 0.0, 0.0)
         support, resistance = map(float, _BUY_ZONE_RE.match(out).groups())
         assert support >= 0.0
         assert support == pytest.approx(5.00 * 0.95)
@@ -442,8 +430,7 @@ class TestApplyTacticalRanges:
 
     def test_hold_range_negative_support_falls_back(self):
         # Finding 14: same floor treatment applied to the HOLD branch's support.
-        params = ExecutionRangeParameters(current_price=5.00, safe_atr=4.00, chandelier_long=0.0, chandelier_short=0.0)
-        out = apply_tactical_ranges("HOLD", params)
+        out = apply_tactical_ranges("HOLD", 5.00, 4.00, 0.0, 0.0)
         support, resistance = map(float, _HOLD_RANGE_RE.match(out).groups())
         assert support >= 0.0
         assert support == pytest.approx(5.00 * 0.95)

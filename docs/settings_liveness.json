@@ -21,7 +21,7 @@
     {
       "expr": "getattr(_rh_settings, _MISSING_ATTR, None)",
       "file": "Gravity AI Review Suite.py",
-      "line": 2715,
+      "line": 2714,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -1710,7 +1710,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "Gravity AI Review Suite.py:4515",
+        "site": "Gravity AI Review Suite.py:4514",
         "via": []
       }
     ],
@@ -1956,7 +1956,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4515",
+        "site": "investyo_mcp_server.py:4513",
         "via": []
       }
     ],
@@ -1976,7 +1976,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4467",
+        "site": "investyo_mcp_server.py:4465",
         "via": []
       }
     ],
@@ -2016,7 +2016,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4475",
+        "site": "investyo_mcp_server.py:4473",
         "via": []
       }
     ],
@@ -2222,7 +2222,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "pilots/scan_config_store.py:165",
+        "site": "pilots/scan_config_store.py:180",
         "via": []
       },
       {
@@ -2242,7 +2242,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11021",
+        "site": "Gravity AI Review Suite.py:11020",
         "via": []
       }
     ],

@@ -102,6 +102,38 @@ def _neutral_macro_dto() -> MacroEconomicDTO:
 
 
 # ---------------------------------------------------------------------------
+# _fetch_bars_for_universe
+# ---------------------------------------------------------------------------
+
+class TestFetchBarsForUniverse:
+    def test_fallback_on_historical_store_import_error(self) -> None:
+        """When HISTORICAL_STORE_ENABLED is true but the module cannot be
+        imported, it must log a warning and fall back to the direct market
+        provider without crashing."""
+        import unittest.mock as mock
+
+        market = mock.MagicMock()
+        mock_df = mock.MagicMock()
+        mock_df.empty = False
+        market.get_intraday_bars.return_value = mock_df
+
+        with mock.patch("main.settings.HISTORICAL_STORE_ENABLED", True):
+            with mock.patch.dict("sys.modules", {"data.historical_store": None}):
+                with mock.patch("main.logger.warning") as mock_logger:
+                    result = m._fetch_bars_for_universe(["AAPL"], market)
+
+                    assert "AAPL" in result
+                    assert result["AAPL"] is mock_df
+                    market.get_intraday_bars.assert_called_once_with("AAPL", lookback_days=450)
+
+                    mock_logger.assert_called_once()
+                    msg = mock_logger.call_args[0][0]
+                    exc = mock_logger.call_args[0][1]
+                    assert "HistoricalStore unavailable" in msg
+                    assert isinstance(exc, ImportError)
+
+
+# ---------------------------------------------------------------------------
 # _fetch_fundamentals_for_universe
 # ---------------------------------------------------------------------------
 
@@ -134,6 +166,30 @@ class TestFetchFundamentalsForUniverse:
 
         assert "AAPL" in result
         assert "NODATA" not in result
+
+    def test_fallback_on_historical_store_import_error(self) -> None:
+        """When HISTORICAL_STORE_ENABLED is true but the module cannot be
+        imported, it must log a warning and fall back to the direct market
+        provider without crashing."""
+        import unittest.mock as mock
+
+        market = mock.MagicMock()
+        market.get_fundamentals.return_value = _make_fund_info()
+
+        with mock.patch("main.settings.HISTORICAL_STORE_ENABLED", True):
+            with mock.patch.dict("sys.modules", {"data.historical_store": None}):
+                with mock.patch("main.logger.warning") as mock_logger:
+                    result = m._fetch_fundamentals_for_universe(["AAPL"], market)
+
+                    assert "AAPL" in result
+                    market.get_fundamentals.assert_called_once_with("AAPL")
+
+                    mock_logger.assert_called_once()
+                    msg = mock_logger.call_args[0][0]
+                    exc = mock_logger.call_args[0][1]
+                    assert "HistoricalStore unavailable" in msg
+                    assert "fundamentals pre-fetch" in msg
+                    assert isinstance(exc, ImportError)
 
 
 # ---------------------------------------------------------------------------
