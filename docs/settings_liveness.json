@@ -77,7 +77,7 @@
     {
       "expr": "getattr(_settings, name, None)",
       "file": "data/robinhood_portfolio.py",
-      "line": 83,
+      "line": 84,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 373,
+  "files_scanned": 374,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -419,13 +419,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 763,
+    "attr": 781,
     "factory_param": 4,
     "getattr_const": 259,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 228,
+    "attr": 229,
     "factory_param": 4,
     "getattr_const": 157,
     "os_environ": 18
@@ -812,6 +812,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "data/historical_store.py:725",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "data/paper_account_store.py:61",
         "via": []
       },
@@ -884,7 +893,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:62",
+        "site": "transactions_store.py:57",
         "via": []
       },
       {
@@ -922,7 +931,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:728",
+        "site": "data/historical_store.py:736",
         "via": []
       },
       {
@@ -931,7 +940,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:731",
+        "site": "data/historical_store.py:739",
         "via": []
       },
       {
@@ -1075,7 +1084,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:66",
+        "site": "transactions_store.py:61",
         "via": []
       },
       {
@@ -1084,7 +1093,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:68",
+        "site": "transactions_store.py:63",
         "via": []
       },
       {
@@ -1122,7 +1131,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:728",
+        "site": "data/historical_store.py:736",
         "via": []
       },
       {
@@ -1131,7 +1140,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:731",
+        "site": "data/historical_store.py:739",
         "via": []
       },
       {
@@ -1275,7 +1284,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:66",
+        "site": "transactions_store.py:61",
         "via": []
       },
       {
@@ -1284,7 +1293,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:68",
+        "site": "transactions_store.py:63",
         "via": []
       },
       {
@@ -1799,11 +1808,110 @@
     "LOCAL_DATA_ROOT": [
       {
         "discarded": false,
-        "form": "name_literal",
+        "form": "attr",
         "rules": [
-          "dynamic_name_literal_unattributable"
+          "module_level"
         ],
-        "site": "settings_keysets.py:132",
+        "site": "alerting.py:75",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "data/portfolio_sync.py:84",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "data/robinhood_orders.py:58",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "data/robinhood_portfolio.py:60",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "db_config.py:55",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "forecasting/model_persistence.py:47",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "gui/orchestrator_runner.py:147",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "ml/data/store.py:27",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "ml/forecast_backfill.py:61",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "ml/lgbm_ranker.py:35",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "ml/meta_labeling.py:46",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "universe_engine.py:40",
         "via": []
       }
     ],
@@ -1814,7 +1922,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "alerting.py:118",
+        "site": "alerting.py:120",
         "via": []
       },
       {
@@ -1942,7 +2050,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:728",
+        "site": "data/historical_store.py:736",
         "via": []
       },
       {
@@ -2014,7 +2122,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:66",
+        "site": "transactions_store.py:61",
         "via": []
       }
     ],
@@ -2025,7 +2133,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4645",
+        "site": "investyo_mcp_server.py:4646",
         "via": []
       }
     ],
@@ -2045,7 +2153,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4597",
+        "site": "investyo_mcp_server.py:4598",
         "via": []
       }
     ],
@@ -2085,7 +2193,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4605",
+        "site": "investyo_mcp_server.py:4606",
         "via": []
       }
     ],
@@ -2129,6 +2237,24 @@
         "rules": [
           "module_level"
         ],
+        "site": "data/rag_index.py:61",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "data/sector_embeddings.py:53",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
         "site": "desktop/ui_server.py:40",
         "via": []
       },
@@ -2148,6 +2274,15 @@
           "module_level"
         ],
         "site": "gui/app.py:144",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "gui/decision_log.py:47",
         "via": []
       },
       {
@@ -2612,14 +2747,14 @@
   ],
   "restart_required_reason_counts": {
     "closure_value": 1,
-    "cross_module_init_helper": 65,
+    "cross_module_init_helper": 66,
     "decorator_arg": 13,
-    "dynamic_name_literal_unattributable": 8,
+    "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 11,
     "init_body": 6,
     "init_self_assign": 41,
     "method_self_assign": 4,
-    "module_level": 56,
+    "module_level": 71,
     "os_environ": 25
   },
   "restart_required_via_name_literal_only": [
@@ -2627,7 +2762,6 @@
     "EDGAR_FULLTEXT_FORMS",
     "ETF_HOLDINGS_TICKERS",
     "FMP_ECON_INDICATORS",
-    "LOCAL_DATA_ROOT",
     "PROMPT_REGISTRY_REFRESH_SECONDS"
   ],
   "status": "ok"

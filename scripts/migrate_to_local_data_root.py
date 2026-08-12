@@ -82,6 +82,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from scripts._bootstrap import bootstrap  # noqa: E402
+bootstrap()
+
 from settings import settings  # noqa: E402
 
 # Categories used for the summary table, in display order.

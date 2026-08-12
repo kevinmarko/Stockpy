@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `124ef92da58434669eecd0da8a00195a31edada1`
+- Measured at commit: `ef1bc9a04bb8f94e9b61c2cea343658177a339e5`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -14,7 +14,7 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 
 ## 1. Field-type breakdown
 
-`len(Settings.model_fields)` = **363**
+`len(Settings.model_fields)` = **364**
 
 | Annotation | Count |
 |---|---|
@@ -24,6 +24,7 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 | `Optional[str]` | 46 |
 | `str` | 39 |
 | `list[str]` | 8 |
+| `Optional[Path]` | 1 |
 | `Path` | 1 |
 | `dict[str, dict[str, float]]` | 1 |
 | `dict[str, dict]` | 1 |
@@ -42,8 +43,13 @@ Distinct `dict[...]` shapes: **4**
 | `dict[str, float]` | 1 |
 | `dict[str, str]` | 1 |
 
-**other/unhandled bucket: 0 fields.** Every field falls into a recognised kind, so a
-kind-derivation switch over the categories above is currently total.
+### other/unhandled bucket — **1** field(s)
+
+A future kind-derivation switch needs an explicit branch for each of these:
+
+| Field | Annotation |
+|---|---|
+| `OUTPUT_DIR` | `Optional[Path]` |
 
 ## 2. `gui/env_io.py` list sizes
 
@@ -52,7 +58,7 @@ kind-derivation switch over the categories above is currently total.
 | `ALLOWED_KEYS` | 314 | 314 | 0 duplicate entries (clean) |
 | `SECRET_KEYS` | 43 | 43 | 0 duplicate entries |
 | `_JSON_KEYS` | 12 | 12 | frozenset |
-| `EXCLUDED_FROM_GUI` | 8 | 8 | frozenset; third classification bucket |
+| `EXCLUDED_FROM_GUI` | 9 | 9 | frozenset; third classification bucket |
 
 `ALLOWED_KEYS ∩ SECRET_KEYS` overlap: **0** (clean — no key is both writable and secret)
 
@@ -64,22 +70,23 @@ Every `Settings.model_fields` name classified into exactly one bucket.
 |---|---|---|
 | `SECRET` | 41 | in `env_io.SECRET_KEYS` |
 | `IN_ALLOWED_KEYS` | 314 | in `env_io.ALLOWED_KEYS` |
-| `UNCLASSIFIED` | 8 | in neither |
+| `UNCLASSIFIED` | 9 | in neither |
 
-Of the 8 `UNCLASSIFIED` fields, **8** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
+Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
 
 ### Every `UNCLASSIFIED` field
 
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
 | `ALERT_FILE_PATH` | L1340 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L4573 | yes | Path to the gcloud binary for environment integrations. |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L3867 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L3752 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
-| `OUTPUT_DIR` | L1589 | yes | Directory for generated reports. |
-| `PROMPT_CACHE_DIR` | L4019 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
-| `SYNC_WATCHLIST_FILES` | L1594 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L3637 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `GCLOUD_BIN` | L4598 | yes | Path to the gcloud binary for environment integrations. |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L3884 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L3769 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `LOCAL_DATA_ROOT` | L1589 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
+| `OUTPUT_DIR` | L1606 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
+| `PROMPT_CACHE_DIR` | L4036 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `SYNC_WATCHLIST_FILES` | L1611 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
+| `WATCH_RULES_FILE` | L3654 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -127,10 +134,10 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 | `MCP_HTTP_BEARER_TOKEN` | `settings.py:267` | no | yes | yes |
 | `MCP_OAUTH_PASSWORD` | `settings.py:315` | no | yes | yes |
 | `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:234` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:3984` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:3992` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:3976` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:3968` | no | yes | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4001` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4009` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:3993` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:3985` | no | yes | yes |
 | `STATE_API_TOKEN` | `settings.py:226` | no | yes | yes |
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
@@ -210,7 +217,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **373** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **374** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -223,12 +230,12 @@ _S.settings, _bl_settings, _dsr_settings, _live_settings, _mt_settings, _oos_gat
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 698 | 225 |
+| (a) `settings.KEY` | 715 | 226 |
 | (b) `getattr(settings, "KEY", default)` | 259 | 157 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
 
-Fields reached by at least one form: **354** of 363.
+Fields reached by at least one form: **355** of 364.
 
 ### Fields with NO statically-attributable read — **9**
 
@@ -239,7 +246,7 @@ referenced by name somewhere and is probably read dynamically.
 
 | Field | Name-literal sites | Verdict |
 |---|---|---|
-| `AI_GENERATION_API_ENABLED` | `api/data_api.py:188`, `settings_keysets.py:345` | likely read dynamically |
+| `AI_GENERATION_API_ENABLED` | `api/data_api.py:188`, `settings_keysets.py:359` | likely read dynamically |
 | `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4694` | likely read dynamically |
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4693` | likely read dynamically |
 | `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4856`, `gui/panels/settings_manager.py:126` | likely read dynamically |
@@ -399,7 +406,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/pilots_api.py:4212` | `getattr(settings, key, None)` |
 | `api/pilots_api.py:4317` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
-| `data/robinhood_portfolio.py:83` | `getattr(_settings, name, None)` |
+| `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
 | `gui/panels/ai_control_center.py:164` | `getattr(settings, tkey, False)` |
 | `gui/panels/ai_control_center.py:189` | `getattr(settings, sel_key, 'none')` |
 | `gui/panels/settings_manager.py:190` | `getattr(settings, key, fallback)` |

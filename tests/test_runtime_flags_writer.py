@@ -1166,9 +1166,14 @@ print(json.dumps({
 
     def test_the_real_default_store_path_is_under_output(self, tmp_path: Path):
         """Nothing in this test file writes there, so assert the wiring
-        separately rather than by touching it."""
+        separately rather than by touching it.
+
+        The store is anchored under settings.LOCAL_DATA_ROOT's default
+        literal (Path.home() / ".stockpy_local"), not the repo root — see
+        runtime_flags.py's DEFAULT_STORE_PATH docstring for why it hardcodes
+        this independently rather than importing settings.LOCAL_DATA_ROOT."""
         assert (
             runtime_flags.DEFAULT_STORE_PATH.parent
-            == REPO_ROOT / "output"
+            == Path.home() / ".stockpy_local" / "output"
         )
         assert writer.AUDIT_FILENAME == "runtime_flags_audit.jsonl"

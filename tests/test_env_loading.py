@@ -269,16 +269,25 @@ class TestEnvPathAnchor:
         fields are pinned by a real shell export by diffing ``os.environ``
         against the parsed ``.env``. If it parsed a DIFFERENT ``.env`` than the
         one pydantic-settings loaded, every field would be misclassified.
+
+        The store's OWN location, however, is deliberately NOT anchored to
+        ENV_PATH's repo root anymore — see ``settings.LOCAL_DATA_ROOT``
+        (default ``~/.stockpy_local``, shared across every git worktree on
+        this machine). ``runtime_flags.py`` still cannot import ``settings``
+        to read that field (same circular-import constraint as above), so it
+        hardcodes the identical literal independently; this assertion is the
+        guard that keeps THAT duplicate in sync instead.
         """
         import settings as settings_module
         import runtime_flags
 
         derived = Path(runtime_flags.__file__).resolve().parent / ".env"
         assert derived == settings_module.ENV_PATH
-        # ...and the store itself hangs off that same repo-root anchor.
+        # ...but the store itself hangs off settings.LOCAL_DATA_ROOT's
+        # default literal (Path.home() / ".stockpy_local"), not the repo root.
         assert (
             runtime_flags.DEFAULT_STORE_PATH.parent.parent
-            == settings_module.ENV_PATH.parent
+            == Path.home() / ".stockpy_local"
         )
 
 
