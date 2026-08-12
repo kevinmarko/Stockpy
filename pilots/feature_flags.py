@@ -78,6 +78,15 @@ WRITE_GATE_REASONS: dict[str, str] = {
         "proposal here is hypothetical and paper-only, no capital or "
         "broker involvement (rlhf_calibration_store.py)."
     ),
+    "PAPER_BROKER_WRITES_ENABLED": (
+        "Gates POST /pilots/paper-broker/reset on the Pilots API "
+        "(api/pilots_api.py::require_paper_broker_writes_enabled) -- wipes "
+        "the local FMP paper account's positions/orders and reseeds cash. "
+        "Defaults True: no real money or broker is involved "
+        "(data/paper_account_store.py), unlike BROKER_BACKEND itself (in "
+        "settings_keysets.DANGEROUS_KEYS) which decides whether an order is "
+        "real."
+    ),
 }
 
 # -- Read-only diagnostic/data features (2026-08-07, opt-in by operator -----
