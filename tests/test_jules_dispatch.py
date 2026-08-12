@@ -118,6 +118,7 @@ class TestCreateSessionWithConfirm:
             branch="main",
             title="Fix bug",
             force=False,
+            confirm=True,
         )
         assert exit_code == 0
         out = capsys.readouterr().out
