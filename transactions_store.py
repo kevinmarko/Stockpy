@@ -1,7 +1,6 @@
 """SQLAlchemy-backed transactions database for tracking active and closed trades. The backend is resolved through db_config.py (SQLite by default, Postgres/Supabase when DATABASE_URL is set). On a DB-outage it substitutes a read-only offline stub so a connectivity failure can't dead-letter the advisory pipeline."""
 
 import logging
-import os
 import pandas as pd
 from datetime import datetime, timezone
 from typing import Optional, Union
@@ -11,10 +10,6 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from db_config import resolve_database_url, create_db_engine, session_scope
 
 logger = logging.getLogger(__name__)
-
-DB_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_FILE = os.path.join(DB_DIR, "quant_platform.db")
-DATABASE_URL = f"sqlite:///{DB_FILE}"
 
 Base = declarative_base()
 
