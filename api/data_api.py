@@ -41,7 +41,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from api._redact import redact_line
+from api._redact import install_redacting_exception_handler, redact_line
 
 from dotenv import load_dotenv as _load_dotenv
 
@@ -121,6 +121,12 @@ app.add_middleware(
     allow_methods=["GET", "PUT", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# Structural backstop for exception-message leakage: redacts every
+# HTTPException.detail before it reaches the client, so a future endpoint
+# that raises HTTPException(detail=str(exc)) directly is covered even if it
+# forgets an explicit redact_line() call. See api/_redact.py.
+install_redacting_exception_handler(app)
 
 # Mount WebSocket tick router only -- NOT training_router. The training-status
 # broadcast singletons (training_status_manager/_MAIN_LOOP) are only ever
