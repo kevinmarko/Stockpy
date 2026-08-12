@@ -66,7 +66,7 @@ branch names — `exec-unified-alerting`, `exec-fill-stream-flatten`,
 `gui-caching-analytics-diagnostics`, `gui-observability-helpers`,
 `gui-report-viewer-helpers`, `gui-ml-model-monitoring` — touch `config.py`
 or `database_setup.py`; those are all `execution/`/`gui/`/`ml/`-scoped).
-**Unlike `docs/OBSERVABILITY_PLAN.md`'s sequencing gate, you may start this
+**Unlike `docs/plans/OBSERVABILITY_PLAN.md`'s sequencing gate, you may start this
 phase immediately — no waiting, no merge-status check required.**
 
 **You own (and may edit):**
@@ -89,7 +89,7 @@ phase immediately — no waiting, no merge-status check required.**
   turn out to be genuinely valuable and currently homeless, that is an
   explicit, called-out exception — see Phase C1.)
 - Touch `observability/`, `alerting.py`, or anything under `execution/` —
-  that is `docs/OBSERVABILITY_PLAN.md`'s scope (a separate, parallel
+  that is `docs/plans/OBSERVABILITY_PLAN.md`'s scope (a separate, parallel
   Gemini assignment with its own sequencing gate; unrelated to this one).
 - Touch `main_orchestrator.py`'s `compile_dashboard()` internals — you may
   *read* it to characterize orchestrator-side column coverage (Phase C1)

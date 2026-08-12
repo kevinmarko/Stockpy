@@ -8,7 +8,7 @@ resolution chain — even a correctly signed one.  A bad signature is discarded
 upstream in ``registry.py``; a signed-but-dangerous body must be rejected here.
 
 This module enforces the **hard boundary** stated in
-``docs/PROMPT_REGISTRY_PLAN.md`` §4.3 / §0:
+``docs/plans/PROMPT_REGISTRY_PLAN.md`` §4.3 / §0:
 
     *"A fetched prompt can change what an AI is told.
       It cannot change what the platform is permitted to do."*

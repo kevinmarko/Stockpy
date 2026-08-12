@@ -37,7 +37,7 @@ No engine/signal/execution/runtime code is touched — this is pure
 | Doc auto-sync (see below) | `.claude/hooks/sync_agent_docs.sh` / `.agents/hooks/sync_agent_docs.sh` | `PostToolUse`: copies `CLAUDE.md`↔`AGENTS.md` onto each other whenever either is edited, on both runtimes. |
 | Doc auto-sync | `.gitignore` (modified) | Added `!.agents/hooks.json` immediately after the existing `!docs/settings_liveness.json` exception, in the same block of `*.json`-blanket-rule carve-outs — see below. |
 | Cross-cutting policy | `CLAUDE.md` / `AGENTS.md` (modified) | New `## Agent Workflow: Verification & Planning` section, inserted right after `## Branch Workflow`, codifying all 5 checklist points as repo policy for whichever agent is working. |
-| Retrospective | `docs/AGENT_WORKFLOW_HARDENING_PLAN.md` | This file. |
+| Retrospective | `docs/plans/AGENT_WORKFLOW_HARDENING_PLAN.md` | This file. |
 
 Point 3 ("Direct Artifact Feedback") and half of point 5 ("model routing")
 needed no new files — they're native UX in both tools (Plan-mode/diff

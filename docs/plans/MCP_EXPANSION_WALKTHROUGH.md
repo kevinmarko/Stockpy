@@ -121,7 +121,7 @@ propose/confirm design, needs its own explicit go-ahead — see
 
 `.github/workflows/deploy_mcp_vm.yml` currently triggers on `push: branches:
 [main]` — fully automatic. This reverses a deliberate, previously-documented
-decision in `docs/mcp_server_split_brain.md` not to auto-restart production
+decision in `docs/handovers/mcp_server_split_brain.md` not to auto-restart production
 from CI. **Not changed in this round** — this file was explicitly out of
 scope. If/when Phase 5 is picked up, switch the trigger to
 `workflow_dispatch` (manual) per the plan's recommended default before this
