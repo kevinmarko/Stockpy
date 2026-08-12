@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `92db910d47d8c4bec39f16dccfa8f92494146c66`
+- Measured at commit: `a4e0bbef0f6e78d7261a21cc0f29221377a8bf25`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -73,7 +73,7 @@ Of the 8 `UNCLASSIFIED` fields, **8** are accounted for by the third `EXCLUDED_F
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
 | `ALERT_FILE_PATH` | L1303 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L4512 | yes | Path to the gcloud binary for environment integrations. |
+| `GCLOUD_BIN` | L4523 | yes | Path to the gcloud binary for environment integrations. |
 | `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L3817 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
 | `LLM_COMMENTARY_CACHE_PATH` | L3702 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
 | `OUTPUT_DIR` | L1552 | yes | Directory for generated reports. |
@@ -221,7 +221,7 @@ _S.settings, _bl_settings, _dsr_settings, _live_settings, _mt_settings, _oos_gat
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 688 | 221 |
+| (a) `settings.KEY` | 689 | 221 |
 | (b) `getattr(settings, "KEY", default)` | 257 | 156 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
