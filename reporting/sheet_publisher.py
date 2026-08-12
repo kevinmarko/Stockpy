@@ -98,7 +98,7 @@ def rec_to_sheet_row(
         "Forecast_30_Pct": round(forecast_pct, 6),
 
         # ── Dividends ────────────────────────────────────────────────────────
-        # docs/CONFIG_SCHEMA_PLAN.md Phase C1: was keyed "Dividend Yield",
+        # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1: was keyed "Dividend Yield",
         # which matches neither COLUMN_SCHEMA's key nor header and was
         # silently dropped by write_recommendations()'s column filter.
         # config.COLUMN_SCHEMA already has a slot for this exact value —
@@ -124,7 +124,7 @@ def rec_to_sheet_row(
         ),
 
         # ── Advisory overlay ─────────────────────────────────────────────────
-        # docs/CONFIG_SCHEMA_PLAN.md Phase C1: "Advisory_Action" and
+        # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1: "Advisory_Action" and
         # "Advisory_Rationale" were REMOVED here (they were dead code —
         # already-silently-dropped duplicates, never wired to a column):
         #   - Advisory_Action was byte-identical to the "Action Signal"

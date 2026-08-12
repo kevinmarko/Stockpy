@@ -781,6 +781,16 @@ def evaluate(
     # falls straight through to the original fresh-fit path (dead-letter safe).
     # ──────────────────────────────────────────────────────────────────────────
     garch_vol: Optional[float] = None
+    # Only a fit against THIS call's bars_df is safe to also reuse as Step 6's
+    # forecast sigma below -- a value supplied by the caller via
+    # precomputed_garch may have been fit against a different bars window
+    # fetched at a different point in the cycle, which is fine for sizing
+    # (garch_vol's pre-existing use) but must not silently become this
+    # specific bars_df/current_price forecast's confidence band too.
+    # fresh_garch_vol carries that provenance directly: it stays None unless
+    # set by a successful local fit just below, and is passed to
+    # generate_forecast() as-is (no separate flag to keep in sync with it).
+    fresh_garch_vol: Optional[float] = None
     if precomputed_garch is not None and precomputed_garch > 0:
         garch_vol = float(precomputed_garch)
     elif has_sufficient_history:
@@ -791,6 +801,7 @@ def evaluate(
                 else _get_technical_options_engine()
             )
             garch_vol = toe.estimate_gjr_garch_volatility(bars_df.copy())
+            fresh_garch_vol = garch_vol
         except Exception as exc:
             logger.warning("advisory[%s]: GARCH vol failed — %s", symbol, exc)
             partial_flags.append("garch_vol_failed")
@@ -820,6 +831,7 @@ def evaluate(
                 current_price=current_price,
                 history_series=bars_df["Close"],
                 history_df=bars_df,
+                precomputed_garch_annual_vol=fresh_garch_vol,
             )
             raw_f30 = fc_results.get("Forecast_30", 0.0)
             forecast_price = float(raw_f30) if raw_f30 and raw_f30 > 0 else None

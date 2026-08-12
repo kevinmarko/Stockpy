@@ -266,7 +266,7 @@ class TestMigrateDailySignalsSchema:
 
 # ---------------------------------------------------------------------------
 # migrate_daily_signals_schema — orphaned-column detection (Phase C3,
-# docs/CONFIG_SCHEMA_PLAN.md)
+# docs/plans/CONFIG_SCHEMA_PLAN.md)
 # ---------------------------------------------------------------------------
 
 class TestOrphanedColumnDetection:

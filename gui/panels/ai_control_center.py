@@ -222,7 +222,7 @@ def _render_capability_row(
                 except Exception as exc:
                     c4.error(f"Model write refused: {exc}")
     elif not rowinfo["built"]:
-        c4.caption("🚧 requires build — see `docs/OPAL_BUILD_SPEC.md`")
+        c4.caption("🚧 requires build — see `docs/plans/OPAL_BUILD_SPEC.md`")
     else:
         c4.caption("—")
 
@@ -340,7 +340,7 @@ def render_ai_control_center() -> None:
 
                 if not opal_built():
                     st.caption(
-                        "🚧 Opal backend not built yet — see `docs/OPAL_BUILD_SPEC.md`. "
+                        "🚧 Opal backend not built yet — see `docs/plans/OPAL_BUILD_SPEC.md`. "
                         "This button activates automatically once `llm/research.py` ships."
                     )
                 else:

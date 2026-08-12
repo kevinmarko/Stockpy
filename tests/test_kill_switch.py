@@ -236,7 +236,7 @@ class TestKillSwitchAlertDispatch:
     ``observability.alerts.send_alert`` out-of-band from the ``logger.critical``
     call, so an operator relying only on Discord/Slack/email (not tailing
     logs) is still notified — the platform's single highest-value
-    observability gap per docs/OBSERVABILITY_PLAN.md.
+    observability gap per docs/plans/OBSERVABILITY_PLAN.md.
     """
 
     def test_activate_calls_send_alert_critical(self, tmp_ks: GlobalKillSwitch):

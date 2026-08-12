@@ -1841,7 +1841,7 @@ are secret-only and can never be set from the GUI — edit `.env` directly.
 | `OPENAI_API_KEY` | _(none)_ | Required when `OPAL_RESEARCH_PROVIDER=openai` |
 
 See `docs/FEATURE_TIER_HISTORY.md` (Tier 9 sections) for the full build history of
-each agent, and `docs/OPAL_BUILD_SPEC.md` for Opal's design record.
+each agent, and `docs/plans/OPAL_BUILD_SPEC.md` for Opal's design record.
 
 ### Standing rule
 

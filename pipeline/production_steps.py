@@ -1927,7 +1927,7 @@ class StrategyEvalStep(PipelineStep):
                 lambda x: attention_scores.get(x, float('nan'))
             )
 
-        # docs/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
+        # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
         # (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---" section) are
         # populated only by the advisory path (engine/advisory.py via
         # reporting/sheet_publisher.py::rec_to_sheet_row); this orchestrator

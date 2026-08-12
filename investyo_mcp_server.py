@@ -850,7 +850,7 @@ def list_jules_sources() -> str:
     Read-only -- no side effects. Requires JULES_ENABLED=true and JULES_API_KEY
     to be set; returns a clear message (not an error) if either is missing.
     """
-    from data.jules_client import list_sources, JulesUnavailable
+    from data.jules_client import list_sources, JulesUnavailable, format_sources
 
     try:
         sources = list_sources()
@@ -858,16 +858,12 @@ def list_jules_sources() -> str:
         return str(e)
 
     lines = ["# Jules Connected Sources\n"]
-    source_list = sources.get("sources", []) if isinstance(sources, dict) else []
-    if not source_list:
+    normalized_sources = format_sources(sources)
+    if not normalized_sources:
         lines.append("No connected sources found.")
     else:
-        for src in source_list:
-            name = src.get("name", "unknown") if isinstance(src, dict) else str(src)
-            gh = src.get("githubRepo", {}) if isinstance(src, dict) else {}
-            owner = gh.get("owner", "?")
-            repo = gh.get("repo", "?")
-            lines.append(f"- **{owner}/{repo}** (`{name}`)")
+        for src in normalized_sources:
+            lines.append(f"- **{src['owner']}/{src['repo']}** (`{src['name']}`)")
 
     lines.append("\n```json")
     lines.append(json.dumps(sources, indent=2, default=str))
@@ -909,7 +905,9 @@ def dispatch_jules_task(prompt: str, title: str, source: str, branch: str = "mai
     from data.jules_client import dispatch_session, JulesUnavailable
 
     try:
-        result = dispatch_session(prompt=prompt, source=source, branch=branch, title=title)
+        result = dispatch_session(
+            prompt=prompt, source=source, branch=branch, title=title, confirm=confirm
+        )
     except JulesUnavailable as e:
         return str(e)
 

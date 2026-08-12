@@ -275,7 +275,7 @@ COLUMN_SCHEMA = [
     {"header": "Cluster", "key": "Correlation_Cluster", "format": "number"},
 
     # ==========================================================
-    # --- ADVISORY METADATA (docs/CONFIG_SCHEMA_PLAN.md Phase C1) ---
+    # --- ADVISORY METADATA (docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1) ---
     # Five fields that reporting/sheet_publisher.py::rec_to_sheet_row()
     # already computed from engine.advisory.Recommendation but which were
     # silently dropped before reaching the Sheet because they matched

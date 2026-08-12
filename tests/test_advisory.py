@@ -1659,6 +1659,34 @@ class TestPrecomputedGarchAndForecast:
         assert sig.parameters["precomputed_garch"].default is None
         assert sig.parameters["precomputed_forecast"].default is None
 
+    def test_fresh_garch_fit_is_threaded_into_forecast_sigma(self):
+        """Regression pin for the redundant-fit fix: when GARCH vol is
+        freshly fit against THIS call's bars_df (no precomputed_garch
+        supplied), that same value must be passed into generate_forecast()
+        as precomputed_garch_annual_vol so ForecastingEngine doesn't re-fit
+        arch_model a second time this call. A future refactor that silently
+        drops this kwarg again would still leave every other assertion in
+        this class green -- only this test would catch it."""
+        rec, toe, fe, se = self._run()
+        assert fe.generate_forecast.called
+        _, kwargs = fe.generate_forecast.call_args
+        assert kwargs.get("precomputed_garch_annual_vol") == pytest.approx(0.22)
+
+    def test_reused_precomputed_garch_is_not_threaded_into_forecast_sigma(self):
+        """A precomputed_garch value came from the caller (potentially fit
+        against a different bars window than this call's bars_df) and is
+        safe to reuse for position sizing, but must NOT also be trusted
+        verbatim as this specific forecast's Monte Carlo sigma -- that would
+        silently widen a same-cycle-but-different-window vol figure into a
+        second, unrelated consumer. generate_forecast() must fall through
+        to its own internal fresh fit (precomputed_garch_annual_vol=None)
+        whenever garch_vol didn't come from THIS call's bars_df."""
+        rec, toe, fe, se = self._run(precomputed_garch=0.31)
+        assert not toe.estimate_gjr_garch_volatility.called  # sizing reuse still applies
+        assert fe.generate_forecast.called  # forecast itself still runs fresh (no precomputed_forecast)
+        _, kwargs = fe.generate_forecast.call_args
+        assert kwargs.get("precomputed_garch_annual_vol") is None
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HistoricalStore routing (Steps 1 & 3) tests

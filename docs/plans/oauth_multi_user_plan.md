@@ -7,7 +7,7 @@
 Evidence:
 - `mcp_oauth_store.py`'s docstring calls `oauth_login_state` "a singleton row (`id=1`)" for "a minimal OAuth 2.1 authorization server" — deliberately single-subject.
 - `mcp_oauth_provider.py`'s docstring: the real trust boundary is one `/login` password form (`settings.MCP_OAUTH_PASSWORD`) — one password, not a credential table.
-- `docs/mcp_server_split_brain.md`'s OAuth addendum calls both bearer- and oauth-mode `streamable-http` instances **"ephemeral, developer-machine-local tooling"** — a personal connector, not a hosted service.
+- `docs/handovers/mcp_server_split_brain.md`'s OAuth addendum calls both bearer- and oauth-mode `streamable-http` instances **"ephemeral, developer-machine-local tooling"** — a personal connector, not a hosted service.
 - Grepped `user_id`/`User_ID`/`tenant_id`/`account_id`/`owner` across `transactions_store.py`, `data/paper_account_store.py`, `pilots/follows_store.py`, `data/cache_long_short_store.py` — **zero hits in all four**. `CLAUDE.md`'s own Cache Long/Short bullet states outright: "Single-operator schema (no `User_ID`/`Portfolios`... not a multi-tenant design)." One brokerage connection, one `PaperAccount.id==1` singleton, one kill switch, one `FollowsStore`.
 - Grepped `investyo_mcp_server.py`'s ~53 tools for `subject`, `AccessToken`, `get_access_token`, `request_context`, `current_user` — **zero hits outside the OAuth module**. The token's `subject` claim is never read downstream by any tool.
 
@@ -143,7 +143,7 @@ Mirroring the existing per-module split (`tests/test_mcp_oauth_store.py`, `_prov
 
 **Additive, opt-in — no forced migration.** At `MCP_OAUTH_MULTI_USER_ENABLED=False` (default), `login_post()` is byte-identical to today: one-field form, `MCP_OAUTH_PASSWORD` check, existing lockout semantics. `oauth_users` exists but is never queried while off.
 
-The one non-purely-additive piece is `oauth_login_state`'s PK change (`id=1` → `username`). Recommended approach: reserve a sentinel username (e.g. `"__single_password__"`, validated at provisioning time to never collide with a real username) for the legacy path, add a `username` column via an idempotent additive `ALTER TABLE` (mirroring `data/historical_store.py`'s `schema_version`-style additive-migration precedent — this codebase has no formal migration framework), and leave the old `id` column in place unused rather than dropping it (SQLite `DROP COLUMN` support is version-fragile). Rejected alternative: a hard cutover assuming every deployment starts fresh — rejected because at least one real developer-machine-local deployment exists today (per `docs/mcp_server_split_brain.md`) and silently dropping its lockout state, while low-stakes, is an avoidable surprise.
+The one non-purely-additive piece is `oauth_login_state`'s PK change (`id=1` → `username`). Recommended approach: reserve a sentinel username (e.g. `"__single_password__"`, validated at provisioning time to never collide with a real username) for the legacy path, add a `username` column via an idempotent additive `ALTER TABLE` (mirroring `data/historical_store.py`'s `schema_version`-style additive-migration precedent — this codebase has no formal migration framework), and leave the old `id` column in place unused rather than dropping it (SQLite `DROP COLUMN` support is version-fragile). Rejected alternative: a hard cutover assuming every deployment starts fresh — rejected because at least one real developer-machine-local deployment exists today (per `docs/handovers/mcp_server_split_brain.md`) and silently dropping its lockout state, while low-stakes, is an avoidable surprise.
 
 Rollout: upgrade (flag off, no behavior change) → `scripts/manage_oauth_users.py add <username>` per named human → set `MCP_OAUTH_MULTI_USER_ENABLED=True` → restart. Downgrade is symmetric and lossless (`MCP_OAUTH_PASSWORD` must still be set for legacy mode to work).
 
@@ -158,7 +158,7 @@ Rollout: upgrade (flag off, no behavior change) → `scripts/manage_oauth_users.
 5. `mcp_oauth_provider.py` — conditional `username` field on the login form; `login_post()` branches legacy-vs-multi-user; sets `subject=username` on success.
 6. `scripts/manage_oauth_users.py` (new CLI).
 7. Tests (§7) — interleave with 1-6, but the backward-compat regression test must run explicitly before calling this done.
-8. Docs: `docs/mcp_server_split_brain.md`'s OAuth addendum; update `mcp_oauth_store.py`'s own module docstring (its "singleton row" description of `oauth_login_state` would otherwise actively mislead); `AGENTS.md`'s env-write-safety bullet.
+8. Docs: `docs/handovers/mcp_server_split_brain.md`'s OAuth addendum; update `mcp_oauth_store.py`'s own module docstring (its "singleton row" description of `oauth_login_state` would otherwise actively mislead); `AGENTS.md`'s env-write-safety bullet.
 9. Verify (below).
 
 ---
