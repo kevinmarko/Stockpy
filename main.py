@@ -215,8 +215,8 @@ def _reset_macro_engine_cache() -> None:
 
 def _interval_cycle_gated(now_utc: datetime) -> bool:
     """True when an automatic interval cycle should be skipped (market-hours gate)."""
-    from engine.advisory_agent import is_extended_hours
-    return settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY and not is_extended_hours(now_utc)
+    from engine.advisory_agent import is_automatic_run_gated
+    return is_automatic_run_gated(now_utc, extended_hours_only=settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY)
 
 
 # ---------------------------------------------------------------------------

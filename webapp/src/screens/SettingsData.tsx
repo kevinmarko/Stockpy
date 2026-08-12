@@ -30,6 +30,7 @@ import { fmtAge, fmtDate, timeAgo } from "../format";
 import { theme } from "../theme";
 import { SectionCard } from "../components/SectionCard";
 import { TabGuide } from "../components/TabGuide";
+import { saveOutcomeMessage } from "../settingsLiveness";
 
 export function SettingsData() {
   const {
@@ -573,9 +574,16 @@ function ScheduleSection({
   const { run: updateTunable, pending: updatingTunables, error: updateTunableError } = useMutation(
     (val: boolean) => api.updateTunables({ ORCHESTRATOR_EXTENDED_HOURS_ONLY: val })
   );
+  const [updateOutcome, setUpdateOutcome] = useState<ReturnType<typeof saveOutcomeMessage>>(null);
 
   const handleUpdateTunable = async (val: boolean) => {
     const res = await updateTunable(val);
+    // saveOutcomeMessage (webapp/src/settingsLiveness.ts) is the same helper
+    // GenericSettingsEditor.tsx uses to report a real, backend-sourced outcome
+    // -- reused here instead of a second hand-written "what just happened"
+    // sentence, so this toggle's result reporting can't drift from the
+    // shared editor's.
+    setUpdateOutcome(res ? saveOutcomeMessage(res) : null);
     if (res) onReloadTunables?.();
   };
   return (
@@ -621,14 +629,17 @@ function ScheduleSection({
                         away -- it does NOT mean every automatic-trigger process does. A
                         plain `main.py --interval` subprocess (the default,
                         ORCHESTRATOR_DAEMON_ENABLED=False, topology) never re-polls settings
-                        after startup, so the liveness classifier's "immediately" claim is
-                        honestly false for that deployment. Show a fixed, always-visible
-                        caveat instead of trusting `liveness.applies` for this specific
-                        field. */}
+                        after startup. A standalone `api/pilots_api.py` process fronting a
+                        separately-running daemon only forwards the write live if
+                        RUNTIME_FLAGS_REFRESH_ENABLED is also on (default off) -- otherwise
+                        the daemon keeps its stale value until restarted too. Show a fixed,
+                        always-visible caveat instead of trusting `liveness.applies` for
+                        this specific field. */}
                     <span style={{ display: "block", color: "var(--text-info)", marginTop: 2 }}>
-                      A running daemon picks this up immediately; a plain{" "}
-                      <code>main.py --interval</code> process only picks it up on its next
-                      restart.
+                      Applies immediately only to the process handling this request. A
+                      plain <code>main.py --interval</code> process, or a daemon running
+                      behind a separate Pilots API without RUNTIME_FLAGS_REFRESH_ENABLED,
+                      only picks this up on its next restart.
                     </span>
                   </span>
                 </div>
@@ -643,6 +654,12 @@ function ScheduleSection({
                 <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
                   <span>⚠️</span>
                   <span>{updateTunableError}</span>
+                </Notice>
+              )}
+              {!updateTunableError && updateOutcome && (
+                <Notice variant={updateOutcome.variant} style={{ marginTop: "var(--s-2)" }}>
+                  <span>{updateOutcome.variant === "success" ? "✅" : "ℹ️"}</span>
+                  <span>{updateOutcome.text}</span>
                 </Notice>
               )}
             </div>

@@ -478,8 +478,7 @@ class TestGetRunUnknown:
 class TestTimerThread:
     def test_interval_skips_run_when_outside_extended_hours_with_gate_on(self, monkeypatch):
         _fast_ok_main_body(monkeypatch)
-        monkeypatch.setattr("desktop.daemon_runtime.is_extended_hours", lambda _: False)
-        # default ORCHESTRATOR_EXTENDED_HOURS_ONLY is True
+        monkeypatch.setattr("desktop.daemon_runtime.is_automatic_run_gated", lambda now_utc, extended_hours_only: True)
         d = OrchestratorDaemon(interval_seconds=1)
         d.start()
         try:
@@ -493,8 +492,7 @@ class TestTimerThread:
 
     def test_interval_triggers_run_when_outside_extended_hours_with_gate_off(self, monkeypatch):
         _fast_ok_main_body(monkeypatch)
-        monkeypatch.setattr("desktop.daemon_runtime.is_extended_hours", lambda _: False)
-        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", False)
+        monkeypatch.setattr("desktop.daemon_runtime.is_automatic_run_gated", lambda now_utc, extended_hours_only: False)
         d = OrchestratorDaemon(interval_seconds=1)
         d.start()
         try:
@@ -511,7 +509,7 @@ class TestTimerThread:
 
     def test_interval_triggers_run_when_inside_extended_hours(self, monkeypatch):
         _fast_ok_main_body(monkeypatch)
-        monkeypatch.setattr("desktop.daemon_runtime.is_extended_hours", lambda _: True)
+        monkeypatch.setattr("desktop.daemon_runtime.is_automatic_run_gated", lambda now_utc, extended_hours_only: False)
         d = OrchestratorDaemon(interval_seconds=1)
         d.start()
         try:
@@ -534,7 +532,7 @@ class TestTimerThread:
         # outside the 4am-8pm ET weekday window (e.g. a late-night/weekend CI
         # run), with no code defect present. See the gate-specific tests
         # above for coverage of the gate's own on/off/inside/outside behavior.
-        monkeypatch.setattr("desktop.daemon_runtime.is_extended_hours", lambda _: True)
+        monkeypatch.setattr("desktop.daemon_runtime.is_automatic_run_gated", lambda now_utc, extended_hours_only: False)
         d = OrchestratorDaemon(interval_seconds=1)
         d.start()
         try:
