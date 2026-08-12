@@ -871,7 +871,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:51",
+        "site": "transactions_store.py:62",
         "via": []
       },
       {
@@ -1044,7 +1044,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:55",
+        "site": "transactions_store.py:66",
         "via": []
       },
       {
@@ -1053,7 +1053,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:57",
+        "site": "transactions_store.py:68",
         "via": []
       },
       {
@@ -1226,7 +1226,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:55",
+        "site": "transactions_store.py:66",
         "via": []
       },
       {
@@ -1235,7 +1235,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:57",
+        "site": "transactions_store.py:68",
         "via": []
       },
       {
@@ -1945,7 +1945,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:55",
+        "site": "transactions_store.py:66",
         "via": []
       }
     ],
