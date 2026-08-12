@@ -3,7 +3,7 @@ prompt_registry/signing.py
 ===========================
 HMAC-SHA256 signing and verification for prompt bodies.
 
-**Signing scheme** (from ``docs/PROMPT_REGISTRY_PLAN.md`` §4.2):
+**Signing scheme** (from ``docs/plans/PROMPT_REGISTRY_PLAN.md`` §4.2):
 
     sha256(body)  = hashlib.sha256(body.encode("utf-8")).hexdigest()
     signature     = HMAC-SHA256(SIGNING_KEY, sha256_hex).hexdigest()

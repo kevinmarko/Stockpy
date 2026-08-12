@@ -55,6 +55,12 @@ as Branch Workflow above: no per-agent carve-out.
   validation, orchestrators — as scoped in the Start-of-session checklist above): produce an
   Implementation Plan and get it reviewed before writing code. Claude Code: `EnterPlanMode`.
   Antigravity: its native `implementation_plan.md` artifact.
+- **Every Implementation Plan must include an explicit documentation-update step** —
+  identify which of `CLAUDE.md`/`AGENTS.md`, `docs/architecture/*.md`,
+  `docs/signals/<name>.md`, or other `docs/` files need touching for the change, and
+  scope those edits into the plan itself. This applies to both agents and to any task
+  producing a plan, not just the "Everything else" tier above — documentation is part
+  of the deliverable, not a separate pass to get to later.
 - Steer a plan or diff you're unhappy with via inline comments on the artifact itself, not a
   fresh open-ended re-prompt — targeted feedback keeps the agent from losing the thread.
 - **Decompose isolated, mechanical subtasks to a subagent** (writing/extending a test file, a
@@ -78,10 +84,12 @@ InvestYo Quant Platform ("Stock Dashboard Py") — an automated quantitative ana
 ### Key documentation files
 | File | Purpose |
 |------|---------|
+| `docs/README.md` | Master index of the full `docs/` library (~74 files) — start here if you don't already know a doc's path; this table covers only the load-bearing subset |
 | `docs/architecture.md` | Mermaid data-flow diagram (Engines → DTOs → Signals → Strategy → Advisory → Broker [quarantined]) |
 | `docs/architecture/*.md` | Per-module architecture reference, split out of this file's `## Architecture` section by subsystem (data layer, signal engines, execution, GUI/webapp, testing, etc.) — see the index table under `## Architecture` below |
 | `docs/signals/README.md` | Index of all 17 registered `SignalModule` implementations with academic references, logic, and failure modes |
 | `docs/signals/<name>.md` | Per-strategy README for each signal module |
+| `docs/known_issues/README.md` | Index of 7 dated production-issue write-ups (root cause, what was tried, fixed/resolved/mitigated status) |
 | `docs/incident_log.md` | Template + log for production incidents (referenced by RUNBOOK.md §6) |
 | `docs/HOW_TO_GUIDE.md` | End-user guide for every platform feature |
 | `docs/RUNBOOK.md` | Operational runbook — pre-market checklist, incident playbooks, advisory pause procedure |

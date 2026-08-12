@@ -91,9 +91,16 @@ function sanitizeWidgets(raw: any): CustomViewWidgets {
  * is appended in canonical order rather than silently dropped -- a widget
  * the operator explicitly enabled must still render somewhere. */
 function sanitizeWidgetOrder(raw: any, widgets: CustomViewWidgets): (keyof CustomViewWidgets)[] {
-  const fromRaw: (keyof CustomViewWidgets)[] = Array.isArray(raw)
+  const filtered: (keyof CustomViewWidgets)[] = Array.isArray(raw)
     ? raw.filter((k: any): k is keyof CustomViewWidgets => ALL_WIDGET_KEYS.includes(k) && widgets[k as keyof CustomViewWidgets])
     : [];
+  // A duplicate key already present in the raw input (hand-edited JSON, a
+  // buggy caller) must not survive into the stored order -- CustomView.tsx
+  // renders `widgetOrder` directly with each entry as a React list `key`,
+  // so a duplicate would render the same widget section twice under two
+  // colliding keys. `Array.from(new Set(...))` keeps the first occurrence
+  // and drops any later repeat, same as every other de-dup in this module.
+  const fromRaw = Array.from(new Set(filtered));
   const missing = ALL_WIDGET_KEYS.filter((k) => widgets[k] && !fromRaw.includes(k));
   return [...fromRaw, ...missing];
 }
@@ -208,8 +215,14 @@ function hashString(s: string): string {
  * trimmed name keeps the invariant instead: the SAME odd name still maps to
  * the SAME slug (repeat-saves-update-in-place still holds), but two
  * DIFFERENT odd names no longer collide.
+ *
+ * Exported so `CreateDataApp.tsx`'s `duplicateView` can check the SAME
+ * collision rule this module's own writers use, rather than re-deriving its
+ * own notion of "would this name collide" -- see that function's doc for why
+ * that matters (a naive constant "- Copy" suffix collides with itself on a
+ * second click).
  */
-function slugify(name: string): string {
+export function slugify(name: string): string {
   const trimmed = name.trim();
   const base = trimmed
     .toLowerCase()
@@ -245,10 +258,10 @@ export function addOrUpdateView(input: {
 }): { view: CustomView; persisted: boolean } {
   const name = input.name.trim();
   let slug = slugify(name);
-  
+
   // Find by ID first if provided, otherwise find by slug
   let existing = input.id ? views.find((v) => v.id === input.id) : views.find((v) => v.slug === slug);
-  
+
   // If we are renaming an existing view, make sure the new slug doesn't collide with a DIFFERENT view
   if (existing && input.id && slug !== existing.slug) {
     let existingWithNewSlug = views.find((v) => v.slug === slug && v.id !== input.id);
@@ -259,7 +272,18 @@ export function addOrUpdateView(input: {
 
   const now = new Date().toISOString();
 
-  const widgetOrder = input.widgetOrder ?? (Object.keys(input.widgets) as (keyof CustomViewWidgets)[]).filter(k => input.widgets[k]);
+  // `sanitizeWidgetOrder`'s own doc says it must run at EVERY write path --
+  // `loadFromStorage` and `importViews` already did; this one (the primary
+  // create/update/duplicate path) previously stored `input.widgetOrder`
+  // verbatim, so a caller passing a stale or hand-built order (duplicating a
+  // view saved before a widget existed, a manually-constructed API caller)
+  // could persist an order that omits an active widget or lists an inactive
+  // one -- `CustomView.tsx` trusts `widgetOrder` alone with no fallback
+  // cross-check against `widgets`, so that widget would silently never
+  // render. Reconciling here closes the gap the other two write paths
+  // already close.
+  const providedOrder = input.widgetOrder ?? (Object.keys(input.widgets) as (keyof CustomViewWidgets)[]).filter(k => input.widgets[k]);
+  const widgetOrder = sanitizeWidgetOrder(providedOrder, input.widgets);
   const widgetConfigs = input.widgetConfigs ?? {};
 
   let view: CustomView;
@@ -282,6 +306,19 @@ export function addOrUpdateView(input: {
   const persisted = persist();
   notify();
   return { view, persisted };
+}
+
+/**
+ * Reads a single view by id straight from the module's current in-memory
+ * store -- unlike `useCustomViews().views`, which is a per-render React
+ * snapshot, this always reflects the LATEST write, including one made
+ * synchronously earlier in the same event handler (e.g. `CreateDataApp.tsx`'s
+ * `handleImport` needs to know whether the view it has open for editing was
+ * just overwritten by the import it just ran, without waiting for a
+ * re-render to find out).
+ */
+export function getViewById(id: string): CustomView | undefined {
+  return views.find((v) => v.id === id);
 }
 
 /** See addOrUpdateView's `persisted` doc -- same honesty contract applies to deletion. */

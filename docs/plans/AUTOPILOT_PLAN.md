@@ -80,7 +80,7 @@ automatically.
 > read real SEC EDGAR point-in-time fundamentals via `data.historical_store.HistoricalStore
 > .get_fundamentals_history()` — read-only, never touching `data/edgar_fundamentals.py`,
 > `data/historical_store.py`, or `scripts/backfill_edgar_fundamentals.py` (Gemini-owned per
-> `docs/DATA_LAYER_PLAN.md`). That store is a pure DB reader with no live-EDGAR fallback: a
+> `docs/plans/DATA_LAYER_PLAN.md`). That store is a pure DB reader with no live-EDGAR fallback: a
 > fresh clone's `quant_platform.db` has zero EDGAR rows until an operator runs
 > `python scripts/backfill_edgar_fundamentals.py --tickers AAPL,JNJ,XOM,KO,JPM,PG,INTC,T,GE,F`
 > (a real, rate-limited SEC network operation, not run automatically by any pipeline). Until

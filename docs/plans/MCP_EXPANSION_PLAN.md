@@ -93,7 +93,7 @@ phase actually needs one.
 
 ## Phase 1 — Read-only analytics tools, real data only — ✅ DONE, verified
 
-See `docs/MCP_EXPANSION_WALKTHROUGH.md` for the full verified breakdown
+See `docs/plans/MCP_EXPANSION_WALKTHROUGH.md` for the full verified breakdown
 (each tool, its real data source, and the test/lint/pytest results). Kept
 below for the original design rationale.
 
@@ -421,7 +421,7 @@ ever be placed through this path.
     to `on: workflow_dispatch` — per the operator's earlier answer, this is
     the confirmed default, not still an open question.
 *   Body: the SSH/restart command itself is already correct (verified
-    against `docs/mcp_server_split_brain.md`'s documented remediation —
+    against `docs/handovers/mcp_server_split_brain.md`'s documented remediation —
     correct `cd /opt/investyo` before `sudo -u investyo`, correct
     zone/project/VM name) — leave it as-is, do not re-derive it.
 *   Requires `secrets.GCP_CREDENTIALS` and IAM configured in GCP first
@@ -429,7 +429,7 @@ ever be placed through this path.
     on the workflow; if it doesn't, the workflow will fail cleanly at the
     auth step rather than silently doing nothing).
 
-### [MODIFY] `docs/mcp_server_split_brain.md`
+### [MODIFY] `docs/handovers/mcp_server_split_brain.md`
 
 *   Update the "Remediation" section to describe the manual-dispatch
     workflow as an operator-invokable option (a button click after

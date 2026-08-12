@@ -4,7 +4,7 @@ prompt_registry/registry.py
 Resolution orchestration for the Prompt Registry.
 
 ``PromptRegistry`` is the single public entry-point for all prompt lookups.
-It implements the §1 resolution chain from ``docs/PROMPT_REGISTRY_PLAN.md``:
+It implements the §1 resolution chain from ``docs/plans/PROMPT_REGISTRY_PLAN.md``:
 
     Pin  →  Remote latest (verified)  →  Disk cache (verified)  →  Baseline
 

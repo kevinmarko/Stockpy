@@ -254,6 +254,91 @@ def _load_state_snapshot() -> Optional[dict]:
         return None
 
 
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _repo_commit_info() -> str:
+    """
+    Best-effort git commit SHA + commit date of the checkout this process is
+    actually running from. Used to prefix every docs resource/tool response
+    with a staleness signal.
+
+    Why this exists: this server runs from THREE independently-advancing
+    checkouts (local `investyo-platform` stdio, the `investyo` GCP VM
+    connection which only advances when an operator manually redeploys, and
+    any ad hoc `streamable-http` instance) -- see
+    docs/handovers/mcp_server_split_brain.md. There is no autonomous
+    mechanism in this repo that pulls fresh code/docs onto the VM (and
+    deliberately so -- restarting a production service is a live deploy
+    action, not something a docs change should trigger). The practical
+    mitigation is making staleness DETECTABLE rather than silent: a client
+    reading docs off a stale VM connection sees a stale commit SHA in the
+    response and can flag the mismatch, instead of unknowingly trusting
+    out-of-date content with zero signal.
+
+    Never raises (CONSTRAINT #6); degrades to an honest "unknown" string if
+    this isn't a git checkout (e.g. an extracted tarball deploy) or git is
+    unavailable -- never fabricates a commit identity (CONSTRAINT #4).
+    """
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=_REPO_ROOT, capture_output=True, text=True, timeout=5,
+        )
+        commit_date = subprocess.run(
+            ["git", "log", "-1", "--format=%cI"],
+            cwd=_REPO_ROOT, capture_output=True, text=True, timeout=5,
+        )
+        if sha.returncode == 0 and commit_date.returncode == 0 and sha.stdout.strip():
+            return f"{sha.stdout.strip()} ({commit_date.stdout.strip()})"
+    except Exception:
+        pass
+    return "unknown (not a git checkout, or git unavailable)"
+
+
+def _resolve_doc_path(rel_path: str) -> Optional[str]:
+    """
+    Resolves a client-supplied repo-relative path to an absolute path,
+    restricted to `docs/` plus the two root instruction files
+    (`CLAUDE.md`/`AGENTS.md`). Rejects anything that would escape those
+    roots (`..`, an absolute path, a home-dir `~` reference) via a real
+    normalized-prefix check rather than a substring/regex guard, so this can
+    never become an arbitrary-filesystem-read primitive. Returns ``None``
+    (never raises) on any invalid, out-of-bounds, or non-existent path --
+    the caller degrades to an honest error message (CONSTRAINT #6).
+    """
+    if not rel_path or rel_path.startswith(("/", "~")) or "\x00" in rel_path:
+        return None
+    candidate = os.path.normpath(os.path.join(_REPO_ROOT, rel_path))
+    if not (candidate == _REPO_ROOT or candidate.startswith(_REPO_ROOT + os.sep)):
+        return None
+    rel_from_root = os.path.relpath(candidate, _REPO_ROOT)
+    allowed = rel_from_root in ("CLAUDE.md", "AGENTS.md") or rel_from_root.startswith(
+        "docs" + os.sep
+    )
+    if not allowed or not os.path.isfile(candidate):
+        return None
+    return candidate
+
+
+def _read_doc_with_commit_header(resolved_path: str, missing_label: str) -> str:
+    """Shared body for get_docs_index/get_doc: prefix the file's content with
+    the staleness-signaling commit header, or an honest error if resolution
+    or the read itself failed. `resolved_path` may be None (not found)."""
+    commit = _repo_commit_info()
+    if resolved_path is None:
+        return (
+            f"> Served from commit {commit}.\n\n"
+            f"Error: {missing_label}"
+        )
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as fh:
+            body = fh.read()
+    except Exception as e:
+        return f"> Served from commit {commit}.\n\nError reading '{resolved_path}': {e}"
+    return f"> Served from commit {commit} on this instance's checkout.\n\n{body}"
+
+
 # ==========================================
 # [1] RESOURCES (Read-Only Context)
 # ==========================================
@@ -342,6 +427,24 @@ def get_ticker_context(symbol: str) -> str:
     except Exception as e:
         return f"Error retrieving context for {symbol}: {str(e)}"
 
+
+@mcp.resource("investyo://docs/index")
+def get_docs_index() -> str:
+    """
+    Returns docs/README.md -- the master table of contents for this repo's
+    entire documentation library (architecture reference, signal module
+    docs, known issues, operational runbooks, feature-plan history) --
+    prefixed with this instance's git commit SHA/date so a client can tell
+    whether it's talking to a stale deployment (see
+    docs/handovers/mcp_server_split_brain.md: the GCP VM connection only
+    advances when an operator manually redeploys, so this resource can
+    honestly be serving old docs there even though it never raises an
+    error). Use the ``get_doc`` tool with a path from this index to read any
+    individual file.
+    """
+    resolved = _resolve_doc_path(os.path.join("docs", "README.md"))
+    return _read_doc_with_commit_header(resolved, "docs/README.md not found.")
+
 # ==========================================
 # [2] PROMPTS (Context Templates)
 # ==========================================
@@ -365,6 +468,35 @@ def list_registry_prompts() -> str:
     from prompt_registry.cache import list_baseline_ids
     ids = list_baseline_ids()
     return "Available Prompt IDs in the registry:\n" + "\n".join(f"- {pid}" for pid in ids)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def get_doc(path: str) -> str:
+    """
+    Returns the raw content of a single documentation file, addressed by its
+    repo-relative path -- e.g. "docs/RUNBOOK.md", "docs/signals/macro_regime.md",
+    "docs/architecture/signal-engines.md", "CLAUDE.md". A TOOL rather than a
+    resource template deliberately: FastMCP resource-template path segments
+    (`{name}`) cannot match a `/`, so a template couldn't address a nested
+    path like "docs/signals/macro_regime.md" -- only a plain string tool
+    argument can. Scoped strictly to `docs/` plus `CLAUDE.md`/`AGENTS.md`;
+    never an arbitrary-filesystem-read primitive (any path outside those
+    roots, or containing `..`/an absolute path, is rejected). Start from the
+    `investyo://docs/index` resource to discover valid paths. Response is
+    prefixed with this instance's git commit SHA/date -- see
+    docs/handovers/mcp_server_split_brain.md for why that matters when
+    reading docs off a remote (VM) connection that may not have been
+    redeployed recently.
+
+    Args:
+        path: Repo-relative path to a file under docs/, or "CLAUDE.md"/"AGENTS.md".
+    """
+    resolved = _resolve_doc_path(path)
+    missing = (
+        f"'{path}' is outside the allowed docs/, CLAUDE.md, AGENTS.md roots, "
+        f"or does not exist. See the investyo://docs/index resource for valid paths."
+    )
+    return _read_doc_with_commit_header(resolved, missing)
 
 
 # ---------------------------------------------------------------------------
@@ -850,7 +982,7 @@ def list_jules_sources() -> str:
     Read-only -- no side effects. Requires JULES_ENABLED=true and JULES_API_KEY
     to be set; returns a clear message (not an error) if either is missing.
     """
-    from data.jules_client import list_sources, JulesUnavailable
+    from data.jules_client import list_sources, JulesUnavailable, format_sources
 
     try:
         sources = list_sources()
@@ -858,16 +990,12 @@ def list_jules_sources() -> str:
         return str(e)
 
     lines = ["# Jules Connected Sources\n"]
-    source_list = sources.get("sources", []) if isinstance(sources, dict) else []
-    if not source_list:
+    normalized_sources = format_sources(sources)
+    if not normalized_sources:
         lines.append("No connected sources found.")
     else:
-        for src in source_list:
-            name = src.get("name", "unknown") if isinstance(src, dict) else str(src)
-            gh = src.get("githubRepo", {}) if isinstance(src, dict) else {}
-            owner = gh.get("owner", "?")
-            repo = gh.get("repo", "?")
-            lines.append(f"- **{owner}/{repo}** (`{name}`)")
+        for src in normalized_sources:
+            lines.append(f"- **{src['owner']}/{src['repo']}** (`{src['name']}`)")
 
     lines.append("\n```json")
     lines.append(json.dumps(sources, indent=2, default=str))
@@ -909,7 +1037,9 @@ def dispatch_jules_task(prompt: str, title: str, source: str, branch: str = "mai
     from data.jules_client import dispatch_session, JulesUnavailable
 
     try:
-        result = dispatch_session(prompt=prompt, source=source, branch=branch, title=title)
+        result = dispatch_session(
+            prompt=prompt, source=source, branch=branch, title=title, confirm=confirm
+        )
     except JulesUnavailable as e:
         return str(e)
 

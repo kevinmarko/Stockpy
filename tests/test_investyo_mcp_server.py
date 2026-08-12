@@ -163,6 +163,7 @@ Coverage
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 from datetime import datetime, timedelta
@@ -324,6 +325,164 @@ class TestPromptRegistryWiring:
 
         assert "- a" in result
         assert "- b" in result
+
+
+# ---------------------------------------------------------------------------
+# Documentation library resource/tool (investyo://docs/index, get_doc) —
+# see docs/handovers/mcp_server_split_brain.md for the staleness-signaling
+# commit-header rationale.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCompletedProcess:
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+class TestRepoCommitInfo:
+    def test_real_git_checkout_returns_sha_and_date(self):
+        # This test file itself lives inside a real git checkout, so the
+        # unmocked function should resolve to something other than "unknown".
+        result = srv._repo_commit_info()
+        assert result != "unknown (not a git checkout, or git unavailable)"
+        assert "(" in result and ")" in result
+
+    def test_git_failure_degrades_to_unknown_string(self, monkeypatch):
+        monkeypatch.setattr(
+            srv.subprocess, "run", lambda *a, **k: _FakeCompletedProcess(returncode=1)
+        )
+        assert srv._repo_commit_info() == "unknown (not a git checkout, or git unavailable)"
+
+    def test_git_raising_degrades_to_unknown_string(self, monkeypatch):
+        def _raise(*a, **k):
+            raise FileNotFoundError("git not installed")
+
+        monkeypatch.setattr(srv.subprocess, "run", _raise)
+        assert srv._repo_commit_info() == "unknown (not a git checkout, or git unavailable)"
+
+
+class TestResolveDocPath:
+    def test_resolves_top_level_doc(self):
+        resolved = srv._resolve_doc_path("docs/RUNBOOK.md")
+        assert resolved is not None
+        assert resolved.endswith(os.path.join("docs", "RUNBOOK.md"))
+
+    def test_resolves_nested_doc(self):
+        resolved = srv._resolve_doc_path("docs/signals/macro_regime.md")
+        assert resolved is not None
+        assert resolved.endswith(os.path.join("docs", "signals", "macro_regime.md"))
+
+    def test_resolves_claude_md(self):
+        resolved = srv._resolve_doc_path("CLAUDE.md")
+        assert resolved is not None
+        assert resolved.endswith("CLAUDE.md")
+
+    def test_resolves_agents_md(self):
+        resolved = srv._resolve_doc_path("AGENTS.md")
+        assert resolved is not None
+        assert resolved.endswith("AGENTS.md")
+
+    def test_rejects_parent_traversal(self):
+        assert srv._resolve_doc_path("docs/../../../etc/passwd") is None
+
+    def test_rejects_absolute_path(self):
+        assert srv._resolve_doc_path("/etc/passwd") is None
+
+    def test_rejects_home_relative_path(self):
+        assert srv._resolve_doc_path("~/.ssh/id_rsa") is None
+
+    def test_rejects_path_outside_allowed_roots(self):
+        # A real, existing repo file -- but not under docs/ or the two root
+        # instruction files, so it must still be refused.
+        assert srv._resolve_doc_path("settings.py") is None
+
+    def test_rejects_nonexistent_doc(self):
+        assert srv._resolve_doc_path("docs/DOES_NOT_EXIST.md") is None
+
+    def test_rejects_empty_path(self):
+        assert srv._resolve_doc_path("") is None
+
+    def test_rejects_null_byte(self):
+        assert srv._resolve_doc_path("docs/RUNBOOK.md\x00.py") is None
+
+    def test_docs_directory_itself_is_not_a_file_and_is_rejected(self):
+        # docs/ (or docs/signals/) is a real directory under the allowed
+        # root, but this resolver must only ever return a FILE.
+        assert srv._resolve_doc_path("docs") is None
+        assert srv._resolve_doc_path("docs/signals") is None
+
+
+class TestGetDocsIndex:
+    def test_returns_commit_header_and_readme_content(self, monkeypatch):
+        monkeypatch.setattr(srv, "_repo_commit_info", lambda: "abc1234 (2026-01-01T00:00:00Z)")
+
+        result = srv.get_docs_index()
+
+        assert result.startswith("> Served from commit abc1234 (2026-01-01T00:00:00Z)")
+        assert "Documentation Library" in result
+
+    def test_missing_index_degrades_to_honest_error(self, monkeypatch):
+        monkeypatch.setattr(srv, "_repo_commit_info", lambda: "abc1234 (2026-01-01T00:00:00Z)")
+        monkeypatch.setattr(srv, "_resolve_doc_path", lambda p: None)
+
+        result = srv.get_docs_index()
+
+        assert "Error" in result
+        assert "docs/README.md not found" in result
+
+
+class TestGetDoc:
+    def test_valid_top_level_path(self, monkeypatch):
+        monkeypatch.setattr(srv, "_repo_commit_info", lambda: "abc1234 (2026-01-01T00:00:00Z)")
+
+        result = srv.get_doc("docs/RUNBOOK.md")
+
+        assert result.startswith("> Served from commit abc1234")
+        assert "Runbook" in result
+
+    def test_valid_nested_path(self, monkeypatch):
+        # Proves the tool-not-resource-template design choice: FastMCP
+        # resource templates can't match a `/` in a path segment, so this
+        # nested lookup must go through the plain-string tool argument.
+        monkeypatch.setattr(srv, "_repo_commit_info", lambda: "abc1234 (2026-01-01T00:00:00Z)")
+
+        result = srv.get_doc("docs/signals/macro_regime.md")
+
+        assert "macro_regime" in result.lower()
+
+    def test_valid_claude_md(self, monkeypatch):
+        monkeypatch.setattr(srv, "_repo_commit_info", lambda: "abc1234 (2026-01-01T00:00:00Z)")
+
+        result = srv.get_doc("CLAUDE.md")
+
+        assert "# CLAUDE.md" in result
+
+    def test_invalid_path_returns_honest_error_not_raise(self, monkeypatch):
+        monkeypatch.setattr(srv, "_repo_commit_info", lambda: "abc1234 (2026-01-01T00:00:00Z)")
+
+        result = srv.get_doc("../../../etc/passwd")
+
+        assert "Error" in result
+        assert "outside the allowed" in result
+
+    def test_nonexistent_doc_returns_honest_error(self, monkeypatch):
+        monkeypatch.setattr(srv, "_repo_commit_info", lambda: "abc1234 (2026-01-01T00:00:00Z)")
+
+        result = srv.get_doc("docs/DOES_NOT_EXIST.md")
+
+        assert "Error" in result
+
+    def test_read_failure_degrades_to_honest_error(self, monkeypatch, tmp_path):
+        # Simulate _resolve_doc_path succeeding but the subsequent read
+        # failing (e.g. a permissions error, or a race where the file was
+        # deleted between resolution and read).
+        monkeypatch.setattr(srv, "_repo_commit_info", lambda: "abc1234 (2026-01-01T00:00:00Z)")
+        monkeypatch.setattr(srv, "_resolve_doc_path", lambda p: str(tmp_path / "vanished.md"))
+
+        result = srv.get_doc("docs/whatever.md")
+
+        assert "Error reading" in result
 
 
 # ---------------------------------------------------------------------------

@@ -246,7 +246,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # (JSON-encoded; see _JSON_KEYS). GUI-writable.
     "CORS_ALLOWED_ORIGINS",
     # Prompt Registry tunables (non-secret; credentials live in SECRET_KEYS below).
-    # See docs/PROMPT_REGISTRY_PLAN.md §8 and settings.PROMPT_REGISTRY_*.
+    # See docs/plans/PROMPT_REGISTRY_PLAN.md §8 and settings.PROMPT_REGISTRY_*.
     "PROMPT_REGISTRY_ENABLED",   # bool master switch (baseline-only when False)
     "PROMPT_REGISTRY_BACKEND",   # "http" | "local" | "firestore"
     "PROMPT_REGISTRY_PINS",      # JSON dict {"prompt_id": "version"} — rollback lever

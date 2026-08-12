@@ -172,7 +172,7 @@ Scrypt-hashed via `mcp_oauth_password.py`), provisioned with the new
 `list`/`reset-password`, password always via `getpass`, never a CLI arg).
 
 **This is Option A, not genuine multi-tenancy** (see
-`oauth_multi_user_plan.md`'s §0 scope resolution): every named user still
+`docs/plans/oauth_multi_user_plan.md`'s §0 scope resolution): every named user still
 reaches the exact same single trading account, follows, paper account, and
 kill switch as today. The only observable difference per user is which
 `subject` (the authenticated username) lands on their issued OAuth token —
@@ -191,3 +191,55 @@ Same ephemeral, developer-machine-local framing as the rest of this
 addendum applies — multi-user mode changes who can pass the `/login` gate
 on one already-ephemeral instance, not the instance's own deployment
 model.
+
+## Addendum: docs are now served over MCP too, and inherit this exact risk — mitigated with a staleness-visibility signal, not autonomous redeploy (2026-08)
+
+`investyo_mcp_server.py` gained `investyo://docs/index` (serves
+`docs/README.md`, the master index of this repo's documentation library) and
+a `get_doc(path)` tool (reads any single file under `docs/` or
+`CLAUDE.md`/`AGENTS.md` by repo-relative path — see
+`docs/architecture/observability-and-apis.md`'s `investyo_mcp_server.py`
+entry for the full "why a tool, not a resource template" reasoning). The
+motivating use case is the same one the rest of this file already
+establishes: a client connected via `investyo` (the GCP VM) or a
+`streamable-http` instance has **no filesystem access to this repo at all**
+— it can query the platform's data/tools but previously had no way to read
+CLAUDE.md's conventions or a signal's `docs/signals/<name>.md` writeup.
+
+**This inherits the exact split-brain risk this file already documents, not
+a new one.** The VM's `investyo_mcp_server.py` — and therefore its
+`investyo://docs/index`/`get_doc` responses — is only as fresh as the last
+manual `git pull` + service restart an operator ran there. A client on that
+connection could easily read a stale `docs/README.md` or a stale
+`CLAUDE.md` section with zero indication anything was wrong, which is worse
+for docs than for tools: a missing tool at least fails loudly ("tool not
+found"); stale prose fails silently and can actively mislead an agent
+working through that connection.
+
+**The fix applied here is visibility, not automation — consistent with this
+file's existing stance** ("Restarting a service on a production VM is a
+live deploy action, not something to execute autonomously from a docs-only
+change," above). Nothing in this change SSHes into `investyo-vm`, pulls
+code, or restarts `investyo-mcp.service` — that remains the same manual
+operator action documented in "Remediation" above, now additionally
+covering docs. Instead, every response from `investyo://docs/index` and
+`get_doc` is prefixed with `_repo_commit_info()`: the short git commit SHA
++ ISO commit date of whichever checkout is actually serving that response
+(`unknown (not a git checkout, or git unavailable)` if `git` itself isn't
+available — never fabricated, per CONSTRAINT #4). A client — or an operator
+eyeballing a response — can now directly compare that SHA against
+`origin/main`'s tip and know immediately whether the connection it's
+reading docs through is stale, instead of trusting silently.
+
+**Practical implication for the "Confirmed drift" table above:** the next
+time someone audits tool-surface drift between `investyo-platform` and
+`investyo`, `investyo://docs/index`'s commit header is now also a
+one-request staleness check for the VM connection generally — a fast
+proxy for "has this VM been redeployed recently" without needing to
+enumerate every tool by hand.
+
+Tests: `tests/test_investyo_mcp_server.py`'s `TestRepoCommitInfo`,
+`TestResolveDocPath`, `TestGetDocsIndex`, `TestGetDoc` classes — including
+path-traversal/absolute-path/outside-allowed-root rejection tests, since
+`get_doc` accepts a client-supplied path and must never become an
+arbitrary-filesystem-read primitive.

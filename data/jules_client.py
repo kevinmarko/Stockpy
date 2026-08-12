@@ -62,24 +62,35 @@ source/branch/title/prompt — was already dispatched today. A different day's
 identical prompt is allowed, exactly matching ``receipts_store.py``'s
 date-scoped ``dedup_key`` reasoning.
 
-Scaffold note
--------------
-This module currently ships with the real interface (this docstring, the
-exception, the dedup-ledger helpers) but ``list_sources``/``dispatch_session``
-raise ``NotImplementedError`` as a scaffold — see the parallel implementation
-task that replaces these bodies with the real HTTP calls. Every other
-consumer of this module (the MCP tools, the CLI script, their tests) is
-written against these exact signatures and does not need the real bodies to
-exist to be correct.
+Real implementation, not a scaffold
+-------------------------------------
+``list_sources``/``dispatch_session`` make real HTTP calls against the Jules
+REST API (``GET /sources`` / ``POST /sessions``) — every consumer of this
+module (the MCP tools, the CLI script, their tests) is written against these
+exact signatures and bodies.
+
+Error-contract discipline: ``response.json()`` is always called INSIDE the
+same ``try/except`` that wraps the raw ``requests`` call (or its own
+dedicated try/except raising :class:`JulesUnavailable`) — a malformed/empty
+2xx body must degrade the same way a transport error or non-2xx status does,
+never escape as a raw ``JSONDecodeError``. See CONSTRAINT #6 below.
+
+The dispatch ledger's check-then-write sequence (``_check_dispatch_dedup``
+followed by the POST and ``_record_dispatch``) is protected end-to-end by an
+OS-level advisory lock (see ``_dispatch_lock`` below) so two concurrent/
+retried calls for the same source/branch/title/prompt on the same day cannot
+both pass the dedup check before either records its dispatch.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import requests
 
@@ -108,11 +119,106 @@ class JulesUnavailable(Exception):
     """
 
 
+class JulesConfirmationRequired(JulesUnavailable):
+    """Raised by :func:`dispatch_session` when called with ``confirm`` not
+    exactly ``True``.
+
+    Subclasses :class:`JulesUnavailable` rather than a bare exception so the
+    existing ``except JulesUnavailable`` boundary at every current call site
+    (``investyo_mcp_server.py``'s ``dispatch_jules_task``,
+    ``scripts/jules_dispatch.py``'s ``_cmd_create_session``) keeps working
+    unchanged, AND so a future third caller that forgets its own
+    confirm-gate still gets a clear, catchable failure — never an unhandled
+    crash through the MCP transport boundary — instead of silently being
+    allowed to dispatch. The safety property (never dispatch unconfirmed)
+    now lives centrally in :func:`dispatch_session` itself, not only in each
+    caller's own pre-check.
+    """
+
+
 def _ledger_path() -> Path:
     """Lazy settings read (see module docstring) — never module-level."""
     from settings import settings
 
     return settings.OUTPUT_DIR / _LEDGER_FILENAME
+
+
+_LOCK_FILENAME = "jules_dispatched.jsonl.lock"
+_LOCK_ACQUIRE_TIMEOUT_SECONDS = 10.0
+_LOCK_POLL_INTERVAL_SECONDS = 0.05
+
+
+@contextmanager
+def _dispatch_lock() -> Iterator[None]:
+    """Cross-process advisory lock guarding the dedup-check → POST → ledger-
+    write sequence in :func:`dispatch_session`, closing the TOCTOU race where
+    two concurrent/retried calls for the same source/branch/title/prompt on
+    the same day could both pass ``_check_dispatch_dedup`` before either one
+    appends to the ledger.
+
+    Lock mechanism choice: this codebase has no existing ``fcntl``/
+    ``filelock`` convention to follow — ``execution/receipts_store.py``,
+    ``sizing/cap_audit_store.py``, ``desktop/run_history_store.py``, and
+    ``execution/kill_switch.py`` all rely on atomic write-then-rename
+    (``os.replace``) for a SINGLE write, not on any file-locking primitive,
+    because none of them protects a multi-step check-then-write sequence the
+    way this ledger's dedup gate needs to. Per this module's own "no shared
+    budget, no concurrency to serialize against" reasoning (see the top-of-
+    file docstring) this is a rare-contention, human-cadence case, so rather
+    than introduce a first-of-its-kind ``fcntl.flock`` dependency this uses a
+    plain stdlib ``O_CREAT | O_EXCL`` lock-file, atomic on the POSIX
+    filesystems this macOS/Linux-only codebase runs on.
+
+    Degrades to "proceed without the lock" (never blocks a real dispatch)
+    when the lock file itself cannot be created for a reason OTHER than it
+    already existing (e.g. a read-only output directory) — matching this
+    module's existing OSError-tolerant posture in ``_check_dispatch_dedup``/
+    ``_record_dispatch``. A lock that is genuinely held by a concurrent
+    dispatch instead raises :class:`JulesUnavailable` after
+    ``_LOCK_ACQUIRE_TIMEOUT_SECONDS`` — a stuck lock must never silently wait
+    forever, but its failure mode is "ask the human to retry", not "silently
+    double-dispatch."
+    """
+    ledger_path = _ledger_path()
+    lock_path = ledger_path.with_name(ledger_path.name + ".lock")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass  # best-effort; a real problem surfaces from os.open below
+
+    fd: Optional[int] = None
+    held = False
+    deadline = time.monotonic() + _LOCK_ACQUIRE_TIMEOUT_SECONDS
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            held = True
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise JulesUnavailable(
+                    f"Timed out waiting for the Jules dispatch ledger lock "
+                    f"({lock_path}); another dispatch may be in progress. "
+                    "Please try again shortly."
+                )
+            time.sleep(_LOCK_POLL_INTERVAL_SECONDS)
+        except OSError:
+            # Can't create a lock file at all (e.g. unwritable output dir) --
+            # degrade to unprotected rather than blocking a real dispatch on
+            # a local filesystem problem.
+            break
+    try:
+        yield
+    finally:
+        if held and fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
 
 
 def _compute_dedup_key(source: str, branch: str, title: str, prompt: str) -> str:
@@ -214,14 +320,60 @@ def list_sources() -> Dict[str, Any]:
             },
             timeout=settings.JULES_REQUEST_TIMEOUT_SECONDS,
         )
+
+        status = getattr(response, "status_code", None)
+        if status is None or not (200 <= int(status) < 300):
+            raise JulesUnavailable(f"Jules returned HTTP {status} for GET /sources.")
+
+        return response.json()
     except requests.RequestException as exc:
         raise JulesUnavailable(f"Jules transport error on GET /sources: {exc}") from exc
+    except ValueError as exc:
+        # response.json() raises a json.JSONDecodeError (a ValueError
+        # subclass, same for stdlib json and simplejson) on a malformed or
+        # empty 2xx body. This must degrade the same way a transport error
+        # or non-2xx status does (CONSTRAINT #6) rather than escape as a raw
+        # JSONDecodeError.
+        raise JulesUnavailable(
+            f"Jules returned a malformed JSON response for GET /sources: {exc}"
+        ) from exc
 
-    status = getattr(response, "status_code", None)
-    if status is None or not (200 <= int(status) < 300):
-        raise JulesUnavailable(f"Jules returned HTTP {status} for GET /sources.")
 
-    return response.json()
+def format_sources(sources_response: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Normalize a raw ``GET /sources`` response body into a flat list of
+    ``{"name": str, "owner": str, "repo": str}`` dicts.
+
+    Single shared source-list formatter for every consumer that renders
+    ``list_sources()``'s output — previously ``investyo_mcp_server.py``'s
+    ``list_jules_sources`` and ``scripts/jules_dispatch.py``'s
+    ``_cmd_list_sources`` each reimplemented this parsing independently and
+    had already drifted (different fallback strings for an unnamed source).
+    ``"unknown"`` is the canonical fallback here (the MCP tool's prior
+    choice; the CLI script's prior ``"<unknown>"`` is retired in favor of
+    this shared one).
+
+    Tolerates the same edge cases :func:`dispatch_session` itself must
+    tolerate: an explicit ``{"sources": null}`` (``.get(...) or []``, not
+    ``.get(..., [])`` — the default only applies when the key is absent) and
+    a non-dict entry in the list.
+    """
+    sources = (
+        (sources_response.get("sources") or []) if isinstance(sources_response, dict) else []
+    )
+    normalized: List[Dict[str, str]] = []
+    for src in sources:
+        if isinstance(src, dict):
+            name = src.get("name") or "unknown"
+            github_repo = src.get("githubRepo")
+            github_repo = github_repo if isinstance(github_repo, dict) else {}
+            owner = str(github_repo.get("owner", "?"))
+            repo = str(github_repo.get("repo", "?"))
+        else:
+            name = str(src) if src is not None else "unknown"
+            owner = "?"
+            repo = "?"
+        normalized.append({"name": name, "owner": owner, "repo": repo})
+    return normalized
 
 
 def dispatch_session(
@@ -231,6 +383,7 @@ def dispatch_session(
     title: str,
     *,
     force: bool = False,
+    confirm: bool = False,
 ) -> Dict[str, Any]:
     """``POST /sessions`` — start a Jules session against ``source`` on
     ``branch`` with ``prompt``, in the hardcoded ``AUTO_CREATE_PR`` automation
@@ -240,13 +393,35 @@ def dispatch_session(
     dispatching an autonomous coding agent at the WRONG external repo, so
     this must never pass through blind.
 
+    ``confirm`` MUST be exactly ``True`` or this raises
+    :class:`JulesConfirmationRequired` immediately, before any network call
+    or settings check — this is the central enforcement of the "never
+    dispatch without the operator's explicit go-ahead" safety property.
+    Every existing caller (``investyo_mcp_server.py``'s ``dispatch_jules_task``,
+    ``scripts/jules_dispatch.py``'s ``_cmd_create_session``) ALSO gates on its
+    own ``confirm``/``--confirm`` before ever calling this function — that
+    caller-side gate is what produces a nice user-facing message instead of
+    a raised exception, and stays in place unchanged; this parameter is the
+    additional guarantee that a future third caller cannot bypass the gate
+    by forgetting its own check.
+
     Refuses (raises :class:`JulesUnavailable`) if an identical dispatch
     (same UTC day, same source/branch/title/prompt) was already recorded in
-    the ledger today, unless ``force=True``. On success, appends a record to
-    the ledger before returning.
+    the ledger today, unless ``force=True``. The dedup check, the POST
+    itself, and the ledger write are protected end-to-end by
+    :func:`_dispatch_lock` so a concurrent/retried call for the same
+    dispatch cannot race past the dedup check before either one records it.
 
     Returns the raw parsed JSON response from ``POST /sessions``.
     """
+    if confirm is not True:
+        raise JulesConfirmationRequired(
+            "dispatch_session() requires confirm=True: dispatching a Jules "
+            "session opens a real, unsupervised PR on the target repo. This "
+            "must never be set without the operator's explicit go-ahead for "
+            "this exact prompt/branch/title."
+        )
+
     from settings import settings
 
     if not settings.JULES_ENABLED:
@@ -260,7 +435,9 @@ def dispatch_session(
 
     sources_response = list_sources()
     known_sources = [
-        s.get("name") for s in sources_response.get("sources", []) if isinstance(s, dict)
+        s.get("name")
+        for s in (sources_response.get("sources") or [])
+        if isinstance(s, dict)
     ]
     if source not in known_sources:
         raise JulesUnavailable(
@@ -268,52 +445,62 @@ def dispatch_session(
             "Call list_sources() to see what's actually connected."
         )
 
-    dedup_key = _compute_dedup_key(source, branch, title, prompt)
-    if not force and _check_dispatch_dedup(dedup_key):
-        raise JulesUnavailable(
-            f"An identical dispatch (source={source!r}, branch={branch!r}, "
-            f"title={title!r}) was already recorded today (dedup_key={dedup_key}). "
-            "Pass force=True to dispatch anyway."
-        )
+    with _dispatch_lock():
+        dedup_key = _compute_dedup_key(source, branch, title, prompt)
+        if not force and _check_dispatch_dedup(dedup_key):
+            raise JulesUnavailable(
+                f"An identical dispatch (source={source!r}, branch={branch!r}, "
+                f"title={title!r}) was already recorded today (dedup_key={dedup_key}). "
+                "Pass force=True to dispatch anyway."
+            )
 
-    url = f"{JULES_BASE_URL}/sessions"
-    body = {
-        "prompt": prompt,
-        "sourceContext": {
-            "source": source,
-            "githubRepoContext": {"startingBranch": branch},
-        },
-        "automationMode": _AUTOMATION_MODE,
-        "title": title,
-    }
-    try:
-        response = requests.post(
-            url,
-            headers={
-                "X-Goog-Api-Key": settings.JULES_API_KEY,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
+        url = f"{JULES_BASE_URL}/sessions"
+        body = {
+            "prompt": prompt,
+            "sourceContext": {
+                "source": source,
+                "githubRepoContext": {"startingBranch": branch},
             },
-            json=body,
-            timeout=settings.JULES_REQUEST_TIMEOUT_SECONDS,
+            "automationMode": _AUTOMATION_MODE,
+            "title": title,
+        }
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "X-Goog-Api-Key": settings.JULES_API_KEY,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json=body,
+                timeout=settings.JULES_REQUEST_TIMEOUT_SECONDS,
+            )
+
+            status = getattr(response, "status_code", None)
+            if status is None or not (200 <= int(status) < 300):
+                raise JulesUnavailable(f"Jules returned HTTP {status} for POST /sessions.")
+
+            payload = response.json()
+        except requests.RequestException as exc:
+            raise JulesUnavailable(f"Jules transport error on POST /sessions: {exc}") from exc
+        except ValueError as exc:
+            # response.json() raises a json.JSONDecodeError (a ValueError
+            # subclass) on a malformed or empty 2xx body -- must degrade to
+            # JulesUnavailable the same way a transport error or non-2xx
+            # status does (CONSTRAINT #6), not escape as a raw exception.
+            raise JulesUnavailable(
+                f"Jules returned a malformed JSON response for POST /sessions: {exc}"
+            ) from exc
+
+        session_name = ""
+        if isinstance(payload, dict):
+            session_name = payload.get("name", "") or ""
+        _record_dispatch(
+            dedup_key=dedup_key,
+            source=source,
+            branch=branch,
+            title=title,
+            prompt=prompt,
+            session_name=session_name,
         )
-    except requests.RequestException as exc:
-        raise JulesUnavailable(f"Jules transport error on POST /sessions: {exc}") from exc
-
-    status = getattr(response, "status_code", None)
-    if status is None or not (200 <= int(status) < 300):
-        raise JulesUnavailable(f"Jules returned HTTP {status} for POST /sessions.")
-
-    payload = response.json()
-    session_name = ""
-    if isinstance(payload, dict):
-        session_name = payload.get("name", "") or ""
-    _record_dispatch(
-        dedup_key=dedup_key,
-        source=source,
-        branch=branch,
-        title=title,
-        prompt=prompt,
-        session_name=session_name,
-    )
-    return payload
+        return payload

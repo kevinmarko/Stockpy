@@ -11,7 +11,7 @@ a real point-in-time backtest that reconstructs the live `dto_models.MacroEconom
 BAMLH0A0HYM2, UNRATE) — the module's inputs (yield curve, HY spreads, VIX, Sahm Rule) are no longer
 "not price/volume-only, so no honest backtest exists"; two v1 caveats remain documented in the
 adapter's own docstring: the HMM regime-downgrade overlay is not replayed, and sector is a current
-snapshot applied across the full backtest history. See `docs/AUTOPILOT_PLAN.md`.
+snapshot applied across the full backtest history. See `docs/plans/AUTOPILOT_PLAN.md`.
 
 ---
 

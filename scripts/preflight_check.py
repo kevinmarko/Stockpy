@@ -139,7 +139,7 @@ Checks (15 total)
                                   is itself an advisory-mode feature.
 18. alert_channels_reachable    — WARNING-ONLY (never blocking).  Probes every
                                   currently-active observability.alerts channel
-                                  (docs/OBSERVABILITY_PLAN.md Phase O4) via
+                                  (docs/plans/OBSERVABILITY_PLAN.md Phase O4) via
                                   observability.alerts.check_channel_health()
                                   and reports which, if any, are unreachable —
                                   so a broken Discord/Slack webhook or SMTP

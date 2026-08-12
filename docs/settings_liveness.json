@@ -42,28 +42,28 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 168,
+      "line": 175,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3151,
+      "line": 3158,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4197,
+      "line": 4204,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4302,
+      "line": 4309,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -601,7 +601,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:168",
+        "site": "api/control_api.py:169",
         "via": []
       },
       {
@@ -610,7 +610,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/data_api.py:121",
+        "site": "api/data_api.py:122",
         "via": []
       },
       {
@@ -619,7 +619,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/metrics_api.py:73",
+        "site": "api/metrics_api.py:74",
         "via": []
       },
       {
@@ -628,7 +628,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:321",
+        "site": "api/pilots_api.py:322",
         "via": []
       },
       {
@@ -872,7 +872,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:51",
+        "site": "transactions_store.py:62",
         "via": []
       },
       {
@@ -1045,7 +1045,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:55",
+        "site": "transactions_store.py:66",
         "via": []
       },
       {
@@ -1054,7 +1054,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:57",
+        "site": "transactions_store.py:68",
         "via": []
       },
       {
@@ -1227,7 +1227,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:55",
+        "site": "transactions_store.py:66",
         "via": []
       },
       {
@@ -1236,7 +1236,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:57",
+        "site": "transactions_store.py:68",
         "via": []
       },
       {
@@ -1298,7 +1298,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4679",
+        "site": "api/pilots_api.py:4686",
         "via": []
       }
     ],
@@ -1309,7 +1309,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4678",
+        "site": "api/pilots_api.py:4685",
         "via": []
       }
     ],
@@ -1320,7 +1320,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4841",
+        "site": "api/pilots_api.py:4848",
         "via": []
       },
       {
@@ -1395,7 +1395,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4820",
+        "site": "api/pilots_api.py:4827",
         "via": []
       },
       {
@@ -1439,7 +1439,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:618",
+        "site": "api/pilots_api.py:625",
         "via": []
       }
     ],
@@ -1946,7 +1946,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "transactions_store.py:55",
+        "site": "transactions_store.py:66",
         "via": []
       }
     ],
@@ -1957,7 +1957,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4515",
+        "site": "investyo_mcp_server.py:4645",
         "via": []
       }
     ],
@@ -1977,7 +1977,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4467",
+        "site": "investyo_mcp_server.py:4597",
         "via": []
       }
     ],
@@ -2017,7 +2017,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4475",
+        "site": "investyo_mcp_server.py:4605",
         "via": []
       }
     ],
@@ -2039,7 +2039,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:245",
+        "site": "api/control_api.py:252",
         "via": []
       }
     ],
@@ -2223,7 +2223,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "pilots/scan_config_store.py:165",
+        "site": "pilots/scan_config_store.py:180",
         "via": []
       },
       {
@@ -2445,7 +2445,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/control_api.py:240",
+        "site": "api/control_api.py:247",
         "via": []
       },
       {
@@ -2454,7 +2454,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:613",
+        "site": "api/pilots_api.py:620",
         "via": []
       },
       {

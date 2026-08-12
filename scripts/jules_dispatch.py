@@ -56,7 +56,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from data.jules_client import JulesUnavailable, dispatch_session, list_sources
+from data.jules_client import JulesUnavailable, dispatch_session, format_sources, list_sources
 
 
 def _cmd_list_sources(args: argparse.Namespace) -> int:
@@ -66,18 +66,14 @@ def _cmd_list_sources(args: argparse.Namespace) -> int:
         print(f"ERROR: could not list Jules sources: {exc}", file=sys.stderr)
         return 1
 
-    sources = result.get("sources", []) if isinstance(result, dict) else []
+    sources = format_sources(result)
     if not sources:
         print("No Jules sources connected.")
         return 0
 
     print(f"Connected Jules sources ({len(sources)}):")
     for source in sources:
-        if isinstance(source, dict):
-            name = source.get("name", "<unknown>")
-        else:
-            name = str(source)
-        print(f"  - {name}")
+        print(f"  - {source['name']}")
     return 0
 
 
@@ -98,6 +94,7 @@ def _cmd_create_session(args: argparse.Namespace) -> int:
             branch=args.branch,
             title=args.title,
             force=args.force,
+            confirm=args.confirm,
         )
     except JulesUnavailable as exc:
         print(f"ERROR: could not dispatch Jules session: {exc}", file=sys.stderr)

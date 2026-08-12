@@ -921,7 +921,7 @@ def _write_state_snapshot(
 def _validate_dashboard(final_df, *, strict: bool) -> bool:
     """Validate the compiled dashboard against ``config.DashboardSchema``.
 
-    Two-tier validation (Phase 3b of docs/IMPROVEMENT_PLAN.md):
+    Two-tier validation (Phase 3b of docs/plans/IMPROVEMENT_PLAN.md):
 
     * **Production (strict=False, default):** validate with ``lazy=True`` so
       *every* schema violation across the wide 50+ column frame is reported in

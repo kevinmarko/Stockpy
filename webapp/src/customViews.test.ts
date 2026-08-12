@@ -231,7 +231,14 @@ describe("customViews store", () => {
       expect(view.widgetConfigs).toEqual({});
     });
 
-    it("stores an explicit widgetOrder/widgetConfigs verbatim", () => {
+    it("stores an explicit, already-well-formed widgetOrder/widgetConfigs unchanged", () => {
+      // NOTE: this input's widgetOrder already exactly matches its active
+      // widgets, so it round-trips unchanged even now that addOrUpdateView
+      // reconciles widgetOrder against widgets (see the REGRESSION tests
+      // below for cases where reconciliation actually changes the stored
+      // order) -- this test was previously titled "...verbatim", which is
+      // no longer literally true of the code path even though the observed
+      // result here is identical.
       const { view } = addOrUpdateView({
         name: "Configured",
         widgets: { ...ALL_WIDGETS_OFF, symbolOverlay: true, macroRegime: true },
@@ -240,6 +247,30 @@ describe("customViews store", () => {
       });
       expect(view.widgetOrder).toEqual(["macroRegime", "symbolOverlay"]);
       expect(view.widgetConfigs).toEqual({ symbolOverlay: { defaultTicker: "TSLA" } });
+    });
+
+    it("REGRESSION (review finding): addOrUpdateView reconciles a caller-supplied widgetOrder against widgets instead of storing it verbatim -- an inactive widget in the order is dropped and an active widget missing from it is appended", () => {
+      const { view } = addOrUpdateView({
+        name: "Reconciled",
+        widgets: { ...ALL_WIDGETS_OFF, symbolOverlay: true, macroRegime: true },
+        // Lists an INACTIVE widget (pilotsTable) and OMITS an active one
+        // (macroRegime) -- exactly the kind of stale/hand-built order a
+        // duplicated or manually-constructed caller could pass, which
+        // CustomView.tsx would previously have trusted verbatim (rendering
+        // a phantom pilotsTable-shaped gap and silently never rendering
+        // macroRegime).
+        widgetOrder: ["pilotsTable", "symbolOverlay"],
+      });
+      expect(view.widgetOrder).toEqual(["symbolOverlay", "macroRegime"]);
+    });
+
+    it("REGRESSION (review finding): addOrUpdateView dedupes a caller-supplied widgetOrder that repeats the same key", () => {
+      const { view } = addOrUpdateView({
+        name: "Deduped",
+        widgets: { ...ALL_WIDGETS_OFF, symbolOverlay: true, macroRegime: true },
+        widgetOrder: ["symbolOverlay", "macroRegime", "symbolOverlay"],
+      });
+      expect(view.widgetOrder).toEqual(["symbolOverlay", "macroRegime"]);
     });
 
     it("editing by id and renaming to a name that collides with a DIFFERENT view's slug gets a disambiguated slug instead of overwriting that other view", () => {
@@ -339,6 +370,22 @@ describe("customViews store", () => {
       expect(raw[0].widgets).not.toHaveProperty("notARealWidget");
       // symbolOverlay is active but wasn't listed in the source widgetOrder --
       // it must still render, appended rather than silently dropped.
+      expect(raw[0].widgetOrder).toEqual(["macroRegime", "symbolOverlay"]);
+    });
+
+    it("REGRESSION (review finding): a duplicate key already present in the imported widgetOrder is deduped, not rendered twice", () => {
+      const withDuplicate = JSON.stringify([
+        {
+          name: "Duplicated Order",
+          widgets: { macroRegime: true, symbolOverlay: true },
+          widgetOrder: ["macroRegime", "symbolOverlay", "macroRegime"],
+        },
+      ]);
+      const { importedCount, error } = importViews(withDuplicate);
+      expect(error).toBeUndefined();
+      expect(importedCount).toBe(1);
+
+      const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) as string);
       expect(raw[0].widgetOrder).toEqual(["macroRegime", "symbolOverlay"]);
     });
 

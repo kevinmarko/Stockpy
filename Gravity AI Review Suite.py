@@ -10817,7 +10817,7 @@ class GravityAIAuditor:
     def step_69_prompt_registry_audit(self) -> None:
         """Step 69 — Prompt Registry security + wiring audit (Stage 8, 2026-06-30).
 
-        10 checks (from docs/PROMPT_REGISTRY_PLAN.md §10):
+        10 checks (from docs/plans/PROMPT_REGISTRY_PLAN.md §10):
 
         1.  ``prompt_registry`` importable; ``get_registry``, ``PromptRegistry``,
             ``PromptRecord`` exist.
@@ -15339,7 +15339,7 @@ class GravityAIAuditor:
         order *intents* — yet before this step it had ZERO Gravity coverage while
         every other order-adjacent subsystem (steps 79/80/81) is audited.
 
-        Load-bearing invariants (see docs/AUTOPILOT_PLAN.md):
+        Load-bearing invariants (see docs/plans/AUTOPILOT_PLAN.md):
         * **Broker quarantine.** No new order code, no ``place_*``/``submit_order``/
           ``*_order`` function names, and no direct broker/order-manager import —
           all placement stays the sole job of the downstream ``robinhood-execution``
