@@ -7,9 +7,9 @@ across process restarts for the FMP-based paper trading engine.
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, inspect
+from sqlalchemy import Column, Integer, String, Float, DateTime, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import resolve_database_url, create_db_engine, session_scope
@@ -49,6 +49,7 @@ class PaperOrder(Base):
     symbol = Column(String(10), nullable=False)
     side = Column(String(10), nullable=False)
     qty = Column(Float, nullable=False)
+    target_qty = Column(Float, nullable=True)
     filled_qty = Column(Float, nullable=False, default=0.0)
     filled_avg_price = Column(Float, nullable=True)
     status = Column(String(20), nullable=False)
@@ -71,6 +72,12 @@ class PaperAccountStore:
             self._ensure_account_exists()
 
     def _ensure_account_exists(self):
+        with self.engine.begin() as conn:
+            try:
+                conn.execute(text("ALTER TABLE paper_orders ADD COLUMN target_qty REAL"))
+            except Exception:
+                pass
+                
         with session_scope(self.Session) as session:
             acc = session.query(PaperAccount).filter_by(id=1).first()
             if not acc:
@@ -147,6 +154,27 @@ class PaperAccountStore:
                 ))
         return results
 
+    def reset_account(self, starting_cash: Optional[float] = None) -> None:
+        """
+        Deletes all PaperPosition and PaperOrder rows. Resets cash balance to
+        `starting_cash` if provided, otherwise to FMP_PAPER_STARTING_CASH.
+        """
+        if self._readonly:
+            raise RuntimeError("Cannot reset account in readonly mode.")
+
+        cash_value = starting_cash if starting_cash is not None else settings.FMP_PAPER_STARTING_CASH
+
+        with session_scope(self.Session) as session:
+            session.query(PaperPosition).delete()
+            session.query(PaperOrder).delete()
+
+            acc = session.query(PaperAccount).filter_by(id=1).with_for_update().first()
+            if acc:
+                acc.cash_balance = cash_value
+            else:
+                acc = PaperAccount(id=1, cash_balance=cash_value)
+                session.add(acc)
+
     def apply_fill(
         self, 
         client_order_id: str,
@@ -155,6 +183,7 @@ class PaperAccountStore:
         qty: float, 
         fill_price: float, 
         commission_and_fees: float,
+        target_qty: Optional[float] = None,
         status: str = OrderStatus.FILLED
     ) -> bool:
         """
@@ -180,7 +209,7 @@ class PaperAccountStore:
                 if acc.cash_balance < total_cost:
                     logger.warning(f"Insufficient funds for paper buy of {qty} {symbol}: cash={acc.cash_balance}, cost={total_cost}")
                     # Still record rejection
-                    self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED)
+                    self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty)
                     return False
                     
                 acc.cash_balance -= total_cost
@@ -196,7 +225,7 @@ class PaperAccountStore:
             elif side == "sell":
                 if current_qty < qty - _QTY_EPSILON:
                     logger.warning(f"Insufficient inventory for paper sell of {qty} {symbol}: pos={current_qty}")
-                    self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED)
+                    self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty)
                     return False
                     
                 total_proceeds = cost_basis_impact - commission_and_fees
@@ -209,10 +238,10 @@ class PaperAccountStore:
             else:
                 return False
 
-            self._insert_order(session, client_order_id, symbol, side, qty, qty, fill_price, status)
+            self._insert_order(session, client_order_id, symbol, side, qty, qty, fill_price, status, target_qty)
             return True
 
-    def _insert_order(self, session, client_order_id, symbol, side, qty, filled_qty, fill_price, status):
+    def _insert_order(self, session, client_order_id, symbol, side, qty, filled_qty, fill_price, status, target_qty=None):
         # We use a derived broker_order_id
         broker_order_id = f"FMP-{client_order_id}"
         
@@ -224,6 +253,7 @@ class PaperAccountStore:
                 symbol=symbol.upper(),
                 side=side,
                 qty=qty,
+                target_qty=target_qty,
                 filled_qty=filled_qty,
                 filled_avg_price=fill_price,
                 status=status,
@@ -263,4 +293,35 @@ class PaperAccountStore:
                     filled_at=ts if po.filled_qty > 0 else None,
                     error_message=None
                 ))
+        return results
+
+    def get_full_orders(self, status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        if self._readonly:
+            try:
+                insp = inspect(self.engine)
+                if not insp.has_table("paper_orders"):
+                    return []
+            except Exception:
+                return []
+
+        results = []
+        with session_scope(self.Session) as session:
+            q = session.query(PaperOrder)
+            if status:
+                q = q.filter_by(status=status)
+            q = q.order_by(PaperOrder.timestamp.desc()).limit(limit)
+            
+            for po in q.all():
+                ts = po.timestamp.replace(tzinfo=timezone.utc)
+                results.append({
+                    "order_id": po.client_order_id,
+                    "symbol": po.symbol,
+                    "side": po.side.upper(),
+                    "qty": po.qty,
+                    "price": po.filled_avg_price or 0.0,
+                    "status": po.status,
+                    "filled_qty": po.filled_qty,
+                    "filled_avg_price": po.filled_avg_price,
+                    "created_at": ts.isoformat()
+                })
         return results

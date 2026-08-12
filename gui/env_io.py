@@ -533,6 +533,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # POST /pilots/cache-long-short/{start,approve-bulk} endpoints it guards
     # remain independently gated by their own command token regardless.
     "CACHE_LONG_SHORT_WRITES_ENABLED",
+    "PAPER_BROKER_WRITES_ENABLED",
     "FMP_PAPER_STARTING_CASH",
     # Fields flagged by scripts/auditor/stockpy_codebase_auditor.py's
     # undeclared_env_var check (2026-08) — non-secret tunables.

@@ -134,7 +134,11 @@ import type {
   CacheLongShortStartResult,
   CacheLongShortDashboard,
   CacheLongShortPendingTrade,
-  CacheLongShortApproveBulkResult,
+    PaperBrokerAccount,
+  PaperBrokerPosition,
+  PaperBrokerOrder,
+  PaperBrokerResetResult,
+CacheLongShortApproveBulkResult,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
@@ -271,6 +275,7 @@ async function http<T>(
     Accept: "application/json",
     ...(init?.body ? { "Content-Type": "application/json" } : {}),
   };
+
   if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
 
   const base = baseFor(path);
@@ -917,6 +922,24 @@ const liveApi = {
     http<CacheLongShortApproveBulkResult>("/pilots/cache-long-short/approve-bulk", {
       method: "POST",
       body: JSON.stringify({ lot_ids: lotIds }),
+    }),
+  // ---- Paper Broker ----
+  getPaperBrokerAccount: () => http<PaperBrokerAccount>("/pilots/paper-broker/account"),
+  getPaperBrokerPositions: () => http<PaperBrokerPosition[]>("/pilots/paper-broker/positions"),
+  getPaperBrokerOrders: (limit = 100) => http<PaperBrokerOrder[]>(`/pilots/paper-broker/orders?limit=${limit}`),
+  resetPaperBroker: (cash: number) =>
+    http<PaperBrokerResetResult>("/pilots/paper-broker/reset", {
+      method: "POST",
+      body: JSON.stringify({ cash }),
+    }),
+  getPaperBrokerSettings: () => http<TunablesResponse>("/settings/paper-broker"),
+  updatePaperBrokerSettings: (
+    values: Record<string, number | boolean | string>,
+    confirm: import("./types").SettingsConfirmMap = {},
+  ) =>
+    http<TunablesUpdateResult>("/settings/paper-broker", {
+      method: "PUT",
+      body: JSON.stringify({ values, confirm }),
     }),
 };
 

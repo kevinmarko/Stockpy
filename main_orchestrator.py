@@ -437,7 +437,18 @@ async def _execute_broker_orders(
         from execution.risk_gate import PreTradeRiskGate, RiskContext
         from transactions_store import TransactionsStore
 
-        if getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper":
+        from execution.broker_selection import resolve_broker_backend
+
+        # resolve_broker_backend() is the single source of truth for "which
+        # broker should actually be used" -- shared with
+        # robinhood_execution_mcp.py::_get_broker() so the two call sites
+        # can never drift on the fmp_paper/live-trading safety guard. It
+        # logs CRITICAL + fires an alert and forces 'alpaca' internally
+        # when BROKER_BACKEND='fmp_paper' while this run is genuinely going
+        # live (ADVISORY_ONLY=False and ALPACA_PAPER=False).
+        broker_backend = resolve_broker_backend()
+
+        if broker_backend == "fmp_paper":
             from execution.fmp_paper_broker import FMPPaperBroker
             broker = FMPPaperBroker()
         else:
@@ -553,7 +564,10 @@ async def _execute_broker_orders(
                     # never a crash. Since the derating steps only ever reduce
                     # weight, target_qty will always be >= the actually-submitted
                     # qty once a portfolio-level cap or Dual Momentum has derated
-                    # this position relative to its per-name sizing decision.
+                    # this position relative to its per-name sizing decision. This
+                    # is what makes the ML feature paper_size_vs_kelly_ratio_30d
+                    # (ml/training_data.py) carry real signal instead of a constant
+                    # 1.0 for BUY orders.
                     target_weight = float(row.get("Kelly_Target_Post_Regime", kelly) or kelly)
                     target_qty_value = _kelly_target_qty(target_weight, equity, price)
                     intent = OrderIntent(

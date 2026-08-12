@@ -73,6 +73,7 @@ class OrderIntent:
     order_type: OrderType = OrderType.MARKET
     limit_price: Optional[float] = None
     time_in_force: str = "day"
+    target_qty: Optional[float] = None
     # Populated by order_manager before submission; leave None at construction.
     client_order_id: Optional[str] = None
     # Multi-leg options support (spread / condor legs as list of dicts).

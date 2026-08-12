@@ -280,6 +280,22 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "BLOCKING pre-live failure when ALPACA_PAPER=False, which is the "
         "repo's own statement that this is not a routine toggle."
     ),
+    "BROKER_BACKEND": (
+        "Selects which broker actually receives orders: 'alpaca' (real "
+        "broker) vs. 'fmp_paper' (a local SQLite paper ledger via "
+        "execution/fmp_paper_broker.py -- no order ever reaches a real "
+        "market). execution/broker_selection.py::resolve_broker_backend() "
+        "now force-falls-back to 'alpaca' with a CRITICAL alert when this "
+        "is 'fmp_paper' AND the run is genuinely going live "
+        "(ADVISORY_ONLY=False and ALPACA_PAPER=False), and both "
+        "main_orchestrator.py and robinhood_execution_mcp.py route through "
+        "that one shared guard. But a runtime guard on the CONSTRUCTED "
+        "broker is not the same protection as gating the SETTING itself --"
+        " a silent flip via a settings-editor write is still the single "
+        "field that decides whether an order is real or a paper no-op, "
+        "matching the same justification MACRO_REGIME_GATE_ENABLED already "
+        "gets in this same dict."
+    ),
     "FMP_BARS_ENABLED": (
         "Its own field description says to read FMP_BARS_ADJUSTMENT before "
         "enabling, because an adjustment-convention mismatch corrupts every "

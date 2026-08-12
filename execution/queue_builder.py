@@ -363,6 +363,7 @@ def _intent_dict(
         order_type=order_type,
         client_order_id=client_order_id,
         dry_run=True,
+        target_qty=gate_qty,
     )
 
     gate_allowed, gate_reasons = gate_intent(intent, context, gate)

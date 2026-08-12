@@ -337,3 +337,52 @@ async def test_confirm_live_trade_passes_real_risk_gate_when_within_limits():
     assert data["status"] == "success"
     assert data["broker_order_id"] == "mock-order-1"
     mock_broker.submit_order.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _get_broker() -- ported from the pre-rename test suite. Confirms
+# broker_live_execution_mcp.py's _get_broker() genuinely delegates to
+# execution.broker_selection.resolve_broker_backend() (the single source of
+# truth shared with main_orchestrator.py::_execute_broker_orders) rather than
+# re-deriving the fmp_paper/live-trading safety check independently. Without
+# this, this file's _get_broker() would silently construct FMPPaperBroker (a
+# local paper ledger) instead of the real AlpacaBroker for
+# confirm_live_trade/cancel_order during a genuinely-going-live run.
+# ---------------------------------------------------------------------------
+
+def test_get_broker_forces_alpaca_when_going_live_with_fmp_paper():
+    from broker_live_execution_mcp import _get_broker
+    from settings import settings as _settings
+
+    mock_alpaca_instance = MagicMock()
+
+    with patch.object(_settings, "BROKER_BACKEND", "fmp_paper"), \
+         patch.object(_settings, "ADVISORY_ONLY", False), \
+         patch.object(_settings, "ALPACA_PAPER", False), \
+         patch("observability.alerts.send_alert") as mock_alert, \
+         patch("diagnostics_and_visuals.telemetry.error") as mock_err, \
+         patch("execution.alpaca_broker.AlpacaBroker", return_value=mock_alpaca_instance) as mock_alpaca_cls, \
+         patch("execution.fmp_paper_broker.FMPPaperBroker") as mock_fmp_cls:
+        broker = _get_broker()
+
+    mock_alert.assert_called_once()
+    mock_err.assert_called_once()
+    mock_alpaca_cls.assert_called_once()
+    mock_fmp_cls.assert_not_called()
+    assert broker is mock_alpaca_instance
+
+
+def test_get_broker_uses_fmp_paper_when_not_going_live():
+    """Sanity check: the guard only engages when genuinely going live --
+    BROKER_BACKEND='fmp_paper' in paper/advisory mode still constructs
+    FMPPaperBroker exactly as before."""
+    from broker_live_execution_mcp import _get_broker
+    from settings import settings as _settings
+    from execution.fmp_paper_broker import FMPPaperBroker
+
+    with patch.object(_settings, "BROKER_BACKEND", "fmp_paper"), \
+         patch.object(_settings, "ADVISORY_ONLY", True), \
+         patch.object(_settings, "ALPACA_PAPER", True):
+        broker = _get_broker()
+
+    assert isinstance(broker, FMPPaperBroker)
