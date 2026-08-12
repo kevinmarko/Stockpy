@@ -19,9 +19,14 @@ from gui import engine_status as engine_status_module
 from gui.engine_status import engine_status
 
 
-def _patch_signals(monkeypatch, *, heartbeat=None, snapshot=None):
+def _patch_signals(monkeypatch, *, heartbeat=None, snapshot=None, paused_for_market_hours=False):
     """Patch both liveness signals. Each arg is either a fixed value/None or
-    a zero-arg callable (for raising side effects)."""
+    a zero-arg callable (for raising side effects).
+
+    ``paused_for_market_hours`` pins ``_paused_for_market_hours()`` (real wall-clock
+    time otherwise) so every idle/threshold test stays deterministic regardless of
+    when it's actually run -- see ``TestMarketHoursPausedBadge`` below for tests
+    of that branch itself."""
     def _wrap(value):
         if callable(value):
             return value
@@ -32,6 +37,9 @@ def _patch_signals(monkeypatch, *, heartbeat=None, snapshot=None):
     )
     monkeypatch.setattr(
         engine_status_module.orchestrator_runner, "state_snapshot_age_seconds", _wrap(snapshot)
+    )
+    monkeypatch.setattr(
+        engine_status_module, "_paused_for_market_hours", lambda: paused_for_market_hours
     )
 
 
@@ -123,3 +131,58 @@ def test_custom_threshold_is_respected(monkeypatch: pytest.MonkeyPatch) -> None:
 
     badge, _ = engine_status(fresh_threshold_seconds=150.0)
     assert badge == "🟢"
+
+
+class TestMarketHoursPausedBadge:
+    """Regression coverage for the ORCHESTRATOR_EXTENDED_HOURS_ONLY gate (see
+    main.py/desktop/daemon_runtime.py): a stale signal explained by the
+    market-hours gate legitimately skipping automatic cycles must render as
+    an honest '🌙 paused' badge, not a falsely-alarming '🟠 idle' one."""
+
+    def test_stale_and_paused_returns_moon_badge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_signals(monkeypatch, heartbeat=None, snapshot=6000, paused_for_market_hours=True)
+        badge, text = engine_status()
+        assert badge == "🌙"
+        assert text == "Automatic runs paused (outside market hours) · last refresh 6000s ago"
+
+    def test_stale_and_not_paused_still_returns_idle_badge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_signals(monkeypatch, heartbeat=None, snapshot=6000, paused_for_market_hours=False)
+        badge, text = engine_status()
+        assert badge == "🟠"
+        assert text == "Engine idle · last refresh 6000s ago"
+
+    def test_fresh_signal_ignores_paused_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The paused check must only apply once staleness has already been
+        established -- a fresh signal always wins regardless of market hours."""
+        _patch_signals(monkeypatch, heartbeat=None, snapshot=12, paused_for_market_hours=True)
+        badge, text = engine_status()
+        assert badge == "🟢"
+        assert text == "Engine live · refreshed 12s ago"
+
+    def test_paused_for_market_hours_true_when_gate_on_and_outside_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        assert engine_status_module._paused_for_market_hours() is True
+
+    def test_paused_for_market_hours_false_when_gate_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", False)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        assert engine_status_module._paused_for_market_hours() is False
+
+    def test_paused_for_market_hours_false_when_inside_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: True)
+        assert engine_status_module._paused_for_market_hours() is False
+
+    def test_paused_helper_never_raises_on_a_broken_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Dead-letter by design (CONSTRAINT #6): a broken market-hours check must
+        degrade to False (ordinary '🟠 idle' badge), never raise or mask a real
+        idle badge with a falsely-reassuring 'paused' one."""
+        def _raise(now):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", _raise)
+        assert engine_status_module._paused_for_market_hours() is False

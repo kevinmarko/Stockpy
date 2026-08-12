@@ -35,6 +35,7 @@ from engine.advisory_agent import (
     compute_backlog_reminders,
     compute_next_run_delay,
     dispatch_backlog_reminders,
+    is_automatic_run_gated,
     is_extended_hours,
     is_us_market_open,
     load_agent_state,
@@ -133,6 +134,24 @@ class TestMarketHours:
     def test_extended_hours_excludes_weekend(self):
         t = _et(2025, 6, 28, 12, 0)
         assert is_extended_hours(t) is False
+
+
+class TestIsAutomaticRunGated:
+    """is_automatic_run_gated -- the single shared predicate main.py and
+    desktop/daemon_runtime.py both call instead of independently
+    re-deriving `extended_hours_only and not is_extended_hours(now)`."""
+
+    def test_gated_when_enabled_and_outside_window(self):
+        t = _et(2025, 6, 30, 3, 0)  # 3am ET Monday -- outside the window
+        assert is_automatic_run_gated(t, extended_hours_only=True) is True
+
+    def test_not_gated_when_enabled_and_inside_window(self):
+        t = _et(2025, 6, 30, 12, 0)  # noon ET Monday -- inside the window
+        assert is_automatic_run_gated(t, extended_hours_only=True) is False
+
+    def test_never_gated_when_disabled(self):
+        t = _et(2025, 6, 30, 3, 0)  # outside the window, but the flag is off
+        assert is_automatic_run_gated(t, extended_hours_only=False) is False
 
 
 # ---------------------------------------------------------------------------
