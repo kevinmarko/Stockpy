@@ -190,6 +190,9 @@ import type {
   CacheLongShortDashboard,
   CacheLongShortPendingTrade,
   CacheLongShortApproveBulkResult,
+  PaperBrokerAccount,
+  PaperBrokerPosition,
+  PaperBrokerOrder,
 } from "./types";
 
 const SECTORS = [
@@ -1921,6 +1924,7 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
 // FEATURE_FLAGS_TUNABLE_DEFS) serves every one of them, exercising the
 // typed-confirmation flow for all 20 in mock mode.
 const MOCK_DANGEROUS_KEYS = new Set([
+  "BROKER_BACKEND",
   "ADVISORY_ONLY",
   "DRY_RUN",
   "ROBINHOOD_EXECUTION_MODE",
@@ -8360,7 +8364,39 @@ export const mockApi = {
       count: lotIds.length
     });
   },
+  async getPaperBrokerAccount() {
+    return paperAccount;
+  },
+  async getPaperBrokerPositions() {
+    return paperPositions;
+  },
+  async getPaperBrokerOrders(_limit?: number) {
+    return paperOrders;
+  },
+  async resetPaperBroker(cash: number) {
+    paperAccount = { equity: cash, cash: cash, buying_power: cash };
+    paperPositions = [];
+    paperOrders = [];
+    return { status: "reset", cash };
+  },
+  async getPaperBrokerSettings() {
+    return buildTunablesResponse(
+      PAPER_BROKER_TUNABLE_DEFS,
+      "mock_paper_broker_tunables",
+      "mock_paper_broker_drift"
+    );
+  },
+  async updatePaperBrokerSettings(update: any, confirm?: any) {
+    return applyTunablesGeneric(
+      update,
+      PAPER_BROKER_TUNABLE_DEFS,
+      "mock_paper_broker_tunables",
+      "mock_paper_broker_drift",
+      confirm
+    );
+  },
 };
+
 
 // ---------------------------------------------------------------------------
 // Report Library (G5) + Dead-Letter Queue (G6) fixtures.
@@ -8594,4 +8630,50 @@ export const MOCK_META = {
   sectors: SECTORS,
 };
 
+
+
+// Mirrors the real api/pilots_api.py::_PAPER_BROKER_GROUPS exactly (field
+// names, types, and defaults) -- this fixture previously invented fields
+// (PAPER_BROKER_ENABLED, PAPER_BROKER_INITIAL_CASH, PAPER_BROKER_SLIPPAGE_BPS)
+// that don't exist in settings.py at all, and gave BROKER_BACKEND a fake
+// "PAPER"/"ALPACA"/"ROBINHOOD" enum with a "ROBINHOOD" option that doesn't
+// actually work (BROKER_BACKEND recognizes only "alpaca"/"fmp_paper" today;
+// "robinhood" is a documented-but-not-yet-implemented reserved value that
+// falls through to "alpaca" -- see docs/architecture/execution.md's "Future
+// extension point" section). A mock-mode operator exercising this screen was
+// seeing a fictional, unsafe-looking control surface that bore no relation
+// to what a real write would do.
+const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
+  {
+    group: "Paper Broker Configuration",
+    key: "BROKER_BACKEND",
+    type: "string",
+    value: "fmp_paper",
+    default: "fmp_paper",
+    description: "Selects the active broker backend ('alpaca' or 'fmp_paper'). Defaults to 'fmp_paper'. A runtime guard forces 'alpaca' if 'fmp_paper' is used while genuinely going live. 'robinhood' is reserved for a future automated broker; any unrecognized value falls through to 'alpaca'.",
+  },
+  {
+    group: "Paper Broker Configuration",
+    key: "FMP_PAPER_STARTING_CASH",
+    type: "number",
+    value: 100000.0,
+    default: 100000.0,
+    min: 0,
+    max: 10000000,
+    step: 1000,
+    description: "Starting cash balance seeded into a fresh paper trading account the first time it's constructed. Only takes effect when BROKER_BACKEND='fmp_paper'.",
+  },
+  {
+    group: "Paper Broker Configuration",
+    key: "PAPER_BROKER_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description: "Gates POST /pilots/paper-broker/reset. If false, resets are blocked.",
+  },
+];
+
+let paperAccount: PaperBrokerAccount = { equity: 0, cash: 0, buying_power: 0 };
+let paperPositions: PaperBrokerPosition[] = [];
+let paperOrders: PaperBrokerOrder[] = [];
 

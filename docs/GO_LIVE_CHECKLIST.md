@@ -1,7 +1,13 @@
-> **This checklist applies only when re-enabling broker execution
-> (`ADVISORY_ONLY=false`). In advisory mode (the project default), the operational
-> checklist is `docs/RUNBOOK.md §2 — Pre-Market Checklist (Daily Advisory Run)`.
-> See `docs/HOW_TO_GUIDE.md → Advisory-Only Mode` for the re-enable procedure.**
+> **This checklist applies when re-enabling the automated Alpaca/FMP-paper broker
+> execution path (`ADVISORY_ONLY=false`) — OR when going live on the separate
+> Robinhood execution bridge (`ROBINHOOD_EXECUTION_MODE=live`), which is
+> **independent of `ADVISORY_ONLY`** and stays gated even while `ADVISORY_ONLY=true`.
+> If you are only going live on Robinhood, `ADVISORY_ONLY` should correctly stay
+> `true` (it only quarantines the Alpaca surface) — do not skip this file on that
+> basis; jump straight to **🤖 Robinhood Live Sign-Off** below. If neither applies
+> (advisory mode, no Robinhood execution), the operational checklist is
+> `docs/RUNBOOK.md §2 — Pre-Market Checklist (Daily Advisory Run)`.
+> See `docs/HOW_TO_GUIDE.md → Advisory-Only Mode` for the Alpaca re-enable procedure.**
 
 # InvestYo Go-Live Checklist
 
@@ -22,7 +28,24 @@
   (preflight check #3 — warning-only; auto-skipped when `ADVISORY_ONLY=true`; check wired in Stage 3 of the 2026-06-26 cleanup plan).
 - [ ] *(manual)* No sensitive data (account numbers, SSN, trade history) stored unencrypted on disk.
 - [ ] *(manual)* Broker account uses 2-factor authentication.
-- [ ] If `ROBINHOOD_EXECUTION_MODE=live` (Tier 8 execution bridge, independent of `ADVISORY_ONLY`), `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` is set to a positive per-order dollar ceiling — `check_robinhood_execution_mode` FAILS otherwise. This check is never auto-skipped under `ADVISORY_ONLY=true` since the Robinhood path is orthogonal to the Alpaca quarantine.
+- [ ] If `ROBINHOOD_EXECUTION_MODE=live` (Tier 8 execution bridge, independent of `ADVISORY_ONLY`), `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` is set to a positive per-order dollar ceiling — `check_robinhood_execution_mode` FAILS otherwise. This check is never auto-skipped under `ADVISORY_ONLY=true` since the Robinhood path is orthogonal to the Alpaca quarantine. See **🤖 Robinhood Live Sign-Off** below for the full checklist on this path.
+
+---
+
+## 🤖 Robinhood Live Sign-Off
+
+> Applies whenever `ROBINHOOD_EXECUTION_MODE=live` — regardless of `ADVISORY_ONLY`.
+> This is the platform's only mechanism for placing a real Robinhood order (see
+> `docs/architecture/execution.md`'s `execution/queue_builder.py` entry); it is
+> entirely separate from the Alpaca/FMP-paper broker sections elsewhere in this
+> checklist, which do not apply to a Robinhood-only go-live.
+
+- [ ] Staged rollout followed in order — `off → review → live` — not jumped straight to `live`. See `docs/RUNBOOK.md`'s **Robinhood Execution Bridge (Tier 8) — paper-first rollout** section for the full staged-rollout walkthrough.
+- [ ] `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` set to a positive per-order dollar ceiling (see the Security bullet above; `check_robinhood_execution_mode` in `scripts/preflight_check.py` enforces this).
+- [ ] Dedicated, separately-funded Robinhood **Agentic** account opened and confirmed — the `robinhood-execution` skill refuses to operate against the main account.
+- [ ] Kill switch (`python -m execution.kill_switch --status`) verified clear before the first live run.
+- [ ] *(manual)* Operator has walked the full day-to-day procedure at least once in `review` mode: `docs/RUNBOOK.md`'s **Robinhood Live Execution Procedure** section.
+- [ ] *(manual)* Per-trade human confirmation understood and accepted as mandatory — the `robinhood-execution` skill never batch-confirms orders.
 
 ---
 

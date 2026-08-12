@@ -437,7 +437,18 @@ async def _execute_broker_orders(
         from execution.risk_gate import PreTradeRiskGate, RiskContext
         from transactions_store import TransactionsStore
 
-        if getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper":
+        from execution.broker_selection import resolve_broker_backend
+
+        # resolve_broker_backend() is the single source of truth for "which
+        # broker should actually be used" -- shared with
+        # robinhood_execution_mcp.py::_get_broker() so the two call sites
+        # can never drift on the fmp_paper/live-trading safety guard. It
+        # logs CRITICAL + fires an alert and forces 'alpaca' internally
+        # when BROKER_BACKEND='fmp_paper' while this run is genuinely going
+        # live (ADVISORY_ONLY=False and ALPACA_PAPER=False).
+        broker_backend = resolve_broker_backend()
+
+        if broker_backend == "fmp_paper":
             from execution.fmp_paper_broker import FMPPaperBroker
             broker = FMPPaperBroker()
         else:
@@ -540,6 +551,25 @@ async def _execute_broker_orders(
                             symbol, kelly, equity, price,
                         )
                         continue
+                    # target_qty is the pre-portfolio-cap, pre-Dual-Momentum sizing
+                    # target implied by Kelly_Target_Post_Regime -- the per-name-
+                    # capped weight strategy_engine.py computes (Kelly cap,
+                    # MAX_POSITION_WEIGHT, regime multiplier, meta-label composite,
+                    # ETF-transmission multiplier all already applied) BEFORE the
+                    # Dual Momentum safe-asset override and the cycle-wide portfolio
+                    # gross cap overwrite "Kelly Target" — both of which only ever
+                    # reduce weight further. Falls back to `kelly` (today's exact
+                    # prior behavior, i.e. target_qty == qty) when the column is
+                    # absent (an older cached DataFrame) or falsy — never fabricated,
+                    # never a crash. Since the derating steps only ever reduce
+                    # weight, target_qty will always be >= the actually-submitted
+                    # qty once a portfolio-level cap or Dual Momentum has derated
+                    # this position relative to its per-name sizing decision. This
+                    # is what makes the ML feature paper_size_vs_kelly_ratio_30d
+                    # (ml/training_data.py) carry real signal instead of a constant
+                    # 1.0 for BUY orders.
+                    target_weight = float(row.get("Kelly_Target_Post_Regime", kelly) or kelly)
+                    target_qty_value = _kelly_target_qty(target_weight, equity, price)
                     intent = OrderIntent(
                         strategy_id="main_pipeline",
                         symbol=symbol,
@@ -547,6 +577,7 @@ async def _execute_broker_orders(
                         qty=buy_qty,
                         order_type=OrderType.MARKET,
                         priority=OrderPriority.NORMAL,
+                        target_qty=target_qty_value,
                     )
 
                     def _log_buy(result, symbol=symbol, buy_qty=buy_qty, kelly=kelly,
@@ -565,6 +596,11 @@ async def _execute_broker_orders(
 
                 elif signal in ("SELL", "TRIM") and symbol in open_symbols:
                     sell_qty = abs(open_symbols[symbol])
+                    # target_qty intentionally equals qty here, not a remaining gap:
+                    # a full position close has no distinct "target" size to diverge
+                    # from what's actually held -- the target IS the held quantity,
+                    # unlike the BUY case above which now has a genuine pre-cap
+                    # (Kelly_Target_Post_Regime) vs. post-cap (Kelly Target) distinction.
                     intent = OrderIntent(
                         strategy_id="main_pipeline",
                         symbol=symbol,
@@ -572,6 +608,7 @@ async def _execute_broker_orders(
                         qty=sell_qty,
                         order_type=OrderType.MARKET,
                         priority=OrderPriority.URGENT,
+                        target_qty=sell_qty,
                     )
 
                     def _log_sell(result, symbol=symbol, sell_qty=sell_qty):

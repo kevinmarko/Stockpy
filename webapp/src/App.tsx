@@ -54,6 +54,9 @@ import { OperationsHub } from "./screens/OperationsHub";
 import { Help } from "./screens/Help";
 import { Onboarding } from "./screens/Onboarding";
 import { CacheLongShort } from "./screens/CacheLongShort";
+import { PaperBroker } from "./screens/PaperBroker";
+import { SettingsPaperBroker } from "./screens/SettingsPaperBroker";
+
 import { StrategyInsights } from "./screens/StrategyInsights";
 import { CreateDataApp } from "./screens/CreateDataApp";
 import { CustomView } from "./screens/CustomView";
@@ -259,6 +262,8 @@ export default function App() {
                   <Route path="/operations" element={<OperationsHub />} />
                   <Route path="/portfolio" element={<Portfolio />} />
                   <Route path="/cache-long-short" element={<CacheLongShort />} />
+          <Route path="/paper-broker" element={<PaperBroker />} />
+
                   <Route path="/strategy-insights" element={<StrategyInsights />} />
                   <Route path="/create-data-app" element={<CreateDataApp />} />
                   <Route path="/app/:slug" element={<CustomView />} />
@@ -277,6 +282,8 @@ export default function App() {
                     <Route path="fmp" element={<FmpSettings />} />
                     <Route path="etf-transmission" element={<EtfTransmissionSettings />} />
                     <Route path="cache-long-short" element={<SettingsCacheLongShort />} />
+            <Route path="paper-broker" element={<SettingsPaperBroker />} />
+
                     <Route path="feature-flags" element={<FeatureFlagsScreen />} />
                     <Route path="ai" element={<AIControlCenter />} />
                     <Route path="prompts" element={<PromptRegistry />} />

@@ -34,6 +34,12 @@ export type GlossaryValue = string | ((t: Thresholds | null) => string);
 
 /** term key (lower-case) → plain-English definition. */
 export const GLOSSARY: Record<string, GlossaryValue> = {
+  "paper broker":
+    "A simulated trading environment that tracks mock cash and positions without risking real money, allowing strategies to be tested against real-time market data.",
+  "tiered cost model":
+    "A fee estimation model that applies different slippage and commission rates based on trade size and asset liquidity, rather than a flat fixed rate.",
+  "slippage":
+    "The difference between the expected price of a trade and the actual price at which it executes, simulated to reflect real-world execution costs.",
   "advisory only":
     "The platform recommends; you decide. It is in advisory mode by default — no order is ever sent to a broker automatically. Every action signal, size, and options directive is informational.",
   "action signal":
@@ -200,6 +206,13 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
 export const TAB_HELP: Record<string, TabHelp> = {
+  "paper-broker": {
+    title: "Paper Broker",
+    description:
+      "A local simulated brokerage for end-to-end execution testing. Orders are executed against real-time market data with simulated slippage.",
+    keyConcepts: ["paper broker", "tiered cost model", "slippage"],
+  },
+
   dashboard: {
     title: "Dashboard",
     description:

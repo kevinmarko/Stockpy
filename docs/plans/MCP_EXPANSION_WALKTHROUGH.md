@@ -102,20 +102,29 @@ module, and now documents this repo's actual 3 separate alert systems
 instead of 1 invented one). YAML frontmatter validated to parse cleanly on
 all 5.
 
-## Phase 4: Execution boundary (`robinhood_execution_mcp.py`) — NOT touched this round
+## Phase 4: Execution boundary (`broker_live_execution_mcp.py`, was `robinhood_execution_mcp.py`)
 
-Exists in this branch (imports `OrderManager`/`PreTradeRiskGate`, has a
-dual-key propose/confirm flow and a token-bucket rate limiter) but was
-**explicitly excluded from this round's build-out and has not been
-independently verified**. Given the pattern found in every other tool this
-round — code that imports the right real modules but has a hidden bug
-making it a no-op or a silent always-pass (an unpopulated `RiskContext()`
-in `validate_order_compliance` was exactly this failure mode) — **do not
-assume this file works correctly without a dedicated verification pass**,
-the same kind of pass Phases 1–3 just got. This is safety-critical: it can
-place real live orders. Building this out for real, and the specific
-propose/confirm design, needs its own explicit go-ahead — see
-`implementation_plan.md`'s Phase 4 gate.
+Renamed from `robinhood_execution_mcp.py` — despite the old name, this file
+places orders through `AlpacaBroker`/`FMPPaperBroker`, never Robinhood, so
+the old filename was actively misleading. Two confirmed bugs from the
+code-reading pass documented below — `get_live_positions()` crashing on any
+account with real holdings, and `confirm_live_trade()`'s pre-trade risk gate
+being a silent no-op — have since been fixed as a minimal, targeted patch
+(see `docs/MCP_EXPANSION_PLAN.md`'s "Phase 4 — REVISED PLAN" section). The
+larger propose/notify/approve/execute human-approval redesign that same
+section describes remains open, unbuilt, future work — it was NOT built as
+part of this fix.
+
+Original note from this round, left for context: this file existed
+(imports `OrderManager`/`PreTradeRiskGate`, has a dual-key propose/confirm
+flow and a token-bucket rate limiter) but was explicitly excluded from that
+round's build-out and had not been independently verified. Given the
+pattern found in every other tool that round — code that imports the right
+real modules but has a hidden bug making it a no-op or a silent
+always-pass (an unpopulated `RiskContext()` in `validate_order_compliance`
+was exactly this failure mode) — this file needed a dedicated verification
+pass, the same kind of pass Phases 1–3 got. This is safety-critical: it can
+place real live orders.
 
 ## Phase 5: VM deploy automation — NOT touched this round
 
