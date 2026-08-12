@@ -14,7 +14,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FollowModal, resolveMinAmount } from "./FollowModal";
+import { FollowModal } from "./FollowModal";
+import { resolveMinAmount } from "./resolveMinAmount";
 import { api } from "../api/client";
 import { __resetThresholdsCache } from "../help/thresholds";
 import type { FollowResult, PilotSummary, Thresholds } from "../api/types";

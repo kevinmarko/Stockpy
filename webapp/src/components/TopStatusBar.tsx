@@ -9,7 +9,7 @@ import { usePoll } from "../hooks/usePoll";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useAutoRefresh } from "./AutoRefreshContext";
 import { computeMarketSession } from "../marketSession";
-import { useExecutionMode } from "./ExecutionModeContext";
+import { useExecutionMode } from "../hooks/useExecutionMode";
 import type { ObservabilitySummary } from "../api/types";
 
 const AUTOMATION_POLL_MS = 30_000;

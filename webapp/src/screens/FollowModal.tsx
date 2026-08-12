@@ -5,6 +5,7 @@ import { fmtPct, fmtUsd } from "../format";
 import { loadThresholds } from "../help/thresholds";
 import { theme } from "../theme";
 import { Notice } from "../components/ui";
+import { resolveMinAmount } from "./resolveMinAmount";
 
 const MODE_LABEL: Record<string, { label: string; cls: string }> = {
   off: { label: "OFF — nothing is written", cls: "badge-neutral" },
@@ -12,23 +13,6 @@ const MODE_LABEL: Record<string, { label: string; cls: string }> = {
   paper: { label: "PAPER — simulated fills", cls: "badge-warn" },
   live: { label: "LIVE — real orders (per-trade confirm)", cls: "badge-bad" },
 };
-
-/**
- * Resolves the minimum follow amount to display/gate on. `result.min_amount`
- * (once a real follow response exists) is the most authoritative source — it
- * may reflect server-side overrides that a cached `GET /thresholds` fetch
- * wouldn't know about — so it always wins when present. Before that, the
- * live `GET /thresholds` value (`follow_min_amount`, read live from
- * `settings.FOLLOW_MIN_AMOUNT`) is used. Never a hardcoded literal: if
- * neither has resolved yet, the minimum is honestly `null` (unknown), not a
- * guessed number — callers render that via `fmtUsd(null)` ("—").
- */
-export function resolveMinAmount(
-  result: FollowResult | null,
-  thresholds: Thresholds | null
-): number | null {
-  return result?.min_amount ?? thresholds?.follow_min_amount ?? null;
-}
 
 /**
  * Follow flow modal. Amount input (min + notional cap), planned_intents preview,

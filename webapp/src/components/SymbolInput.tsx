@@ -7,9 +7,9 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Button } from "./ui";
-import { api } from "../api/client";
 import { useDebounce } from "../hooks/useDebounce";
 import type { UniverseSymbol } from "../api/types";
+import { loadUniverse, getCachedUniverse } from "./universeCache";
 
 /**
  * Shared symbol entry bar for the per-symbol research screens (Data Explorer,
@@ -29,40 +29,9 @@ import type { UniverseSymbol } from "../api/types";
  * keystroke, so the owning screen's `useApi` refetches once per lookup.
  */
 
-// Module-level cache: the universe is identical for every SymbolInput and rarely
-// changes within a session, so fetch it at most once and share the result.
-let universeCache: UniverseSymbol[] | null = null;
-let universePromise: Promise<UniverseSymbol[]> | null = null;
-
-/** Exported so other lookup UIs (e.g. CommandPaletteModal's ticker search)
- *  share this exact module cache instead of issuing their own GET /universe. */
-export function loadUniverse(): Promise<UniverseSymbol[]> {
-  if (universeCache) return Promise.resolve(universeCache);
-  if (!universePromise) {
-    universePromise = api
-      .getUniverse()
-      .then((r) => {
-        universeCache = r.symbols ?? [];
-        return universeCache;
-      })
-      .catch((err) => {
-        // Non-fatal to the user: degrade to a plain text field (free-text still
-        // works). Still log so a real outage is diagnosable rather than silently
-        // indistinguishable from "nothing tracked yet". Reset the promise so a
-        // later mount can retry.
-        console.warn("SymbolInput: failed to load the tracked-symbol universe", err);
-        universePromise = null;
-        return [];
-      });
-  }
-  return universePromise;
-}
-
-/** Exposed for tests to reset the shared cache between cases. */
-export function __resetUniverseCache() {
-  universeCache = null;
-  universePromise = null;
-}
+// The tracked-symbol universe cache/fetcher lives in ./universeCache.ts (a
+// pure module, no React) so this file only exports the `SymbolInput`
+// component -- see that file for the module-level cache and fetch contract.
 
 const MAX_SUGGESTIONS = 8;
 
@@ -93,7 +62,7 @@ export function SymbolInput({
   testId?: string;
 }) {
   const [value, setValue] = useState(initial);
-  const [universe, setUniverse] = useState<UniverseSymbol[]>(universeCache ?? []);
+  const [universe, setUniverse] = useState<UniverseSymbol[]>(getCachedUniverse() ?? []);
   const [open, setOpen] = useState(false);
   // -1 = nothing highlighted → Enter submits the typed text (free-text default);
   // 0..n-1 = a suggestion is highlighted → Enter/Tab accept it.

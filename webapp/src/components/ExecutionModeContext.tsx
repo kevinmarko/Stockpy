@@ -1,8 +1,9 @@
-import { createContext, useContext, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import type { AutomationStatus } from "../api/types";
+import { ExecutionModeCtx, type ExecutionMode } from "../context/executionModeContext";
 
 // ---------------------------------------------------------------------------
 // ExecutionModeContext — single source of truth for advisory/live mode state
@@ -19,50 +20,14 @@ import type { AutomationStatus } from "../api/types";
 // independent GET /automation/status fetch via a local useApi call, so that
 // screen and this context can briefly disagree between polls. Migrate
 // Settings.tsx onto useExecutionMode() to close that gap.
+//
+// The `ExecutionMode` type/default/context object live in
+// ../context/executionModeContext.ts and the `useExecutionMode()` hook lives
+// in ../hooks/useExecutionMode.ts -- both pure, non-component modules -- so
+// this file only exports the `ExecutionModeProvider` component, keeping
+// Vite's React Fast Refresh working here instead of invalidating on every
+// edit.
 // ---------------------------------------------------------------------------
-
-export interface ExecutionMode {
-  /** True = advisory-only / paper mode (default, safe). False = live trading. */
-  advisoryOnly: boolean;
-  /** Global emergency halt — when active, no trades are placed even in live mode. */
-  killSwitchActive: boolean;
-  /** Kill switch trip reason, if any. */
-  killSwitchReason: string | null;
-  /** Dry-run flag — orders are simulated, not submitted to the broker. */
-  dryRun: boolean;
-  /** Alpaca paper trading flag. */
-  alpacaPaper: boolean;
-  /** True while the initial fetch is in flight. */
-  loading: boolean;
-  /** Non-null when the fetch failed. */
-  error: string | null;
-  /** Force a refetch (e.g. after toggling execution mode in Settings). */
-  reload: () => void;
-  /** Raw AutomationStatus data from the API. */
-  data: AutomationStatus | null;
-}
-
-const DEFAULT: ExecutionMode = {
-  advisoryOnly: true, // safe default
-  killSwitchActive: false,
-  killSwitchReason: null,
-  dryRun: true,
-  alpacaPaper: true,
-  loading: true,
-  error: null,
-  reload: () => {},
-  data: null,
-};
-
-const Ctx = createContext<ExecutionMode>(DEFAULT);
-
-/**
- * Read the current execution mode from anywhere in the component tree.
- * Must be called inside <ExecutionModeProvider>.
- */
-export function useExecutionMode(): ExecutionMode {
-  return useContext(Ctx);
-}
 
 /**
  * Provider — wraps the app near the root (inside ToastProvider and
@@ -91,5 +56,5 @@ export function ExecutionModeProvider({ children }: { children: ReactNode }) {
     data: data ?? null,
   };
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return <ExecutionModeCtx.Provider value={value}>{children}</ExecutionModeCtx.Provider>;
 }

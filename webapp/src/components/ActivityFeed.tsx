@@ -8,6 +8,7 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useAutoRefresh } from "./AutoRefreshContext";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
+import { getAlertCategory } from "./alertCategory";
 
 const LEVEL_STYLE: Record<string, { color: string; label: string }> = {
   CRITICAL: { color: theme.decline, label: "Critical" },
@@ -42,15 +43,6 @@ function LevelDot({ level }: { level: string | null }) {
       </span>
     </span>
   );
-}
-
-export function getAlertCategory(entry: AlertEntry): "SYSTEM" | "EXECUTION" | "RISK" | "REGIME" {
-  const t = entry.extra?.type as string | undefined;
-  if (!t) return "SYSTEM";
-  if (["fill", "order", "trade", "execution"].includes(t)) return "EXECUTION";
-  if (["risk", "constraint"].includes(t)) return "RISK";
-  if (["regime", "hmm", "macro"].includes(t)) return "REGIME";
-  return "SYSTEM";
 }
 
 const CATEGORY_COLORS = {
