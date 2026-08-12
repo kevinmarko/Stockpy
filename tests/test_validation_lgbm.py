@@ -22,7 +22,18 @@ import pytest
 from ml.lgbm_ranker import LGBMCrossSectionalRanker
 from ml.feature_engineering import FEATURE_COLUMNS, build_pit_feature_matrix
 from execution.cost_model import TieredCostModel
+import validation.harness as harness_module
 from validation.harness import StrategyValidationHarness
+
+
+def _mock_universe_lookup(tickers):
+    """run() reads the module-level get_universe_with_survivorship_warning
+    binding directly, not the constructor's universe_fn kwarg (which
+    StrategyValidationHarness.run() never calls) -- see
+    tests/test_harness_oos_gate.py's identical fixture for the established
+    pattern this mirrors. Keeps these tests fully offline."""
+    return lambda _d: (list(tickers), {"n_current": len(tickers), "n_at_date": len(tickers),
+                                        "n_delisted_in_period": 0, "estimated_bias_pct": 0.5})
 
 
 def _build_planted_alpha_panel(
@@ -77,11 +88,15 @@ def _build_planted_alpha_panel(
 
 
 @pytest.mark.slow
-def test_lgbm_validation_harness_runs_end_to_end(tmp_path):
+def test_lgbm_validation_harness_runs_end_to_end(tmp_path, monkeypatch):
     """Smoke-test: harness runs without crashing; report has required fields."""
     X_panel, y_panel, price_df = _build_planted_alpha_panel(n_dates=120, n_tickers=10)
     dates = price_df.index
     cost_model = TieredCostModel()
+    monkeypatch.setattr(
+        harness_module, "get_universe_with_survivorship_warning",
+        _mock_universe_lookup(price_df.columns),
+    )
 
     # The strategy function trains a fresh LGBMRanker on the train fold and
     # evaluates on the test fold by long-top-quintile / short-bottom-quintile.
@@ -161,11 +176,15 @@ def test_lgbm_validation_harness_runs_end_to_end(tmp_path):
 
 
 @pytest.mark.slow
-def test_lgbm_deployability_gate_respected(tmp_path):
+def test_lgbm_deployability_gate_respected(tmp_path, monkeypatch):
     """The gate must block deployment when metrics fail — wiring check only."""
     X_panel, y_panel, price_df = _build_planted_alpha_panel(n_dates=80, n_tickers=8)
     dates = price_df.index
     cost_model = TieredCostModel()
+    monkeypatch.setattr(
+        harness_module, "get_universe_with_survivorship_warning",
+        _mock_universe_lookup(price_df.columns),
+    )
 
     # Strategy that deliberately loses money (negative alpha signal).
     # Use a DETERMINISTIC constant daily loss rather than a random draw:

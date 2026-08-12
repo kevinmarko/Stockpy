@@ -650,9 +650,29 @@ class StrategyValidationHarness:
         """
         logger.info(f"Starting validation harness for {strategy_name}...")
         
-        # 1. Load universe with survivorship report
+        # 1. Load universe with survivorship report. Guarded (mirrors
+        # simulation_engine.py::print_survivorship_warning_for_backtest's
+        # existing try/except around the same call): a universe-loader
+        # failure (network down, Wikipedia page shape changed, FMP
+        # unavailable) must never crash the whole validation run over one
+        # diagnostic metric. Degrades to an honestly NaN/None-flagged
+        # bias_report (CONSTRAINT #4 -- never fabricate n_current/
+        # estimated_bias_pct) rather than raising.
         start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
-        _, bias_report = get_universe_with_survivorship_warning(start_dt)
+        try:
+            _, bias_report = get_universe_with_survivorship_warning(start_dt)
+        except Exception as exc:
+            logger.warning(
+                "Survivorship-bias universe lookup failed, degrading to NaN sentinel: %s", exc
+            )
+            bias_report = {
+                "n_current": None,
+                "n_at_date": None,
+                "n_delisted_in_period": None,
+                "estimated_bias_pct": float("nan"),
+                "data_unavailable": True,
+                "error": str(exc),
+            }
 
         # 2. Get Data
         if X is None or y is None:

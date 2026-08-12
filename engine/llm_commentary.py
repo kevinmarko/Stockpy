@@ -99,7 +99,14 @@ def _build_synthetic_watch_alert(rec):
 def main(argv: Optional[list] = None) -> int:
     # Mirror the project convention: load .env on entry so credentials in
     # the user's local config reach pydantic-settings AND os.environ.
-    load_dotenv(override=False)
+    # Anchored to ENV_PATH (settings.py) rather than a bare load_dotenv() —
+    # bare load_dotenv() uses find_dotenv(), which walks UP from this file's
+    # directory and, in a git worktree with no .env of its own, silently
+    # finds a PARENT checkout's .env instead. See settings.ENV_PATH's
+    # docstring comment for the full three-locators writeup.
+    from settings import ENV_PATH  # noqa: PLC0415
+
+    load_dotenv(ENV_PATH, override=False)
 
     parser = argparse.ArgumentParser(
         prog="python -m engine.llm_commentary",

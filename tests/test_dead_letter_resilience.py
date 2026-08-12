@@ -31,8 +31,11 @@ import pytest
 
 import universe_engine
 from engine.advisory import evaluate
+from execution.cost_model import TieredCostModel
 from research_engine import AdvancedResearchEngine
 from transactions_store import TransactionsStore
+import validation.harness as harness_module
+from validation.harness import StrategyValidationHarness
 
 # Reuse the established market-provider / bars / account-snapshot / heavy-engine
 # helpers from tests/test_advisory.py rather than re-deriving them, per item #1's
@@ -323,9 +326,9 @@ class TestFetchAndCacheUniverseMalformedTable:
         resp.text = "<html></html>"
         return resp
 
-    def test_no_tables_raises_value_error(self):
+    def test_too_few_tables_raises_value_error(self):
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
-             mock.patch("universe_engine.pd.read_html", return_value=[]):
+             mock.patch("universe_engine.pd.read_html", return_value=[pd.DataFrame({"Symbol": ["AAPL"]})]):
             with pytest.raises(ValueError, match="tables not found"):
                 universe_engine.fetch_and_cache_universe()
 
@@ -336,35 +339,57 @@ class TestFetchAndCacheUniverseMalformedTable:
             with pytest.raises(ValueError, match="Symbol/Ticker column"):
                 universe_engine.fetch_and_cache_universe()
 
-    def test_missing_changes_table_or_columns_gracefully_degrades(self):
-        """If the changes table is missing entirely or lacks required columns,
-        it must log a warning and return only the current constituents,
-        rather than aborting."""
+    def test_missing_changes_columns_raises_value_error(self):
         current_df = pd.DataFrame({"Symbol": ["AAPL"]})
         changes_no_cols = pd.DataFrame({"Something": ["irrelevant"]})
-
-        # Test 1: Only 1 table (current constituents)
         with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
-             mock.patch("universe_engine.pd.read_html", return_value=[current_df]), \
-             mock.patch("universe_engine.logger.warning") as mock_logger:
-            result = universe_engine.fetch_and_cache_universe()
-            assert len(result) == 1
-            assert result.iloc[0]["added_ticker"] == "AAPL"
-            assert result.iloc[0]["type"] == "current"
-            mock_logger.assert_called_once()
-
-        # Test 2: 2 tables, but second table is malformed
-        with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
-             mock.patch("universe_engine.pd.read_html", return_value=[current_df, changes_no_cols]), \
-             mock.patch("universe_engine.logger.warning") as mock_logger:
-            result = universe_engine.fetch_and_cache_universe()
-            assert len(result) == 1
-            assert result.iloc[0]["added_ticker"] == "AAPL"
-            assert result.iloc[0]["type"] == "current"
-            mock_logger.assert_called_once()
+             mock.patch("universe_engine.pd.read_html", return_value=[current_df, changes_no_cols]):
+            with pytest.raises(ValueError, match="Date, Added Ticker, or Removed Ticker"):
+                universe_engine.fetch_and_cache_universe()
 
     def _changes_table(self):
         return _changes_table()
+
+    def _write_stale_cache(self):
+        cached = pd.DataFrame({
+            "type": ["current"], "date": ["2024-01-01"],
+            "added_ticker": ["AAPL"], "removed_ticker": [None],
+        })
+        cached.to_parquet(universe_engine.CACHE_PATH, index=False)
+        return cached
+
+    def test_too_few_tables_with_cache_present_falls_back_to_stale_cache(self):
+        """A page-shape failure (e.g. Wikipedia's 'Selected changes' table
+        being removed entirely, as happened live in 2026-08) must be treated
+        with the same severity as a network failure: fall back to a stale
+        cache if one exists, rather than crashing every caller with no local
+        cache -- see TestFetchAndCacheUniverseNetworkFailure's equivalent
+        network-exception test above."""
+        cached = self._write_stale_cache()
+        with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
+             mock.patch("universe_engine.pd.read_html", return_value=[pd.DataFrame({"Symbol": ["AAPL"]})]):
+            result = universe_engine.fetch_and_cache_universe()
+        pd.testing.assert_frame_equal(result.reset_index(drop=True), cached.reset_index(drop=True))
+
+    def test_missing_symbol_column_with_cache_present_falls_back_to_stale_cache(self):
+        cached = self._write_stale_cache()
+        current_no_symbol = pd.DataFrame({"NotASymbolColumn": ["AAPL"]})
+        with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
+             mock.patch("universe_engine.pd.read_html", return_value=[current_no_symbol, self._changes_table()]):
+            result = universe_engine.fetch_and_cache_universe()
+        pd.testing.assert_frame_equal(result.reset_index(drop=True), cached.reset_index(drop=True))
+
+    def test_missing_changes_columns_with_cache_present_falls_back_to_stale_cache(self):
+        """This is the exact live-production failure mode (Wikipedia's
+        changes table removed entirely, 2026-08): with a stale cache present,
+        fetch_and_cache_universe() must degrade to it instead of raising."""
+        cached = self._write_stale_cache()
+        current_df = pd.DataFrame({"Symbol": ["AAPL"]})
+        changes_no_cols = pd.DataFrame({"Something": ["irrelevant"]})
+        with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
+             mock.patch("universe_engine.pd.read_html", return_value=[current_df, changes_no_cols]):
+            result = universe_engine.fetch_and_cache_universe()
+        pd.testing.assert_frame_equal(result.reset_index(drop=True), cached.reset_index(drop=True))
 
     def test_single_malformed_change_row_is_skipped_not_raised(self):
         """A bad DATE on one row (not a missing column) must be logged and
@@ -440,3 +465,139 @@ class TestGetDelistedTickersDeadLetter:
         )
         with pytest.raises(KeyError):
             universe_engine.get_delisted_tickers()
+
+
+# ============================================================================
+# universe_engine.py -- FMP primary source / Wikipedia fallback ordering
+#
+# settings.FMP_UNIVERSE_ENABLED (default False) gates data/fmp_universe.py's
+# dispatcher entirely; when it returns usable rows they win over Wikipedia's
+# changes table (the one whose "Selected changes" content is gone from the
+# live page as of 2026-08), and an empty/failed FMP result falls through to
+# the existing Wikipedia parse unchanged.
+# ============================================================================
+
+class TestFetchAndCacheUniverseFMPPrimarySource:
+    def _mock_response(self):
+        resp = mock.MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.text = "<html></html>"
+        return resp
+
+    def test_fmp_disabled_by_default_uses_wikipedia_changes_table(self, monkeypatch):
+        """Flag off (the default) must reproduce today's exact Wikipedia-only
+        behavior -- zero FMP calls attempted."""
+        from settings import settings as _settings
+        monkeypatch.setattr(_settings, "FMP_UNIVERSE_ENABLED", False)
+        with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
+             mock.patch("universe_engine.pd.read_html", return_value=[
+                 pd.DataFrame({"Symbol": ["AAPL"]}), _changes_table(),
+             ]), \
+             mock.patch("data.fmp_client.historical_sp500_changes") as mock_fmp:
+            result = universe_engine.fetch_and_cache_universe()
+
+        mock_fmp.assert_not_called()
+        change_rows = result[result["type"] == "change"]
+        assert change_rows.iloc[0]["_provider"] == "wikipedia"
+        assert "NEW" in change_rows["added_ticker"].values
+
+    def test_fmp_enabled_and_returns_rows_takes_priority_over_wikipedia(self, monkeypatch):
+        from settings import settings as _settings
+        monkeypatch.setattr(_settings, "FMP_UNIVERSE_ENABLED", True)
+        monkeypatch.setattr(_settings, "FMP_API_KEY", "test-key")
+        fmp_raw = [{"date": "2024-06-01", "symbol": "FMPNEW", "removedTicker": "FMPOLD"}]
+        with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
+             mock.patch("universe_engine.pd.read_html", return_value=[
+                 pd.DataFrame({"Symbol": ["AAPL"]}), _changes_table(),
+             ]), \
+             mock.patch("data.fmp_client.historical_sp500_changes", return_value=fmp_raw):
+            result = universe_engine.fetch_and_cache_universe()
+
+        change_rows = result[result["type"] == "change"]
+        assert set(change_rows["added_ticker"]) == {"FMPNEW"}
+        assert set(change_rows["_provider"]) == {"fmp"}
+        # Wikipedia's "NEW"/"OLD" changes row must NOT be present -- FMP won.
+        assert "NEW" not in change_rows["added_ticker"].values
+
+    def test_fmp_enabled_but_returns_nothing_falls_back_to_wikipedia(self, monkeypatch):
+        from settings import settings as _settings
+        monkeypatch.setattr(_settings, "FMP_UNIVERSE_ENABLED", True)
+        monkeypatch.setattr(_settings, "FMP_API_KEY", "test-key")
+        with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
+             mock.patch("universe_engine.pd.read_html", return_value=[
+                 pd.DataFrame({"Symbol": ["AAPL"]}), _changes_table(),
+             ]), \
+             mock.patch("data.fmp_client.historical_sp500_changes", return_value=[]):
+            result = universe_engine.fetch_and_cache_universe()
+
+        change_rows = result[result["type"] == "change"]
+        assert change_rows.iloc[0]["_provider"] == "wikipedia"
+        assert "NEW" in change_rows["added_ticker"].values
+
+    def test_fmp_enabled_but_raises_falls_back_to_wikipedia(self, monkeypatch):
+        from settings import settings as _settings
+        from data.fmp_client import FMPUnavailable
+        monkeypatch.setattr(_settings, "FMP_UNIVERSE_ENABLED", True)
+        monkeypatch.setattr(_settings, "FMP_API_KEY", "test-key")
+        with mock.patch("universe_engine.requests.get", return_value=self._mock_response()), \
+             mock.patch("universe_engine.pd.read_html", return_value=[
+                 pd.DataFrame({"Symbol": ["AAPL"]}), _changes_table(),
+             ]), \
+             mock.patch("data.fmp_client.historical_sp500_changes", side_effect=FMPUnavailable("down")):
+            result = universe_engine.fetch_and_cache_universe()
+
+        change_rows = result[result["type"] == "change"]
+        assert change_rows.iloc[0]["_provider"] == "wikipedia"
+
+
+# ============================================================================
+# validation/harness.py -- guarded survivorship-bias universe lookup
+#
+# get_universe_with_survivorship_warning() must never crash the whole
+# validation run over one diagnostic metric -- mirrors
+# simulation_engine.py::print_survivorship_warning_for_backtest's existing
+# try/except around the exact same call.
+# ============================================================================
+
+def _harness_synthetic_xy(n=300, seed=13):
+    idx = pd.date_range("2015-01-01", periods=n, freq="B")
+    rng = np.random.default_rng(seed)
+    X = pd.DataFrame({"feat": np.arange(n, dtype=float)}, index=idx)
+    y = pd.Series(rng.normal(0.0003, 0.007, size=n), index=idx)
+    return X, y
+
+
+def _harness_stub_strategy_fn(X_train, y_train, X_test, y_test):
+    return [{
+        "params": "synthetic",
+        "train_returns": y_train,
+        "test_returns": y_test,
+        "turnover": 0.03,
+    }]
+
+
+class TestValidationHarnessUniverseFailureGuard:
+    def test_universe_lookup_failure_degrades_to_nan_sentinel_not_crash(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            harness_module, "get_universe_with_survivorship_warning",
+            mock.Mock(side_effect=RuntimeError("Wikipedia scrape failed, no cache found")),
+        )
+        monkeypatch.setattr(harness_module, "_spy_return_series", lambda oos_index, s, e: None)
+
+        X, y = _harness_synthetic_xy()
+        harness = StrategyValidationHarness(
+            strategy_fn=_harness_stub_strategy_fn,
+            universe_fn=lambda _d: ["SYN"],
+            cost_model=TieredCostModel(),
+            n_cpcv_splits=5,
+            n_test_splits=2,
+            reports_dir=str(tmp_path),
+        )
+
+        report = harness.run(
+            start_date="2015-01-01", end_date="2016-03-01", X=X, y=y, strategy_name="s"
+        )
+
+        assert report.bias_report["data_unavailable"] is True
+        assert math.isnan(report.bias_report["estimated_bias_pct"])
+        assert "Wikipedia scrape failed" in report.bias_report["error"]

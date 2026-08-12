@@ -9,7 +9,6 @@ import os
 import logging
 import argparse
 from datetime import date, datetime, timedelta
-from io import StringIO
 from typing import List, Tuple, Dict, Any, Optional
 import pandas as pd
 import numpy as np
@@ -42,27 +41,13 @@ def clean_ticker(ticker: Any) -> Optional[str]:
     cleaned = cleaned.replace('.', '-')
     return cleaned if cleaned else None
 
-def fetch_and_cache_universe() -> pd.DataFrame:
-    """Scrapes Wikipedia and caches the combined data to a parquet file."""
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    
-    logger.info("Fetching S&P 500 constituents from Wikipedia...")
-    try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        tables = pd.read_html(StringIO(resp.text))
-    except Exception as e:
-        logger.error(f"Error scraping Wikipedia: {e}")
-        if os.path.exists(CACHE_PATH):
-            logger.warning("Scraping failed. Loading stale cache as fallback.")
-            return pd.read_parquet(CACHE_PATH)
-        raise RuntimeError(f"Failed to scrape Wikipedia and no cache found: {e}")
-
-    if not tables:
+def _parse_current_constituents(tables: List[pd.DataFrame]) -> List[str]:
+    """Extract current S&P 500 tickers from Wikipedia's first table. Raises
+    ValueError on a page-shape change -- the caller decides whether to fall
+    back to a stale cache."""
+    if len(tables) < 1:
         raise ValueError("Wikipedia page structure changed. S&P 500 tables not found.")
 
-    # 1. Parse Current Constituents
     current_df = tables[0]
     symbol_col = None
     for col in current_df.columns:
@@ -71,48 +56,109 @@ def fetch_and_cache_universe() -> pd.DataFrame:
             break
     if not symbol_col:
         raise ValueError("Could not find Symbol/Ticker column in Wikipedia current table.")
-    
+
     current_tickers = [clean_ticker(t) for t in current_df[symbol_col].dropna()]
-    current_tickers = [t for t in current_tickers if t]
+    return [t for t in current_tickers if t]
 
-    # 2. Parse Changes
-    changes_df = None
-    for tbl in tables[1:]:
-        if isinstance(tbl.columns, pd.MultiIndex):
-            cols = [f"{col[0]}_{col[1]}".lower() for col in tbl.columns]
-        else:
-            cols = [str(col).lower() for col in tbl.columns]
 
-        has_date = any("date" in c for c in cols)
-        has_added = any("added" in c and "ticker" in c for c in cols)
-        has_removed = any("removed" in c and "ticker" in c for c in cols)
+def _parse_wikipedia_changes_table(tables: List[pd.DataFrame]) -> List[Dict[str, Any]]:
+    """Extract historical addition/removal change records from Wikipedia's
+    second table ("Selected changes to the list of S&P 500 components").
+    Raises ValueError if that table is missing or its shape has changed
+    beyond recognition -- callers are responsible for falling back to
+    another source (FMP) or a stale cache."""
+    if len(tables) < 2:
+        raise ValueError("Wikipedia page structure changed. S&P 500 tables not found.")
 
-        if has_date and (has_added or has_removed):
-            changes_df = tbl.copy()
-            break
+    changes_df = tables[1].copy()
+    if isinstance(changes_df.columns, pd.MultiIndex):
+        changes_df.columns = [f"{col[0]}_{col[1]}" for col in changes_df.columns]
 
-    if changes_df is not None:
-        if isinstance(changes_df.columns, pd.MultiIndex):
-            changes_df.columns = [f"{col[0]}_{col[1]}" for col in changes_df.columns]
+    date_col = None
+    added_col = None
+    removed_col = None
 
-        date_col = None
-        added_col = None
-        removed_col = None
+    for col in changes_df.columns:
+        col_lower = str(col).lower()
+        if "date" in col_lower:
+            date_col = col
+        elif "added" in col_lower and "ticker" in col_lower:
+            added_col = col
+        elif "removed" in col_lower and "ticker" in col_lower:
+            removed_col = col
 
-        for col in changes_df.columns:
-            col_lower = str(col).lower()
-            if "date" in col_lower:
-                date_col = col
-            elif "added" in col_lower and "ticker" in col_lower:
-                added_col = col
-            elif "removed" in col_lower and "ticker" in col_lower:
-                removed_col = col
+    if not date_col or not added_col or not removed_col:
+        raise ValueError("Could not identify Date, Added Ticker, or Removed Ticker columns in changes table.")
 
-    else:
-        logger.warning("Changes table not found on Wikipedia. Returning current constituents only.")
+    records: List[Dict[str, Any]] = []
+    for _, row in changes_df.iterrows():
+        try:
+            raw_date = row[date_col]
+            if pd.isna(raw_date):
+                continue
+            parsed_date = pd.to_datetime(raw_date).strftime("%Y-%m-%d")
+            added = clean_ticker(row[added_col])
+            removed = clean_ticker(row[removed_col])
+            if added or removed:
+                records.append({
+                    "type": "change",
+                    "date": parsed_date,
+                    "added_ticker": added,
+                    "removed_ticker": removed,
+                    "_provider": "wikipedia",
+                })
+        except Exception as ex:
+            logger.warning(f"Skipping malformed change row: {row.to_dict()} due to: {ex}")
+
+    return records
+
+
+def fetch_and_cache_universe() -> pd.DataFrame:
+    """Scrapes Wikipedia for current constituents and (as a fallback) the
+    historical changes table, preferring FMP for the changes history when
+    settings.FMP_UNIVERSE_ENABLED is set (see data/fmp_universe.py), and
+    caches the combined data to a parquet file.
+
+    Any failure to produce a fresh combined_df -- a network failure or a
+    Wikipedia page-shape change alike -- falls back to a stale cache if one
+    exists, else raises (RuntimeError for network/transport failures,
+    preserving the original ValueError for a structural page-shape failure,
+    matching this function's pre-existing exception contract)."""
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    logger.info("Fetching S&P 500 constituents from Wikipedia...")
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        tables = pd.read_html(resp.text)
+
+        current_tickers = _parse_current_constituents(tables)
+
+        # Historical additions/removals: FMP first (when enabled), Wikipedia's
+        # changes table as fallback. The FMP dispatcher never raises -- an
+        # empty list here means "not configured, unavailable, or nothing
+        # usable returned" and always falls through to Wikipedia.
+        try:
+            from data.fmp_universe import fetch_sp500_changes_via_fmp
+            change_records = fetch_sp500_changes_via_fmp()
+        except Exception as fmp_exc:  # pragma: no cover -- defensive, dispatcher already guards itself
+            logger.debug(f"FMP universe dispatch failed, falling back to Wikipedia: {fmp_exc}")
+            change_records = []
+
+        if not change_records:
+            change_records = _parse_wikipedia_changes_table(tables)
+    except Exception as e:
+        logger.error(f"Error scraping/parsing Wikipedia S&P 500 page: {e}")
+        if os.path.exists(CACHE_PATH):
+            logger.warning("Scraping/parsing failed. Loading stale cache as fallback.")
+            return pd.read_parquet(CACHE_PATH)
+        if isinstance(e, ValueError):
+            raise
+        raise RuntimeError(f"Failed to scrape Wikipedia and no cache found: {e}")
 
     # Convert to combined schema
-    records = []
+    records: List[Dict[str, Any]] = []
     # Add current tickers
     today_str = datetime.now().strftime("%Y-%m-%d")
     for t in current_tickers:
@@ -120,38 +166,16 @@ def fetch_and_cache_universe() -> pd.DataFrame:
             "type": "current",
             "date": today_str,
             "added_ticker": t,
-            "removed_ticker": None
+            "removed_ticker": None,
+            "_provider": "wikipedia",
         })
 
-    # Add historical changes if available
-    if changes_df is not None and date_col and (added_col or removed_col):
-        for _, row in changes_df.iterrows():
-            try:
-                raw_date = row[date_col]
-                if pd.isna(raw_date):
-                    continue
-                parsed_date = pd.to_datetime(raw_date).strftime("%Y-%m-%d")
-
-                added = None
-                if added_col and pd.notna(row[added_col]):
-                    added = clean_ticker(row[added_col])
-
-                removed = None
-                if removed_col and pd.notna(row[removed_col]):
-                    removed = clean_ticker(row[removed_col])
-
-                if added or removed:
-                    records.append({
-                        "type": "change",
-                        "date": parsed_date,
-                        "added_ticker": added,
-                        "removed_ticker": removed
-                    })
-            except Exception as ex:
-                logger.warning(f"Skipping malformed change row: {row.to_dict()} due to: {ex}")
+    # Add historical changes (already shaped by _parse_wikipedia_changes_table
+    # or fetch_sp500_changes_via_fmp)
+    records.extend(change_records)
 
     combined_df = pd.DataFrame(records)
-    
+
     # Ensure directory exists and cache to parquet
     os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
     combined_df.to_parquet(CACHE_PATH, index=False)

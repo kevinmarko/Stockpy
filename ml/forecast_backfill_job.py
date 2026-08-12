@@ -98,6 +98,18 @@ class BackfillJobState:
     error_type: Optional[BackfillErrorType] = None
     summary: Optional[dict] = None
     sample_rows: Optional[int] = None
+    # Set from the worker's {"event": "progress", ...} events (emitted after
+    # each step-5 combo trains -- see ml/forecast_backfill_worker.py's
+    # on_combo_trained callback). Shape: {"trained": [<model_key>, ...],
+    # "metrics_so_far": {<model_key>: {"accuracy": ..., "auc": ..., ...}}}.
+    # Always the LAST progress event received, never accumulated/merged here
+    # (the worker's own metrics_so_far is already the full cumulative
+    # snapshot at the time it was emitted). Deliberately left untouched by
+    # _enforce_deadline -- a deadline SIGKILL only ever kills the process and
+    # flips job.state to "timeout"; whatever this field last held survives
+    # that unchanged, which is the whole point: a SIGKILL can land between
+    # filesystem writes, but the parent's last-received event does not.
+    partial_summary: Optional[dict] = None
     started_at: float = field(default_factory=time.time)
     deadline_at: float = field(
         default_factory=lambda: time.time() + settings.FORECAST_BACKFILL_DEADLINE_SECONDS
@@ -196,6 +208,16 @@ def _drain_events(events_r: int, job: BackfillJobState) -> None:
                         total_steps = obj.get("total_steps", job.total_steps)
                         if isinstance(total_steps, int) and not isinstance(total_steps, bool):
                             job.total_steps = total_steps
+                    elif event == "progress":
+                        # Emitted after each step-5 combo trains (see
+                        # ml/forecast_backfill_worker.py). Overwrites, never
+                        # merges -- the worker's metrics_so_far is already
+                        # the full cumulative snapshot at emit time, so the
+                        # latest event alone is always the complete picture.
+                        job.partial_summary = {
+                            "trained": obj.get("trained", []),
+                            "metrics_so_far": obj.get("metrics_so_far", {}),
+                        }
                     elif event == "result":
                         if obj.get("ok"):
                             job.state = "succeeded"
@@ -404,6 +426,7 @@ def serialize_job(job: BackfillJobState) -> Dict[str, Any]:
             "error_type": job.error_type,
             "summary": job.summary,
             "sample_rows": job.sample_rows,
+            "partial_summary": job.partial_summary,
             "seconds_remaining": round(job.seconds_remaining, 1),
         }
 

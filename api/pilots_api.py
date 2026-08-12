@@ -4798,6 +4798,7 @@ _FMP_GROUPS = [
             ("FMP_INSIDER_REFRESH_DAYS", "int", {"min": 1, "max": 30, "step": 1}),
             ("FMP_INSIDER_MIN_LAG_DAYS", "int", {"min": 0, "max": 90, "step": 1}),
             ("FMP_SECTOR_SNAPSHOT_ENABLED", "bool", {}),
+            ("FMP_UNIVERSE_ENABLED", "bool", {}),
         ],
     ),
 ]
