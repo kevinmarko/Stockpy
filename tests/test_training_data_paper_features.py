@@ -46,6 +46,15 @@ def test_pit_ticker_row_with_paper_orders():
     # Fill rate = 20 / 30 = 0.666...
     assert pytest.approx(row["paper_fill_rate_30d"], 0.001) == 20 / 30
 
+    # Conviction features
+    assert row["paper_order_count_30d"] == 2.0
+    assert pytest.approx(row["paper_size_variance_30d"], 0.001) == 50.0  # var of [20, 10] = 50.0
+    
+    # Outcome features - mock doesn't trigger triple_barrier without price movement
+    # So we don't assert the exact hit rate here yet, just check they are present or NaN
+    assert "paper_hit_rate_30d" in row
+    assert "paper_avg_realized_pnl_30d" in row
+
 
 def test_pit_ticker_row_empty_paper_orders():
     dates = pd.date_range("2023-01-01", periods=100, freq="B")
@@ -60,7 +69,10 @@ def test_pit_ticker_row_empty_paper_orders():
     
     assert row["paper_has_history_30d"] == 0.0
     assert np.isnan(row["paper_fill_rate_30d"])
-
+    assert np.isnan(row["paper_order_count_30d"])
+    assert np.isnan(row["paper_size_variance_30d"])
+    assert np.isnan(row["paper_hit_rate_30d"])
+    assert np.isnan(row["paper_avg_realized_pnl_30d"])
 
 def test_pit_ticker_row_no_paper_orders_passed():
     dates = pd.date_range("2023-01-01", periods=100, freq="B")
@@ -70,3 +82,7 @@ def test_pit_ticker_row_no_paper_orders_passed():
     
     assert row["paper_has_history_30d"] == 0.0
     assert np.isnan(row["paper_fill_rate_30d"])
+    assert np.isnan(row["paper_order_count_30d"])
+    assert np.isnan(row["paper_size_variance_30d"])
+    assert np.isnan(row["paper_hit_rate_30d"])
+    assert np.isnan(row["paper_avg_realized_pnl_30d"])

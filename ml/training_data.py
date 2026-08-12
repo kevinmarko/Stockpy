@@ -65,6 +65,7 @@ from ml.feature_engineering import (
     compute_multifactor_zscores,
 )
 from ml.data.store import PITFeatureStore
+from ml.triple_barrier import apply_triple_barrier
 
 logger = logging.getLogger("ML.TrainingData")
 
@@ -278,13 +279,18 @@ def _pit_ticker_row(close: pd.Series, symbol: Optional[str] = None, as_of_date: 
     else:
         row["GARCH_Vol"] = float("nan")
 
-    # Paper Execution Features
+    # Paper Execution & Meta-Labeling Features
+    row["paper_order_count_30d"] = float("nan")
+    row["paper_size_variance_30d"] = float("nan")
+    row["paper_hit_rate_30d"] = float("nan")
+    row["paper_avg_realized_pnl_30d"] = float("nan")
+    row["paper_fill_rate_30d"] = float("nan")
+    row["paper_has_history_30d"] = 0.0
+
     if paper_orders is not None and not paper_orders.empty and symbol and as_of_date:
-        # Coerce as_of_date to tz-naive to match paper_orders timestamp, if necessary
         as_of_naive = as_of_date.tz_localize(None) if as_of_date.tz is not None else as_of_date
         start_date = as_of_naive - pd.Timedelta(days=30)
         
-        # Filter for this symbol and trailing 30d window strictly BEFORE as_of_date
         mask = (
             (paper_orders["symbol"] == symbol) & 
             (paper_orders["timestamp"] < as_of_naive) & 
@@ -294,15 +300,50 @@ def _pit_ticker_row(close: pd.Series, symbol: Optional[str] = None, as_of_date: 
         
         if len(slice_orders) > 0:
             row["paper_has_history_30d"] = 1.0
+            
+            # Conviction & Sizing consistency
+            row["paper_order_count_30d"] = float(len(slice_orders))
+            if len(slice_orders) >= 2:
+                row["paper_size_variance_30d"] = float(slice_orders["qty"].var(ddof=1))
+            else:
+                row["paper_size_variance_30d"] = 0.0
+                
             total_qty = slice_orders["qty"].sum()
             filled_qty = slice_orders["filled_qty"].sum()
-            row["paper_fill_rate_30d"] = float(filled_qty / total_qty) if total_qty > 0 else np.nan
-        else:
-            row["paper_has_history_30d"] = 0.0
-            row["paper_fill_rate_30d"] = np.nan
-    else:
-        row["paper_has_history_30d"] = 0.0
-        row["paper_fill_rate_30d"] = np.nan
+            if total_qty > 0:
+                row["paper_fill_rate_30d"] = float(filled_qty / total_qty)
+
+            # Outcome-Based Meta-Labeling (Triple-Barrier)
+            buy_orders = slice_orders[slice_orders["side"].str.lower() == "buy"]
+            if not buy_orders.empty:
+                events = pd.DatetimeIndex(buy_orders["timestamp"])
+                barrier_df = apply_triple_barrier(
+                    events=events,
+                    close=close,  # 'close' already excludes as_of_date, preserving PIT
+                    pt_sl_multiples=(2.0, 1.0),
+                    vertical_barrier_days=5,
+                    vol_span=100
+                )
+                
+                # We can only learn from outcomes resolved STRICTLY BEFORE as_of_naive
+                if not barrier_df.empty:
+                    resolved_mask = barrier_df["t1"] < as_of_naive
+                    resolved = barrier_df[resolved_mask]
+                    
+                    if not resolved.empty:
+                        hits = (resolved["label"] == 1).sum()
+                        row["paper_hit_rate_30d"] = float(hits / len(resolved))
+                        
+                        # Realized PnL based on the barrier hit price vs entry
+                        # t1 is the timestamp of the barrier hit, or vertical timeout
+                        t1_prices = close.reindex(resolved["t1"]).values
+                        entries = resolved["entry"].values
+                        # If t1 is missing from close (e.g. timeout on the very last bar), 
+                        # it becomes NaN. Only compute for finite pairs.
+                        valid = np.isfinite(t1_prices) & np.isfinite(entries) & (entries > 0)
+                        if valid.any():
+                            returns = (t1_prices[valid] - entries[valid]) / entries[valid]
+                            row["paper_avg_realized_pnl_30d"] = float(returns.mean())
 
     return row
 
