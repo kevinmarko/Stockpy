@@ -1,3 +1,9 @@
+"""
+Broker Live Execution MCP Server.
+
+Exposes MCP tools for proposing, reviewing, approving, and executing paper/live
+orders through the OrderManager and PreTradeRiskGate safety harnesses.
+"""
 import os
 import json
 import uuid
