@@ -113,6 +113,86 @@ def test_load_dotenv_actually_populates_environ(monkeypatch: pytest.MonkeyPatch,
 
 
 # ===========================================================================
+# Regression guard: no bare load_dotenv() call sites anywhere in production
+# code.  A bare load_dotenv() (no dotenv_path/first-positional arg) falls
+# back to python-dotenv's own find_dotenv(), which walks UP the directory
+# tree from the process CWD — in a git worktree with no .env of its own,
+# this silently resolves to a PARENT checkout's .env instead, polluting the
+# real os.environ with that checkout's values for the rest of the process.
+#
+# This exact bug class has been fixed at least four times in this codebase
+# (main.py, main_orchestrator.py, app_shell.py, desktop/orchestrator_daemon.py,
+# the api/*.py services, scripts/_bootstrap.py, gui/app.py — see settings.py's
+# ENV_PATH docstring) and was found AGAIN in engine/gravity_ai_runner.py,
+# engine/opal_research.py, and engine/llm_commentary.py: their main() CLI
+# entry points called bare `load_dotenv(override=False)`, which in a worktree
+# checkout silently loaded a sibling checkout's .env and mutated the real
+# process os.environ — corrupting every test that ran afterward in the same
+# pytest session (tests/test_runtime_flags.py, tests/test_runtime_flags_writer.py,
+# tests/test_pilots_api_tunables.py, tests/test_prompt_registry_resolution.py,
+# tests/test_settings.py — 18 failures, all traced to this one root cause).
+# This scan exists so a fifth recurrence fails CI instead of silently
+# reintroducing cross-worktree test pollution.
+# ===========================================================================
+
+def _find_bare_load_dotenv_calls(path: Path) -> list[int]:
+    """Return line numbers of any `load_dotenv(...)` call (under any import
+    alias) in `path` that supplies no path argument at all (neither a first
+    positional arg nor a `dotenv_path=` keyword) — i.e. a bare call that
+    falls back to find_dotenv()'s CWD-relative, worktree-unsafe search."""
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "dotenv":
+            for alias in node.names:
+                if alias.name == "load_dotenv":
+                    aliases[alias.asname or alias.name] = "load_dotenv"
+
+    if not aliases:
+        return []
+
+    bare_lines: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in aliases:
+                has_positional_path = len(node.args) >= 1
+                has_dotenv_path_kwarg = any(kw.arg == "dotenv_path" for kw in node.keywords)
+                if not has_positional_path and not has_dotenv_path_kwarg:
+                    bare_lines.append(node.lineno)
+    return bare_lines
+
+
+# Directories excluded from the repo-wide scan: virtualenv/vendor/build
+# output (not our code), and tests/ (test fixtures legitimately construct
+# throwaway .env files and pass dotenv_path= explicitly, or call
+# load_dotenv() against a monkeypatched/reverted os.environ — the risk this
+# guard targets is a worktree-unsafe call reachable from production code).
+_SCAN_EXCLUDED_DIR_PARTS = {".venv", "node_modules", "tests", "webapp", ".git"}
+
+
+def test_no_bare_load_dotenv_calls_in_production_code() -> None:
+    offenders: list[str] = []
+    for path in REPO_ROOT.rglob("*.py"):
+        if any(part in _SCAN_EXCLUDED_DIR_PARTS for part in path.relative_to(REPO_ROOT).parts):
+            continue
+        for lineno in _find_bare_load_dotenv_calls(path):
+            offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
+
+    assert not offenders, (
+        "Bare load_dotenv() call(s) found — these fall back to find_dotenv(), "
+        "which walks UP from the process CWD and, in a git worktree with no "
+        ".env of its own, silently loads a PARENT checkout's .env instead, "
+        "polluting the real os.environ for the rest of the process. Pass "
+        "settings.ENV_PATH explicitly (or a REPO_ROOT-derived path, for the "
+        "documented leaf-module exceptions that cannot import settings.py): "
+        + ", ".join(offenders)
+    )
+
+
+# ===========================================================================
 # settings.ENV_PATH — the single source of truth every other .env locator
 # in the codebase must import instead of re-deriving (see settings.py's own
 # comment immediately above the ENV_PATH definition for the three previously
