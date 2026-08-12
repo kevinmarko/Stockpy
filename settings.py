@@ -198,6 +198,31 @@ class Settings(BaseSettings):
         default=True,
         description="Gates POST /pilots/paper-broker/reset endpoint. If False, resets are blocked."
     )
+    LIVE_TRADE_EXECUTION_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Master switch for broker_live_execution_mcp.py's execute_live_trade/"
+            "confirm_live_trade tool pair — the standalone MCP server that places "
+            "real Alpaca/FMP orders. Defaults False: this changes what the "
+            "platform can do with real capital, so it does not follow the "
+            "2026-08-03 'new admin capabilities default True' convention (which "
+            "explicitly excludes anything changing trading behavior) — it "
+            "follows BROKER_BACKEND/AUTOMATION_WRITES_ENABLED's precedent "
+            "instead. Must be True, together with LIVE_TRADE_APPROVAL_ENABLED, "
+            "before a real order can ever be placed through this path."
+        ),
+    )
+    LIVE_TRADE_APPROVAL_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Gates POST /pilots/execution/{token}/approve and "
+            "/pilots/execution/{token}/reject on the Pilots API — the ONLY way "
+            "a live-trade proposal's status can become 'approved', and "
+            "therefore the only path that lets confirm_live_trade actually "
+            "submit an order. Defaults False, the same real-capital carve-out "
+            "as LIVE_TRADE_EXECUTION_ENABLED."
+        ),
+    )
     STATE_API_TOKEN: Optional[str] = Field(
         default=None,
         description=(

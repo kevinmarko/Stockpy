@@ -527,6 +527,13 @@ def require_paper_broker_writes_enabled() -> None:
             detail="Paper broker writes are disabled (PAPER_BROKER_WRITES_ENABLED=false)."
         )
 
+def require_live_trade_approval_enabled() -> None:
+    if not settings.LIVE_TRADE_APPROVAL_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Live trade approval is disabled (LIVE_TRADE_APPROVAL_ENABLED=false).",
+        )
+
 def require_cache_long_short_writes_enabled() -> None:
     """FAIL-CLOSED master-switch guard for ``POST /pilots/cache-long-short/*``
     write endpoints (start, approve-bulk) -- persists a new tracked position
@@ -5576,3 +5583,56 @@ def post_paper_broker_reset(body: Optional[PaperBrokerResetRequest] = None) -> D
     store.reset_account(starting_cash=starting_cash)
     acc = store.get_account()
     return {"status": "ok", "message": "Paper account reset", "cash": acc.cash}
+
+@app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])
+def get_live_trade_pending() -> Dict[str, Any]:
+    from pilots.live_trade_proposals import get_pending_proposals
+    return {"proposals": get_pending_proposals()}
+
+@app.post(
+    "/pilots/execution/{token}/approve",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_live_trade_approval_enabled),
+    ],
+)
+def post_live_trade_approve(token: str) -> Dict[str, Any]:
+    from execution.live_trade_proposals_store import (
+        LiveTradeProposalAlreadyDecidedError,
+        LiveTradeProposalNotFoundError,
+        LiveTradeProposalStore,
+    )
+    from pilots.live_trade_proposals import _serialize
+
+    store = LiveTradeProposalStore()
+    try:
+        proposal = store.approve_proposal(token, approved_by="operator")
+    except LiveTradeProposalNotFoundError:
+        raise HTTPException(status_code=404, detail="not_found")
+    except LiveTradeProposalAlreadyDecidedError:
+        raise HTTPException(status_code=409, detail="already_decided")
+    return _serialize(proposal)
+
+@app.post(
+    "/pilots/execution/{token}/reject",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_live_trade_approval_enabled),
+    ],
+)
+def post_live_trade_reject(token: str) -> Dict[str, Any]:
+    from execution.live_trade_proposals_store import (
+        LiveTradeProposalAlreadyDecidedError,
+        LiveTradeProposalNotFoundError,
+        LiveTradeProposalStore,
+    )
+    from pilots.live_trade_proposals import _serialize
+
+    store = LiveTradeProposalStore()
+    try:
+        proposal = store.reject_proposal(token, approved_by="operator")
+    except LiveTradeProposalNotFoundError:
+        raise HTTPException(status_code=404, detail="not_found")
+    except LiveTradeProposalAlreadyDecidedError:
+        raise HTTPException(status_code=409, detail="already_decided")
+    return _serialize(proposal)

@@ -8,12 +8,10 @@ from mcp.server.fastmcp import FastMCP
 from execution.broker_base import OrderIntent, OrderSide, OrderType
 from execution.order_manager import OrderManager
 from execution.risk_gate import PreTradeRiskGate, RiskContext
+from execution.live_trade_proposals_store import LiveTradeProposalStore
 from settings import settings
 
 mcp = FastMCP("Broker Live Execution")
-
-# In-memory storage for dual-key confirmation
-_pending_orders = {}
 
 # Simple token bucket rate limiter
 class RateLimiter:
@@ -56,9 +54,18 @@ def _get_broker():
 @mcp.tool()
 def execute_live_trade(symbol: str, side: str, qty: float, order_type: str = "market", limit_price: float = None) -> str:
     """
-    PREPARES a live trade for execution. This does NOT place the order immediately.
-    Returns a confirmation_token that must be passed to confirm_live_trade to execute.
+    PROPOSES a live trade for operator approval. This does NOT place the order
+    and does NOT skip to execution once "confirmed" -- the returned
+    confirmation_token identifies a durable, pending_approval proposal that
+    must be approved by the operator (via the Pilots PWA) before
+    confirm_live_trade can ever submit it to the broker.
     """
+    if not settings.LIVE_TRADE_EXECUTION_ENABLED:
+        return json.dumps({
+            "status": "error",
+            "message": "Live trade execution is disabled (LIVE_TRADE_EXECUTION_ENABLED=false).",
+        })
+
     if not _rate_limiter.consume():
         return json.dumps({"status": "error", "message": "Rate limit exceeded. Try again later."})
 
@@ -77,11 +84,31 @@ def execute_live_trade(symbol: str, side: str, qty: float, order_type: str = "ma
         limit_price=limit_price
     )
 
-    token = str(uuid.uuid4())
-    _pending_orders[token] = {
-        "intent": intent,
-        "expires": time.time() + 300 # 5 minutes TTL
-    }
+    try:
+        token = LiveTradeProposalStore().create_proposal(
+            symbol=intent.symbol,
+            side=intent.side.value,
+            qty=intent.qty,
+            order_type=intent.order_type.value,
+            limit_price=intent.limit_price,
+        )
+    except ValueError as e:
+        return json.dumps({"status": "error", "message": f"Invalid order parameters: {e}"})
+    except Exception as e:
+        # Broader than ValueError -- a DB/network outage on store construction
+        # (LiveTradeProposalStore() does an eager connection) or the write
+        # itself must degrade to an honest error, not crash this MCP tool.
+        return json.dumps({"status": "error", "message": f"Could not create proposal: {e}"})
+
+    try:
+        from observability.alerts import send_alert
+        send_alert(
+            "WARNING",
+            f"Live trade proposal {token} awaiting operator approval: "
+            f"{intent.side.value} {intent.qty} {intent.symbol}",
+        )
+    except Exception:
+        pass  # notification failure must never block proposal creation
 
     return json.dumps({
         "status": "pending_confirmation",
@@ -93,7 +120,12 @@ def execute_live_trade(symbol: str, side: str, qty: float, order_type: str = "ma
             "type": intent.order_type.value,
             "limit_price": intent.limit_price
         },
-        "message": "Call confirm_live_trade with the confirmation_token to execute this order."
+        "message": (
+            "This order will NOT execute until the operator approves it via "
+            "the Pilots PWA. Do not call confirm_live_trade expecting "
+            "immediate success -- it will report the proposal's current "
+            "status (pending/rejected/expired) until approved."
+        )
     }, indent=2)
 
 @mcp.tool()
@@ -107,18 +139,58 @@ async def confirm_live_trade(confirmation_token: str) -> str:
     ``OrderManager.submit_order_with_idempotency`` makes the gate a silent
     no-op (see execution/order_manager.py's documented behavior), which was
     a real safety gap on this live-order-placement path.
+
+    Re-checks ``settings.LIVE_TRADE_EXECUTION_ENABLED`` here too, not just in
+    ``execute_live_trade`` -- without this, flipping the flag off after a
+    proposal was already approved would not actually stop it from executing,
+    defeating its purpose as a kill switch.
+
+    Uses ``store.claim_for_execution`` (a single atomic compare-and-swap
+    UPDATE) rather than a plain ``proposal.status != "approved"`` check --
+    the plain check alone lets two concurrent/retried calls for the same
+    approved token both observe "approved" before either writes back a
+    change, both build an ``OrderManager`` with its own empty per-instance
+    idempotency state, and both submit to the broker. The claim is the only
+    thing that actually closes that race.
     """
     if not _rate_limiter.consume():
         return json.dumps({"status": "error", "message": "Rate limit exceeded. Try again later."})
 
-    if confirmation_token not in _pending_orders:
+    if not settings.LIVE_TRADE_EXECUTION_ENABLED:
+        return json.dumps({
+            "status": "error",
+            "message": "Live trade execution is disabled (LIVE_TRADE_EXECUTION_ENABLED=false).",
+        })
+
+    store = LiveTradeProposalStore()
+    proposal = store.get_by_token(confirmation_token)
+    if proposal is None:
         return json.dumps({"status": "error", "message": "Invalid or expired confirmation_token."})
 
-    order_data = _pending_orders.pop(confirmation_token)
-    if time.time() > order_data["expires"]:
-        return json.dumps({"status": "error", "message": "Confirmation token expired."})
+    if not store.claim_for_execution(confirmation_token):
+        # Lost the claim -- either it was never approved, was rejected,
+        # expired, or (the race this claim exists to close) another call
+        # already claimed/executed it first. Re-read for an honest,
+        # current-status message rather than trusting the pre-claim read.
+        current = store.get_by_token(confirmation_token)
+        current_status = current.status if current is not None else "unknown"
+        return json.dumps({
+            "status": "error",
+            "message": (
+                f"Order not yet executable: current status is '{current_status}'. "
+                "It must be approved by the operator via the Pilots PWA before "
+                "it can execute, and can only be executed once."
+            ),
+        })
 
-    intent = order_data["intent"]
+    intent = OrderIntent(
+        strategy_id=proposal.strategy_id,
+        symbol=proposal.symbol,
+        side=OrderSide(proposal.side),
+        qty=float(proposal.qty),
+        order_type=OrderType(proposal.order_type),
+        limit_price=proposal.limit_price,
+    )
 
     broker = _get_broker()
     om = OrderManager(broker, dry_run=False, risk_gate=PreTradeRiskGate())
@@ -156,16 +228,30 @@ async def confirm_live_trade(confirmation_token: str) -> str:
 
         result = await om.submit_order_with_idempotency(intent, risk_context=risk_context)
         if result.status.value == "error":
+            try:
+                store.mark_failed(confirmation_token, result.error_message or "unknown error")
+            except Exception:
+                pass  # marking-failed is best-effort; the real error is reported below
             return json.dumps({
                 "status": "error",
                 "message": result.error_message,
             }, indent=2)
+
+        try:
+            store.mark_executed(confirmation_token, result.broker_order_id)
+        except Exception:
+            pass  # the broker order already went through; a bookkeeping failure here must not mask that
+
         return json.dumps({
             "status": "success",
             "broker_order_id": result.broker_order_id,
             "order_status": result.status.value
         }, indent=2)
     except Exception as e:
+        try:
+            store.mark_failed(confirmation_token, str(e))
+        except Exception:
+            pass
         return json.dumps({"status": "error", "message": str(e)})
 
 @mcp.tool()

@@ -296,6 +296,19 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "matching the same justification MACRO_REGIME_GATE_ENABLED already "
         "gets in this same dict."
     ),
+    "LIVE_TRADE_EXECUTION_ENABLED": (
+        "Master switch for broker_live_execution_mcp.py's execute_live_trade/"
+        "confirm_live_trade tool pair -- the only MCP-driven path that can "
+        "place a real Alpaca/FMP order. A silent flip here is what lets that "
+        "path attempt order submission at all."
+    ),
+    "LIVE_TRADE_APPROVAL_ENABLED": (
+        "Gates the only endpoints that can move a live-trade proposal's "
+        "status to 'approved' (POST /pilots/execution/{token}/approve and "
+        ".../reject on the Pilots API). Without this on, confirm_live_trade "
+        "can never find an approved proposal to execute regardless of "
+        "LIVE_TRADE_EXECUTION_ENABLED."
+    ),
     "FMP_BARS_ENABLED": (
         "Its own field description says to read FMP_BARS_ADJUSTMENT before "
         "enabling, because an adjustment-convention mismatch corrupts every "

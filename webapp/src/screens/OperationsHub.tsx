@@ -32,8 +32,12 @@ import { theme } from "../theme";
  * section, but this hub's CARDS array is hand-maintained separately and
  * doesn't auto-derive from NAV_ITEMS, so it silently missed the addition --
  * exactly the reachable-in-Sidebar-but-not-here gap this file already fixed
- * twice for Console/Report Library. No test enforces NAV_ITEMS/CARDS parity
- * yet; this comment is the only guard until one exists.
+ * twice for Console/Report Library. `OperationsHub.test.tsx`'s "REGRESSION:
+ * every operations-section NAV_ITEMS entry has a matching hub card" test now
+ * enforces this parity directly (added after this gap recurred a third
+ * time) -- it caught Live Trade Approvals missing its card here, exactly as
+ * designed. Keep adding a CARDS entry whenever navigation.tsx gains a new
+ * "operations" NAV_ITEMS entry; the test will fail loudly if one is missed.
  */
 interface HubCard {
   to: string;
@@ -43,6 +47,7 @@ interface HubCard {
 }
 
 const CARDS: HubCard[] = [
+  { to: "/live-trade-approvals", label: "Live Trade Approvals", ico: "🛡️", description: TAB_HELP["live-trade-approvals"].description },
   { to: "/observability", label: "Mission Control", ico: "🛰️", description: TAB_HELP.observability.description },
   { to: "/pipeline", label: "Pipeline", ico: "🚀", description: TAB_HELP.pipeline.description },
   { to: "/console", label: "Console", ico: "🖥️", description: TAB_HELP.console.description },
