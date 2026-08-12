@@ -2222,7 +2222,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "pilots/scan_config_store.py:165",
+        "site": "pilots/scan_config_store.py:180",
         "via": []
       },
       {
