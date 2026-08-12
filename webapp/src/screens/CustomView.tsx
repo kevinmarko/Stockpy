@@ -77,81 +77,89 @@ export function CustomView() {
       <TabGuide tabKey="custom-view" />
 
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)", marginTop: "var(--s-4)" }}>
-        {view.widgets.edgeByStrategy && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Edge per strategy</h2>
-            <EdgeByStrategyChart />
-          </section>
-        )}
-
-        {view.widgets.symbolOverlay && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>
-              Price history &amp; signal overlay
-            </h2>
-            <SymbolSignalOverlayChart />
-          </section>
-        )}
-
-        {view.widgets.pilotsTable && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Pilots</h2>
-            <PilotsTableWidget />
-          </section>
-        )}
-
-        {view.widgets.sentimentMini && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Sentiment history</h2>
-            <SentimentMiniChart />
-          </section>
-        )}
-
-        {view.widgets.portfolioHeat && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Portfolio heat</h2>
-            <PortfolioHeatWidget />
-          </section>
-        )}
-
-        {view.widgets.optionsDirective && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Options directives</h2>
-            <OptionsDirectiveSummary />
-          </section>
-        )}
-
-        {view.widgets.signalBreakdown && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Signal breakdown</h2>
-            <SignalBreakdownMiniWidget />
-          </section>
-        )}
-
-        {view.widgets.macroRegime && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Macro regime</h2>
-            <MacroRegimeBanner />
-          </section>
-        )}
-
-        {view.widgets.aiChat && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-2)" }}>Ask AI</h2>
-            <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginBottom: "var(--s-3)" }}>
-              Opens the platform's grounded chat assistant with this view's context.
-            </p>
-            <Button
-              variant="primary"
-              onClick={() => openChat(`Operator is viewing their custom Data App "${view.name}".`)}
-              data-testid="custom-view-open-chat"
-            >
-              <span aria-hidden style={{ display: "inline-flex", alignItems: "center", gap: "var(--s-1-5)" }}>
-                <MessageCircle size={16} strokeWidth={2.5} /> Ask AI about this view
-              </span>
-            </Button>
-          </section>
-        )}
+        {view.widgetOrder.map((key) => {
+          const config = view.widgetConfigs?.[key] || {};
+          switch (key) {
+            case "edgeByStrategy":
+              return (
+                <section key={key} className="card card-pad">
+                  <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Edge per strategy</h2>
+                  <EdgeByStrategyChart {...config} />
+                </section>
+              );
+            case "symbolOverlay":
+              return (
+                <section key={key} className="card card-pad">
+                  <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>
+                    Price history &amp; signal overlay
+                  </h2>
+                  <SymbolSignalOverlayChart {...config} />
+                </section>
+              );
+            case "pilotsTable":
+              return (
+                <section key={key} className="card card-pad">
+                  <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Pilots</h2>
+                  <PilotsTableWidget {...config} />
+                </section>
+              );
+            case "sentimentMini":
+              return (
+                <section key={key} className="card card-pad">
+                  <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Sentiment history</h2>
+                  <SentimentMiniChart {...config} />
+                </section>
+              );
+            case "portfolioHeat":
+              return (
+                <section key={key} className="card card-pad">
+                  <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Portfolio heat</h2>
+                  <PortfolioHeatWidget {...config} />
+                </section>
+              );
+            case "optionsDirective":
+              return (
+                <section key={key} className="card card-pad">
+                  <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Options directives</h2>
+                  <OptionsDirectiveSummary {...config} />
+                </section>
+              );
+            case "signalBreakdown":
+              return (
+                <section key={key} className="card card-pad">
+                  <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Signal breakdown</h2>
+                  <SignalBreakdownMiniWidget {...config} />
+                </section>
+              );
+            case "macroRegime":
+              return (
+                <section key={key} className="card card-pad">
+                  <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Macro regime</h2>
+                  <MacroRegimeBanner {...config} />
+                </section>
+              );
+            case "aiChat":
+              return (
+                <section key={key} className="card card-pad">
+                  <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-2)" }}>Ask AI</h2>
+                  <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginBottom: "var(--s-3)" }}>
+                    Opens the platform's grounded chat assistant with this view's context.
+                  </p>
+                  <Button
+                    variant="primary"
+                    onClick={() => openChat(`Operator is viewing their custom Data App "${view.name}".`)}
+                    data-testid="custom-view-open-chat"
+                  >
+                    <span aria-hidden style={{ display: "inline-flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+                      <MessageCircle size={16} strokeWidth={2.5} /> Ask AI about this view
+                    </span>
+                  </Button>
+                </section>
+              );
+            default:
+              return null;
+          }
+        })}
       </div>
     </div>
   );

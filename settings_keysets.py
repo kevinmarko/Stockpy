@@ -395,6 +395,14 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "inference — a real change to what the platform's scoring is "
         "trained on, not a config toggle."
     ),
+    "JULES_ENABLED": (
+        "Enables the Jules third-party autonomous coding-agent integration "
+        "(data/jules_client.py) -- when on, dispatch_jules_task can make Jules "
+        "write code and open a real, unsupervised PR on the operator's "
+        "actual GitHub repo. Unlike the other flags in this group there is "
+        "no internal Stockpy command-token boundary protecting this action; "
+        "the per-call confirm=True argument is the only remaining gate."
+    ),
 }
 
 SAFETY_CRITICAL_KEYS: frozenset[str] = frozenset(SAFETY_CRITICAL_KEY_REASONS)
