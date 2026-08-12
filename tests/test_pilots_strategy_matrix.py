@@ -429,7 +429,11 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # scan_configs section of its payload.
         allowed = allowed | {"pilots"}
     if module_name == "scan_config_store":
-            allowed = allowed | {"datetime", "copy"}
+        # threading backs the module-level path-keyed config cache (a fresh
+        # ScanConfigStore is constructed per request by every real caller,
+        # so the cache lives at module scope, guarded by a lock, rather than
+        # on the instance).
+        allowed = allowed | {"datetime", "copy", "threading"}
     if module_name == "watchlist_writer":
         # Stdlib-only append helper for watchlist.txt (no settings, no engines):
         # os (WATCHLIST env precedence check, mirroring main._load_watchlist),

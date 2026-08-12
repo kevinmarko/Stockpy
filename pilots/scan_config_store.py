@@ -43,9 +43,10 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from settings import settings
 
@@ -54,6 +55,19 @@ logger = logging.getLogger(__name__)
 __all__ = ["ScanConfigStore"]
 
 SCHEMA_VERSION = 1
+
+# Process-wide, path-keyed cache (mtime, size, filtered-configs), guarded by
+# _CACHE_LOCK. Deliberately module-level rather than an instance attribute:
+# every real caller (api/pilots_api.py, pilots/discovery.py) constructs a
+# fresh ScanConfigStore per request, so an instance-level cache would never
+# see a second read on the same instance and would buy nothing. Keyed by the
+# resolved path string so distinct ScanConfigStore(path=...) instances that
+# point at the same file share one cache entry. (mtime, size) rather than
+# bare mtime mirrors desktop/daemon_runtime.py's own change-detection idiom
+# and narrows (without eliminating) the same-tick-external-edit blind spot a
+# bare mtime-equality check would have.
+_CACHE_LOCK = threading.Lock()
+_CONFIG_CACHE: Dict[str, Tuple[Tuple[float, int], List[Dict[str, Any]]]] = {}
 
 
 def _utc_now_iso() -> str:
@@ -166,18 +180,25 @@ class ScanConfigStore:
         self._path = Path(path) if path is not None else settings.OUTPUT_DIR / "scan_configs.json"
         self._clock: Callable[[], str] = clock or _utc_now_iso
         self._seed_defaults = seed_defaults
-        self._cached_configs: Optional[List[Dict[str, Any]]] = None
-        self._cached_mtime: float = 0.0
+
+    def _cache_key(self) -> str:
+        return str(self._path)
+
+    def _stamp(self) -> Optional[Tuple[float, int]]:
+        try:
+            st = self._path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime, st.st_size)
 
     def _load(self) -> List[Dict[str, Any]]:
         """Return the raw scan-config list; empty on missing/corrupt file (never raises)."""
-        try:
-            mtime = self._path.stat().st_mtime
-        except OSError:
-            mtime = 0.0
-
-        if self._cached_configs is not None and mtime == self._cached_mtime:
-            return copy.deepcopy(self._cached_configs)
+        stamp = self._stamp()
+        if stamp is not None:
+            with _CACHE_LOCK:
+                cached = _CONFIG_CACHE.get(self._cache_key())
+            if cached is not None and cached[0] == stamp:
+                return copy.deepcopy(cached[1])
 
         if not self._path.exists():
             if self._seed_defaults:
@@ -185,10 +206,7 @@ class ScanConfigStore:
                 # module-import time -- see _default_scans()'s docstring).
                 defaults = _default_scans()
                 self._save(defaults)
-                if self._cached_configs is not None:
-                    return copy.deepcopy(self._cached_configs)
-                else:
-                    return list(defaults)
+                return list(defaults)
             return []
         try:
             with self._path.open("r", encoding="utf-8") as fh:
@@ -205,9 +223,11 @@ class ScanConfigStore:
         if not isinstance(configs, list):
             return []
 
-        self._cached_configs = [c for c in configs if isinstance(c, dict) and c.get("name")]
-        self._cached_mtime = mtime
-        return copy.deepcopy(self._cached_configs)
+        filtered = [c for c in configs if isinstance(c, dict) and c.get("name")]
+        if stamp is not None:
+            with _CACHE_LOCK:
+                _CONFIG_CACHE[self._cache_key()] = (stamp, filtered)
+        return copy.deepcopy(filtered)
 
     def _save(self, configs: List[Dict[str, Any]]) -> None:
         """Atomically persist *configs* via write-then-rename."""
@@ -219,11 +239,15 @@ class ScanConfigStore:
                 json.dump(payload, fh, indent=2)
             tmp.replace(self._path)
 
-            self._cached_configs = [c for c in configs if isinstance(c, dict) and c.get("name")]
-            try:
-                self._cached_mtime = self._path.stat().st_mtime
-            except OSError:
-                self._cached_mtime = 0.0
+            filtered = [c for c in configs if isinstance(c, dict) and c.get("name")]
+            stamp = self._stamp()
+            with _CACHE_LOCK:
+                if stamp is not None:
+                    _CONFIG_CACHE[self._cache_key()] = (stamp, filtered)
+                else:
+                    # Can't stat the file we just wrote -- don't leave a
+                    # stale/unstamped entry a later _load() could match.
+                    _CONFIG_CACHE.pop(self._cache_key(), None)
         except Exception as exc:  # noqa: BLE001 - clean up temp on any failure
             logger.warning("ScanConfigStore: failed to write %s: %s", self._path, exc)
             tmp.unlink(missing_ok=True)
