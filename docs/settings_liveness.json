@@ -844,7 +844,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:108",
+        "site": "rating/symbol_rating_store.py:109",
         "via": []
       },
       {
@@ -990,7 +990,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:113",
+        "site": "rating/symbol_rating_store.py:114",
         "via": []
       },
       {
@@ -999,7 +999,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:115",
+        "site": "rating/symbol_rating_store.py:116",
         "via": []
       },
       {
@@ -1172,7 +1172,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:113",
+        "site": "rating/symbol_rating_store.py:114",
         "via": []
       },
       {
@@ -1181,7 +1181,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:115",
+        "site": "rating/symbol_rating_store.py:116",
         "via": []
       },
       {
@@ -1918,7 +1918,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:113",
+        "site": "rating/symbol_rating_store.py:114",
         "via": []
       },
       {
