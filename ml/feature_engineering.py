@@ -30,7 +30,7 @@ _MEAN_REVERSION_COLS = ["RSI", "RSI_2"]
 _FUNDAMENTAL_COLS = ["book_to_market", "earnings_yield", "quality_factor_score", "low_vol_score"]
 _MACRO_COLS = ["vix_level"]     # scalar context, tiled across cross-section
 _FACTOR_COLS = ["Value_Z", "Quality_Z", "LowVol_Z", "Size_Z"]
-_PAPER_EXEC_COLS = ["paper_has_history_30d", "paper_fill_rate_30d"]
+_PAPER_EXEC_COLS = ["paper_fill_rate_30d"]
 
 # Full ordered list used as the canonical feature order for model training.
 FEATURE_COLUMNS = (

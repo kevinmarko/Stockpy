@@ -38,8 +38,6 @@ def test_pit_ticker_row_with_paper_orders():
     row = _pit_ticker_row(close, symbol, as_of_date, paper_orders)
     
     # We expect only orders 2 and 3 to be included in the 30d window.
-    # History flag should be 1.0
-    assert row["paper_has_history_30d"] == 1.0
     
     # Total qty = 20 + 10 = 30
     # Filled qty = 10 + 10 = 20
@@ -58,7 +56,6 @@ def test_pit_ticker_row_empty_paper_orders():
     
     row = _pit_ticker_row(close, symbol, as_of_date, paper_orders)
     
-    assert row["paper_has_history_30d"] == 0.0
     assert np.isnan(row["paper_fill_rate_30d"])
 
 
@@ -68,5 +65,4 @@ def test_pit_ticker_row_no_paper_orders_passed():
     
     row = _pit_ticker_row(close)
     
-    assert row["paper_has_history_30d"] == 0.0
     assert np.isnan(row["paper_fill_rate_30d"])

@@ -293,16 +293,12 @@ def _pit_ticker_row(close: pd.Series, symbol: Optional[str] = None, as_of_date: 
         slice_orders = paper_orders[mask]
         
         if len(slice_orders) > 0:
-            row["paper_has_history_30d"] = 1.0
-            
             total_qty = slice_orders["qty"].sum()
             filled_qty = slice_orders["filled_qty"].sum()
             row["paper_fill_rate_30d"] = float(filled_qty / total_qty) if total_qty > 0 else np.nan
         else:
-            row["paper_has_history_30d"] = 0.0
             row["paper_fill_rate_30d"] = np.nan
     else:
-        row["paper_has_history_30d"] = 0.0
         row["paper_fill_rate_30d"] = np.nan
 
     return row
