@@ -39,10 +39,11 @@ import numpy as np
 import pandas as pd
 
 from ml.models.base import Model
+from settings import settings
 
 logger = logging.getLogger("ML.MetaLabeling")
 
-_MODELS_DIR = Path(__file__).parent / "models"
+_MODELS_DIR = settings.LOCAL_DATA_ROOT / "ml_models"
 _MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 _DEFAULT_META_PARAMS: dict = {

@@ -49,10 +49,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
-# Daily cache of normalised fills — one level above data/ (project root)/cache/.
-_CACHE_PATH: Path = Path(__file__).parent.parent / "cache" / "robinhood_orders.json"
+# Daily cache of normalised fills — under settings.LOCAL_DATA_ROOT, shared
+# across every git worktree on this machine (see docs/architecture/data-layer.md).
+_CACHE_PATH: Path = settings.LOCAL_DATA_ROOT / "robinhood_cache" / "robinhood_orders.json"
 
 
 # ---------------------------------------------------------------------------

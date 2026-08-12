@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -1586,9 +1586,26 @@ class Settings(BaseSettings):
     )
 
     # --- Runtime / IO ---
-    OUTPUT_DIR: Path = Field(
-        default=Path(__file__).resolve().parent / "output",
-        description="Directory for generated reports.",
+    LOCAL_DATA_ROOT: Path = Field(
+        default=Path.home() / ".stockpy_local",
+        description=(
+            "Machine-global root for ALL locally-generated model/data artifacts "
+            "(trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every "
+            "git worktree/checkout on purpose. This repo runs many worktrees "
+            "simultaneously; untracked files are worktree-local in git, so a "
+            "model trained in one worktree was previously invisible from every "
+            "other one even though nothing was deleted. Every worktree/checkout "
+            "on this machine reads/writes the SAME physical files here with zero "
+            "per-worktree .env setup. Override via the LOCAL_DATA_ROOT env var "
+            "to relocate to an external drive/NAS/cloud-synced folder. "
+            "OUTPUT_DIR and every other LOCAL_DATA_ROOT-relative module constant "
+            "derive their default from this value -- see "
+            "docs/architecture/data-layer.md."
+        ),
+    )
+    OUTPUT_DIR: Optional[Path] = Field(
+        default=None,
+        description="Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset.",
     )
     DEFAULT_TICKERS: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "JNJ", "AGNC"])
     SYNC_WATCHLIST_FILES: Optional[str] = Field(
@@ -4437,8 +4454,16 @@ class Settings(BaseSettings):
 
     @field_validator("OUTPUT_DIR")
     @classmethod
-    def _ensure_output_dir(cls, value: Path) -> Path:
-        """Coerce to ``Path`` and create the directory if it does not exist."""
+    def _ensure_output_dir(cls, value: Optional[Path]) -> Optional[Path]:
+        """Coerce to ``Path`` and create the directory if it does not exist.
+
+        A ``None`` value (unset) is a no-op passthrough — the model_validator
+        below fills it in from ``LOCAL_DATA_ROOT`` once every field has
+        resolved, since a static field_validator cannot read another field's
+        value.
+        """
+        if value is None:
+            return None
         path = Path(value)
         try:
             path.mkdir(parents=True, exist_ok=True)
@@ -4586,6 +4611,53 @@ class Settings(BaseSettings):
         default="",
         description="Qdrant URL for RAG orchestrator.",
     )
+
+    @model_validator(mode="after")
+    def _derive_local_data_root_paths(self) -> "Settings":
+        """Fill in OUTPUT_DIR and OUTPUT_DIR-relative cache paths from
+        LOCAL_DATA_ROOT once every field has resolved.
+
+        A Field(default=...) expression cannot read another field's resolved
+        value, so OUTPUT_DIR's "defaults to <LOCAL_DATA_ROOT>/output" behavior
+        has to live here rather than as a static default. An operator's
+        explicit OUTPUT_DIR=/custom/path override always wins -- this only
+        ever fills in a still-None value.
+
+        The three str-typed cache-path fields below are only re-anchored
+        under the resolved OUTPUT_DIR if their value still EXACTLY matches
+        the documented relative-default literal (i.e. the operator never
+        overrode it) -- an explicit override (any other string) is left
+        untouched.
+        """
+        try:
+            self.LOCAL_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "Unable to create LOCAL_DATA_ROOT directory %s (%s). Proceeding anyway.",
+                self.LOCAL_DATA_ROOT,
+                exc,
+            )
+
+        if self.OUTPUT_DIR is None:
+            resolved_output_dir = self.LOCAL_DATA_ROOT / "output"
+            try:
+                resolved_output_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                logger.warning(
+                    "Unable to create output directory %s (%s). Proceeding anyway.",
+                    resolved_output_dir,
+                    exc,
+                )
+            self.OUTPUT_DIR = resolved_output_dir
+
+        if self.PROMPT_CACHE_DIR == "output/prompt_cache":
+            self.PROMPT_CACHE_DIR = str(self.OUTPUT_DIR / "prompt_cache")
+        if self.LLM_COMMENTARY_CACHE_PATH == "output/llm_commentary_cache.json":
+            self.LLM_COMMENTARY_CACHE_PATH = str(self.OUTPUT_DIR / "llm_commentary_cache.json")
+        if self.GRAVITY_AI_RUNNER_OUTPUT_PATH == "output/gravity_ai_audit.json":
+            self.GRAVITY_AI_RUNNER_OUTPUT_PATH = str(self.OUTPUT_DIR / "gravity_ai_audit.json")
+
+        return self
 
     def warn_if_fred_key_leaked(self, log: logging.Logger = logger) -> bool:
         """Emit a CRITICAL warning if the configured key is the leaked one.

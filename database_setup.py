@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import config
 from db_config import resolve_database_url, create_db_engine, session_scope, get_dbapi_connection
+from db_config import DEFAULT_DB_FILE as DB_FILE
 
 # Configure logging
 logging.basicConfig(
@@ -22,9 +23,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("DatabaseSetup")
-
-DB_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_FILE = os.path.join(DB_DIR, "quant_platform.db")
 
 
 # Explicit mapping from COLUMN_SCHEMA formats to SQLite datatypes

@@ -3,11 +3,13 @@
 This module is the single source of truth for how the platform resolves its
 database URL, constructs its SQLAlchemy engine, and manages session lifecycle.
 
-By default the platform runs on a local SQLite file (`quant_platform.db` at the
-repo root) with WAL journaling for concurrency. Setting `DATABASE_URL` (e.g. a
-`postgresql://...` DSN) transparently switches every store onto Postgres with a
-pre-pinged connection pool. Backend-specific engine tuning (SQLite PRAGMAs,
-Postgres pool sizing) lives here so callers never have to branch on backend.
+By default the platform runs on a local SQLite file (`quant_platform.db` under
+`settings.LOCAL_DATA_ROOT`, a machine-global root shared by every worktree on
+this machine -- NOT the repo root) with WAL journaling for concurrency. Setting
+`DATABASE_URL` (e.g. a `postgresql://...` DSN) transparently switches every
+store onto Postgres with a pre-pinged connection pool. Backend-specific engine
+tuning (SQLite PRAGMAs, Postgres pool sizing) lives here so callers never have
+to branch on backend.
 
 `session_scope()` is the canonical connection-lifecycle helper: commit on
 success, rollback on exception, always close.
@@ -36,7 +38,6 @@ the backend NAME only, never the full URL.
 from __future__ import annotations
 
 import logging
-import os
 import urllib.parse
 from contextlib import contextmanager
 from typing import Any, Iterator
@@ -48,9 +49,10 @@ from settings import settings
 
 logger = logging.getLogger(__name__)
 
-# db_config.py lives at the repo root, so this resolves to <repo_root>.
-DB_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB_FILE = os.path.join(DB_DIR, "quant_platform.db")
+# Anchored under settings.LOCAL_DATA_ROOT (a machine-global root shared by every
+# worktree/checkout on this machine) rather than the repo root -- see settings.py's
+# LOCAL_DATA_ROOT docstring and docs/architecture/data-layer.md for why.
+DEFAULT_DB_FILE = str(settings.LOCAL_DATA_ROOT / "quant_platform.db")
 DEFAULT_DATABASE_URL = f"sqlite:///{DEFAULT_DB_FILE}"
 
 

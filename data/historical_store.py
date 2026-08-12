@@ -698,7 +698,12 @@ class HistoricalStore:
     Parameters
     ----------
     db_path:
-        Path to the SQLite database file (default ``"quant_platform.db"``).
+        Path (or ``sqlite://``/``postgresql://`` URL) to the database. When
+        omitted (``None``, the default), resolved via
+        ``db_config.resolve_database_url()`` -- the same
+        ``settings.LOCAL_DATA_ROOT``-anchored default every sibling store
+        (``data/paper_account_store.py``, ``transactions_store.py``) uses,
+        rather than a CWD-relative ``"quant_platform.db"`` literal.
     readonly:
         When True, builds a DATABASE-LEVEL read-only engine
         (``db_config.create_readonly_db_engine``) and skips ``_ensure_tables()``
@@ -714,7 +719,10 @@ class HistoricalStore:
         at the DB level (CONSTRAINT #4 — never silently no-op a write).
     """
 
-    def __init__(self, db_path: str = "quant_platform.db", *, readonly: bool = False) -> None:
+    def __init__(self, db_path: Optional[str] = None, *, readonly: bool = False) -> None:
+        if db_path is None:
+            from db_config import resolve_database_url
+            db_path = resolve_database_url()
         self._db_path = db_path
         self._readonly = readonly
         if "://" not in db_path:

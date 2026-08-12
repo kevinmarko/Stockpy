@@ -188,17 +188,28 @@ class TestPathAnchoring:
     same failure mode here would read a sibling checkout's operator state.
     """
 
-    def test_default_store_path_is_anchored_to_the_repo_root_next_to_settings(self):
-        """The assertion the task called for: this module's base path is the
-        same directory ``settings.py`` anchors ``ENV_PATH`` to.
+    def test_default_store_path_matches_local_data_root_default_literal(self):
+        """Drift guard: ``DEFAULT_STORE_PATH`` is a deliberate, documented
+        duplication of ``settings.LOCAL_DATA_ROOT``'s own default literal
+        (``Path.home() / ".stockpy_local"``), NOT derived from this module's
+        own file location the way ``settings.ENV_PATH`` is (see
+        ``test_dotenv_anchor_matches_settings_env_path_exactly`` below).
 
-        This test CAN import settings even though runtime_flags.py cannot.
+        The runtime-flags store deliberately lives under the shared,
+        machine-global, cross-worktree ``LOCAL_DATA_ROOT`` rather than a
+        per-checkout repo-relative path — every worktree/checkout on a
+        machine reads/writes the same physical store. This module cannot
+        import ``settings`` to read ``LOCAL_DATA_ROOT`` directly (see the
+        module docstring), so the two literals must be pinned against each
+        other here or they could silently diverge.
+
+        This test does NOT import settings.py to compute the expected value
+        (the literal is hardcoded here, matching settings.LOCAL_DATA_ROOT's
+        own hardcoded default) — that is the whole point of the guard.
         """
-        settings_dir = Path(settings_module.__file__).resolve().parent
         assert runtime_flags.DEFAULT_STORE_PATH == (
-            settings_dir / "output" / runtime_flags.STORE_FILENAME
+            Path.home() / ".stockpy_local" / "output" / runtime_flags.STORE_FILENAME
         )
-        assert runtime_flags.DEFAULT_STORE_PATH.parent.parent == settings_dir
         assert runtime_flags.DEFAULT_STORE_PATH.is_absolute()
 
     def test_dotenv_anchor_matches_settings_env_path_exactly(self):

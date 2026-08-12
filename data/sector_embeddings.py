@@ -34,6 +34,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 import yaml
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -46,7 +48,9 @@ if not SBERT_AVAILABLE:
     logger.debug("sentence-transformers not available. Sector similarity will degrade to NaN.")
 
 _DESCRIPTIONS_PATH = Path(__file__).resolve().parent / "sector_descriptions.yaml"
-_EMBEDDING_CACHE_PATH = Path("output") / "sector_embedding_cache.json"
+# Resolved from settings.OUTPUT_DIR (settings.LOCAL_DATA_ROOT / "output" by
+# default) rather than a CWD-relative Path("output") literal.
+_EMBEDDING_CACHE_PATH = settings.OUTPUT_DIR / "sector_embedding_cache.json"
 
 _MODEL_CACHE: Dict[tuple, Any] = {}
 

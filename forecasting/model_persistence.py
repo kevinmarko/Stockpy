@@ -36,11 +36,15 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from settings import settings
+
 logger = logging.getLogger("ForecastModelPersistence")
 
 # One shared directory for all persisted forecaster artifacts, alongside the
-# existing per-signal ML model artifacts convention (ml/models/*.pkl).
-MODELS_DIR = Path(__file__).resolve().parent.parent / "ml" / "models" / "forecast_cache"
+# existing per-signal ML model artifacts convention
+# ({settings.LOCAL_DATA_ROOT}/ml_models/*.pkl) -- lives outside every git
+# worktree/checkout, see settings.LOCAL_DATA_ROOT's docstring.
+MODELS_DIR = settings.LOCAL_DATA_ROOT / "ml_models" / "forecast_cache"
 
 
 def _safe_ticker(ticker: str) -> str:

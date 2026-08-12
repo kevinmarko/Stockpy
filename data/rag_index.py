@@ -50,9 +50,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
-_DEFAULT_INDEX_PATH = os.path.join("output", "rag_index", "index.faiss")
+# Resolved from settings.OUTPUT_DIR (settings.LOCAL_DATA_ROOT / "output" by
+# default) rather than a CWD-relative os.path.join("output", ...) literal.
+# faiss.read_index/write_index and os.path.exists/os.makedirs all want a
+# plain string, hence the str() cast.
+_DEFAULT_INDEX_PATH = str(settings.OUTPUT_DIR / "rag_index" / "index.faiss")
 
 # faiss's OpenMP thread pool is capped to 1 thread the first time real faiss
 # work happens in this process — see ``_cap_faiss_threads()`` below for the

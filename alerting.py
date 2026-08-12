@@ -65,12 +65,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
-_LOGS_DIR = Path("logs")
+_LOGS_DIR = settings.LOCAL_DATA_ROOT / "logs"
 _LOG_FILE = _LOGS_DIR / "investyo.log"
 _LOG_MAX_BYTES = 10 * 1024 * 1024   # 10 MB per rotating segment
 _LOG_BACKUP_COUNT = 5               # keep 5 rotated files → 50 MB max on disk

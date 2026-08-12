@@ -285,6 +285,7 @@ class TestLivenessCrossReference:
     # direction is information someone should look at.
     EXPECTED = {
         "OUTPUT_DIR": "restart_required",
+        "LOCAL_DATA_ROOT": "restart_required",
         "DATABASE_URL": "restart_required",
         "MCP_DATABASE_URL_RO": "restart_required",
         "DB_POOL_SIZE": "restart_required",

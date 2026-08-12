@@ -35,11 +35,16 @@ from typing import Literal, Optional
 
 import pandas as pd
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 ActionTaken = Literal["acted", "passed", "modified"]
 
-DEFAULT_LOG_PATH = Path("output/decision_log.jsonl")
+# Resolved from settings.OUTPUT_DIR (settings.LOCAL_DATA_ROOT / "output" by
+# default) rather than a CWD-relative Path("output/...") literal -- matches
+# pilots/calibration.py::_decision_log_path()'s already-correct pattern.
+DEFAULT_LOG_PATH = settings.OUTPUT_DIR / "decision_log.jsonl"
 
 _SCHEMA: dict[str, type] = {
     "symbol": str,

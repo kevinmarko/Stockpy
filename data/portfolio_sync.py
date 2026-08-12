@@ -71,13 +71,17 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 # Cache for the most recent SyncReport — readable by the GUI Live Inventory
 # panel after the orchestrator has run, so a panel render does not need to
 # block on a fresh probe.  Atomic write-then-rename, same convention as
-# data/robinhood_portfolio.py's account cache.
-_CACHE_PATH: Path = Path(__file__).parent.parent / "cache" / "sync_report.json"
+# data/robinhood_portfolio.py's account cache.  Lives under
+# settings.LOCAL_DATA_ROOT, shared across every git worktree on this machine
+# (see docs/architecture/data-layer.md).
+_CACHE_PATH: Path = settings.LOCAL_DATA_ROOT / "robinhood_cache" / "sync_report.json"
 
 
 # ---------------------------------------------------------------------------

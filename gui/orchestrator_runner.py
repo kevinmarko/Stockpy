@@ -144,7 +144,7 @@ GRAVITY_LOG_PATH: Path = settings.OUTPUT_DIR / "gravity_run.log"
 # Telemetry log written by ``alerting.setup_logging()`` and shared by both
 # entry points. Surfaced in the Launcher tab so the operator sees structured
 # diagnostics from across the platform (CONSTRAINT #2 — observable feedback).
-TELEMETRY_LOG_PATH = _REPO_ROOT / "logs" / "investyo.log"
+TELEMETRY_LOG_PATH = settings.LOCAL_DATA_ROOT / "logs" / "investyo.log"
 
 # Env vars the pipeline NEEDS to produce non-trivial output. Missing values are
 # surfaced as a pre-launch warning in the UI rather than discovered after a

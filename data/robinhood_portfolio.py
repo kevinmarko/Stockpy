@@ -54,9 +54,10 @@ from settings import settings as _settings
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Cache location — one level above data/ (project root) / cache /
+# Cache location — under settings.LOCAL_DATA_ROOT, shared across every git
+# worktree on this machine (see docs/architecture/data-layer.md).
 # ---------------------------------------------------------------------------
-_CACHE_PATH: Path = Path(__file__).parent.parent / "cache" / "account_snapshot.json"
+_CACHE_PATH: Path = _settings.LOCAL_DATA_ROOT / "robinhood_cache" / "account_snapshot.json"
 
 
 # ---------------------------------------------------------------------------

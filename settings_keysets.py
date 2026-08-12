@@ -129,6 +129,20 @@ BOOTSTRAP_KEY_REASONS: dict[str, str] = {
         "(execution/kill_switch.py:43 among them), so a live change is "
         "half-applied on top of being circular."
     ),
+    "LOCAL_DATA_ROOT": (
+        "Self-referential one level deeper than OUTPUT_DIR. OUTPUT_DIR "
+        "itself now derives its default from LOCAL_DATA_ROOT (settings.py's "
+        "_derive_local_data_root_paths model_validator, since OUTPUT_DIR is "
+        "None unless explicitly overridden), so a runtime-store change to "
+        "LOCAL_DATA_ROOT would move the ground OUTPUT_DIR's own resolution "
+        "stands on, not merely the value of a sibling field. It is also the "
+        "machine-global root every worktree/checkout on this machine shares "
+        "for models, SQLite DBs, and caches (see settings.py's field "
+        "docstring) -- a live relocation mid-process would split every "
+        "already-constructed store/model-loader (pointed at the old root) "
+        "from every one constructed afterward (pointed at the new one), on "
+        "top of the OUTPUT_DIR circularity above."
+    ),
 
     # ---- database connection: split-brain, not staleness -------------------
     "DATABASE_URL": (
