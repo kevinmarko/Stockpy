@@ -1163,13 +1163,14 @@ def read_platform_logs(lines: int = 50) -> str:
         logs_summary.append(f"Could not read ExecutionLogs from DB: {str(e)}")
             
     # 2. Check for log files. The real rotating log file this platform writes
-    # is logs/investyo.log (see alerting.py::setup_logging's RotatingFileHandler,
-    # cwd-relative like every other file-based tool in this module) -- a plain
-    # os.listdir(".") never finds it because it lives one directory down. Look
-    # in logs/ first, then also check the cwd directly (kept for backward
-    # compatibility with any other *.log file an operator might drop there).
+    # is {LOCAL_DATA_ROOT}/logs/investyo.log (see alerting.py::setup_logging's
+    # RotatingFileHandler, which now resolves under settings.LOCAL_DATA_ROOT
+    # rather than a CWD-relative "logs/" dir) -- a plain os.listdir(".") never
+    # finds it since it no longer lives anywhere under the repo. Look there
+    # first, then also check the cwd directly (kept for backward compatibility
+    # with any other *.log file an operator might drop there).
     log_files = []
-    logs_subdir = "logs"
+    logs_subdir = str(_settings.LOCAL_DATA_ROOT / "logs")
     if os.path.isdir(logs_subdir):
         log_files += [
             os.path.join(logs_subdir, f)

@@ -5,6 +5,15 @@ secrets.py
 .env.bak*
 .env.*.bak
 
+# Model/data/cache artifacts (trained models, quant_platform.db, output/, logs/,
+# and every cache below) now default to living under settings.LOCAL_DATA_ROOT
+# (default ~/.stockpy_local) — entirely OUTSIDE this repo, not just gitignored.
+# The rules further down that still name these repo-relative paths are kept as
+# defense-in-depth only: for anyone on an older checkout that predates this
+# change, or for an explicit LOCAL_DATA_ROOT override that (by mistake) points
+# back inside a repo checkout. See docs/architecture/data-layer.md's
+# `settings.LOCAL_DATA_ROOT` subsection for the full subfolder layout and why.
+
 # Operator-local ticker list (personal, not shared codebase state), plus its
 # 3-strike fetch-failure counter (pilots/watchlist_writer.py)
 watchlist.txt

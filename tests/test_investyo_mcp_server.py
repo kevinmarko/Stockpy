@@ -4214,7 +4214,11 @@ class TestReadPlatformLogsFindsLogsSubdirectory:
     directory down). Fixed to also look inside logs/."""
 
     def test_finds_investyo_log_in_logs_subdir(self, monkeypatch, tmp_path):
+        # logs_subdir now resolves via settings.LOCAL_DATA_ROOT / "logs"
+        # (settings.LOCAL_DATA_ROOT, Bucket 3) rather than a CWD-relative
+        # "logs" dir, so point LOCAL_DATA_ROOT at tmp_path.
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(srv._settings, "LOCAL_DATA_ROOT", tmp_path)
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
         (logs_dir / "investyo.log").write_text("line1\nline2\nline3\n", encoding="utf-8")
@@ -4229,6 +4233,9 @@ class TestReadPlatformLogsFindsLogsSubdirectory:
         """Backward-compat: a *.log file directly in the cwd (not under
         logs/) is still found -- pins the pre-existing behavior/test."""
         monkeypatch.chdir(tmp_path)
+        # Point LOCAL_DATA_ROOT somewhere with no "logs" subdir so this test
+        # only exercises the cwd fallback, not the real operator's local data root.
+        monkeypatch.setattr(srv._settings, "LOCAL_DATA_ROOT", tmp_path / "_unused_local_data_root")
         (tmp_path / "app.log").write_text("a\nb\n", encoding="utf-8")
 
         result = srv.read_platform_logs(lines=10)
@@ -4237,6 +4244,7 @@ class TestReadPlatformLogsFindsLogsSubdirectory:
 
     def test_finds_both_logs_subdir_and_cwd_files(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(srv._settings, "LOCAL_DATA_ROOT", tmp_path)
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
         (logs_dir / "investyo.log").write_text("db line\n", encoding="utf-8")

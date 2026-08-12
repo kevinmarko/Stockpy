@@ -16,7 +16,8 @@ Cadence               – enum of refresh cadences
 CADENCE_TTL           – single dict mapping Cadence → timedelta (tune here)
 CADENCE_REGISTRY      – maps logical data-type names to their Cadence
 cached                – @cached(namespace, cadence) decorator for fetch funcs
-get_default_cache()   – process-wide singleton Cache (path: cache/cache.db)
+get_default_cache()   – process-wide singleton Cache (path:
+                        {LOCAL_DATA_ROOT}/api_cache/cache.db)
 
 Architecture notes
 ------------------
@@ -46,6 +47,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import pandas as pd
+
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -544,7 +547,7 @@ class Cache:
 # MODULE-LEVEL SINGLETON
 # ─────────────────────────────────────────────────────────────────────────────
 
-_DEFAULT_DB_PATH: Path = Path(__file__).parent / "cache.db"
+_DEFAULT_DB_PATH: Path = settings.LOCAL_DATA_ROOT / "api_cache" / "cache.db"
 _default_cache: Optional[Cache] = None
 _default_cache_lock: threading.Lock = threading.Lock()
 
