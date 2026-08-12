@@ -2182,6 +2182,11 @@ export interface SentimentDynamics {
   headlines: HeadlineSentimentItem[];
   earnings_catalyst: EarningsCatalystStatus | null;
   provider_used: "fmp" | "finnhub" | "none";
+  source_breakdown: Record<string, number>;
+  raw_sentiment_avg: number | null;
+  dampened_sentiment_score: number | null;
+  attention_score: number | null;
+  sector_heat_factor: number | null;
 }
 
 /**

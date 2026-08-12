@@ -114,9 +114,11 @@ function HeadlineProbabilityBar({ p }: { p: HeadlineSentimentItem["probabilities
 function HeadlineFeed({
   headlines,
   providerUsed,
+  sourceBreakdown,
 }: {
   headlines: HeadlineSentimentItem[];
   providerUsed: SentimentDynamicsData["provider_used"];
+  sourceBreakdown: Record<string, number>;
 }) {
   return (
     <section
@@ -136,11 +138,18 @@ function HeadlineFeed({
         }}
       >
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Headlines</h2>
-        {providerUsed !== "none" && (
-          <span className="chip" data-testid="headline-feed-provider">
-            {providerUsed}
-          </span>
-        )}
+        <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
+          {Object.entries(sourceBreakdown || {}).map(([source, count]) => (
+            <span key={source} className="chip" style={{ fontSize: "var(--t-micro)", background: "transparent", border: `1px solid ${theme.border}` }}>
+              {source}: {count}
+            </span>
+          ))}
+          {providerUsed !== "none" && (
+            <span className="chip" data-testid="headline-feed-provider">
+              {providerUsed}
+            </span>
+          )}
+        </div>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
         {headlines.length === 0 && (
@@ -219,12 +228,22 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-4)" }}>
         <Tile
-          label="Sentiment Score"
+          label="LLM Sentiment"
           value={<span style={{ color: getScoreColor(d.sentiment_score) }}>{fmtNum(d.sentiment_score, 2)}</span>}
         />
-        <Tile label="Sentiment Intensity" value={fmtNum(d.sentiment_intensity, 2)} />
-        <Tile label="Credibility Score" value={fmtNum(d.credibility_score, 2)} />
+        <Tile label="LLM Intensity" value={fmtNum(d.sentiment_intensity, 2)} />
+        <Tile label="LLM Credibility" value={fmtNum(d.credibility_score, 2)} />
         <Tile label="Vol Persistence" value={fmtNum(d.volatility_persistence, 2)} />
+        <Tile
+          label="News Raw Sentiment"
+          value={<span style={{ color: getScoreColor(d.raw_sentiment_avg) }}>{fmtNum(d.raw_sentiment_avg, 2)}</span>}
+        />
+        <Tile
+          label="News Dampened"
+          value={<span style={{ color: getScoreColor(d.dampened_sentiment_score) }}>{fmtNum(d.dampened_sentiment_score, 2)}</span>}
+        />
+        <Tile label="Sector Heat" value={fmtNum(d.sector_heat_factor, 2)} />
+        <Tile label="Attention Score" value={fmtNum(d.attention_score, 2)} />
       </div>
 
       <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
@@ -233,13 +252,21 @@ function Breakdown({ d }: { d: SentimentDynamicsData }) {
         </div>
         <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
         <p style={{ color: theme.textSecondary, fontSize: "var(--t-callout)", lineHeight: 1.5 }}>
-          <strong>Score (-1 to 1):</strong> Positive means bullish news sentiment, negative means bearish.
+          <strong>LLM Score (-1 to 1):</strong> Positive means bullish news sentiment, negative means bearish.
           <br/>
-          <strong>Intensity (0.1 to 1):</strong> High values mean extreme emotional language or high news volume.
+          <strong>LLM Intensity (0.1 to 1):</strong> High values mean extreme emotional language or high news volume.
           <br/>
-          <strong>Credibility (0.1 to 1):</strong> Filter for 'rumor mill' spikes; low credibility means the sentiment is likely noise.
+          <strong>LLM Credibility (0.1 to 1):</strong> Filter for 'rumor mill' spikes; low credibility means the sentiment is likely noise.
           <br/>
           <strong>Persistence:</strong> GJR-GARCH measure of how long volatility shocks endure.
+          <br/>
+          <strong>News Raw Sentiment (-1 to 1):</strong> The average FinBERT score of recent headlines.
+          <br/>
+          <strong>News Dampened (-1 to 1):</strong> The FinBERT score dampened by earnings proximity.
+          <br/>
+          <strong>Sector Heat:</strong> Relative news coverage intensity for the symbol's sector via GDELT.
+          <br/>
+          <strong>Attention Score:</strong> Wikimedia pageviews anomaly metric indicating retail attention.
         </p>
         </div>
       </section>
@@ -477,7 +504,7 @@ export function SentimentDynamics() {
           <div key="headlines">
             {loading && <Loading lines={3} />}
             {!loading && !error && data && (
-              <HeadlineFeed headlines={data.headlines} providerUsed={data.provider_used} />
+              <HeadlineFeed headlines={data.headlines} providerUsed={data.provider_used} sourceBreakdown={data.source_breakdown} />
             )}
           </div>
         </div>

@@ -314,6 +314,16 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
         logger.warning("metrics_api: news catalyst details failed for %s: %s", symbol, catalyst_result)
         catalyst_result = {"headlines": [], "earnings_catalyst": None, "provider_used": "none"}
 
+    snapshot = load_snapshot()
+    attention_score = None
+    sector_heat_factor = None
+    if snapshot and "signals" in snapshot:
+        for item in snapshot["signals"]:
+            if item.get("symbol") == symbol:
+                attention_score = item.get("attention_score")
+                sector_heat_factor = item.get("sector_heat_factor")
+                break
+
     result = {
         "ticker": sentiment_result.ticker,
         "date": sentiment_result.date.isoformat(),
@@ -328,6 +338,8 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
         "source_breakdown": catalyst_result.get("source_breakdown", {}),
         "raw_sentiment_avg": catalyst_result.get("raw_sentiment_avg"),
         "dampened_sentiment_score": catalyst_result.get("dampened_sentiment_score"),
+        "attention_score": attention_score,
+        "sector_heat_factor": sector_heat_factor,
     }
 
     return _clean_nan(result)

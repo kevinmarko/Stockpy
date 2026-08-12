@@ -5749,6 +5749,11 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
   headlines: [],
   earnings_catalyst: null,
   provider_used: "none",
+  source_breakdown: {},
+  raw_sentiment_avg: null,
+  dampened_sentiment_score: null,
+  attention_score: null,
+  sector_heat_factor: null,
 };
 
 // ================= public mock API (shape-identical to client.ts) =================
@@ -7596,6 +7601,11 @@ export const mockApi = {
         multiplier: 0.5,
       },
       provider_used: "fmp",
+      source_breakdown: { "Reuters": 1, "Bloomberg": 1, "MarketWatch": 1 },
+      raw_sentiment_avg: 0.12,
+      dampened_sentiment_score: 0.06,
+      attention_score: 1.45,
+      sector_heat_factor: 2.1,
     });
   },
 
