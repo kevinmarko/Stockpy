@@ -420,6 +420,15 @@
             <!-- Survivorship Bias Report -->
             <section class="section-box">
                 <h2>Survivorship Bias Audit</h2>
+                {% if bias_report.get('data_unavailable') %}
+                <div class="split-row">
+                    <span class="split-name" style="color: var(--danger-color);">
+                        Universe data unavailable this run -- survivorship bias could not
+                        be computed ({{ bias_report.get('error', 'unknown error') }}).
+                        Deployability gate is UNAFFECTED; this is diagnostic only.
+                    </span>
+                </div>
+                {% else %}
                 <div class="split-row">
                     <span class="split-name">Current constituents count</span>
                     <span class="split-value">{{ bias_report.n_current }}</span>
@@ -436,6 +445,7 @@
                     <span class="split-name">Estimated annualized bias</span>
                     <span class="split-value" style="color: var(--danger-color);">{{ bias_report.estimated_bias_pct }}%</span>
                 </div>
+                {% endif %}
             </section>
         </div>
 

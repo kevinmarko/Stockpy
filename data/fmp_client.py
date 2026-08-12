@@ -828,6 +828,19 @@ def batch_index_quotes() -> Any:
     return _fmp_get("batch-index-quotes", {})
 
 
+def historical_sp500_changes() -> Any:
+    """Full history of S&P 500 constituent additions/removals
+    (``/historical-sp-500``). Used by ``data/fmp_universe.py`` as the primary
+    source for ``universe_engine.py``'s point-in-time survivorship-bias
+    reconstruction, with the legacy Wikipedia changes-table scrape demoted to
+    a fallback. NOTE: the exact path segment and response field names
+    (candidates: ``date``, ``symbol``/``addedSecurity``, ``removedTicker``)
+    have not been confirmed against a live account in this environment — see
+    ``docs/FMP_INTEGRATION.md`` §8 for verification status before relying on
+    this as the *working* primary path rather than a safe no-op."""
+    return _fmp_get("historical-sp-500", {})
+
+
 def peers(symbol: str) -> Any:
     """Stock peer group comparison tickers (``/peers``)."""
     return _fmp_get("peers", {"symbol": _sym(symbol)})
