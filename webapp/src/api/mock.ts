@@ -5835,6 +5835,24 @@ const MOCK_PROMPT_REGISTRY_WRITABLE = true;
  * state directly, alongside the populated "fmp" example getSentimentDynamics
  * returns by default.
  */
+/**
+ * The honest "nothing computed yet" shape for SentimentDynamics's five
+ * FinBERT/Sector-Heat/Attention fields (source_breakdown/raw_sentiment_avg/
+ * dampened_sentiment_score/attention_score/sector_heat_factor) — spread into
+ * any fixture that isn't specifically exercising these fields, instead of
+ * hand-copying the same five nulls into every fixture literal.
+ */
+export const emptySentimentDynamicsExtras = {
+  source_breakdown: {},
+  raw_sentiment_avg: null,
+  dampened_sentiment_score: null,
+  attention_score: null,
+  sector_heat_factor: null,
+} satisfies Pick<
+  SentimentDynamics,
+  "source_breakdown" | "raw_sentiment_avg" | "dampened_sentiment_score" | "attention_score" | "sector_heat_factor"
+>;
+
 export const mockNoProviderSentimentFixture: SentimentDynamics = {
   ticker: "ZZZZ",
   date: new Date().toISOString(),
@@ -5846,6 +5864,7 @@ export const mockNoProviderSentimentFixture: SentimentDynamics = {
   headlines: [],
   earnings_catalyst: null,
   provider_used: "none",
+  ...emptySentimentDynamicsExtras,
 };
 
 // ================= public mock API (shape-identical to client.ts) =================
@@ -7693,6 +7712,11 @@ export const mockApi = {
         multiplier: 0.5,
       },
       provider_used: "fmp",
+      source_breakdown: { "Reuters": 1, "Bloomberg": 1, "MarketWatch": 1 },
+      raw_sentiment_avg: 0.12,
+      dampened_sentiment_score: 0.06,
+      attention_score: 1.45,
+      sector_heat_factor: 2.1,
     });
   },
 

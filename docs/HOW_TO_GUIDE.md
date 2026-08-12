@@ -1966,7 +1966,7 @@ explanatory note.
 The agent requires the `google.antigravity` SDK to be installed and a
 `GEMINI_API_KEY` set in `.env`. When either is missing, or the live call
 fails, the tab shows an honest **"unavailable"** note and blanks (`—`) for
-Sentiment Score / Intensity / Credibility — it never falls back to a
+LLM Sentiment / Intensity / Credibility — it never falls back to a
 fabricated placeholder number. The GJR-GARCH Volatility Persistence metric is
 computed independently of the agent, so it can still show a real value even
 when the agent itself is unavailable (as long as there are at least 100 daily
