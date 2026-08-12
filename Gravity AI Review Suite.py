@@ -3535,6 +3535,27 @@ class GravityAIAuditor:
             from datetime import datetime, timezone
             from unittest.mock import patch, MagicMock
 
+            def _make_run_once_market_provider(price: float = 100.0) -> MagicMock:
+                """MagicMock MarketDataProvider with get_latest_quote configured.
+
+                A bare `MagicMock()` auto-generates a MagicMock (not a float) for
+                any unconfigured attribute, so `market.get_latest_quote(sym).price`
+                would return a MagicMock — and engine.advisory.evaluate()'s
+                `current_price <= 0.0` check then raises
+                `TypeError: '<=' not supported between instances of 'MagicMock'
+                and 'float'` for every symbol, dead-lettering the whole universe.
+                Mirrors tests/test_advisory.py::_make_market_provider.
+                """
+                from data.market_data import Quote
+                provider = MagicMock()
+                provider.get_latest_quote.return_value = Quote(
+                    symbol="TEST", price=price, bid=price - 0.01, ask=price + 0.01,
+                    timestamp=datetime.now(timezone.utc), is_stale=False, source="test",
+                )
+                provider.get_intraday_bars.return_value = None
+                provider.get_fundamentals.return_value = {}
+                return provider
+
             # ── a. RunResult is a frozen dataclass with required fields ───────
             check_a = {"status": "PASS"}
             try:
@@ -3595,7 +3616,7 @@ class GravityAIAuditor:
                 macro_mock.vix_value = 18.0
 
                 with patch("main.fetch_account_snapshot", return_value=snap_mock), \
-                     patch("main.get_provider", return_value=MagicMock()), \
+                     patch("main.get_provider", return_value=_make_run_once_market_provider()), \
                      patch("main._build_macro_dto", return_value=macro_mock), \
                      patch("main._fetch_bars_for_universe", return_value={}), \
                      patch("main._build_context_extras", return_value={}), \
@@ -3631,7 +3652,7 @@ class GravityAIAuditor:
                     os.chdir(tmp)
                     try:
                         with patch("main.fetch_account_snapshot", return_value=snap_mock2), \
-                             patch("main.get_provider", return_value=MagicMock()), \
+                             patch("main.get_provider", return_value=_make_run_once_market_provider()), \
                              patch("main._build_macro_dto", return_value=macro_mock2), \
                              patch("main._fetch_bars_for_universe", return_value={}), \
                              patch("main._build_context_extras", return_value={}):
@@ -3670,7 +3691,7 @@ class GravityAIAuditor:
                     os.chdir(tmp2)
                     try:
                         with patch("main.fetch_account_snapshot", return_value=snap_mock3) as mock_fetch, \
-                             patch("main.get_provider", return_value=MagicMock()), \
+                             patch("main.get_provider", return_value=_make_run_once_market_provider()), \
                              patch("main._build_macro_dto", return_value=macro_mock3), \
                              patch("main._fetch_bars_for_universe", return_value={}), \
                              patch("main._build_context_extras", return_value={}):
@@ -10796,7 +10817,7 @@ class GravityAIAuditor:
     def step_69_prompt_registry_audit(self) -> None:
         """Step 69 — Prompt Registry security + wiring audit (Stage 8, 2026-06-30).
 
-        10 checks (from docs/PROMPT_REGISTRY_PLAN.md §10):
+        10 checks (from docs/plans/PROMPT_REGISTRY_PLAN.md §10):
 
         1.  ``prompt_registry`` importable; ``get_registry``, ``PromptRegistry``,
             ``PromptRecord`` exist.
@@ -15318,7 +15339,7 @@ class GravityAIAuditor:
         order *intents* — yet before this step it had ZERO Gravity coverage while
         every other order-adjacent subsystem (steps 79/80/81) is audited.
 
-        Load-bearing invariants (see docs/AUTOPILOT_PLAN.md):
+        Load-bearing invariants (see docs/plans/AUTOPILOT_PLAN.md):
         * **Broker quarantine.** No new order code, no ``place_*``/``submit_order``/
           ``*_order`` function names, and no direct broker/order-manager import —
           all placement stays the sole job of the downstream ``robinhood-execution``

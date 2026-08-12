@@ -7,7 +7,7 @@ These are **pure value objects** — they carry no I/O, no signing logic, and no
 validation beyond field-type coercion.  Signing lives in ``signing.py``;
 guardrail validation lives in ``guardrails.py``.
 
-Schema correspondence (from ``docs/PROMPT_REGISTRY_PLAN.md`` §2):
+Schema correspondence (from ``docs/plans/PROMPT_REGISTRY_PLAN.md`` §2):
 ::
 
     {

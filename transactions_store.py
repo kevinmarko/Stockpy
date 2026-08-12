@@ -33,6 +33,17 @@ class Trade(Base):
     notes = Column(String(255), nullable=True)
     conviction = Column(Float, nullable=True)  # advisory signal conviction [0,1] at entry
 
+
+def _normalize_symbol(symbol) -> str:
+    """Uppercase/stripped symbol key, or ``""`` for anything that isn't a
+    real non-blank string (e.g. a NaN/None cell) -- never raises, so a
+    single malformed symbol degrades to "no match" instead of crashing a
+    per-row/batch trade-history lookup."""
+    if not isinstance(symbol, str):
+        return ""
+    return symbol.strip().upper()
+
+
 class TransactionsStore:
     def __init__(self, db_url: Optional[str] = None, *, readonly: bool = False):
         """
@@ -148,15 +159,34 @@ class TransactionsStore:
     def get_trade_history(self, symbol: str) -> pd.DataFrame:
         """Returns trade history (both open and closed) for a symbol as a pandas
         DataFrame. See open_trades_df's docstring for the dead-letter/readonly-
-        mode degrade contract."""
+        mode degrade contract. Thin wrapper over get_trade_histories_batch() so
+        the single- and multi-symbol lookups share one query implementation
+        instead of two independently-maintained ones that could drift."""
+        return self.get_trade_histories_batch([symbol]).get(_normalize_symbol(symbol), pd.DataFrame())
+
+    def get_trade_histories_batch(self, symbols: list) -> dict:
+        """Returns trade histories for multiple symbols in a single query,
+        keyed by normalized (uppercase/stripped) symbol. Any entry in
+        ``symbols`` that isn't a real non-blank string (NaN, None, "") is
+        skipped rather than raising -- mirrors get_trade_history's own
+        degrade-to-empty-frame contract for a single bad symbol."""
         session = self.Session()
         try:
-            query = session.query(Trade).filter(Trade.symbol == symbol.upper().strip())
+            upper_symbols = sorted({sym for s in symbols if (sym := _normalize_symbol(s))})
+            if not upper_symbols:
+                return {}
+
+            query = session.query(Trade).filter(Trade.symbol.in_(upper_symbols))
             df = pd.read_sql(query.statement, self.engine)
-            return df
+
+            histories = {sym: pd.DataFrame() for sym in upper_symbols}
+            if not df.empty:
+                for sym, group in df.groupby('symbol'):
+                    histories[sym] = group.copy()
+            return histories
         except Exception as exc:
-            logger.debug("get_trade_history: %s", exc)
-            return pd.DataFrame()
+            logger.debug("get_trade_histories_batch: %s", exc)
+            return {sym: pd.DataFrame() for s in symbols if (sym := _normalize_symbol(s))}
         finally:
             session.close()
 
@@ -194,3 +224,6 @@ class _OfflineTransactionsStore:
 
     def get_trade_history(self, symbol: str) -> pd.DataFrame:
         return pd.DataFrame()
+
+    def get_trade_histories_batch(self, symbols: list) -> dict:
+        return {sym: pd.DataFrame() for s in symbols if (sym := _normalize_symbol(s))}

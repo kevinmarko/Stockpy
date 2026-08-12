@@ -110,6 +110,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
+from api._redact import install_redacting_exception_handler, redact_line
 
 from dotenv import load_dotenv as _load_dotenv
 
@@ -324,6 +325,12 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# Structural backstop for exception-message leakage: redacts every
+# HTTPException.detail before it reaches the client, so a future endpoint
+# that raises HTTPException(detail=str(exc)) directly is covered even if it
+# forgets an explicit redact_line() call. See api/_redact.py.
+install_redacting_exception_handler(app)
 
 # The performance ?range= toggles the PWA exposes (echoed for API symmetry — no
 # per-range curve is persisted yet, see pilots/performance.py).
@@ -1781,7 +1788,7 @@ def post_brinson_fachler_attribution(body: BrinsonFachlerRequest) -> Dict[str, A
     try:
         result = brinson.compute_brinson_fachler(rows)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=redact_line(str(exc))) from exc
     result["validation_warnings"] = brinson.validate_brinson_fachler_rows(rows)
     return result
 
@@ -2754,12 +2761,12 @@ def post_agentic_watch(body: WatchRequest) -> Dict[str, Any]:
     except WatchlistEnvPrecedenceError as exc:
         raise HTTPException(
             status_code=409,
-            detail={"error": exc.tag, "message": str(exc)},
+            detail={"error": exc.tag, "message": redact_line(str(exc))},
         )
     except InvalidSymbolError as exc:
         raise HTTPException(
             status_code=422,
-            detail={"error": exc.tag, "message": str(exc)},
+            detail={"error": exc.tag, "message": redact_line(str(exc))},
         )
 
     already = bool(result.already_present) and not result.added
@@ -3122,7 +3129,7 @@ def set_llm_setting(body: LlmSettingUpdateRequest) -> Dict[str, Any]:
     try:
         ai_control_center.validate_toggle_write(body.key)
     except (env_io.SecretWriteError, env_io.DisallowedKeyError) as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail=redact_line(str(exc))) from exc
 
     applied_live = body.key in ai_control_center.LIVE_PATCHABLE_KEYS
     applied_value: Any = body.value
@@ -3135,7 +3142,7 @@ def set_llm_setting(body: LlmSettingUpdateRequest) -> Dict[str, Any]:
         except ValidationError as exc:
             raise HTTPException(
                 status_code=422,
-                detail=f"invalid value for {body.key!r}: {exc.errors()[0]['msg']}",
+                detail=f"invalid value for {body.key!r}: {redact_line(str(exc.errors()[0]['msg']))}",
             ) from exc
         # validate_assignment already wrote the coerced value into
         # settings.__dict__[body.key] in place; read it back so both the
@@ -4799,6 +4806,7 @@ _FMP_GROUPS = [
             ("FMP_INSIDER_REFRESH_DAYS", "int", {"min": 1, "max": 30, "step": 1}),
             ("FMP_INSIDER_MIN_LAG_DAYS", "int", {"min": 0, "max": 90, "step": 1}),
             ("FMP_SECTOR_SNAPSHOT_ENABLED", "bool", {}),
+            ("FMP_UNIVERSE_ENABLED", "bool", {}),
         ],
     ),
 ]

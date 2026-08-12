@@ -188,3 +188,59 @@ def test_strategy_engine_transactions_store_property_degrades_on_construction_fa
     store = engine.transactions_store
     assert isinstance(store, _OfflineTransactionsStore)
     assert engine.transactions_store is store  # cached, not reconstructed
+
+
+# ---------------------------------------------------------------------------
+# get_trade_histories_batch -- regression pins for two code-review findings:
+# (1) a non-string/NaN symbol in the input list must never raise, including
+#     from the except-fallback branch itself; (2) get_trade_history() and
+#     get_trade_histories_batch() must never be able to drift, since the
+#     former is now a thin wrapper over the latter.
+# ---------------------------------------------------------------------------
+
+def test_batch_skips_non_string_symbols_without_raising(tmp_path):
+    db_url = f"sqlite:///{tmp_path / 't.db'}"
+    store = TransactionsStore(db_url=db_url)
+    store.record_trade(
+        symbol="AAPL", side="long", entry_ts=datetime(2026, 6, 20), entry_price=180.5, shares=100.0,
+    )
+
+    result = store.get_trade_histories_batch(["AAPL", float("nan"), None, "", "  "])
+    assert len(result["AAPL"]) == 1
+    assert "nan" not in result  # never crashed building the normalized key set
+
+
+def test_batch_except_fallback_also_skips_non_string_symbols(tmp_path, monkeypatch):
+    """Forces the except branch (a broken query) and confirms the fallback
+    dict comprehension -- which used to repeat the same unguarded .upper()
+    call -- degrades instead of raising a second AttributeError."""
+    db_url = f"sqlite:///{tmp_path / 't.db'}"
+    store = TransactionsStore(db_url=db_url)
+
+    monkeypatch.setattr(store, "engine", None)  # pd.read_sql will raise on a None engine
+    result = store.get_trade_histories_batch(["AAPL", float("nan"), None])
+    assert set(result.keys()) == {"AAPL"}
+    assert result["AAPL"].empty
+
+
+def test_get_trade_history_delegates_to_batch_and_stays_consistent(tmp_path):
+    """get_trade_history(s) and get_trade_histories_batch([s])[s] must always
+    agree -- true by construction now that the former delegates to the
+    latter, closing the "two independently-maintained queries" drift risk."""
+    db_url = f"sqlite:///{tmp_path / 't.db'}"
+    store = TransactionsStore(db_url=db_url)
+    store.record_trade(
+        symbol="msft", side="long", entry_ts=datetime(2026, 6, 20), entry_price=300.0, shares=10.0,
+    )
+
+    single = store.get_trade_history("MSFT")
+    batch = store.get_trade_histories_batch(["MSFT"])["MSFT"]
+    assert len(single) == len(batch) == 1
+    assert single.iloc[0]["trade_id"] == batch.iloc[0]["trade_id"]
+
+
+def test_offline_store_batch_skips_non_string_symbols():
+    store = _OfflineTransactionsStore()
+    result = store.get_trade_histories_batch(["AAPL", float("nan"), None, ""])
+    assert set(result.keys()) == {"AAPL"}
+    assert result["AAPL"].empty

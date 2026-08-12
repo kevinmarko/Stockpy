@@ -1,17 +1,10 @@
 import { Link, useNavigate, useParams } from "react-router";
 import { MessageCircle, Trash2 } from "lucide-react";
 import { Button, EmptyState } from "../components/ui";
-import { EdgeByStrategyChart } from "../components/EdgeByStrategyChart";
-import { SymbolSignalOverlayChart } from "../components/SymbolSignalOverlayChart";
-import { PilotsTableWidget } from "../components/PilotsTableWidget";
-import { SentimentMiniChart } from "../components/SentimentMiniChart";
-import { PortfolioHeatWidget } from "../components/PortfolioHeatWidget";
-import { OptionsDirectiveSummary } from "../components/OptionsDirectiveSummary";
-import { SignalBreakdownMiniWidget } from "../components/SignalBreakdownMiniWidget";
-import { MacroRegimeBanner } from "../components/MacroRegimeBanner";
 import { TabGuide } from "../components/TabGuide";
 import { useChat } from "../chat/ChatContext";
 import { useCustomViews } from "../customViews";
+import { WIDGET_COMPONENTS, type NonChatWidgetKey } from "../widgetRegistry";
 import { theme } from "../theme";
 import toast from "react-hot-toast";
 
@@ -77,81 +70,42 @@ export function CustomView() {
       <TabGuide tabKey="custom-view" />
 
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)", marginTop: "var(--s-4)" }}>
-        {view.widgets.edgeByStrategy && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Edge per strategy</h2>
-            <EdgeByStrategyChart />
-          </section>
-        )}
+        {view.widgetOrder.map((key) => {
+          const config = view.widgetConfigs?.[key] || {};
 
-        {view.widgets.symbolOverlay && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>
-              Price history &amp; signal overlay
-            </h2>
-            <SymbolSignalOverlayChart />
-          </section>
-        )}
+          // `aiChat` is intentionally not in WIDGET_COMPONENTS -- it needs
+          // the real `useChat()` context, unlike every other widget here.
+          // See widgetRegistry.tsx's module doc for the full reasoning.
+          if (key === "aiChat") {
+            return (
+              <section key={key} className="card card-pad">
+                <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-2)" }}>Ask AI</h2>
+                <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginBottom: "var(--s-3)" }}>
+                  Opens the platform's grounded chat assistant with this view's context.
+                </p>
+                <Button
+                  variant="primary"
+                  onClick={() => openChat(`Operator is viewing their custom Data App "${view.name}".`)}
+                  data-testid="custom-view-open-chat"
+                >
+                  <span aria-hidden style={{ display: "inline-flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+                    <MessageCircle size={16} strokeWidth={2.5} /> Ask AI about this view
+                  </span>
+                </Button>
+              </section>
+            );
+          }
 
-        {view.widgets.pilotsTable && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Pilots</h2>
-            <PilotsTableWidget />
-          </section>
-        )}
-
-        {view.widgets.sentimentMini && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Sentiment history</h2>
-            <SentimentMiniChart />
-          </section>
-        )}
-
-        {view.widgets.portfolioHeat && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Portfolio heat</h2>
-            <PortfolioHeatWidget />
-          </section>
-        )}
-
-        {view.widgets.optionsDirective && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Options directives</h2>
-            <OptionsDirectiveSummary />
-          </section>
-        )}
-
-        {view.widgets.signalBreakdown && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Signal breakdown</h2>
-            <SignalBreakdownMiniWidget />
-          </section>
-        )}
-
-        {view.widgets.macroRegime && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Macro regime</h2>
-            <MacroRegimeBanner />
-          </section>
-        )}
-
-        {view.widgets.aiChat && (
-          <section className="card card-pad">
-            <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-2)" }}>Ask AI</h2>
-            <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", marginBottom: "var(--s-3)" }}>
-              Opens the platform's grounded chat assistant with this view's context.
-            </p>
-            <Button
-              variant="primary"
-              onClick={() => openChat(`Operator is viewing their custom Data App "${view.name}".`)}
-              data-testid="custom-view-open-chat"
-            >
-              <span aria-hidden style={{ display: "inline-flex", alignItems: "center", gap: "var(--s-1-5)" }}>
-                <MessageCircle size={16} strokeWidth={2.5} /> Ask AI about this view
-              </span>
-            </Button>
-          </section>
-        )}
+          const entry = WIDGET_COMPONENTS[key as NonChatWidgetKey];
+          if (!entry) return null; // unknown/stale key -- degrade silently, same as the old switch's `default`.
+          const { Component, heading } = entry;
+          return (
+            <section key={key} className="card card-pad">
+              <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>{heading}</h2>
+              <Component {...config} />
+            </section>
+          );
+        })}
       </div>
     </div>
   );

@@ -83,7 +83,7 @@ def estimate_win_rate_and_payoff(
         estimates) if ``MIN_TRADES_REQUIRED <= n_trades < MIN_TRADES_FOR_CONFIDENCE``.
     """
     if closed_trades_df is None or closed_trades_df.empty:
-        logger.error("estimate_win_rate_and_payoff: no closed trades available (n=0).")
+        logger.info("estimate_win_rate_and_payoff: no closed trades available (n=0).")
         return float("nan"), float("nan"), 0
 
     required_cols = {"entry_price", "exit_price", "side", "exit_ts"}
@@ -96,7 +96,7 @@ def estimate_win_rate_and_payoff(
     n_trades = len(df)
 
     if n_trades < MIN_TRADES_REQUIRED:
-        logger.error(
+        logger.warning(
             "estimate_win_rate_and_payoff: only %d closed trades available "
             "(< %d required). Kelly estimate disabled.", n_trades, MIN_TRADES_REQUIRED
         )

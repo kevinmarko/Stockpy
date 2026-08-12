@@ -26,16 +26,20 @@ const FALLBACK_SYMBOLS = ["AAPL", "MSFT", "SPY"];
  * `StrategyInsights.tsx` and the Create Data App `/app/:slug` renderer, kept
  * as the ONE implementation rather than two independently-drifting copies.
  */
-export function SymbolSignalOverlayChart() {
+export function SymbolSignalOverlayChart({ defaultTicker }: { defaultTicker?: string }) {
   const portfolio = useApi<Portfolio>(() => api.getPortfolio(), []);
   const symbols = useMemo(() => {
     const held = Array.from(
       new Set((portfolio.data?.positions ?? []).map((p) => p.symbol).filter(Boolean))
     );
-    return held.length > 0 ? held : FALLBACK_SYMBOLS;
-  }, [portfolio.data]);
+    let list = held.length > 0 ? held : FALLBACK_SYMBOLS;
+    if (defaultTicker && !list.includes(defaultTicker)) {
+      list = [defaultTicker, ...list];
+    }
+    return list;
+  }, [portfolio.data, defaultTicker]);
 
-  const [symbol, setSymbol] = useState(symbols[0] ?? "AAPL");
+  const [symbol, setSymbol] = useState(defaultTicker || (symbols[0] ?? "AAPL"));
 
   // Keep the selection valid as `symbols` resolves from the fallback list to
   // the operator's real holdings (portfolio fetch lands after mount).
@@ -43,6 +47,21 @@ export function SymbolSignalOverlayChart() {
     if (symbols.length > 0 && !symbols.includes(symbol)) setSymbol(symbols[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbols]);
+
+  // `useState(defaultTicker || ...)` above only ever reads `defaultTicker`
+  // at MOUNT -- a later change to the prop (the operator edits this widget's
+  // config in the Configure modal, or opens a different saved view whose
+  // config carries a different `defaultTicker`, both of which re-render this
+  // same mounted component with a new prop rather than remounting it) was
+  // silently ignored: the `symbols` effect above only resets `symbol` when it
+  // falls OUT of the current `symbols` list, which rarely happens since
+  // `defaultTicker` is unioned INTO `symbols` rather than replacing anything.
+  // This effect reacts to the prop itself, and ONLY the prop -- it must not
+  // re-fire on `symbol` changes, or it would stomp the operator's own manual
+  // in-widget symbol selection on every unrelated re-render.
+  useEffect(() => {
+    if (defaultTicker) setSymbol(defaultTicker);
+  }, [defaultTicker]);
 
   const bars = useApi<Bar[]>(() => api.getDataBars(symbol, 252), [symbol]);
   const decisions = useApi<DecisionEntry[]>(

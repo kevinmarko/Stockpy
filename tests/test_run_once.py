@@ -229,6 +229,23 @@ class TestBuildUniverse:
         mock_sheet2.assert_not_called()
         assert "TSLA" in result
 
+    def test_build_universe_symbol_rating_exclusion_failure_handled(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """When SYMBOL_RATING_AUTO_DROP_ENABLED is on but SymbolRatingStore fails,
+        the exception should be caught and the universe returned unaffected."""
+        monkeypatch.setattr("main.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setenv("WATCHLIST", "NVDA,MSFT")
+        monkeypatch.chdir(tmp_path)
+        snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
+
+        with patch("rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols", side_effect=Exception("mocked failure")):
+            result = _build_universe(snap)
+
+        # AAPL (held), NVDA, MSFT (watchlist) should remain in the universe
+        assert set(result) == {"AAPL", "NVDA", "MSFT"}
+        assert result == sorted(result)
+
     def test_watchlist_env_and_file_both_merged_into_universe(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:

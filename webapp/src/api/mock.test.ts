@@ -766,6 +766,61 @@ describe("mock API — async forecast backfill job contract", () => {
     await cancelJob(initial.job_id);
   });
 
+  it("the stockpy.mock.forecast_backfill_timeout marker makes a job time out with a non-empty partial_summary once step-5 combos have checkpointed", async () => {
+    localStorage.setItem("stockpy.mock.forecast_backfill_timeout", "1");
+
+    const jobPromise = mockApi.runForecastBackfill();
+    await vi.advanceTimersByTimeAsync(300);
+    const initial = await jobPromise;
+    expect(initial.state).toBe("running");
+    // Before any step-5 combo has checkpointed, partial_summary stays null --
+    // mirrors ml/forecast_backfill_job.py's BackfillJobState default.
+    expect(initial.partial_summary).toBeNull();
+
+    // Advance into the simulated "backtraining" window (>= 8s elapsed, see
+    // _mockForecastBackfillJobStatus) -- a running poll should now report a
+    // non-empty checkpoint.
+    await vi.advanceTimersByTimeAsync(8500);
+    const midStatusPromise = mockApi.getForecastBackfillJobStatus(initial.job_id);
+    await vi.advanceTimersByTimeAsync(300);
+    const midStatus = await midStatusPromise;
+    expect(midStatus.state).toBe("running");
+    expect(midStatus.partial_summary?.trained.length).toBeGreaterThan(0);
+    // Shape parity: metrics_so_far entries carry the same fields as a
+    // completed run's ForecastBackfillModelMetrics.
+    const firstKey = midStatus.partial_summary!.trained[0];
+    const firstMetrics = midStatus.partial_summary!.metrics_so_far[firstKey];
+    expect(typeof firstMetrics.accuracy).toBe("number");
+    expect(typeof firstMetrics.auc).toBe("number");
+    expect(typeof firstMetrics.n_train).toBe("number");
+    expect(typeof firstMetrics.n_test).toBe("number");
+    expect(typeof firstMetrics.split_date).toBe("string");
+    // trained and the keys of metrics_so_far are always the same set.
+    expect([...midStatus.partial_summary!.trained].sort()).toEqual(
+      Object.keys(midStatus.partial_summary!.metrics_so_far).sort()
+    );
+
+    // Advance past the simulated deadline (>= 10s elapsed) -- terminal
+    // state: "timeout" with the checkpoint preserved (mirrors
+    // _enforce_deadline never touching partial_summary).
+    await vi.advanceTimersByTimeAsync(2000);
+    const finalStatusPromise = mockApi.getForecastBackfillJobStatus(initial.job_id);
+    await vi.advanceTimersByTimeAsync(300);
+    const finalStatus = await finalStatusPromise;
+    expect(finalStatus.state).toBe("timeout");
+    expect(finalStatus.error_type).toBe("timeout");
+    expect(finalStatus.partial_summary?.trained.length).toBeGreaterThan(0);
+
+    // `state: "timeout"` is itself terminal (not `"running"`), so this
+    // wouldn't trip `_findRunningForecastBackfillJobId()` for a later test
+    // even without this -- but cancel anyway, matching every other test in
+    // this block's convention, since this job's elapsed-time-derived state
+    // would otherwise revert to looking freshly `"running"` once a LATER
+    // test's `vi.useFakeTimers()` reseeds the clock (see this block's own
+    // comment above).
+    await cancelJob(initial.job_id);
+  });
+
   it("getForecastBackfillJobStatus() for an unknown job_id throws ApiError(404)", async () => {
     await expect(mockApi.getForecastBackfillJobStatus("no-such-job")).rejects.toMatchObject({
       status: 404,

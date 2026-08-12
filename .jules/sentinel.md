@@ -1,0 +1,4 @@
+## 2024-05-18 - [MEDIUM] Error message information leakage in APIs
+**Vulnerability:** Fast API routes were passing `str(exc)` or similar directly to the `detail` parameter of `HTTPException`, leading to potential information leakage (stack traces, internals, file paths, specific parameter details) when internal exceptions occurred.
+**Learning:** The FastAPI endpoints correctly catch most errors and map them to HTTP status codes, but they often passed the unscrubbed exception message through to the client. This codebase already had an `api._redact.redact_line` utility for logs and traces, but it was not being utilized for client-facing `HTTPException` detail payloads.
+**Prevention:** Always scrub exception messages using `redact_line(str(exc))` before passing them to the client via `HTTPException` to prevent the leakage of sensitive internal details (keys, filepaths, secrets).

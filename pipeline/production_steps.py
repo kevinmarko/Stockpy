@@ -403,7 +403,7 @@ class ForecastingStep(PipelineStep):
                 }
 
         workers = max(1, int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)))
-        rows = [row for _, row in ctx.dashboard_df.iterrows()]
+        rows = ctx.dashboard_df.to_dict('records')
         if workers == 1 or len(rows) <= 1:
             pairs = [_forecast_one(r) for r in rows]
         else:
@@ -503,7 +503,7 @@ def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) 
     from rating.symbol_rating_store import SymbolRatingStore
 
     events = []
-    for _, row in dashboard_df.iterrows():
+    for row in dashboard_df.to_dict('records'):
         # A missing Score/Action Signal means this ticker's strategy
         # evaluation never reached the 'results' stage this cycle
         # (dead-lettered) -- skip it rather than writing a fabricated
@@ -819,7 +819,7 @@ def _apply_etf_transmission(
         _mcap_col = 'Market Cap' if 'Market Cap' in dashboard_df.columns else None
         _price_col = 'Price' if 'Price' in dashboard_df.columns else None
         if _mcap_col and _price_col:
-            for _, row in dashboard_df.iterrows():
+            for row in dashboard_df.to_dict('records'):
                 sym = str(row.get('Symbol', '') or '').upper().strip()
                 if not sym:
                     continue
@@ -1927,7 +1927,7 @@ class StrategyEvalStep(PipelineStep):
                 lambda x: attention_scores.get(x, float('nan'))
             )
 
-        # docs/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
+        # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
         # (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---" section) are
         # populated only by the advisory path (engine/advisory.py via
         # reporting/sheet_publisher.py::rec_to_sheet_row); this orchestrator
@@ -2044,7 +2044,7 @@ class StrategyEvalStep(PipelineStep):
             vectorized_results = {}
         # -----------------------------------
 
-        for idx, row in ctx.dashboard_df.iterrows():
+        for row in ctx.dashboard_df.to_dict('records'):
             ticker = row['Symbol']
             price = row['Price']
             if not price or price == 0:
@@ -2445,7 +2445,7 @@ class StrategyEvalStep(PipelineStep):
                 from sizing.cap_audit_store import CapAuditStore
 
                 events = []
-                for _, row in ctx.dashboard_df.iterrows():
+                for row in ctx.dashboard_df.to_dict('records'):
                     # None (never "" -- see _SIZING_GUARDRAIL_COLS above) means
                     # this ticker's strategy evaluation never reached the
                     # 'results' stage this cycle (dead-lettered). Skip it
@@ -2609,7 +2609,7 @@ class BrokerExecutionStep(PipelineStep):
                     return _ticker, None
 
             _adv_rows = []
-            for _idx, _row in ctx.dashboard_df.iterrows():
+            for _row in ctx.dashboard_df.to_dict('records'):
                 _ticker = str(_row.get('Symbol', '')).upper()
                 if not _ticker:
                     continue
