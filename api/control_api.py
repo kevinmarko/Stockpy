@@ -124,6 +124,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+from api._redact import install_redacting_exception_handler, redact_line
 
 from dotenv import load_dotenv as _load_dotenv
 
@@ -171,6 +172,12 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# Structural backstop for exception-message leakage: redacts every
+# HTTPException.detail before it reaches the client, so a future endpoint
+# that raises HTTPException(detail=str(exc)) directly is covered even if it
+# forgets an explicit redact_line() call. See api/_redact.py.
+install_redacting_exception_handler(app)
 
 # Mount the training-status WebSocket router (/ws/training/status) only --
 # NOT tick_router. This is the process that actually runs POST /jobs and the
@@ -600,11 +607,11 @@ def create_job(body: JobCreateRequest) -> Dict[str, Any]:
     try:
         rec = job_manager.start_job(jtype, body.params)
     except RuntimeError as err:
-        raise HTTPException(status_code=409, detail=str(err)) from err
+        raise HTTPException(status_code=409, detail=redact_line(str(err))) from err
     except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err)) from err
+        raise HTTPException(status_code=400, detail=redact_line(str(err))) from err
     except PermissionError as err:
-        raise HTTPException(status_code=403, detail=str(err)) from err
+        raise HTTPException(status_code=403, detail=redact_line(str(err))) from err
 
     # Broadcast a training-status "started" event over /ws/training/status
     # for the two model-retraining job types. Deliberately placed AFTER the
@@ -678,7 +685,7 @@ def cancel_job(job_id: str) -> Dict[str, Any]:
     except KeyError as err:
         raise HTTPException(status_code=404, detail=f"No job found with ID {job_id}") from err
     except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err)) from err
+        raise HTTPException(status_code=400, detail=redact_line(str(err))) from err
 
     return {"job_id": job_id, "cancelled": confirmed}
 

@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query
+from api._redact import install_redacting_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv as _load_dotenv
@@ -76,6 +77,14 @@ app.add_middleware(
     allow_methods=["GET"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# Structural backstop for exception-message leakage: redacts every
+# HTTPException.detail before it reaches the client, so a future endpoint
+# that raises HTTPException(detail=str(exc)) directly is covered even if it
+# forgets an explicit redact_line() call. See api/_redact.py. (No call site
+# in this file currently interpolates str(exc) into a detail, but this
+# closes the class of bug structurally rather than per-endpoint.)
+install_redacting_exception_handler(app)
 
 def _clean_nan(obj: Any) -> Any:
     """Recursively convert NaN/inf floats to ``None`` (JSON ``null``)."""
