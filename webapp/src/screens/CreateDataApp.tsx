@@ -113,17 +113,17 @@ export function CreateDataApp() {
 
   const [name, setName] = useState("");
   const [widgets, setWidgets] = useState<CustomViewWidgets>(DEFAULT_WIDGETS);
-  
+
   // masterOrder keeps all widgets ordered, active or not, so toggling remembers position.
   const [masterOrder, setMasterOrder] = useState<(keyof CustomViewWidgets)[]>(ALL_WIDGET_KEYS);
-  
+
   // widgetOrder is derived for rendering the Reorder list
   const widgetOrder = masterOrder.filter(k => widgets[k]);
 
   const [widgetConfigs, setWidgetConfigs] = useState<Record<string, any>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [livePreview, setLivePreview] = useState(false);
-  
+
   // Modal state
   const [configModalWidget, setConfigModalWidget] = useState<keyof CustomViewWidgets | null>(null);
   const [tempConfig, setTempConfig] = useState<Record<string, any>>({});
@@ -176,7 +176,7 @@ export function CreateDataApp() {
     setEditingId(v.id);
     setName(v.name);
     setWidgets(v.widgets);
-    
+
     const active = v.widgetOrder || [];
     const inactive = masterOrder.filter(k => !active.includes(k));
     setMasterOrder([...active, ...inactive]);
@@ -340,7 +340,7 @@ export function CreateDataApp() {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-4)", marginTop: "var(--s-4)", alignItems: "start" }}>
-        
+
         {/* Left Column: Form & Selection */}
         <section className="card card-pad">
           <h2 style={{ fontSize: "var(--t-input)", margin: "0 0 var(--s-3)" }}>Editor</h2>
@@ -512,7 +512,7 @@ export function CreateDataApp() {
               </Button>
             </div>
           </div>
-          
+
           {views.length === 0 ? (
             <EmptyState title="No Data Apps yet" hint="Create one above -- it'll show up here and in the sidebar." />
           ) : (

@@ -258,10 +258,10 @@ export function addOrUpdateView(input: {
 }): { view: CustomView; persisted: boolean } {
   const name = input.name.trim();
   let slug = slugify(name);
-  
+
   // Find by ID first if provided, otherwise find by slug
   let existing = input.id ? views.find((v) => v.id === input.id) : views.find((v) => v.slug === slug);
-  
+
   // If we are renaming an existing view, make sure the new slug doesn't collide with a DIFFERENT view
   if (existing && input.id && slug !== existing.slug) {
     let existingWithNewSlug = views.find((v) => v.slug === slug && v.id !== input.id);
