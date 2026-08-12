@@ -5486,6 +5486,9 @@ class CacheLongShortStartRequest(BaseModel):
 class CacheLongShortApproveBulkRequest(BaseModel):
     lot_ids: List[int]
 
+class PaperBrokerResetRequest(BaseModel):
+    cash: Optional[float] = Field(default=None, gt=0)
+
 @app.get("/pilots/cache-long-short/concentrated-positions", dependencies=[Depends(require_read_token)])
 def get_cls_concentrated_positions() -> Dict[str, Any]:
     """Real held (long) positions exceeding 20% of account equity, sourced
@@ -5557,8 +5560,10 @@ def get_paper_broker_orders(status: Optional[str] = None, limit: int = 100) -> L
     return get_orders(status=status, limit=limit)
 
 @app.post("/pilots/paper-broker/reset", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
-def post_paper_broker_reset() -> Dict[str, Any]:
+def post_paper_broker_reset(body: Optional[PaperBrokerResetRequest] = None) -> Dict[str, Any]:
     from data.paper_account_store import PaperAccountStore
     store = PaperAccountStore()
-    store.reset_account()
-    return {"status": "ok", "message": "Paper account reset"}
+    starting_cash = body.cash if body and body.cash is not None else None
+    store.reset_account(starting_cash=starting_cash)
+    acc = store.get_account()
+    return {"status": "ok", "message": "Paper account reset", "cash": acc.cash}

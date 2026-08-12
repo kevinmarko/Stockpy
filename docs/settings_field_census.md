@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `89e898674e8c613018eb8f0ca8a2c6c35c64e7f3`
+- Measured at commit: `690d42623e39920dabb68aae991d8609e6a747ec`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -209,7 +209,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **367** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **368** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -222,8 +222,8 @@ _S.settings, _bl_settings, _dsr_settings, _live_settings, _mt_settings, _oos_gat
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 684 | 219 |
-| (b) `getattr(settings, "KEY", default)` | 259 | 156 |
+| (a) `settings.KEY` | 681 | 219 |
+| (b) `getattr(settings, "KEY", default)` | 257 | 156 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
 
@@ -238,7 +238,7 @@ referenced by name somewhere and is probably read dynamically.
 
 | Field | Name-literal sites | Verdict |
 |---|---|---|
-| `AI_GENERATION_API_ENABLED` | `api/data_api.py:181`, `settings_keysets.py:316` | likely read dynamically |
+| `AI_GENERATION_API_ENABLED` | `api/data_api.py:181`, `settings_keysets.py:332` | likely read dynamically |
 | `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4679` | likely read dynamically |
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4678` | likely read dynamically |
 | `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4840`, `gui/panels/settings_manager.py:126` | likely read dynamically |
@@ -271,7 +271,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `BERT_LLA_ENABLED` | b | 2 | 0 |
 | `BERT_LLA_MIN_SENTIMENT_COVERAGE` | b | 1 | 0 |
 | `BERT_LLA_WINDOW_SIZE` | b | 1 | 0 |
-| `BROKER_BACKEND` | b | 3 | 0 |
+| `BROKER_BACKEND` | b | 2 | 0 |
 | `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` | b | 1 | 0 |
 | `DATABASE_URL` | b | 1 | 0 |
 | `DATA_FETCH_MAX_CONCURRENCY` | b | 4 | 0 |

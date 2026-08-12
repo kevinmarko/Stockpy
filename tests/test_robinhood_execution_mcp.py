@@ -108,6 +108,52 @@ async def test_cancel_order():
         data = json.loads(result)
         assert data["status"] == "success"
 
+def test_get_broker_forces_alpaca_when_going_live_with_fmp_paper():
+    """execution.broker_selection.resolve_broker_backend() must force
+    'alpaca' when BROKER_BACKEND='fmp_paper' AND the run is genuinely going
+    live (ADVISORY_ONLY=False, ALPACA_PAPER=False) -- mirroring the guard
+    main_orchestrator.py's _execute_broker_orders already applies. Without
+    this guard, robinhood_execution_mcp.py's _get_broker() would silently
+    construct FMPPaperBroker (a local paper ledger) instead of the real
+    AlpacaBroker for confirm_live_trade/cancel_order.
+    """
+    from robinhood_execution_mcp import _get_broker
+    from settings import settings as _settings
+
+    mock_alpaca_instance = MagicMock()
+
+    with patch.object(_settings, "BROKER_BACKEND", "fmp_paper"), \
+         patch.object(_settings, "ADVISORY_ONLY", False), \
+         patch.object(_settings, "ALPACA_PAPER", False), \
+         patch("observability.alerts.send_alert") as mock_alert, \
+         patch("diagnostics_and_visuals.telemetry.error") as mock_err, \
+         patch("execution.alpaca_broker.AlpacaBroker", return_value=mock_alpaca_instance) as mock_alpaca_cls, \
+         patch("execution.fmp_paper_broker.FMPPaperBroker") as mock_fmp_cls:
+        broker = _get_broker()
+
+    mock_alert.assert_called_once()
+    mock_err.assert_called_once()
+    mock_alpaca_cls.assert_called_once()
+    mock_fmp_cls.assert_not_called()
+    assert broker is mock_alpaca_instance
+
+
+def test_get_broker_uses_fmp_paper_when_not_going_live():
+    """Sanity check: the guard only engages when genuinely going live --
+    BROKER_BACKEND='fmp_paper' in paper/advisory mode still constructs
+    FMPPaperBroker exactly as before."""
+    from robinhood_execution_mcp import _get_broker
+    from settings import settings as _settings
+    from execution.fmp_paper_broker import FMPPaperBroker
+
+    with patch.object(_settings, "BROKER_BACKEND", "fmp_paper"), \
+         patch.object(_settings, "ADVISORY_ONLY", True), \
+         patch.object(_settings, "ALPACA_PAPER", True):
+        broker = _get_broker()
+
+    assert isinstance(broker, FMPPaperBroker)
+
+
 def test_get_live_positions():
     mock_snapshot = MagicMock()
     mock_snapshot.net_liquidity = 10000.0

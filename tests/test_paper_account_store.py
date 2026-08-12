@@ -133,3 +133,32 @@ def test_reset_account_clears_data(tmp_path):
     assert len(store.get_orders()) == 0
     account = store.get_account()
     assert account.cash == settings.FMP_PAPER_STARTING_CASH
+
+
+def test_reset_account_with_custom_starting_cash(tmp_path):
+    from settings import settings
+    from data.paper_account_store import PaperAccountStore
+    db_path = tmp_path / "test_reset_custom_cash.db"
+    store = PaperAccountStore(f"sqlite:///{db_path}")
+
+    store.apply_fill("custom_cash_1", "AAPL", "buy", 10, 150.0, 0.0)
+
+    # Reset with an explicit override -- must NOT fall back to
+    # settings.FMP_PAPER_STARTING_CASH.
+    custom_cash = 25000.0
+    store.reset_account(starting_cash=custom_cash)
+
+    assert len(store.get_open_positions()) == 0
+    assert len(store.get_orders()) == 0
+    account = store.get_account()
+    assert account.cash == custom_cash
+    assert account.cash != settings.FMP_PAPER_STARTING_CASH
+
+    # Reset again with no argument -- must fall back to the default.
+    store.apply_fill("custom_cash_2", "MSFT", "buy", 5, 300.0, 0.0)
+    store.reset_account()
+
+    assert len(store.get_open_positions()) == 0
+    assert len(store.get_orders()) == 0
+    account = store.get_account()
+    assert account.cash == settings.FMP_PAPER_STARTING_CASH

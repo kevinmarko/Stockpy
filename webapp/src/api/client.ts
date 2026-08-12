@@ -924,11 +924,11 @@ const liveApi = {
       body: JSON.stringify({ lot_ids: lotIds }),
     }),
   // ---- Paper Broker ----
-  getPaperBrokerAccount: () => http<PaperBrokerAccount>("/paper-broker/account"),
-  getPaperBrokerPositions: () => http<PaperBrokerPosition[]>("/paper-broker/positions"),
-  getPaperBrokerOrders: (limit = 100) => http<PaperBrokerOrder[]>(`/paper-broker/orders?limit=${limit}`),
+  getPaperBrokerAccount: () => http<PaperBrokerAccount>("/pilots/paper-broker/account"),
+  getPaperBrokerPositions: () => http<PaperBrokerPosition[]>("/pilots/paper-broker/positions"),
+  getPaperBrokerOrders: (limit = 100) => http<PaperBrokerOrder[]>(`/pilots/paper-broker/orders?limit=${limit}`),
   resetPaperBroker: (cash: number) =>
-    http<PaperBrokerResetResult>("/paper-broker/reset", {
+    http<PaperBrokerResetResult>("/pilots/paper-broker/reset", {
       method: "POST",
       body: JSON.stringify({ cash }),
     }),

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "89e898674e8c613018eb8f0ca8a2c6c35c64e7f3",
+    "git_commit": "690d42623e39920dabb68aae991d8609e6a747ec",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2516,7 +2516,7 @@
         "route": "/pilots/cache-long-short/start",
         "method": "POST",
         "function": "start_cls_strategy",
-        "line": 5523,
+        "line": 5526,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2533,7 +2533,7 @@
         "route": "/pilots/cache-long-short/approve-bulk",
         "method": "POST",
         "function": "approve_cls_bulk",
-        "line": 5535,
+        "line": 5538,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2550,7 +2550,7 @@
         "route": "/pilots/paper-broker/reset",
         "method": "POST",
         "function": "post_paper_broker_reset",
-        "line": 5560,
+        "line": 5563,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2913,7 +2913,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 367,
+    "files_scanned": 368,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2941,7 +2941,7 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 684,
+      "total_reads": 681,
       "distinct_fields": 219,
       "counts": {
         "OUTPUT_DIR": 123,
@@ -2966,7 +2966,6 @@
         "SIZING_CAP_ESCALATION_ENABLED": 6,
         "STATE_API_TOKEN": 6,
         "CORS_ALLOWED_ORIGINS": 5,
-        "FMP_PAPER_STARTING_CASH": 5,
         "FORECAST_SKILL_MIN_OBS": 5,
         "FORECAST_SKILL_WINDOW_DAYS": 5,
         "KELLY_FRACTION": 5,
@@ -3033,6 +3032,7 @@
         "ETF_TRANSMISSION_MAX_DERATE": 2,
         "ETF_TRANSMISSION_MIN_MULTIPLIER": 2,
         "ETF_TRANSMISSION_OWNERSHIP_REFERENCE": 2,
+        "FMP_PAPER_STARTING_CASH": 2,
         "FOLLOW_MIN_AMOUNT": 2,
         "FORECAST_BACKFILL_DEADLINE_SECONDS": 2,
         "FUNDAMENTALS_CACHE_TTL_SECONDS": 2,
@@ -3166,7 +3166,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 259,
+      "total_reads": 257,
       "distinct_fields": 156,
       "counts": {
         "FMP_API_KEY": 10,
@@ -3182,7 +3182,6 @@
         "GRAVITY_AI_RUNNER_ENABLED": 4,
         "OPENAI_API_KEY": 4,
         "ROBINHOOD_EXECUTION_MODE": 4,
-        "BROKER_BACKEND": 3,
         "FMP_MAX_SECONDS_PER_CYCLE": 3,
         "FMP_NEWS_MAX_PAGES": 3,
         "FMP_NEWS_PAGE_LIMIT": 3,
@@ -3192,9 +3191,9 @@
         "ADVISORY_MAX_CONCURRENCY": 2,
         "ALERT_FILE_PATH": 2,
         "ALPACA_API_KEY": 2,
-        "ALPACA_PAPER": 2,
         "BARS_BACKFILL_DAYS": 2,
         "BERT_LLA_ENABLED": 2,
+        "BROKER_BACKEND": 2,
         "DB_MAX_OVERFLOW": 2,
         "DB_POOL_SIZE": 2,
         "ETF_HOLDINGS_MARKET_PROXY": 2,
@@ -3218,6 +3217,7 @@
         "ADVISORY_REUSE_PIPELINE_COMPUTE": 1,
         "ALERT_WEBHOOK_URL": 1,
         "ALPACA_KEY_ROTATED_DATE": 1,
+        "ALPACA_PAPER": 1,
         "ALPACA_SECRET_KEY": 1,
         "ANTHROPIC_API_KEY": 1,
         "ATTENTION_CIRCUIT_BREAKER_THRESHOLD": 1,
@@ -3726,7 +3726,7 @@
         "field": "AI_GENERATION_API_ENABLED",
         "name_literal_sites": [
           "api/data_api.py:181",
-          "settings_keysets.py:316"
+          "settings_keysets.py:332"
         ],
         "name_literal_site_count": 2,
         "likely_dynamic_read": true

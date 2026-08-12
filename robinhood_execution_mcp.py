@@ -38,7 +38,16 @@ class RateLimiter:
 _rate_limiter = RateLimiter(capacity=5, fill_rate=1.0/12.0)
 
 def _get_broker():
-    if getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper":
+    # resolve_broker_backend() is the single source of truth for "which
+    # broker should actually be used" -- shared with
+    # main_orchestrator.py::_execute_broker_orders so the two call sites
+    # can never drift on the fmp_paper/live-trading safety guard. It
+    # forces 'alpaca' (and fires a CRITICAL alert) when
+    # BROKER_BACKEND='fmp_paper' while this run is genuinely going live
+    # (ADVISORY_ONLY=False and ALPACA_PAPER=False).
+    from execution.broker_selection import resolve_broker_backend
+
+    if resolve_broker_backend() == "fmp_paper":
         from execution.fmp_paper_broker import FMPPaperBroker
         return FMPPaperBroker()
     from execution.alpaca_broker import AlpacaBroker

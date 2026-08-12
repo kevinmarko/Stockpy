@@ -76,6 +76,12 @@ _ROC_6M_LB = 126    # ≈ 6 months
 _REALIZED_VOL_WINDOW = 60
 _GARCH_PROXY_WINDOW = 20   # matches scripts/train_lgbm.py's pre-convergence proxy
 
+# Vertical (timeout) barrier width for the paper-order outcome features below.
+# MUST match the ``vertical_barrier_days`` passed to ``apply_triple_barrier`` in
+# ``_pit_ticker_row`` -- it is also reused independently to recompute each
+# event's real full-window deadline (see the ``resolved_mask`` comment there).
+_PAPER_BARRIER_VERTICAL_DAYS = 5
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Price sourcing
@@ -327,13 +333,50 @@ def _pit_ticker_row(close: pd.Series, symbol: Optional[str] = None, as_of_date: 
                     events=events,
                     close=close,  # 'close' already excludes as_of_date, preserving PIT
                     pt_sl_multiples=(2.0, 1.0),
-                    vertical_barrier_days=5,
+                    vertical_barrier_days=_PAPER_BARRIER_VERTICAL_DAYS,
                     vol_span=100
                 )
-                
-                # We can only learn from outcomes resolved STRICTLY BEFORE as_of_naive
+
+                # We can only learn from outcomes resolved STRICTLY BEFORE as_of_naive.
+                #
+                # A genuine barrier TOUCH ("upper"/"lower") is always trustworthy --
+                # apply_triple_barrier only reports one when it actually observed
+                # price crossing the level, and that observation necessarily lies
+                # within `close`, which is already PIT-truncated to before
+                # as_of_date.
+                #
+                # A "vertical" result, however, is NOT proof the position was
+                # genuinely held to the full intended holding window --
+                # apply_triple_barrier emits the SAME "vertical" barrier_hit both
+                # when the position was genuinely timed out AND when there simply
+                # wasn't enough future price history yet to evaluate the full
+                # window (its `future.empty` fallback sets t1 = t0, and its
+                # "no touch within the truncated window" branch sets t1 to the
+                # last available bar, which can likewise fall short of the real
+                # deadline). Since `close` is truncated at as_of_date, both of
+                # these under-observed cases trivially satisfy `t1 < as_of_naive`
+                # for almost any recent order, which would otherwise let a
+                # "we don't know yet" outcome masquerade as a known, resolved one
+                # (and, since barely any time elapsed, usually with an
+                # artificially near-zero realized return).
+                #
+                # We therefore only trust a "vertical" result once the order's
+                # OWN full intended holding period has genuinely elapsed by
+                # as_of_date -- i.e. t0 + vertical_barrier_days (business days)
+                # <= as_of_naive -- recomputed here identically to how
+                # apply_triple_barrier derives its own t1_deadline internally.
                 if not barrier_df.empty:
-                    resolved_mask = barrier_df["t1"] < as_of_naive
+                    genuine_deadline = barrier_df.index + pd.tseries.offsets.BDay(
+                        _PAPER_BARRIER_VERTICAL_DAYS
+                    )
+                    is_genuine_touch = barrier_df["barrier_hit"] != "vertical"
+                    is_genuine_timeout = (
+                        (barrier_df["barrier_hit"] == "vertical")
+                        & (genuine_deadline <= as_of_naive)
+                    )
+                    resolved_mask = (barrier_df["t1"] < as_of_naive) & (
+                        is_genuine_touch | is_genuine_timeout
+                    )
                     resolved = barrier_df[resolved_mask]
                     
                     if not resolved.empty:

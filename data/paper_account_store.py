@@ -7,7 +7,7 @@ across process restarts for the FMP-based paper trading engine.
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from sqlalchemy import Column, Integer, String, Float, DateTime, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -154,22 +154,25 @@ class PaperAccountStore:
                 ))
         return results
 
-    def reset_account(self) -> None:
+    def reset_account(self, starting_cash: Optional[float] = None) -> None:
         """
-        Deletes all PaperPosition and PaperOrder rows. Resets cash balance to FMP_PAPER_STARTING_CASH.
+        Deletes all PaperPosition and PaperOrder rows. Resets cash balance to
+        `starting_cash` if provided, otherwise to FMP_PAPER_STARTING_CASH.
         """
         if self._readonly:
             raise RuntimeError("Cannot reset account in readonly mode.")
-            
+
+        cash_value = starting_cash if starting_cash is not None else settings.FMP_PAPER_STARTING_CASH
+
         with session_scope(self.Session) as session:
             session.query(PaperPosition).delete()
             session.query(PaperOrder).delete()
-            
+
             acc = session.query(PaperAccount).filter_by(id=1).with_for_update().first()
             if acc:
-                acc.cash_balance = settings.FMP_PAPER_STARTING_CASH
+                acc.cash_balance = cash_value
             else:
-                acc = PaperAccount(id=1, cash_balance=settings.FMP_PAPER_STARTING_CASH)
+                acc = PaperAccount(id=1, cash_balance=cash_value)
                 session.add(acc)
 
     def apply_fill(
@@ -322,21 +325,3 @@ class PaperAccountStore:
                     "created_at": ts.isoformat()
                 })
         return results
-
-    def reset_account(self) -> None:
-        """
-        Deletes all PaperPosition and PaperOrder rows. Resets cash balance to FMP_PAPER_STARTING_CASH.
-        """
-        if self._readonly:
-            raise RuntimeError("Cannot reset account in readonly mode.")
-            
-        with session_scope(self.Session) as session:
-            session.query(PaperPosition).delete()
-            session.query(PaperOrder).delete()
-            
-            acc = session.query(PaperAccount).filter_by(id=1).with_for_update().first()
-            if acc:
-                acc.cash_balance = settings.FMP_PAPER_STARTING_CASH
-            else:
-                acc = PaperAccount(id=1, cash_balance=settings.FMP_PAPER_STARTING_CASH)
-                session.add(acc)

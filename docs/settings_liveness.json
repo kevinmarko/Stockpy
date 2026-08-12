@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 367,
+  "files_scanned": 368,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -412,9 +412,9 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 743,
+    "attr": 740,
     "factory_param": 4,
-    "getattr_const": 259,
+    "getattr_const": 257,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
@@ -805,7 +805,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:60",
+        "site": "data/paper_account_store.py:61",
         "via": []
       },
       {
@@ -924,7 +924,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:64",
+        "site": "data/paper_account_store.py:65",
         "via": []
       },
       {
@@ -933,7 +933,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:66",
+        "site": "data/paper_account_store.py:67",
         "via": []
       },
       {
@@ -1106,7 +1106,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:64",
+        "site": "data/paper_account_store.py:65",
         "via": []
       },
       {
@@ -1115,7 +1115,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:66",
+        "site": "data/paper_account_store.py:67",
         "via": []
       },
       {
@@ -1411,9 +1411,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:77",
+        "site": "data/paper_account_store.py:84",
         "via": [
-          71
+          72
         ]
       }
     ],
@@ -1888,7 +1888,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:64",
+        "site": "data/paper_account_store.py:65",
         "via": []
       },
       {

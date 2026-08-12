@@ -437,15 +437,17 @@ async def _execute_broker_orders(
         from execution.risk_gate import PreTradeRiskGate, RiskContext
         from transactions_store import TransactionsStore
 
-        broker_backend = getattr(settings, "BROKER_BACKEND", "alpaca")
-        going_live = not getattr(settings, "ADVISORY_ONLY", True) and not getattr(settings, "ALPACA_PAPER", True)
-        if broker_backend == "fmp_paper" and going_live:
-            from observability.alerts import send_alert, AlertLevel
-            msg = "BROKER_BACKEND='fmp_paper' is invalid for live trading. Forcing 'alpaca' fallback."
-            telemetry.error(msg)
-            send_alert(level="CRITICAL", message=msg)
-            broker_backend = "alpaca"
-            
+        from execution.broker_selection import resolve_broker_backend
+
+        # resolve_broker_backend() is the single source of truth for "which
+        # broker should actually be used" -- shared with
+        # robinhood_execution_mcp.py::_get_broker() so the two call sites
+        # can never drift on the fmp_paper/live-trading safety guard. It
+        # logs CRITICAL + fires an alert and forces 'alpaca' internally
+        # when BROKER_BACKEND='fmp_paper' while this run is genuinely going
+        # live (ADVISORY_ONLY=False and ALPACA_PAPER=False).
+        broker_backend = resolve_broker_backend()
+
         if broker_backend == "fmp_paper":
             from execution.fmp_paper_broker import FMPPaperBroker
             broker = FMPPaperBroker()
@@ -549,6 +551,14 @@ async def _execute_broker_orders(
                             symbol, kelly, equity, price,
                         )
                         continue
+                    # target_qty currently always equals qty here: buy_qty is
+                    # already the fully-sized, post-portfolio-cap quantity by
+                    # the time this function runs, and there is no separate
+                    # "pre-cap target" available at this layer yet. The ML
+                    # feature paper_size_vs_kelly_ratio_30d that consumes
+                    # target_qty is presently uninformative (reads as a
+                    # constant 1.0) pending a future change to thread a
+                    # genuinely distinct pre-cap value through.
                     intent = OrderIntent(
                         strategy_id="main_pipeline",
                         symbol=symbol,
@@ -575,6 +585,12 @@ async def _execute_broker_orders(
 
                 elif signal in ("SELL", "TRIM") and symbol in open_symbols:
                     sell_qty = abs(open_symbols[symbol])
+                    # target_qty currently always equals qty here: sell_qty is
+                    # already the fully-sized (whole-position-close) quantity
+                    # by the time this function runs, and there is no
+                    # separate "pre-cap target" available at this layer yet.
+                    # See the BUY branch's identical comment above for the
+                    # ML feature this affects (paper_size_vs_kelly_ratio_30d).
                     intent = OrderIntent(
                         strategy_id="main_pipeline",
                         symbol=symbol,
