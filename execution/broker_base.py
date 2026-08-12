@@ -73,6 +73,7 @@ class OrderIntent:
     order_type: OrderType = OrderType.MARKET
     limit_price: Optional[float] = None
     time_in_force: str = "day"
+    target_qty: Optional[float] = None
     # Populated by order_manager before submission; leave None at construction.
     client_order_id: Optional[str] = None
     # Multi-leg options support (spread / condor legs as list of dicts).
@@ -83,6 +84,13 @@ class OrderIntent:
     # ignored otherwise (default NORMAL preserves today's plain submission
     # order for every existing caller that never sets this).
     priority: OrderPriority = OrderPriority.NORMAL
+    # Optional sizing-decision telemetry, not consumed by broker submission
+    # itself: the quantity the per-name sizing decision targeted BEFORE any
+    # portfolio-level derating (portfolio gross cap, Dual Momentum safe-asset
+    # override) was applied. ``None`` for any caller that does not populate
+    # it (today's exact prior behavior). See main_orchestrator.py's
+    # ``_execute_broker_orders`` BUY/SELL branches for the one real producer.
+    target_qty: Optional[float] = None
 
 
 @dataclass

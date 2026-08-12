@@ -3800,3 +3800,37 @@ export interface CacheLongShortApproveBulkResult {
   status: string;
   count: number;
 }
+
+
+export interface PaperBrokerAccount {
+  equity: number;
+  cash: number;
+  buying_power: number;
+}
+
+export interface PaperBrokerPosition {
+  symbol: string;
+  qty: number;
+  avg_cost: number;
+  current_price: number | null;
+  market_value: number | null;
+  unrealized_pl: number | null;
+  unrealized_pl_pct: number | null;
+}
+
+export interface PaperBrokerOrder {
+  order_id: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  qty: number;
+  price: number;
+  status: "filled" | "pending" | "cancelled" | "rejected";
+  filled_qty: number;
+  filled_avg_price: number | null;
+  created_at: string;
+}
+
+export interface PaperBrokerResetResult {
+  status: string;
+  cash: number;
+}

@@ -612,6 +612,40 @@ def check_alpaca_configured() -> CheckResult:
     return CheckResult(name, True, "ALPACA_API_KEY and ALPACA_SECRET_KEY are configured")
 
 
+def check_broker_backend_matches_live_intent() -> CheckResult:
+    """
+    Verifies that BROKER_BACKEND='fmp_paper' is not active when live trading
+    is intended.
+
+    Uses ``execution.broker_selection.is_going_live()`` -- the SAME "going
+    live" predicate the runtime guard in ``main_orchestrator.py``'s
+    ``_execute_broker_orders`` (via ``resolve_broker_backend()``) and
+    ``robinhood_execution_mcp.py``'s ``_get_broker()`` both use -- rather
+    than a narrower, independently-reimplemented ``not ALPACA_PAPER`` check.
+    The runtime guard also considers ``ADVISORY_ONLY``: a run with
+    ``ADVISORY_ONLY=True`` never submits broker orders at all regardless of
+    ``ALPACA_PAPER``, so gating this preflight check on ``ALPACA_PAPER``
+    alone previously blocked configurations the runtime guard would never
+    have flagged, and could equally have missed a genuinely-live
+    misconfiguration once ``ADVISORY_ONLY`` was folded into the real
+    predicate.
+    """
+    from execution.broker_selection import is_going_live
+
+    if getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper" and is_going_live():
+        return CheckResult(
+            name="broker_backend_matches_live_intent",
+            passed=False,
+            reason="BROKER_BACKEND='fmp_paper' is active but this run is configured to go live "
+            "(ADVISORY_ONLY=False and ALPACA_PAPER=False). Set BROKER_BACKEND='alpaca' for live "
+            "trading, or enable ALPACA_PAPER/ADVISORY_ONLY to stay in paper/advisory mode."
+        )
+    return CheckResult(
+        name="broker_backend_matches_live_intent",
+        passed=True,
+        reason="BROKER_BACKEND is compatible with live trading intent."
+    )
+
 def check_macro_regime_gate_enabled() -> CheckResult:
     """Fail if the macro regime gate is disabled while live trading is configured.
 
@@ -1307,6 +1341,7 @@ ALL_CHECKS = [
     check_robinhood_session_present,
     check_alpaca_configured,
     check_macro_regime_gate_enabled,
+    check_broker_backend_matches_live_intent,
     check_alpaca_paper_mode,
     check_dry_run_disabled,
     check_env_not_committed,

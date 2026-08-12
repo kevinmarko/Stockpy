@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 268,
+    "live_safe": 269,
     "no_op": 2,
     "restart_required": 90,
-    "total": 360
+    "total": 361
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3151,
+      "line": 3158,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4198,
+      "line": 4205,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4303,
+      "line": 4310,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 369,
+  "files_scanned": 371,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -314,6 +314,7 @@
     "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
     "PAIRS_SNAPSHOT_ENABLED",
     "PAIRS_SNAPSHOT_MAX_PAIRS",
+    "PAPER_BROKER_WRITES_ENABLED",
     "PAPER_TRADING_START_DATE",
     "PILOTS_API_ENABLED",
     "PILOTS_API_PORT",
@@ -416,15 +417,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 752,
+    "attr": 754,
     "factory_param": 4,
-    "getattr_const": 257,
+    "getattr_const": 259,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 225,
+    "attr": 226,
     "factory_param": 4,
-    "getattr_const": 156,
+    "getattr_const": 157,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -809,7 +810,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:60",
+        "site": "data/paper_account_store.py:61",
         "via": []
       },
       {
@@ -928,7 +929,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:64",
+        "site": "data/paper_account_store.py:65",
         "via": []
       },
       {
@@ -937,7 +938,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:66",
+        "site": "data/paper_account_store.py:67",
         "via": []
       },
       {
@@ -1110,7 +1111,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:64",
+        "site": "data/paper_account_store.py:65",
         "via": []
       },
       {
@@ -1119,7 +1120,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:66",
+        "site": "data/paper_account_store.py:67",
         "via": []
       },
       {
@@ -1298,7 +1299,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4680",
+        "site": "api/pilots_api.py:4687",
         "via": []
       }
     ],
@@ -1309,7 +1310,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4679",
+        "site": "api/pilots_api.py:4686",
         "via": []
       }
     ],
@@ -1320,7 +1321,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4825",
+        "site": "api/pilots_api.py:4849",
         "via": []
       },
       {
@@ -1395,7 +1396,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4804",
+        "site": "api/pilots_api.py:4828",
         "via": []
       },
       {
@@ -1415,9 +1416,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:77",
+        "site": "data/paper_account_store.py:84",
         "via": [
-          71
+          72
         ]
       }
     ],
@@ -1439,7 +1440,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:618",
+        "site": "api/pilots_api.py:625",
         "via": []
       }
     ],
@@ -1892,7 +1893,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:64",
+        "site": "data/paper_account_store.py:65",
         "via": []
       },
       {
@@ -2454,7 +2455,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:613",
+        "site": "api/pilots_api.py:620",
         "via": []
       },
       {

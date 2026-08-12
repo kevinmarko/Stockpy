@@ -1647,3 +1647,42 @@ class TestAlertChannelsReachable:
         assert results[0].passed
         assert results[0].warning
         assert all(r.passed for r in results)  # exit-code-relevant condition
+
+def test_check_broker_backend_matches_live_intent():
+    from scripts.preflight_check import check_broker_backend_matches_live_intent
+    from settings import settings
+
+    original_broker = getattr(settings, "BROKER_BACKEND", "alpaca")
+    original_paper = getattr(settings, "ALPACA_PAPER", True)
+    original_advisory = getattr(settings, "ADVISORY_ONLY", True)
+
+    try:
+        # Genuinely going live (ADVISORY_ONLY=False, ALPACA_PAPER=False) with
+        # BROKER_BACKEND='fmp_paper' -- must fail, per the shared
+        # execution.broker_selection.is_going_live() predicate.
+        settings.BROKER_BACKEND = "fmp_paper"
+        settings.ADVISORY_ONLY = False
+        settings.ALPACA_PAPER = False
+        res = check_broker_backend_matches_live_intent()
+        assert not res.passed
+
+        # ADVISORY_ONLY=True means the run never submits broker orders at
+        # all regardless of ALPACA_PAPER -- not "going live" -- so this must
+        # pass even with ALPACA_PAPER=False.
+        settings.ADVISORY_ONLY = True
+        res = check_broker_backend_matches_live_intent()
+        assert res.passed
+
+        settings.ADVISORY_ONLY = False
+        settings.ALPACA_PAPER = True
+        res = check_broker_backend_matches_live_intent()
+        assert res.passed
+
+        settings.BROKER_BACKEND = "alpaca"
+        settings.ALPACA_PAPER = False
+        res = check_broker_backend_matches_live_intent()
+        assert res.passed
+    finally:
+        settings.BROKER_BACKEND = original_broker
+        settings.ALPACA_PAPER = original_paper
+        settings.ADVISORY_ONLY = original_advisory

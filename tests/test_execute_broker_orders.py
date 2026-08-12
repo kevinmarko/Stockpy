@@ -30,6 +30,10 @@ Coverage map
 - test_reconciliation_drift_is_surfaced      — (d) drift detected → telemetry.critical
 - test_broker_error_on_one_symbol_is_non_fatal — (e) one symbol raises → logged, cycle continues
 - test_unsizable_buy_is_skipped              — BUY with no account equity is skipped, not fabricated to 1 share
+- test_buy_target_qty_reflects_post_regime_derate — (g) Kelly_Target_Post_Regime > Kelly Target -> target_qty > qty
+- test_buy_target_qty_falls_back_when_column_absent — (g) no Kelly_Target_Post_Regime column -> target_qty == qty
+- test_buy_target_qty_equals_qty_when_no_derate — (g) Kelly_Target_Post_Regime == Kelly Target -> target_qty == qty
+- test_sell_target_qty_always_equals_qty      — (g) SELL/TRIM: target_qty == qty, unchanged by this feature
 """
 
 from __future__ import annotations
@@ -187,6 +191,7 @@ def _install_enabled_broker_stack(
     import transactions_store as ts_mod
 
     monkeypatch.setattr(main_orchestrator.settings, "ADVISORY_ONLY", False, raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "BROKER_BACKEND", "alpaca", raising=False)
     monkeypatch.setattr(alpaca_mod, "AlpacaBroker", lambda *a, **k: broker)
     monkeypatch.setattr(ts_mod, "TransactionsStore", lambda *a, **k: ts_store)
     monkeypatch.setattr(risk_mod, "PreTradeRiskGate", lambda *a, **k: _PassThroughRiskGate())
@@ -408,6 +413,117 @@ def test_unsizable_buy_is_skipped(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# (g) OrderIntent.target_qty -- the pre-portfolio-cap, pre-Dual-Momentum
+#     sizing target implied by Kelly_Target_Post_Regime (BUY only; SELL/TRIM
+#     always equals qty since a full close has no distinct target).
+# ---------------------------------------------------------------------------
+
+def test_buy_target_qty_reflects_post_regime_derate(monkeypatch):
+    """Kelly_Target_Post_Regime > 'Kelly Target' simulates a portfolio-gross-
+    cap or Dual-Momentum derate having shrunk the submitted 'Kelly Target'
+    weight after strategy_engine.py originally computed a larger per-name
+    sizing decision. target_qty must reflect the larger, pre-derate weight,
+    strictly greater than the actually-submitted qty."""
+    broker = MockBroker(positions=[], equity=100_000.0)
+    ts_store = _make_ts_store({})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+
+    df = _df([{
+        "Symbol": "AAPL", "Action Signal": "BUY",
+        "Kelly Target": 0.1, "Kelly_Target_Post_Regime": 0.2,
+        "Price": 100.0,
+    }])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    expected_qty = main_orchestrator._kelly_target_qty(0.1, 100_000.0, 100.0)
+    expected_target_qty = main_orchestrator._kelly_target_qty(0.2, 100_000.0, 100.0)
+    assert buy.qty == pytest.approx(expected_qty)  # unaffected -- still Kelly-Target-sized
+    assert buy.target_qty == pytest.approx(expected_target_qty)
+    assert buy.target_qty > buy.qty
+
+
+def test_buy_target_qty_falls_back_when_column_absent(monkeypatch):
+    """No 'Kelly_Target_Post_Regime' column at all (an older/incompatible
+    cached DataFrame) -> graceful fallback to 'Kelly Target' itself, so
+    target_qty == qty (today's exact prior behavior)."""
+    broker = MockBroker(positions=[], equity=100_000.0)
+    ts_store = _make_ts_store({})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+
+    df = _df([{"Symbol": "AAPL", "Action Signal": "BUY", "Kelly Target": 0.1, "Price": 100.0}])
+    assert "Kelly_Target_Post_Regime" not in df.columns
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    expected_qty = main_orchestrator._kelly_target_qty(0.1, 100_000.0, 100.0)
+    assert buy.qty == pytest.approx(expected_qty)
+    assert buy.target_qty == pytest.approx(buy.qty)
+
+
+def test_buy_target_qty_equals_qty_when_no_derate(monkeypatch):
+    """Kelly_Target_Post_Regime present but equal to 'Kelly Target' (no
+    portfolio-gross-cap / Dual-Momentum derating happened this cycle) ->
+    target_qty == qty."""
+    broker = MockBroker(positions=[], equity=100_000.0)
+    ts_store = _make_ts_store({})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+
+    df = _df([{
+        "Symbol": "AAPL", "Action Signal": "BUY",
+        "Kelly Target": 0.1, "Kelly_Target_Post_Regime": 0.1,
+        "Price": 100.0,
+    }])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    expected_qty = main_orchestrator._kelly_target_qty(0.1, 100_000.0, 100.0)
+    assert buy.qty == pytest.approx(expected_qty)
+    assert buy.target_qty == pytest.approx(buy.qty)
+
+
+def test_sell_target_qty_always_equals_qty(monkeypatch):
+    """SELL/TRIM: target_qty == qty, unchanged by this feature -- a full
+    position close has no distinct 'target' size to diverge from what's
+    actually held."""
+    broker = MockBroker(positions=[_pos("MSFT", 5.0)], equity=100_000.0)
+    ts_store = _make_ts_store({"MSFT": 5.0})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+
+    df = _df([{
+        "Symbol": "MSFT", "Action Signal": "SELL",
+        "Kelly Target": 0.0, "Kelly_Target_Post_Regime": 0.0,
+        "Price": 200.0,
+    }])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    sell = broker.submitted[0]
+    assert sell.side is OrderSide.SELL
+    assert sell.qty == pytest.approx(5.0)
+    assert sell.target_qty == pytest.approx(sell.qty)
+
+
+# ---------------------------------------------------------------------------
 # (f) Opt-in priority queue (settings.EXECUTION_PRIORITY_QUEUE_ENABLED) --
 #     Phase-2 WebSocket-ingestion-priority-queue item 1b
 # ---------------------------------------------------------------------------
@@ -484,3 +600,40 @@ def test_priority_queue_enabled_kill_switch_still_aborts_remaining_drain(monkeyp
     assert broker.submitted == [], "no order may reach the broker when kill switch is active"
     crit = " ".join(str(c.args[0]) for c in telemetry_mock.critical.call_args_list if c.args)
     assert "Kill switch" in crit
+
+def test_execute_broker_orders_fmp_paper_live_fallback():
+    from main_orchestrator import _execute_broker_orders
+    from settings import settings
+    import pandas as pd
+    from unittest.mock import patch
+    
+    original_broker = getattr(settings, "BROKER_BACKEND", "alpaca")
+    original_advisory = getattr(settings, "ADVISORY_ONLY", True)
+    original_paper = getattr(settings, "ALPACA_PAPER", True)
+    
+    settings.BROKER_BACKEND = "fmp_paper"
+    settings.ADVISORY_ONLY = False
+    settings.ALPACA_PAPER = False
+    
+    try:
+        with patch("main_orchestrator.telemetry.error") as mock_err, \
+             patch("observability.alerts.send_alert") as mock_alert, \
+             patch("execution.alpaca_broker.AlpacaBroker") as mock_broker, \
+             patch("execution.order_manager.OrderManager") as mock_om, \
+             patch("transactions_store.TransactionsStore") as mock_ts, \
+             patch("execution.risk_gate.PreTradeRiskGate") as mock_rg:
+             
+            from unittest.mock import AsyncMock
+            mock_broker.return_value.get_open_positions = AsyncMock(return_value=[])
+            mock_om.return_value.reconcile_state = AsyncMock()
+            mock_om.return_value.reconcile_state.return_value.has_drift = False
+            
+            import asyncio
+            asyncio.run(_execute_broker_orders(pd.DataFrame(), dry_run=False))
+            mock_err.assert_called_once()
+            mock_alert.assert_called_once()
+            mock_broker.assert_called_once()
+    finally:
+        settings.BROKER_BACKEND = original_broker
+        settings.ADVISORY_ONLY = original_advisory
+        settings.ALPACA_PAPER = original_paper

@@ -4,7 +4,7 @@ on:
     branches: [ "main" ]
     paths:
       - 'investyo_mcp_server.py'
-      - 'robinhood_execution_mcp.py'
+      - 'broker_live_execution_mcp.py'
       - 'data/**'
       - 'execution/**'
 jobs:
