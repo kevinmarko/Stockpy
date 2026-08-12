@@ -1,13 +1,25 @@
 import numpy as np
 import pandas as pd
 from execution.cost_model import TieredCostModel
+import validation.harness as harness_module
 from validation.harness import StrategyValidationHarness
 
-def test_validation_harness_random_strategy(tmp_path):
+def test_validation_harness_random_strategy(tmp_path, monkeypatch):
     """
     Verify that a random coin-flip strategy has deployable=False
     and PBO is around 0.5.
     """
+    # run() reads the module-level get_universe_with_survivorship_warning
+    # binding directly, not the constructor's universe_fn kwarg below (which
+    # StrategyValidationHarness.run() never calls) -- see
+    # tests/test_harness_oos_gate.py's identical fixture for the established
+    # pattern this mirrors. Keeps this test fully offline.
+    monkeypatch.setattr(
+        harness_module, "get_universe_with_survivorship_warning",
+        lambda _d: (["MOCK"], {"n_current": 1, "n_at_date": 1,
+                                "n_delisted_in_period": 0, "estimated_bias_pct": 0.5}),
+    )
+
     np.random.seed(42)
     dates = pd.date_range("2020-01-01", periods=200)
     X = pd.DataFrame(np.random.randn(200, 2), index=dates)

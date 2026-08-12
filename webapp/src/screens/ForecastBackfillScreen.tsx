@@ -75,6 +75,13 @@ export function ForecastBackfillScreen() {
     modelKeys = modelKeys.filter(key => selectedStrategies.some(s => key.startsWith(s)));
   }
 
+  // Checkpointed step-5 combos from a timed-out run (ml/forecast_backfill_job.py's
+  // BackfillJobState.partial_summary) -- null/empty whenever the kill landed
+  // before any combo finished (steps 1-4), which is the honest "nothing was
+  // saved" case backfillFailureMessage() already covers in the banner above.
+  const partialSummary = job?.state === "timeout" ? job.partial_summary : null;
+  const partialTrainedKeys = partialSummary?.trained ?? [];
+
   return (
     <div className="screen">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--s-4)" }}>
@@ -153,6 +160,57 @@ export function ForecastBackfillScreen() {
             )}
           </div>
         </div>
+      )}
+
+      {partialSummary && partialTrainedKeys.length > 0 && (
+        <section className="card card-pad" style={{ marginBottom: "var(--s-4)", borderColor: theme.caution }}>
+          <div style={{ fontWeight: 700, fontSize: "var(--t-subhead)", marginBottom: "var(--s-2)" }}>
+            Partial Results Saved Before Timeout
+          </div>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginBottom: "var(--s-3)" }}>
+            {partialTrainedKeys.length} model{partialTrainedKeys.length === 1 ? "" : "s"} finished training
+            before the deadline was reached and were checkpointed to disk. Re-run the backfill to train the
+            remaining models -- these are not yet reflected in the &quot;Trained Meta-Labelers Performance&quot;
+            table below, which only updates from a fully completed run.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${theme.border}` }}>
+                  <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Model Key</th>
+                  <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Status</th>
+                  <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Accuracy</th>
+                  <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>ROC-AUC</th>
+                  <th style={{ padding: "var(--s-2)", color: theme.textMuted }}>Train N</th>
+                </tr>
+              </thead>
+              <tbody>
+                {partialTrainedKeys.map((key) => {
+                  const m = partialSummary.metrics_so_far[key];
+                  return (
+                    <tr key={key} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                      <td style={{ padding: "var(--s-2)", fontWeight: 600 }}>{key}</td>
+                      <td style={{ padding: "var(--s-2)" }}>
+                        <span style={{
+                          padding: "2px 6px",
+                          borderRadius: "4px",
+                          fontSize: "12px",
+                          background: m?.is_active ? "rgba(46, 204, 113, 0.2)" : "rgba(108, 117, 125, 0.2)",
+                          color: m?.is_active ? theme.growth : theme.textMuted
+                        }}>
+                          {m?.is_active ? "Active" : "Diagnostic"}
+                        </span>
+                      </td>
+                      <td style={{ padding: "var(--s-2)" }}>{m ? fmtNum(m.accuracy, 4) : "—"}</td>
+                      <td style={{ padding: "var(--s-2)" }}>{m ? fmtNum(m.auc, 4) : "—"}</td>
+                      <td style={{ padding: "var(--s-2)" }}>{m?.n_train ?? "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
       {loading ? (

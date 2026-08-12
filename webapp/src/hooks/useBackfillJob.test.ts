@@ -16,6 +16,7 @@ function job(overrides: Partial<ForecastBackfillJob> = {}): ForecastBackfillJob 
     error_type: null,
     summary: null,
     sample_rows: null,
+    partial_summary: null,
     seconds_remaining: 14,
     ...overrides,
   };

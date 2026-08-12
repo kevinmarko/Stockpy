@@ -90,6 +90,7 @@ describe("ForecastBackfillScreen (real mock API)", () => {
       error_type: null,
       summary: null,
       sample_rows: null,
+      partial_summary: null,
       seconds_remaining: 14,
     });
     const jobStatusSpy = vi.spyOn(api, "getForecastBackfillJobStatus").mockResolvedValueOnce({
@@ -102,6 +103,7 @@ describe("ForecastBackfillScreen (real mock API)", () => {
       error_type: null,
       summary: null,
       sample_rows: 1200,
+      partial_summary: null,
       seconds_remaining: 0,
     });
     const statusSpy = vi.spyOn(api, "getForecastBackfill");
@@ -141,6 +143,7 @@ describe("ForecastBackfillScreen (real mock API)", () => {
       error_type: null,
       summary: null,
       sample_rows: null,
+      partial_summary: null,
       seconds_remaining: 20,
     });
 
@@ -182,5 +185,110 @@ describe("ForecastBackfillScreen (real mock API)", () => {
 
     fireEvent.click(screen.getByText("🚀 Run Forecast Backfill"));
     expect(await screen.findByText(/Error: backend unreachable/)).toBeInTheDocument();
+  });
+
+  it("a timeout with a non-empty partial_summary shows the 'N models' message and renders the partial-results table", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    vi.spyOn(api, "runForecastBackfill").mockResolvedValueOnce({
+      job_id: "job-timeout",
+      state: "running",
+      phase: "backtraining",
+      step: 5,
+      total_steps: 7,
+      error: null,
+      error_type: null,
+      summary: null,
+      sample_rows: null,
+      partial_summary: null,
+      seconds_remaining: 5,
+    });
+    vi.spyOn(api, "getForecastBackfillJobStatus").mockResolvedValueOnce({
+      job_id: "job-timeout",
+      state: "timeout",
+      phase: "backtraining",
+      step: 5,
+      total_steps: 7,
+      error: "Forecast backfill did not complete within 1800s.",
+      error_type: "timeout",
+      summary: null,
+      sample_rows: null,
+      partial_summary: {
+        trained: ["timeseries_momentum_10d", "rsi2_mean_reversion_10d"],
+        metrics_so_far: {
+          timeseries_momentum_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 0, split_date: "CPCV", is_active: true },
+          rsi2_mean_reversion_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 6820, n_test: 0, split_date: "CPCV", is_active: true },
+        },
+      },
+      seconds_remaining: 0,
+    });
+
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+
+    fireEvent.click(screen.getByText("🚀 Run Forecast Backfill"));
+    await waitFor(() => expect(api.runForecastBackfill).toHaveBeenCalled());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+
+    expect(
+      await screen.findByText(/The backfill timed out after training 2 models — partial results were saved\./)
+    ).toBeInTheDocument();
+    expect(screen.getByText("Partial Results Saved Before Timeout")).toBeInTheDocument();
+    // The partial table renders both checkpointed model keys.
+    const partialSection = screen.getByText("Partial Results Saved Before Timeout").closest("section");
+    expect(partialSection).not.toBeNull();
+    expect(partialSection).toHaveTextContent("timeseries_momentum_10d");
+    expect(partialSection).toHaveTextContent("rsi2_mean_reversion_10d");
+
+    vi.useRealTimers();
+  });
+
+  it("a timeout with no partial_summary keeps the honest 'nothing was saved' message and renders no partial table", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    vi.spyOn(api, "runForecastBackfill").mockResolvedValueOnce({
+      job_id: "job-timeout-empty",
+      state: "running",
+      phase: "fetching_data",
+      step: 1,
+      total_steps: 7,
+      error: null,
+      error_type: null,
+      summary: null,
+      sample_rows: null,
+      partial_summary: null,
+      seconds_remaining: 5,
+    });
+    vi.spyOn(api, "getForecastBackfillJobStatus").mockResolvedValueOnce({
+      job_id: "job-timeout-empty",
+      state: "timeout",
+      phase: "technical_features",
+      step: 2,
+      total_steps: 7,
+      error: "Forecast backfill did not complete within 1800s.",
+      error_type: "timeout",
+      summary: null,
+      sample_rows: null,
+      partial_summary: null,
+      seconds_remaining: 0,
+    });
+
+    renderScreen();
+    await screen.findByText("timeseries_momentum_10d");
+
+    fireEvent.click(screen.getByText("🚀 Run Forecast Backfill"));
+    await waitFor(() => expect(api.runForecastBackfill).toHaveBeenCalled());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+
+    expect(await screen.findByText("The backfill timed out. Nothing was saved.")).toBeInTheDocument();
+    expect(screen.queryByText("Partial Results Saved Before Timeout")).not.toBeInTheDocument();
+
+    vi.useRealTimers();
   });
 });

@@ -56,7 +56,7 @@ All 31 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 
 `FMP_MIN_REQUEST_INTERVAL_SECONDS=0` with `FMP_MAX_RETRIES=0` and `FMP_COOLDOWN_THRESHOLD=0` reproduces un-throttled behavior exactly (the `GDELT_*` comment convention).
 
-### Master feed gates (9) — all default `False` = complete no-op
+### Master feed gates (10) — all default `False` = complete no-op
 
 | Setting | Type | Default | Purpose |
 |---|---|---|---|
@@ -72,6 +72,7 @@ All 31 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 | `FMP_OPTIONS_HEALTH_ENABLED` | `bool` | `False` | Master switch for the fundamental-health overlay bundled into the options premium-directive matrix (Altman Z / Piotroski F / Net Debt-EBITDA / FCF Yield / 30-day realized vol). Single gate bundling three endpoints. See §3a below. |
 | `FMP_OPTIONS_CONTEXT_ENABLED` | `bool` | `False` | Master switch for the market/qualitative-context overlay on the options premium-directive matrix (news headlines, capped at 3/symbol, + peer-comparison tickers). Single gate bundling two endpoints, deliberately separate from `FMP_OPTIONS_HEALTH_ENABLED`. See §3b below. |
 | `FMP_PEERS_ENABLED` | `bool` | `False` | Master switch for the on-demand `GET /data/peers/{symbol}` peer-group lookup (webapp's Symbol Comparison "suggest peers" affordance). Single gate, deliberately separate from `FMP_OPTIONS_CONTEXT_ENABLED` despite both calling the same `fetch_peer_group` — different cadence/rate-limit shape (per-click vs. per-cycle batch). See §3b below. |
+| `FMP_UNIVERSE_ENABLED` | `bool` | `False` | Master switch for using FMP's historical S&P 500 constituent-changes feed as the PRIMARY source for `universe_engine.py`'s point-in-time survivorship-bias reconstruction, with the Wikipedia "Selected changes" table scrape (removed from the live page entirely as of 2026-08) demoted to a fallback. Single gate. See §8 below. |
 
 ### Behavior knobs (9)
 
@@ -268,3 +269,70 @@ degrades honestly rather than silently).
 Finnhub-specific and is not re-pointed at the dispatchers — it remains a
 separately-selectable `SENTIMENT_SOURCES` entry for an operator who wants Finnhub
 specifically, alongside (or instead of) `fmp_news`.
+
+---
+
+## 8. S&P 500 constituent-changes feed (2026-08 addition)
+
+Added because Wikipedia removed the "Selected changes to the list of S&P 500
+components" table from `List_of_S%26P_500_companies` entirely (confirmed live,
+2026-08 — not a markup/selector shift, the table content is gone), which broke
+`universe_engine.py::fetch_and_cache_universe()` unconditionally on any fresh
+clone with no pre-existing local `data/universe_cache.parquet`. FMP's historical
+S&P 500 constituent-changes feed carries a similar date/added-ticker/removed-ticker
+schema and replaces the Wikipedia changes table as the primary source, with
+Wikipedia demoted to a fallback.
+
+**Endpoint used:** `data/fmp_client.py::historical_sp500_changes` wraps
+`GET /historical-sp-500` with no parameters (returns the full change history in
+one call, unlike the paginated `/news/stock`).
+
+**⚠️ NOT verified against a live FMP account.** Unlike every other feed in this
+document, this one's endpoint path and response field names (`date`, and either
+`symbol`/`addedTicker` for the added ticker, `removedTicker` for the removed one)
+are best-effort from public FMP documentation only — this integration was built in
+a sandbox with no live-market network access, and FMP's own docs site returned
+HTTP 403 to automated fetches while researching it. The wrapper and dispatcher are
+both written defensively specifically because of this: `fetch_sp500_changes_via_fmp`
+(`data/fmp_universe.py`) never raises, and an empty result (wrong path, unexpected
+field names, entitlement rejection, or any other failure) falls straight through
+to the Wikipedia scrape unchanged — so a schema surprise degrades safely into a
+no-op rather than corrupting the cached universe. **Before relying on
+`FMP_UNIVERSE_ENABLED=True` as the working primary path (not just a safe no-op),
+run `python3 universe_engine.py --report` with a real `FMP_API_KEY` and confirm:
+the constituent/bias-report counts look sane, and `data/universe_cache.parquet`'s
+change rows carry `_provider="fmp"` rather than silently falling back to
+`"wikipedia"` the whole time.** Update this section with the result (real
+confirmed field names and a "Verified live YYYY-MM-DD" note, matching §7's
+convention) once that check has actually been run — do not treat this note as
+satisfied by anything less.
+
+**Wikipedia's current-constituents table is untouched by this change.** Only the
+*historical changes* half of `fetch_and_cache_universe()` is FMP-eligible —
+Wikipedia's first table (current S&P 500 roster) is unaffected by the "Selected
+changes" table's removal and stays the unconditional source of truth for the
+CURRENT roster regardless of `FMP_UNIVERSE_ENABLED`.
+
+**Consumers, all provider-agnostic (FMP-first, Wikipedia-fallback):**
+- `universe_engine.py::fetch_and_cache_universe()` — the sole call site. Tries
+  `data.fmp_universe.fetch_sp500_changes_via_fmp()` first; an empty list (flag off,
+  no key, `FMPUnavailable`, or nothing usable) falls through to the existing
+  `_parse_wikipedia_changes_table()` unchanged. Each change row is tagged
+  `_provider: "fmp"` or `"wikipedia"` in the cached parquet for exactly this kind
+  of debugging.
+- `validation/harness.py::run()` and
+  `simulation_engine.py::print_survivorship_warning_for_backtest` — both already
+  consumed `universe_engine.get_universe_with_survivorship_warning`; neither needed
+  any change, since the FMP/Wikipedia split is entirely internal to
+  `fetch_and_cache_universe()`. `validation/harness.py::run()` additionally gained
+  its own guard (independent of this feed) so a universe-lookup failure of any
+  kind degrades to an honest NaN-flagged `bias_report` sentinel instead of crashing
+  the whole validation run — see `CLAUDE.md`'s "Degenerate-std guard convention"-
+  adjacent bullet on this fix for detail.
+
+**Flag-off is byte-identical.** With the default `False` (or no `FMP_API_KEY`),
+`data.fmp_universe.fetch_sp500_changes_via_fmp()` returns `[]` with zero network
+calls — `data/fmp_client.py` is never even imported by `universe_engine.py` in
+that case (the import is lazy, inside `fetch_and_cache_universe()`) — reproducing
+today's exact Wikipedia-changes-table behavior. Proven by
+`tests/test_dead_letter_resilience.py::TestFetchAndCacheUniverseFMPPrimarySource::test_fmp_disabled_by_default_uses_wikipedia_changes_table`.

@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 263,
+    "live_safe": 267,
     "no_op": 2,
     "restart_required": 90,
-    "total": 355
+    "total": 359
   },
   "dynamic_sites": [
     {
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 366,
+  "files_scanned": 369,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -242,6 +242,7 @@
     "FMP_RETRY_BACKOFF_SECONDS",
     "FMP_SECTOR_SNAPSHOT_ENABLED",
     "FMP_TIMEOUT_SECONDS",
+    "FMP_UNIVERSE_ENABLED",
     "FOLLOW_MIN_AMOUNT",
     "FORECAST_BACKFILL_DEADLINE_SECONDS",
     "FORECAST_BACKFILL_ENABLED",
@@ -269,6 +270,9 @@
     "GRAVITY_AI_RUNNER_OUTPUT_PATH",
     "HISTORICAL_STORE_ENABLED",
     "JOBS_API_ENABLED",
+    "JULES_API_KEY",
+    "JULES_ENABLED",
+    "JULES_REQUEST_TIMEOUT_SECONDS",
     "KELLY_CAP",
     "KELLY_FRACTION",
     "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
@@ -411,15 +415,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 738,
+    "attr": 748,
     "factory_param": 4,
-    "getattr_const": 255,
+    "getattr_const": 257,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 221,
+    "attr": 224,
     "factory_param": 4,
-    "getattr_const": 155,
+    "getattr_const": 156,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -1251,7 +1255,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:110",
+        "site": "ml/forecast_backfill.py:128",
         "via": []
       }
     ],
@@ -1315,7 +1319,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4816",
+        "site": "api/pilots_api.py:4817",
         "via": []
       },
       {
@@ -1445,7 +1449,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:133",
+        "site": "ml/forecast_backfill.py:151",
         "via": []
       }
     ],
@@ -1456,7 +1460,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:120",
+        "site": "ml/forecast_backfill.py:138",
         "via": []
       }
     ],
@@ -1467,7 +1471,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "ml/forecast_backfill.py:115",
+        "site": "ml/forecast_backfill.py:133",
         "via": []
       }
     ],
@@ -1478,7 +1482,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:126",
+        "site": "ml/forecast_backfill.py:144",
         "via": []
       }
     ],
@@ -1489,7 +1493,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:127",
+        "site": "ml/forecast_backfill.py:145",
         "via": []
       }
     ],
@@ -1500,7 +1504,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:131",
+        "site": "ml/forecast_backfill.py:149",
         "via": []
       }
     ],
@@ -1511,7 +1515,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:122",
+        "site": "ml/forecast_backfill.py:140",
         "via": []
       }
     ],
@@ -1522,7 +1526,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:130",
+        "site": "ml/forecast_backfill.py:148",
         "via": []
       }
     ],
@@ -1533,7 +1537,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:132",
+        "site": "ml/forecast_backfill.py:150",
         "via": []
       }
     ],
@@ -1544,7 +1548,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:125",
+        "site": "ml/forecast_backfill.py:143",
         "via": []
       }
     ],
@@ -1555,7 +1559,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:129",
+        "site": "ml/forecast_backfill.py:147",
         "via": []
       }
     ],
@@ -1566,7 +1570,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:124",
+        "site": "ml/forecast_backfill.py:142",
         "via": []
       }
     ],
@@ -1577,7 +1581,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:128",
+        "site": "ml/forecast_backfill.py:146",
         "via": []
       }
     ],
@@ -1588,7 +1592,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:123",
+        "site": "ml/forecast_backfill.py:141",
         "via": []
       }
     ],
@@ -1706,7 +1710,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "Gravity AI Review Suite.py:4493",
+        "site": "Gravity AI Review Suite.py:4514",
         "via": []
       }
     ],
@@ -1952,7 +1956,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4433",
+        "site": "investyo_mcp_server.py:4515",
         "via": []
       }
     ],
@@ -1972,7 +1976,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4385",
+        "site": "investyo_mcp_server.py:4467",
         "via": []
       }
     ],
@@ -2012,7 +2016,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4393",
+        "site": "investyo_mcp_server.py:4475",
         "via": []
       }
     ],
@@ -2023,7 +2027,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:136",
+        "site": "ml/forecast_backfill.py:154",
         "via": []
       }
     ],
@@ -2238,7 +2242,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:10999",
+        "site": "Gravity AI Review Suite.py:11020",
         "via": []
       }
     ],

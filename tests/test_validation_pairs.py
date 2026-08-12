@@ -2,14 +2,26 @@ import numpy as np
 import pandas as pd
 import pytest
 from execution.cost_model import TieredCostModel
+import validation.harness as harness_module
 from validation.harness import StrategyValidationHarness
 from signals.pairs_trading import generate_pairs_signals
 
-def test_validation_harness_runs_on_pairs_strategy(tmp_path):
+def test_validation_harness_runs_on_pairs_strategy(tmp_path, monkeypatch):
     """
     Smoke-tests the StrategyValidationHarness on our Kalman-based pairs strategy
     using synthetic cointegrated series.
     """
+    # run() reads the module-level get_universe_with_survivorship_warning
+    # binding directly, not the constructor's universe_fn kwarg below (which
+    # StrategyValidationHarness.run() never calls) -- see
+    # tests/test_harness_oos_gate.py's identical fixture for the established
+    # pattern this mirrors. Keeps this test fully offline.
+    monkeypatch.setattr(
+        harness_module, "get_universe_with_survivorship_warning",
+        lambda _d: (["Y", "X"], {"n_current": 2, "n_at_date": 2,
+                                  "n_delisted_in_period": 0, "estimated_bias_pct": 0.5}),
+    )
+
     np.random.seed(42)
     n = 300
     dates = pd.date_range(start='2020-01-01', periods=n, freq='B')
