@@ -794,6 +794,106 @@ def test_sentiment_agent_failure_still_404s_even_with_catalyst_ok(monkeypatch):
     assert resp.status_code == 404
 
 
+def _canned_sentiment_for_snapshot_tests():
+    from sentiment_risk_engine import SentimentResult
+
+    return SentimentResult(
+        ticker="AAPL",
+        date=datetime(2026, 7, 20, tzinfo=timezone.utc),
+        sentiment_score=0.4,
+        sentiment_intensity=0.7,
+        credibility_score=0.85,
+        volatility_persistence=0.9,
+        source="antigravity_agent",
+    )
+
+
+def _mock_sentiment_call_chain(monkeypatch):
+    """Shared plumbing for the snapshot-lookup tests below: real bars, a
+    canned SentimentResult, and a canned (empty) news-catalyst response --
+    isolating the assertions to the new attention_score/sector_heat_factor
+    lookup this diff adds."""
+    bars = _synthetic_bars()
+    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
+    monkeypatch.setattr(
+        metrics_api, "SentimentRiskEngine", lambda: _FakeSentimentEngine(_canned_sentiment_for_snapshot_tests())
+    )
+    monkeypatch.setattr(
+        metrics_api, "get_symbol_news_catalyst_details", lambda symbol: _canned_catalyst_details()
+    )
+
+
+def test_sentiment_attention_and_sector_heat_populated_from_snapshot(monkeypatch):
+    """attention_score/sector_heat_factor are pulled from the matching
+    state_snapshot.json signals[] entry for this symbol."""
+    _mock_sentiment_call_chain(monkeypatch)
+    monkeypatch.setattr(
+        metrics_api,
+        "load_snapshot",
+        lambda: {"signals": [{"symbol": "AAPL", "attention_score": 1.23, "sector_heat_factor": 4.56}]},
+    )
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["attention_score"] == 1.23
+    assert body["sector_heat_factor"] == 4.56
+
+
+def test_sentiment_attention_and_sector_heat_null_on_symbol_miss(monkeypatch):
+    """A snapshot with no matching signals[] entry for this symbol degrades
+    to null (never a fabricated 0.0), not an error -- CONSTRAINT #4."""
+    _mock_sentiment_call_chain(monkeypatch)
+    monkeypatch.setattr(
+        metrics_api,
+        "load_snapshot",
+        lambda: {"signals": [{"symbol": "MSFT", "attention_score": 1.23, "sector_heat_factor": 4.56}]},
+    )
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["attention_score"] is None
+    assert body["sector_heat_factor"] is None
+
+
+def test_sentiment_attention_and_sector_heat_case_insensitive_match(monkeypatch):
+    """A signals[] entry whose symbol isn't already uppercase (neither
+    snapshot writer normalizes it -- see pilots/symbols.py::find_signal)
+    still matches an upper-cased request symbol."""
+    _mock_sentiment_call_chain(monkeypatch)
+    monkeypatch.setattr(
+        metrics_api,
+        "load_snapshot",
+        lambda: {"signals": [{"symbol": "aapl", "attention_score": 1.23, "sector_heat_factor": 4.56}]},
+    )
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["attention_score"] == 1.23
+    assert body["sector_heat_factor"] == 4.56
+
+
+def test_sentiment_malformed_snapshot_degrades_instead_of_500(monkeypatch):
+    """A malformed snapshot (signals not a list) must not crash the request
+    -- it degrades to null attention_score/sector_heat_factor, dead-letter
+    safe per CONSTRAINT #6, same as every other pilots/symbols.py-based
+    snapshot reader in this codebase."""
+    _mock_sentiment_call_chain(monkeypatch)
+    monkeypatch.setattr(metrics_api, "load_snapshot", lambda: {"signals": "not-a-list"})
+
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        resp = client.get("/metrics/sentiment/AAPL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["attention_score"] is None
+    assert body["sector_heat_factor"] is None
+
+
 class TestCORSLanTailscale:
     """LAN/Tailscale origins are allowed via api.cors.LAN_TAILSCALE_ORIGIN_REGEX
     (additive to the explicit CORS_ALLOWED_ORIGINS list), scoped to the Pilots

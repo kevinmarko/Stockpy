@@ -10,7 +10,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SentimentDynamics } from "./SentimentDynamics";
 import { api } from "../api/client";
-import { mockNoProviderSentimentFixture } from "../api/mock";
+import { emptySentimentDynamicsExtras, mockNoProviderSentimentFixture } from "../api/mock";
 
 function renderScreen() {
   return render(
@@ -30,7 +30,7 @@ describe("SentimentDynamics screen (real mock API)", () => {
 
   it("renders the populated tiles for the default symbol (mock's antigravity_agent example)", async () => {
     renderScreen();
-    expect(await screen.findByText("Sentiment Score")).toBeInTheDocument();
+    expect(await screen.findByText("LLM Sentiment")).toBeInTheDocument();
     expect(screen.getByText("0.15")).toBeInTheDocument();
     expect(screen.getByText("0.94")).toBeInTheDocument();
     // No "unavailable" note for the populated happy path.
@@ -51,6 +51,7 @@ describe("SentimentDynamics screen (real mock API)", () => {
       headlines: [],
       earnings_catalyst: null,
       provider_used: "none",
+      ...emptySentimentDynamicsExtras,
     });
     renderScreen();
 
@@ -90,6 +91,7 @@ describe("SentimentDynamics screen (real mock API)", () => {
           multiplier: 0,
         },
         provider_used: "fmp",
+        ...emptySentimentDynamicsExtras,
       });
       renderScreen();
       const badge = await screen.findByTestId("earnings-catalyst-badge");
@@ -110,9 +112,10 @@ describe("SentimentDynamics screen (real mock API)", () => {
           next_earnings_date: null,
           hours_to_earnings: null,
           status: "normal",
-          multiplier: 1,
+          multiplier: 1.0,
         },
         provider_used: "fmp",
+        ...emptySentimentDynamicsExtras,
       });
       renderScreen();
       const banner = await screen.findByTestId("earnings-catalyst-banner");

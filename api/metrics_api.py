@@ -58,7 +58,8 @@ from signals.registry import global_registry
 from signals.aggregator import SignalAggregator
 from signals.base import SignalContext
 from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
-from pilots.scoring import load_snapshot
+from pilots.scoring import load_snapshot, _coerce_float
+from pilots.symbols import find_signal
 import engine.advisory
 
 logger = logging.getLogger(__name__)
@@ -323,6 +324,19 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
         logger.warning("metrics_api: news catalyst details failed for %s: %s", symbol, catalyst_result)
         catalyst_result = {"headlines": [], "earnings_catalyst": None, "provider_used": "none"}
 
+    # load_snapshot() is synchronous file I/O + JSON parsing — this is the
+    # only async def handler in this file, so it's dispatched via
+    # asyncio.to_thread (matching sentiment_task/catalyst_task above) rather
+    # than called inline, which would block the shared event loop for every
+    # other concurrent request. find_signal() is the established, guarded
+    # symbol lookup (case/whitespace-normalized, never raises on a malformed
+    # snapshot) — see pilots/symbols.py — and _coerce_float() matches the
+    # NaN/inf-safe coercion every other numeric snapshot field goes through.
+    snapshot = await asyncio.to_thread(load_snapshot)
+    sig = find_signal(snapshot, symbol)
+    attention_score = _coerce_float(sig.get("attention_score")) if sig else None
+    sector_heat_factor = _coerce_float(sig.get("sector_heat_factor")) if sig else None
+
     result = {
         "ticker": sentiment_result.ticker,
         "date": sentiment_result.date.isoformat(),
@@ -337,6 +351,8 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
         "source_breakdown": catalyst_result.get("source_breakdown", {}),
         "raw_sentiment_avg": catalyst_result.get("raw_sentiment_avg"),
         "dampened_sentiment_score": catalyst_result.get("dampened_sentiment_score"),
+        "attention_score": attention_score,
+        "sector_heat_factor": sector_heat_factor,
     }
 
     return _clean_nan(result)
