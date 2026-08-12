@@ -151,6 +151,40 @@ def test_stop_never_goes_negative_under_extreme_atr() -> None:
     assert stop >= 0.01, "stop must be clamped to >= $0.01 (never negative or zero)"
 
 
+def test_active_long_stale_chandelier_above_price_clamped_to_price() -> None:
+    """Finding 9: a stale chandelier_long sitting ABOVE current_price (e.g. a
+    trailing high set before a sharp drawdown) is not a sane trailing stop for
+    a resting sell order -- clamp to current_price."""
+    out = apply_sell_side_range(
+        signal="BUY",
+        current_price=100.00,
+        safe_atr=2.00,
+        chandelier_long=150.00,  # stale, above current_price
+        chandelier_short=0.0,
+        forecast_price=0.0,
+    )
+    m = _SELL_ZONE_RE.match(out)
+    assert m is not None
+    _, _, stop = map(float, m.groups())
+    assert stop == pytest.approx(100.00)
+
+
+def test_risk_reduce_stale_chandelier_above_price_clamped_to_price() -> None:
+    """Finding 9: same clamp applied to the RISK REDUCE immediate-exit branch."""
+    out = apply_sell_side_range(
+        signal="RISK REDUCE",
+        current_price=50.00,
+        safe_atr=1.00,
+        chandelier_long=75.00,  # stale, above current_price
+        chandelier_short=0.0,
+        forecast_price=0.0,
+    )
+    m = _SELL_NOW_RE.match(out)
+    assert m is not None
+    (stop,) = map(float, m.groups())
+    assert stop == pytest.approx(50.00)
+
+
 def test_unknown_signal_fails_closed_to_sell_now() -> None:
     """Unknown / future signal strings fail closed to the conservative exit branch."""
     out = apply_sell_side_range(

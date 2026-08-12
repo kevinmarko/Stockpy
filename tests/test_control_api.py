@@ -1129,6 +1129,81 @@ class TestJobsApi:
             via_query = client.get(f"/jobs/{job_id}/stream?token=read-tok")
             assert via_query.status_code == 200
 
+    def test_stream_yields_log_content_via_offloaded_read(self, monkeypatch, tmp_path):
+        """Content-level coverage for the asyncio.to_thread-backed
+        ``_read_lines`` helper -- the prior tests only asserted status
+        codes and never actually read the SSE body, so a regression in the
+        offloaded-read/offset bookkeeping would have gone uncaught."""
+        log_path = tmp_path / "job.log"
+        log_path.write_text("line one\nline two\n")
+        handle = _FakeHandle(running=False, rc=0, log_path=log_path)
+        monkeypatch.setattr(jobs_module, "launch_preflight", lambda: handle)
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            created = client.post(
+                "/jobs",
+                json={"job_type": "preflight"},
+                headers={"Authorization": "Bearer cmd-tok"},
+            ).json()
+            job_id = created["job_id"]
+
+            resp = client.get(f"/jobs/{job_id}/stream?token=read-tok")
+            assert resp.status_code == 200
+            body = resp.text
+            assert "id: 0\ndata: line one\n\n" in body
+            assert "id: 0\ndata: line two\n\n" in body
+            assert "event: end\ndata: Job completed with exit code 0\n\n" in body
+
+            # Resuming from an offset that already covers "line one" (its
+            # length + the trailing newline) must yield only "line two" --
+            # proves current_offset is threaded through the to_thread call
+            # correctly rather than always reading from 0.
+            resume_offset = len("line one\n")
+            resumed = client.get(
+                f"/jobs/{job_id}/stream?token=read-tok&offset={resume_offset}"
+            )
+            assert resumed.status_code == 200
+            resumed_body = resumed.text
+            assert "line one" not in resumed_body
+            assert f"id: {resume_offset}\ndata: line two\n\n" in resumed_body
+
+    def test_stream_survives_non_missing_stat_error(self, monkeypatch, tmp_path):
+        """A non-FileNotFoundError OSError from the size-check stat (a
+        dropped network mount, a permission change) must degrade to "no new
+        data this tick" and be logged -- not crash the SSE generator with an
+        unhandled exception (which would surface as a broken/incomplete
+        stream to the client instead of a clean, if quiet, response)."""
+        log_path = tmp_path / "job.log"
+        log_path.write_text("line one\n")
+        handle = _FakeHandle(running=False, rc=0, log_path=log_path)
+        monkeypatch.setattr(jobs_module, "launch_preflight", lambda: handle)
+        monkeypatch.setattr(
+            control_api.os,
+            "stat",
+            mock.Mock(side_effect=PermissionError("mocked: permission denied")),
+        )
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"), \
+             mock.patch.object(control_api.logger, "warning") as mock_warning:
+            created = client.post(
+                "/jobs",
+                json={"job_type": "preflight"},
+                headers={"Authorization": "Bearer cmd-tok"},
+            ).json()
+            job_id = created["job_id"]
+
+            resp = client.get(f"/jobs/{job_id}/stream?token=read-tok")
+
+        assert resp.status_code == 200
+        body = resp.text
+        # No log content was read (the stat failure suppressed the read),
+        # but the stream still terminates cleanly with the end event.
+        assert "line one" not in body
+        assert "event: end\ndata: Job completed with exit code 0\n\n" in body
+        assert mock_warning.called
+
 
 # ---------------------------------------------------------------------------
 # Architectural guard

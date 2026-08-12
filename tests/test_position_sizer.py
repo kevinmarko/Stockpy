@@ -374,6 +374,35 @@ class TestPortfolioGrossCap:
         for symbol in positions:
             assert out.scaled_weights[symbol] == pytest.approx(expected[symbol], rel=1e-9)
 
+    def test_coverage_gap_symbol_first_in_order_does_not_falsely_flag_capped(self):
+        """Finding 22 regression: on the cov-matrix path, portfolio_vol_target
+        ZEROES OUT any symbol missing from cov_matrix (its own correct
+        behavior for unknowable risk), which is NOT the uniform
+        portfolio-gross scalar this recovery loop is trying to recover. If
+        that coverage-gap symbol happens to be FIRST in iteration order,
+        naively dividing its zeroed scaled value by its raw weight recovers a
+        false scale_factor=0.0 (-> a false was_capped=True) instead of the
+        real uniform scalar applied to the covered names."""
+        # "MISSING" (absent from cov_matrix) is deliberately first in dict
+        # insertion order.
+        weights = {"MISSING": 0.5, "AAPL": 0.5, "MSFT": 0.5}
+        cov = pd.DataFrame(
+            [[0.0004, 0.0], [0.0, 0.0004]], index=["AAPL", "MSFT"], columns=["AAPL", "MSFT"]
+        )
+        # A quiet book (0.02 vol/name) vs a generous target_vol -> the real
+        # scalar portfolio_vol_target computes for AAPL/MSFT saturates at the
+        # reduction-only ceiling (1.0), i.e. the covered names are genuinely
+        # NOT capped.
+        out = apply_portfolio_gross_cap(
+            weights, max_gross=3.0, cov_matrix=cov, target_vol=0.10
+        )
+        assert out.scaled_weights["MISSING"] == pytest.approx(0.0)
+        assert out.scaled_weights["AAPL"] == pytest.approx(0.5, rel=1e-9)
+        assert out.scaled_weights["MSFT"] == pytest.approx(0.5, rel=1e-9)
+        assert out.scale_factor == pytest.approx(1.0, rel=1e-9)
+        assert out.was_capped is False
+        assert out.binding_constraint is None
+
     def test_scale_factor_derivation_skips_zero_weight_names(self):
         """A zero-weight name must not be used to derive the representative
         scale_factor (0/0 is undefined) -- the first non-zero name is used

@@ -76,7 +76,7 @@ META_LABELED_SIGNAL_IDS: tuple[str, ...] = (
 # were fixed, SignalAggregator.aggregate() only ever queries the registry
 # with the two real signal_ids above, so a "TSMOM_10d" entry would just sit
 # unused. The multi-horizon backfill is a standalone research/diagnostic
-# engine (see docs/FORECAST_BACKFILL_PLAN.md) — surfaced via
+# engine (see docs/plans/FORECAST_BACKFILL_PLAN.md) — surfaced via
 # GET /pilots/forecast_backfill and the webapp Forecast Backfill screen, not
 # wired into live position sizing.
 

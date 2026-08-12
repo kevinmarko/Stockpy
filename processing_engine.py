@@ -445,10 +445,13 @@ class ProcessingEngine:
                     info.get('netPercentInsiderShares')
                     or info.get('netPercentInstitutionsSharesOut')
                 )
-                if not inst_change or inst_change == 0.0:
+                if inst_change is None:
                     # EXPLANATION: Fallback to monthly change in short interest as a proxy
                     # for institutional velocity, since Yahoo Finance has removed direct
                     # institutional transaction keys from the info dictionary.
+                    # A genuine 0.0 reading (field present, no net change) must be
+                    # preserved as-is -- only a truly absent field (None) triggers
+                    # the proxy fallback (CONSTRAINT #4: don't overwrite real data).
                     short_prior = float(info.get('sharesShortPriorMonth', 0.0) or 0.0)
                     short_curr  = float(info.get('sharesShort', 0.0) or 0.0)
                     shares_out  = float(info.get('sharesOutstanding', 1.0) or 1.0)
@@ -615,11 +618,14 @@ class ProcessingEngine:
         df['Realized_Vol_60D'] = realized_vol_60d
 
         # Momentum Vol Scaled = ROC_12M * (0.10 / realized_vol_60d)
-        # Handle zero or NaN volatility safely
+        # Handle zero or NaN volatility safely -- NaN (never a fabricated 0.0)
+        # when the scaled value cannot genuinely be computed (CONSTRAINT #4):
+        # a ticker with <60 days of history should read as "no opinion", not
+        # "flat momentum".
         df['Momentum_Vol_Scaled'] = np.where(
             (realized_vol_60d > 0) & (df['ROC_12M'].notna()) & (realized_vol_60d.notna()),
             df['ROC_12M'] * (0.10 / realized_vol_60d),
-            0.0
+            np.nan
         )
 
         return df
@@ -676,6 +682,11 @@ def calculate_rolling_beta(
         rolling_cov = returns.rolling(window).cov(spy_returns)
         rolling_var = spy_returns.rolling(window).var()
         beta = rolling_cov / rolling_var
+        # Degenerate-std guard (repo convention): a near-constant SPY window
+        # produces a rolling_var that is near-zero but not exactly 0.0 due to
+        # floating-point noise, which would otherwise explode beta. Mirrors
+        # risk/etf_transmission.py's `_DEGENERATE_STD` (1e-12) threshold.
+        beta = beta.mask(rolling_var < 1e-12, np.nan)
         beta.name = "Rolling_Beta"
         return beta
 

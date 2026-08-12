@@ -153,6 +153,43 @@ def test_pilot_detail_shape(monkeypatch):
     assert body["reason"] is None
 
 
+def test_pilot_detail_news_coverage_null_for_non_news_pilot(monkeypatch):
+    # trend-following carries no `news_catalyst` weight -> news_coverage must
+    # be null, never a fabricated/borrowed value (CONSTRAINT #4).
+    _point_reports_at_fixtures(monkeypatch)
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES):
+        resp = client.get("/pilots/trend-following")
+    assert resp.status_code == 200
+    assert resp.json()["news_coverage"] is None
+
+
+def test_pilot_detail_news_coverage_populated_for_news_catalyst_pilot(monkeypatch):
+    _point_reports_at_fixtures(monkeypatch)
+    fake_coverage = {
+        "archived_score_count": 412,
+        "headline_volume_7d": 18,
+        "universe_score_distribution": {"positive": 9, "neutral": 21, "negative": 4},
+    }
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES), mock.patch(
+        "pilots.news_catalyst.get_news_catalyst_coverage", return_value=fake_coverage
+    ):
+        resp = client.get("/pilots/news-catalyst")
+    assert resp.status_code == 200
+    assert resp.json()["news_coverage"] == fake_coverage
+
+
+def test_pilot_detail_news_coverage_degrades_to_none_on_failure(monkeypatch):
+    # get_news_catalyst_coverage itself never raises (CONSTRAINT #6) — but the
+    # detail endpoint must also survive a None return honestly, not 500.
+    _point_reports_at_fixtures(monkeypatch)
+    with mock.patch.object(settings, "OUTPUT_DIR", FIXTURES), mock.patch(
+        "pilots.news_catalyst.get_news_catalyst_coverage", return_value=None
+    ):
+        resp = client.get("/pilots/news-catalyst")
+    assert resp.status_code == 200
+    assert resp.json()["news_coverage"] is None
+
+
 def test_pilot_detail_unknown_404():
     resp = client.get("/pilots/does-not-exist")
     assert resp.status_code == 404
@@ -886,14 +923,30 @@ class TestFollowAuthorized:
             def latest_account_snapshot(self):
                 return _FakeSnap()
 
+        # This test is about proportional-split math, not Kelly sizing -- stub
+        # the Kelly ceiling generously. plan_follow first calls
+        # estimate_win_rate_and_payoff_per_strategy to decide cold-start vs.
+        # warm; a real (unmocked) TransactionsStore for a brand-new
+        # "Follow:<pilot_id>" strategy always has zero closed trades, which
+        # would report cold-start and route around kelly_sizing_for_strategy
+        # entirely -- so both must be stubbed together for this stub to have
+        # any effect.
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
                 with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
-                    resp = client.post(
-                        "/pilots/trend-following/follow",
-                        json={"amount": 1000.0},
-                        headers=self._auth(),
-                    )
+                    with mock.patch(
+                        "sizing.kelly.estimate_win_rate_and_payoff_per_strategy",
+                        return_value=(0.6, 1.5, 999),
+                    ):
+                        with mock.patch(
+                            "sizing.kelly.kelly_sizing_for_strategy",
+                            return_value=(1.0, "test_stub_no_ceiling"),
+                        ):
+                            resp = client.post(
+                                "/pilots/trend-following/follow",
+                                json={"amount": 1000.0},
+                                headers=self._auth(),
+                            )
         assert resp.status_code == 200
         body = resp.json()
         assert body["follow"]["pilot_id"] == "trend-following"
@@ -4559,7 +4612,7 @@ class TestAgenticScanConfigWrite:
         assert "created_at" in row and "updated_at" in row
         # Actually persisted to disk (not just echoed).
         on_disk = json.loads((tmp_path / "scan_configs.json").read_text(encoding="utf-8"))
-        assert on_disk["scan_configs"][0]["name"] == "high_momentum_breakout"
+        assert on_disk["scan_configs"][-1]["name"] == "high_momentum_breakout"
 
     def test_upsert_calls_store_exactly_once_with_full_payload(self, tmp_path):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):

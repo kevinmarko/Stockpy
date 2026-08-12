@@ -180,6 +180,33 @@ class CrossSectionalMomentumSignal(SignalModule):
             explanation=explanation,
         )
 
+    # ------------------------------------------------------------------ #
+    # Vectorized historical-backfill fast path (ml/forecast_backfill.py    #
+    # only -- never called from the live per-cycle pipeline)               #
+    # ------------------------------------------------------------------ #
+
+    def compute_batch_xsec(self, ranks_wide: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """Vectorized replay of compute()'s score formula across every date
+        at once.
+
+        Must stay numerically identical to the per-date pre_compute() +
+        per-ticker compute() combination:
+            rank = valid_returns.rank(pct=True, ascending=True)   # pre_compute
+            score = 2.0 * (rank - 0.5)                             # compute
+        This is the literal same formula, applied to an already-ranked wide
+        frame instead of per-ticker dict lookups (verified by
+        tests/test_forecast_backfill.py's fast-path/slow-path parity test).
+
+        confidence/explanation/meta_label_proba from the slow path are NOT
+        reproduced here -- they are confirmed unused downstream in
+        ml/forecast_backfill.py (`_resolve_meta_features` resolves this
+        module's meta_label_features against step 2's shared technical
+        columns, never against out_df's columns); only `score`'s sign feeds
+        the exported ``{name}_Signal`` column, and this hook preserves that
+        exactly.
+        """
+        return 2.0 * (ranks_wide - 0.5)
+
 
 # ---------------------------------------------------------------------------
 # Utilities

@@ -9,6 +9,11 @@ Responsibilities
 1. **Kill-switch gate** — if the global kill switch is active,
    ``submit_order_with_idempotency`` raises ``KillSwitchActiveError`` BEFORE
    the dedup check and BEFORE any broker call, making it impossible to bypass.
+   A SECOND check runs inside ``_submit_with_retry``, immediately before each
+   real broker call (after the LeakyBucketQueue wait / retry backoff sleep),
+   so activating the switch WHILE an order is waiting in the queue or between
+   retries still blocks it -- the entry-time check alone cannot see a switch
+   flipped during that wait.
 
 2. **Idempotency** — every ``OrderIntent`` is assigned a deterministic
    ``client_order_id`` derived from (strategy_id, timestamp_bucket, symbol,
@@ -184,6 +189,16 @@ class OrderManager:
         # Set of client_order_ids already submitted this process lifetime.
         # Prevents a double-call bug even when the broker's dedup window expires.
         self._submitted: set[str] = set()
+        # Per-client_order_id lock making the "check _submitted, then submit,
+        # then register in _submitted" sequence atomic across concurrent
+        # asyncio callers. Without this, two concurrent calls for the SAME
+        # coid can both observe "not yet submitted" before either one
+        # registers it (the register only happens after the broker call,
+        # which awaits) -- both then reach the broker. Locks are created
+        # lazily via dict.setdefault, which is synchronous and therefore
+        # race-free even without its own guard. Grows unboundedly across a
+        # process lifetime, matching ``_submitted``'s own documented growth.
+        self._submit_locks: dict[str, asyncio.Lock] = {}
         # Rate-limiting queue — sheds low-priority (BUY) requests under load;
         # high-priority (SELL / stop-loss) are allowed to wait for a token.
         self._queue: LeakyBucketQueue = LeakyBucketQueue(
@@ -209,9 +224,14 @@ class OrderManager:
         -------------------
         1. Kill-switch check — raises ``KillSwitchActiveError`` if active.
         2. Derive ``client_order_id``; return ACCEPTED early if already submitted.
+           Steps 2-4 run inside a per-coid ``asyncio.Lock`` so two concurrent
+           calls for the same intent can't both pass the dedup check before
+           either registers it — see the lock's own inline comment.
         3. Pre-trade risk gate — returns ERROR result if any check fails.
         4. ``_submit_with_retry`` → rate-limit gate + broker (see that method's
-           docstring for why the LeakyBucketQueue gate lives there, not here).
+           docstring for why the LeakyBucketQueue gate lives there, not here;
+           also re-checks the kill switch immediately before each real broker
+           call, closing the TOCTOU window a queue wait or retry sleep opens).
 
         Parameters
         ----------
@@ -245,52 +265,69 @@ class OrderManager:
         intent.client_order_id = coid
         intent.dry_run = self._dry_run
 
-        if coid in self._submitted:
-            logger.warning(
-                "Idempotency: client_order_id %s already submitted; skipping duplicate.",
-                coid,
-            )
-            return OrderResult(
-                client_order_id=coid,
-                broker_order_id=None,
-                status=OrderStatus.ACCEPTED,
-            )
-
-        # 3. Pre-trade risk gate (only when a gate and context were injected).
-        if self._risk_gate is not None and risk_context is not None:
-            gate_passed, gate_results = self._risk_gate.run_all(intent, risk_context)
-            if not gate_passed:
-                failing = next(r for r in gate_results if not r.passed)
+        # The check-(risk-gate)-submit-register sequence below must be
+        # atomic per coid: two concurrent calls for the SAME client_order_id
+        # could otherwise both observe "not yet submitted" before either one
+        # registers it (registration only happens after the broker call,
+        # which awaits and yields control) -- both would then reach the
+        # broker, defeating idempotency. A per-coid asyncio.Lock serializes
+        # the whole sequence for a given coid; a concurrent call for a
+        # DIFFERENT coid is unaffected (each coid gets its own lock).
+        lock = self._submit_locks.setdefault(coid, asyncio.Lock())
+        async with lock:
+            if coid in self._submitted:
+                logger.warning(
+                    "Idempotency: client_order_id %s already submitted; skipping duplicate.",
+                    coid,
+                )
                 return OrderResult(
                     client_order_id=coid,
                     broker_order_id=None,
-                    status=OrderStatus.ERROR,
-                    error_message=f"PRE-TRADE GATE [{failing.check_name}]: {failing.reason}",
+                    status=OrderStatus.ACCEPTED,
                 )
 
-        result = await self._submit_with_retry(intent)
+            # 3. Pre-trade risk gate (only when a gate and context were injected).
+            if self._risk_gate is not None and risk_context is None:
+                logger.warning(
+                    "Risk gate is configured but no risk_context was supplied for %s %s x %.4f "
+                    "(coid=%s) -- ALL pre-trade risk checks are being silently skipped for this "
+                    "order. Pass risk_context= to submit_order_with_idempotency to enable them.",
+                    intent.side.value, intent.symbol, intent.qty, coid,
+                )
+            if self._risk_gate is not None and risk_context is not None:
+                gate_passed, gate_results = self._risk_gate.run_all(intent, risk_context)
+                if not gate_passed:
+                    failing = next(r for r in gate_results if not r.passed)
+                    return OrderResult(
+                        client_order_id=coid,
+                        broker_order_id=None,
+                        status=OrderStatus.ERROR,
+                        error_message=f"PRE-TRADE GATE [{failing.check_name}]: {failing.reason}",
+                    )
 
-        if result.status != OrderStatus.ERROR:
-            self._submitted.add(coid)
-            logger.info(
-                "Order accepted: %s %s x %.4f | coid=%s broker_id=%s",
-                intent.side.value,
-                intent.symbol,
-                intent.qty,
-                coid,
-                result.broker_order_id,
-            )
-        else:
-            logger.error(
-                "Order FAILED after retries: %s %s x %.4f | coid=%s | %s",
-                intent.side.value,
-                intent.symbol,
-                intent.qty,
-                coid,
-                result.error_message,
-            )
+            result = await self._submit_with_retry(intent)
 
-        return result
+            if result.status != OrderStatus.ERROR:
+                self._submitted.add(coid)
+                logger.info(
+                    "Order accepted: %s %s x %.4f | coid=%s broker_id=%s",
+                    intent.side.value,
+                    intent.symbol,
+                    intent.qty,
+                    coid,
+                    result.broker_order_id,
+                )
+            else:
+                logger.error(
+                    "Order FAILED after retries: %s %s x %.4f | coid=%s | %s",
+                    intent.side.value,
+                    intent.symbol,
+                    intent.qty,
+                    coid,
+                    result.error_message,
+                )
+
+            return result
 
     async def reconcile_state(
         self,
@@ -427,6 +464,25 @@ class OrderManager:
                     broker_order_id=None,
                     status=OrderStatus.ERROR,
                     error_message="Rate-limit load-shed: API utilization above threshold. Retry later.",
+                )
+
+            # Second kill-switch check, immediately before the actual broker
+            # call -- the LeakyBucketQueue wait above (or a prior retry's
+            # backoff sleep) can take seconds, during which the kill switch
+            # could be activated AFTER the entry-time check in
+            # submit_order_with_idempotency already passed. Without this,
+            # the module docstring's "impossible to bypass" claim would be
+            # false for any order that spent time waiting in the queue or
+            # between retries.
+            if self._kill_switch.is_active():
+                reason = self._kill_switch.reason()
+                logger.critical(
+                    "ORDER BLOCKED — global kill switch ACTIVE (detected before broker "
+                    "call, mid-submission). Reason: %s", reason,
+                )
+                raise KillSwitchActiveError(
+                    f"Global kill switch is active — all order submission blocked. "
+                    f"Reason: {reason or '(none)'}"
                 )
 
             result = await self._broker.submit_order(intent)

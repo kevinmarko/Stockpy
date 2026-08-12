@@ -99,7 +99,7 @@ panel that reads `output/state_snapshot.json` for display.
 You (Gemini) own **`observability/`** (specifically `observability/alerts.py`,
 gated per the sequencing rule above) **and root-level `alerting.py`** in this
 phase. Claude does **NOT** touch these files in this phase — Claude's
-concurrent work is elsewhere (see `docs/CONFIG_SCHEMA_PLAN.md` for Claude's
+concurrent work is elsewhere (see `docs/plans/CONFIG_SCHEMA_PLAN.md` for Claude's
 sibling assignment, which has zero file overlap with this one).
 
 **You own (and may edit, subject to the sequencing gate above):**

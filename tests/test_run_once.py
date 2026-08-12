@@ -108,14 +108,26 @@ class TestLoadWatchlist:
         result = _load_watchlist()
         assert result == ["AAPL", "MSFT", "GOOG"]
 
-    def test_env_var_takes_precedence_over_file(
+    def test_env_var_and_file_are_merged(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
+        """WATCHLIST env var and watchlist.txt are a genuine union, not precedence."""
         monkeypatch.setenv("WATCHLIST", "TSLA")
         (tmp_path / "watchlist.txt").write_text("NVDA\nAMD\n")
         monkeypatch.chdir(tmp_path)
         result = _load_watchlist()
-        assert result == ["TSLA"]
+        assert set(result) == {"TSLA", "NVDA", "AMD"}
+
+    def test_env_var_and_file_union_with_overlap_deduped(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """Different tickers in each source are unioned; overlapping ones are deduped."""
+        monkeypatch.setenv("WATCHLIST", "TSLA,NVDA")
+        (tmp_path / "watchlist.txt").write_text("NVDA\nAMD\n")
+        monkeypatch.chdir(tmp_path)
+        result = _load_watchlist()
+        assert set(result) == {"TSLA", "NVDA", "AMD"}
+        assert len(result) == 3  # NVDA not duplicated
 
     def test_from_file(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
@@ -175,6 +187,7 @@ class TestBuildUniverse:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
         with patch("main._load_tickers_from_sheet2", return_value=[]):
@@ -185,6 +198,7 @@ class TestBuildUniverse:
     ) -> None:
         """Sheet2 is consulted only when held + watchlist are both empty."""
         monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
         with patch("main._load_tickers_from_sheet2", return_value=["SPY", "QQQ"]):
@@ -214,6 +228,38 @@ class TestBuildUniverse:
             result = _build_universe(snap)
         mock_sheet2.assert_not_called()
         assert "TSLA" in result
+
+    def test_build_universe_symbol_rating_exclusion_failure_handled(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """When SYMBOL_RATING_AUTO_DROP_ENABLED is on but SymbolRatingStore fails,
+        the exception should be caught and the universe returned unaffected."""
+        monkeypatch.setattr("main.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setenv("WATCHLIST", "NVDA,MSFT")
+        monkeypatch.chdir(tmp_path)
+        snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
+
+        with patch("rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols", side_effect=Exception("mocked failure")):
+            result = _build_universe(snap)
+
+        # AAPL (held), NVDA, MSFT (watchlist) should remain in the universe
+        assert set(result) == {"AAPL", "NVDA", "MSFT"}
+        assert result == sorted(result)
+
+    def test_watchlist_env_and_file_both_merged_into_universe(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """WATCHLIST env var and watchlist.txt, populated with different tickers,
+        are both merged into the universe -- a genuine 3-way union with held
+        positions, per this repo's documented `positions ∪ WATCHLIST ∪
+        watchlist.txt` convention."""
+        monkeypatch.setenv("WATCHLIST", "NVDA,MSFT")
+        (tmp_path / "watchlist.txt").write_text("AMD\nINTC\n")
+        monkeypatch.chdir(tmp_path)
+        snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
+        result = _build_universe(snap)
+        assert set(result) == {"AAPL", "NVDA", "MSFT", "AMD", "INTC"}
+        assert result == sorted(result)
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +502,7 @@ class TestRunOnce:
     ) -> None:
         """No held symbols and no watchlist → empty RunResult; advisory never called."""
         monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         mock_snap.return_value = _make_snapshot(positions={})
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)

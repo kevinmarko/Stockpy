@@ -390,7 +390,7 @@ def _import_roots(source: str) -> set:
 
 @pytest.mark.parametrize(
     "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry"],
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst"],
 )
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
@@ -429,7 +429,11 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # scan_configs section of its payload.
         allowed = allowed | {"pilots"}
     if module_name == "scan_config_store":
-        allowed = allowed | {"datetime"}
+        # threading backs the module-level path-keyed config cache (a fresh
+        # ScanConfigStore is constructed per request by every real caller,
+        # so the cache lives at module scope, guarded by a lock, rather than
+        # on the instance).
+        allowed = allowed | {"datetime", "copy", "threading"}
     if module_name == "watchlist_writer":
         # Stdlib-only append helper for watchlist.txt (no settings, no engines):
         # os (WATCHLIST env precedence check, mirroring main._load_watchlist),
@@ -463,6 +467,16 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # NaN/Infinity sanitizer, pathlib for the glob-based catalog) is
         # already in the base allowlist.
         allowed = allowed | {"datetime"}
+    if module_name == "news_catalyst":
+        # pilots.news_catalyst reads data.historical_store.HistoricalStore
+        # (readonly=True).count_finbert_scores() -- confirmed dependency-light
+        # by inspection, same as pilots.sector_selection's `data` allowance
+        # above -- for archived_score_count/headline_volume_7d. `datetime` is
+        # used only for the 7-day `since` cutoff; it never imports
+        # `signals.news_catalyst` -- the current-cycle universe distribution
+        # is read from the already-persisted `news_sentiment` field in
+        # output/state_snapshot.json instead of a live signal computation.
+        allowed = allowed | {"data", "datetime"}
     if module_name == "prompt_registry":
         # pilots.prompt_registry wraps prompt_registry.registry.get_registry()
         # (and prompt_registry.cache / prompt_registry.__main__ for baseline

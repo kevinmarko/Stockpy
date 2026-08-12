@@ -4,6 +4,7 @@ InvestYo Quant Platform - Relative Strength Signal Module
 Phase 4B: Scores relative strength/underperformance compared to the S&P 500.
 """
 
+import numpy as np
 import pandas as pd
 from signals.base import SignalModule, SignalContext, SignalOutput
 from signals.registry import global_registry
@@ -14,7 +15,11 @@ class RelativeStrengthSignal(SignalModule):
     required_features = []
 
     def compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame:
-        rs = df.get("relative_strength", pd.Series(0.0, index=df.index))
+        # When the column is absent, fall back to NaN (never a fabricated 0.0)
+        # so `valid = rs.notna()` correctly excludes every row -- matching the
+        # scalar compute()'s neutral/no-score behavior for the same missing-
+        # column case, instead of a fabricated full bearish (-1.0) reading.
+        rs = df.get("relative_strength", pd.Series(np.nan, index=df.index))
         
         score = pd.Series(0.0, index=df.index)
         exps = pd.Series("", index=df.index)

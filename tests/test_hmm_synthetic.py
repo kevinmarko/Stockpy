@@ -143,3 +143,44 @@ def test_risk_on_probability_higher_in_calm_regime_window():
     turbulent_risk_on = detector.predict_proba(turbulent_df)["risk_on_probability"]
 
     assert calm_risk_on > turbulent_risk_on
+
+
+def test_near_constant_feature_column_does_not_explode_scaled_values():
+    """Finding 8 regression: a near-constant (not bit-identical) feature
+    column produces a std that is near-zero but not exactly 0.0 due to
+    floating-point noise. The old exact ``== 0.0`` guard on
+    ``feature_stds_`` let that near-zero value through unclamped, exploding
+    the corresponding scaled feature column (``(X - mean) / std``) to huge
+    magnitudes. The fixed ``< 1e-12`` guard (the repo's degenerate-std
+    convention) clamps it to ``std=1.0`` instead."""
+    n = 200
+    rng = np.random.default_rng(3)
+    dates = pd.bdate_range(end=pd.Timestamp("2024-01-01"), periods=n)
+    # One column near-constant with floating-point-scale noise (~1e-13) --
+    # NOT bit-identical, so an exact `== 0.0` check would not catch it.
+    near_constant = 5.0 + rng.normal(0, 1e-13, size=n)
+    features_df = pd.DataFrame(
+        {
+            "spy_return": rng.normal(0.0005, 0.01, size=n),
+            "realized_vol_20d": near_constant,
+            "vix_level": rng.normal(15, 3, size=n),
+            "yield_curve_spread": rng.normal(0.5, 0.2, size=n),
+        },
+        index=dates,
+    )
+
+    detector = HMMRegimeDetector(n_states=2, retrain_freq_days=10_000, random_state=7)
+    detector.fit(features_df)
+
+    near_constant_idx = features_df.columns.get_loc("realized_vol_20d")
+    # The near-constant column's std must have been clamped to 1.0, not left
+    # at its true near-zero (but not exactly 0.0) value.
+    assert detector.feature_stds_[near_constant_idx] == 1.0
+
+    # And the scaled feature values for that column must stay bounded --
+    # before the fix, dividing by a ~1e-13 std would explode (X - mean) by a
+    # factor on the order of 1e12+.
+    X = features_df.to_numpy(dtype=float)
+    X_scaled = (X - detector.feature_means_) / detector.feature_stds_
+    assert np.all(np.isfinite(X_scaled[:, near_constant_idx]))
+    assert np.all(np.abs(X_scaled[:, near_constant_idx]) < 1e6)

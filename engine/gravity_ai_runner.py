@@ -550,7 +550,14 @@ def _print_report_human(report: RunReport) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    load_dotenv(override=False)
+    # Anchored to ENV_PATH (settings.py) rather than a bare load_dotenv() —
+    # bare load_dotenv() uses find_dotenv(), which walks UP from this file's
+    # directory and, in a git worktree with no .env of its own, silently
+    # finds a PARENT checkout's .env instead. See settings.ENV_PATH's
+    # docstring comment for the full three-locators writeup.
+    from settings import ENV_PATH  # noqa: PLC0415
+
+    load_dotenv(ENV_PATH, override=False)
     parser = argparse.ArgumentParser(
         prog="python -m engine.gravity_ai_runner",
         description="Run the AI Gravity audit (Claude auditor + Gemini cross-checker).",
@@ -566,9 +573,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.step is None:
         report = run_all()
     else:
+        try:
+            from settings import settings as _s  # noqa: PLC0415
+
+            enabled = bool(getattr(_s, "GRAVITY_AI_RUNNER_ENABLED", False))
+        except Exception:
+            enabled = False
         report = RunReport(
             generated_at=_utc_iso(),
-            enabled=False,
+            enabled=enabled,
             steps=[run_step(args.step)],
             summary={},
         )

@@ -53,10 +53,11 @@ nobody) rather than fail closed and silently shrink the tracked universe.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import create_db_engine, resolve_database_url, session_scope
@@ -225,33 +226,66 @@ class SymbolRatingStore:
         here, "don't know" must default to "keep tracking it", exactly the
         same CONSTRAINT #4/#6 reasoning ``rating.symbol_rating.classify_tier``
         applies to a NaN score.
+
+        Issues exactly ONE query (a ``ROW_NUMBER() OVER (PARTITION BY
+        symbol ORDER BY id DESC)`` window function, filtered server-side to
+        ``rn <= _MAX_STREAK_SCAN_ROWS``) instead of one query per symbol --
+        this both avoids the N+1 round-trip pattern of the naive per-symbol
+        loop AND keeps the per-symbol row cap enforced in SQL, so the
+        number of rows transferred from the DB stays bounded by
+        ``_MAX_STREAK_SCAN_ROWS * len(symbols)`` regardless of how much
+        history has accumulated for any one symbol.
         """
         try:
             session = self.Session()
             try:
                 if known_symbols is not None:
-                    symbols = {str(s).upper() for s in known_symbols}
+                    symbols_filter = {str(s).upper() for s in known_symbols}
+                    if not symbols_filter:
+                        return set()
                 else:
-                    symbols = {
-                        row[0] for row in session.query(SymbolRatingEvent.symbol).distinct().all()
-                    }
+                    symbols_filter = None
+
+                rank = (
+                    func.row_number()
+                    .over(
+                        partition_by=SymbolRatingEvent.symbol,
+                        order_by=SymbolRatingEvent.id.desc(),
+                    )
+                    .label("rn")
+                )
+                ranked_query = session.query(
+                    SymbolRatingEvent.symbol,
+                    SymbolRatingEvent.tier,
+                    SymbolRatingEvent.is_held,
+                    rank,
+                )
+                if symbols_filter is not None:
+                    ranked_query = ranked_query.filter(
+                        SymbolRatingEvent.symbol.in_(symbols_filter)
+                    )
+                ranked = ranked_query.subquery()
+
+                capped_rows = (
+                    session.query(ranked.c.symbol, ranked.c.tier, ranked.c.is_held)
+                    .filter(ranked.c.rn <= _MAX_STREAK_SCAN_ROWS)
+                    .order_by(ranked.c.symbol, ranked.c.rn)
+                    .all()
+                )
+
+                grouped_rows: dict = defaultdict(list)
+                for symbol, tier, is_held in capped_rows:
+                    grouped_rows[symbol].append((tier, is_held))
 
                 excluded: "set[str]" = set()
-                for symbol in symbols:
-                    rows = (
-                        session.query(SymbolRatingEvent)
-                        .filter(SymbolRatingEvent.symbol == symbol)
-                        .order_by(SymbolRatingEvent.id.desc())
-                        .limit(_MAX_STREAK_SCAN_ROWS)
-                        .all()
-                    )
+                for symbol, rows in grouped_rows.items():
                     if not rows:
                         continue
-                    if rows[0].is_held:
+                    if rows[0][1]:
                         continue  # currently held -- never excluded, see rating.symbol_rating.should_exclude
                     consecutive = 0
-                    for row in rows:
-                        if row.tier != "BAD":
+                    for tier, _is_held in rows:
+                        if tier != "BAD":
                             break
                         consecutive += 1
                     if consecutive >= threshold_cycles:

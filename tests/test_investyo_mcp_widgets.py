@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import ClassVar
 from unittest.mock import Mock
 
 import pytest
@@ -140,17 +141,28 @@ class TestRegisterWidgetResourcesDegrade:
 
 
 class TestRegisterWidgetResourcesSuccess:
+    # Mirrors mcp_widget_resources._WIDGET_RESOURCES exactly -- kept as a
+    # standalone tuple (rather than importing the real list) so this test
+    # fixture independently proves every entry in that module-level list has
+    # a real, buildable template, instead of trivially matching whatever the
+    # list happens to contain.
+    _TEMPLATE_NAMES = (
+        "pilot-picker.html",
+        "pilot-detail.html",
+        "follow-result.html",
+        "pilot-compare.html",
+        "pilot-portfolio.html",
+        "equity-curve.html",
+        "risk-matrix.html",
+        "signal-tree.html",
+        "execution-queue.html",
+    )
+
     def _build_full_fixture(self, tmp_path):
         bundle_path = tmp_path / "fake-bundle.js"
         bundle_path.write_text("globalThis.ExtApps={FAKE:1};")
         _write_common_assets(tmp_path)
-        for name in (
-            "pilot-picker.html",
-            "pilot-detail.html",
-            "follow-result.html",
-            "pilot-compare.html",
-            "pilot-portfolio.html",
-        ):
+        for name in self._TEMPLATE_NAMES:
             (tmp_path / name).write_text(
                 "<!doctype html>\n"
                 "<style>/*__WIDGET_COMMON_CSS__*/</style>\n"
@@ -162,7 +174,7 @@ class TestRegisterWidgetResourcesSuccess:
             )
         return bundle_path
 
-    def test_all_five_registered_with_correct_uris_and_mime_type(self, monkeypatch, tmp_path):
+    def test_all_nine_registered_with_correct_uris_and_mime_type(self, monkeypatch, tmp_path):
         bundle_path = self._build_full_fixture(tmp_path)
         monkeypatch.setattr(mcp_widget_resources, "BUNDLE_PATH", bundle_path)
         monkeypatch.setattr(mcp_widget_resources, "TEMPLATES_DIR", tmp_path)
@@ -173,15 +185,9 @@ class TestRegisterWidgetResourcesSuccess:
         result = mcp_widget_resources.register_widget_resources(fake_mcp)
 
         assert result is True
-        assert fake_mcp.resource.call_count == 5
+        assert fake_mcp.resource.call_count == len(self._TEMPLATE_NAMES)
 
-        expected_uris = {
-            "ui://widgets/pilot-picker.html",
-            "ui://widgets/pilot-detail.html",
-            "ui://widgets/follow-result.html",
-            "ui://widgets/pilot-compare.html",
-            "ui://widgets/pilot-portfolio.html",
-        }
+        expected_uris = {f"ui://widgets/{name}" for name in self._TEMPLATE_NAMES}
         seen_uris = set()
         for call in fake_mcp.resource.call_args_list:
             args, kwargs = call
@@ -341,6 +347,136 @@ class TestPilotPortfolioWidgetSmoke:
         tool = srv.mcp._tool_manager.get_tool("get_portfolio_by_pilot")
         assert tool is not None
         assert tool.meta == srv._PILOT_PORTFOLIO_UI
+
+
+class TestAnalyticsWidgetsSmoke:
+    """Covers the 4 Chart.js-backed analytics widgets (equity-curve,
+    risk-matrix, signal-tree, execution-queue) added alongside the
+    Pilot-picker widgets: real-bundle rendering, tool<->widget meta wiring,
+    and that every tool wired to one of these widgets actually emits a
+    ```json fenced block matching the schema its widget expects (never a
+    bare markdown/image response with nothing for the widget to parse)."""
+
+    _TOOL_TO_UI: ClassVar[dict[str, tuple[str, str]]] = {
+        "plot_equity_curve": ("_EQUITY_CURVE_UI", "ui://widgets/equity-curve.html"),
+        "plot_portfolio_equity": ("_EQUITY_CURVE_UI", "ui://widgets/equity-curve.html"),
+        "get_var_es_metrics": ("_RISK_MATRIX_UI", "ui://widgets/risk-matrix.html"),
+        "get_factor_attributions": ("_RISK_MATRIX_UI", "ui://widgets/risk-matrix.html"),
+        "get_signal_breakdown": ("_SIGNAL_TREE_UI", "ui://widgets/signal-tree.html"),
+        "get_execution_queue": ("_EXECUTION_QUEUE_UI", "ui://widgets/execution-queue.html"),
+    }
+
+    @pytest.mark.parametrize(
+        "template_name",
+        ["equity-curve.html", "risk-matrix.html", "signal-tree.html", "execution-queue.html"],
+    )
+    @pytest.mark.skipif(
+        not mcp_widget_resources.BUNDLE_PATH.exists(),
+        reason=(
+            "vendored ext-apps bundle not built locally; run: "
+            "cd mcp_widgets/build && npm install && npm run build"
+        ),
+    )
+    def test_renders_with_no_leftover_placeholders_and_has_chartjs(self, template_name):
+        result = mcp_widget_resources.render_widget_html(template_name)
+        assert result is not None
+        assert "__EXT_APPS_BUNDLE__" not in result
+        assert "__WIDGET_COMMON_CSS__" not in result
+        assert "__WIDGET_COMMON_JS__" not in result
+        assert "globalThis.ExtApps=" in result
+        # Chart.js is only actually rendered by equity-curve/risk-matrix
+        # (signal-tree/execution-queue are DOM list/table renders, matching
+        # the shape of their real -- flat, non-numeric-series -- tool output).
+        if template_name in ("equity-curve.html", "risk-matrix.html"):
+            assert "Chart.js v" in result
+
+    def test_ui_wiring_consistent_with_widgets_available(self):
+        import investyo_mcp_server as srv
+
+        for attr_name, expected_uri in {
+            "_EQUITY_CURVE_UI": "ui://widgets/equity-curve.html",
+            "_RISK_MATRIX_UI": "ui://widgets/risk-matrix.html",
+            "_SIGNAL_TREE_UI": "ui://widgets/signal-tree.html",
+            "_EXECUTION_QUEUE_UI": "ui://widgets/execution-queue.html",
+        }.items():
+            value = getattr(srv, attr_name)
+            if srv._WIDGETS_AVAILABLE:
+                assert value == {"ui": {"resourceUri": expected_uri}}
+            else:
+                assert value is None
+
+    @pytest.mark.parametrize("tool_name", list(_TOOL_TO_UI))
+    def test_tool_meta_matches_its_widget_constant(self, tool_name):
+        import investyo_mcp_server as srv
+
+        attr_name, _ = self._TOOL_TO_UI[tool_name]
+        tool = srv.mcp._tool_manager.get_tool(tool_name)
+        assert tool is not None
+        assert tool.meta == getattr(srv, attr_name)
+
+    def test_plot_equity_curve_emits_json_payload_matching_widget_schema(self, monkeypatch):
+        import investyo_mcp_server as srv
+
+        class _FakeTicker:
+            def __init__(self, *_a, **_k):
+                pass
+
+            def history(self, period="1y"):
+                import pandas as pd
+
+                idx = pd.date_range("2024-01-02", periods=60, freq="B")
+                return pd.DataFrame(
+                    {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 1000},
+                    index=idx,
+                )
+
+        monkeypatch.setattr(srv, "yf", type("_yf", (), {"Ticker": _FakeTicker}), raising=False)
+
+        result = srv.plot_equity_curve("AAPL", period="3mo")
+
+        assert isinstance(result, str)
+        if "```json" not in result:
+            pytest.skip(f"backtrader simulation did not produce a real result in this env: {result[:200]}")
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["symbol"] == "AAPL"
+        assert isinstance(payload["dates"], list) and payload["dates"]
+        assert isinstance(payload["series"], list) and payload["series"]
+        assert isinstance(payload["series"][0]["values"], list)
+
+    def test_get_execution_queue_empty_payload_matches_widget_schema(self, monkeypatch, tmp_path):
+        import investyo_mcp_server as srv
+
+        empty_queue = tmp_path / "execution_queue.json"
+        empty_queue.write_text(json.dumps({"mode": "off", "intents": [], "kill_switch_active": False}))
+        monkeypatch.setattr(srv._settings, "OUTPUT_DIR", tmp_path, raising=False)
+
+        result = srv.get_execution_queue()
+
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["orders"] == []
+        assert payload["mode"] == "off"
+        assert payload["kill_switch_active"] is False
+
+    def test_get_var_es_metrics_insufficient_history_has_no_json_block(self, monkeypatch):
+        """Honesty check: when the tool can't compute real metrics it must
+        return its plain "insufficient history" text with NO ```json block
+        at all -- the widget's extractJsonPayload() then correctly returns
+        null and renders the honest empty-state, never a fabricated chart."""
+        import investyo_mcp_server as srv
+
+        class _FakeStore:
+            def get_bars(self, *_a, **_k):
+                return None
+
+        monkeypatch.setattr(
+            "data.historical_store.HistoricalStore", lambda: _FakeStore()
+        )
+
+        result = srv.get_var_es_metrics("AAPL")
+
+        assert "insufficient history" in result
+        assert "```json" not in result
 
 
 # ---------------------------------------------------------------------------

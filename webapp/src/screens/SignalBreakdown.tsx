@@ -11,7 +11,6 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { Button, ErrorState, Loading, Table, Tile } from "../components/ui";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 import { fmtNum } from "../format";
 import { pnlColor, theme } from "../theme";
 import { exportCsv } from "../utils/csv";
@@ -98,7 +97,7 @@ function Breakdown({ d }: { d: SignalBreakdownData }) {
         </div>
       ) : (
         <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-          <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+          <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "var(--s-2)", flexWrap: "wrap" }}>
               <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Module contributions</h2>
               <Button
@@ -178,7 +177,7 @@ function GlobalImportancePanel() {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="global-importance-panel">
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-subhead)", margin: "0 0 var(--s-1)" }}>Signal driver weights (universe-wide)</h2>
         <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", margin: 0, lineHeight: 1.5 }}>
           Mean absolute contribution per module, averaged across every symbol currently
@@ -278,7 +277,6 @@ export function SignalBreakdown() {
             advisory engine; the module split from the signal aggregator.
           </p>
         </div>
-        <Button variant="neutral" onClick={() => resetGridLayout("signal-breakdown")}>Reset Layout</Button>
       </div>
 
       <TabGuide tabKey="signals" />
@@ -289,22 +287,14 @@ export function SignalBreakdown() {
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
         <div style={{ flex: 1, minHeight: 0 }}>
-          <DynamicGrid
-            layoutKey="signal-breakdown"
-            defaultLayouts={{
-              lg: [
-                { i: "breakdown", x: 0, y: 0, w: 7, h: 6, minW: 5, minH: 4 },
-                { i: "importance", x: 7, y: 0, w: 5, h: 6, minW: 4, minH: 4 },
-              ],
-            }}
-          >
+          <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
             <div key="breakdown">
               <Breakdown d={data} />
             </div>
             <div key="importance">
               <GlobalImportancePanel />
             </div>
-          </DynamicGrid>
+          </div>
         </div>
       )}
     </div>

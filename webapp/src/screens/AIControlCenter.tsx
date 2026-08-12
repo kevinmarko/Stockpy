@@ -7,7 +7,6 @@ import { ErrorState, Loading, MetricBadge, Notice, Select, StaleDataNotice } fro
 import { Toggle } from "../components/Toggle";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
-import { DynamicGrid, resetGridLayout } from "../components/DynamicGrid";
 
 /**
  * AI Control Center — the write path over GET/PUT /llm/setting for the 5 AI
@@ -63,9 +62,6 @@ export function AIControlCenter() {
             happened on the last real call.
           </p>
         </div>
-        <button className="reset-layout-btn" onClick={() => resetGridLayout("ai-control-layout")} title="Reset grid layout">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-        </button>
       </div>
 
       {loading && <Loading lines={5} />}
@@ -73,14 +69,14 @@ export function AIControlCenter() {
       {!loading && !error && data && (
         <>
           {stale && <StaleDataNotice cachedAt={cachedAt} onRetry={reload} />}
-          <DynamicGrid layoutKey="ai-control-layout" defaultLayouts={{ lg: [{ i: "toggles", x: 0, y: 0, w: 8, h: 4 }, { i: "telemetry", x: 8, y: 0, w: 4, h: 4 }] }}>
+          <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
             <div key="toggles">
               <CapabilityToggles data={data} onSaved={reload} />
             </div>
             <div key="telemetry">
               <TelemetrySection data={data} />
             </div>
-          </DynamicGrid>
+          </div>
         </>
       )}
     </div>
@@ -133,7 +129,7 @@ function CapabilityToggles({ data, onSaved }: { data: LlmStatus; onSaved: () => 
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Capabilities</h2>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
@@ -291,7 +287,7 @@ const LLM_BADGE_LABEL: Record<LlmCapabilityRow["status"], string> = {
 function TelemetrySection({ data }: { data: LlmStatus }) {
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }}>
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Provider telemetry</h2>
         <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
           What happened on the last real call to each provider.

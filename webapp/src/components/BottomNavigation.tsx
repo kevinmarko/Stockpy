@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { Modal } from "./Modal";
 import { theme } from "../theme";
-import { NAV_ITEMS, SECTION_ORDER, SECTION_LABEL, SECTION_ROUTE } from "../navigation";
+import { useNavItems, SECTION_ORDER, SECTION_LABEL, SECTION_ROUTE } from "../navigation";
 import { Menu, ArrowRight, Compass } from "lucide-react";
 
 /** Mobile-only fixed tab bar (top-level sections; hidden above the desktop breakpoint). */
@@ -11,9 +11,10 @@ export function BottomNav() {
   const nav = useNavigate();
   const path = loc.pathname;
   const [moreOpen, setMoreOpen] = useState(false);
+  const items = useNavItems();
 
-  const primary = NAV_ITEMS.filter((it) => it.section === "primary");
-  const secondary = NAV_ITEMS.filter((it) => it.section !== "primary");
+  const primary = items.filter((it) => it.section === "primary");
+  const secondary = items.filter((it) => it.section !== "primary");
   const moreActive = secondary.some((it) => it.match(path));
 
   const go = (to: string) => {
@@ -143,10 +144,11 @@ export function Sidebar() {
   const loc = useLocation();
   const nav = useNavigate();
   const path = loc.pathname;
-  const primary = NAV_ITEMS.filter((it) => it.section === "primary");
-  const secondary = NAV_ITEMS.filter((it) => it.section !== "primary");
+  const items = useNavItems();
+  const primary = items.filter((it) => it.section === "primary");
+  const secondary = items.filter((it) => it.section !== "primary");
 
-  const renderItem = (it: (typeof NAV_ITEMS)[number]) => {
+  const renderItem = (it: (typeof items)[number]) => {
     const Icon = it.ico;
     return (
       <button

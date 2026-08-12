@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 262,
+    "live_safe": 267,
     "no_op": 2,
     "restart_required": 90,
-    "total": 354
+    "total": 359
   },
   "dynamic_sites": [
     {
@@ -42,28 +42,28 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 164,
+      "line": 168,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3100,
+      "line": 3144,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4146,
+      "line": 4190,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4251,
+      "line": 4295,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 362,
+  "files_scanned": 369,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -242,6 +242,7 @@
     "FMP_RETRY_BACKOFF_SECONDS",
     "FMP_SECTOR_SNAPSHOT_ENABLED",
     "FMP_TIMEOUT_SECONDS",
+    "FMP_UNIVERSE_ENABLED",
     "FOLLOW_MIN_AMOUNT",
     "FORECAST_BACKFILL_DEADLINE_SECONDS",
     "FORECAST_BACKFILL_ENABLED",
@@ -269,6 +270,9 @@
     "GRAVITY_AI_RUNNER_OUTPUT_PATH",
     "HISTORICAL_STORE_ENABLED",
     "JOBS_API_ENABLED",
+    "JULES_API_KEY",
+    "JULES_ENABLED",
+    "JULES_REQUEST_TIMEOUT_SECONDS",
     "KELLY_CAP",
     "KELLY_FRACTION",
     "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
@@ -398,6 +402,7 @@
     "SYNC_WATCHLIST_FILES",
     "UNIVERSE_SYNC_ENABLED",
     "USE_DUAL_MOMENTUM_OVERLAY",
+    "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
     "VALIDATION_HARNESS_OOS_GATE_ENABLED",
     "VOL_TARGET",
     "WATCH_RULES_FILE",
@@ -410,15 +415,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 729,
+    "attr": 748,
     "factory_param": 4,
-    "getattr_const": 250,
+    "getattr_const": 257,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 221,
+    "attr": 224,
     "factory_param": 4,
-    "getattr_const": 153,
+    "getattr_const": 156,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -529,7 +534,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/order_manager.py:183",
+        "site": "execution/order_manager.py:188",
         "via": []
       }
     ],
@@ -604,7 +609,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/data_api.py:117",
+        "site": "api/data_api.py:121",
         "via": []
       },
       {
@@ -613,7 +618,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/metrics_api.py:70",
+        "site": "api/metrics_api.py:73",
         "via": []
       },
       {
@@ -622,7 +627,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:319",
+        "site": "api/pilots_api.py:321",
         "via": []
       },
       {
@@ -839,7 +844,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:108",
+        "site": "rating/symbol_rating_store.py:109",
         "via": []
       },
       {
@@ -985,7 +990,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:113",
+        "site": "rating/symbol_rating_store.py:114",
         "via": []
       },
       {
@@ -994,7 +999,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:115",
+        "site": "rating/symbol_rating_store.py:116",
         "via": []
       },
       {
@@ -1167,7 +1172,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:113",
+        "site": "rating/symbol_rating_store.py:114",
         "via": []
       },
       {
@@ -1176,7 +1181,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:115",
+        "site": "rating/symbol_rating_store.py:116",
         "via": []
       },
       {
@@ -1250,7 +1255,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:110",
+        "site": "ml/forecast_backfill.py:128",
         "via": []
       }
     ],
@@ -1292,7 +1297,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4628",
+        "site": "api/pilots_api.py:4672",
         "via": []
       }
     ],
@@ -1303,7 +1308,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4627",
+        "site": "api/pilots_api.py:4671",
         "via": []
       }
     ],
@@ -1314,7 +1319,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4772",
+        "site": "api/pilots_api.py:4817",
         "via": []
       },
       {
@@ -1389,7 +1394,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4752",
+        "site": "api/pilots_api.py:4796",
         "via": []
       },
       {
@@ -1433,7 +1438,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:609",
+        "site": "api/pilots_api.py:611",
         "via": []
       }
     ],
@@ -1444,7 +1449,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:133",
+        "site": "ml/forecast_backfill.py:151",
         "via": []
       }
     ],
@@ -1455,7 +1460,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:120",
+        "site": "ml/forecast_backfill.py:138",
         "via": []
       }
     ],
@@ -1466,7 +1471,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "ml/forecast_backfill.py:115",
+        "site": "ml/forecast_backfill.py:133",
         "via": []
       }
     ],
@@ -1477,7 +1482,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:126",
+        "site": "ml/forecast_backfill.py:144",
         "via": []
       }
     ],
@@ -1488,7 +1493,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:127",
+        "site": "ml/forecast_backfill.py:145",
         "via": []
       }
     ],
@@ -1499,7 +1504,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:131",
+        "site": "ml/forecast_backfill.py:149",
         "via": []
       }
     ],
@@ -1510,7 +1515,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:122",
+        "site": "ml/forecast_backfill.py:140",
         "via": []
       }
     ],
@@ -1521,7 +1526,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:130",
+        "site": "ml/forecast_backfill.py:148",
         "via": []
       }
     ],
@@ -1532,7 +1537,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:132",
+        "site": "ml/forecast_backfill.py:150",
         "via": []
       }
     ],
@@ -1543,7 +1548,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:125",
+        "site": "ml/forecast_backfill.py:143",
         "via": []
       }
     ],
@@ -1554,7 +1559,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:129",
+        "site": "ml/forecast_backfill.py:147",
         "via": []
       }
     ],
@@ -1565,7 +1570,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:124",
+        "site": "ml/forecast_backfill.py:142",
         "via": []
       }
     ],
@@ -1576,7 +1581,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:128",
+        "site": "ml/forecast_backfill.py:146",
         "via": []
       }
     ],
@@ -1587,7 +1592,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:123",
+        "site": "ml/forecast_backfill.py:141",
         "via": []
       }
     ],
@@ -1705,7 +1710,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "Gravity AI Review Suite.py:4493",
+        "site": "Gravity AI Review Suite.py:4514",
         "via": []
       }
     ],
@@ -1913,7 +1918,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:113",
+        "site": "rating/symbol_rating_store.py:114",
         "via": []
       },
       {
@@ -1951,7 +1956,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3722",
+        "site": "investyo_mcp_server.py:4513",
         "via": []
       }
     ],
@@ -1971,7 +1976,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3674",
+        "site": "investyo_mcp_server.py:4465",
         "via": []
       }
     ],
@@ -2011,7 +2016,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:3682",
+        "site": "investyo_mcp_server.py:4473",
         "via": []
       }
     ],
@@ -2022,7 +2027,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "ml/forecast_backfill.py:136",
+        "site": "ml/forecast_backfill.py:154",
         "via": []
       }
     ],
@@ -2217,7 +2222,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "pilots/scan_config_store.py:80",
+        "site": "pilots/scan_config_store.py:180",
         "via": []
       },
       {
@@ -2237,7 +2242,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:10999",
+        "site": "Gravity AI Review Suite.py:11020",
         "via": []
       }
     ],
@@ -2448,7 +2453,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:604",
+        "site": "api/pilots_api.py:606",
         "via": []
       },
       {
@@ -2477,7 +2482,7 @@
         "rules": [
           "closure_value"
         ],
-        "site": "pipeline/production_steps.py:531",
+        "site": "pipeline/production_steps.py:560",
         "via": []
       }
     ],
@@ -2506,7 +2511,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "main.py:256",
+        "site": "main.py:261",
         "via": []
       },
       {

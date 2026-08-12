@@ -21,6 +21,7 @@ This module MAY import the heavy calculation engines (unlike ``state_api.py`` /
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import datetime
@@ -52,10 +53,12 @@ from processing_engine import ProcessingEngine
 from forecasting_engine import ForecastingEngine
 from technical_options_engine import build_premium_directive, validate_directive_integrity
 from sentiment_risk_engine import SentimentRiskEngine
+from signals.news_catalyst import get_symbol_news_catalyst_details
 from signals.registry import global_registry
 from signals.aggregator import SignalAggregator
 from signals.base import SignalContext
 from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
+from pilots.scoring import load_snapshot
 import engine.advisory
 
 logger = logging.getLogger(__name__)
@@ -113,6 +116,41 @@ def _current_price(symbol: str, bars: pd.DataFrame) -> float:
         return float(get_provider().get_latest_quote(symbol).price)
     except (MarketDataError, Exception):  # noqa: B014 - defensive fallback
         return float(bars["Close"].iloc[-1])
+
+
+class _MacroProxy:
+    """``MacroEconomicDTO``-shaped stub (``.vix``/``.market_regime`` only) so
+    the VRP regime gate inside ``build_premium_directive`` fires without a
+    live FRED round-trip. Mirrors ``gui/panels/options_matrix.py::_MacroProxy``
+    / ``options_ondemand.py::_MacroProxy`` / ``reporting/options_snapshot.py::_MacroProxy``."""
+
+    def __init__(self, vix: float, market_regime: str):
+        self.vix = vix
+        self.market_regime = market_regime
+
+
+# Neutral defaults — the VRP regime gate in build_premium_directive only fires
+# on POSITIVE evidence of stress (VIX >= 30 or a CREDIT EVENT regime), so a
+# neutral default here reproduces "no override" rather than silently gating.
+# Mirrors options_ondemand.py's MACRO_DEFAULT_VIX/MACRO_DEFAULT_REGIME.
+_MACRO_DEFAULT_VIX = 15.0
+_MACRO_DEFAULT_REGIME = "RISK ON"
+
+
+def _macro_from_snapshot() -> tuple:
+    """Extract ``(vix, market_regime)`` from the persisted state snapshot,
+    falling back to neutral defaults when unavailable/malformed. Mirrors
+    ``options_ondemand.py::macro_from_snapshot``. Never raises."""
+    snapshot = load_snapshot()
+    if not isinstance(snapshot, dict):
+        return _MACRO_DEFAULT_VIX, _MACRO_DEFAULT_REGIME
+    raw_vix = snapshot.get("vix")
+    try:
+        vix = float(raw_vix) if raw_vix is not None else _MACRO_DEFAULT_VIX
+    except (TypeError, ValueError):
+        vix = _MACRO_DEFAULT_VIX
+    regime = str(snapshot.get("market_regime") or _MACRO_DEFAULT_REGIME)
+    return vix, regime
 
 
 @app.get("/health")
@@ -206,7 +244,16 @@ def get_options(symbol: str) -> Dict[str, Any]:
     except Exception:
         spot = float(bars["Close"].iloc[-1])
     try:
-        directive = build_premium_directive(symbol, bars, spot_price=spot, is_stale=is_stale)
+        vix, market_regime = _macro_from_snapshot()
+        macro_proxy = _MacroProxy(vix, market_regime)
+        directive = build_premium_directive(
+            symbol,
+            bars,
+            spot_price=spot,
+            is_stale=is_stale,
+            macro_dto=macro_proxy,
+            vrp=None,  # VRP requires an options chain — left None to skip that gate
+        )
         integrity = validate_directive_integrity(directive)
         directive = dict(directive)
         directive["Integrity_OK"] = bool(integrity.get("ok"))
@@ -220,7 +267,10 @@ def get_options(symbol: str) -> Dict[str, Any]:
 @app.get("/metrics/sentiment/{symbol}", dependencies=[Depends(require_token)])
 async def get_sentiment(symbol: str) -> Dict[str, Any]:
     """Sentiment Dynamics for ``symbol`` — Antigravity Agent news sentiment
-    plus GJR-GARCH asymmetric-volatility persistence.
+    plus GJR-GARCH asymmetric-volatility persistence, merged with a
+    ``signals.news_catalyst.get_symbol_news_catalyst_details`` news-catalyst
+    detail bundle (headlines, per-headline FinBERT/lexicon scores, earnings
+    proximity).
 
     Honesty contract (CONSTRAINT #4): an unconfigured/unavailable agent (SDK
     missing, no ``GEMINI_API_KEY``, or a failed live call) is a legitimate,
@@ -234,6 +284,19 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
     ``SentimentRiskEngine.get_live_sentiment`` is the single fixed engine call
     shared with the Streamlit ``gui/panels/sentiment_dynamics.py`` panel — one
     honesty contract enforced centrally, not two divergent implementations.
+    This handler does NOT modify ``sentiment_risk_engine.py`` — the two
+    results are combined here, at the API boundary, matching that module's
+    own docstring ("never touches ``signals/`` or ``StrategyEngine``").
+
+    The two calls run CONCURRENTLY via ``asyncio.gather`` — the news-catalyst
+    helper does blocking network I/O + FinBERT inference, so it is wrapped in
+    ``asyncio.to_thread`` rather than awaited inline (which would stall the
+    event loop for every other concurrent request). A news-catalyst failure
+    degrades that portion of the response to
+    ``headlines: [], earnings_catalyst: None, provider_used: "none"``
+    (logged, not propagated) — the Antigravity-agent fields above keep their
+    own independent honesty contract regardless of how the news-catalyst call
+    fares.
     """
     symbol = symbol.upper()
     bars = _fetch_bars(symbol, 252)
@@ -244,12 +307,21 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
     returns = bars['Close'].pct_change().dropna()
     date = datetime.now()
 
-    try:
-        engine = SentimentRiskEngine()
-        sentiment_result = await engine.get_live_sentiment(symbol, date, returns)
-    except Exception as exc:
-        logger.warning("metrics_api: sentiment dynamics failed for %s: %s", symbol, exc)
+    engine = SentimentRiskEngine()
+    sentiment_task = engine.get_live_sentiment(symbol, date, returns)
+    catalyst_task = asyncio.to_thread(get_symbol_news_catalyst_details, symbol)
+
+    sentiment_result, catalyst_result = await asyncio.gather(
+        sentiment_task, catalyst_task, return_exceptions=True
+    )
+
+    if isinstance(sentiment_result, BaseException):
+        logger.warning("metrics_api: sentiment dynamics failed for %s: %s", symbol, sentiment_result)
         raise HTTPException(status_code=404, detail="Sentiment calculation failed")
+
+    if isinstance(catalyst_result, BaseException):
+        logger.warning("metrics_api: news catalyst details failed for %s: %s", symbol, catalyst_result)
+        catalyst_result = {"headlines": [], "earnings_catalyst": None, "provider_used": "none"}
 
     result = {
         "ticker": sentiment_result.ticker,
@@ -259,6 +331,12 @@ async def get_sentiment(symbol: str) -> Dict[str, Any]:
         "credibility_score": sentiment_result.credibility_score,
         "volatility_persistence": sentiment_result.volatility_persistence,
         "source": sentiment_result.source,
+        "headlines": catalyst_result.get("headlines", []),
+        "earnings_catalyst": catalyst_result.get("earnings_catalyst"),
+        "provider_used": catalyst_result.get("provider_used", "none"),
+        "source_breakdown": catalyst_result.get("source_breakdown", {}),
+        "raw_sentiment_avg": catalyst_result.get("raw_sentiment_avg"),
+        "dampened_sentiment_score": catalyst_result.get("dampened_sentiment_score"),
     }
 
     return _clean_nan(result)

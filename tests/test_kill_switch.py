@@ -96,6 +96,16 @@ def _buy_intent(symbol: str = "AAPL") -> OrderIntent:
     )
 
 
+def _sell_intent(symbol: str = "AAPL") -> OrderIntent:
+    return OrderIntent(
+        strategy_id="test",
+        symbol=symbol,
+        side=OrderSide.SELL,
+        qty=1.0,
+        order_type=OrderType.MARKET,
+    )
+
+
 # ---------------------------------------------------------------------------
 # GlobalKillSwitch unit tests
 # ---------------------------------------------------------------------------
@@ -179,6 +189,43 @@ class TestOrderManagerKillSwitch:
             asyncio.run(om.submit_order_with_idempotency(_buy_intent()))
         assert broker.submit_count == 0
 
+    def test_kill_switch_activated_during_queue_wait_blocks_before_broker_call(
+        self, tmp_ks: GlobalKillSwitch, broker: MockBroker
+    ):
+        """TOCTOU regression (Finding 18): the entry-time kill-switch check in
+        submit_order_with_idempotency passes when the switch is still
+        inactive, but the LeakyBucketQueue wait inside _submit_with_retry can
+        take real wall-clock time. Activating the switch DURING that wait
+        must still block the order before it reaches the broker -- the
+        module docstring's "impossible to bypass" claim must hold for orders
+        that spend time waiting, not just for orders submitted instantly."""
+        from execution.leaky_bucket_queue import LeakyBucketQueue
+
+        om = OrderManager(broker, kill_switch=tmp_ks, dry_run=False)
+
+        # A drained, slow-refilling bucket forces await_or_shed to actually
+        # wait (a SELL/high-priority intent spin-waits rather than being
+        # shed) -- giving us a real window to activate the switch while the
+        # coroutine is suspended inside the queue wait, before a token
+        # becomes available ~0.2s later.
+        om._queue = LeakyBucketQueue(capacity=1, refill_rate=5.0)
+        om._queue.bucket.consume(1)  # drain the single token
+
+        async def activate_mid_wait():
+            await asyncio.sleep(0.05)
+            tmp_ks.activate(reason="activated during queue wait")
+
+        async def main():
+            submit_task = asyncio.create_task(
+                om.submit_order_with_idempotency(_sell_intent(), timestamp=datetime.now(timezone.utc))
+            )
+            await activate_mid_wait()
+            return await submit_task
+
+        with pytest.raises(KillSwitchActiveError):
+            asyncio.run(main())
+        assert broker.submit_count == 0, "kill switch activated mid-wait must block before the broker call"
+
 
 # ---------------------------------------------------------------------------
 # activate() -> observability.alerts.send_alert wiring (Phase O3)
@@ -189,7 +236,7 @@ class TestKillSwitchAlertDispatch:
     ``observability.alerts.send_alert`` out-of-band from the ``logger.critical``
     call, so an operator relying only on Discord/Slack/email (not tailing
     logs) is still notified — the platform's single highest-value
-    observability gap per docs/OBSERVABILITY_PLAN.md.
+    observability gap per docs/plans/OBSERVABILITY_PLAN.md.
     """
 
     def test_activate_calls_send_alert_critical(self, tmp_ks: GlobalKillSwitch):

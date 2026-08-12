@@ -16,7 +16,7 @@ See [`docs/architecture.md`](../architecture.md) for the full data-flow context.
 
 The **Pilot** column cross-links to the `pilots/catalog.py` Pilot that packages this
 module as a standalone, copyable strategy in the Pilots PWA (`webapp/`) — see
-[`docs/AUTOPILOT_PLAN.md`](../AUTOPILOT_PLAN.md). **Backtest** is the honest join to a
+[`docs/plans/AUTOPILOT_PLAN.md`](../plans/AUTOPILOT_PLAN.md). **Backtest** is the honest join to a
 `STRATEGY_REGISTRY` adapter (`scripts/refresh_validations.py`) that gives that Pilot a
 real, PBO/DSR-gated performance curve; `—` means the module's inputs (macro DTO,
 point-in-time fundamentals, point-in-time news, an external forecast target) can't be
@@ -83,6 +83,19 @@ contributions.
 | Sizing-only | regime_multiplier | 0 pts (Kelly scalar) |
 
 ---
+
+## Related non-module docs
+
+These three docs live in this directory because they're closely related to signal
+scoring, but each is explicitly **not** a registered `SignalModule` — none appears in
+`settings.SIGNAL_WEIGHTS` or the module index table above — so they're listed
+separately rather than mixed into it:
+
+| Doc | What it covers | Why it's not a module |
+|-----|-----------------|------------------------|
+| [`etf_transmission.md`](etf_transmission.md) | ETF volatility-transmission — diagnostic columns (`ETF_Ownership_Pct`, `ETF_Comovement_R2`) plus an opt-in sizing derate and portfolio-covariance adjustment | Diagnostic/sizing-only; consumed by `sizing/position_sizer.py`, not `SignalAggregator` |
+| [`sector_heat_factor.md`](sector_heat_factor.md) | GDELT-based per-sector article-volume/attention proxy | Dashboard feature column only, populated by `pipeline/production_steps.py` |
+| [`sector_selection.md`](sector_selection.md) | Semantic related-sector-selection engine (`sector_selection_engine.py`) — a daily ranking pass powering the webapp's Sector Selection screen | A standalone orchestration engine with its own master switch (`settings.SECTOR_SELECTION_ENABLED`), not a per-ticker scoring contributor |
 
 ## Adding a New Signal Module
 

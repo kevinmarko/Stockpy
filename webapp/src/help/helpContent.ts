@@ -171,6 +171,12 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "0.1 to 1: a filter for 'rumor mill' spikes — low credibility means the sentiment reading is likely noise rather than a durable signal.",
   "volatility persistence":
     "A GJR-GARCH measure of how long a volatility shock takes to decay back toward baseline for a symbol. Computed independently from price history, not from the sentiment agent — it stays populated even when the sentiment agent itself is unavailable.",
+  "earnings catalyst":
+    "How close a symbol is to its next scheduled earnings print, and whether that proximity is currently dampening its live news-sentiment score. Fully zeroed out inside the pre-earnings blackout window (the read is considered too unreliable to use at all), halved in the days just before that window and again for about a day after the print (the reaction is still settling), and full-strength otherwise — including when no earnings date is currently scheduled.",
+  "finbert classification":
+    "The 3-class (positive / neutral / negative) sentiment read a headline gets from FinBERT, a language model tuned on financial text — falling back to a simple keyword lexicon when the model isn't available. The probability bar shown next to a headline is this classification, not a single collapsed score.",
+  "news provider":
+    "Which live source actually supplied a symbol's scored headlines this request — a primary provider with a fallback behind it. Shown honestly as unset when neither is configured, rather than showing an empty feed with no explanation.",
   // The three entries below back the Settings screen's Data Auto-Refresh
   // card. Deliberately written with ZERO numeric literals: the interval,
   // floors, and defaults they describe are user-set local device
@@ -260,8 +266,34 @@ export const TAB_HELP: Record<string, TabHelp> = {
   sentiment: {
     title: "Sentiment Dynamics",
     description:
-      "Live sentiment analysis from financial news and social media for one symbol, driven by the Antigravity Agent, alongside a GJR-GARCH volatility-persistence read and an archived sentiment-vs-VIX trend chart. Every value degrades honestly to '—' when the sourcing agent is unavailable — never a guessed number.",
-    keyConcepts: ["sentiment score", "sentiment intensity", "credibility score", "volatility persistence"],
+      "Live sentiment analysis from financial news and social media for one symbol, driven by the Antigravity Agent, alongside a GJR-GARCH volatility-persistence read, a real scored-headline feed, and an archived sentiment-vs-VIX trend chart. Every value degrades honestly to '—' when the sourcing agent is unavailable — never a guessed number.",
+    keyConcepts: [
+      "sentiment score",
+      "sentiment intensity",
+      "credibility score",
+      "volatility persistence",
+      "earnings catalyst",
+      "finbert classification",
+      "news provider",
+    ],
+  },
+  "strategy-insights": {
+    title: "Strategy Insights",
+    description:
+      "A per-Pilot deep dive: real holdings coverage, archived news-sentiment coverage for Pilots that weight the news-catalyst signal, and a 'what if I allocated $X' allocation simulator. Every projection is computed fresh per Pilot and per allocation size — never a single reused number across Pilots.",
+    keyConcepts: ["deployable", "kelly target", "news provider"],
+  },
+  "create-data-app": {
+    title: "Create Data App",
+    description:
+      "Name a custom view built from the same real, live widgets Strategy Insights uses, and save it as a working sidebar shortcut — never a decorative form. Saved to this browser's storage (survives a reload, syncs across its other open tabs); if your browser blocks or fills that storage you'll see an honest warning instead of a false 'Saved'.",
+    keyConcepts: ["edge ratio"],
+  },
+  "custom-view": {
+    title: "Data App",
+    description:
+      "An operator-saved custom view. Every widget here is the same live component used elsewhere in the app (Strategy Insights' charts, the platform's grounded chat) — a Data App is a saved combination of those, not a separate implementation.",
+    keyConcepts: ["edge ratio"],
   },
   "sector-selection": {
     title: "Sector Selection",

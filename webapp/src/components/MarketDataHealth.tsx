@@ -214,7 +214,7 @@ export function MarketDataHealth() {
 
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", padding: 0 }} data-testid="market-data-health">
-      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)`, cursor: "grab" }}>
+      <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--s-2)", flexWrap: "wrap" }}>
           <h2 style={{ fontSize: "var(--t-subhead)", margin: 0 }}>Market data connection</h2>
           <span style={{ fontSize: "var(--t-caption)", fontWeight: 700, color: badge.color }} data-testid="md-health-badge">

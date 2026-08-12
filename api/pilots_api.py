@@ -162,6 +162,7 @@ from pilots import (
     forecast_skill,
     gravity_audit as gravity_audit_reader,
     models,
+    news_catalyst,
     observability,
     options,
     pairs,
@@ -172,6 +173,7 @@ from pilots import (
     run_status,
     scoring,
     sector_selection,
+    simulation,
     strategy_health,
     strategy_matrix as strategy_matrix_reader,
     symbols,
@@ -700,6 +702,16 @@ class FollowRequest(BaseModel):
     amount: float = Field(..., gt=0.0)
 
 
+class PilotSimulationRequest(BaseModel):
+    """Body for ``POST /pilots/{id}/simulate``. ``allocation_amount`` is the
+    hypothetical USD amount to allocate to the Pilot on top of the operator's
+    real current portfolio — must be positive (a zero/negative allocation
+    isn't a "what-if", it's a no-op or a withdrawal, neither of which this
+    endpoint models)."""
+
+    allocation_amount: float = Field(..., gt=0.0)
+
+
 class PauseRequest(BaseModel):
     """Body for ``POST /automation/pause``. A non-empty reason is required —
     mirrors ``docs/RUNBOOK.md`` §6's own pause-procedure example, and guards
@@ -1183,6 +1195,8 @@ def get_pilot_detail(pilot_id: str) -> Any:
     payload = _pilot_summary(pilot, snapshot, store)
     payload["validation_strategy_id"] = pilot.validation_strategy_id
     payload["weights"] = dict(pilot.weights)
+    has_news = pilot.weights.get("news_catalyst", 0.0) > 0.0
+    payload["news_coverage"] = news_catalyst.get_news_catalyst_coverage() if has_news else None
 
     if snapshot is None:
         payload.update(
@@ -1259,6 +1273,34 @@ def get_pilot_trades(
         raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
     trades = scoring.pilot_trades(pilot, history_dir=_history_dir())
     return trades[-limit:]
+
+
+@app.post("/pilots/{pilot_id}/simulate", dependencies=[Depends(require_read_token)])
+def simulate_pilot(pilot_id: str, body: PilotSimulationRequest) -> Dict[str, Any]:
+    """Real, honest "What-If" simulation: what would the operator's portfolio
+    risk metrics look like if ``body.allocation_amount`` (USD) were allocated
+    to this Pilot on top of their real current holdings?
+
+    ``require_read_token`` ALONE — this performs no writes (no order is
+    placed, no follow is created, nothing is persisted), matching this file's
+    ``/data/cache-long-short/simulate``-style "interactive, on-demand" read
+    tier per the pilots-endpoint skill.
+
+    Every number returned is either reused verbatim from the same real
+    computation the Observability screen shows, or derived from a synthetic
+    equity curve built out of real historical daily closes — see
+    ``pilots.simulation.simulate_pilot_allocation``'s docstring for the exact
+    formula and the honesty note on why ``heat_pct_projected`` is always
+    ``None`` (there is no honest way to project unrealized P&L for a
+    hypothetical, never-entered position — CONSTRAINT #4).
+
+    404 on an unknown Pilot id. Never 500s — a missing snapshot or missing
+    price history degrades to the honest null shape with a ``reason``
+    (CONSTRAINT #6)."""
+    pilot = catalog.get_pilot(pilot_id)
+    if pilot is None:
+        raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
+    return simulation.simulate_pilot_allocation(pilot_id, body.allocation_amount)
 
 
 @app.get("/universe", dependencies=[Depends(require_read_token)])
@@ -2559,6 +2601,8 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
         # "not configured" rather than "$0.00"); min_amount is the PWA's dollar floor.
         "notional_cap": float(settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER),
         "min_amount": float(settings.FOLLOW_MIN_AMOUNT),
+        "sizing_path": plan.get("sizing_path"),
+        "kelly_weight": plan.get("kelly_weight"),
         "notice": notice,
     }
     if note is not None:
@@ -4761,6 +4805,7 @@ _FMP_GROUPS = [
             ("FMP_INSIDER_REFRESH_DAYS", "int", {"min": 1, "max": 30, "step": 1}),
             ("FMP_INSIDER_MIN_LAG_DAYS", "int", {"min": 0, "max": 90, "step": 1}),
             ("FMP_SECTOR_SNAPSHOT_ENABLED", "bool", {}),
+            ("FMP_UNIVERSE_ENABLED", "bool", {}),
         ],
     ),
 ]

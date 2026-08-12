@@ -51,7 +51,7 @@ the full detail, test surface, and Gravity step numbers behind each of those.
 
 ## LLM key-misconfiguration surfacing — last-real-call telemetry, not a probe (2026-07-17)
 
-**Why.** Gap §4 of `docs/project_review_and_gap_analysis.md`: when `GEMINI_API_KEY` /
+**Why.** Gap §4 of `docs/handovers/project_review_and_gap_analysis.md`: when `GEMINI_API_KEY` /
 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` was missing or invalid, LLM analyst narratives
 degraded silently to `null` with zero UI visibility — the operator's only signal was a
 `logger.info` line. Presence checks alone couldn't close it: `llm/providers.py` swallows a
@@ -242,7 +242,7 @@ honesty: a non-deployable pilot renders `deployable=false` plainly; a `curve:nul
 **Test surface.** `tests/test_pilots_{catalog,scoring,performance,follows,mirror}.py` (Phase 1
 + 3), `tests/test_pilots_api.py` (Phase 2, incl. the import-guard). Frontend: Vitest contract
 + honesty-fixture tests under `webapp/src/api/mock.test.ts` (`npm run test`), plus
-`npm run typecheck` / `npm run build`. See `docs/AUTOPILOT_PLAN.md` for the phasing overview.
+`npm run typecheck` / `npm run build`. See `docs/plans/AUTOPILOT_PLAN.md` for the phasing overview.
 
 ## Gravity split-brain consolidation — delete the dead `gravity/__init__.py`, migrate its steps into the single launcher (PR #209, commit 2f461a70, 2026-07-10)
 
@@ -1916,7 +1916,7 @@ Streamlit-free, unit-testable (mirrors `gui/ai_insights_panel.py`). Public surfa
 - **`control_center_overview(settings) -> list[dict]`** — one status row per capability; `provider_keys` narrows to the single ACTIVE required key when `active_provider` is set (e.g. `["GEMINI_API_KEY"]`, not both possible keys).
 - **`status_badge(status) -> str`** — maps a status token to `🟢 ready` / `⚪ disabled` / `🟡 key missing` / `🚧 not built`.
 - **`validate_toggle_write(key)`** — pre-flight guard: raises `SecretWriteError` for a secret key (CONSTRAINT #3), `DisallowedKeyError` for a non-allowlisted key.
-- **`opal_built() -> bool`** — soft `import llm.research` probe; the Opal row auto-activates once its backend ships (`docs/OPAL_BUILD_SPEC.md`).
+- **`opal_built() -> bool`** — soft `import llm.research` probe; the Opal row auto-activates once its backend ships (`docs/plans/OPAL_BUILD_SPEC.md`).
 
 ### GUI panel: `gui/panels/__init__.py::render_ai_control_center`
 Wrapped in `safe_panel` (CONSTRAINT #6). Four sections:
@@ -1934,7 +1934,7 @@ Wrapped in `safe_panel` (CONSTRAINT #6). Four sections:
 - `SECRET_KEYS` gained `OPENAI_API_KEY` (forward-compatible Opal enabler; never GUI-writable — CONSTRAINT #3).
 
 ### Opal relationship (phased)
-- **Phase 1 (shipped):** Control Center works fully for the four shipped options + scheduling + toggles. The Opal row renders gated `not_built` ("requires build — see `docs/OPAL_BUILD_SPEC.md`").
+- **Phase 1 (shipped):** Control Center works fully for the four shipped options + scheduling + toggles. The Opal row renders gated `not_built` ("requires build — see `docs/plans/OPAL_BUILD_SPEC.md`").
 - **Phase 2 (shipped, see Tier 9 Scope 4 below):** the Opal backend (`llm/research.py`) has since been built; its Control Center row auto-activated via `opal_built()` with no Control Center code changes needed, confirming the design.
 
 ### Help content (`gui/help_content.py`)

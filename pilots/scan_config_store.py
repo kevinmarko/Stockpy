@@ -40,11 +40,13 @@ Design constraints (identical to ``FollowsStore``):
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from settings import settings
 
@@ -54,9 +56,106 @@ __all__ = ["ScanConfigStore"]
 
 SCHEMA_VERSION = 1
 
+# Process-wide, path-keyed cache (mtime, size, filtered-configs), guarded by
+# _CACHE_LOCK. Deliberately module-level rather than an instance attribute:
+# every real caller (api/pilots_api.py, pilots/discovery.py) constructs a
+# fresh ScanConfigStore per request, so an instance-level cache would never
+# see a second read on the same instance and would buy nothing. Keyed by the
+# resolved path string so distinct ScanConfigStore(path=...) instances that
+# point at the same file share one cache entry. (mtime, size) rather than
+# bare mtime mirrors desktop/daemon_runtime.py's own change-detection idiom
+# and narrows (without eliminating) the same-tick-external-edit blind spot a
+# bare mtime-equality check would have.
+_CACHE_LOCK = threading.Lock()
+_CONFIG_CACHE: Dict[str, Tuple[Tuple[float, int], List[Dict[str, Any]]]] = {}
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _default_scans() -> List[Dict[str, Any]]:
+    """Build the seeded default scan configs, timestamped at call time.
+
+    A plain module-level list would freeze ``created_at``/``updated_at`` at
+    process-import time (whenever this module was first imported) rather than
+    the moment a fresh store is actually seeded — every operator's first-ever
+    scan config would carry a stale, misleading timestamp. Called fresh from
+    ``ScanConfigStore._load()``'s seeding branch instead.
+    """
+    now = _utc_now_iso()
+    return [
+        {
+            "name": "momentum-leaders",
+            "filters": {"min_relative_volume": 1.5, "min_price": 5, "min_volume": 1000000},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "trend-follower",
+            "filters": {"price_above_sma200": True, "roc_12m_min": 0.1, "min_price": 5},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "dip-buyer",
+            "filters": {"rsi2_max": 10, "price_above_sma200": True, "min_price": 5},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "edge-and-volatility",
+            "filters": {"iv_rank_min": 50, "min_options_volume": 500},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "multifactor",
+            "filters": {"min_market_cap": 300000000, "roe_min": 0.15, "pe_ratio_max": 20},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "forecast-aligned",
+            "filters": {"analyst_rating_min": 4.0, "min_price": 5, "min_volume": 500000},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "news-catalyst",
+            "filters": {"unusual_volume": True, "social_sentiment_min": 70},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "risk-adjusted",
+            "filters": {"beta_max": 1.0, "max_drawdown_52w": -0.2},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "dividend-income",
+            "filters": {"dividend_yield_min": 0.03, "payout_ratio_max": 0.6},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "name": "balanced-blend",
+            "filters": {"composite_score_min": 80, "min_price": 10, "min_volume": 1000000},
+            "enabled": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+    ]
 
 
 class ScanConfigStore:
@@ -76,13 +175,38 @@ class ScanConfigStore:
         self,
         path: Optional[str] = None,
         clock: Optional[Callable[[], str]] = None,
+        seed_defaults: bool = True,
     ) -> None:
         self._path = Path(path) if path is not None else settings.OUTPUT_DIR / "scan_configs.json"
         self._clock: Callable[[], str] = clock or _utc_now_iso
+        self._seed_defaults = seed_defaults
+
+    def _cache_key(self) -> str:
+        return str(self._path)
+
+    def _stamp(self) -> Optional[Tuple[float, int]]:
+        try:
+            st = self._path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime, st.st_size)
 
     def _load(self) -> List[Dict[str, Any]]:
         """Return the raw scan-config list; empty on missing/corrupt file (never raises)."""
+        stamp = self._stamp()
+        if stamp is not None:
+            with _CACHE_LOCK:
+                cached = _CONFIG_CACHE.get(self._cache_key())
+            if cached is not None and cached[0] == stamp:
+                return copy.deepcopy(cached[1])
+
         if not self._path.exists():
+            if self._seed_defaults:
+                # Seed default scans on first run, timestamped now (not at
+                # module-import time -- see _default_scans()'s docstring).
+                defaults = _default_scans()
+                self._save(defaults)
+                return list(defaults)
             return []
         try:
             with self._path.open("r", encoding="utf-8") as fh:
@@ -98,7 +222,12 @@ class ScanConfigStore:
         configs = data.get("scan_configs", [])
         if not isinstance(configs, list):
             return []
-        return [c for c in configs if isinstance(c, dict) and c.get("name")]
+
+        filtered = [c for c in configs if isinstance(c, dict) and c.get("name")]
+        if stamp is not None:
+            with _CACHE_LOCK:
+                _CONFIG_CACHE[self._cache_key()] = (stamp, filtered)
+        return copy.deepcopy(filtered)
 
     def _save(self, configs: List[Dict[str, Any]]) -> None:
         """Atomically persist *configs* via write-then-rename."""
@@ -109,6 +238,16 @@ class ScanConfigStore:
             with tmp.open("w", encoding="utf-8") as fh:
                 json.dump(payload, fh, indent=2)
             tmp.replace(self._path)
+
+            filtered = [c for c in configs if isinstance(c, dict) and c.get("name")]
+            stamp = self._stamp()
+            with _CACHE_LOCK:
+                if stamp is not None:
+                    _CONFIG_CACHE[self._cache_key()] = (stamp, filtered)
+                else:
+                    # Can't stat the file we just wrote -- don't leave a
+                    # stale/unstamped entry a later _load() could match.
+                    _CONFIG_CACHE.pop(self._cache_key(), None)
         except Exception as exc:  # noqa: BLE001 - clean up temp on any failure
             logger.warning("ScanConfigStore: failed to write %s: %s", self._path, exc)
             tmp.unlink(missing_ok=True)

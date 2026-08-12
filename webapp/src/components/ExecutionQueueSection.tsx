@@ -47,13 +47,10 @@ export function ExecutionQueueSection() {
   return (
     <div style={{ marginTop: 40 }} className="card card-pad">
       {/*
-        "drag-handle" (a marker class with no CSS attached anywhere in this
-        codebase -- see components/DynamicGrid.tsx's `draggableHandle`
-        prop) is a no-op everywhere this component renders OUTSIDE a
-        DynamicGrid (e.g. Commands.tsx). It only takes effect for the
-        "execution" tile in AgenticTrading.tsx's DynamicGrid, which had no
-        drag-handle at all before this. The minimize button below is
-        guarded against the drag capture this class enables.
+        "drag-handle" had a role in the old customizable grid layout. It is now
+        mostly obsolete beyond the global `.drag-handle { cursor: default !important; }`
+        rule in index.css, but is retained for layout consistency. The minimize button
+        below is guarded against the drag capture this class used to enable.
       */}
       <div className="rail-head drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>

@@ -31,6 +31,7 @@ Macro-triggered gating (engine/advisory.evaluate):
 
 from __future__ import annotations
 
+import os
 import types
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -379,8 +380,19 @@ class TestOrchestratorKillSwitchGate:
             import asyncio
             import main_orchestrator as _mo
 
-            # Patch file-system check for credentials.json
-            with mock.patch("os.path.exists", return_value=False):
+            # Patch file-system check for credentials.json only -- a blanket
+            # `os.path.exists -> False` also fakes away GlobalKillSwitch's own
+            # `self._path.exists()` sentinel check on Python 3.13+, where
+            # pathlib.Path.exists() delegates straight to os.path.exists (it
+            # did not on 3.12, this repo's pinned interpreter). That would
+            # spuriously report the sentinel as absent and defeat the exact
+            # gate this test verifies. See tests/test_daemon_runtime.py's
+            # `_patch_data_engine_construction` fixture for the same pattern.
+            _real_exists = os.path.exists
+            with mock.patch(
+                "os.path.exists",
+                side_effect=lambda p: False if p == "credentials.json" else _real_exists(p),
+            ):
                 asyncio.run(_mo._main_body(effective_dry_run=True))
 
         assert pipeline_called == [], "run_pipeline must NOT be called when kill switch is active"

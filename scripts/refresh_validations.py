@@ -49,7 +49,7 @@ Point-in-time fundamentals (Value / Quality / Dividend Yield)
 use REAL point-in-time SEC EDGAR fundamentals — closing the gap the note above
 used to describe as permanently excluded. They read ONLY through
 ``data.historical_store.HistoricalStore.get_fundamentals_history(ticker)`` (a
-pure DB reader; Gemini-owned per ``docs/DATA_LAYER_PLAN.md`` — never edited or
+pure DB reader; Gemini-owned per ``docs/plans/DATA_LAYER_PLAN.md`` — never edited or
 fetched-from directly here). That table is populated by a SEPARATE,
 manually/cron-run backfill (``scripts/backfill_edgar_fundamentals.py``,
 NOT invoked by this module) — a fresh clone's ``quant_platform.db`` has no
@@ -1088,7 +1088,7 @@ def _build_sortino_drawdown_adapter(
 # SEC EDGAR point-in-time (PIT) fundamentals adapters
 #
 # Consume real PIT fundamentals via ``data.historical_store.HistoricalStore``
-# (Gemini-owned per docs/DATA_LAYER_PLAN.md — read-only here, never modified,
+# (Gemini-owned per docs/plans/DATA_LAYER_PLAN.md — read-only here, never modified,
 # never fetched from directly; the underlying SEC EDGAR fetch/backfill lives
 # entirely in scripts/backfill_edgar_fundamentals.py). ``HistoricalStore`` is
 # a pure DB reader with no live-EDGAR fallback, so these adapters are only as

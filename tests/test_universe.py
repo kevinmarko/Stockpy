@@ -52,6 +52,8 @@ def test_wikipedia_scrape_and_cache():
 
 def test_cache_is_reused():
     """Verify that loading constituents reuse cache if it is fresh."""
+    # Ensure cache is created first so this test is robust to xdist concurrency
+    _ = get_sp500_constituents(datetime.date.today())
     assert os.path.exists(universe_engine.CACHE_PATH)
     initial_mtime = os.path.getmtime(universe_engine.CACHE_PATH)
 
@@ -80,6 +82,9 @@ def test_point_in_time_no_lookahead():
     Test lookahead/leakage check: Verify that querying for an older date does
     not include tickers added after that date.
     """
+    # Ensure cache is created first so this test is robust to xdist concurrency
+    _ = get_sp500_constituents(datetime.date.today())
+
     # Let's find a change in the changes table
     df = pd.read_parquet(universe_engine.CACHE_PATH)
     changes = df[df["type"] == "change"].copy()

@@ -86,6 +86,7 @@ empty / preview-only result and never raises.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -271,6 +272,8 @@ def _follow_rationale(
     score: Optional[float],
     weight: float,
     target_notional: float,
+    sizing_tag: Optional[str] = None,
+    kelly_weight: Optional[float] = None,
 ) -> str:
     """Build the honest per-name "why" for a follow intent — a RANKING, not a thesis.
 
@@ -290,11 +293,14 @@ def _follow_rationale(
     """
     label = f"Follow:{getattr(pilot, 'id', 'unknown')}"
     score_frag = f"score {score:.2f} → " if score is not None else ""
-    return (
+    base = (
         f"{label} — ranked #{rank} of {total} by its signal blend "
         f"({score_frag}{weight * 100:.1f}% target weight, "
         f"${target_notional:,.0f} target)."
     )
+    if sizing_tag and kelly_weight is not None:
+        base += f" [Sizing: {sizing_tag}, ceiling {kelly_weight * 100:.1f}%]"
+    return base
 
 
 def build_follow_targets(
@@ -302,6 +308,8 @@ def build_follow_targets(
     amount: float,
     snapshot: Optional[dict],
     top_n: Optional[int] = None,
+    sizing_tag: Optional[str] = None,
+    kelly_weight: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """Pure target-notional math for a Pilot follow — the shared primitive
     both the legacy single-pilot preview path (:func:`build_follow_intents`,
@@ -360,6 +368,7 @@ def build_follow_targets(
                 "rationale": _follow_rationale(
                     pilot, rank=rank0 + 1, total=total_holdings,
                     score=score, weight=float(weight), target_notional=float(target),
+                    sizing_tag=sizing_tag, kelly_weight=kelly_weight,
                 ),
             })
         return out
@@ -380,6 +389,8 @@ def build_follow_intents(
     snapshot: Optional[dict] = None,
     top_n: Optional[int] = None,
     prior_mirrored: Optional[List[Dict[str, Any]]] = None,
+    sizing_tag: Optional[str] = None,
+    kelly_weight: Optional[float] = None,
 ) -> List[FollowIntent]:
     """Build proportional target-notional rebalance intents to mirror ``pilot``.
 
@@ -453,7 +464,10 @@ def build_follow_intents(
             follow_source_id,
         )
 
-        targets = build_follow_targets(pilot, amount, snapshot, top_n=top_n)
+        targets = build_follow_targets(
+            pilot, amount, snapshot, top_n=top_n,
+            sizing_tag=sizing_tag, kelly_weight=kelly_weight
+        )
         prior = prior_mirrored or []
         if not targets and not prior:
             logger.info(
@@ -607,10 +621,96 @@ def plan_follow(
         store = None
         prior_mirrored = []
 
+    path_tag = None
+    kelly_weight = None
+    try:
+        from transactions_store import TransactionsStore
+        from sizing.kelly import (
+            kelly_sizing_for_strategy,
+            estimate_win_rate_and_payoff_per_strategy,
+            MIN_TRADES_REQUIRED,
+        )
+        from sizing.vol_target import volatility_target_weight
+        from pilots.scoring import pilot_holdings
+
+        portfolio_vol = None
+        if isinstance(snapshot, dict):
+            signals = snapshot.get("signals", [])
+            holdings = pilot_holdings(pilot, snapshot)
+            vols = []
+            weights = []
+            for h in holdings:
+                sym = str(h.get("symbol") or "").upper().strip()
+                w = _coerce_float(h.get("weight"))
+                if not sym or w is None or w <= 0:
+                    continue
+                sym_sig = next((s for s in signals if s.get("symbol") == sym), None)
+                if sym_sig:
+                    vol = _coerce_float(sym_sig.get("Realized_Vol_60D") or sym_sig.get("Realized_Vol_30D"))
+                    if vol is not None:
+                        vols.append(vol)
+                        weights.append(w)
+            if vols and sum(weights) > 0:
+                portfolio_vol = sum(v * w for v, w in zip(vols, weights)) / sum(weights)
+
+        transactions_store = TransactionsStore()
+        strategy_id = f"Follow:{pilot_id}"
+
+        # Cold-start check BEFORE delegating to kelly_sizing_for_strategy: that
+        # function's own vol-target fallback ramps sizing in via
+        # min(1.0, n_trades / MIN_TRADES_REQUIRED) -- a safety feature designed
+        # for a brand-new AUTONOMOUS strategy earning trust from zero. A Follow
+        # relationship starts at n_trades=0 by definition (nothing has been
+        # mirrored yet), so that same scale-in would permanently zero the
+        # ceiling on every first-ever follow of any Pilot: amount -> $0 ->
+        # no position ever opens -> n_trades can never grow -> deadlock.
+        # A Pilot's edge is already proven by validation/harness.py's
+        # deployability gate (PBO/DSR/Sharpe/MaxDD) before it's even
+        # followable, unlike an untested autonomous strategy -- so a Follow
+        # isn't "earning trust from zero" the way that derate assumes, and it
+        # doesn't apply here. Cap on the raw (unscaled) vol-target weight from
+        # trade #1 instead; once 30 real Follow trades accumulate, the branch
+        # below transparently switches to the real bootstrap-Kelly path
+        # (kelly_sizing_for_strategy's warm path is untouched by this bypass).
+        p, b, n_trades = estimate_win_rate_and_payoff_per_strategy(
+            transactions_store, strategy_id, min_trades=MIN_TRADES_REQUIRED
+        )
+        if not (math.isnan(p) or math.isnan(b)):
+            kw, p_tag = kelly_sizing_for_strategy(
+                transactions_store,
+                strategy_id=strategy_id,
+                realized_vol=portfolio_vol,
+            )
+        elif portfolio_vol is None or (isinstance(portfolio_vol, float) and math.isnan(portfolio_vol)) or portfolio_vol <= 0:
+            kw, p_tag = 0.0, "cold_start_no_vol"
+        else:
+            kw = volatility_target_weight(portfolio_vol)
+            p_tag = f"vol_target_fallback_no_scalein(n={n_trades})"
+        path_tag = p_tag
+        from settings import settings
+        max_weight = getattr(settings, "MAX_POSITION_WEIGHT", 1.0)
+        kelly_weight = max(0.0, min(kw, max_weight))
+
+        total_equity = _coerce_float(getattr(account_snapshot, "total_equity", 0.0))
+        if total_equity is not None and total_equity > 0:
+            kelly_ceiling = kelly_weight * total_equity
+            if amount > kelly_ceiling:
+                logger.info(
+                    "plan_follow: Pilot %s requested amount $%.2f exceeds Kelly ceiling "
+                    "$%.2f (weight=%.4f). Capping amount.",
+                    pilot_id, amount, kelly_ceiling, kelly_weight
+                )
+                amount = kelly_ceiling
+    except Exception as exc:
+        logger.debug("mirror: plan_follow sizing ceiling calculation failed (%s)", exc)
+        path_tag = "kelly_error"
+        kelly_weight = 0.0
+
     try:
         intents = build_follow_intents(
             pilot, amount, account_snapshot,
             snapshot=snapshot, prior_mirrored=prior_mirrored,
+            sizing_tag=path_tag, kelly_weight=kelly_weight,
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("mirror: plan_follow intent build failed (%s)", exc)
@@ -642,6 +742,7 @@ def plan_follow(
             write_follow_source(
                 pilot, amount, snapshot,
                 prior_mirrored=prior_mirrored, output_dir=output_dir,
+                sizing_tag=path_tag, kelly_weight=kelly_weight,
             )
             written_path = compose_and_emit(
                 account_snapshot, output_dir=output_dir,
@@ -674,7 +775,10 @@ def plan_follow(
     # nothing left to detect as "just dropped" on this same call.
     if store is not None:
         try:
-            current_set = build_follow_targets(pilot, amount, snapshot)
+            current_set = build_follow_targets(
+                pilot, amount, snapshot,
+                sizing_tag=path_tag, kelly_weight=kelly_weight,
+            )
             if current_set:
                 current_symbols = {row.get("symbol") for row in current_set}
                 retained: List[Dict[str, Any]] = []
@@ -722,4 +826,6 @@ def plan_follow(
         "planned_intents": planned,
         "mode": mode,
         "queue_written": queue_written,
+        "sizing_path": path_tag,
+        "kelly_weight": kelly_weight,
     }

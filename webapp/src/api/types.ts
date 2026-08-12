@@ -144,12 +144,51 @@ export interface PilotTrade {
   sector?: string;
 }
 
+/**
+ * `GET /pilots/{id}`'s news-coverage summary — how much archived headline
+ * sentiment backs this Pilot's `news_catalyst`-weighted holdings. Not every
+ * Pilot uses the news-catalyst signal, so this is `null` (never a fabricated
+ * zero) for a Pilot whose strategy doesn't weight news at all — the same
+ * generic, not-special-cased treatment the real backend applies to any Pilot.
+ */
+export interface NewsCoverage {
+  archived_score_count: number;
+  headline_volume_7d: number;
+  universe_score_distribution: { positive: number; neutral: number; negative: number };
+}
+
 /** GET /pilots/{id} — full detail. */
 export interface PilotDetail extends PilotSummary {
   holdings: Holding[];
   sector_allocation: SectorSlice[];
   recent_trades: PilotTrade[];
   as_of: string | null; // ISO timestamp of the snapshot the holdings came from
+  news_coverage: NewsCoverage | null;
+}
+
+/** POST /pilots/{id}/simulate request body — hypothetical allocation size. */
+export interface PilotSimulationRequest {
+  allocation_amount: number;
+}
+
+/**
+ * POST /pilots/{id}/simulate result — "what if I allocated $X to this
+ * Pilot" projection. `current`/`projected` are genuinely DIFFERENT numbers
+ * computed per-Pilot and per-allocation-size (the specific fabrication bug
+ * this feature rebuild exists to fix was a mock that returned the identical
+ * delta for every Pilot). `heat_pct_projected` is always `null` — projecting
+ * portfolio-wide heat requires the full live portfolio context this
+ * endpoint doesn't have, so it is never guessed. `reason` is non-null only
+ * when the projection is degraded (e.g. no backtest series for this Pilot).
+ */
+export interface PilotSimulationResult {
+  pilot_id: string;
+  current: { sharpe_ratio: number | null; max_drawdown: number | null };
+  projected: { sharpe_ratio: number | null; max_drawdown: number | null };
+  heat_pct_current: number | null;
+  heat_pct_projected: null;
+  coverage: { symbols_covered: number; symbols_total: number };
+  reason: string | null;
 }
 
 export type PerfRange = "1W" | "1M" | "3M" | "6M" | "1Y" | "2Y";
@@ -234,6 +273,8 @@ export interface FollowResult {
   queue_written: boolean;
   notional_cap: number; // ROBINHOOD_MAX_NOTIONAL_PER_ORDER
   min_amount: number;
+  sizing_path?: string;
+  kelly_weight?: number;
   notice: string; // human-readable gating notice
 }
 
@@ -2080,8 +2121,44 @@ export interface MacroGateUpdateResult {
 }
 
 /**
+ * One scored headline (`signals/news_catalyst.py`'s FMP/Finnhub-sourced
+ * company news, FinBERT-scored) surfaced on the Sentiment Dynamics screen.
+ * `publisher` is always a real wire/outlet name FMP or Finnhub actually
+ * returned, or the literal source string ("fmp"/"finnhub") as a fallback —
+ * NEVER "SEC EDGAR" or any other publisher this data path cannot reach (SEC
+ * filings are ingested by a structurally different module for a different
+ * signal). `url`/`published_at` are `null` on a genuine gap, never fabricated.
+ */
+export interface HeadlineSentimentItem {
+  title: string;
+  publisher: string;
+  url: string | null;
+  published_at: string | null;
+  score: number; // FinBERT-scored, roughly [-1, 1]
+  probabilities: { positive: number; neutral: number; negative: number };
+}
+
+/**
+ * Earnings-proximity dampening state for one symbol's live news score
+ * (`signals/news_catalyst.py::_earnings_proximity_multiplier`). `"suppressed"`
+ * = fully zeroed (0.0x) inside the pre-earnings blackout window;
+ * `"dampened"` = halved (0.5x) — this covers BOTH the multi-day run-up
+ * before earnings (beyond the blackout window but still close) AND the
+ * ~24h window immediately after the print, when the reaction is still
+ * fresh/noisy; `"normal"` = full-strength (1.0x), including when no earnings
+ * date is currently scheduled at all.
+ */
+export interface EarningsCatalystStatus {
+  next_earnings_date: string | null;
+  hours_to_earnings: number | null;
+  status: "normal" | "suppressed" | "dampened";
+  multiplier: number;
+}
+
+/**
  * GET /metrics/sentiment/{symbol} — Sentiment Dynamics: Antigravity-agent
- * news sentiment plus GJR-GARCH asymmetric-volatility persistence.
+ * news sentiment plus GJR-GARCH asymmetric-volatility persistence, plus the
+ * real scored-headline feed and earnings-proximity dampening state.
  *
  * Honesty contract: `source` distinguishes real Antigravity-agent output
  * ("antigravity_agent") from an honest cold-start/unconfigured-agent
@@ -2090,6 +2167,9 @@ export interface MacroGateUpdateResult {
  * `volatility_persistence` is computed independently via a real per-request
  * GJR-GARCH fit over price history, so it can be a real number even when
  * `source === "unavailable"` (or `null` itself on insufficient history).
+ * `headlines`/`earnings_catalyst`/`provider_used` are REQUIRED (not `?:`
+ * optional) — an honest empty state is an explicit `[]`/`null`/`"none"`,
+ * never an absent key.
  */
 export interface SentimentDynamics {
   ticker: string;
@@ -2099,6 +2179,9 @@ export interface SentimentDynamics {
   credibility_score: number | null;
   volatility_persistence: number | null;
   source: "antigravity_agent" | "unavailable";
+  headlines: HeadlineSentimentItem[];
+  earnings_catalyst: EarningsCatalystStatus | null;
+  provider_used: "fmp" | "finnhub" | "none";
 }
 
 /**
@@ -3629,6 +3712,23 @@ export type ForecastBackfillPhase =
  *  parameters) or `"unexpected"` (a genuine training-time exception). */
 export type ForecastBackfillErrorType = "value_error" | "unexpected" | "timeout" | "cancelled" | null;
 
+/** Checkpoint snapshot from the last `{"event": "progress", ...}` NDJSON
+ *  event the backend drained off the worker's events pipe before the job
+ *  reached a terminal state -- mirrors `ml/forecast_backfill_job.py`'s
+ *  `BackfillJobState.partial_summary` exactly (emitted after each step-5
+ *  "backtraining" combo finishes training and its model is saved).
+ *  `trained` and the keys of `metrics_so_far` are always the same set --
+ *  `trained` is `sorted(metrics_so_far.keys())` on the backend. Always the
+ *  LAST progress event received, never accumulated across events (the
+ *  worker's own `metrics_so_far` is already the full cumulative snapshot at
+ *  emit time). A deadline SIGKILL (`_enforce_deadline`) never touches this
+ *  field, so whatever it last held survives the kill unchanged -- the whole
+ *  point of the checkpoint. */
+export interface ForecastBackfillPartialSummary {
+  trained: string[];
+  metrics_so_far: Record<string, ForecastBackfillModelMetrics>;
+}
+
 export interface ForecastBackfillJob {
   job_id: string;
   state: ForecastBackfillJobState;
@@ -3639,6 +3739,10 @@ export interface ForecastBackfillJob {
   error_type: ForecastBackfillErrorType;
   summary: ForecastBackfillSummary | null;
   sample_rows: number | null;
+  /** `null` when no `progress` event has ever been observed (e.g. the job
+   *  was killed during steps 1-4, before any step-5 combo finished) --
+   *  never fabricated. See `ForecastBackfillPartialSummary`. */
+  partial_summary: ForecastBackfillPartialSummary | null;
   seconds_remaining: number;
 }
 

@@ -88,8 +88,11 @@ import type {
   PerfRange,
   PerformanceResponse,
   PilotDetail,
+  PilotSimulationRequest,
+  PilotSimulationResult,
   PilotSummary,
   PilotTrade,
+  NewsCoverage,
   Portfolio,
   PortfolioAttribution,
   PortfolioForecastSkill,
@@ -801,6 +804,22 @@ function findPilot(id: string): MockPilot | undefined {
   return CATALOG.find((p) => p.summary.id === id);
 }
 
+/**
+ * GET /pilots/{id}'s `news_coverage` — realistic non-null coverage only for
+ * the one Pilot whose strategy actually weights `news_catalyst`
+ * ("news-catalyst"); `null` for every other Pilot, matching the real
+ * backend's generic, not-special-cased treatment (a Pilot whose strategy
+ * doesn't use the news-catalyst signal genuinely has no coverage to report).
+ */
+function newsCoverageFor(id: string): NewsCoverage | null {
+  if (id !== "news-catalyst") return null;
+  return {
+    archived_score_count: 47,
+    headline_volume_7d: 9,
+    universe_score_distribution: { positive: 0.41, neutral: 0.38, negative: 0.21 },
+  };
+}
+
 const RANGE_DAYS: Record<PerfRange, number> = {
   "1W": 7,
   "1M": 30,
@@ -1149,9 +1168,19 @@ interface _MockForecastBackfillJob {
   //   localStorage.setItem("stockpy.mock.forecast_backfill_failure", "1")  // next run fails partway through instead of succeeding
   //   localStorage.removeItem("stockpy.mock.forecast_backfill_failure")   // back to the happy path
   simulateFailure: boolean;
+  // Deterministic "deadline SIGKILL mid-training" trigger, same convention.
+  // Reproduces ml/forecast_backfill_job.py's _enforce_deadline path: a few
+  // step-5 combos already trained (real partial_summary.trained/
+  // metrics_so_far entries) before the kill, so the honest
+  // "partial results were saved" branch of backfillFailureMessage() is
+  // reachable by actually running the app, not only through the test suite:
+  //   localStorage.setItem("stockpy.mock.forecast_backfill_timeout", "1")  // next run times out with partial results
+  //   localStorage.removeItem("stockpy.mock.forecast_backfill_timeout")    // back to the happy path
+  simulateTimeout: boolean;
 }
 
 const FORECAST_BACKFILL_FAILURE_KEY = "stockpy.mock.forecast_backfill_failure";
+const FORECAST_BACKFILL_TIMEOUT_KEY = "stockpy.mock.forecast_backfill_timeout";
 
 function readForecastBackfillFailure(): boolean {
   try {
@@ -1159,6 +1188,30 @@ function readForecastBackfillFailure(): boolean {
   } catch {
     return false;
   }
+}
+
+function readForecastBackfillTimeout(): boolean {
+  try {
+    return localStorage.getItem(FORECAST_BACKFILL_TIMEOUT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Realistic partial checkpoint for the timeout-simulation branch below --
+ *  a subset of mockForecastBackfill()'s own metrics, matching the exact
+ *  {accuracy, auc, n_train, n_test, split_date, is_active} shape
+ *  ml/forecast_backfill.py actually writes to `self.metrics[model_key]`. */
+function mockForecastBackfillPartialSummary(): ForecastBackfillJob["partial_summary"] {
+  const metrics_so_far = {
+    timeseries_momentum_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 0, split_date: "CPCV", is_active: true },
+    timeseries_momentum_30d: { accuracy: 0.5340, auc: 0.5580, n_train: 9416, n_test: 0, split_date: "CPCV", is_active: true },
+    rsi2_mean_reversion_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 6820, n_test: 0, split_date: "CPCV", is_active: true },
+  };
+  return {
+    trained: Object.keys(metrics_so_far).sort(),
+    metrics_so_far,
+  };
 }
 
 let _mockForecastBackfillJobSeq = 0;
@@ -1220,6 +1273,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
       error_type: "cancelled",
       summary: null,
       sample_rows: null,
+      partial_summary: null,
       seconds_remaining: secondsRemaining,
     };
   }
@@ -1240,6 +1294,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
         error_type: null,
         summary: null,
         sample_rows: null,
+        partial_summary: null,
         seconds_remaining: secondsRemaining,
       };
     }
@@ -1253,6 +1308,51 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
       error_type: "value_error",
       summary: null,
       sample_rows: null,
+      // Killed/failed during step 2 (technical_features), well before step 5
+      // (backtraining) ever produces a progress event -- honestly null, not
+      // fabricated, matching ml/forecast_backfill_job.py's own contract.
+      partial_summary: null,
+      seconds_remaining: 0,
+    };
+  }
+
+  if (job.simulateTimeout) {
+    // Reproduces ml/forecast_backfill_job.py's _enforce_deadline: a running
+    // job that never reaches a "result" event before the deadline elapses is
+    // SIGKILLed and flipped to state: "timeout" -- but a few step-5 combos
+    // already trained (and were checkpointed via the on_combo_trained
+    // callback) before the kill, so partial_summary is honestly non-empty
+    // here, exercising backfillFailureMessage()'s "partial results were
+    // saved" branch.
+    if (elapsedSeconds < 10) {
+      return {
+        job_id: jobId,
+        state: "running",
+        phase,
+        step,
+        total_steps: TOTAL_STEPS,
+        error: null,
+        error_type: null,
+        summary: null,
+        sample_rows: null,
+        // The real backend only starts populating partial_summary once
+        // step-5 combos begin training (phase: "backtraining"), same as
+        // ml/forecast_backfill_worker.py's on_combo_trained callback.
+        partial_summary: elapsedSeconds >= 8 ? mockForecastBackfillPartialSummary() : null,
+        seconds_remaining: secondsRemaining,
+      };
+    }
+    return {
+      job_id: jobId,
+      state: "timeout",
+      phase: "backtraining",
+      step: 5,
+      total_steps: TOTAL_STEPS,
+      error: `Forecast backfill did not complete within the configured deadline.`,
+      error_type: "timeout",
+      summary: null,
+      sample_rows: null,
+      partial_summary: mockForecastBackfillPartialSummary(),
       seconds_remaining: 0,
     };
   }
@@ -1268,6 +1368,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
       error_type: null,
       summary: mockForecastBackfill(),
       sample_rows: 11080,
+      partial_summary: null,
       seconds_remaining: 0,
     };
   }
@@ -1282,6 +1383,7 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
     error_type: null,
     summary: null,
     sample_rows: null,
+    partial_summary: null,
     seconds_remaining: secondsRemaining,
   };
 }
@@ -2780,6 +2882,11 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
     group: "Diagnostic & Supplement Feeds", key: "FMP_SECTOR_SNAPSHOT_ENABLED", type: "boolean",
     value: false, default: false,
     description: "Fetch sector valuation & performance snapshots.",
+  },
+  {
+    group: "Diagnostic & Supplement Feeds", key: "FMP_UNIVERSE_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Use FMP's historical S&P 500 constituent-changes feed as the primary source for survivorship-bias reconstruction (Wikipedia demoted to fallback).",
   },
 ];
 
@@ -5706,6 +5813,32 @@ const MOCK_PROMPT_REGISTRY_ENABLED = true;
 // by overriding this via a mocked api module rather than a second fixture.
 const MOCK_PROMPT_REGISTRY_WRITABLE = true;
 
+/**
+ * Honest cold-start fixture for GET /metrics/sentiment/{symbol}'s news-feed
+ * fields: no news provider configured (neither FMP_NEWS_ENABLED nor a
+ * Finnhub client), so there are no headlines and no earnings-catalyst read
+ * at all — never a fabricated headline list or a guessed dampening state.
+ * Deliberately independent of the Antigravity-agent `source` field (a
+ * different, unrelated data path — see `source: "unavailable"` covered
+ * inline in SentimentDynamics.test.tsx) so this fixture isolates the
+ * news-provider-not-configured state on its own. Exported so both
+ * SentimentDynamics.test.tsx and any other caller can exercise this real
+ * state directly, alongside the populated "fmp" example getSentimentDynamics
+ * returns by default.
+ */
+export const mockNoProviderSentimentFixture: SentimentDynamics = {
+  ticker: "ZZZZ",
+  date: new Date().toISOString(),
+  sentiment_score: 0.15,
+  sentiment_intensity: 0.72,
+  credibility_score: 0.85,
+  volatility_persistence: 0.94,
+  source: "antigravity_agent",
+  headlines: [],
+  earnings_catalyst: null,
+  provider_used: "none",
+};
+
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
   async health() {
@@ -5725,6 +5858,7 @@ export const mockApi = {
       sector_allocation: sectorAlloc(p.holdings),
       recent_trades: trades(p.holdings),
       as_of: new Date(Date.now() - 5400_000).toISOString(),
+      news_coverage: newsCoverageFor(id),
     };
     return delay(detail);
   },
@@ -5756,6 +5890,70 @@ export const mockApi = {
       macro_benchmark: p.macroBenchmark
         ? synthCurve("SPY-macro", range, 0.08, 0.1)
         : null,
+    });
+  },
+
+  async getHoldings(id: string): Promise<Holding[]> {
+    const p = findPilot(id);
+    if (!p) throw notFound(id);
+    return delay(p.holdings);
+  },
+
+  /**
+   * "What if I allocated $X to this Pilot" projection. `current`/`projected`
+   * are deterministically derived from BOTH the Pilot id AND the requested
+   * allocation amount (a small per-Pilot seeded random walk, scaled by
+   * allocation size) so different Pilots — and different allocation sizes
+   * for the same Pilot — genuinely produce different numbers. A mock that
+   * returned the same delta for every Pilot would reproduce the exact
+   * fabrication bug this feature rebuild exists to fix.
+   */
+  async simulatePilotAllocation(
+    pilotId: string,
+    payload: PilotSimulationRequest
+  ): Promise<PilotSimulationResult> {
+    const p = findPilot(pilotId);
+    if (!p) throw notFound(pilotId);
+    const amount = payload.allocation_amount;
+    const baseSharpe = p.summary.headline.sharpe;
+    const baseDD = p.summary.headline.max_drawdown;
+    const symbolsTotal = p.holdings.length;
+
+    if (baseSharpe == null || baseDD == null) {
+      // Honest degradation: no backtest series behind this Pilot at all —
+      // the same case getPerformance's own curve:null branch reports.
+      return delay<PilotSimulationResult>({
+        pilot_id: pilotId,
+        current: { sharpe_ratio: baseSharpe, max_drawdown: baseDD },
+        projected: { sharpe_ratio: null, max_drawdown: null },
+        heat_pct_current: null,
+        heat_pct_projected: null,
+        coverage: { symbols_covered: 0, symbols_total: symbolsTotal },
+        reason:
+          "No backtest series yet — this Pilot's validation report has no persisted return curve.",
+      });
+    }
+
+    // Deterministic per Pilot id + allocation size, NOT a fixed delta.
+    const rng = seeded(pilotId.length * 97 + Math.round(amount / 100) + 3);
+    const sizeFactor = Math.min(1, Math.max(0, amount) / 50_000);
+    const sharpeDelta = (rng() - 0.5) * 0.4 * sizeFactor;
+    const ddDelta = (rng() - 0.35) * 0.06 * sizeFactor;
+    const projectedSharpe = +(baseSharpe + sharpeDelta).toFixed(3);
+    const projectedDD = Math.min(1, Math.max(0, +(baseDD + ddDelta).toFixed(3)));
+    // Occasionally an honest partial-coverage Pilot (a symbol missing a
+    // live quote this cycle) rather than every Pilot reporting full coverage.
+    const symbolsCovered = Math.max(0, symbolsTotal - (rng() < 0.3 ? 1 : 0));
+    const heatCurrent = +(0.02 + rng() * 0.03).toFixed(4);
+
+    return delay<PilotSimulationResult>({
+      pilot_id: pilotId,
+      current: { sharpe_ratio: baseSharpe, max_drawdown: baseDD },
+      projected: { sharpe_ratio: projectedSharpe, max_drawdown: projectedDD },
+      heat_pct_current: heatCurrent,
+      heat_pct_projected: null,
+      coverage: { symbols_covered: symbolsCovered, symbols_total: symbolsTotal },
+      reason: null,
     });
   },
 
@@ -6092,6 +6290,12 @@ export const mockApi = {
     const prior = existing.find((f) => f.pilot_id === id);
     const follow: Follow = {
       pilot_id: id,
+      // Matches the real backend exactly: `follow.amount` is always the
+      // raw requested amount (FollowsStore().upsert(pilot_id, body.amount)
+      // in api/pilots_api.py) -- it is NEVER the Kelly-clamped amount. The
+      // clamped figure only exists as the sum of `planned_intents[].
+      // target_notional` below; that discrepancy is exactly what
+      // FollowModal.tsx's "capped" notice exists to surface honestly.
       amount,
       created_at: prior?.created_at ?? now,
       updated_at: now,
@@ -6104,10 +6308,24 @@ export const mockApi = {
     if (amount > 0) next.push(follow);
     writeFollows(next);
 
+    // Kelly-ceiling sizing simulation (mirrors pilots/mirror.py's
+    // plan_follow) -- a deliberately simplified, deterministic stand-in for
+    // the real bootstrap-Kelly/vol-target math, not a replication of it.
+    // MOCK_TOTAL_EQUITY matches getPortfolioSummary's mock fixture so the
+    // implied kelly_weight fraction stays internally consistent.
+    const MOCK_TOTAL_EQUITY = 48213.55;
+    const MOCK_KELLY_CEILING = 1800; // deliberately below the $2500 quick-chip, above $1000
+    const kellyWeight = +(MOCK_KELLY_CEILING / MOCK_TOTAL_EQUITY).toFixed(4);
+    const capped = amount > MOCK_KELLY_CEILING;
+    const allocated = capped ? MOCK_KELLY_CEILING : amount;
+    const sizingPath = capped
+      ? "vol_target_fallback_no_scalein(n=0)"
+      : "bootstrap_kelly_5th_pct(n=45,k5=0.09,k50=0.14,k95=0.21)";
+
     const planned = p.holdings.map((hd) => ({
       symbol: hd.symbol,
       side: "BUY" as const,
-      target_notional: +Math.min(amount * hd.weight, NOTIONAL_CAP).toFixed(2),
+      target_notional: +Math.min(allocated * hd.weight, NOTIONAL_CAP).toFixed(2),
       weight: hd.weight,
       conviction: +(0.55 + hd.score * 0.35).toFixed(2),
       allow_place: false, // mock is review-mode; nothing is ever placeable
@@ -6120,6 +6338,8 @@ export const mockApi = {
       queue_written: amount > 0,
       notional_cap: NOTIONAL_CAP,
       min_amount: MIN_AMOUNT,
+      sizing_path: amount > 0 ? sizingPath : undefined,
+      kelly_weight: amount > 0 ? kellyWeight : undefined,
       notice:
         "This creates a gated, paper-first order queue that you must confirm. No order is placed automatically.",
     });
@@ -7416,15 +7636,54 @@ export const mockApi = {
   async getSentimentDynamics(symbol: string): Promise<SentimentDynamics> {
     // Illustrative "available" example (this repo's USE_MOCK convention) —
     // the real endpoint can also return source: "unavailable" with all
-    // three agent-derived fields null; see SentimentDynamics.test.tsx.
+    // three agent-derived fields null; see SentimentDynamics.test.tsx. Real
+    // possible publishers only ("Reuters"/"Bloomberg"/"MarketWatch", or the
+    // literal source strings "fmp"/"finnhub") — NEVER "SEC EDGAR" or any
+    // EDGAR/Google-News-flavored publisher, since this data path
+    // (signals/news_catalyst.py's FMP-primary/Finnhub-fallback dispatcher)
+    // structurally cannot return those.
+    const sym = symbol.toUpperCase();
     return delay<SentimentDynamics>({
-      ticker: symbol.toUpperCase(),
+      ticker: sym,
       date: new Date().toISOString(),
       sentiment_score: 0.15,
       sentiment_intensity: 0.72,
       credibility_score: 0.85,
       volatility_persistence: 0.94,
       source: "antigravity_agent",
+      headlines: [
+        {
+          title: `${sym} Guidance Beats Estimates as Demand Holds Up`,
+          publisher: "Reuters",
+          url: "https://example.com/news/1",
+          published_at: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+          score: 0.62,
+          probabilities: { positive: 0.71, neutral: 0.22, negative: 0.07 },
+        },
+        {
+          title: `Analysts Weigh In After ${sym}'s Latest Product Announcement`,
+          publisher: "Bloomberg",
+          url: "https://example.com/news/2",
+          published_at: new Date(Date.now() - 18 * 3_600_000).toISOString(),
+          score: 0.08,
+          probabilities: { positive: 0.38, neutral: 0.47, negative: 0.15 },
+        },
+        {
+          title: `Supply-Chain Concerns Weigh on ${sym} Shares`,
+          publisher: "MarketWatch",
+          url: null,
+          published_at: new Date(Date.now() - 46 * 3_600_000).toISOString(),
+          score: -0.34,
+          probabilities: { positive: 0.11, neutral: 0.29, negative: 0.6 },
+        },
+      ],
+      earnings_catalyst: {
+        next_earnings_date: new Date(Date.now() + 3 * 86_400_000).toISOString(),
+        hours_to_earnings: 72,
+        status: "dampened",
+        multiplier: 0.5,
+      },
+      provider_used: "fmp",
     });
   },
 
@@ -8019,6 +8278,7 @@ export const mockApi = {
       startedAt: Date.now(),
       cancelled: false,
       simulateFailure: readForecastBackfillFailure(),
+      simulateTimeout: readForecastBackfillTimeout(),
     };
     _mockForecastBackfillJobs[jobId] = job;
     return delay(_mockForecastBackfillJobStatus(jobId, job));

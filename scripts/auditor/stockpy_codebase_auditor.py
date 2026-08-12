@@ -297,6 +297,22 @@ class StockpyAuditor:
             head = dotted.split(".")[0]
             self._local_dotted.add(head)
 
+    def _resolve_relative_import_base(self, info: ModuleInfo, node: ast.ImportFrom) -> Optional[str]:
+        """Resolve a relative ``ast.ImportFrom`` (``node.level > 0``) to the
+        absolute dotted base module/package it targets, mirroring CPython's own
+        ``importlib._bootstrap._resolve_name``. ``info.dotted`` is the importing
+        module's own dotted name (already package-collapsed for ``__init__.py``
+        by ``_dotted_name``). Returns ``None`` if the relative import climbs
+        above the root package (nothing sane to resolve to)."""
+        is_package = info.path.name == "__init__.py"
+        package = info.dotted if is_package else info.dotted.rsplit(".", 1)[0] if "." in info.dotted else ""
+        if not package:
+            return None
+        bits = package.rsplit(".", node.level - 1)
+        if len(bits) < node.level:
+            return None
+        return bits[0]
+
     def _walk_ast(self, info: ModuleInfo, tree: ast.AST) -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -311,6 +327,18 @@ class StockpyAuditor:
                     # submodule imported via its package is not seen as orphaned.
                     for alias in node.names:
                         info.imports.add(f"{node.module}.{alias.name}")
+                elif node.level > 0:
+                    base = self._resolve_relative_import_base(info, node)
+                    if base is not None:
+                        target = f"{base}.{node.module}" if node.module else base
+                        info.imports.add(target.split(".")[0])
+                        info.imports.add(target)
+                        # `from . import submodule` / `from .pkg import submodule` —
+                        # record target.submodule the same way the level==0 branch
+                        # does, so a submodule reached only via a relative import is
+                        # not seen as orphaned.
+                        for alias in node.names:
+                            info.imports.add(f"{target}.{alias.name}")
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 info.functions += 1
                 if not node.name.startswith("_"):
@@ -362,6 +390,14 @@ class StockpyAuditor:
                     info.top_level_imports.add(node.module)
                     for alias in node.names:
                         info.top_level_imports.add(f"{node.module}.{alias.name}")
+                elif node.level > 0:
+                    base = self._resolve_relative_import_base(info, node)
+                    if base is not None:
+                        target = f"{base}.{node.module}" if node.module else base
+                        info.top_level_imports.add(target.split(".")[0])
+                        info.top_level_imports.add(target)
+                        for alias in node.names:
+                            info.top_level_imports.add(f"{target}.{alias.name}")
             elif isinstance(node, ast.If) and self._is_type_checking_test(node.test):
                 # TYPE_CHECKING is False at runtime — only the else branch runs.
                 self._collect_top_level_imports(info, node.orelse)
@@ -488,7 +524,7 @@ class StockpyAuditor:
         if any(m in low for m in entry_markers):
             return True
         rel = info.rel
-        if rel.startswith(("scripts/", "api/", "gui/", "deploy/")):
+        if rel.startswith(("scripts/", "api/", "gui/", "deploy/", "ml/models/")):
             return True
         try:
             source = info.path.read_text(encoding="utf-8", errors="replace")
@@ -594,7 +630,7 @@ class StockpyAuditor:
 
         # Known aliases / dynamic names that are legitimately absent.
         benign = {"HOME", "PATH", "PWD", "USER", "TERM", "HTTPS_PROXY", "HTTP_PROXY",
-                  "DATABASE_URL", "PYTEST_CURRENT_TEST", "CI"}
+                  "DATABASE_URL", "PYTEST_CURRENT_TEST", "CI", "RH_LOGIN_WORKER"}
         for name, rel in sorted(env_refs.items()):
             if name in self._env_declared or name in benign:
                 continue
