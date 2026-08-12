@@ -14,6 +14,8 @@ import pandas as pd
 import numpy as np
 import requests
 
+from settings import settings
+
 # Set up module logger
 logger = logging.getLogger("Universe_Engine")
 if not logger.handlers:
@@ -23,12 +25,19 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
-# Anchor data paths to this module's directory, not the process CWD, so that
-# get_delisted_tickers() / fetch_and_cache_universe() resolve the same files
-# regardless of where the platform (or a test that changed CWD) is invoked from.
-# Mirrors the Path(__file__)-anchored pattern in data/robinhood_portfolio.py.
+# CACHE_PATH is deliberately not CWD-relative -- get_delisted_tickers() /
+# fetch_and_cache_universe() must resolve the same file regardless of where
+# the platform (or a test that changed CWD) is invoked from. It is now
+# additionally anchored under settings.LOCAL_DATA_ROOT rather than this
+# module's own directory, so every git worktree/checkout on this machine
+# shares the same physical cache file instead of each worktree computing its
+# own (untracked files are worktree-local in git) -- see
+# settings.LOCAL_DATA_ROOT's docstring for the full rationale.
+# DELISTED_PATH is the hand-curated survivorship-bias fixture CSV and stays
+# tracked in-repo, module-directory-relative -- it is NOT part of this
+# migration.
 _MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
-CACHE_PATH = os.path.join(_MODULE_DIR, "data", "universe_cache.parquet")
+CACHE_PATH = os.path.join(str(settings.LOCAL_DATA_ROOT), "universe_cache.parquet")
 DELISTED_PATH = os.path.join(_MODULE_DIR, "data", "delisted_tickers.csv")
 
 def clean_ticker(ticker: Any) -> Optional[str]:

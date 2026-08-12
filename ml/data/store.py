@@ -5,9 +5,11 @@ Caches daily cross-sectional feature matrices (as_of_date → DataFrame) so that
 monthly model retraining can pull an expanding window without recomputing
 everything from scratch.
 
-The store uses Parquet files under ml/data/cache/ for efficient I/O. Each date
-is a separate file: ``cache/features_<YYYYMMDD>.parquet``. The cache is append-
-only; it is never modified retroactively (PIT guarantee).
+The store uses Parquet files under {settings.LOCAL_DATA_ROOT}/ml_feature_cache/
+for efficient I/O -- lives outside every git worktree/checkout, see
+settings.LOCAL_DATA_ROOT's docstring. Each date is a separate file:
+``ml_feature_cache/features_<YYYYMMDD>.parquet``. The cache is append-only; it
+is never modified retroactively (PIT guarantee).
 """
 
 from __future__ import annotations
@@ -18,9 +20,11 @@ from typing import Optional
 
 import pandas as pd
 
+from settings import settings
+
 logger = logging.getLogger("ML.Data.Store")
 
-_CACHE_DIR = Path(__file__).parent / "cache"
+_CACHE_DIR = settings.LOCAL_DATA_ROOT / "ml_feature_cache"
 
 
 class PITFeatureStore:

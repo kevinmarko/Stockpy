@@ -58,7 +58,7 @@ from settings import settings
 
 logger = logging.getLogger("ML.ForecastBackfill")
 
-_MODELS_DIR = Path(__file__).parent / "models"
+_MODELS_DIR = settings.LOCAL_DATA_ROOT / "ml_models"
 _MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Upper bound is arbitrary (10 years of trading days) -- the point is just to
