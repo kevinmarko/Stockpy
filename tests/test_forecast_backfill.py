@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 
 import api.pilots_api as pilots_api
 import pilots.watchlist_writer as watchlist_writer
+import ml.forecast_backfill as forecast_backfill
 from ml.forecast_backfill import AgenticForecastBackfiller
 from settings import settings
 
@@ -52,9 +53,26 @@ def _isolate_output_dir(tmp_path, monkeypatch):
     relative) and a sibling watchlist_failures.json when no explicit path is
     passed -- exactly what every call in this file does. Left unpatched, a
     ZZZZ_NOT_REAL-style test run would silently rewrite the operator's real
-    watchlist.txt / watchlist_failures.json in the repo root."""
+    watchlist.txt / watchlist_failures.json in the repo root.
+
+    A third, previously-unpatched instance of the identical bug class:
+    ml.forecast_backfill._MODELS_DIR (settings.LOCAL_DATA_ROOT / "ml_models"
+    since the LOCAL_DATA_ROOT consolidation) is where step_6's real
+    RandomForest meta-models get pickled, using production-matching filenames
+    (meta_{model_key}.pkl, e.g. meta_timeseries_momentum_10d.pkl). Before that
+    consolidation this already wrote into the real repo's ml/models/ directory
+    -- unpatched, it stayed a same-checkout-only leak; after the
+    consolidation, LOCAL_DATA_ROOT is shared across every worktree AND the
+    live production daemon, so an unpatched run here would silently overwrite
+    real production model weights with test-fixture output under the exact
+    filenames the daemon loads. Confirmed happening in practice: a full
+    `make ci` run during the LOCAL_DATA_ROOT rollout clobbered 13 of the
+    operator's real multi-horizon meta-model files this way."""
     monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(watchlist_writer, "DEFAULT_WATCHLIST_PATH", tmp_path / "watchlist.txt")
+    tmp_models_dir = tmp_path / "ml_models"
+    tmp_models_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(forecast_backfill, "_MODELS_DIR", tmp_models_dir)
 
 
 @pytest.mark.parametrize(

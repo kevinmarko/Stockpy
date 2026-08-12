@@ -77,8 +77,25 @@ def main() -> int:
     args = parser.parse_args()
 
     from settings import settings
+    import ml.forecast_backfill as forecast_backfill
 
     settings.OUTPUT_DIR = args.output_dir
+
+    # step_5_backtrain_meta_labelers() persists each (model_type, horizon)
+    # combo's RandomForest to ml.forecast_backfill._MODELS_DIR AS IT TRAINS
+    # -- not only at a final "step 6" -- using production-matching filenames
+    # (meta_{model_key}.pkl). This is a genuinely separate process (spawned
+    # via subprocess.Popen, not monkeypatch-reachable from the parent test),
+    # so it must redirect this itself rather than relying on the parent's
+    # fixture. Unpatched, this real subprocess would write straight into
+    # settings.LOCAL_DATA_ROOT / "ml_models" -- the one location shared
+    # across every worktree AND the live production daemon -- clobbering
+    # real model weights under their real filenames. See
+    # tests/test_forecast_backfill.py's _isolate_output_dir fixture for the
+    # in-process sibling of this same isolation requirement.
+    models_dir = Path(args.output_dir) / "ml_models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    forecast_backfill._MODELS_DIR = models_dir
 
     tickers = ["AAA", "BBB", "CCC", "DDD"]
     horizons = [5, 10, 15, 20, 25, 30, 35, 40]
