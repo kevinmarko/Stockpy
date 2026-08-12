@@ -1197,7 +1197,7 @@ class Settings(BaseSettings):
     # source file is written only when the operator explicitly (re-)follows
     # via plan_follow -- there is no background job that keeps it fresh
     # (the "re-plan all follows" auto-refresh idea was deliberately cut from
-    # this feature -- see docs/AUTOPILOT_PLAN.md). Left unchecked, a
+    # this feature -- see docs/plans/AUTOPILOT_PLAN.md). Left unchecked, a
     # weeks-old target netted against today's account holdings would be
     # computed from a dead snapshot. Rather than silently netting against
     # arbitrarily stale data (or picking a threshold nobody chose), a single
@@ -3894,7 +3894,7 @@ class Settings(BaseSettings):
     # ── Prompt Registry (prompt_registry/ package) ───────────────────────────
     # Versioned, cryptographically-signed, remotely-updatable store for every
     # AI-facing instruction.  Default: disabled (baseline-only, zero network).
-    # See docs/PROMPT_REGISTRY_PLAN.md §8 for the full security model.
+    # See docs/plans/PROMPT_REGISTRY_PLAN.md §8 for the full security model.
     #
     # CONSTRAINT #3 — the four credential fields are Optional[str] secrets:
     # they are masked by gui/env_io.read_settings() and raise SecretWriteError

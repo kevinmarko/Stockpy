@@ -1,7 +1,7 @@
 """
 tests/test_config.py
 =====================
-docs/CONFIG_SCHEMA_PLAN.md Phase C0 — turns the plan's one-time audit of
+docs/plans/CONFIG_SCHEMA_PLAN.md Phase C0 — turns the plan's one-time audit of
 ``config.COLUMN_SCHEMA`` into a regression-tested, machine-checkable
 contract, and exercises ``Config.validate_config()`` in CI for the first
 time (previously only invoked via ``python config.py``'s ``__main__`` block).
@@ -22,7 +22,7 @@ Three classes:
     orchestrator-only path, so a future rename/drop of either function's
     keys breaks this test intentionally rather than silently drifting.
 
-Numeric snapshot (docs/CONFIG_SCHEMA_PLAN.md Phase C1 changed the pre-existing
+Numeric snapshot (docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1 changed the pre-existing
 86/27/8/59 split by fixing the 8-key silent-drop bug in ``rec_to_sheet_row``):
 COLUMN_SCHEMA now has 91 entries (86 original + 5 new
 "# --- ADVISORY METADATA ---" columns). Of those 91: 33 are populated by the
@@ -211,7 +211,7 @@ class TestAdvisoryColumnCoverage:
     """Living, breakable contract for which COLUMN_SCHEMA keys the advisory
     path (main.py via reporting/sheet_publisher.py::rec_to_sheet_row)
     actually populates vs. leaves for the orchestrator-only path
-    (main_orchestrator.py). See docs/CONFIG_SCHEMA_PLAN.md sections (c)/(e)
+    (main_orchestrator.py). See docs/plans/CONFIG_SCHEMA_PLAN.md sections (c)/(e)
     for the full audit this pins.
 
     Phase C1 fixed the original 8-key silent-drop bug in rec_to_sheet_row:

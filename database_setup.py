@@ -85,7 +85,7 @@ def initialize_database(db_file: str = DB_FILE):
 
             # 2. Create DailySignals Table
             #
-            # docs/CONFIG_SCHEMA_PLAN.md Phase C2 finding (re-verified at
+            # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C2 finding (re-verified at
             # implementation time, not just the plan's original snapshot):
             # NO PRODUCTION CODE ANYWHERE IN THIS REPO WRITES A ROW TO
             # DailySignals. This table is schema-created and schema-migrated
@@ -196,7 +196,7 @@ def migrate_daily_signals_schema(cursor, conn):
     This ensures the schema stays synchronized with config.py across re-runs without
     dropping or truncating existing data.
 
-    docs/CONFIG_SCHEMA_PLAN.md Phase C3: this migration is, and remains,
+    docs/plans/CONFIG_SCHEMA_PLAN.md Phase C3: this migration is, and remains,
     ADDITIVE ONLY -- it has never handled renamed or removed COLUMN_SCHEMA
     keys (a renamed key leaves the old column permanently orphaned; a
     removed key's column is silently orphaned forever with no warning).
@@ -233,7 +233,7 @@ def migrate_daily_signals_schema(cursor, conn):
     else:
         logger.info("Schema migration: DailySignals is already up-to-date.")
 
-    # docs/CONFIG_SCHEMA_PLAN.md Phase C3 -- non-destructive orphan detection.
+    # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C3 -- non-destructive orphan detection.
     # Re-read the table's columns post-migration (rather than reusing
     # existing_cols, which predates the ADD COLUMN loop above) and diff
     # against the CURRENT COLUMN_SCHEMA key set, excluding the two base
