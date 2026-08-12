@@ -213,6 +213,12 @@ def _reset_macro_engine_cache() -> None:
     _MACRO_ENGINE_CACHE.clear()
 
 
+def _interval_cycle_gated(now_utc: datetime) -> bool:
+    """True when an automatic interval cycle should be skipped (market-hours gate)."""
+    from engine.advisory_agent import is_automatic_run_gated
+    return is_automatic_run_gated(now_utc, extended_hours_only=settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY)
+
+
 # ---------------------------------------------------------------------------
 # RunResult — immutable container for one full pipeline cycle
 # ---------------------------------------------------------------------------
@@ -1051,11 +1057,23 @@ def _run_agent_loop(run_cycle) -> None:
     while not _shutdown:
         # ── (1) Run one full advisory cycle (sheet + html + watch_engine) ────
         cycle_started_at = datetime.now(timezone.utc)
-        try:
-            result = run_cycle()
-        except Exception as exc:
-            logger.exception("Agent cycle failed unexpectedly: %s", exc)
+        if _interval_cycle_gated(cycle_started_at):
+            # Same market-hours gate as --interval mode (settings.ORCHESTRATOR_
+            # EXTENDED_HOURS_ONLY). compute_next_run_delay()'s own off-hours/
+            # extended-hours cadence below still governs how long we sleep
+            # before checking again -- this only skips actually RUNNING the
+            # cycle outside the window, composing cleanly with the existing
+            # adaptive-delay policy rather than replacing it.
+            logger.debug(
+                "Market-hours gate: skipping agent cycle (outside 4am-8pm ET weekday window)."
+            )
             result = None
+        else:
+            try:
+                result = run_cycle()
+            except Exception as exc:
+                logger.exception("Agent cycle failed unexpectedly: %s", exc)
+                result = None
 
         # ── (2) Update agent state with cycle outcome ────────────────────────
         if result is not None:
@@ -1407,7 +1425,10 @@ def main() -> None:
 
         logger.info("Interval mode: market data refreshes every %ds.", args.interval)
         while not _shutdown:
-            _run_cycle()
+            if _interval_cycle_gated(datetime.now(timezone.utc)):
+                logger.debug("Market-hours gate: skipping interval cycle (outside 4am-8pm ET weekday window).")
+            else:
+                _run_cycle()
             if _shutdown:
                 break
             logger.info(

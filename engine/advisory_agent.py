@@ -339,6 +339,17 @@ def is_extended_hours(now_utc: datetime) -> bool:
     return 4 <= now_et.hour < 20
 
 
+def is_automatic_run_gated(now_utc: datetime, *, extended_hours_only: bool) -> bool:
+    """True when an automatic-trigger cycle (daemon timer / ``main.py --interval``
+    / ``main.py --agent``) should be skipped: the gate is enabled AND `now_utc`
+    falls outside the extended-hours window. Single source of truth for the
+    `settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY and not is_extended_hours(now_utc)`
+    expression previously duplicated independently in `main.py` and
+    `desktop/daemon_runtime.py`. Never gates manual/API-triggered runs -- those
+    call sites simply never call this function."""
+    return bool(extended_hours_only) and not is_extended_hours(now_utc)
+
+
 def _minutes_into_or_until_rth(now_utc: datetime) -> Tuple[int, int]:
     """Return `(minutes_since_open, minutes_until_close)` clipped to [0, ∞).
 

@@ -2281,6 +2281,11 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     description: "Route the desktop shell's always-on refresh loop and the Launcher tab's manual run trigger through the persistent orchestrator daemon instead of spawning a fresh subprocess per cycle. False (default) preserves today's exact subprocess behavior everywhere.",
   },
   {
+    group: "Advanced / Config", key: "ORCHESTRATOR_EXTENDED_HOURS_ONLY", type: "boolean",
+    value: true, default: true,
+    description: "Skip automatic interval-triggered pipeline cycles (daemon timer and main.py --interval) outside the 4am-8pm ET weekday window (engine.advisory_agent.is_extended_hours) -- not strict 9:30-16:00 RTH. Manual/on-demand triggers (webapp buttons, API calls) are never gated. No holiday calendar is applied (same known limitation as is_us_market_open); default True fixes previously-unconditional 24/7 automatic runs.",
+  },
+  {
     group: "Advanced / Config", key: "CORS_ALLOWED_ORIGINS", type: "string",
     value: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
     default: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',

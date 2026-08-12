@@ -6,6 +6,7 @@ import type {
   AutomationStatus,
   BrokerageStatus,
   ProgressState,
+  TunablesResponse,
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
@@ -29,6 +30,7 @@ import { fmtAge, fmtDate, timeAgo } from "../format";
 import { theme } from "../theme";
 import { SectionCard } from "../components/SectionCard";
 import { TabGuide } from "../components/TabGuide";
+import { saveOutcomeMessage } from "../settingsLiveness";
 
 export function SettingsData() {
   const {
@@ -50,6 +52,11 @@ export function SettingsData() {
   const {
     data: brokerageData,
   } = useApi<BrokerageStatus>(() => api.getBrokerageStatus(), []);
+
+  const {
+    data: tunables,
+    reload: reloadTunables,
+  } = useApi<TunablesResponse>(() => api.getTunables(), []);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
@@ -76,6 +83,8 @@ export function SettingsData() {
         error={scheduleError}
         httpStatus={scheduleHttpStatus}
         onRetry={reloadSchedule}
+        tunables={tunables}
+        onReloadTunables={reloadTunables}
       />
 
       <AutoRefreshSection brokerageStatus={brokerageData} />
@@ -547,13 +556,36 @@ function ScheduleSection({
   error,
   httpStatus,
   onRetry,
+  tunables,
+  onReloadTunables,
 }: {
   schedule: AutomationSchedule | null;
   loading: boolean;
   error: string | null;
   httpStatus: number | null;
   onRetry: () => void;
+  tunables?: TunablesResponse | null;
+  onReloadTunables?: () => void;
 }) {
+  const extendedHoursField = tunables?.groups
+    .flatMap((g) => g.fields)
+    .find((f) => f.key === "ORCHESTRATOR_EXTENDED_HOURS_ONLY");
+
+  const { run: updateTunable, pending: updatingTunables, error: updateTunableError } = useMutation(
+    (val: boolean) => api.updateTunables({ ORCHESTRATOR_EXTENDED_HOURS_ONLY: val })
+  );
+  const [updateOutcome, setUpdateOutcome] = useState<ReturnType<typeof saveOutcomeMessage>>(null);
+
+  const handleUpdateTunable = async (val: boolean) => {
+    const res = await updateTunable(val);
+    // saveOutcomeMessage (webapp/src/settingsLiveness.ts) is the same helper
+    // GenericSettingsEditor.tsx uses to report a real, backend-sourced outcome
+    // -- reused here instead of a second hand-written "what just happened"
+    // sentence, so this toggle's result reporting can't drift from the
+    // shared editor's.
+    setUpdateOutcome(res ? saveOutcomeMessage(res) : null);
+    if (res) onReloadTunables?.();
+  };
   return (
     <SectionCard title="Schedule">
       {loading && <Loading lines={2} />}
@@ -584,6 +616,54 @@ function ScheduleSection({
           )}
 
           <IntervalEditor schedule={schedule} onSaved={onRetry} />
+
+          {extendedHoursField && (
+            <div className="list" style={{ marginTop: "var(--s-3-5)" }}>
+              <div className="row" style={{ alignItems: "center" }}>
+                <div className="row-main">
+                  <span className="row-title">Extended Market Hours Only</span>
+                  <span className="row-sub">
+                    Skip automatic interval runs outside 4am-8pm ET weekdays.
+                    {/* This field is always classified live_safe ("applies: immediately"),
+                        which only means the process serving this write picks it up right
+                        away -- it does NOT mean every automatic-trigger process does. A
+                        plain `main.py --interval` subprocess (the default,
+                        ORCHESTRATOR_DAEMON_ENABLED=False, topology) never re-polls settings
+                        after startup. A standalone `api/pilots_api.py` process fronting a
+                        separately-running daemon only forwards the write live if
+                        RUNTIME_FLAGS_REFRESH_ENABLED is also on (default off) -- otherwise
+                        the daemon keeps its stale value until restarted too. Show a fixed,
+                        always-visible caveat instead of trusting `liveness.applies` for
+                        this specific field. */}
+                    <span style={{ display: "block", color: theme.accent, marginTop: 2 }}>
+                      Applies immediately only to the process handling this request. A
+                      plain <code>main.py --interval</code> process, or a daemon running
+                      behind a separate Pilots API without RUNTIME_FLAGS_REFRESH_ENABLED,
+                      only picks this up on its next restart.
+                    </span>
+                  </span>
+                </div>
+                <Toggle
+                  label="Extended Market Hours Only"
+                  checked={Boolean(extendedHoursField.value)}
+                  onChange={(val) => handleUpdateTunable(val)}
+                  pending={updatingTunables}
+                />
+              </div>
+              {updateTunableError && (
+                <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
+                  <span>⚠️</span>
+                  <span>{updateTunableError}</span>
+                </Notice>
+              )}
+              {!updateTunableError && updateOutcome && (
+                <Notice variant={updateOutcome.variant} style={{ marginTop: "var(--s-2)" }}>
+                  <span>{updateOutcome.variant === "success" ? "✅" : "ℹ️"}</span>
+                  <span>{updateOutcome.text}</span>
+                </Notice>
+              )}
+            </div>
+          )}
 
           <div style={{ marginTop: "var(--s-3-5)" }}>
             <div className="row-sub" style={{ marginBottom: "var(--s-1-5)" }}>
