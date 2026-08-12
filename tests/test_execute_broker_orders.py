@@ -30,6 +30,10 @@ Coverage map
 - test_reconciliation_drift_is_surfaced      — (d) drift detected → telemetry.critical
 - test_broker_error_on_one_symbol_is_non_fatal — (e) one symbol raises → logged, cycle continues
 - test_unsizable_buy_is_skipped              — BUY with no account equity is skipped, not fabricated to 1 share
+- test_buy_target_qty_reflects_post_regime_derate — (g) Kelly_Target_Post_Regime > Kelly Target -> target_qty > qty
+- test_buy_target_qty_falls_back_when_column_absent — (g) no Kelly_Target_Post_Regime column -> target_qty == qty
+- test_buy_target_qty_equals_qty_when_no_derate — (g) Kelly_Target_Post_Regime == Kelly Target -> target_qty == qty
+- test_sell_target_qty_always_equals_qty      — (g) SELL/TRIM: target_qty == qty, unchanged by this feature
 """
 
 from __future__ import annotations
@@ -405,6 +409,117 @@ def test_unsizable_buy_is_skipped(monkeypatch):
 
     assert broker.submitted == [], "an unsizable BUY must not be submitted"
     assert telemetry_mock.warning.called, "the skip must be logged as a WARNING"
+
+
+# ---------------------------------------------------------------------------
+# (g) OrderIntent.target_qty -- the pre-portfolio-cap, pre-Dual-Momentum
+#     sizing target implied by Kelly_Target_Post_Regime (BUY only; SELL/TRIM
+#     always equals qty since a full close has no distinct target).
+# ---------------------------------------------------------------------------
+
+def test_buy_target_qty_reflects_post_regime_derate(monkeypatch):
+    """Kelly_Target_Post_Regime > 'Kelly Target' simulates a portfolio-gross-
+    cap or Dual-Momentum derate having shrunk the submitted 'Kelly Target'
+    weight after strategy_engine.py originally computed a larger per-name
+    sizing decision. target_qty must reflect the larger, pre-derate weight,
+    strictly greater than the actually-submitted qty."""
+    broker = MockBroker(positions=[], equity=100_000.0)
+    ts_store = _make_ts_store({})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+
+    df = _df([{
+        "Symbol": "AAPL", "Action Signal": "BUY",
+        "Kelly Target": 0.1, "Kelly_Target_Post_Regime": 0.2,
+        "Price": 100.0,
+    }])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    expected_qty = main_orchestrator._kelly_target_qty(0.1, 100_000.0, 100.0)
+    expected_target_qty = main_orchestrator._kelly_target_qty(0.2, 100_000.0, 100.0)
+    assert buy.qty == pytest.approx(expected_qty)  # unaffected -- still Kelly-Target-sized
+    assert buy.target_qty == pytest.approx(expected_target_qty)
+    assert buy.target_qty > buy.qty
+
+
+def test_buy_target_qty_falls_back_when_column_absent(monkeypatch):
+    """No 'Kelly_Target_Post_Regime' column at all (an older/incompatible
+    cached DataFrame) -> graceful fallback to 'Kelly Target' itself, so
+    target_qty == qty (today's exact prior behavior)."""
+    broker = MockBroker(positions=[], equity=100_000.0)
+    ts_store = _make_ts_store({})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+
+    df = _df([{"Symbol": "AAPL", "Action Signal": "BUY", "Kelly Target": 0.1, "Price": 100.0}])
+    assert "Kelly_Target_Post_Regime" not in df.columns
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    expected_qty = main_orchestrator._kelly_target_qty(0.1, 100_000.0, 100.0)
+    assert buy.qty == pytest.approx(expected_qty)
+    assert buy.target_qty == pytest.approx(buy.qty)
+
+
+def test_buy_target_qty_equals_qty_when_no_derate(monkeypatch):
+    """Kelly_Target_Post_Regime present but equal to 'Kelly Target' (no
+    portfolio-gross-cap / Dual-Momentum derating happened this cycle) ->
+    target_qty == qty."""
+    broker = MockBroker(positions=[], equity=100_000.0)
+    ts_store = _make_ts_store({})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+
+    df = _df([{
+        "Symbol": "AAPL", "Action Signal": "BUY",
+        "Kelly Target": 0.1, "Kelly_Target_Post_Regime": 0.1,
+        "Price": 100.0,
+    }])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    expected_qty = main_orchestrator._kelly_target_qty(0.1, 100_000.0, 100.0)
+    assert buy.qty == pytest.approx(expected_qty)
+    assert buy.target_qty == pytest.approx(buy.qty)
+
+
+def test_sell_target_qty_always_equals_qty(monkeypatch):
+    """SELL/TRIM: target_qty == qty, unchanged by this feature -- a full
+    position close has no distinct 'target' size to diverge from what's
+    actually held."""
+    broker = MockBroker(positions=[_pos("MSFT", 5.0)], equity=100_000.0)
+    ts_store = _make_ts_store({"MSFT": 5.0})
+    kill_switch = _FakeKillSwitch(active=False)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
+    )
+
+    df = _df([{
+        "Symbol": "MSFT", "Action Signal": "SELL",
+        "Kelly Target": 0.0, "Kelly_Target_Post_Regime": 0.0,
+        "Price": 200.0,
+    }])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    sell = broker.submitted[0]
+    assert sell.side is OrderSide.SELL
+    assert sell.qty == pytest.approx(5.0)
+    assert sell.target_qty == pytest.approx(sell.qty)
 
 
 # ---------------------------------------------------------------------------

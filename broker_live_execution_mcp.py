@@ -7,10 +7,10 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from execution.broker_base import OrderIntent, OrderSide, OrderType
 from execution.order_manager import OrderManager
-from execution.risk_gate import PreTradeRiskGate
+from execution.risk_gate import PreTradeRiskGate, RiskContext
 from settings import settings
 
-mcp = FastMCP("Robinhood Execution")
+mcp = FastMCP("Broker Live Execution")
 
 # In-memory storage for dual-key confirmation
 _pending_orders = {}
@@ -22,13 +22,13 @@ class RateLimiter:
         self.tokens = capacity
         self.fill_rate = fill_rate
         self.last_fill = time.time()
-        
+
     def consume(self, tokens: int = 1) -> bool:
         now = time.time()
         elapsed = now - self.last_fill
         self.tokens = min(self.capacity, self.tokens + elapsed * self.fill_rate)
         self.last_fill = now
-        
+
         if self.tokens >= tokens:
             self.tokens -= tokens
             return True
@@ -52,7 +52,7 @@ def execute_live_trade(symbol: str, side: str, qty: float, order_type: str = "ma
     """
     if not _rate_limiter.consume():
         return json.dumps({"status": "error", "message": "Rate limit exceeded. Try again later."})
-        
+
     try:
         side_enum = OrderSide(side.lower())
         otype_enum = OrderType(order_type.lower())
@@ -67,13 +67,13 @@ def execute_live_trade(symbol: str, side: str, qty: float, order_type: str = "ma
         order_type=otype_enum,
         limit_price=limit_price
     )
-    
+
     token = str(uuid.uuid4())
     _pending_orders[token] = {
         "intent": intent,
         "expires": time.time() + 300 # 5 minutes TTL
     }
-    
+
     return json.dumps({
         "status": "pending_confirmation",
         "confirmation_token": token,
@@ -91,24 +91,66 @@ def execute_live_trade(symbol: str, side: str, qty: float, order_type: str = "ma
 async def confirm_live_trade(confirmation_token: str) -> str:
     """
     Confirms and executes a previously prepared live trade.
+
+    Builds a real RiskContext (open positions, account snapshot, and a
+    current price for the traded symbol) before submission so
+    ``PreTradeRiskGate`` actually runs — passing ``risk_context=None`` to
+    ``OrderManager.submit_order_with_idempotency`` makes the gate a silent
+    no-op (see execution/order_manager.py's documented behavior), which was
+    a real safety gap on this live-order-placement path.
     """
     if not _rate_limiter.consume():
         return json.dumps({"status": "error", "message": "Rate limit exceeded. Try again later."})
-        
+
     if confirmation_token not in _pending_orders:
         return json.dumps({"status": "error", "message": "Invalid or expired confirmation_token."})
-        
+
     order_data = _pending_orders.pop(confirmation_token)
     if time.time() > order_data["expires"]:
         return json.dumps({"status": "error", "message": "Confirmation token expired."})
-        
+
     intent = order_data["intent"]
-    
+
     broker = _get_broker()
     om = OrderManager(broker, dry_run=False, risk_gate=PreTradeRiskGate())
-    
+
     try:
-        result = await om.submit_order_with_idempotency(intent)
+        # Best-effort broker context for the pre-trade risk gate, mirroring
+        # main_orchestrator.py::_execute_broker_orders' construction. Each
+        # optional RiskContext field passes conservatively (never blocks) on
+        # a None/empty value, so a partial failure here degrades the gate's
+        # coverage rather than aborting the trade -- the fail-closed
+        # boundary is still the risk gate itself, which now genuinely runs.
+        try:
+            open_positions = await broker.get_open_positions()
+        except Exception:
+            open_positions = []
+        try:
+            account = await broker.get_account()
+        except Exception:
+            account = None
+
+        current_prices: dict = {}
+        try:
+            from data.market_data import get_provider, MarketDataError
+            quote = get_provider().get_latest_quote(intent.symbol)
+            current_prices[intent.symbol.upper()] = float(quote.price)
+        except Exception:
+            pass  # no live price available -- position-size check skips conservatively
+
+        risk_context = RiskContext(
+            open_positions=open_positions,
+            account=account,
+            current_prices=current_prices,
+            is_premium_sell_strategy=False,
+        )
+
+        result = await om.submit_order_with_idempotency(intent, risk_context=risk_context)
+        if result.status.value == "error":
+            return json.dumps({
+                "status": "error",
+                "message": result.error_message,
+            }, indent=2)
         return json.dumps({
             "status": "success",
             "broker_order_id": result.broker_order_id,
@@ -122,7 +164,7 @@ async def cancel_order(order_id: str) -> str:
     """Cancels an open order."""
     if not _rate_limiter.consume():
         return json.dumps({"status": "error", "message": "Rate limit exceeded."})
-        
+
     broker = _get_broker()
     try:
         success = await broker.cancel_order(order_id)
@@ -137,29 +179,36 @@ def get_live_positions() -> str:
     """Fetches the latest real account snapshot from robinhood_portfolio."""
     if not _rate_limiter.consume():
         return json.dumps({"status": "error", "message": "Rate limit exceeded."})
-        
+
     try:
         from data.historical_store import HistoricalStore
         snapshot = HistoricalStore().latest_account_snapshot()
         if snapshot is None:
             return json.dumps({"status": "error", "message": "No account snapshot available."})
-            
-        positions = getattr(snapshot, "positions", [])
+
+        positions = getattr(snapshot, "positions", {}) or {}
         if not positions:
-            return json.dumps({"status": "success", "positions": []})
-            
+            return json.dumps({
+                "status": "success",
+                "total_equity": float(snapshot.total_equity),
+                "buying_power": float(snapshot.buying_power),
+                "positions": [],
+            })
+
         pos_list = []
-        for p in positions:
+        # AccountSnapshot.positions is dict[symbol -> PortfolioPosition] --
+        # iterate .values(), not the dict itself (which yields string keys).
+        for p in positions.values():
             pos_list.append({
                 "symbol": p.symbol,
-                "qty": float(p.qty),
+                "quantity": float(p.quantity),
                 "market_value": float(p.market_value),
                 "unrealized_pl": float(p.unrealized_pl)
             })
-            
+
         return json.dumps({
             "status": "success",
-            "net_liquidity": float(snapshot.net_liquidity),
+            "total_equity": float(snapshot.total_equity),
             "buying_power": float(snapshot.buying_power),
             "positions": pos_list
         }, indent=2)

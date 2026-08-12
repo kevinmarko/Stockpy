@@ -83,6 +83,13 @@ class OrderIntent:
     # ignored otherwise (default NORMAL preserves today's plain submission
     # order for every existing caller that never sets this).
     priority: OrderPriority = OrderPriority.NORMAL
+    # Optional sizing-decision telemetry, not consumed by broker submission
+    # itself: the quantity the per-name sizing decision targeted BEFORE any
+    # portfolio-level derating (portfolio gross cap, Dual Momentum safe-asset
+    # override) was applied. ``None`` for any caller that does not populate
+    # it (today's exact prior behavior). See main_orchestrator.py's
+    # ``_execute_broker_orders`` BUY/SELL branches for the one real producer.
+    target_qty: Optional[float] = None
 
 
 @dataclass

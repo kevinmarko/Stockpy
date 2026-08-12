@@ -211,7 +211,9 @@ per skill (what does it look like when this goes wrong, and what's the fix).
 
 ## Phase 4 — Execution boundary — REVISED PLAN, ready for a fresh agent to build
 
-> **Why this section was rewritten.** `robinhood_execution_mcp.py` already
+> **Why this section was rewritten.** `broker_live_execution_mcp.py` (at the
+> time this section was written, still named `robinhood_execution_mcp.py` --
+> renamed in a later minimal-patch pass, see the note below) already
 > exists on `main` (landed as part of PR #675) but was explicitly excluded
 > from that round's build-out and verification. A direct code-reading pass
 > (not a test run — no test file covered these paths at all) found it has
@@ -283,7 +285,7 @@ This REPLACES the current `_pending_orders = {}` in-memory module dict —
 durable storage also fixes the secondary gap that a process restart
 between propose and confirm silently drops the proposal today.
 
-#### [MODIFY] `robinhood_execution_mcp.py::execute_live_trade`
+#### [MODIFY] `broker_live_execution_mcp.py::execute_live_trade`
 
 *   Builds the `OrderIntent` exactly as today (same validation of
     `side`/`order_type`), but instead of storing it in `_pending_orders` and
@@ -327,7 +329,7 @@ between propose and confirm silently drops the proposal today.
     and sufficient; do not fabricate a user-identity system that doesn't
     exist elsewhere here).
 *   These two endpoints are load-bearing precisely *because* they are not
-    MCP tools — `investyo_mcp_server.py`/`robinhood_execution_mcp.py` MUST
+    MCP tools — `investyo_mcp_server.py`/`broker_live_execution_mcp.py` MUST
     NOT expose an equivalent "approve" tool. The whole point of this
     redesign is that the calling agent has no code path to set
     `approved_by` itself.
@@ -341,7 +343,7 @@ human's actual interaction surface. Follow this repo's standard webapp
 pattern for a new screen (see `.agents/skills/new-pwa-screen/SKILL.md`):
 types → client + mock → screen → route → test, mock/live parity gate.
 
-#### [MODIFY] `robinhood_execution_mcp.py::confirm_live_trade`
+#### [MODIFY] `broker_live_execution_mcp.py::confirm_live_trade`
 
 *   Looks up the proposal by id. If `status != "approved"`, return an
     honest "still pending operator approval" (or "rejected"/"expired") —
@@ -366,7 +368,7 @@ types → client + mock → screen → route → test, mock/live parity gate.
 *   Updates the proposal row to `executed`/`failed` with the real
     `broker_order_id`/`error_message`.
 
-#### [MODIFY] `robinhood_execution_mcp.py::get_live_positions`
+#### [MODIFY] `broker_live_execution_mcp.py::get_live_positions`
 
 *   Fix the 3 confirmed bugs: iterate `snapshot.positions.values()`, use
     `.quantity` not `.qty`, use `.total_equity` not `.net_liquidity`.

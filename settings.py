@@ -184,7 +184,11 @@ class Settings(BaseSettings):
         "'fmp_paper' — see execution/fmp_paper_broker.py). Defaults to 'alpaca' "
         "so this is purely additive: nothing about ALPACA_PAPER's existing "
         "behavior changes for any existing deployment unless an operator "
-        "explicitly opts into 'fmp_paper'.",
+        "explicitly opts into 'fmp_paper'. 'robinhood' is a documented-but-not-"
+        "yet-implemented future value reserved for an eventual RobinhoodBroker "
+        "— any unrecognized value (including 'robinhood' today) falls through "
+        "to 'alpaca'; see docs/architecture/execution.md's 'Future extension "
+        "point — automated Robinhood execution (not implemented)' section.",
     )
     STATE_API_TOKEN: Optional[str] = Field(
         default=None,
