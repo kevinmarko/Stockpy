@@ -193,6 +193,7 @@ import type {
   PaperBrokerAccount,
   PaperBrokerPosition,
   PaperBrokerOrder,
+  LiveTradeProposal,
 } from "./types";
 
 const SECTORS = [
@@ -8395,6 +8396,30 @@ export const mockApi = {
       confirm
     );
   },
+  // ---- Live Trade Approvals ----
+  async getPendingLiveTrades() {
+    return delay({ proposals: mockLiveTradeProposals.filter((p) => p.status === "pending_approval") });
+  },
+  async approveLiveTrade(token: string) {
+    const proposal = mockLiveTradeProposals.find((p) => p.token === token);
+    if (!proposal) {
+      throw new ApiError("not_found", 404);
+    }
+    proposal.status = "approved";
+    proposal.approved_at = new Date().toISOString();
+    proposal.approved_by = "operator";
+    return delay({ ...proposal });
+  },
+  async rejectLiveTrade(token: string) {
+    const proposal = mockLiveTradeProposals.find((p) => p.token === token);
+    if (!proposal) {
+      throw new ApiError("not_found", 404);
+    }
+    proposal.status = "rejected";
+    proposal.approved_at = new Date().toISOString();
+    proposal.approved_by = "operator";
+    return delay({ ...proposal });
+  },
 };
 
 
@@ -8676,4 +8701,111 @@ const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
 let paperAccount: PaperBrokerAccount = { equity: 0, cash: 0, buying_power: 0 };
 let paperPositions: PaperBrokerPosition[] = [];
 let paperOrders: PaperBrokerOrder[] = [];
+
+/**
+ * Live-trade proposals awaiting human approve/reject -- the ONE place an
+ * operator can act on a real order an MCP tool proposed. Module-level and
+ * mutable (matches `paperAccount`/`paperPositions`/`paperOrders` above) so
+ * approve/reject mutations in mock mode persist across a reload of the
+ * pending list within the same session.
+ *
+ * Deliberately seeded with a mix of statuses (not just `pending_approval`)
+ * so a mock-mode operator can see what a decided/expired/failed proposal
+ * honestly looks like -- `getPendingLiveTrades` still only ever surfaces
+ * the `pending_approval` rows, matching the real backend's `GET
+ * /pilots/execution/pending` contract.
+ */
+let mockLiveTradeProposals: LiveTradeProposal[] = [
+  {
+    token: "ltp_8f2a1c",
+    symbol: "AAPL",
+    side: "BUY",
+    qty: 25,
+    order_type: "limit",
+    limit_price: 228.5,
+    strategy_id: "momentum_12_1",
+    proposed_at: new Date(Date.now() - 4 * 60_000).toISOString(),
+    expires_at: new Date(Date.now() + 26 * 60_000).toISOString(),
+    status: "pending_approval",
+    approved_at: null,
+    approved_by: null,
+    broker_order_id: null,
+    error_message: null,
+  },
+  {
+    token: "ltp_1d9e77",
+    symbol: "MSFT",
+    side: "SELL",
+    qty: 10,
+    order_type: "market",
+    limit_price: null,
+    strategy_id: "multifactor_lowvol_size",
+    proposed_at: new Date(Date.now() - 12 * 60_000).toISOString(),
+    expires_at: new Date(Date.now() + 18 * 60_000).toISOString(),
+    status: "pending_approval",
+    approved_at: null,
+    approved_by: null,
+    broker_order_id: null,
+    error_message: null,
+  },
+  {
+    token: "ltp_5b3f02",
+    symbol: "NVDA",
+    side: "BUY",
+    qty: 5,
+    order_type: "limit",
+    limit_price: 132.75,
+    strategy_id: "cross_sectional_momentum",
+    proposed_at: new Date(Date.now() - 3600_000).toISOString(),
+    expires_at: new Date(Date.now() - 3300_000).toISOString(),
+    status: "expired",
+    approved_at: null,
+    approved_by: null,
+    broker_order_id: null,
+    error_message: null,
+  },
+  {
+    token: "ltp_a04c19",
+    symbol: "JNJ",
+    side: "BUY",
+    qty: 15,
+    order_type: "limit",
+    limit_price: 158.2,
+    strategy_id: "garch_vol_target",
+    proposed_at: new Date(Date.now() - 7200_000).toISOString(),
+    expires_at: new Date(Date.now() - 6600_000).toISOString(),
+    status: "executed",
+    approved_at: new Date(Date.now() - 7000_000).toISOString(),
+    approved_by: "operator",
+    broker_order_id: "brk_ord_66211a",
+    error_message: null,
+  },
+  {
+    token: "ltp_c78d40",
+    symbol: "TSLA",
+    side: "SELL",
+    qty: 8,
+    order_type: "market",
+    limit_price: null,
+    strategy_id: "rsi2_mean_reversion",
+    proposed_at: new Date(Date.now() - 9000_000).toISOString(),
+    expires_at: new Date(Date.now() - 8400_000).toISOString(),
+    status: "rejected",
+    approved_at: new Date(Date.now() - 8900_000).toISOString(),
+    approved_by: "operator",
+    broker_order_id: null,
+    error_message: null,
+  },
+];
+
+/**
+ * Exposed for tests (and any mock-mode operator who wants to see the
+ * genuinely-quiet-queue empty state): replace the mock live-trade proposal
+ * fixture wholesale. Call with `[]` to reach the honest "no pending
+ * proposals" branch `LiveTradeApprovals.tsx` must render, matching the
+ * `__resetMockDataUniverse`/`__resetMockRatingOverrides` convention above.
+ */
+export function __setMockLiveTradeProposals(proposals: LiveTradeProposal[]) {
+  mockLiveTradeProposals = proposals;
+}
 

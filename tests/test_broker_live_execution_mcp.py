@@ -1,7 +1,5 @@
 import pytest
 import json
-import uuid
-import time
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from execution.broker_base import (
@@ -13,6 +11,7 @@ from execution.broker_base import (
     OrderResult,
     PositionSnapshot,
 )
+from execution.live_trade_proposals_store import LiveTradeProposalStore
 from data.robinhood_portfolio import AccountSnapshot as RHAccountSnapshot, PortfolioPosition
 from settings import settings
 
@@ -21,58 +20,188 @@ from settings import settings
 def anyio_backend():
     return "asyncio"
 
-# Must mock setting before import if necessary, but we can mock _get_broker
+
 from broker_live_execution_mcp import (
     execute_live_trade,
     confirm_live_trade,
     cancel_order,
     get_live_positions,
-    _pending_orders,
     _rate_limiter,
 )
 
 
 @pytest.fixture(autouse=True)
-def reset_state():
-    _pending_orders.clear()
+def reset_state(tmp_path, monkeypatch):
+    """Every test gets: (1) a fresh, isolated live_trade_proposals DB (a
+    tmp_path-backed SQLite file -- NOT :memory:, since execute_live_trade /
+    confirm_live_trade each construct their own LiveTradeProposalStore()
+    instance and :memory: would give each construction its own empty DB);
+    (2) a full rate-limiter bucket; (3) LIVE_TRADE_EXECUTION_ENABLED defaulted
+    True so existing/new tests don't have to opt in individually -- the
+    dedicated disabled-flag test below flips it back off."""
+    db_url = f"sqlite:///{tmp_path / 'live_trade_proposals.db'}"
+    monkeypatch.setattr(settings, "DATABASE_URL", db_url)
+    monkeypatch.setattr(settings, "LIVE_TRADE_EXECUTION_ENABLED", True)
     _rate_limiter.tokens = _rate_limiter.capacity
+    yield
 
 
-def test_execute_live_trade_returns_token():
+def _store() -> LiveTradeProposalStore:
+    return LiveTradeProposalStore(db_url=settings.DATABASE_URL)
+
+
+# ---------------------------------------------------------------------------
+# execute_live_trade
+# ---------------------------------------------------------------------------
+
+
+def test_execute_live_trade_returns_token_and_creates_pending_proposal():
     result = execute_live_trade("AAPL", "buy", 10.0, "market")
     data = json.loads(result)
     assert data["status"] == "pending_confirmation"
     assert "confirmation_token" in data
     assert data["details"]["symbol"] == "AAPL"
     assert data["details"]["qty"] == 10.0
+    assert "operator" in data["message"].lower() or "approve" in data["message"].lower()
 
-    # Check it's in pending orders
     token = data["confirmation_token"]
-    assert token in _pending_orders
-    assert _pending_orders[token]["intent"].symbol == "AAPL"
+    proposal = _store().get_by_token(token)
+    assert proposal is not None
+    assert proposal.status == "pending_approval"
+    assert proposal.symbol == "AAPL"
+    assert proposal.side == "buy"
+
+
+def test_execute_live_trade_disabled_returns_honest_message_and_creates_no_proposal(monkeypatch):
+    monkeypatch.setattr(settings, "LIVE_TRADE_EXECUTION_ENABLED", False)
+
+    result = execute_live_trade("AAPL", "buy", 10.0, "market")
+    data = json.loads(result)
+
+    assert data["status"] == "error"
+    assert "disabled" in data["message"].lower()
+    assert "confirmation_token" not in data
+
+    # No proposal of any kind was created.
+    assert _store().get_pending(limit=10) == []
+
+
+def test_execute_live_trade_never_calls_the_broker():
+    """A happy-path execute_live_trade call creates a proposal and must never
+    touch the broker -- it only proposes, it never executes."""
+    mock_broker = AsyncMock()
+    with patch("broker_live_execution_mcp._get_broker", return_value=mock_broker):
+        result = execute_live_trade("AAPL", "buy", 10.0, "market")
+        data = json.loads(result)
+
+    assert data["status"] == "pending_confirmation"
+    mock_broker.submit_order.assert_not_called()
+    assert not mock_broker.method_calls
+
+
+def test_execute_live_trade_sends_notification_best_effort():
+    with patch("observability.alerts.send_alert") as mock_alert:
+        result = execute_live_trade("AAPL", "buy", 10.0, "market")
+    data = json.loads(result)
+    assert data["status"] == "pending_confirmation"
+    mock_alert.assert_called_once()
+    args, _ = mock_alert.call_args
+    assert args[0] == "WARNING"
+    assert data["confirmation_token"] in args[1]
+
+
+def test_execute_live_trade_notification_failure_does_not_block_proposal_creation():
+    with patch("observability.alerts.send_alert", side_effect=RuntimeError("webhook down")):
+        result = execute_live_trade("AAPL", "buy", 10.0, "market")
+    data = json.loads(result)
+    assert data["status"] == "pending_confirmation"
+    assert _store().get_by_token(data["confirmation_token"]) is not None
+
+
+# ---------------------------------------------------------------------------
+# confirm_live_trade -- status-gated enforcement
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_confirm_live_trade_success():
-    # Setup pending order
-    token = str(uuid.uuid4())
-    intent = OrderIntent(
-        strategy_id="mcp-agent",
-        symbol="MSFT",
-        side=OrderSide.BUY,
-        qty=5.0,
-        order_type=OrderType.MARKET
-    )
-    _pending_orders[token] = {
-        "intent": intent,
-        "expires": time.time() + 300
-    }
+async def test_confirm_live_trade_pending_approval_is_not_executable():
+    token = _store().create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+
+    with patch("broker_live_execution_mcp.OrderManager") as mock_om_cls:
+        result = await confirm_live_trade(token)
+
+    data = json.loads(result)
+    assert data["status"] == "error"
+    assert "not yet executable" in data["message"].lower()
+    assert "pending_approval" in data["message"]
+    mock_om_cls.assert_not_called()
+
+    # Status is untouched by the failed confirm attempt.
+    assert _store().get_by_token(token).status == "pending_approval"
+
+
+@pytest.mark.anyio
+async def test_confirm_live_trade_rejected_is_not_executable():
+    store = _store()
+    token = store.create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+    store.reject_proposal(token)
+
+    with patch("broker_live_execution_mcp.OrderManager") as mock_om_cls:
+        result = await confirm_live_trade(token)
+
+    data = json.loads(result)
+    assert data["status"] == "error"
+    assert "not yet executable" in data["message"].lower()
+    assert "rejected" in data["message"]
+    mock_om_cls.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_confirm_live_trade_expired_is_not_executable():
+    from datetime import datetime, timedelta, timezone
+    from execution.live_trade_proposals_store import LiveTradeProposal
+
+    store = _store()
+    token = store.create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+    with store.Session() as session:
+        row = session.query(LiveTradeProposal).filter_by(token=token).first()
+        row.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
+        session.commit()
+
+    with patch("broker_live_execution_mcp.OrderManager") as mock_om_cls:
+        result = await confirm_live_trade(token)
+
+    data = json.loads(result)
+    assert data["status"] == "error"
+    assert "not yet executable" in data["message"].lower()
+    assert "expired" in data["message"]
+    mock_om_cls.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_confirm_live_trade_unrecognized_token_error_shape():
+    result = await confirm_live_trade("does-not-exist")
+    data = json.loads(result)
+    assert data["status"] == "error"
+    assert "invalid or expired confirmation_token" in data["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# confirm_live_trade -- approved proposal actually executes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_confirm_live_trade_approved_executes_and_marks_executed():
+    store = _store()
+    token = store.create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+    store.approve_proposal(token)
 
     mock_om = AsyncMock()
     mock_om.submit_order_with_idempotency.return_value = OrderResult(
         client_order_id="client-123",
         status=OrderStatus.ACCEPTED,
-        broker_order_id="broker-123"
+        broker_order_id="broker-123",
     )
 
     with patch("broker_live_execution_mcp.OrderManager", return_value=mock_om), \
@@ -80,39 +209,77 @@ async def test_confirm_live_trade_success():
         result = await confirm_live_trade(token)
         data = json.loads(result)
 
-        assert data["status"] == "success"
-        assert data["broker_order_id"] == "broker-123"
-        assert data["order_status"] == "accepted"
+    assert data["status"] == "success"
+    assert data["broker_order_id"] == "broker-123"
+    assert data["order_status"] == "accepted"
 
-        # Verify removed from pending
-        assert token not in _pending_orders
+    assert mock_om.submit_order_with_idempotency.await_count == 1
+    _, kwargs = mock_om.submit_order_with_idempotency.await_args
+    assert kwargs.get("risk_context") is not None
 
-        # The risk gate is no longer a silent no-op -- a real RiskContext
-        # must have been threaded through to the manager call.
-        assert mock_om.submit_order_with_idempotency.await_count == 1
-        _, kwargs = mock_om.submit_order_with_idempotency.await_args
-        assert kwargs.get("risk_context") is not None
+    row = store.get_by_token(token)
+    assert row.status == "executed"
+    assert row.broker_order_id == "broker-123"
 
 
 @pytest.mark.anyio
-async def test_confirm_live_trade_expired():
-    token = str(uuid.uuid4())
-    intent = OrderIntent(
-        strategy_id="mcp-agent",
-        symbol="MSFT",
-        side=OrderSide.BUY,
-        qty=5.0,
-        order_type=OrderType.MARKET
-    )
-    _pending_orders[token] = {
-        "intent": intent,
-        "expires": time.time() - 10 # expired
-    }
+async def test_confirm_live_trade_approved_broker_error_marks_failed():
+    store = _store()
+    token = store.create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+    store.approve_proposal(token)
 
-    result = await confirm_live_trade(token)
-    data = json.loads(result)
+    mock_om = AsyncMock()
+    mock_om.submit_order_with_idempotency.return_value = OrderResult(
+        client_order_id="client-123",
+        broker_order_id=None,
+        status=OrderStatus.ERROR,
+        error_message="broker rejected the order",
+    )
+
+    with patch("broker_live_execution_mcp.OrderManager", return_value=mock_om), \
+         patch("broker_live_execution_mcp._get_broker", return_value=AsyncMock()):
+        result = await confirm_live_trade(token)
+        data = json.loads(result)
+
     assert data["status"] == "error"
-    assert "expired" in data["message"]
+    assert data["message"] == "broker rejected the order"
+
+    row = store.get_by_token(token)
+    assert row.status == "failed"
+    assert row.error_message == "broker rejected the order"
+
+
+@pytest.mark.anyio
+async def test_confirm_live_trade_duplicate_call_on_executed_proposal_is_idempotent():
+    """A second confirm_live_trade call against an already-executed proposal
+    must not re-submit to the broker -- its status is now 'executed', so the
+    status-gate naturally routes it into the 'not yet executable' branch.
+    This IS the idempotency guarantee for this new code path (distinct from
+    OrderManager's own client_order_id dedup at the broker layer)."""
+    store = _store()
+    token = store.create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+    store.approve_proposal(token)
+
+    mock_om = AsyncMock()
+    mock_om.submit_order_with_idempotency.return_value = OrderResult(
+        client_order_id="client-123",
+        status=OrderStatus.ACCEPTED,
+        broker_order_id="broker-123",
+    )
+
+    with patch("broker_live_execution_mcp.OrderManager", return_value=mock_om), \
+         patch("broker_live_execution_mcp._get_broker", return_value=AsyncMock()):
+        first = json.loads(await confirm_live_trade(token))
+        assert first["status"] == "success"
+        assert mock_om.submit_order_with_idempotency.await_count == 1
+
+        second = json.loads(await confirm_live_trade(token))
+
+    assert second["status"] == "error"
+    assert "not yet executable" in second["message"].lower()
+    assert "executed" in second["message"]
+    # The broker was never called a second time.
+    assert mock_om.submit_order_with_idempotency.await_count == 1
 
 
 def test_rate_limiter_blocks():
@@ -251,18 +418,9 @@ def test_get_live_positions_no_snapshot():
 
 @pytest.mark.anyio
 async def test_confirm_live_trade_blocked_by_real_risk_gate():
-    token = str(uuid.uuid4())
-    intent = OrderIntent(
-        strategy_id="mcp-agent",
-        symbol="AAPL",
-        side=OrderSide.BUY,
-        qty=100.0,  # 100 shares
-        order_type=OrderType.MARKET,
-    )
-    _pending_orders[token] = {
-        "intent": intent,
-        "expires": time.time() + 300,
-    }
+    store = _store()
+    token = store.create_proposal(symbol="AAPL", side="buy", qty=100.0, order_type="market")
+    store.approve_proposal(token)
 
     mock_broker = AsyncMock()
     mock_broker.get_open_positions.return_value = []
@@ -288,7 +446,9 @@ async def test_confirm_live_trade_blocked_by_real_risk_gate():
     assert "PRE-TRADE GATE" in data["message"]
     assert "max_position_size" in data["message"]
     mock_broker.submit_order.assert_not_awaited()
-    assert token not in _pending_orders
+
+    row = store.get_by_token(token)
+    assert row.status == "failed"
 
 
 @pytest.mark.anyio
@@ -296,18 +456,9 @@ async def test_confirm_live_trade_passes_real_risk_gate_when_within_limits():
     """Sanity counterpart to the blocked test above -- a small, well within
     limits order still executes once a genuine RiskContext is threaded
     through (proves the fix doesn't just fail closed for everything)."""
-    token = str(uuid.uuid4())
-    intent = OrderIntent(
-        strategy_id="mcp-agent",
-        symbol="AAPL",
-        side=OrderSide.BUY,
-        qty=1.0,
-        order_type=OrderType.MARKET,
-    )
-    _pending_orders[token] = {
-        "intent": intent,
-        "expires": time.time() + 300,
-    }
+    store = _store()
+    token = store.create_proposal(symbol="AAPL", side="buy", qty=1.0, order_type="market")
+    store.approve_proposal(token)
 
     mock_broker = AsyncMock()
     mock_broker.get_open_positions.return_value = []

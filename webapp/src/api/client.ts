@@ -45,6 +45,7 @@ import type {
   ExecutionQueueParams,
   JobRecord,
   KillSwitchActionResult,
+  LiveTradeProposal,
   LlmSettingUpdateResult,
   LlmStatus,
   LogAggregation,
@@ -941,6 +942,12 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
     }),
+  // ---- Live Trade Approvals ----
+  getPendingLiveTrades: () => http<{ proposals: LiveTradeProposal[] }>("/pilots/execution/pending"),
+  approveLiveTrade: (token: string) =>
+    http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/approve`, { method: "POST" }),
+  rejectLiveTrade: (token: string) =>
+    http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/reject`, { method: "POST" }),
 };
 
 /**

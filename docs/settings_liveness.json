@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 268,
+    "live_safe": 270,
     "no_op": 2,
-    "restart_required": 92,
+    "restart_required": 90,
     "total": 362
   },
   "dynamic_sites": [
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3158,
+      "line": 3165,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4204,
+      "line": 4211,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4309,
+      "line": 4316,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 371,
+  "files_scanned": 373,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -276,6 +276,8 @@
     "KELLY_CAP",
     "KELLY_FRACTION",
     "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
+    "LIVE_TRADE_APPROVAL_ENABLED",
+    "LIVE_TRADE_EXECUTION_ENABLED",
     "LLM_COMMENTARY_ALERT_PROVIDER",
     "LLM_COMMENTARY_CACHE_PATH",
     "LLM_COMMENTARY_ENABLED",
@@ -416,13 +418,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 750,
+    "attr": 758,
     "factory_param": 4,
     "getattr_const": 259,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
-    "attr": 225,
+    "attr": 227,
     "factory_param": 4,
     "getattr_const": 157,
     "os_environ": 18
@@ -836,6 +838,15 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "execution/live_trade_proposals_store.py:102",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "mcp_oauth_store.py:309",
         "via": []
       },
@@ -974,6 +985,24 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:69",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "execution/live_trade_proposals_store.py:107",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "execution/live_trade_proposals_store.py:109",
         "via": []
       },
       {
@@ -1164,6 +1193,24 @@
         "rules": [
           "cross_module_init_helper"
         ],
+        "site": "execution/live_trade_proposals_store.py:107",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "execution/live_trade_proposals_store.py:109",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
         "site": "mcp_oauth_store.py:310",
         "via": []
       },
@@ -1298,7 +1345,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4686",
+        "site": "api/pilots_api.py:4693",
         "via": []
       }
     ],
@@ -1309,7 +1356,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4685",
+        "site": "api/pilots_api.py:4692",
         "via": []
       }
     ],
@@ -1320,7 +1367,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4848",
+        "site": "api/pilots_api.py:4855",
         "via": []
       },
       {
@@ -1395,7 +1442,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4827",
+        "site": "api/pilots_api.py:4834",
         "via": []
       },
       {
@@ -1439,7 +1486,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:625",
+        "site": "api/pilots_api.py:632",
         "via": []
       }
     ],
@@ -1748,28 +1795,6 @@
         "via": []
       }
     ],
-    "LIVE_TRADE_APPROVAL_ENABLED": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "settings_keysets.py:305",
-        "via": []
-      }
-    ],
-    "LIVE_TRADE_EXECUTION_ENABLED": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "settings_keysets.py:299",
-        "via": []
-      }
-    ],
     "LOG_LEVEL": [
       {
         "discarded": false,
@@ -1933,6 +1958,15 @@
           "cross_module_init_helper"
         ],
         "site": "desktop/run_history_store.py:67",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "execution/live_trade_proposals_store.py:107",
         "via": []
       },
       {
@@ -2476,7 +2510,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:620",
+        "site": "api/pilots_api.py:627",
         "via": []
       },
       {
@@ -2566,9 +2600,9 @@
   ],
   "restart_required_reason_counts": {
     "closure_value": 1,
-    "cross_module_init_helper": 59,
+    "cross_module_init_helper": 65,
     "decorator_arg": 13,
-    "dynamic_name_literal_unattributable": 9,
+    "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 11,
     "init_body": 6,
     "init_self_assign": 41,
@@ -2581,8 +2615,6 @@
     "EDGAR_FULLTEXT_FORMS",
     "ETF_HOLDINGS_TICKERS",
     "FMP_ECON_INDICATORS",
-    "LIVE_TRADE_APPROVAL_ENABLED",
-    "LIVE_TRADE_EXECUTION_ENABLED",
     "PROMPT_REGISTRY_REFRESH_SECONDS"
   ],
   "status": "ok"

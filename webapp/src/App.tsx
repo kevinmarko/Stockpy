@@ -56,6 +56,7 @@ import { Onboarding } from "./screens/Onboarding";
 import { CacheLongShort } from "./screens/CacheLongShort";
 import { PaperBroker } from "./screens/PaperBroker";
 import { SettingsPaperBroker } from "./screens/SettingsPaperBroker";
+import { LiveTradeApprovals } from "./screens/LiveTradeApprovals";
 
 import { StrategyInsights } from "./screens/StrategyInsights";
 import { CreateDataApp } from "./screens/CreateDataApp";
@@ -263,6 +264,7 @@ export default function App() {
                   <Route path="/portfolio" element={<Portfolio />} />
                   <Route path="/cache-long-short" element={<CacheLongShort />} />
           <Route path="/paper-broker" element={<PaperBroker />} />
+                  <Route path="/live-trade-approvals" element={<LiveTradeApprovals />} />
 
                   <Route path="/strategy-insights" element={<StrategyInsights />} />
                   <Route path="/create-data-app" element={<CreateDataApp />} />

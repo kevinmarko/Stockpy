@@ -3834,3 +3834,25 @@ export interface PaperBrokerResetResult {
   status: string;
   cash: number;
 }
+
+/**
+ * A real live-trade order an MCP tool proposed for human approval. This
+ * webapp screen (LiveTradeApprovals.tsx) IS the enforcement surface -- there
+ * is no MCP-callable equivalent to approve/reject one.
+ */
+export interface LiveTradeProposal {
+  token: string;
+  symbol: string;
+  side: string;
+  qty: number;
+  order_type: string;
+  limit_price: number | null;
+  strategy_id: string;
+  proposed_at: string;
+  expires_at: string;
+  status: "pending_approval" | "approved" | "rejected" | "expired" | "executed" | "failed";
+  approved_at: string | null;
+  approved_by: string | null;
+  broker_order_id: string | null;
+  error_message: string | null;
+}

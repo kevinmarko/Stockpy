@@ -34,6 +34,8 @@ export type GlossaryValue = string | ((t: Thresholds | null) => string);
 
 /** term key (lower-case) → plain-English definition. */
 export const GLOSSARY: Record<string, GlossaryValue> = {
+  "live trade proposal":
+    "A real, unfilled order an MCP tool proposed against your live brokerage account. It sits in `pending_approval` until a human explicitly approves or rejects it here — this screen is the ONLY way to act on one; there is no MCP-callable approve/reject, so a proposal can never be filled without an operator looking at it first.",
   "paper broker":
     "A simulated trading environment that tracks mock cash and positions without risking real money, allowing strategies to be tested against real-time market data.",
   "tiered cost model":
@@ -206,6 +208,12 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
 export const TAB_HELP: Record<string, TabHelp> = {
+  "live-trade-approvals": {
+    title: "Live Trade Approvals",
+    description:
+      "The one place an operator can approve or reject a REAL live-trade proposal an MCP tool has queued against your actual brokerage account. There is no MCP-callable equivalent — this screen IS the human-in-the-loop enforcement surface, not just a convenience view. A proposal expires on its own if nobody acts on it in time.",
+    keyConcepts: ["live trade proposal", "advisory only"],
+  },
   "paper-broker": {
     title: "Paper Broker",
     description:
