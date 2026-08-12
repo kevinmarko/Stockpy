@@ -556,6 +556,7 @@ async def _execute_broker_orders(
                         qty=buy_qty,
                         order_type=OrderType.MARKET,
                         priority=OrderPriority.NORMAL,
+                        target_qty=buy_qty,
                     )
 
                     def _log_buy(result, symbol=symbol, buy_qty=buy_qty, kelly=kelly,
@@ -581,6 +582,7 @@ async def _execute_broker_orders(
                         qty=sell_qty,
                         order_type=OrderType.MARKET,
                         priority=OrderPriority.URGENT,
+                        target_qty=sell_qty,
                     )
 
                     def _log_sell(result, symbol=symbol, sell_qty=sell_qty):

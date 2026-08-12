@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, inspect
+from sqlalchemy import Column, Integer, String, Float, DateTime, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import resolve_database_url, create_db_engine, session_scope
@@ -49,6 +49,7 @@ class PaperOrder(Base):
     symbol = Column(String(10), nullable=False)
     side = Column(String(10), nullable=False)
     qty = Column(Float, nullable=False)
+    target_qty = Column(Float, nullable=True)
     filled_qty = Column(Float, nullable=False, default=0.0)
     filled_avg_price = Column(Float, nullable=True)
     status = Column(String(20), nullable=False)
@@ -71,6 +72,12 @@ class PaperAccountStore:
             self._ensure_account_exists()
 
     def _ensure_account_exists(self):
+        with self.engine.begin() as conn:
+            try:
+                conn.execute(text("ALTER TABLE paper_orders ADD COLUMN target_qty REAL"))
+            except Exception:
+                pass
+                
         with session_scope(self.Session) as session:
             acc = session.query(PaperAccount).filter_by(id=1).first()
             if not acc:
@@ -173,6 +180,7 @@ class PaperAccountStore:
         qty: float, 
         fill_price: float, 
         commission_and_fees: float,
+        target_qty: Optional[float] = None,
         status: str = OrderStatus.FILLED
     ) -> bool:
         """
@@ -198,7 +206,7 @@ class PaperAccountStore:
                 if acc.cash_balance < total_cost:
                     logger.warning(f"Insufficient funds for paper buy of {qty} {symbol}: cash={acc.cash_balance}, cost={total_cost}")
                     # Still record rejection
-                    self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED)
+                    self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty)
                     return False
                     
                 acc.cash_balance -= total_cost
@@ -214,7 +222,7 @@ class PaperAccountStore:
             elif side == "sell":
                 if current_qty < qty - _QTY_EPSILON:
                     logger.warning(f"Insufficient inventory for paper sell of {qty} {symbol}: pos={current_qty}")
-                    self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED)
+                    self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty)
                     return False
                     
                 total_proceeds = cost_basis_impact - commission_and_fees
@@ -227,10 +235,10 @@ class PaperAccountStore:
             else:
                 return False
 
-            self._insert_order(session, client_order_id, symbol, side, qty, qty, fill_price, status)
+            self._insert_order(session, client_order_id, symbol, side, qty, qty, fill_price, status, target_qty)
             return True
 
-    def _insert_order(self, session, client_order_id, symbol, side, qty, filled_qty, fill_price, status):
+    def _insert_order(self, session, client_order_id, symbol, side, qty, filled_qty, fill_price, status, target_qty=None):
         # We use a derived broker_order_id
         broker_order_id = f"FMP-{client_order_id}"
         
@@ -242,6 +250,7 @@ class PaperAccountStore:
                 symbol=symbol.upper(),
                 side=side,
                 qty=qty,
+                target_qty=target_qty,
                 filled_qty=filled_qty,
                 filled_avg_price=fill_price,
                 status=status,

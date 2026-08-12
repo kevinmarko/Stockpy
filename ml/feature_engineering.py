@@ -34,6 +34,7 @@ _PAPER_EXEC_COLS = [
     "paper_fill_rate_30d",
     "paper_order_count_30d",
     "paper_size_variance_30d",
+    "paper_size_vs_kelly_ratio_30d",
     "paper_hit_rate_30d",
     "paper_avg_realized_pnl_30d",
 ]

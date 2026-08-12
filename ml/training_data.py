@@ -282,6 +282,7 @@ def _pit_ticker_row(close: pd.Series, symbol: Optional[str] = None, as_of_date: 
     # Paper Execution & Meta-Labeling Features
     row["paper_order_count_30d"] = float("nan")
     row["paper_size_variance_30d"] = float("nan")
+    row["paper_size_vs_kelly_ratio_30d"] = float("nan")
     row["paper_hit_rate_30d"] = float("nan")
     row["paper_avg_realized_pnl_30d"] = float("nan")
     row["paper_fill_rate_30d"] = float("nan")
@@ -312,6 +313,11 @@ def _pit_ticker_row(close: pd.Series, symbol: Optional[str] = None, as_of_date: 
             filled_qty = slice_orders["filled_qty"].sum()
             if total_qty > 0:
                 row["paper_fill_rate_30d"] = float(filled_qty / total_qty)
+
+            if "target_qty" in slice_orders.columns:
+                target_qty = slice_orders["target_qty"].sum()
+                if target_qty > 0:
+                    row["paper_size_vs_kelly_ratio_30d"] = float(total_qty / target_qty)
 
             # Outcome-Based Meta-Labeling (Triple-Barrier)
             buy_orders = slice_orders[slice_orders["side"].str.lower() == "buy"]

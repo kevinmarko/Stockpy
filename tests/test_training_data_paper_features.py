@@ -24,15 +24,15 @@ def test_pit_ticker_row_with_paper_orders():
     # Paper orders history (some outside 30d window, some exactly on/after as_of_date)
     paper_orders = pd.DataFrame([
         # 1. 40 days ago (should be excluded - outside 30d window)
-        {"client_order_id": "1", "symbol": "AAPL", "side": "buy", "qty": 10, "filled_qty": 10, "timestamp": pd.Timestamp("2023-03-20")},
+        {"client_order_id": "1", "symbol": "AAPL", "side": "buy", "qty": 10, "target_qty": 10, "filled_qty": 10, "timestamp": pd.Timestamp("2023-03-20")},
         # 2. 15 days ago (should be included)
-        {"client_order_id": "2", "symbol": "AAPL", "side": "buy", "qty": 20, "filled_qty": 10, "timestamp": pd.Timestamp("2023-04-16")},
+        {"client_order_id": "2", "symbol": "AAPL", "side": "buy", "qty": 20, "target_qty": 25, "filled_qty": 10, "timestamp": pd.Timestamp("2023-04-16")},
         # 3. 5 days ago (should be included)
-        {"client_order_id": "3", "symbol": "AAPL", "side": "sell", "qty": 10, "filled_qty": 10, "timestamp": pd.Timestamp("2023-04-26")},
+        {"client_order_id": "3", "symbol": "AAPL", "side": "sell", "qty": 10, "target_qty": 10, "filled_qty": 10, "timestamp": pd.Timestamp("2023-04-26")},
         # 4. Exactly on as_of_date (should be strictly excluded - lookahead!)
-        {"client_order_id": "4", "symbol": "AAPL", "side": "buy", "qty": 100, "filled_qty": 100, "timestamp": pd.Timestamp("2023-05-01")},
+        {"client_order_id": "4", "symbol": "AAPL", "side": "buy", "qty": 100, "target_qty": 100, "filled_qty": 100, "timestamp": pd.Timestamp("2023-05-01")},
         # 5. Different symbol (should be excluded)
-        {"client_order_id": "5", "symbol": "MSFT", "side": "buy", "qty": 10, "filled_qty": 10, "timestamp": pd.Timestamp("2023-04-20")},
+        {"client_order_id": "5", "symbol": "MSFT", "side": "buy", "qty": 10, "target_qty": 10, "filled_qty": 10, "timestamp": pd.Timestamp("2023-04-20")},
     ])
     
     row = _pit_ticker_row(close, symbol, as_of_date, paper_orders)
@@ -49,6 +49,8 @@ def test_pit_ticker_row_with_paper_orders():
     # Conviction features
     assert row["paper_order_count_30d"] == 2.0
     assert pytest.approx(row["paper_size_variance_30d"], 0.001) == 50.0  # var of [20, 10] = 50.0
+    # Qty sum = 30. Target qty sum = 25 + 10 = 35. Ratio = 30 / 35.
+    assert pytest.approx(row["paper_size_vs_kelly_ratio_30d"], 0.001) == 30.0 / 35.0
     
     # Outcome features - mock doesn't trigger triple_barrier without price movement
     # So we don't assert the exact hit rate here yet, just check they are present or NaN
@@ -71,6 +73,7 @@ def test_pit_ticker_row_empty_paper_orders():
     assert np.isnan(row["paper_fill_rate_30d"])
     assert np.isnan(row["paper_order_count_30d"])
     assert np.isnan(row["paper_size_variance_30d"])
+    assert np.isnan(row["paper_size_vs_kelly_ratio_30d"])
     assert np.isnan(row["paper_hit_rate_30d"])
     assert np.isnan(row["paper_avg_realized_pnl_30d"])
 
@@ -84,5 +87,6 @@ def test_pit_ticker_row_no_paper_orders_passed():
     assert np.isnan(row["paper_fill_rate_30d"])
     assert np.isnan(row["paper_order_count_30d"])
     assert np.isnan(row["paper_size_variance_30d"])
+    assert np.isnan(row["paper_size_vs_kelly_ratio_30d"])
     assert np.isnan(row["paper_hit_rate_30d"])
     assert np.isnan(row["paper_avg_realized_pnl_30d"])
