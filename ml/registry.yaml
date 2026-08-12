@@ -34,16 +34,16 @@ models:
   lgbm_ranker:
     role: cross_sectional_ranker
     path: ml/models/lgbm_latest.pkl
-    trained_date: '2026-08-11'
-    cpcv_dsr: 0.9991642899451342
-    pbo: 0.6
-    n_train: 450
-    deployable: false
+    trained_date: '2026-08-12'
+    cpcv_dsr: 0.9820248913092426
+    pbo: 0.2
+    n_train: 460
+    deployable: true
     notes: LightGBM LambdaRank model for cross-sectional return rank prediction. Trained monthly on an
       expanding window of dashboard_df snapshots via PITFeatureStore. NDCG@1 monitored in CV logs. Weight
       in settings.SIGNAL_WEIGHTS["lgbm_ranker"] = 0.10 (modest until validated at > 200 out-of-sample
       dates).
-    artifact_file: lgbm_20260811.pkl
+    artifact_file: lgbm_20260812.pkl
     hyperparameters:
       objective: lambdarank
       metric: ndcg
@@ -58,8 +58,8 @@ models:
       verbose: -1
     train_window:
       start: '2025-08-19'
-      end: '2026-07-07'
-      n_dates: 45
+      end: '2026-07-14'
+      n_dates: 46
     features:
     - ROC_12M
     - ROC_6M
@@ -75,6 +75,12 @@ models:
     - Quality_Z
     - LowVol_Z
     - Size_Z
+    - paper_fill_rate_30d
+    - paper_order_count_30d
+    - paper_size_variance_30d
+    - paper_size_vs_kelly_ratio_30d
+    - paper_hit_rate_30d
+    - paper_avg_realized_pnl_30d
     - ROC_12M_rank
     - ROC_6M_rank
     - GARCH_Vol_rank
@@ -84,8 +90,8 @@ models:
     - earnings_yield_rank
     - quality_factor_score_rank
     - low_vol_score_rank
-    cpcv_mean_oos_sharpe: 2.516472026145507
-    cpcv_mean_oos_max_dd: 0.014425017361323298
+    cpcv_mean_oos_sharpe: 2.457556208639323
+    cpcv_mean_oos_max_dd: 0.012603120222581282
   meta_labeler_timeseries_momentum:
     role: meta_labeler
     path: ml/models/meta_timeseries_momentum_latest.pkl
