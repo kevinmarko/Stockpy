@@ -416,7 +416,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 750,
+    "attr": 752,
     "factory_param": 4,
     "getattr_const": 257,
     "os_environ": 25

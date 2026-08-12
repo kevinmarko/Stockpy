@@ -1057,11 +1057,23 @@ def _run_agent_loop(run_cycle) -> None:
     while not _shutdown:
         # ── (1) Run one full advisory cycle (sheet + html + watch_engine) ────
         cycle_started_at = datetime.now(timezone.utc)
-        try:
-            result = run_cycle()
-        except Exception as exc:
-            logger.exception("Agent cycle failed unexpectedly: %s", exc)
+        if _interval_cycle_gated(cycle_started_at):
+            # Same market-hours gate as --interval mode (settings.ORCHESTRATOR_
+            # EXTENDED_HOURS_ONLY). compute_next_run_delay()'s own off-hours/
+            # extended-hours cadence below still governs how long we sleep
+            # before checking again -- this only skips actually RUNNING the
+            # cycle outside the window, composing cleanly with the existing
+            # adaptive-delay policy rather than replacing it.
+            logger.debug(
+                "Market-hours gate: skipping agent cycle (outside 4am-8pm ET weekday window)."
+            )
             result = None
+        else:
+            try:
+                result = run_cycle()
+            except Exception as exc:
+                logger.exception("Agent cycle failed unexpectedly: %s", exc)
+                result = None
 
         # ── (2) Update agent state with cycle outcome ────────────────────────
         if result is not None:

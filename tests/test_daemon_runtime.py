@@ -528,6 +528,13 @@ class TestTimerThread:
 
     def test_interval_triggers_runs_and_stops_on_shutdown(self, monkeypatch):
         _fast_ok_main_body(monkeypatch)
+        # Pin the market-hours gate open: ORCHESTRATOR_EXTENDED_HOURS_ONLY
+        # defaults True, and without this the test's real firing depends on
+        # actual wall-clock ET time -- it would spuriously fail whenever run
+        # outside the 4am-8pm ET weekday window (e.g. a late-night/weekend CI
+        # run), with no code defect present. See the gate-specific tests
+        # above for coverage of the gate's own on/off/inside/outside behavior.
+        monkeypatch.setattr("desktop.daemon_runtime.is_extended_hours", lambda _: True)
         d = OrchestratorDaemon(interval_seconds=1)
         d.start()
         try:

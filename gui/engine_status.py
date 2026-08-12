@@ -12,9 +12,12 @@ Two liveness signals exist, written by different entry points:
     ``_heartbeat()`` task). ``main.py`` never writes this file, including in
     ``--interval``/``--agent`` mode -- so relying on it alone means the badge
     can never go green under the desktop shell's actual engine loop.
-  - ``output/state_snapshot.json`` — rewritten by EVERY ``run_once()`` cycle
+  - ``output/state_snapshot.json`` — rewritten by every ``run_once()`` cycle
     in ``main.py`` (interval/agent mode included) AND by
-    ``main_orchestrator.py``.
+    ``main_orchestrator.py``. **Since ``settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY``
+    (default ``True``), automatic interval cycles are skipped outside the
+    4am-8pm ET weekday window, so this file legitimately goes unwritten for
+    long stretches every night/weekend -- see the market-hours check below.**
 
 This module takes the freshest (minimum age) of both, so the badge is
 correct regardless of which entry point is actually driving the refresh.
@@ -61,7 +64,11 @@ def engine_status(fresh_threshold_seconds: float = 600.0) -> tuple[str, str]:
     tuple[str, str]
         ``('⚪', 'Engine not started')`` — neither signal file exists yet.
         ``('🟢', 'Engine live · refreshed {age}s ago')`` — fresh signal.
-        ``('🟠', 'Engine idle · last refresh {age}s ago')`` — stale signal.
+        ``('🌙', 'Automatic runs paused (outside market hours) · last refresh {age}s ago')``
+            — stale signal, but explained by the market-hours gate (see
+            ``_paused_for_market_hours()``) rather than a real stall.
+        ``('🟠', 'Engine idle · last refresh {age}s ago')`` — stale signal,
+            not explained by the market-hours gate.
         ``('⚪', 'Engine status unavailable')`` — unexpected error computing age.
     """
     try:
@@ -75,4 +82,27 @@ def engine_status(fresh_threshold_seconds: float = 600.0) -> tuple[str, str]:
     if age <= fresh_threshold_seconds:
         return ("🟢", f"Engine live · refreshed {int(age)}s ago")
 
+    if _paused_for_market_hours():
+        return ("🌙", f"Automatic runs paused (outside market hours) · last refresh {int(age)}s ago")
+
     return ("🟠", f"Engine idle · last refresh {int(age)}s ago")
+
+
+def _paused_for_market_hours() -> bool:
+    """True when staleness is fully explained by ``settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY``
+    (see ``main.py``/``desktop/daemon_runtime.py``'s automatic-trigger gate) rather than a
+    real stall. Lazy imports keep this module's own import graph unchanged for every caller
+    that never hits this branch; dead-letter by design (CONSTRAINT #6) -- any failure here
+    must never turn a real "idle" badge into a falsely-reassuring "paused" one, so it
+    degrades to False (fall through to the ordinary idle badge) on any error."""
+    try:
+        from datetime import datetime, timezone
+
+        from engine.advisory_agent import is_extended_hours
+        from settings import settings
+
+        return bool(settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY) and not is_extended_hours(
+            datetime.now(timezone.utc)
+        )
+    except Exception:
+        return False

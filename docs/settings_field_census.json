@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "ac4f31e8f2c47b221ff04571bba58d433a0b9bf7",
+    "git_commit": "cc847af1a8fab27d30f3a246dfc8d2e357678afa",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2921,7 +2921,7 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 691,
+      "total_reads": 693,
       "distinct_fields": 222,
       "counts": {
         "OUTPUT_DIR": 125,
@@ -2964,6 +2964,7 @@
         "JULES_API_KEY": 4,
         "MARKET_DATA_QUOTE_TTL_SECONDS": 4,
         "MCP_DATABASE_URL_RO": 4,
+        "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 4,
         "SIZING_CAP_ALERT_THRESHOLD_PCT": 4,
         "SIZING_CAP_AUDIT_ENABLED": 4,
         "SNAPSHOT_HISTORY_DAYS": 4,
@@ -3037,7 +3038,6 @@
         "OPAL_RESEARCH_ENABLED": 2,
         "ORCHESTRATOR_DAEMON_ENABLED": 2,
         "ORCHESTRATOR_DAEMON_TOKEN": 2,
-        "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 2,
         "ORCHESTRATOR_INTERVAL_SECONDS": 2,
         "PILOTS_API_PORT": 2,
         "PROGRESS_POLL_SECONDS": 2,

@@ -248,13 +248,15 @@ class TestExistingEditorsAreNotBootstrap:
             # 53 -> 52: PILOTS_API_ENABLED was moved to FEATURE_FLAG_KEYS.
             # 24 -> 25: FMP_UNIVERSE_ENABLED added (S&P 500 constituent-changes
             # feed, universe_engine.py's FMP-primary/Wikipedia-fallback fix).
-            "_TUNABLE_INDEX": 52,
+            # 52 -> 53: ORCHESTRATOR_EXTENDED_HOURS_ONLY added (the pipeline
+            # market-hours gate -- see CLAUDE.md's "Extended hours gate" bullet).
+            "_TUNABLE_INDEX": 53,
             "_SENTIMENT_INDEX": 33,
             "_SECTOR_SELECTION_INDEX": 11,
             "_FMP_INDEX": 25,
             "_ETF_TRANSMISSION_INDEX": 19,
         }
-        assert len(ALL_EDITOR_KEYS) == 140
+        assert len(ALL_EDITOR_KEYS) == 141
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

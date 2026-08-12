@@ -81,6 +81,15 @@ def _settings(tmp_path: Path, **overrides) -> MagicMock:
     m.ROBINHOOD_MAX_NOTIONAL_PER_ORDER = overrides.get(
         "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0
     )
+    # Default False (not the real code's own default of True): m is a bare
+    # MagicMock, and MagicMock.__bool__ is always truthy, so leaving this
+    # unset would make check_state_snapshot_fresh's _paused_for_market_hours()
+    # helper read a truthy gate and fall through to a REAL, wall-clock-dependent
+    # is_extended_hours() call -- exactly the flakiness class this fix exists to
+    # prevent. False here reproduces every pre-existing test's assumption (gate
+    # off -> staleness always fails) deterministically; see TestStateSnapshotFresh
+    # for tests that explicitly override this to True.
+    m.ORCHESTRATOR_EXTENDED_HOURS_ONLY = overrides.get("ORCHESTRATOR_EXTENDED_HOURS_ONLY", False)
     return m
 
 
@@ -1428,6 +1437,66 @@ class TestStateSnapshotFresh:
         it is the advisory liveness check."""
         from scripts.preflight_check import _ADVISORY_AUTO_SKIP
         assert "state_snapshot_fresh" not in _ADVISORY_AUTO_SKIP
+
+    def test_stale_but_paused_for_market_hours_is_warning_only_pass(self, tmp_path, monkeypatch):
+        """A stale snapshot is expected (not a failure) when the automatic
+        interval gate (ORCHESTRATOR_EXTENDED_HOURS_ONLY) is on and we're
+        currently outside the 4am-8pm ET weekday window -- see main.py /
+        desktop/daemon_runtime.py's automatic-trigger gate."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        snapshot = tmp_path / "state_snapshot.json"
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        snapshot.write_text(json.dumps({"timestamp": stale_ts}), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path, ORCHESTRATOR_EXTENDED_HOURS_ONLY=True)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert r.passed
+        assert r.warning
+        assert "outside market hours" in r.reason.lower()
+
+    def test_stale_and_gate_on_but_inside_window_still_fails(self, tmp_path, monkeypatch):
+        """The gate being on doesn't excuse staleness DURING the window --
+        only an out-of-window staleness is expected."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        snapshot = tmp_path / "state_snapshot.json"
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        snapshot.write_text(json.dumps({"timestamp": stale_ts}), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path, ORCHESTRATOR_EXTENDED_HOURS_ONLY=True)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: True)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert not r.passed
+
+    def test_stale_and_gate_off_still_fails_unconditionally(self, tmp_path, monkeypatch):
+        """Pre-existing behavior: with the gate off, staleness always fails
+        regardless of the hour."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        snapshot = tmp_path / "state_snapshot.json"
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        snapshot.write_text(json.dumps({"timestamp": stale_ts}), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path, ORCHESTRATOR_EXTENDED_HOURS_ONLY=False)
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert not r.passed
+
+    def test_paused_check_failure_degrades_to_blocking_failure(self, tmp_path, monkeypatch):
+        """Dead-letter by design (CONSTRAINT #6): a broken market-hours check
+        must never turn a real staleness failure into a false pass."""
+        from scripts.preflight_check import check_state_snapshot_fresh
+        snapshot = tmp_path / "state_snapshot.json"
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        snapshot.write_text(json.dumps({"timestamp": stale_ts}), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path, ORCHESTRATOR_EXTENDED_HOURS_ONLY=True)
+
+        def _raise(now):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", _raise)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_state_snapshot_fresh(max_age_hours=2.0)
+        assert not r.passed
 
 
 # ---------------------------------------------------------------------------

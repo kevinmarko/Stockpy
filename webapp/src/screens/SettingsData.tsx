@@ -570,7 +570,7 @@ function ScheduleSection({
     .flatMap((g) => g.fields)
     .find((f) => f.key === "ORCHESTRATOR_EXTENDED_HOURS_ONLY");
 
-  const { run: updateTunable, pending: updatingTunables } = useMutation(
+  const { run: updateTunable, pending: updatingTunables, error: updateTunableError } = useMutation(
     (val: boolean) => api.updateTunables({ ORCHESTRATOR_EXTENDED_HOURS_ONLY: val })
   );
 
@@ -616,11 +616,20 @@ function ScheduleSection({
                   <span className="row-title">Extended Market Hours Only</span>
                   <span className="row-sub">
                     Skip automatic interval runs outside 4am-8pm ET weekdays.
-                    {extendedHoursField.liveness?.applies === "next_daemon_restart" && (
-                      <span style={{ display: "block", color: "var(--text-info)", marginTop: 2 }}>
-                        Restart daemon to apply.
-                      </span>
-                    )}
+                    {/* This field is always classified live_safe ("applies: immediately"),
+                        which only means the process serving this write picks it up right
+                        away -- it does NOT mean every automatic-trigger process does. A
+                        plain `main.py --interval` subprocess (the default,
+                        ORCHESTRATOR_DAEMON_ENABLED=False, topology) never re-polls settings
+                        after startup, so the liveness classifier's "immediately" claim is
+                        honestly false for that deployment. Show a fixed, always-visible
+                        caveat instead of trusting `liveness.applies` for this specific
+                        field. */}
+                    <span style={{ display: "block", color: "var(--text-info)", marginTop: 2 }}>
+                      A running daemon picks this up immediately; a plain{" "}
+                      <code>main.py --interval</code> process only picks it up on its next
+                      restart.
+                    </span>
                   </span>
                 </div>
                 <Toggle
@@ -630,6 +639,12 @@ function ScheduleSection({
                   pending={updatingTunables}
                 />
               </div>
+              {updateTunableError && (
+                <Notice variant="warn" style={{ marginTop: "var(--s-2)" }}>
+                  <span>⚠️</span>
+                  <span>{updateTunableError}</span>
+                </Notice>
+              )}
             </div>
           )}
 
