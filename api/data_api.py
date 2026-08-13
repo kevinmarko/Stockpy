@@ -800,6 +800,95 @@ def recompute_options_ondemand(body: OptionsRecomputeRequest) -> Dict[str, Any]:
     )
 
 
+@app.get("/data/options/chain/{symbol}", dependencies=[Depends(require_token)])
+def get_options_chain(symbol: str, expiration: Optional[str] = None) -> Dict[str, Any]:
+    """On-demand full options chain fetcher.
+    If `expiration` is omitted, returns a list of available expiration dates.
+    If `expiration` is provided, returns the calls and puts for that date, enriched with Greeks.
+    """
+    symbol = symbol.upper()
+    from data.market_data import get_options_provider, get_provider
+    options_provider = get_options_provider()
+    provider = get_provider()
+    
+    if expiration is None:
+        expirations = options_provider.fetch_options_chain(symbol)
+        return _clean_nan({
+            "symbol": symbol,
+            "expirations": expirations
+        })
+    
+    chain = options_provider.fetch_options_chain(symbol, expiration)
+    if chain is None:
+        raise HTTPException(status_code=404, detail=f"Option chain not found for {symbol} at {expiration}")
+        
+    try:
+        # We rely on the configured provider (which we prefer to be FMP based on config)
+        # to fetch a reliable spot price for the Greek calculations.
+        quote = provider.get_latest_quote(symbol)
+        spot_price = quote.price if quote.price is not None else 0.0
+    except Exception:
+        spot_price = 0.0
+        
+    from technical_options_engine import OptionsPricingRecommender
+    import datetime
+    
+    # Calculate DTE
+    try:
+        exp_date = datetime.datetime.strptime(expiration, "%Y-%m-%d").date()
+        today = datetime.date.today()
+        dte = max(1, (exp_date - today).days)
+    except Exception:
+        dte = 30
+        
+    T = dte / 365.0
+    recommender = OptionsPricingRecommender(stock_price=spot_price, risk_free_rate=float(settings.RISK_FREE_RATE))
+    
+    def enrich_contract(row, option_type):
+        iv = float(row.get('impliedVolatility', 0.0))
+        strike = float(row.get('strike', 0.0))
+        greeks = recommender.black_scholes_pricing_and_greeks(strike, T, iv, option_type)
+        
+        # Use math.isnan for safety on volume/openInterest if they come as float NaN from pandas
+        vol = row.get("volume", 0)
+        vol = 0 if vol is None or (isinstance(vol, float) and math.isnan(vol)) else int(vol)
+        
+        oi = row.get("openInterest", 0)
+        oi = 0 if oi is None or (isinstance(oi, float) and math.isnan(oi)) else int(oi)
+        
+        return {
+            "contractSymbol": row.get("contractSymbol"),
+            "strike": strike,
+            "lastPrice": float(row.get("lastPrice", 0.0)),
+            "bid": float(row.get("bid", 0.0)),
+            "ask": float(row.get("ask", 0.0)),
+            "volume": vol,
+            "openInterest": oi,
+            "impliedVolatility": iv,
+            "inTheMoney": bool(row.get("inTheMoney", False)),
+            "greeks": {
+                "delta": float(greeks['Delta']),
+                "gamma": float(greeks['Gamma']),
+                "theta": float(greeks['Theta_Daily']),
+                "vega": float(greeks['Vega']),
+                "rho": float(greeks['Rho']),
+                "chanceOfProfit": float(greeks['ChanceOfProfit']),
+            }
+        }
+    
+    calls = [enrich_contract(row, 'call') for _, row in chain.calls.iterrows()] if not chain.calls.empty else []
+    puts = [enrich_contract(row, 'put') for _, row in chain.puts.iterrows()] if not chain.puts.empty else []
+    
+    return _clean_nan({
+        "symbol": symbol,
+        "expiration": expiration,
+        "spot_price": spot_price,
+        "calls": calls,
+        "puts": puts
+    })
+
+
+
 # ---------------------------------------------------------------------------
 # On-demand AI generation — /data/ai/*
 # ---------------------------------------------------------------------------

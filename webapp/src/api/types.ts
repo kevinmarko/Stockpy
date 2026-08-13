@@ -3861,3 +3861,32 @@ export interface LiveTradeProposal {
   broker_order_id: string | null;
   error_message: string | null;
 }
+
+export interface OptionContract {
+  contractSymbol: string;
+  strike: number;
+  lastPrice: number;
+  bid: number;
+  ask: number;
+  volume: number;
+  openInterest: number;
+  impliedVolatility: number;
+  inTheMoney: boolean;
+  greeks: {
+    delta: number;
+    gamma: number;
+    theta: number;
+    vega: number;
+    rho: number;
+    chanceOfProfit: number;
+  };
+}
+
+export interface OptionChainResponse {
+  symbol: string;
+  expiration?: string;
+  spot_price: number;
+  expirations?: string[];
+  calls?: OptionContract[];
+  puts?: OptionContract[];
+}
