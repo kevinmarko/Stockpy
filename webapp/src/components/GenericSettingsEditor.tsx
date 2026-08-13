@@ -706,13 +706,12 @@ function FieldRow({
   // else keeps the description; a restart reason is surfaced separately below
   // so it never displaces the field's own documentation.
   const pinnedCaption = `A shell environment variable is set for ${f.key}, which overrides both .env and the runtime store. Unset it and restart to edit this here.`;
-  const hintText = !editable ? pinnedCaption : invalid ? rangeMsg : f.description ?? undefined;
-  const hint = hintText ? (
-    <details>
-      <summary style={{ cursor: "pointer", color: theme.textSecondary, userSelect: "none", fontSize: "var(--t-caption)" }}>Explainer / Details</summary>
-      <div style={{ marginTop: "4px", color: theme.textMuted, fontSize: "var(--t-caption)" }}>{hintText}</div>
-    </details>
-  ) : undefined;
+  // Plain text, NOT pre-wrapped in a <details> here: Input/Select/Textarea/
+  // TagInput already collapse a non-invalid hint into their own "More info"
+  // disclosure (ui.tsx, TagInput.tsx) and show an invalid hint immediately,
+  // un-collapsed. Wrapping it again here would nest a second <details> inside
+  // theirs and would hide a validation error message behind an extra click.
+  const hint = !editable ? pinnedCaption : invalid ? rangeMsg : f.description ?? undefined;
 
   return (
     <div>
@@ -755,9 +754,9 @@ function FieldRow({
             label={textLabel}
             disabled={!editable}
           />
-          <div style={{ margin: "var(--s-1-5) 0 0" }}>
+          <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", margin: "var(--s-1-5) 0 0" }}>
             {hint}
-          </div>
+          </p>
         </>
       ) : f.type === "enum" ? (
         <Select

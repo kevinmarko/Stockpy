@@ -60,6 +60,7 @@ from execution.broker_base import (
 from execution.kill_switch import GlobalKillSwitch
 from execution.order_manager import make_client_order_id
 from execution.risk_gate import PreTradeRiskGate, RiskContext
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +69,12 @@ VALID_MODES = ("off", "review", "live")
 # Single source of truth for builder thresholds (no magic numbers below).
 CONFIG: Dict[str, Any] = {
     # Premium-selling gate — mirrors the codebase-wide VRP regime rules
-    # (see CLAUDE.md "Options premium selling ... gated by VRP regime rules").
+    # (see CLAUDE.md "Options premium selling ... gated by VRP regime rules")
+    # and technical_options_engine.py's identical settings.OPTIONS_VRP_THRESHOLD
+    # read, so this gate can never silently drift out of sync with the pricing
+    # engine's own gate.
     "min_ivr": 50.0,          # true_ivr / IVR proxy must EXCEED this
-    "min_vrp": 0.02,          # VRP must EXCEED this (checked only when VRP known)
+    "min_vrp": settings.OPTIONS_VRP_THRESHOLD,  # VRP must EXCEED this (checked only when VRP known)
     "max_vix": 30.0,          # VIX must be strictly BELOW this
     # Regimes that unconditionally veto premium selling.
     "blocked_regimes": ("CREDIT EVENT", "RECESSION"),
