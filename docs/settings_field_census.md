@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `3bebe6697ac414747ded2cf29a80b035048f1bfe`
+- Measured at commit: `df46af2abc71099094964b80fa9dc9505d0ef26e`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -169,23 +169,23 @@ module-level helper which itself calls `env_io.write_*` (or builds the response 
 | `/automation/schedule/interval` | PUT | `set_automation_interval` | 3729 | yes | no | yes | `immediately`, `next_daemon_restart` |
 | `/strategy/modules` | PUT | `set_strategy_modules` | 3812 | yes | no | no | `next_daemon_restart` |
 | `/automation/execution-mode` | PUT | `update_execution_mode` | 3899 | yes | no | no | `next_daemon_restart` |
-| `/settings/tunables` | PUT | `put_settings_tunables` | 4275 | yes | no | no | _(none)_ |
-| `/settings/tunables` | PATCH | `put_settings_tunables` | 4275 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PUT | `put_settings_sentiment` | 4920 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 4920 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 4945 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 4945 | yes | no | no | _(none)_ |
-| `/settings/cache-long-short` | PUT | `put_settings_cache_long_short` | 4970 | yes | no | no | _(none)_ |
-| `/settings/cache-long-short` | PATCH | `put_settings_cache_long_short` | 4970 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 4992 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 4992 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 5056 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 5056 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PUT | `put_settings_fmp` | 5085 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PATCH | `put_settings_fmp` | 5085 | yes | no | no | _(none)_ |
-| `/settings/etf-transmission` | PUT | `put_settings_etf_transmission` | 5110 | yes | no | no | _(none)_ |
-| `/settings/etf-transmission` | PATCH | `put_settings_etf_transmission` | 5110 | yes | no | no | _(none)_ |
-| `/prompts/pin` | PUT | `put_prompts_pin` | 5381 | yes | no | no | `next_daemon_restart` |
+| `/settings/tunables` | PUT | `put_settings_tunables` | 4323 | yes | no | no | _(none)_ |
+| `/settings/tunables` | PATCH | `put_settings_tunables` | 4323 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PUT | `put_settings_sentiment` | 4974 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 4974 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 4999 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 4999 | yes | no | no | _(none)_ |
+| `/settings/cache-long-short` | PUT | `put_settings_cache_long_short` | 5024 | yes | no | no | _(none)_ |
+| `/settings/cache-long-short` | PATCH | `put_settings_cache_long_short` | 5024 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 5046 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 5046 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 5110 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 5110 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PUT | `put_settings_fmp` | 5139 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PATCH | `put_settings_fmp` | 5139 | yes | no | no | _(none)_ |
+| `/settings/etf-transmission` | PUT | `put_settings_etf_transmission` | 5164 | yes | no | no | _(none)_ |
+| `/settings/etf-transmission` | PATCH | `put_settings_etf_transmission` | 5164 | yes | no | no | _(none)_ |
+| `/prompts/pin` | PUT | `put_prompts_pin` | 5435 | yes | no | no | `next_daemon_restart` |
 
 ### Existing in-process hot-reload beachhead — `gui/ai_control_center.py::LIVE_PATCHABLE_KEYS`
 
@@ -221,19 +221,19 @@ Scope: **375** production `.py` files (excludes `tests/`, `test_*.py`, `conftest
 
 Files that could not be parsed: **0**
 
-The singleton is bound under **21** distinct local names
+The singleton is bound under **22** distinct local names
 across the tree, which is why this is an AST pass and not a grep:
 
 ```
-_S.settings, _bl_settings, _dsr_settings, _live_settings, _mt_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_local, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings_module.settings
+_S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_local, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings_module.settings
 ```
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 717 | 226 |
+| (a) `settings.KEY` | 718 | 227 |
 | (b) `getattr(settings, "KEY", default)` | 261 | 159 |
 | (c) `getattr(settings, <var>)` (dynamic) | 17 sites | n/a — key not statically known |
-| (d) `os.environ` / `os.getenv("KEY")` | 25 | 18 |
+| (d) `os.environ` / `os.getenv("KEY")` | 24 | 17 |
 
 Fields reached by at least one form: **355** of 364.
 
@@ -247,16 +247,16 @@ referenced by name somewhere and is probably read dynamically.
 | Field | Name-literal sites | Verdict |
 |---|---|---|
 | `AI_GENERATION_API_ENABLED` | `api/data_api.py:188`, `settings_keysets.py:359` | likely read dynamically |
-| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4694` | likely read dynamically |
-| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4693` | likely read dynamically |
-| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4856`, `gui/panels/settings_manager.py:126` | likely read dynamically |
-| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4835`, `gui/panels/settings_manager.py:162` | likely read dynamically |
+| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4742` | likely read dynamically |
+| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4741` | likely read dynamically |
+| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:4910`, `gui/panels/settings_manager.py:126` | likely read dynamically |
+| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4883`, `gui/panels/settings_manager.py:162` | likely read dynamically |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
-| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11020` | likely read dynamically |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11021` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1127`, `pilots/feature_flags.py:49` | likely read dynamically |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **129**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **128**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -358,7 +358,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `GDELT_MIN_REQUEST_INTERVAL_SECONDS` | b | 1 | 0 |
 | `GDELT_RETRY_BACKOFF_SECONDS` | b | 1 | 0 |
 | `GRAVITY_AI_RUNNER_ENABLED` | b | 4 | 0 |
-| `GRAVITY_REQUIRE_NATIVE` | d | 0 | 1 |
 | `LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED` | b | 2 | 0 |
 | `LLM_COMMENTARY_CACHE_PATH` | b | 1 | 0 |
 | `LLM_STATUS_MAX_AGE_HOURS` | b | 1 | 0 |
@@ -403,8 +402,8 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/auth.py:140` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:175` | `getattr(settings, flag_name, False)` |
 | `api/pilots_api.py:3165` | `getattr(settings, body.key)` |
-| `api/pilots_api.py:4212` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:4317` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:4260` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:4365` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
 | `gui/panels/ai_control_center.py:164` | `getattr(settings, tkey, False)` |
@@ -416,7 +415,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `runtime_flags_writer.py:774` | `getattr(settings_module.settings, key, None)` |
 | `runtime_flags_writer.py:783` | `getattr(settings_module.settings, key, None)` |
 
-### Fields read via `os.environ` (form d) — 18 field(s)
+### Fields read via `os.environ` (form d) — 17 field(s)
 
 `.env` is loaded into the `Settings` model directly by pydantic-settings; it is only
 copied into the real `os.environ` when something calls `load_dotenv()`. A field read
@@ -438,7 +437,6 @@ this way therefore reads a *different source* than `settings.KEY` does — see C
 | `ALERT_NTFY_TOPIC` | 1 | **no** |
 | `ALERT_SLACK_WEBHOOK_URL` | 1 | **no** |
 | `GCLOUD_BIN` | 1 | **no** |
-| `GRAVITY_REQUIRE_NATIVE` | 1 | **no** |
 | `LOG_LEVEL` | 1 | yes |
 | `PROMPT_REGISTRY_SIGNING_KEY` | 1 | yes |
 | `QDRANT_COLLECTION` | 1 | **no** |
