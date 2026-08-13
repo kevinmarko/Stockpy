@@ -1686,3 +1686,187 @@ def test_check_broker_backend_matches_live_intent():
         settings.BROKER_BACKEND = original_broker
         settings.ALPACA_PAPER = original_paper
         settings.ADVISORY_ONLY = original_advisory
+
+
+# ---------------------------------------------------------------------------
+# no_stray_database_files
+# ---------------------------------------------------------------------------
+
+class TestNoStrayDatabaseFiles:
+    """check_no_stray_database_files() is a WARNING-ONLY diagnostic tripwire
+    for the 2026-08 forecast_tracker.py incident: a hardcoded CWD-relative DB
+    default bypassed db_config.resolve_database_url() and silently wrote
+    millions of rows to a stale, non-canonical quant_platform.db at the repo
+    root for hours after the daemon restarted onto LOCAL_DATA_ROOT-aware code.
+
+    Every test fully isolates ``_REPO_ROOT`` (patched to a private ``tmp_path``
+    subdirectory) and ``db_config.resolve_database_url`` (patched directly,
+    since the check imports it lazily inside the function body) so nothing
+    here ever touches the real repo root, real settings.LOCAL_DATA_ROOT, or
+    any real file on the host machine.
+    """
+
+    def _repo_and_canonical(self, tmp_path: Path) -> tuple[Path, Path]:
+        """Build two disjoint directories: a fake repo root and a fake
+        canonical (LOCAL_DATA_ROOT-style) DB directory, so a stray file
+        written at the repo root is unambiguously distinct from the
+        canonical file."""
+        repo_root = tmp_path / "repo"
+        canonical_dir = tmp_path / "local_data_root"
+        repo_root.mkdir()
+        canonical_dir.mkdir()
+        return repo_root, canonical_dir
+
+    def test_canonical_only_no_stray_passes_cleanly(self, tmp_path):
+        """(a) Only the canonical DB exists -- no stray file anywhere in the
+        bounded search scope -- must PASS with no warning noise."""
+        from scripts.preflight_check import check_no_stray_database_files
+
+        repo_root, canonical_dir = self._repo_and_canonical(tmp_path)
+        canonical_db = canonical_dir / "quant_platform.db"
+        canonical_db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+
+        with patch("scripts.preflight_check._REPO_ROOT", repo_root), \
+             patch("db_config.resolve_database_url", return_value=f"sqlite:///{canonical_db}"):
+            r = check_no_stray_database_files()
+
+        assert r.passed
+        assert not r.warning
+        assert r.name == "no_stray_database_files"
+        assert "No stray" in r.reason
+
+    def test_stray_file_present_but_stale_passes_cleanly(self, tmp_path):
+        """(b) A stray file exists at the repo root but hasn't been touched
+        in a long time (48h ago, past the 24h default threshold) -- a
+        genuinely stale leftover, not an active split-brain write target --
+        must PASS with no false alarm."""
+        from scripts.preflight_check import check_no_stray_database_files
+        import os
+        import time
+
+        repo_root, canonical_dir = self._repo_and_canonical(tmp_path)
+        canonical_db = canonical_dir / "quant_platform.db"
+        canonical_db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+
+        stray_db = repo_root / "quant_platform.db"
+        stray_db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+        old_time = time.time() - (48 * 3600)  # 48h ago -- past the 24h default window
+        os.utime(stray_db, (old_time, old_time))
+
+        with patch("scripts.preflight_check._REPO_ROOT", repo_root), \
+             patch("db_config.resolve_database_url", return_value=f"sqlite:///{canonical_db}"):
+            r = check_no_stray_database_files(max_age_hours=24.0)
+
+        assert r.passed
+        assert not r.warning
+        assert "stale leftover" in r.reason
+
+    def test_stray_file_recently_modified_warns_with_specifics(self, tmp_path):
+        """(c) A stray file exists at the repo root AND was just modified --
+        something is actively writing to the wrong location -- must produce a
+        WARNING (never a blocking FAIL) that names both the exact stray path
+        and the canonical path it should be at instead."""
+        from scripts.preflight_check import check_no_stray_database_files
+
+        repo_root, canonical_dir = self._repo_and_canonical(tmp_path)
+        canonical_db = canonical_dir / "quant_platform.db"
+        canonical_db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+
+        stray_db = repo_root / "quant_platform.db"
+        stray_db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)  # fresh mtime (just written)
+
+        with patch("scripts.preflight_check._REPO_ROOT", repo_root), \
+             patch("db_config.resolve_database_url", return_value=f"sqlite:///{canonical_db}"):
+            r = check_no_stray_database_files(max_age_hours=24.0)
+
+        assert r.passed  # WARNING, never a blocking FAIL
+        assert r.warning is True
+        assert str(stray_db) in r.reason
+        assert str(canonical_db.resolve()) in r.reason
+        assert "ACTIVELY WRITING" in r.reason
+
+    def test_non_sqlite_database_url_skips_gracefully(self, tmp_path):
+        """(d) A Postgres (or any non-sqlite) DATABASE_URL makes this check a
+        no-op -- it only makes sense for the sqlite-default deployment shape
+        -- and it must never raise."""
+        from scripts.preflight_check import check_no_stray_database_files
+
+        repo_root, _canonical_dir = self._repo_and_canonical(tmp_path)
+
+        with patch("scripts.preflight_check._REPO_ROOT", repo_root), \
+             patch(
+                 "db_config.resolve_database_url",
+                 return_value="postgresql://user:pass@host:5432/investyo",
+             ):
+            r = check_no_stray_database_files()  # must not raise
+
+        assert r.passed
+        assert not r.warning
+        assert "not sqlite" in r.reason.lower()
+
+    def test_resolve_database_url_raising_degrades_to_warning_pass_never_fail(self, tmp_path):
+        """A broken resolver itself must not become a new failure mode for
+        the go-live gate -- mirrors this module's other diagnostic checks
+        (e.g. check_alert_channels_reachable)."""
+        from scripts.preflight_check import check_no_stray_database_files
+
+        repo_root, _canonical_dir = self._repo_and_canonical(tmp_path)
+
+        def raising_resolver():
+            raise RuntimeError("db_config broken")
+
+        with patch("scripts.preflight_check._REPO_ROOT", repo_root), \
+             patch("db_config.resolve_database_url", raising_resolver):
+            r = check_no_stray_database_files()  # must not raise
+
+        assert r.passed
+        assert r.warning is True
+
+    def test_same_physical_file_is_not_flagged_as_stray(self, tmp_path):
+        """When the canonical DB itself happens to live at the repo root
+        (e.g. LOCAL_DATA_ROOT coincides with the repo root), that file must
+        NOT be flagged as its own stray copy."""
+        from scripts.preflight_check import check_no_stray_database_files
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        canonical_db = repo_root / "quant_platform.db"
+        canonical_db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+
+        with patch("scripts.preflight_check._REPO_ROOT", repo_root), \
+             patch("db_config.resolve_database_url", return_value=f"sqlite:///{canonical_db}"):
+            r = check_no_stray_database_files()
+
+        assert r.passed
+        assert not r.warning
+        assert "No stray" in r.reason
+
+    def test_included_in_all_checks(self):
+        from scripts.preflight_check import ALL_CHECKS, check_no_stray_database_files
+        assert check_no_stray_database_files in ALL_CHECKS
+
+    def test_run_checks_never_fails_gate_on_recent_stray(self, tmp_path):
+        """End-to-end: a recently-modified stray DB file surfaces in
+        run_checks() results as warning=True and does not, by itself, cause
+        main()'s exit code to be 1 (warnings don't count toward the fail
+        total). ALL_CHECKS is patched to just this one check so the test is
+        isolated from every other check's environment requirements.
+        """
+        from scripts.preflight_check import run_checks, check_no_stray_database_files
+
+        repo_root, canonical_dir = self._repo_and_canonical(tmp_path)
+        canonical_db = canonical_dir / "quant_platform.db"
+        canonical_db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+        stray_db = repo_root / "quant_platform.db"
+        stray_db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+
+        with patch("scripts.preflight_check.ALL_CHECKS", [check_no_stray_database_files]), \
+             patch("scripts.preflight_check._REPO_ROOT", repo_root), \
+             patch("db_config.resolve_database_url", return_value=f"sqlite:///{canonical_db}"):
+            results = run_checks(skip=[])
+
+        assert len(results) == 1
+        assert results[0].name == "no_stray_database_files"
+        assert results[0].passed
+        assert results[0].warning
+        assert all(r.passed for r in results)  # exit-code-relevant condition
