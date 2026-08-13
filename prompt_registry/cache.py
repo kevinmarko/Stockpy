@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -115,8 +116,9 @@ _DEFAULT_CACHE_DIR: Path = Path("output") / "prompt_cache"
 def _sanitize_id(prompt_id: str) -> str:
     """Convert a prompt id to a safe directory name.
 
-    Dots and slashes are replaced with underscores so that ``gravity.step_01``
-    becomes ``gravity_step_01`` on the filesystem.
+    Dots, slashes, backslashes, and any non-alphanumeric characters are replaced
+    with underscores so that ``gravity.step_01`` becomes ``gravity_step_01``
+    and directory traversal sequences cannot escape the cache directory.
 
     Examples
     --------
@@ -124,8 +126,13 @@ def _sanitize_id(prompt_id: str) -> str:
     'gravity_step_01'
     >>> _sanitize_id("master_preprompt")
     'master_preprompt'
+    >>> _sanitize_id("../../etc/passwd")
+    '______etc_passwd'
     """
-    return prompt_id.replace(".", "_").replace("/", "_").replace(" ", "_")
+    if not prompt_id:
+        return "_empty_"
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", str(prompt_id).strip())
+    return sanitized or "_empty_"
 
 
 class CacheManager:
@@ -166,11 +173,33 @@ class CacheManager:
     # ------------------------------------------------------------------
 
     def _prompt_dir(self, prompt_id: str) -> Path:
-        return self._dir / _sanitize_id(prompt_id)
+        safe_name = _sanitize_id(prompt_id)
+        target = (self._dir / safe_name).resolve()
+        base = self._dir.resolve()
+        try:
+            if not target.is_relative_to(base):
+                logger.warning("CacheManager._prompt_dir: directory escape attempt for %r", prompt_id)
+                return self._dir / "_invalid_"
+        except AttributeError:
+            pass
+        return self._dir / safe_name
 
     def _record_path(self, prompt_id: str, version: str) -> Path:
-        safe_version = version.replace("/", "_").replace(" ", "_")
-        return self._prompt_dir(prompt_id) / f"{safe_version}.json"
+        safe_version = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(version).strip()) or "default"
+        prompt_dir = self._prompt_dir(prompt_id)
+        target = (prompt_dir / f"{safe_version}.json").resolve()
+        base = self._dir.resolve()
+        try:
+            if not target.is_relative_to(base):
+                logger.warning(
+                    "CacheManager._record_path: directory escape attempt for %r@%r",
+                    prompt_id,
+                    version,
+                )
+                return self._dir / "_invalid_" / "invalid.json"
+        except AttributeError:
+            pass
+        return prompt_dir / f"{safe_version}.json"
 
     # ------------------------------------------------------------------
     # Public API

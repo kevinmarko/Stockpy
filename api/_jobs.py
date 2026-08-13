@@ -148,11 +148,18 @@ class JobManager:
                 end = params.get("end")
                 if isinstance(strategies, str):
                     strategies = [s.strip() for s in strategies.split(",") if s.strip()]
-                if not strategies or not start or not end:
+                if not strategies or not isinstance(strategies, list) or not start or not end:
                     raise ValueError(
                         "VALIDATION job requires params: strategies (list[str] or "
                         "comma-separated string), start (YYYY-MM-DD), end (YYYY-MM-DD)"
                     )
+                if not isinstance(start, str) or not isinstance(end, str):
+                    raise ValueError("VALIDATION job start and end must be YYYY-MM-DD strings")
+                try:
+                    datetime.fromisoformat(start.strip())
+                    datetime.fromisoformat(end.strip())
+                except (ValueError, TypeError) as err:
+                    raise ValueError(f"Invalid date format (expected YYYY-MM-DD): {err}") from err
                 handle = launch_validation_run(strategies, start, end)
             elif job_type == JobType.VERIFY:
                 handle = launch_verify()
