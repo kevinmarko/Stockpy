@@ -3,7 +3,7 @@ import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import type { AutomationStatus } from "../api/types";
-import { ExecutionModeCtx, type ExecutionMode } from "../context/executionModeContext";
+import { ExecutionModeCtx, type ExecutionMode, type ExecutionModeLabel } from "../context/executionModeContext";
 
 // ---------------------------------------------------------------------------
 // ExecutionModeContext — single source of truth for advisory/live mode state
@@ -44,7 +44,16 @@ export function ExecutionModeProvider({ children }: { children: ReactNode }) {
     hasError: error != null,
   });
 
+  const mode: ExecutionModeLabel = !data
+    ? "UNKNOWN"
+    : data.advisory_only
+    ? "ADVISORY"
+    : data.alpaca_paper
+    ? "PAPER"
+    : "LIVE";
+
   const value: ExecutionMode = {
+    mode,
     advisoryOnly: data?.advisory_only ?? true,
     killSwitchActive: data?.kill_switch?.active ?? false,
     killSwitchReason: data?.kill_switch?.reason ?? null,

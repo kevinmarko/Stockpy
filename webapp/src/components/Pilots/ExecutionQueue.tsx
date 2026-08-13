@@ -2,8 +2,8 @@ import { Link } from "react-router";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import type { ExecutionQueue as ExecutionQueueData, ExecutionQueueIntent } from "../../api/types";
-import { EmptyState, ErrorState, Loading, StaleDataNotice } from "../ui";
-import { Chip, ModeBadge } from "../ExecutionQueueSection";
+import { Chip, EmptyState, ErrorState, Loading, StaleDataNotice } from "../ui";
+import { ModeBadge } from "../ExecutionQueueSection";
 import { theme } from "../../theme";
 import { timeAgo } from "../../format";
 

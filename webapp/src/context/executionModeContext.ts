@@ -10,7 +10,21 @@ import type { AutomationStatus } from "../api/types";
 // consumer list and the Settings.tsx de-duplication caveat.
 // ---------------------------------------------------------------------------
 
+/**
+ * Coarse execution-mode label derived from `advisory_only`/`alpaca_paper` --
+ * `"UNKNOWN"` only while the initial fetch hasn't resolved yet (never a
+ * fabricated guess -- CONSTRAINT #4). Named distinctly from the
+ * `ExecutionMode` context-value interface below to avoid a collision.
+ */
+export type ExecutionModeLabel = "LIVE" | "PAPER" | "ADVISORY" | "UNKNOWN";
+
 export interface ExecutionMode {
+  /**
+   * Coarse mode label for display (a `Mode: X` chip etc.) -- derived the
+   * same way as `advisoryOnly`/`alpacaPaper` below, just pre-collapsed to
+   * one of four values. `"UNKNOWN"` while `data` hasn't loaded yet.
+   */
+  mode: ExecutionModeLabel;
   /** True = advisory-only / paper mode (default, safe). False = live trading. */
   advisoryOnly: boolean;
   /** Global emergency halt — when active, no trades are placed even in live mode. */
@@ -32,6 +46,7 @@ export interface ExecutionMode {
 }
 
 export const DEFAULT_EXECUTION_MODE: ExecutionMode = {
+  mode: "UNKNOWN",
   advisoryOnly: true, // safe default
   killSwitchActive: false,
   killSwitchReason: null,

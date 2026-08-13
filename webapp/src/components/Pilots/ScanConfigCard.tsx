@@ -2,8 +2,7 @@ import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import { useMutation } from "../../hooks/useMutation";
 import type { AgenticDiscovery, ScanConfig } from "../../api/types";
-import { EmptyState, ErrorState, Loading, Notice, StaleDataNotice } from "../ui";
-import { Chip } from "../ExecutionQueueSection";
+import { Chip, EmptyState, ErrorState, Loading, Notice, StaleDataNotice } from "../ui";
 import { theme } from "../../theme";
 
 /**

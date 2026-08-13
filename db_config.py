@@ -102,6 +102,8 @@ def create_db_engine(db_url: str | None = None) -> Engine:
                 cur = dbapi_conn.cursor()
                 cur.execute("PRAGMA journal_mode=WAL")
                 cur.execute("PRAGMA busy_timeout=5000")
+                cur.execute("PRAGMA synchronous=NORMAL")
+                cur.execute("PRAGMA cache_size=-64000")
                 cur.close()
     else:
         engine = create_engine(db_url, echo=False, pool_pre_ping=True)
