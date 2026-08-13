@@ -4511,8 +4511,8 @@ class GravityAIAuditor:
             )
             print(warning)
             self.report["environment"]["warning"] = warning
-            from settings import settings as _settings
-            if _settings.GRAVITY_REQUIRE_NATIVE:
+            from settings import settings as _gravity_settings
+            if _gravity_settings.GRAVITY_REQUIRE_NATIVE:
                 raise RuntimeError(warning)
 
         self.run_schema_audit()

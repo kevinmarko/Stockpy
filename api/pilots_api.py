@@ -4077,6 +4077,9 @@ _TUNABLE_GROUPS: List[tuple] = [
         ],
     ),
     (
+        # HMM_RISK_OFF_BLOCK_THRESHOLD moved here from "Risk Gate" -- it's a
+        # regime-model parameter, not a risk-gate-specific one, and belongs
+        # next to the other HMM/VRP regime tunables.
         "Regime Model",
         [
             ("HMM_N_STATES", "int", {"min": 2, "max": 10, "step": 1}),
@@ -4128,18 +4131,13 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("ADVISORY_ONLY", "bool", {}),
             ("ROBINHOOD_AUTO_REFRESH_ENABLED", "bool", {}),
             ("RUNTIME_FLAGS_REFRESH_ENABLED", "bool", {}),
-            ("RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS", "int", {"min": 1, "max": 86400, "step": 1}),
+            ("RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS", "int", {"min": 1, "max": 3600, "step": 1}),
         ],
     ),
     (
         # Widgetless / JSON-structured tunables ported from the Streamlit tab's
         # own _SETTINGS_LAYOUT (gui/panels/settings_manager.py:36-77) — all 7
-        # were previously missing from this editor entirely. Also the catch-all
-        # for small clusters of misc diagnostic/audit/gate booleans that don't
-        # warrant their own one-off group (options/pairs snapshots, ML data
-        # capture & audit, validation gates) — keeping them here instead of
-        # minting a new tiny group per 2-6 fields avoids fragmenting the
-        # settings screen into several near-identical "misc flags" sections.
+        # were previously missing from this editor entirely.
         "Advanced / Config",
         [
             ("SECTOR_FORECAST_CONFIG_PATH", "str", {}),
@@ -4150,15 +4148,30 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("ORCHESTRATOR_EXTENDED_HOURS_ONLY", "bool", {}),
             ("CORS_ALLOWED_ORIGINS", "json", {}),
             ("GRAVITY_REQUIRE_NATIVE", "bool", {}),
+        ],
+    ),
+    (
+        "Options & Pairs Snapshots",
+        [
             ("OPTIONS_MATRIX_ENABLED", "bool", {}),
             ("OPTIONS_TRUE_IVR_ENABLED", "bool", {}),
             ("PAIRS_SNAPSHOT_ENABLED", "bool", {}),
+        ],
+    ),
+    (
+        "ML, Data Capture & Audit",
+        [
             ("META_LABELING_ENABLED", "bool", {}),
             ("NEWS_HISTORY_CAPTURE_ENABLED", "bool", {}),
             ("PIT_CAPTURE_ENABLED", "bool", {}),
             ("SENTIMENT_AUDIT_ENABLED", "bool", {}),
             ("SENTIMENT_DESENTENCIZE_ENABLED", "bool", {}),
             ("EXCURSION_INTRADAY_ENABLED", "bool", {}),
+        ],
+    ),
+    (
+        "Validation Gates",
+        [
             ("VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED", "bool", {}),
             ("VALIDATION_HARNESS_OOS_GATE_ENABLED", "bool", {}),
         ],

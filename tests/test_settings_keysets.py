@@ -250,13 +250,42 @@ class TestExistingEditorsAreNotBootstrap:
             # feed, universe_engine.py's FMP-primary/Wikipedia-fallback fix).
             # 52 -> 53: ORCHESTRATOR_EXTENDED_HOURS_ONLY added (the pipeline
             # market-hours gate -- see CLAUDE.md's "Extended hours gate" bullet).
-            "_TUNABLE_INDEX": 53,
+            # 53 -> 86: 29 existing-but-unwired settings.py boolean flags (+4
+            # companion tunables) surfaced into the Pilots PWA settings editors
+            # -- "Position Sizing" gained USE_DUAL_MOMENTUM_OVERLAY/
+            # DUAL_MOMENTUM_SAFE_ASSET/DUAL_MOMENTUM_RISKY_ASSETS; "Risk Gate"
+            # gained EXECUTION_PRIORITY_QUEUE_ENABLED/
+            # EXECUTION_QUEUE_LEAK_RATE_PER_SEC/FLATTEN_ON_KILL; "Forecasting"
+            # gained the 5 BERT_LLA_* keys, the 3 CNN_LSTM_* subprocess-isolation
+            # keys, FORECAST_CNN_LSTM_WALKFORWARD_SCALING, and
+            # LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED; "Market Data" gained
+            # MARKET_DATA_WS_ENABLED/HISTORICAL_STORE_ENABLED; "Runtime & Ops"
+            # gained ROBINHOOD_AUTO_REFRESH_ENABLED/RUNTIME_FLAGS_REFRESH_ENABLED/
+            # RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS; "Advanced / Config" gained
+            # GRAVITY_REQUIRE_NATIVE (also fixed to read via settings.X instead
+            # of a raw os.environ.get in "Gravity AI Review Suite.py"); and
+            # three brand-new groups were added -- "Options & Pairs Snapshots"
+            # (OPTIONS_MATRIX_ENABLED/OPTIONS_TRUE_IVR_ENABLED/
+            # PAIRS_SNAPSHOT_ENABLED), "ML, Data Capture & Audit"
+            # (META_LABELING_ENABLED/NEWS_HISTORY_CAPTURE_ENABLED/
+            # PIT_CAPTURE_ENABLED/SENTIMENT_AUDIT_ENABLED/
+            # SENTIMENT_DESENTENCIZE_ENABLED/EXCURSION_INTRADAY_ENABLED), and
+            # "Validation Gates" (VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED/
+            # VALIDATION_HARNESS_OOS_GATE_ENABLED). 33 keys total.
+            # 25 -> 31: "Diagnostic & Supplement Feeds" gained FMP_NEWS_ENABLED/
+            # FMP_NEWS_PAGE_LIMIT/FMP_NEWS_MAX_PAGES/FMP_OPTIONS_HEALTH_ENABLED/
+            # FMP_OPTIONS_CONTEXT_ENABLED/FMP_PEERS_ENABLED (6 keys).
+            # 86 -> 89: new "Regime Model" _TUNABLE_GROUPS entry added
+            # HMM_N_STATES/HMM_RETRAIN_FREQ_DAYS/OPTIONS_VRP_THRESHOLD (3 keys);
+            # HMM_RISK_OFF_BLOCK_THRESHOLD moved into it from "Risk Gate" (no
+            # net change to the total).
+            "_TUNABLE_INDEX": 89,
             "_SENTIMENT_INDEX": 33,
             "_SECTOR_SELECTION_INDEX": 11,
-            "_FMP_INDEX": 25,
+            "_FMP_INDEX": 31,
             "_ETF_TRANSMISSION_INDEX": 19,
         }
-        assert len(ALL_EDITOR_KEYS) == 141
+        assert len(ALL_EDITOR_KEYS) == 183
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

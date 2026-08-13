@@ -84,14 +84,13 @@ _EXPECTED_GROUPS = [
     "Market Data",
     "Runtime & Ops",
     "Advanced / Config",
+    "Options & Pairs Snapshots",
+    "ML, Data Capture & Audit",
+    "Validation Gates",
     "RLHF Calibration",
 ]
 _VALID_TYPES = {"number", "boolean", "enum", "string"}
 
-# "Advanced / Config" is also the catch-all for small clusters of misc
-# diagnostic/audit/gate booleans that don't warrant their own one-off group
-# (options/pairs snapshots, ML data capture & audit, validation gates) — see
-# api/pilots_api.py's own comment on that group.
 _NEW_ADVANCED_KEYS = {
     "SECTOR_FORECAST_CONFIG_PATH",
     "SECTOR_FORECAST_CONFIGS",
@@ -101,19 +100,31 @@ _NEW_ADVANCED_KEYS = {
     "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
     "CORS_ALLOWED_ORIGINS",
     "GRAVITY_REQUIRE_NATIVE",
-    "OPTIONS_MATRIX_ENABLED",
-    "OPTIONS_TRUE_IVR_ENABLED",
-    "PAIRS_SNAPSHOT_ENABLED",
-    "META_LABELING_ENABLED",
-    "NEWS_HISTORY_CAPTURE_ENABLED",
-    "PIT_CAPTURE_ENABLED",
-    "SENTIMENT_AUDIT_ENABLED",
-    "SENTIMENT_DESENTENCIZE_ENABLED",
-    "EXCURSION_INTRADAY_ENABLED",
-    "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
-    "VALIDATION_HARNESS_OOS_GATE_ENABLED",
 }
 _JSON_KIND_KEYS = {"SECTOR_FORECAST_CONFIGS", "CORS_ALLOWED_ORIGINS"}
+
+# 32 additional flags/tunables surfaced from settings.py across the existing
+# "Position Sizing"/"Risk Gate"/"Forecasting"/"Market Data"/"Runtime & Ops"
+# groups plus the three brand-new groups above ("Options & Pairs Snapshots",
+# "ML, Data Capture & Audit", "Validation Gates") -- GRAVITY_REQUIRE_NATIVE
+# itself is already covered by _NEW_ADVANCED_KEYS above, so it is not
+# repeated here.
+_NEW_MISC_TUNABLE_KEYS = {
+    "USE_DUAL_MOMENTUM_OVERLAY", "DUAL_MOMENTUM_SAFE_ASSET", "DUAL_MOMENTUM_RISKY_ASSETS",
+    "EXECUTION_PRIORITY_QUEUE_ENABLED", "EXECUTION_QUEUE_LEAK_RATE_PER_SEC", "FLATTEN_ON_KILL",
+    "BERT_LLA_ENABLED", "BERT_LLA_WINDOW_SIZE", "BERT_LLA_MIN_SENTIMENT_COVERAGE",
+    "BERT_LLA_BLEND_ENABLED", "BERT_LLA_ABLATION_ENABLED",
+    "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", "CNN_LSTM_PROCESS_POOL_WORKERS",
+    "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS", "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
+    "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
+    "MARKET_DATA_WS_ENABLED", "HISTORICAL_STORE_ENABLED",
+    "ROBINHOOD_AUTO_REFRESH_ENABLED", "RUNTIME_FLAGS_REFRESH_ENABLED",
+    "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS",
+    "OPTIONS_MATRIX_ENABLED", "OPTIONS_TRUE_IVR_ENABLED", "PAIRS_SNAPSHOT_ENABLED",
+    "META_LABELING_ENABLED", "NEWS_HISTORY_CAPTURE_ENABLED", "PIT_CAPTURE_ENABLED",
+    "SENTIMENT_AUDIT_ENABLED", "SENTIMENT_DESENTENCIZE_ENABLED", "EXCURSION_INTRADAY_ENABLED",
+    "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED", "VALIDATION_HARNESS_OOS_GATE_ENABLED",
+}
 
 # RLHF Calibration Review Queue operator tunables (rlhf_calibration_store.py) —
 # RLHF_CALIBRATION_ENABLED itself is deliberately NOT here (hand-set-only
@@ -132,22 +143,6 @@ _NEW_REGIME_KEYS = {
     "HMM_N_STATES",
     "HMM_RETRAIN_FREQ_DAYS",
     "OPTIONS_VRP_THRESHOLD",
-}
-
-# Remaining previously-unwired keys surfaced by this editor, named (rather than
-# left anonymous inside `expected` below) so a future PR can tell at a glance
-# which keys it's responsible for adding to this pin -- mirrors the
-# _NEW_ADVANCED_KEYS/_NEW_RLHF_KEYS convention above.
-_NEW_UNWIRED_KEYS = {
-    "FLATTEN_ON_KILL", "BERT_LLA_WINDOW_SIZE", "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
-    "BERT_LLA_ENABLED", "USE_DUAL_MOMENTUM_OVERLAY", "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",
-    "BERT_LLA_BLEND_ENABLED", "EXECUTION_QUEUE_LEAK_RATE_PER_SEC", "ROBINHOOD_AUTO_REFRESH_ENABLED",
-    "EXECUTION_PRIORITY_QUEUE_ENABLED", "MARKET_DATA_WS_ENABLED", "BERT_LLA_MIN_SENTIMENT_COVERAGE",
-    "DUAL_MOMENTUM_RISKY_ASSETS", "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
-    "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED", "HISTORICAL_STORE_ENABLED",
-    "RUNTIME_FLAGS_REFRESH_ENABLED", "BERT_LLA_ABLATION_ENABLED",
-    "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS", "CNN_LSTM_PROCESS_POOL_WORKERS",
-    "DUAL_MOMENTUM_SAFE_ASSET",
 }
 
 
@@ -391,7 +386,7 @@ class TestTunablesScopeInvariants:
             "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
             "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
             "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
-        } | _NEW_ADVANCED_KEYS | _NEW_RLHF_KEYS | _NEW_REGIME_KEYS | _NEW_UNWIRED_KEYS
+        } | _NEW_ADVANCED_KEYS | _NEW_RLHF_KEYS | _NEW_REGIME_KEYS | _NEW_MISC_TUNABLE_KEYS
         assert set(pilots_api._TUNABLE_INDEX) == expected
 
     def test_excludes_other_screens_keys(self):
@@ -403,11 +398,8 @@ class TestTunablesScopeInvariants:
             assert key not in pilots_api._TUNABLE_INDEX, f"{key} leaked into tunables scope"
 
     def test_new_advanced_keys_are_in_scope(self):
-        """"Advanced / Config"'s full membership: the original keys ported from
-        the real Streamlit tab (gui/panels/settings_manager.py:36-77) plus the
-        misc diagnostic/audit/gate booleans folded into this catch-all instead
-        of each getting a one-off group (see api/pilots_api.py's comment on
-        this group)."""
+        """The keys the real Streamlit tab (gui/panels/settings_manager.py:36-77)
+        served that this editor previously omitted."""
         for key in _NEW_ADVANCED_KEYS:
             assert key in pilots_api._TUNABLE_INDEX, f"{key} still missing from tunables scope"
         advanced_group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Advanced / Config")

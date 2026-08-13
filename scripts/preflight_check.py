@@ -115,7 +115,18 @@ Checks (15 total)
                                   SKIPPED when ADVISORY_ONLY=True — the heartbeat
                                   is written only by main_orchestrator.py; advisory
                                   runs via main.py do not require a persistent
-                                  orchestrator process.
+                                  orchestrator process. Independently of that,
+                                  DEGRADES a stale/missing reading to a warning
+                                  (never a hard FAIL) whenever the persistent
+                                  orchestrator daemon is independently confirmed
+                                  alive via its pid — see check_daemon_pid_alive
+                                  below for why heartbeat.txt is permanently
+                                  absent under that deployment even when healthy.
+    daemon_pid_alive             — WARNING-only cross-check: is the persistent
+                                  orchestrator daemon's pid (from
+                                  OUTPUT_DIR/daemon.json) externally verified
+                                  alive right now. Answers the question a stale
+                                  heartbeat_fresh reading can't on its own.
 12. db_exists                   — quant_platform.db exists and is non-empty.
 13. paper_trading_duration      — Paper-trading started ≥ 90 days ago
                                   (requires PAPER_TRADING_START_DATE in .env).
@@ -963,6 +974,34 @@ def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
         return CheckResult(name, False, f"Could not read state snapshot: {exc}")
 
 
+def _daemon_confirmed_alive() -> bool:
+    """True only if ``OUTPUT_DIR/daemon.json`` exists, parses, and its pid is
+    externally verified alive right now (``os.kill(pid, 0)`` via
+    ``pilots.run_status._pid_alive``). False for every other case (missing
+    file, parse failure, dead pid, or an inconclusive probe) — deliberately
+    conservative, since this gates whether a heartbeat-staleness FAIL
+    degrades to a warning; only a genuinely confirmed-alive daemon should
+    soften that gate, an unknown/inconclusive state should not. Never raises.
+
+    A small, standalone tri-state-collapsing helper — deliberately NOT a
+    refactor of ``check_daemon_pid_alive`` below, which needs the full
+    pid/state detail for its own richer, user-facing reason strings and
+    already has its own dedicated, shipped test coverage; duplicating this
+    one small read here keeps that function's tested shape untouched.
+    """
+    daemon_path = settings.OUTPUT_DIR / "daemon.json"
+    if not daemon_path.exists():
+        return False
+    try:
+        data = json.loads(daemon_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return False
+        from pilots.run_status import _pid_alive
+        return _pid_alive(data.get("pid")) is True
+    except Exception:
+        return False
+
+
 def check_heartbeat_fresh(max_age_hours: float = 2.0) -> CheckResult:
     """Verify that the orchestrator heartbeat file was updated recently.
 
@@ -979,10 +1018,45 @@ def check_heartbeat_fresh(max_age_hours: float = 2.0) -> CheckResult:
     The ``max_age_hours`` parameter is exposed for testing purposes; the
     default 2-hour window is conservative enough to survive a scheduled
     maintenance window while tight enough to catch a genuine crash.
+
+    Daemon-deployment softening
+    ----------------------------
+    ``desktop/orchestrator_daemon.py`` runs ``main_orchestrator._main_body()``
+    directly and deliberately bypasses ``main_orchestrator.main()``'s own
+    heartbeat-writing lifecycle, so ``heartbeat.txt`` is PERMANENTLY
+    absent/stale under a daemon deployment even when the daemon is perfectly
+    healthy (see ``check_daemon_pid_alive``'s docstring for the real operator
+    confusion this was found from). When ``_daemon_confirmed_alive()``
+    independently verifies the daemon process really is alive right now, a
+    missing/stale heartbeat degrades to a warning-only PASS instead of a
+    blocking FAIL — mirroring ``check_state_snapshot_fresh``'s own
+    market-hours-pause degradation precedent. This only ever SOFTENS a FAIL
+    into a warning-PASS, never the reverse, and never masks a genuine
+    outage: a daemon confirmed NOT alive (or no ``daemon.json`` at all)
+    leaves this check's original hard-FAIL behavior completely untouched.
+    Orthogonal to, and independent of, the existing ``ADVISORY_ONLY``-based
+    auto-skip in ``_ADVISORY_AUTO_SKIP`` — that one requires
+    ``ADVISORY_ONLY=True``; this one requires a confirmed-alive daemon
+    regardless of ``ADVISORY_ONLY``, since a live daemon deployment is not
+    necessarily advisory-only.
     """
     name = "heartbeat_fresh"
     hb_path = settings.OUTPUT_DIR / "heartbeat.txt"
+    daemon_alive = _daemon_confirmed_alive()
+    daemon_note = (
+        " The persistent orchestrator daemon is confirmed alive right now, "
+        "though — expected under a daemon deployment (heartbeat.txt is only "
+        "written by main_orchestrator.py's own main() lifecycle, never by "
+        "the daemon), not evidence of an outage. See daemon_pid_alive below "
+        "for the live confirmation."
+    )
     if not hb_path.exists():
+        if daemon_alive:
+            return CheckResult(
+                name, True,
+                "output/heartbeat.txt not found." + daemon_note,
+                warning=True,
+            )
         return CheckResult(
             name, False,
             "output/heartbeat.txt not found — has the orchestrator been run recently? "
@@ -996,6 +1070,13 @@ def check_heartbeat_fresh(max_age_hours: float = 2.0) -> CheckResult:
             ts = ts.replace(tzinfo=timezone.utc)
         age = datetime.now(timezone.utc) - ts
         if age > timedelta(hours=max_age_hours):
+            if daemon_alive:
+                return CheckResult(
+                    name, True,
+                    f"Heartbeat is {age.total_seconds()/3600:.1f}h old "
+                    f"(limit {max_age_hours}h)." + daemon_note,
+                    warning=True,
+                )
             return CheckResult(
                 name, False,
                 f"Heartbeat is {age.total_seconds()/3600:.1f}h old (limit {max_age_hours}h) — "
