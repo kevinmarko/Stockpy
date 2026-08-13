@@ -178,6 +178,12 @@ def initialize_database(db_file: str = DB_FILE):
             """
             cursor.execute(create_transactions_sql)
             logger.info("'Transactions' table created successfully.")
+
+            # Indexes for high-frequency queries
+            logger.info("Initializing performance indexes...")
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_signals_symbol_ts ON DailySignals ("Symbol", timestamp DESC);')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_ticker_date ON Transactions (ticker, execution_date DESC);')
+            logger.info("Performance indexes created successfully.")
     except Exception as e:
         # Unwrap SQLAlchemy OperationalError to raise raw sqlite3.OperationalError for tests
         if hasattr(e, "orig") and e.orig is not None:

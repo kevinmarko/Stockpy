@@ -3026,7 +3026,13 @@ export interface ExecutionQueueIntent {
   gate_reasons: string[];
   allow_place: boolean;
   rationale: string;
-  client_order_id: string;
+  /**
+   * Optional — a queue entry that hasn't been assigned an idempotent order
+   * ID yet (e.g. blocked pre-gate) may omit it; never fabricate one
+   * client-side (CONSTRAINT #4). Existing callers already fall back to
+   * `${symbol}-${side}` for list keys, so this stayed safe to widen.
+   */
+  client_order_id?: string | null;
   /**
    * Real per-intent attribution (never guessed from `rationale` free text —
    * CONSTRAINT #4): `"advisory"` for the base advisory engine, `"composed"`
@@ -3034,6 +3040,12 @@ export interface ExecutionQueueIntent {
    * Pilot's `pilot_id`.
    */
   follow_type?: string;
+  /** Real strategy/signal-module attribution string, when the queue builder has one. */
+  strategy?: string;
+  /** Real contributing signal-source names (news/sentiment/etc.), when available. */
+  sources?: string[];
+  /** The quote price the intent was proposed against — null/absent when unpriced. */
+  proposed_price?: number | null;
 }
 
 /** Query parameters for GET /execution-queue */

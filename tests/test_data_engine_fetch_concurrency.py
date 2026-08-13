@@ -17,19 +17,23 @@ Verifies:
   - settings.DATA_FETCH_MAX_CONCURRENCY=1 forces the sequential path (used
     by callers that want fully deterministic ordering/timing)
 
-Also covers TestFetchTechnicalRawCached (2026-07): DataEngine's new,
-additive fetch_technical_raw_cached() method, which routes each ticker
-through data.historical_store.HistoricalStore.get_bars() (incremental
-top-up) when settings.HISTORICAL_STORE_ENABLED is True, falling back to the
-EXACT fetch_technical_raw() behavior on any HistoricalStore/provider
-construction failure or when the flag is off. All HistoricalStore/provider
-calls are monkeypatched -- no real on-disk DB is touched.
+Also covers TestFetchTechnicalRawCached (2026-07, updated 2026-08): DataEngine's
+additive fetch_technical_raw_cached() method, which routes the whole ticker
+batch through data.historical_store.HistoricalStore.get_bars_bulk() (bounded
+concurrency + per-symbol isolation, itself delegating to get_bars() for its
+incremental top-up) when settings.HISTORICAL_STORE_ENABLED is True, falling
+back to the EXACT fetch_technical_raw() behavior on any HistoricalStore/
+provider construction failure or when the flag is off. All HistoricalStore/
+provider calls are monkeypatched -- no real on-disk DB is touched (tests that
+need genuine get_bars_bulk() isolation semantics use a real HistoricalStore
+backed by tmp_path with only its get_bars() method monkeypatched).
 """
 import pandas as pd
 import pytest
 from unittest.mock import MagicMock, patch
 
 from data_engine import DataEngine, MockDataEngine
+from data.historical_store import HistoricalStore
 
 
 def _make_history_df(rows=3):
@@ -263,33 +267,34 @@ class TestFetchTechnicalRawCached:
 
         assert "AAPL" in result
 
-    def test_uses_historical_store_get_bars_per_ticker(self, monkeypatch):
-        """Happy path: each ticker is routed through
-        HistoricalStore.get_bars(symbol, lookback_days=BARS_BACKFILL_DAYS,
-        provider=<singleton>), and its return value is what flows through."""
+    def test_uses_historical_store_get_bars_per_ticker(self, monkeypatch, tmp_path):
+        """Happy path: fetch_technical_raw_cached() delegates the whole batch
+        to HistoricalStore.get_bars_bulk(), which in turn calls
+        get_bars(symbol, lookback_days, provider=<singleton>) once per
+        ticker -- and its return value is what flows through."""
         monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
         monkeypatch.setattr("data_engine.settings.BARS_BACKFILL_DAYS", 504)
         monkeypatch.setattr("data_engine.settings.DATA_FETCH_MAX_CONCURRENCY", 4)
 
-        fake_store_instance = MagicMock()
-        fake_store_instance.get_bars.side_effect = (
-            lambda symbol, lookback_days=None, provider=None: _make_history_df()
+        real_store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        real_store.get_bars = MagicMock(
+            side_effect=lambda symbol, lookback_days=None, provider=None: _make_history_df()
         )
         fake_provider = MagicMock()
 
-        with patch("data.historical_store.HistoricalStore", return_value=fake_store_instance), \
+        with patch("data.historical_store.HistoricalStore", return_value=real_store), \
                 patch("data.market_data.get_provider", return_value=fake_provider):
             result = self._engine().fetch_technical_raw_cached(["AAPL", "MSFT"])
 
         assert set(result.keys()) == {"AAPL", "MSFT"}
-        assert fake_store_instance.get_bars.call_count == 2
-        for call in fake_store_instance.get_bars.call_args_list:
+        assert real_store.get_bars.call_count == 2
+        for call in real_store.get_bars.call_args_list:
             args, kwargs = call
             assert args[0] in {"AAPL", "MSFT"}
-            assert kwargs["lookback_days"] == 504
+            assert args[1] == 504
             assert kwargs["provider"] is fake_provider
 
-    def test_one_bad_ticker_does_not_abort_batch(self, monkeypatch):
+    def test_one_bad_ticker_does_not_abort_batch(self, monkeypatch, tmp_path):
         monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
         monkeypatch.setattr("data_engine.settings.DATA_FETCH_MAX_CONCURRENCY", 4)
 
@@ -298,37 +303,37 @@ class TestFetchTechnicalRawCached:
                 raise RuntimeError("db exploded")
             return _make_history_df()
 
-        fake_store_instance = MagicMock()
-        fake_store_instance.get_bars.side_effect = _get_bars
+        real_store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        real_store.get_bars = MagicMock(side_effect=_get_bars)
 
-        with patch("data.historical_store.HistoricalStore", return_value=fake_store_instance), \
+        with patch("data.historical_store.HistoricalStore", return_value=real_store), \
                 patch("data.market_data.get_provider", return_value=MagicMock()):
             result = self._engine().fetch_technical_raw_cached(["AAPL", "BADCO", "MSFT"])
 
         assert "BADCO" not in result
         assert set(result.keys()) == {"AAPL", "MSFT"}
 
-    def test_empty_bars_from_store_are_omitted_not_fabricated(self, monkeypatch):
+    def test_empty_bars_from_store_are_omitted_not_fabricated(self, monkeypatch, tmp_path):
         monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
-        fake_store_instance = MagicMock()
-        fake_store_instance.get_bars.return_value = pd.DataFrame()
+        real_store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        real_store.get_bars = MagicMock(return_value=pd.DataFrame())
 
-        with patch("data.historical_store.HistoricalStore", return_value=fake_store_instance), \
+        with patch("data.historical_store.HistoricalStore", return_value=real_store), \
                 patch("data.market_data.get_provider", return_value=MagicMock()):
             result = self._engine().fetch_technical_raw_cached(["EMPTY"])
 
         assert result == {}
 
-    def test_sequential_path_worker_1_matches_parallel_result(self, monkeypatch):
+    def test_sequential_path_worker_1_matches_parallel_result(self, monkeypatch, tmp_path):
         monkeypatch.setattr("data_engine.settings.HISTORICAL_STORE_ENABLED", True)
 
-        fake_store_instance = MagicMock()
-        fake_store_instance.get_bars.side_effect = (
-            lambda symbol, lookback_days=None, provider=None: _make_history_df()
+        real_store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        real_store.get_bars = MagicMock(
+            side_effect=lambda symbol, lookback_days=None, provider=None: _make_history_df()
         )
         tickers = ["AAPL", "MSFT", "GOOG"]
 
-        with patch("data.historical_store.HistoricalStore", return_value=fake_store_instance), \
+        with patch("data.historical_store.HistoricalStore", return_value=real_store), \
                 patch("data.market_data.get_provider", return_value=MagicMock()):
             monkeypatch.setattr("data_engine.settings.DATA_FETCH_MAX_CONCURRENCY", 1)
             sequential = self._engine().fetch_technical_raw_cached(tickers)

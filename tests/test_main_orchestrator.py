@@ -291,6 +291,97 @@ class TestFetchAllDataAsync:
         assert tech_raw is sentinel
 
 
+class TestFetchAllDataAsyncDeadLetter:
+    """2026-08: fetch_all_data_async's asyncio.gather() must isolate a single
+    sub-fetch's failure -- one of macro/fund/tech raising must never take
+    down the other two, and must never propagate out of the coroutine.
+    Each fallback sentinel must match that sub-fetch's OWN real return type
+    (Dict[str, Any] per DataEngine.fetch_macro_raw()'s own type hint) --
+    NOT a pd.DataFrame(), which would only accidentally satisfy today's
+    dict-shaped callers.
+    """
+
+    def test_macro_fetch_failure_isolated_dict_fallback(self, monkeypatch):
+        de = MockDataEngine()
+
+        def _boom():
+            raise RuntimeError("macro provider unavailable")
+
+        monkeypatch.setattr(de, "fetch_macro_raw", _boom)
+
+        macro_raw, fund_raw, tech_raw = asyncio.run(
+            fetch_all_data_async(de, ["AAPL"])
+        )
+
+        # The failing sub-fetch degrades to the empty-dict sentinel matching
+        # its real Dict[str, Any] contract -- never a pd.DataFrame().
+        assert macro_raw == {}
+        assert isinstance(macro_raw, dict)
+        assert not isinstance(macro_raw, pd.DataFrame)
+
+        # The other two sub-fetches succeed normally, unaffected.
+        assert isinstance(fund_raw, dict) and fund_raw
+        assert isinstance(tech_raw, dict) and tech_raw
+        assert "AAPL" in tech_raw
+        assert "SPY" in tech_raw
+
+    def test_fundamentals_fetch_failure_isolated(self, monkeypatch):
+        de = MockDataEngine()
+
+        def _boom(tickers):
+            raise RuntimeError("fundamentals provider unavailable")
+
+        monkeypatch.setattr(de, "fetch_fundamentals_raw", _boom)
+
+        macro_raw, fund_raw, tech_raw = asyncio.run(
+            fetch_all_data_async(de, ["AAPL"])
+        )
+
+        assert fund_raw == {}
+        assert isinstance(fund_raw, dict)
+        assert isinstance(macro_raw, dict) and macro_raw
+        assert isinstance(tech_raw, dict) and tech_raw
+
+    def test_technical_fetch_failure_isolated(self, monkeypatch):
+        de = MockDataEngine()
+
+        def _boom(tickers):
+            raise RuntimeError("technical data provider unavailable")
+
+        monkeypatch.setattr(de, "fetch_technical_raw_cached", _boom)
+
+        macro_raw, fund_raw, tech_raw = asyncio.run(
+            fetch_all_data_async(de, ["AAPL"])
+        )
+
+        assert tech_raw == {}
+        assert isinstance(tech_raw, dict)
+        assert isinstance(macro_raw, dict) and macro_raw
+        assert isinstance(fund_raw, dict) and fund_raw
+
+    def test_no_exception_propagates_when_all_three_fail(self, monkeypatch):
+        de = MockDataEngine()
+
+        def _boom_macro():
+            raise RuntimeError("macro down")
+
+        def _boom_fund(tickers):
+            raise RuntimeError("fundamentals down")
+
+        def _boom_tech(tickers):
+            raise RuntimeError("technical down")
+
+        monkeypatch.setattr(de, "fetch_macro_raw", _boom_macro)
+        monkeypatch.setattr(de, "fetch_fundamentals_raw", _boom_fund)
+        monkeypatch.setattr(de, "fetch_technical_raw_cached", _boom_tech)
+
+        # Must not raise -- every sub-fetch degrades to its own empty sentinel.
+        macro_raw, fund_raw, tech_raw = asyncio.run(
+            fetch_all_data_async(de, ["AAPL"])
+        )
+        assert macro_raw == {} and fund_raw == {} and tech_raw == {}
+
+
 # ===========================================================================
 # 4. _heartbeat
 # ===========================================================================

@@ -40,12 +40,27 @@ function buildOrderCommand(
   );
 }
 
+/** Float price-equality epsilon for matching a pending order's price against
+ * an order-book level -- never exact equality (both are floats sourced from
+ * independent quote fetches). */
+const INTENT_PRICE_EPSILON = 0.001;
+
 export default function ActiveTraderLadder({
   symbol = 'SPY',
   currentPrice = null,
+  intentPrice = null,
+  intentSide = null,
 }: {
   symbol?: string;
   currentPrice?: number | null;
+  /**
+   * A pending queued order's price, for highlighting the matching order-book
+   * row -- unused unless a caller wires it up (e.g. from the execution
+   * queue). Optional/`null` by default so existing callers are unaffected.
+   */
+  intentPrice?: number | null;
+  /** Side of the pending order the `intentPrice` above belongs to. */
+  intentSide?: "buy" | "sell" | null;
 }) {
   // Live top-of-book price/bid/ask over WebSocket (falls back to REST
   // polling server-side -- see api/ws_api.py -- and reconnects with
@@ -179,48 +194,67 @@ export default function ActiveTraderLadder({
 
             <div style={{ display: "flex", flexDirection: "column" }}>
               {/* Asks (descending price) */}
-              {[...ladder.asks].reverse().map((ask, i) => (
-                <div key={`ask-${i}`} className="ladder-row">
-                  <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
-                  <div className="ladder-cell">
-                    <button
-                      type="button"
-                      data-testid={`ladder-ask-price-${i}`}
-                      onClick={() => handlePriceClick(ask.price)}
-                      title="Click to set limit price"
-                      aria-label={`Set limit price to $${ask.price.toFixed(2)} (best ask)`}
-                      style={{
-                        width: "100%",
-                        background: "none",
-                        border: "none",
-                        borderBottom: "1px dashed var(--decline)",
-                        padding: 0,
-                        font: "inherit",
-                        fontWeight: 600,
-                        color: "var(--decline)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      ${ask.price.toFixed(2)}
-                    </button>
+              {[...ladder.asks].reverse().map((ask, i) => {
+                const isIntentMatch =
+                  intentPrice != null &&
+                  intentSide === "buy" &&
+                  Math.abs(ask.price - intentPrice) < INTENT_PRICE_EPSILON;
+                return (
+                  <div
+                    key={`ask-${i}`}
+                    className="ladder-row"
+                    style={
+                      isIntentMatch
+                        ? { background: "rgba(56, 189, 248, 0.15)", outline: "1px solid rgba(56, 189, 248, 0.5)" }
+                        : undefined
+                    }
+                  >
+                    <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
+                    <div className="ladder-cell">
+                      <button
+                        type="button"
+                        data-testid={`ladder-ask-price-${i}`}
+                        onClick={() => handlePriceClick(ask.price)}
+                        title="Click to set limit price"
+                        aria-label={`Set limit price to $${ask.price.toFixed(2)} (best ask)`}
+                        style={{
+                          width: "100%",
+                          background: "none",
+                          border: "none",
+                          borderBottom: "1px dashed var(--decline)",
+                          padding: 0,
+                          font: "inherit",
+                          fontWeight: 600,
+                          color: "var(--decline)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        ${ask.price.toFixed(2)}
+                        {isIntentMatch && (
+                          <span style={{ marginLeft: 4, fontSize: "var(--t-micro)", color: "var(--accent)" }} data-testid={`ladder-intent-match-ask-${i}`}>
+                            ◀ BUY
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                    <div className="ladder-cell">
+                      <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{ask.size}</span>
+                      <div
+                        className="ladder-size-bar"
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          bottom: 0,
+                          right: 0,
+                          background: "rgba(239, 68, 68, 0.15)",
+                          borderRadius: "var(--r-2xs)",
+                          width: `${Math.min(100, (ask.size / 2000) * 100)}%`
+                        }}
+                      />
+                    </div>
                   </div>
-                  <div className="ladder-cell">
-                    <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{ask.size}</span>
-                    <div
-                      className="ladder-size-bar"
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        bottom: 0,
-                        right: 0,
-                        background: "rgba(239, 68, 68, 0.15)",
-                        borderRadius: "var(--r-2xs)",
-                        width: `${Math.min(100, (ask.size / 2000) * 100)}%`
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
 
               {/* Current Price */}
               <div
@@ -251,40 +285,59 @@ export default function ActiveTraderLadder({
               </div>
 
               {/* Bids (descending price) */}
-              {ladder.bids.map((bid, i) => (
-                <div key={`bid-${i}`} className="ladder-row">
-                  <div className="ladder-cell">
-                    <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{bid.size}</span>
-                    <div
-                      className="ladder-size-bar ladder-size-bar-bid"
-                      style={{ width: `${Math.min(100, (bid.size / 2000) * 100)}%` }}
-                    />
+              {ladder.bids.map((bid, i) => {
+                const isIntentMatch =
+                  intentPrice != null &&
+                  intentSide === "sell" &&
+                  Math.abs(bid.price - intentPrice) < INTENT_PRICE_EPSILON;
+                return (
+                  <div
+                    key={`bid-${i}`}
+                    className="ladder-row"
+                    style={
+                      isIntentMatch
+                        ? { background: "rgba(56, 189, 248, 0.15)", outline: "1px solid rgba(56, 189, 248, 0.5)" }
+                        : undefined
+                    }
+                  >
+                    <div className="ladder-cell">
+                      <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{bid.size}</span>
+                      <div
+                        className="ladder-size-bar ladder-size-bar-bid"
+                        style={{ width: `${Math.min(100, (bid.size / 2000) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="ladder-cell">
+                      <button
+                        type="button"
+                        data-testid={`ladder-bid-price-${i}`}
+                        onClick={() => handlePriceClick(bid.price)}
+                        title="Click to set limit price"
+                        aria-label={`Set limit price to $${bid.price.toFixed(2)} (best bid)`}
+                        style={{
+                          width: "100%",
+                          background: "none",
+                          border: "none",
+                          borderBottom: "1px dashed var(--growth)",
+                          padding: 0,
+                          font: "inherit",
+                          fontWeight: 600,
+                          color: "var(--growth)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        ${bid.price.toFixed(2)}
+                        {isIntentMatch && (
+                          <span style={{ marginLeft: 4, fontSize: "var(--t-micro)", color: "var(--accent)" }} data-testid={`ladder-intent-match-bid-${i}`}>
+                            ◀ SELL
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                    <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
                   </div>
-                  <div className="ladder-cell">
-                    <button
-                      type="button"
-                      data-testid={`ladder-bid-price-${i}`}
-                      onClick={() => handlePriceClick(bid.price)}
-                      title="Click to set limit price"
-                      aria-label={`Set limit price to $${bid.price.toFixed(2)} (best bid)`}
-                      style={{
-                        width: "100%",
-                        background: "none",
-                        border: "none",
-                        borderBottom: "1px dashed var(--growth)",
-                        padding: 0,
-                        font: "inherit",
-                        fontWeight: 600,
-                        color: "var(--growth)",
-                        cursor: "pointer",
-                      }}
-                    >
-                      ${bid.price.toFixed(2)}
-                    </button>
-                  </div>
-                  <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
