@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { OptionChainResponse, OptionContract } from '../../api/types';
+import { api } from '../../api/client';
 import { theme } from '../../theme';
 import { OptionsPayoffChart } from './OptionsPayoffChart';
 
@@ -17,6 +18,7 @@ interface SelectedLeg {
 }
 
 interface Props {
+  symbol: string;
   chain: OptionChainResponse | null;
   selectedLegs: SelectedLeg[];
   onUpdateLegs: (legs: SelectedLeg[]) => void;
@@ -36,83 +38,130 @@ const STRATEGIES: { name: StrategyName, category: StrategyCategory, outlook: str
   { name: 'Short Put Calendar', category: 'Calendars', outlook: 'Volatile', desc: 'Buy a near-term put and sell a longer-term put at the same strike.', shape: 'calendar' },
 ];
 
-export const OptionsStrategyBuilder: React.FC<Props> = ({ chain, onUpdateLegs }) => {
+export const OptionsStrategyBuilder: React.FC<Props> = ({ symbol, chain, onUpdateLegs }) => {
   const [activeCategory, setActiveCategory] = useState<StrategyCategory>('Verticals');
   const [activeStrategy, setActiveStrategy] = useState<StrategyName>('Custom');
+  const [isFetchingLegs, setIsFetchingLegs] = useState(false);
 
   useEffect(() => {
-    if (activeStrategy === 'Custom' || !chain) return;
+    let active = true;
 
-    const findClosestStrikeByDelta = (contracts: OptionContract[], targetDelta: number) => {
-      if (!contracts || contracts.length === 0) return null;
-      return contracts.reduce((prev, curr) => 
-        Math.abs(curr.greeks.delta - targetDelta) < Math.abs(prev.greeks.delta - targetDelta) ? curr : prev
-      );
+    const buildLegs = async () => {
+      if (activeStrategy === 'Custom' || !chain) return;
+
+      const findClosestStrikeByDelta = (contracts: OptionContract[], targetDelta: number) => {
+        if (!contracts || contracts.length === 0) return null;
+        return contracts.reduce((prev, curr) => 
+          Math.abs(curr.greeks.delta - targetDelta) < Math.abs(prev.greeks.delta - targetDelta) ? curr : prev
+        );
+      };
+
+      const newLegs: SelectedLeg[] = [];
+      const calls = chain.calls || [];
+      const puts = chain.puts || [];
+
+      switch (activeStrategy) {
+        case 'Bull Call Spread': {
+          const longCall = findClosestStrikeByDelta(calls, 0.50);
+          const shortCall = findClosestStrikeByDelta(calls, 0.30);
+          if (longCall) newLegs.push({ contract: longCall, type: 'call', action: 'Buy' });
+          if (shortCall && shortCall.strike !== longCall?.strike) newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
+          break;
+        }
+        case 'Bear Put Spread': {
+          const longPut = findClosestStrikeByDelta(puts, -0.50);
+          const shortPut = findClosestStrikeByDelta(puts, -0.30);
+          if (longPut) newLegs.push({ contract: longPut, type: 'put', action: 'Buy' });
+          if (shortPut && shortPut.strike !== longPut?.strike) newLegs.push({ contract: shortPut, type: 'put', action: 'Sell' });
+          break;
+        }
+        case 'Bull Put Spread': {
+          const shortPut = findClosestStrikeByDelta(puts, -0.30);
+          const longPut = findClosestStrikeByDelta(puts, -0.15);
+          if (shortPut) newLegs.push({ contract: shortPut, type: 'put', action: 'Sell' });
+          if (longPut && longPut.strike !== shortPut?.strike) newLegs.push({ contract: longPut, type: 'put', action: 'Buy' });
+          break;
+        }
+        case 'Bear Call Spread': {
+          const shortCall = findClosestStrikeByDelta(calls, 0.30);
+          const longCall = findClosestStrikeByDelta(calls, 0.15);
+          if (shortCall) newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
+          if (longCall && longCall.strike !== shortCall?.strike) newLegs.push({ contract: longCall, type: 'call', action: 'Buy' });
+          break;
+        }
+        case 'Long Straddle': {
+          const call = findClosestStrikeByDelta(calls, 0.50);
+          const put = puts.find(p => p.strike === call?.strike);
+          if (call) newLegs.push({ contract: call, type: 'call', action: 'Buy' });
+          if (put) newLegs.push({ contract: put, type: 'put', action: 'Buy' });
+          break;
+        }
+        case 'Long Strangle': {
+          const call = findClosestStrikeByDelta(calls, 0.16);
+          const put = findClosestStrikeByDelta(puts, -0.16);
+          if (call) newLegs.push({ contract: call, type: 'call', action: 'Buy' });
+          if (put) newLegs.push({ contract: put, type: 'put', action: 'Buy' });
+          break;
+        }
+        case 'Long Call Calendar': {
+          const shortCall = findClosestStrikeByDelta(calls, 0.50);
+          if (shortCall) {
+            newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
+            setIsFetchingLegs(true);
+            try {
+              const expirations = chain.expirations || [];
+              const currIdx = expirations.indexOf(chain.expiration || '');
+              const nextExp = (currIdx !== -1 && currIdx + 1 < expirations.length) ? expirations[currIdx + 1] : null;
+              
+              if (nextExp) {
+                const nextChain = await api.getOptionsChain(symbol, nextExp);
+                const nextCalls = nextChain.calls || [];
+                const longCall = nextCalls.find(c => c.strike === shortCall.strike);
+                if (longCall) newLegs.push({ contract: longCall, type: 'call', action: 'Buy' });
+              }
+            } catch (e) {
+              console.error("Failed to fetch next chain for calendar spread:", e);
+            }
+            if (active) setIsFetchingLegs(false);
+          }
+          break;
+        }
+        case 'Long Put Calendar':
+        case 'Short Put Calendar': {
+          const isLong = activeStrategy === 'Long Put Calendar';
+          const shortPut = findClosestStrikeByDelta(puts, isLong ? -0.50 : -0.20); // rough approximation
+          if (shortPut) {
+            newLegs.push({ contract: shortPut, type: 'put', action: isLong ? 'Sell' : 'Buy' });
+            setIsFetchingLegs(true);
+            try {
+              const expirations = chain.expirations || [];
+              const currIdx = expirations.indexOf(chain.expiration || '');
+              const nextExp = (currIdx !== -1 && currIdx + 1 < expirations.length) ? expirations[currIdx + 1] : null;
+              
+              if (nextExp) {
+                const nextChain = await api.getOptionsChain(symbol, nextExp);
+                const nextPuts = nextChain.puts || [];
+                const longPut = nextPuts.find(p => p.strike === shortPut.strike);
+                if (longPut) newLegs.push({ contract: longPut, type: 'put', action: isLong ? 'Buy' : 'Sell' });
+              }
+            } catch (e) {
+              console.error("Failed to fetch next chain for calendar spread:", e);
+            }
+            if (active) setIsFetchingLegs(false);
+          }
+          break;
+        }
+      }
+
+      if (active) {
+        onUpdateLegs(newLegs);
+      }
     };
 
-    const newLegs: SelectedLeg[] = [];
-    const calls = chain.calls || [];
-    const puts = chain.puts || [];
+    buildLegs();
 
-    switch (activeStrategy) {
-      case 'Bull Call Spread': {
-        const longCall = findClosestStrikeByDelta(calls, 0.50);
-        const shortCall = findClosestStrikeByDelta(calls, 0.30);
-        if (longCall) newLegs.push({ contract: longCall, type: 'call', action: 'Buy' });
-        if (shortCall && shortCall.strike !== longCall?.strike) newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
-        break;
-      }
-      case 'Bear Put Spread': {
-        const longPut = findClosestStrikeByDelta(puts, -0.50);
-        const shortPut = findClosestStrikeByDelta(puts, -0.30);
-        if (longPut) newLegs.push({ contract: longPut, type: 'put', action: 'Buy' });
-        if (shortPut && shortPut.strike !== longPut?.strike) newLegs.push({ contract: shortPut, type: 'put', action: 'Sell' });
-        break;
-      }
-      case 'Bull Put Spread': {
-        const shortPut = findClosestStrikeByDelta(puts, -0.30);
-        const longPut = findClosestStrikeByDelta(puts, -0.15);
-        if (shortPut) newLegs.push({ contract: shortPut, type: 'put', action: 'Sell' });
-        if (longPut && longPut.strike !== shortPut?.strike) newLegs.push({ contract: longPut, type: 'put', action: 'Buy' });
-        break;
-      }
-      case 'Bear Call Spread': {
-        const shortCall = findClosestStrikeByDelta(calls, 0.30);
-        const longCall = findClosestStrikeByDelta(calls, 0.15);
-        if (shortCall) newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
-        if (longCall && longCall.strike !== shortCall?.strike) newLegs.push({ contract: longCall, type: 'call', action: 'Buy' });
-        break;
-      }
-      case 'Long Straddle': {
-        const call = findClosestStrikeByDelta(calls, 0.50);
-        const put = puts.find(p => p.strike === call?.strike);
-        if (call) newLegs.push({ contract: call, type: 'call', action: 'Buy' });
-        if (put) newLegs.push({ contract: put, type: 'put', action: 'Buy' });
-        break;
-      }
-      case 'Long Strangle': {
-        const call = findClosestStrikeByDelta(calls, 0.16);
-        const put = findClosestStrikeByDelta(puts, -0.16);
-        if (call) newLegs.push({ contract: call, type: 'call', action: 'Buy' });
-        if (put) newLegs.push({ contract: put, type: 'put', action: 'Buy' });
-        break;
-      }
-      // Calendars require two chains, so we only populate the near-term leg for now
-      case 'Long Call Calendar': {
-        const shortCall = findClosestStrikeByDelta(calls, 0.50);
-        if (shortCall) newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
-        break;
-      }
-      case 'Long Put Calendar':
-      case 'Short Put Calendar': {
-        const shortPut = findClosestStrikeByDelta(puts, -0.50);
-        if (shortPut) newLegs.push({ contract: shortPut, type: 'put', action: 'Sell' });
-        break;
-      }
-    }
-
-    onUpdateLegs(newLegs);
-  }, [activeStrategy, chain, onUpdateLegs]);
+    return () => { active = false; };
+  }, [activeStrategy, chain, symbol, onUpdateLegs]);
 
   const categories: StrategyCategory[] = ['Verticals', 'Straddles & Strangles', 'Calendars'];
   const activeStrategies = STRATEGIES.filter(s => s.category === activeCategory);
@@ -170,7 +219,12 @@ export const OptionsStrategyBuilder: React.FC<Props> = ({ chain, onUpdateLegs })
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <h4 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{strat.name}</h4>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <h4 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{strat.name}</h4>
+                {isFetchingLegs && activeStrategy === strat.name && (
+                  <span style={{ fontSize: 12, color: theme.textSecondary }}>Loading legs...</span>
+                )}
+              </div>
               <span style={{ 
                 fontSize: 11, 
                 padding: '2px 8px', 

@@ -187,6 +187,7 @@ export function OptionsChain() {
         
         {isBuilderMode ? (
           <OptionsStrategyBuilder
+            symbol={ticker!}
             chain={chainData || null}
             selectedLegs={selectedLegs}
             onUpdateLegs={setSelectedLegs}

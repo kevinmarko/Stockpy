@@ -3890,3 +3890,20 @@ export interface OptionChainResponse {
   calls?: OptionContract[];
   puts?: OptionContract[];
 }
+
+export interface OptionsOrderRequest {
+  symbol: string;
+  expiration: string;
+  legs: {
+    contract: OptionContract;
+    type: 'call' | 'put';
+    action: 'Buy' | 'Sell';
+  }[];
+  isLive: boolean;
+}
+
+export interface OptionsOrderResult {
+  ok: boolean;
+  order_id?: string;
+  message: string;
+}

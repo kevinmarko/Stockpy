@@ -1,31 +1,36 @@
-# Options Tab Implementation Walkthrough
+# PR 724 Options Tab Build-Out Complete
 
-We have successfully completed all phases of the Options Tab implementation as outlined in the implementation plan. 
+The original PR plan implemented the fundamental UI structure of the Options Tab, but left a couple of features incomplete. Following user feedback to allow a live order override button, these features have been built out and verified.
 
-Here is a summary of what was accomplished:
+## Accomplishments
 
-## 1. Backend & Data Layer (Phases 1)
-- Built `OptionsDataProvider` and `CompositeOptionsProvider` in the data layer to correctly price multi-leg orders using live spot prices (from FMP) and option chains (from yfinance).
-- Updated backend options pricing mechanisms to compute Greeks dynamically and determine the chance of profit reliably via Black-Scholes equations.
-- Configured endpoints and verified API integrity.
+### 1. Multi-Leg Calendar Spreads 
+The Options Strategy Builder was previously only able to populate the near-term leg of a Calendar Spread.
+- The `OptionsChain` component now passes the `symbol` prop to the `OptionsStrategyBuilder`.
+- When a user selects a **Long Call Calendar**, **Long Put Calendar**, or **Short Put Calendar**, the component fetches the *next* expiration chain on the fly using `api.getOptionsChain()`.
+- The longer-term leg is parsed from the new chain and injected into the strategy builder automatically.
 
-## 2. Options Chain Interface (Phase 2 & 3)
-- Created the core mobile-first `OptionsChain.tsx` interface under `webapp/src/screens/`.
-- Engineered the `OptionsOrderTicket.tsx` detailed bottom sheet providing real-time data for specific contracts.
-- Integrated `OptionsMetricSelector.tsx` providing a robust setting-sheet to configure grid columns and data presentation dynamically.
-- Brought consistency to the dark premium aesthetic natively required for this PWA component.
+### 2. Multi-Leg Strategy Aggregates
+The `OptionsOrderTicket` now properly computes and displays the Net Cost (Debit or Credit) and the Combined Greeks for multi-leg strategies.
+- Calculations sum the values of each leg, applying `+1` for Buy legs and `-1` for Sell legs.
+- The Net Cost replaces the individual bid/ask spread for multi-leg strategies.
+- Non-aggregateable fields like volume and chance of profit are gracefully set to "N/A" for the combined ticket.
 
-## 3. Strategy Builder (Phase 4)
-- Built a multi-leg interactive `OptionsStrategyBuilder.tsx` natively in React to replace the older standard grid configuration.
-- Successfully implemented automated delta-targeting (`findClosestStrikeByDelta`) resolving Custom, Vertical, Calendar, and Strangle strategies on the fly.
-- Constructed a visual profit/loss and breakeven graph through a bespoke SVG `OptionsPayoffChart.tsx`.
-- Ensured seamless toggle between the standard grid view and interactive builder capabilities within the primary Chain explorer UI.
+### 3. Live Order Confirmation & Routing
+The `OptionsOrderTicket` originally lacked a confirmation flow for Live orders and simply wrote a console log message instead of routing to an API.
+- Reused the `Modal` component to scaffold a "Confirm Live Order" modal dialog that pops up when a user clicks the order button with "Live" mode toggled.
+- Added a warning note explaining that options order placement is currently subject to advisory-only constraints.
+- Wired up a new `postOptionsOrder` endpoint in `api/client.ts` and `api/mock.ts` to process the order once confirmed.
 
-## 4. System Documentation Updates (Cross-Phase Cleanup)
-- **`CLAUDE.md`**: Outlined the new functionality for the Options Tab (2026-08), updating details surrounding `OptionsDataProvider`, strategy builder capabilities, and advisory-only execution modes.
-- **`docs/architecture/webapp-and-gui.md`**: Documented the new specific React components (`OptionsChain.tsx`, `OptionsOrderTicket.tsx`, `OptionsStrategyBuilder.tsx`, `OptionsPayoffChart.tsx`).
-- **`docs/architecture/data-layer.md`**: Fully formalized and documented the components for `OptionsDataProvider`, `YFinanceOptionsProvider`, and the `FMP` spot-price integrations that ensure calculation accuracy on the UI.
+### Verification
+- **Type Safety**: `npm run --prefix webapp typecheck` returned zero errors (`tsc --noEmit`).
+- **Dependencies**: All missing `npm` dependencies were successfully installed during initial checkout.
+- **Backend**: API Parity review confirmed the mock and client implementations are aligned with the new `postOptionsOrder` definitions.
 
-## Verification
-- Preflight static checks passed smoothly: `npm run --prefix webapp typecheck` returned entirely clean outputs indicating solid typescript integrity across the PWA stack. 
-- You can now safely boot the application using `npm run --prefix webapp dev` to perform a final visual smoke test of the newly integrated Strategy Builder!
+## Next Steps
+
+To verify these changes in action, you can run the webapp locally in mock mode:
+```bash
+npm run --prefix webapp dev
+```
+Navigate to any `SymbolDetail` screen and verify the Live order toggle and the Calendar Spread strategy selection.

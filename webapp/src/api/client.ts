@@ -141,6 +141,8 @@ import type {
   PaperBrokerResetResult,
   CacheLongShortApproveBulkResult,
   OptionChainResponse,
+  OptionsOrderRequest,
+  OptionsOrderResult,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
@@ -410,6 +412,11 @@ const liveApi = {
     }),
   recomputeOptions: (req: OptionsRecomputeRequest) =>
     http<OptionsRecomputeResult>("/data/options/recompute", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  postOptionsOrder: (req: OptionsOrderRequest) =>
+    http<OptionsOrderResult>("/brokerage/options/order", {
       method: "POST",
       body: JSON.stringify(req),
     }),

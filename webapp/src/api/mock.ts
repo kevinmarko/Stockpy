@@ -195,6 +195,8 @@ import type {
   PaperBrokerPosition,
   PaperBrokerOrder,
   LiveTradeProposal,
+  OptionsOrderRequest,
+  OptionsOrderResult,
 } from "./types";
 
 const SECTORS = [
@@ -7073,6 +7075,18 @@ export const mockApi = {
         target_dte: req.target_dte ?? 30,
       },
       600
+    );
+  },
+
+  async postOptionsOrder(req: OptionsOrderRequest): Promise<OptionsOrderResult> {
+    console.log(`[mockApi] postOptionsOrder (${req.isLive ? 'LIVE' : 'PAPER'}):`, req);
+    return delay(
+      {
+        ok: true,
+        order_id: `mock_opt_${Date.now()}`,
+        message: `Options order for ${req.symbol} received successfully.`
+      },
+      800
     );
   },
 
