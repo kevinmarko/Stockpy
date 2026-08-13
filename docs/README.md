@@ -17,7 +17,7 @@ The load-bearing docs also listed in CLAUDE.md's "Key documentation files" table
 | [`architecture.md`](architecture.md) | Mermaid data-flow diagram (Engines → DTOs → Signals → Strategy → Advisory → Broker [quarantined]) |
 | [`architecture/`](architecture/) | Per-module architecture reference, split by subsystem — see its own files below |
 | [`signals/README.md`](signals/README.md) | Index of all 17 registered `SignalModule` implementations, plus related non-module docs |
-| [`known_issues/README.md`](known_issues/README.md) | Index of 7 dated production-issue write-ups (fixed / resolved / mitigated) |
+| [`known_issues/README.md`](known_issues/README.md) | Index of 8 dated production-issue write-ups (fixed / resolved / mitigated) |
 | [`incident_log.md`](incident_log.md) | Template + log for production incidents (referenced by RUNBOOK.md §6) |
 | [`HOW_TO_GUIDE.md`](HOW_TO_GUIDE.md) | End-user guide for every platform feature |
 | [`RUNBOOK.md`](RUNBOOK.md) | Operational runbook — pre-market checklist, incident playbooks, advisory pause procedure |
