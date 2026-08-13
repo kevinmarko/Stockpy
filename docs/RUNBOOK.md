@@ -1116,17 +1116,22 @@ python3 main.py
 | Missing recommendation for held symbol > 5 consecutive days (§3.2) | Pause + investigate data source; check Dead-Letter Queue |
 | Account snapshot stale > 48 h (§3.1) | Force refresh first (`--refresh-account`); pause only if live fetch also fails |
 | Macro regime shows RECESSION AND HMM agrees | Pause new signal evaluation; monitor daily |
-| Suspicious pipeline output (all signals identical, all BUY, all NaN) | Pause immediately; run `python scripts/preflight_check.py` and check `logs/investyo.log` |
+| Suspicious pipeline output (all signals identical, all BUY, all NaN) | Pause immediately; run `python scripts/preflight_check.py` and check `$LOCAL_DATA_ROOT/logs/investyo.log` (default `~/.stockpy_local/logs/investyo.log`) |
 
 ### Back up the database before any destructive investigation
 
+`quant_platform.db` lives under `settings.LOCAL_DATA_ROOT` (default `~/.stockpy_local/`),
+not the repo root — see `docs/architecture/data-layer.md`'s `settings.LOCAL_DATA_ROOT`
+subsection.
+
 ```bash
-cp quant_platform.db quant_platform_backup_$(date +%Y%m%d_%H%M%S).db
+cp ~/.stockpy_local/quant_platform.db ~/.stockpy_local/quant_platform_backup_$(date +%Y%m%d_%H%M%S).db
 ```
 
 ### Incident log
 
-Document every pause in `output/decision_log.jsonl` via the Reports tab → Decision
+Document every pause in `$LOCAL_DATA_ROOT/output/decision_log.jsonl` (default
+`~/.stockpy_local/output/decision_log.jsonl`) via the Reports tab → Decision
 Journal (entry type: "modified", notes: describe the anomaly and resolution). This keeps
 a timestamped operator log that the calibration tracker can correlate with signal
 accuracy changes.
