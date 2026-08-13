@@ -51,11 +51,19 @@ class _FakePopen:
 # launch_validation_run argv contract
 # ---------------------------------------------------------------------------
 class TestLaunchValidationRun:
-    def test_builds_expected_argv(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_builds_expected_argv(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         from gui import orchestrator_runner
 
         _FakePopen.last_cmd = None
         monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _FakePopen)
+        # launch_validation_run() unconditionally opens VALIDATION_LOG_PATH
+        # ("w", truncating) and mkdir()s OUTPUT_DIR before Popen is ever
+        # reached -- redirect both to tmp_path so this never touches the
+        # real, shared settings.OUTPUT_DIR (settings.LOCAL_DATA_ROOT/output).
+        monkeypatch.setattr(orchestrator_runner, "VALIDATION_LOG_PATH", tmp_path / "gui_validation.log")
+        monkeypatch.setattr(orchestrator_runner.settings, "OUTPUT_DIR", tmp_path)
 
         handle = orchestrator_runner.launch_validation_run(
             ["rsi2_mean_reversion"], "2010-01-01", "2023-12-31"
@@ -79,12 +87,14 @@ class TestLaunchValidationRun:
         assert handle.pid == 4242
 
     def test_multiple_strategies_comma_joined(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         from gui import orchestrator_runner
 
         _FakePopen.last_cmd = None
         monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _FakePopen)
+        monkeypatch.setattr(orchestrator_runner, "VALIDATION_LOG_PATH", tmp_path / "gui_validation.log")
+        monkeypatch.setattr(orchestrator_runner.settings, "OUTPUT_DIR", tmp_path)
 
         orchestrator_runner.launch_validation_run(
             ["a_strategy", "b_strategy"], "2015-01-01", "2020-01-01"
