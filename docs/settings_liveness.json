@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 271,
+    "live_safe": 272,
     "no_op": 2,
-    "restart_required": 91,
+    "restart_required": 90,
     "total": 364
   },
   "dynamic_sites": [
@@ -56,14 +56,14 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4212,
+      "line": 4260,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4317,
+      "line": 4365,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -268,6 +268,7 @@
     "GOOGLE_NEWS_LOOKBACK_WINDOW",
     "GRAVITY_AI_RUNNER_ENABLED",
     "GRAVITY_AI_RUNNER_OUTPUT_PATH",
+    "GRAVITY_REQUIRE_NATIVE",
     "HISTORICAL_STORE_ENABLED",
     "JOBS_API_ENABLED",
     "JULES_API_KEY",
@@ -419,16 +420,16 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 783,
+    "attr": 784,
     "factory_param": 4,
     "getattr_const": 261,
-    "os_environ": 25
+    "os_environ": 24
   },
   "read_forms_distinct_fields": {
-    "attr": 229,
+    "attr": 230,
     "factory_param": 4,
     "getattr_const": 159,
-    "os_environ": 18
+    "os_environ": 17
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
   "restart_required": {
@@ -1364,7 +1365,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4694",
+        "site": "api/pilots_api.py:4742",
         "via": []
       }
     ],
@@ -1375,7 +1376,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4693",
+        "site": "api/pilots_api.py:4741",
         "via": []
       }
     ],
@@ -1386,7 +1387,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4856",
+        "site": "api/pilots_api.py:4910",
         "via": []
       },
       {
@@ -1461,7 +1462,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4835",
+        "site": "api/pilots_api.py:4883",
         "via": []
       },
       {
@@ -1767,17 +1768,6 @@
           "os_environ"
         ],
         "site": "mcp_remote_adapter.py:19",
-        "via": []
-      }
-    ],
-    "GRAVITY_REQUIRE_NATIVE": [
-      {
-        "discarded": false,
-        "form": "os_environ",
-        "rules": [
-          "os_environ"
-        ],
-        "site": "Gravity AI Review Suite.py:4514",
         "via": []
       }
     ],
@@ -2455,7 +2445,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11020",
+        "site": "Gravity AI Review Suite.py:11021",
         "via": []
       }
     ],
@@ -2764,7 +2754,7 @@
     "init_self_assign": 41,
     "method_self_assign": 4,
     "module_level": 71,
-    "os_environ": 25
+    "os_environ": 24
   },
   "restart_required_via_name_literal_only": [
     "EDGAR_FULLTEXT_CHUNK_TOKENS",
