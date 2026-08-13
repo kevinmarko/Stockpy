@@ -4068,13 +4068,24 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("MAX_CORRELATION", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
             ("DAILY_LOSS_LIMIT_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.005}),
             ("MAX_ORDER_RATE_PER_MIN", "int", {"min": 1, "max": 1000, "step": 1}),
-            ("HMM_RISK_OFF_BLOCK_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
             ("RISK_GATE_ENFORCE_MARKET_HOURS", "bool", {}),
             ("META_LABEL_MIN_CONFIDENCE", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
             ("DRY_RUN", "bool", {}),
             ("EXECUTION_PRIORITY_QUEUE_ENABLED", "bool", {}),
             ("EXECUTION_QUEUE_LEAK_RATE_PER_SEC", "float", {"min": 0.0, "max": 100.0, "step": 0.5}),
             ("FLATTEN_ON_KILL", "bool", {}),
+        ],
+    ),
+    (
+        # HMM_RISK_OFF_BLOCK_THRESHOLD moved here from "Risk Gate" -- it's a
+        # regime-model parameter, not a risk-gate-specific one, and belongs
+        # next to the other HMM/VRP regime tunables.
+        "Regime Model",
+        [
+            ("HMM_N_STATES", "int", {"min": 2, "max": 10, "step": 1}),
+            ("HMM_RETRAIN_FREQ_DAYS", "int", {"min": 1, "max": 30, "step": 1}),
+            ("HMM_RISK_OFF_BLOCK_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("OPTIONS_VRP_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
         ],
     ),
     (

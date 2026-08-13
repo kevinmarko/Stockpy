@@ -15,6 +15,7 @@ every dashboard row every cycle -- zero new computation. Backs the
 import pandas as pd
 
 from dto_models import MacroEconomicDTO
+from settings import settings
 from signals.base import SignalModule, SignalContext, SignalOutput
 from signals.registry import global_registry
 
@@ -24,9 +25,12 @@ from signals.registry import global_registry
 # and documented in this repo's own CLAUDE.md "Conventions enforced" section:
 # "Options premium selling (e.g. Put Credit Spreads, Iron Condors) is gated
 # by VRP regime rules: must have true_ivr > 50, VRP > 0.02, VIX < 30, and no
-# CREDIT EVENT. If gated, recommender returns Cash/Wait."
+# CREDIT EVENT. If gated, recommender returns Cash/Wait." VRP_MIN_THRESHOLD is
+# sourced from settings.OPTIONS_VRP_THRESHOLD (not re-hardcoded) so this gate
+# can never silently drift out of sync with technical_options_engine.py's own
+# gate or execution/options_queue_builder.py's.
 IVR_SELL_THRESHOLD = 50.0
-VRP_MIN_THRESHOLD = 0.02
+VRP_MIN_THRESHOLD = settings.OPTIONS_VRP_THRESHOLD
 
 # The macro-level half of the gate (VIX / CREDIT EVENT) is handled centrally
 # via is_active_in_regime() below, NOT baked into the per-row score -- per

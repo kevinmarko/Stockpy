@@ -79,6 +79,7 @@ _EXPECTED_GROUPS = [
     "Position Sizing",
     "Symbol Rating",
     "Risk Gate",
+    "Regime Model",
     "Forecasting",
     "Market Data",
     "Runtime & Ops",
@@ -132,6 +133,16 @@ _NEW_RLHF_KEYS = {
     "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
     "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD",
     "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
+}
+
+# New "Regime Model" group (settings.py's HMM_N_STATES/HMM_RETRAIN_FREQ_DAYS/
+# OPTIONS_VRP_THRESHOLD) -- HMM_RISK_OFF_BLOCK_THRESHOLD moved into this group
+# from "Risk Gate" but isn't new to the editor, so it stays in the inline
+# baseline set below rather than here.
+_NEW_REGIME_KEYS = {
+    "HMM_N_STATES",
+    "HMM_RETRAIN_FREQ_DAYS",
+    "OPTIONS_VRP_THRESHOLD",
 }
 
 
@@ -375,7 +386,7 @@ class TestTunablesScopeInvariants:
             "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
             "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
             "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
-        } | _NEW_ADVANCED_KEYS | _NEW_RLHF_KEYS | _NEW_MISC_TUNABLE_KEYS
+        } | _NEW_ADVANCED_KEYS | _NEW_RLHF_KEYS | _NEW_REGIME_KEYS | _NEW_MISC_TUNABLE_KEYS
         assert set(pilots_api._TUNABLE_INDEX) == expected
 
     def test_excludes_other_screens_keys(self):
@@ -387,7 +398,7 @@ class TestTunablesScopeInvariants:
             assert key not in pilots_api._TUNABLE_INDEX, f"{key} leaked into tunables scope"
 
     def test_new_advanced_keys_are_in_scope(self):
-        """The 7 keys the real Streamlit tab (gui/panels/settings_manager.py:36-77)
+        """The keys the real Streamlit tab (gui/panels/settings_manager.py:36-77)
         served that this editor previously omitted."""
         for key in _NEW_ADVANCED_KEYS:
             assert key in pilots_api._TUNABLE_INDEX, f"{key} still missing from tunables scope"

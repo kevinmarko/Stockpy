@@ -14,8 +14,8 @@
   "counts": {
     "live_safe": 272,
     "no_op": 2,
-    "restart_required": 90,
-    "total": 364
+    "restart_required": 91,
+    "total": 365
   },
   "dynamic_sites": [
     {
@@ -56,14 +56,14 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4260,
+      "line": 4271,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4365,
+      "line": 4376,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -420,13 +420,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 786,
+    "attr": 789,
     "factory_param": 4,
     "getattr_const": 261,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {
-    "attr": 230,
+    "attr": 231,
     "factory_param": 4,
     "getattr_const": 159,
     "os_environ": 17
@@ -1365,7 +1365,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4742",
+        "site": "api/pilots_api.py:4753",
         "via": []
       }
     ],
@@ -1376,7 +1376,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4741",
+        "site": "api/pilots_api.py:4752",
         "via": []
       }
     ],
@@ -1387,7 +1387,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4910",
+        "site": "api/pilots_api.py:4921",
         "via": []
       },
       {
@@ -1462,7 +1462,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4883",
+        "site": "api/pilots_api.py:4894",
         "via": []
       },
       {
@@ -2207,6 +2207,26 @@
         "via": []
       }
     ],
+    "OPTIONS_VRP_THRESHOLD": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "execution/options_queue_builder.py:77",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "signals/vrp_premium_selling.py:33",
+        "via": []
+      }
+    ],
     "ORCHESTRATOR_DAEMON_TOKEN": [
       {
         "discarded": true,
@@ -2753,7 +2773,7 @@
     "init_body": 6,
     "init_self_assign": 41,
     "method_self_assign": 4,
-    "module_level": 71,
+    "module_level": 73,
     "os_environ": 24
   },
   "restart_required_via_name_literal_only": [

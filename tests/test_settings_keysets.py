@@ -275,13 +275,17 @@ class TestExistingEditorsAreNotBootstrap:
             # 25 -> 31: "Diagnostic & Supplement Feeds" gained FMP_NEWS_ENABLED/
             # FMP_NEWS_PAGE_LIMIT/FMP_NEWS_MAX_PAGES/FMP_OPTIONS_HEALTH_ENABLED/
             # FMP_OPTIONS_CONTEXT_ENABLED/FMP_PEERS_ENABLED (6 keys).
-            "_TUNABLE_INDEX": 86,
+            # 86 -> 89: new "Regime Model" _TUNABLE_GROUPS entry added
+            # HMM_N_STATES/HMM_RETRAIN_FREQ_DAYS/OPTIONS_VRP_THRESHOLD (3 keys);
+            # HMM_RISK_OFF_BLOCK_THRESHOLD moved into it from "Risk Gate" (no
+            # net change to the total).
+            "_TUNABLE_INDEX": 89,
             "_SENTIMENT_INDEX": 33,
             "_SECTOR_SELECTION_INDEX": 11,
             "_FMP_INDEX": 31,
             "_ETF_TRANSMISSION_INDEX": 19,
         }
-        assert len(ALL_EDITOR_KEYS) == 180
+        assert len(ALL_EDITOR_KEYS) == 183
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

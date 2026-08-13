@@ -365,7 +365,7 @@ export function EmptyState({
   hint,
 }: {
   title: string;
-  hint?: string;
+  hint?: ReactNode;
 }) {
   return (
     <div className="empty">
@@ -510,7 +510,7 @@ export function Input({
   type?: "text" | "number" | "email" | "password";
   inputMode?: "text" | "numeric" | "decimal" | "email";
   invalid?: boolean;
-  hint?: string;
+  hint?: ReactNode;
   id?: string;
   disabled?: boolean;
   min?: number;
@@ -607,7 +607,7 @@ export function Select({
   onChange: (e: ChangeEvent<HTMLSelectElement>) => void;
   options: { value: string; label: string }[];
   invalid?: boolean;
-  hint?: string;
+  hint?: ReactNode;
   id?: string;
   disabled?: boolean;
   testId?: string;
@@ -696,7 +696,7 @@ export function Textarea({
   rows?: number;
   placeholder?: string;
   invalid?: boolean;
-  hint?: string;
+  hint?: ReactNode;
   id?: string;
   disabled?: boolean;
   spellCheck?: boolean;
