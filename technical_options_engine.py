@@ -102,7 +102,7 @@ class OptionsPricingRecommender:
         # Prevent division by zero errors for expired options
         if T <= 0:
             return {'Price': max(0.0, self.S - K) if option_type == 'call' else max(0.0, K - self.S),
-                    'Delta': 0.0, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0}
+                    'Delta': 0.0, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
 
         # Prevent division by zero / NaN propagation when volatility is zero,
         # negative, or unavailable (e.g. a degenerate upstream IV/GARCH read).
@@ -154,8 +154,16 @@ class OptionsPricingRecommender:
             'Price': price,
             'Delta': delta,
             'Gamma': gamma,
-            'Vega': vega / 100.0,  # Standard representation per 1% change in IV
-            'Theta_Daily': theta_annual / 252.0,
+            # NOTE: raw Black-Scholes vega (per 1.00/100% change in IV), NOT the
+            # "per 1% IV" convention brokers usually display. Keep this shared
+            # engine primitive on its original scale -- `ATM_Vega` in
+            # build_premium_directive() below already consumes this field on
+            # that scale, and rescaling it here would silently drop that
+            # existing, already-recorded metric by 100x. Callers that want the
+            # per-1%-IV display convention (e.g. the options-chain API) should
+            # divide by 100 themselves at their own boundary.
+            'Vega': vega,
+            'Theta_Daily': theta_annual / TRADING_DAYS_PER_YEAR,
             'Rho': rho,
             'ChanceOfProfit': chance_of_profit
         }

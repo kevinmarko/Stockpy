@@ -482,7 +482,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "options-chain": {
     title: "Options Chain Explorer",
     description:
-      "Interactive options chain for a single symbol — browse available expirations, inspect bid/ask/IV/Greeks per strike, and see the statistically-grounded Chance of Profit for each contract. Chain data comes from yfinance; the underlying spot price for Greek calculations comes from the FMP quote endpoint for reliability. All fields are read-only in this phase; order placement and strategy building are coming in future phases.",
+      "Interactive options chain for a single symbol — browse available expirations, inspect bid/ask/IV/Greeks per strike, and see the statistically-grounded Chance of Profit for each contract. Chain data comes from yfinance; the underlying spot price for Greek calculations comes from the FMP quote endpoint for reliability. Use Builder mode to construct common multi-leg strategies (spreads, straddles, calendars) from the chain, then review the combined order in the ticket — Paper orders simulate a fill, and Live orders require an explicit confirmation and remain subject to advisory-only constraints (no order is actually routed to a broker yet).",
     keyConcepts: ["options delta", "options theta", "implied volatility", "chance of profit"],
   },
 };

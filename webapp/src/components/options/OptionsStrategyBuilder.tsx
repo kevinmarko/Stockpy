@@ -20,6 +20,15 @@ interface SelectedLeg {
 interface Props {
   symbol: string;
   chain: OptionChainResponse | null;
+  /**
+   * The full list of available expiration dates for this symbol (from the
+   * no-`expiration`-param chain response). `chain` itself is the response for
+   * ONE already-selected expiration and never carries its own `expirations`
+   * array (both the mock and live backend omit it once `expiration` is
+   * passed) -- Calendar-spread legs must resolve "the next expiration" from
+   * this prop, not from `chain.expirations`.
+   */
+  expirations: string[];
   selectedLegs: SelectedLeg[];
   onUpdateLegs: (legs: SelectedLeg[]) => void;
 }
@@ -38,13 +47,18 @@ const STRATEGIES: { name: StrategyName, category: StrategyCategory, outlook: str
   { name: 'Short Put Calendar', category: 'Calendars', outlook: 'Volatile', desc: 'Buy a near-term put and sell a longer-term put at the same strike.', shape: 'calendar' },
 ];
 
-export const OptionsStrategyBuilder: React.FC<Props> = ({ symbol, chain, onUpdateLegs }) => {
+export const OptionsStrategyBuilder: React.FC<Props> = ({ symbol, chain, expirations, onUpdateLegs }) => {
   const [activeCategory, setActiveCategory] = useState<StrategyCategory>('Verticals');
   const [activeStrategy, setActiveStrategy] = useState<StrategyName>('Custom');
   const [isFetchingLegs, setIsFetchingLegs] = useState(false);
 
   useEffect(() => {
     let active = true;
+    // Reset immediately on every new invocation (strategy/chain/symbol change) --
+    // not gated on `active`, so switching away from a calendar strategy while
+    // its secondary-chain fetch is still in flight can't leave this stuck
+    // `true` forever (the stale fetch's own cleanup-gated reset would never run).
+    setIsFetchingLegs(false);
 
     const buildLegs = async () => {
       if (activeStrategy === 'Custom' || !chain) return;
@@ -106,23 +120,31 @@ export const OptionsStrategyBuilder: React.FC<Props> = ({ symbol, chain, onUpdat
         case 'Long Call Calendar': {
           const shortCall = findClosestStrikeByDelta(calls, 0.50);
           if (shortCall) {
-            newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
+            // Hide the (possibly stale, previously-selected) Order Ticket while the
+            // far-term leg is being resolved, rather than leaving whatever legs were
+            // selected before the user picked this strategy submittable mid-fetch.
+            if (active) onUpdateLegs([]);
             setIsFetchingLegs(true);
             try {
-              const expirations = chain.expirations || [];
               const currIdx = expirations.indexOf(chain.expiration || '');
               const nextExp = (currIdx !== -1 && currIdx + 1 < expirations.length) ? expirations[currIdx + 1] : null;
-              
+
               if (nextExp) {
                 const nextChain = await api.getOptionsChain(symbol, nextExp);
                 const nextCalls = nextChain.calls || [];
                 const longCall = nextCalls.find(c => c.strike === shortCall.strike);
+                newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
                 if (longCall) newLegs.push({ contract: longCall, type: 'call', action: 'Buy' });
+              } else {
+                // No later expiration available -- fall back to the single near-term
+                // leg rather than silently claiming a calendar spread was built.
+                newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
               }
             } catch (e) {
               console.error("Failed to fetch next chain for calendar spread:", e);
+              newLegs.push({ contract: shortCall, type: 'call', action: 'Sell' });
             }
-            if (active) setIsFetchingLegs(false);
+            setIsFetchingLegs(false);
           }
           break;
         }
@@ -131,23 +153,26 @@ export const OptionsStrategyBuilder: React.FC<Props> = ({ symbol, chain, onUpdat
           const isLong = activeStrategy === 'Long Put Calendar';
           const shortPut = findClosestStrikeByDelta(puts, isLong ? -0.50 : -0.20); // rough approximation
           if (shortPut) {
-            newLegs.push({ contract: shortPut, type: 'put', action: isLong ? 'Sell' : 'Buy' });
+            if (active) onUpdateLegs([]);
             setIsFetchingLegs(true);
             try {
-              const expirations = chain.expirations || [];
               const currIdx = expirations.indexOf(chain.expiration || '');
               const nextExp = (currIdx !== -1 && currIdx + 1 < expirations.length) ? expirations[currIdx + 1] : null;
-              
+
               if (nextExp) {
                 const nextChain = await api.getOptionsChain(symbol, nextExp);
                 const nextPuts = nextChain.puts || [];
                 const longPut = nextPuts.find(p => p.strike === shortPut.strike);
+                newLegs.push({ contract: shortPut, type: 'put', action: isLong ? 'Sell' : 'Buy' });
                 if (longPut) newLegs.push({ contract: longPut, type: 'put', action: isLong ? 'Buy' : 'Sell' });
+              } else {
+                newLegs.push({ contract: shortPut, type: 'put', action: isLong ? 'Sell' : 'Buy' });
               }
             } catch (e) {
               console.error("Failed to fetch next chain for calendar spread:", e);
+              newLegs.push({ contract: shortPut, type: 'put', action: isLong ? 'Sell' : 'Buy' });
             }
-            if (active) setIsFetchingLegs(false);
+            setIsFetchingLegs(false);
           }
           break;
         }

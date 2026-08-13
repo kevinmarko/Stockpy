@@ -24,20 +24,30 @@ export function OptionsChain() {
   const [selectedLegs, setSelectedLegs] = useState<{ contract: any, type: 'call' | 'put', action: 'Buy' | 'Sell' }[]>([]);
   const [isBuilderMode, setIsBuilderMode] = useState(false);
 
-  // Fetch chain for selected expiration (or expirations list when none selected)
+  // Fetch the full expirations list once per symbol, independent of whichever
+  // expiration is currently selected. The per-expiration chain fetch below
+  // never carries its own `expirations` array (both the mock and live backend
+  // omit it once `expiration` is passed) -- deriving the scroller/list from
+  // `chainData` directly collapsed to a single stale entry the instant an
+  // expiration was selected.
+  const { data: expirationsData } = useApi<OptionChainResponse>(
+    () => api.getOptionsChain(ticker!),
+    [ticker]
+  );
+  const expirations = expirationsData?.expirations || [];
+
+  // Fetch chain for the selected expiration
   const { data: chainData, loading, error } = useApi<OptionChainResponse>(
     () => api.getOptionsChain(ticker!, selectedExp || undefined),
     [ticker, selectedExp]
   );
 
-  const expirations = chainData?.expirations || (chainData?.expiration ? [chainData.expiration] : []);
-
   // Auto-select the first expiration when they load
   React.useEffect(() => {
-    if (!selectedExp && expirations.length > 0 && !chainData?.expiration) {
+    if (!selectedExp && expirations.length > 0) {
       setSelectedExp(expirations[0]);
     }
-  }, [expirations, selectedExp, chainData]);
+  }, [expirations, selectedExp]);
 
   if (loading && !chainData) {
     return <div style={{ padding: 16 }}>Loading options chain...</div>;
@@ -189,6 +199,7 @@ export function OptionsChain() {
           <OptionsStrategyBuilder
             symbol={ticker!}
             chain={chainData || null}
+            expirations={expirations}
             selectedLegs={selectedLegs}
             onUpdateLegs={setSelectedLegs}
           />

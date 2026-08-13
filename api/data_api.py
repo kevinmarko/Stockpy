@@ -826,10 +826,21 @@ def get_options_chain(symbol: str, expiration: Optional[str] = None) -> Dict[str
         # We rely on the configured provider (which we prefer to be FMP based on config)
         # to fetch a reliable spot price for the Greek calculations.
         quote = provider.get_latest_quote(symbol)
-        spot_price = quote.price if quote.price is not None else 0.0
+        spot_price = quote.price
+        if spot_price is not None and isinstance(spot_price, float) and math.isnan(spot_price):
+            spot_price = None
     except Exception:
-        spot_price = 0.0
-        
+        spot_price = None
+
+    if spot_price is None:
+        # CONSTRAINT #4 (never fabricate): every Greek below is derived from
+        # `spot_price` -- silently substituting $0.00 here would compute a
+        # deeply-in-the-money Delta≈1 for every strike and present it as real,
+        # with no signal to the caller that the underlying quote never
+        # actually loaded. Fail honestly instead of returning invented Greeks.
+        raise HTTPException(status_code=503, detail=f"Unable to fetch a live spot price for {symbol}; cannot compute option Greeks.")
+
+
     from technical_options_engine import OptionsPricingRecommender
     import datetime
     
@@ -849,13 +860,18 @@ def get_options_chain(symbol: str, expiration: Optional[str] = None) -> Dict[str
         strike = float(row.get('strike', 0.0))
         greeks = recommender.black_scholes_pricing_and_greeks(strike, T, iv, option_type)
         
-        # Use math.isnan for safety on volume/openInterest if they come as float NaN from pandas
-        vol = row.get("volume", 0)
-        vol = 0 if vol is None or (isinstance(vol, float) and math.isnan(vol)) else int(vol)
-        
-        oi = row.get("openInterest", 0)
-        oi = 0 if oi is None or (isinstance(oi, float) and math.isnan(oi)) else int(oi)
-        
+        # CONSTRAINT #4 (never fabricate): a contract with genuinely unreported
+        # volume/open-interest (common for far-OTM/illiquid strikes) must stay
+        # `null`, not be coerced to a fabricated `0` that's indistinguishable
+        # from a verified-zero reading. `_clean_nan` below only nulls actual
+        # NaN floats, so the "missing" case is passed through as `None` here
+        # rather than defaulted to `0` up front.
+        vol = row.get("volume", None)
+        vol = None if vol is None or (isinstance(vol, float) and math.isnan(vol)) else int(vol)
+
+        oi = row.get("openInterest", None)
+        oi = None if oi is None or (isinstance(oi, float) and math.isnan(oi)) else int(oi)
+
         return {
             "contractSymbol": row.get("contractSymbol"),
             "strike": strike,
@@ -870,7 +886,13 @@ def get_options_chain(symbol: str, expiration: Optional[str] = None) -> Dict[str
                 "delta": float(greeks['Delta']),
                 "gamma": float(greeks['Gamma']),
                 "theta": float(greeks['Theta_Daily']),
-                "vega": float(greeks['Vega']),
+                # OptionsPricingRecommender.black_scholes_pricing_and_greeks
+                # returns raw Black-Scholes vega (per 1.00/100% IV change) --
+                # rescale to the "per 1% IV" convention this chain response
+                # displays here, at this boundary only, so the shared engine
+                # primitive (and its existing ATM_Vega consumer) stays on its
+                # original scale.
+                "vega": float(greeks['Vega']) / 100.0,
                 "rho": float(greeks['Rho']),
                 "chanceOfProfit": float(greeks['ChanceOfProfit']),
             }

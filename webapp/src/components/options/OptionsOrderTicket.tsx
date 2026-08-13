@@ -24,6 +24,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({ symbol, expiration, legs, 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [showLiveModal, setShowLiveModal] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   if (legs.length === 0) return null;
 
@@ -66,7 +67,9 @@ export const OptionsOrderTicket: React.FC<Props> = ({ symbol, expiration, legs, 
   const executeOrder = async () => {
     setIsSubmitting(true);
     setShowLiveModal(false);
-    
+    setSubmitError(null);
+
+    let ok = false;
     try {
       const res = await api.postOptionsOrder({
         symbol,
@@ -75,16 +78,25 @@ export const OptionsOrderTicket: React.FC<Props> = ({ symbol, expiration, legs, 
         isLive
       });
       console.log(`[Options Order] ${isLive ? 'LIVE' : 'PAPER'} Execution for ${symbol}:`, res);
+      ok = res.ok;
+      if (!ok) setSubmitError(res.message || "Order was rejected.");
     } catch (e) {
       console.error("Order failed:", e);
+      setSubmitError(e instanceof Error ? e.message : "Order failed.");
     }
 
     setIsSubmitting(false);
-    setSubmitted(true);
-    setTimeout(() => {
-      setSubmitted(false);
-      onClear();
-    }, 2000);
+    // Only show the success state and auto-clear the ticket when the order
+    // genuinely succeeded -- a thrown error or a resolved `{ ok: false }`
+    // (e.g. no backend route wired up yet in live mode) must not be
+    // presented to the operator as "Order Submitted".
+    if (ok) {
+      setSubmitted(true);
+      setTimeout(() => {
+        setSubmitted(false);
+        onClear();
+      }, 2000);
+    }
   };
 
   const DataRow = ({ label, value }: { label: string, value: string | React.ReactNode }) => (
@@ -198,7 +210,21 @@ export const OptionsOrderTicket: React.FC<Props> = ({ symbol, expiration, legs, 
         >
           {submitted ? 'Order Submitted' : isSubmitting ? 'Processing...' : (isMultiLeg ? `Execute Strategy` : (isLive ? `Live ${action}` : `Paper ${action}`))}
         </button>
-        
+
+        {submitError && (
+          <div style={{
+            padding: '10px 12px',
+            borderRadius: 8,
+            background: `${theme.decline}15`,
+            border: `1px solid ${theme.decline}`,
+            color: theme.decline,
+            fontSize: 13,
+            fontWeight: 500,
+          }}>
+            Order failed: {submitError}
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'center', gap: 24 }}>
           <button 
             onClick={() => console.log('Added to watchlist')}
@@ -234,9 +260,17 @@ export const OptionsOrderTicket: React.FC<Props> = ({ symbol, expiration, legs, 
           <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
             <h2 style={{ margin: 0, fontSize: 20 }}>Confirm Live Order</h2>
             <p style={{ margin: 0, color: theme.textSecondary, lineHeight: 1.5 }}>
-              You are about to place a <strong>LIVE</strong> order to {action.toLowerCase()} <strong>{isMultiLeg ? `${legs.length} legs` : `1 contract`}</strong> on {symbol}.
+              You are about to place a <strong>LIVE</strong> order to{' '}
+              {isMultiLeg
+                // A multi-leg strategy can mix Buy and Sell legs (e.g. a vertical
+                // spread) -- describing it with only the first leg's action would
+                // misstate the order right before the one human confirmation gate
+                // for an irreversible live submission.
+                ? <strong>execute a {legs.length}-leg strategy ({legs.map(l => l.action).join(' / ')})</strong>
+                : <strong>{action.toLowerCase()} 1 contract</strong>} on {symbol}.
               <br/><br/>
-              This will route to the execution queue for final brokerage submission.
+              This order will be sent to the brokerage integration for placement, subject to
+              the advisory-only constraints noted below.
             </p>
             
             <div style={{ padding: '16px', background: `${theme.decline}15`, border: `1px solid ${theme.decline}`, borderRadius: 8 }}>

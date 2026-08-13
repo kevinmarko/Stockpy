@@ -3868,8 +3868,11 @@ export interface OptionContract {
   lastPrice: number;
   bid: number;
   ask: number;
-  volume: number;
-  openInterest: number;
+  // `null` when the contract's volume/open-interest is genuinely unreported
+  // (common for far-OTM/illiquid strikes) -- never fabricated to `0`, which
+  // would be indistinguishable from a verified-zero reading.
+  volume: number | null;
+  openInterest: number | null;
   impliedVolatility: number;
   inTheMoney: boolean;
   greeks: {
