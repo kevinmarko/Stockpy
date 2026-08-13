@@ -1380,7 +1380,14 @@ class TestGetPortfolioSummary:
 
 class TestReadPlatformLogs:
     def test_nothing_present_returns_message(self, monkeypatch, tmp_path):
+        # logs_subdir resolves via settings.LOCAL_DATA_ROOT / "logs" (Bucket 3
+        # of the LOCAL_DATA_ROOT consolidation), not a CWD-relative "logs" dir
+        # -- unpatched, this found the real, live daemon's actual
+        # ~/.stockpy_local/logs/investyo.log instead of genuinely "nothing
+        # present". Same isolation TestReadPlatformLogsFindsLogsSubdirectory
+        # already applies below.
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(srv._settings, "LOCAL_DATA_ROOT", tmp_path)
         assert "No execution logs found" in srv.read_platform_logs()
 
     def test_db_rows_rendered(self, monkeypatch, tmp_path):
