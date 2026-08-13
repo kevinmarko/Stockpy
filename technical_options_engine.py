@@ -220,9 +220,9 @@ class OptionsPricingRecommender:
         CONDOR_LONG_TARGET = 0.05 * delta_target_scale
         ATM_DELTA_TARGET = 0.50
 
-        # Enforce VRP regime gate: only sell premium if true_ivr > 50, vrp > 0.02, vix < 30, not CREDIT EVENT
+        # Enforce VRP regime gate: only sell premium if true_ivr > 50, vrp > OPTIONS_VRP_THRESHOLD, vix < 30, not CREDIT EVENT
         sell_premium_allowed = True
-        if vrp is not None and vrp <= 0.02:
+        if vrp is not None and vrp <= settings.OPTIONS_VRP_THRESHOLD:
             sell_premium_allowed = False
         if macro_dto is not None:
             vix = getattr(macro_dto, 'vix', 15.0)

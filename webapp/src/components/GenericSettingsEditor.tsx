@@ -706,7 +706,13 @@ function FieldRow({
   // else keeps the description; a restart reason is surfaced separately below
   // so it never displaces the field's own documentation.
   const pinnedCaption = `A shell environment variable is set for ${f.key}, which overrides both .env and the runtime store. Unset it and restart to edit this here.`;
-  const hint = !editable ? pinnedCaption : invalid ? rangeMsg : f.description ?? undefined;
+  const hintText = !editable ? pinnedCaption : invalid ? rangeMsg : f.description ?? undefined;
+  const hint = hintText ? (
+    <details>
+      <summary style={{ cursor: "pointer", color: theme.textSecondary, userSelect: "none", fontSize: "var(--t-caption)" }}>Explainer / Details</summary>
+      <div style={{ marginTop: "4px", color: theme.textMuted, fontSize: "var(--t-caption)" }}>{hintText}</div>
+    </details>
+  ) : undefined;
 
   return (
     <div>
@@ -749,9 +755,9 @@ function FieldRow({
             label={textLabel}
             disabled={!editable}
           />
-          <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", margin: "var(--s-1-5) 0 0" }}>
-            {!editable ? pinnedCaption : f.description}
-          </p>
+          <div style={{ margin: "var(--s-1-5) 0 0" }}>
+            {hint}
+          </div>
         </>
       ) : f.type === "enum" ? (
         <Select
