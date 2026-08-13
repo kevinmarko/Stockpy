@@ -149,6 +149,7 @@ import type {
   SymbolHeldBy,
   SymbolOptions,
   TriggerRunResult,
+  OptionChainResponse,
   Bar,
   Fundamentals,
   MacroHistorySeries,
@@ -194,6 +195,8 @@ import type {
   PaperBrokerPosition,
   PaperBrokerOrder,
   LiveTradeProposal,
+  OptionsOrderRequest,
+  OptionsOrderResult,
 } from "./types";
 
 const SECTORS = [
@@ -6958,6 +6961,53 @@ export const mockApi = {
     });
   },
 
+  async getOptionsChain(ticker: string, expiration?: string): Promise<OptionChainResponse> {
+    const sym = ticker.trim().toUpperCase();
+    
+    if (!expiration) {
+      return delay({
+        symbol: sym,
+        spot_price: 150.0,
+        expirations: ["2026-08-21", "2026-08-28", "2026-09-18", "2026-10-16", "2027-01-15"]
+      });
+    }
+
+    const strikes = [140, 145, 150, 155, 160];
+    const calls = strikes.map(strike => ({
+      contractSymbol: `${sym}260821C00${strike}000`,
+      strike,
+      lastPrice: Math.max(0.1, 150 - strike + 5),
+      bid: Math.max(0.05, 150 - strike + 4.9),
+      ask: Math.max(0.15, 150 - strike + 5.1),
+      volume: 1200,
+      openInterest: 5000,
+      impliedVolatility: 0.25,
+      inTheMoney: strike < 150,
+      greeks: { delta: strike < 150 ? 0.7 : 0.3, gamma: 0.05, theta: -0.02, vega: 0.1, rho: 0.01, chanceOfProfit: strike < 150 ? 0.7 : 0.3 }
+    }));
+    
+    const puts = strikes.map(strike => ({
+      contractSymbol: `${sym}260821P00${strike}000`,
+      strike,
+      lastPrice: Math.max(0.1, strike - 150 + 5),
+      bid: Math.max(0.05, strike - 150 + 4.9),
+      ask: Math.max(0.15, strike - 150 + 5.1),
+      volume: 800,
+      openInterest: 3000,
+      impliedVolatility: 0.26,
+      inTheMoney: strike > 150,
+      greeks: { delta: strike > 150 ? -0.7 : -0.3, gamma: 0.05, theta: -0.02, vega: 0.1, rho: -0.01, chanceOfProfit: strike > 150 ? 0.7 : 0.3 }
+    }));
+
+    return delay({
+      symbol: sym,
+      expiration,
+      spot_price: 150.0,
+      calls,
+      puts
+    });
+  },
+
   // ---- On-demand AI generation (data base, :8603) ----
   // Deliberately keyed off `NVDA` for the honest `available: false` branch of
   // ALL THREE (a different `reason` each time) so a single symbol exercises
@@ -7249,6 +7299,18 @@ export const mockApi = {
         target_dte: req.target_dte ?? 30,
       },
       600
+    );
+  },
+
+  async postOptionsOrder(req: OptionsOrderRequest): Promise<OptionsOrderResult> {
+    console.log(`[mockApi] postOptionsOrder (${req.isLive ? 'LIVE' : 'PAPER'}):`, req);
+    return delay(
+      {
+        ok: true,
+        order_id: `mock_opt_${Date.now()}`,
+        message: `Options order for ${req.symbol} received successfully.`
+      },
+      800
     );
   },
 

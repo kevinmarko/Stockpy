@@ -22,7 +22,8 @@ may be worked on by whichever agent is assigned the task at hand. Branch naming 
    `git checkout -b <short-description>` (lowercase-kebab, e.g. `fix-hmm-lookahead`) and a PR.
    Never commit these directly to `main`.
 4. Open a PR when a feature-branch change is complete; do not squash or amend published commits.
-5. **After merging any PR**, sync the local main checkout so the next session (in this or any
+5. **PR Artifacts**: When submitting a Pull Request, you must copy and commit the implementation plan (`implementation_plan.md`), task tracker (`task.md`), and walkthrough (`walkthrough.md`) from your local brain artifacts directory to the `.claude/` folder on your branch. This ensures other agents checking out the branch can easily review the plan, tasks, and walkthrough.
+6. **After merging any PR**, sync the local main checkout so the next session (in this or any
    other worktree) starts from the merged state instead of a stale `main`:
    `git -C <main-checkout-path> fetch origin && git -C <main-checkout-path> merge --ff-only origin/main`.
    Do this immediately after the merge, not at the start of some future session.

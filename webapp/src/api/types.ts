@@ -3873,3 +3873,52 @@ export interface LiveTradeProposal {
   broker_order_id: string | null;
   error_message: string | null;
 }
+
+export interface OptionContract {
+  contractSymbol: string;
+  strike: number;
+  lastPrice: number;
+  bid: number;
+  ask: number;
+  // `null` when the contract's volume/open-interest is genuinely unreported
+  // (common for far-OTM/illiquid strikes) -- never fabricated to `0`, which
+  // would be indistinguishable from a verified-zero reading.
+  volume: number | null;
+  openInterest: number | null;
+  impliedVolatility: number;
+  inTheMoney: boolean;
+  greeks: {
+    delta: number;
+    gamma: number;
+    theta: number;
+    vega: number;
+    rho: number;
+    chanceOfProfit: number;
+  };
+}
+
+export interface OptionChainResponse {
+  symbol: string;
+  expiration?: string;
+  spot_price: number;
+  expirations?: string[];
+  calls?: OptionContract[];
+  puts?: OptionContract[];
+}
+
+export interface OptionsOrderRequest {
+  symbol: string;
+  expiration: string;
+  legs: {
+    contract: OptionContract;
+    type: 'call' | 'put';
+    action: 'Buy' | 'Sell';
+  }[];
+  isLive: boolean;
+}
+
+export interface OptionsOrderResult {
+  ok: boolean;
+  order_id?: string;
+  message: string;
+}
