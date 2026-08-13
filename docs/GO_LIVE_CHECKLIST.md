@@ -74,7 +74,9 @@
   Document the tolerance and observed deviation in `docs/paper_trading_log.md`.
 - [ ] *(manual)* No unexplained fill gaps (missed orders, incorrect quantities) during the paper period.
 - [ ] Reconciliation flagged **ZERO** unexplained drifts in the last **30 days**.
-  Check `output/` for any saved reconciliation reports.
+  Check `settings.OUTPUT_DIR` for any saved reconciliation reports — this defaults to
+  `<LOCAL_DATA_ROOT>/output` (i.e. `~/.stockpy_local/output/`), not a repo-relative `output/`,
+  as of `settings.LOCAL_DATA_ROOT` (2026-08).
 
 ---
 
@@ -106,21 +108,27 @@
   ```
   streamlit run gui/app.py
   ```
-- [ ] Heartbeat file refreshes every 60 s: `ls -la output/heartbeat.txt`
+- [ ] Heartbeat file refreshes every 60 s: `ls -la ~/.stockpy_local/output/heartbeat.txt`
+  (or `$LOCAL_DATA_ROOT/output/heartbeat.txt` if you've overridden the default — not a
+  repo-relative `output/`, as of `settings.LOCAL_DATA_ROOT` — 2026-08).
 - [ ] *(manual)* Watchdog process (cron / supervisor) configured to activate kill switch if heartbeat goes stale.
 
 ---
 
 ## 🗄️ Data Integrity
 
-- [ ] SQLite backup tested:
+- [ ] SQLite backup tested — as of `settings.LOCAL_DATA_ROOT` (2026-08), `quant_platform.db`
+  lives under `$LOCAL_DATA_ROOT` (default `~/.stockpy_local/`), OUTSIDE the git checkout, not
+  at the repo root:
   ```
-  cp quant_platform.db quant_platform_backup_$(date +%Y%m%d).db
+  cp ~/.stockpy_local/quant_platform.db ~/.stockpy_local/quant_platform_backup_$(date +%Y%m%d).db
   # Restore test:
-  sqlite3 quant_platform_backup_$(date +%Y%m%d).db "SELECT COUNT(*) FROM trades;"
+  sqlite3 ~/.stockpy_local/quant_platform_backup_$(date +%Y%m%d).db "SELECT COUNT(*) FROM trades;"
   ```
+  Substitute your actual `LOCAL_DATA_ROOT` if you've overridden it from the default — see
+  `docs/architecture/data-layer.md`'s `settings.LOCAL_DATA_ROOT` subsection for the full layout.
   Record backup date: `DB_BACKUP_DATE=YYYY-MM-DD` in `.env` to enable automated check.
-- [ ] `quant_platform.db` is included in the regular backup schedule.
+- [ ] `quant_platform.db` (under `$LOCAL_DATA_ROOT`) is included in the regular backup schedule.
 
 ---
 

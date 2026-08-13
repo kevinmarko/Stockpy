@@ -77,7 +77,7 @@ Everything else has a working default. See [Section 3](#3-configuring-your-envir
 python3 database_setup.py
 ```
 
-This creates `quant_platform.db` (SQLite) with the correct schema for storing daily signals and execution logs. The file is **not** checked into git (it's per-machine runtime state, gitignored via `*.db`) — every fresh clone needs this step once. The `trades` table starts empty; the closed-trade population that powers Kelly sizing and the calibration tracker is reconstructed on demand from your Robinhood filled-order history by `data/robinhood_orders.py` (Tier 7) and accumulates live as advisory runs record trades.
+This creates `quant_platform.db` (SQLite) with the correct schema for storing daily signals and execution logs. As of `settings.LOCAL_DATA_ROOT` (2026-08), the file lives under `$LOCAL_DATA_ROOT` (default `~/.stockpy_local/`) — a machine-global folder OUTSIDE every git checkout/worktree, shared across all of them — not at the repo root. Every fresh clone still needs this step once (an empty `LOCAL_DATA_ROOT` has no DB file yet), but a second worktree on the same machine will typically find the DB already initialized. See `docs/architecture/data-layer.md`'s `settings.LOCAL_DATA_ROOT` subsection for the full directory layout. The `trades` table starts empty; the closed-trade population that powers Kelly sizing and the calibration tracker is reconstructed on demand from your Robinhood filled-order history by `data/robinhood_orders.py` (Tier 7) and accumulates live as advisory runs record trades.
 
 ### Step 4 — Verify your setup
 
@@ -430,10 +430,10 @@ Bars below the diagonal → conviction is overconfident in that range.
 
 ### Database
 
-`quant_platform.db` — SQLite database storing signal history and trade records. Query it with any SQLite client:
+`quant_platform.db` — SQLite database storing signal history and trade records. As of `settings.LOCAL_DATA_ROOT` (2026-08) it lives under `$LOCAL_DATA_ROOT` (default `~/.stockpy_local/`), not the repo root — see `docs/architecture/data-layer.md`. Query it with any SQLite client:
 
 ```bash
-sqlite3 quant_platform.db "SELECT * FROM DailySignals ORDER BY date DESC LIMIT 10;"
+sqlite3 ~/.stockpy_local/quant_platform.db "SELECT * FROM DailySignals ORDER BY date DESC LIMIT 10;"
 ```
 
 ---
@@ -683,7 +683,7 @@ run is picked up on the very next render rather than after a fixed TTL.
 | Kill switch banner | `output/KILL_SWITCH` file | Red = active (all orders blocked), Green = inactive |
 | Macro regime / VIX / HMM | `output/state_snapshot.json` | Current regime, VIX, HMM risk-on probability |
 | Macro Regime Gate | `.env` (`MACRO_REGIME_GATE_ENABLED`) | Toggle + live Sahm Rule / HY OAS / yield-curve telemetry |
-| **Account Holdings & P&L** | **`cache/account_snapshot.json`** | **Total equity, buying power, unrealized P&L, dividends, and a per-position table with green/red-coloured unrealized P&L. Falls back to a "run `main.py --refresh-account`" note when no snapshot exists.** |
+| **Account Holdings & P&L** | **`$LOCAL_DATA_ROOT/robinhood_cache/account_snapshot.json`** (default `~/.stockpy_local/robinhood_cache/account_snapshot.json`; renamed/relocated from `cache/account_snapshot.json` by `settings.LOCAL_DATA_ROOT`, 2026-08) | **Total equity, buying power, unrealized P&L, dividends, and a per-position table with green/red-coloured unrealized P&L. Falls back to a "run `main.py --refresh-account`" note when no snapshot exists.** |
 | Strategy P&L | `quant_platform.db` | Realized P&L by strategy |
 | Open positions | `quant_platform.db` vs signals | Internal book vs pipeline recommendations |
 | Portfolio risk metrics | `quant_platform.db` | Portfolio heat, gross exposure, net exposure |
@@ -696,6 +696,13 @@ run is picked up on the very next render rather than after a fixed TTL.
 The Account Holdings panel reads the same Robinhood snapshot the advisory
 report uses — it is the source of truth for account state (holdings, cost
 basis, dividends, equity) and never contains credentials.
+
+**Note on the paths in the table above:** `quant_platform.db`, `output/...`, and `logs/...` are
+shown as short-hand file names — as of `settings.LOCAL_DATA_ROOT` (2026-08), all of them actually
+live under `$LOCAL_DATA_ROOT` (default `~/.stockpy_local/`), OUTSIDE the git checkout, not at the
+repo root shown literally. `reports/*_validation_summary.json` is the one exception in this table
+and remains repo-relative. See `docs/architecture/data-layer.md`'s `settings.LOCAL_DATA_ROOT`
+subsection for the exact per-subfolder layout.
 
 ### Staleness warning
 
@@ -796,13 +803,16 @@ The error notification lists which symbols failed and at which pipeline stage. T
 
 #### Without NTFY_TOPIC
 
-When `NTFY_TOPIC` is unset `notify()` is a silent no-op — the app runs identically. Only the rotating log file (`logs/investyo.log`) is written.
+When `NTFY_TOPIC` is unset `notify()` is a silent no-op — the app runs identically. Only the rotating log file (`logs/investyo.log`, under `$LOCAL_DATA_ROOT` — see below) is written.
 
 ---
 
 ### Log file (always-on, no config needed)
 
-`logs/investyo.log` is created automatically on first run. It rotates at 10 MB and keeps 5 backups (≈50 MB max). The format is:
+`logs/investyo.log` is created automatically on first run. As of `settings.LOCAL_DATA_ROOT`
+(2026-08) it lives at `$LOCAL_DATA_ROOT/logs/investyo.log` (default
+`~/.stockpy_local/logs/investyo.log`), OUTSIDE the git checkout, not at the repo root — see
+`docs/architecture/data-layer.md`. It rotates at 10 MB and keeps 5 backups (≈50 MB max). The format is:
 
 ```
 2026-06-25 09:35:01  INFO      InvestYo.main — Evaluating 12 symbols...
@@ -837,10 +847,12 @@ Errors  : 1  (TSLA @ advisory_evaluate)
 ### Alert log file (always-on audit trail)
 
 ```
-ALERT_FILE_PATH=/Users/kevinlee/Desktop/Stockpy/logs/alerts.jsonl
+ALERT_FILE_PATH=~/.stockpy_local/logs/alerts.jsonl
 ```
 
-Every alert is appended as a JSON line. Useful for post-incident review.
+Every alert is appended as a JSON line. Useful for post-incident review. `ALERT_FILE_PATH` is
+operator-supplied and can point anywhere, but `$LOCAL_DATA_ROOT/logs/` (default
+`~/.stockpy_local/logs/`) keeps it alongside `investyo.log` rather than inside the repo checkout.
 
 ### Email
 
@@ -1078,6 +1090,14 @@ pytest -x
 ---
 
 ## 20. Troubleshooting Common Problems
+
+> **Where these files actually live:** several fixes below reference `quant_platform.db`,
+> `output/heartbeat.txt`, `output/risk_gate_blocks.jsonl`, etc. as if they sit at the repo root.
+> As of `settings.LOCAL_DATA_ROOT` (2026-08), they instead live under `$LOCAL_DATA_ROOT`
+> (default `~/.stockpy_local/`) — a machine-global folder OUTSIDE every git checkout/worktree.
+> Substitute e.g. `~/.stockpy_local/quant_platform.db` or `~/.stockpy_local/output/heartbeat.txt`
+> for the bare filenames below (or your own `LOCAL_DATA_ROOT` override). See
+> `docs/architecture/data-layer.md`'s `settings.LOCAL_DATA_ROOT` subsection for the full layout.
 
 ### "FRED_API_KEY is not configured"
 
