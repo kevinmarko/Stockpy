@@ -318,6 +318,163 @@ class TestHeartbeatFresh:
         assert not r.passed
         assert "not found" in r.reason
 
+    # -----------------------------------------------------------------------
+    # Daemon-deployment softening: a persistent daemon (desktop/
+    # orchestrator_daemon.py) never writes heartbeat.txt at all, even when
+    # perfectly healthy, so a stale/missing reading alone is ambiguous. When
+    # _daemon_confirmed_alive() independently verifies the daemon pid is
+    # alive right now, this degrades a would-be FAIL to a warning-only PASS
+    # -- mirroring state_snapshot_fresh's market-hours-pause precedent.
+    # Every test here follows TestDaemonPidAlive's exact isolation idiom:
+    # patch.object(run_status.os, "kill", ...) to control pid liveness
+    # deterministically, never the real OS.
+    # -----------------------------------------------------------------------
+
+    def test_missing_heartbeat_softens_to_warning_when_daemon_confirmed_alive(self, tmp_path):
+        """(the operator's real scenario) No heartbeat.txt at all, but a
+        daemon.json naming a pid that's externally verified alive -> warning
+        PASS, not a blocking FAIL, with the daemon-alive explanation in the
+        reason."""
+        from scripts.preflight_check import check_heartbeat_fresh
+        from pilots import run_status
+
+        payload = {"pid": 4242, "state": "started", "started_at": "2026-08-13T05:00:00+00:00"}
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", return_value=None):
+            r = check_heartbeat_fresh()
+
+        assert r.passed  # softened: warning, not a blocking FAIL
+        assert r.warning is True
+        assert "not found" in r.reason
+        assert "confirmed alive right now" in r.reason
+        assert "not evidence of an outage" in r.reason
+
+    def test_stale_heartbeat_softens_to_warning_when_daemon_confirmed_alive(self, tmp_path):
+        """A genuinely stale heartbeat.txt, but a confirmed-alive daemon pid
+        alongside it -> warning PASS, not FAIL. The reason still reports the
+        real staleness (the number itself is not hidden), just no longer
+        treated as a blocking failure."""
+        from scripts.preflight_check import check_heartbeat_fresh
+        from pilots import run_status
+
+        hb = tmp_path / "heartbeat.txt"
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+        hb.write_text(stale_ts, encoding="utf-8")
+        payload = {"pid": 4242, "state": "started", "started_at": "2026-08-13T05:00:00+00:00"}
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", return_value=None):
+            r = check_heartbeat_fresh(max_age_hours=2.0)
+
+        assert r.passed
+        assert r.warning is True
+        assert "old" in r.reason.lower()
+        assert "confirmed alive right now" in r.reason
+
+    def test_stale_heartbeat_still_fails_when_daemon_pid_is_dead(self, tmp_path):
+        """A stale heartbeat AND a daemon.json naming a pid that no longer
+        exists -> the original hard FAIL is completely untouched. Softening
+        must never mask a genuine outage."""
+        from scripts.preflight_check import check_heartbeat_fresh
+        from pilots import run_status
+
+        hb = tmp_path / "heartbeat.txt"
+        stale_ts = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+        hb.write_text(stale_ts, encoding="utf-8")
+        payload = {"pid": 9999, "state": "started", "started_at": "2026-08-13T05:00:00+00:00"}
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", side_effect=ProcessLookupError):
+            r = check_heartbeat_fresh(max_age_hours=2.0)
+
+        assert not r.passed
+        assert not r.warning
+        assert "orchestrator may be down" in r.reason
+
+    def test_missing_heartbeat_still_fails_with_no_daemon_json(self, tmp_path):
+        """No heartbeat.txt AND no daemon.json at all (e.g. a non-daemon
+        deployment, or a fresh clone) -> the original hard FAIL, unchanged.
+        Absence of daemon.json is never itself treated as "confirmed
+        alive"."""
+        from scripts.preflight_check import check_heartbeat_fresh
+
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_heartbeat_fresh()
+
+        assert not r.passed
+        assert not r.warning
+        assert "not found" in r.reason
+
+    def test_malformed_daemon_json_does_not_soften_and_never_raises(self, tmp_path):
+        """An unparseable daemon.json must never be treated as "confirmed
+        alive" (that would fabricate a signal from garbage input) and must
+        never raise -- _daemon_confirmed_alive() degrades to False, so
+        heartbeat_fresh keeps its original hard-FAIL behavior."""
+        from scripts.preflight_check import check_heartbeat_fresh
+
+        (tmp_path / "daemon.json").write_text("{not valid json", encoding="utf-8")
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_heartbeat_fresh()  # must not raise
+
+        assert not r.passed
+        assert not r.warning
+        assert "not found" in r.reason
+
+
+class TestDaemonConfirmedAliveHelper:
+    """Direct unit coverage for the small, standalone
+    _daemon_confirmed_alive() helper used by check_heartbeat_fresh --
+    deliberately a separate function from check_daemon_pid_alive's own
+    (already independently tested) implementation, so exercised here too."""
+
+    def test_no_daemon_json_returns_false(self, tmp_path):
+        from scripts.preflight_check import _daemon_confirmed_alive
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            assert _daemon_confirmed_alive() is False
+
+    def test_non_dict_json_returns_false(self, tmp_path):
+        from scripts.preflight_check import _daemon_confirmed_alive
+        (tmp_path / "daemon.json").write_text("[1, 2, 3]", encoding="utf-8")
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            assert _daemon_confirmed_alive() is False
+
+    def test_live_pid_returns_true(self, tmp_path):
+        from scripts.preflight_check import _daemon_confirmed_alive
+        from pilots import run_status
+        (tmp_path / "daemon.json").write_text(json.dumps({"pid": 123}), encoding="utf-8")
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", return_value=None):
+            assert _daemon_confirmed_alive() is True
+
+    def test_dead_pid_returns_false(self, tmp_path):
+        from scripts.preflight_check import _daemon_confirmed_alive
+        from pilots import run_status
+        (tmp_path / "daemon.json").write_text(json.dumps({"pid": 9999}), encoding="utf-8")
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", side_effect=ProcessLookupError):
+            assert _daemon_confirmed_alive() is False
+
+    def test_unusable_pid_returns_false_never_raises(self, tmp_path):
+        """An inconclusive/unknown liveness probe must degrade to False
+        (not confirmed alive), never raise -- consistent with this helper's
+        deliberately conservative "only a genuine confirmation softens the
+        gate" contract."""
+        from scripts.preflight_check import _daemon_confirmed_alive
+        (tmp_path / "daemon.json").write_text(json.dumps({"pid": "not-a-pid"}), encoding="utf-8")
+        s = _settings(tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            assert _daemon_confirmed_alive() is False  # must not raise
+
 
 # ---------------------------------------------------------------------------
 # db_exists
