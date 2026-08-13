@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "3af227405366e3ae1a9ccf1e2336d92141c5611f",
+    "git_commit": "8478a4f5bcf2841aaa646d53d7d033ec2f6cb197",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2907,7 +2907,7 @@
           "route": "/data/ai/commentary/{symbol}",
           "method": "POST",
           "function": "generate_commentary",
-          "line": 844,
+          "line": 955,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2924,7 +2924,7 @@
           "route": "/data/ai/chart/{symbol}",
           "method": "POST",
           "function": "generate_chart_insight",
-          "line": 887,
+          "line": 998,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2941,7 +2941,7 @@
           "route": "/data/ai/research/{symbol}",
           "method": "POST",
           "function": "generate_research",
-          "line": 989,
+          "line": 1100,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2958,7 +2958,7 @@
           "route": "/data/sync",
           "method": "POST",
           "function": "post_data_sync",
-          "line": 1138,
+          "line": 1249,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2979,7 +2979,7 @@
           "route": "/api/chat",
           "method": "POST",
           "function": "chat_endpoint",
-          "line": 1633,
+          "line": 1744,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3036,7 +3036,7 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 716,
+      "total_reads": 717,
       "distinct_fields": 226,
       "counts": {
         "OUTPUT_DIR": 129,
@@ -3052,13 +3052,13 @@
         "KELLY_CAP": 7,
         "MAX_LEVERAGE": 7,
         "MAX_POSITION_WEIGHT": 7,
+        "RISK_FREE_RATE": 7,
         "VOL_TARGET": 7,
         "ALPACA_PAPER": 6,
         "ALPACA_SECRET_KEY": 6,
         "FINBERT_ENABLED": 6,
         "HISTORICAL_STORE_ENABLED": 6,
         "MAX_PORTFOLIO_HEAT": 6,
-        "RISK_FREE_RATE": 6,
         "SIZING_CAP_ESCALATION_ENABLED": 6,
         "STATE_API_TOKEN": 6,
         "CORS_ALLOWED_ORIGINS": 5,
@@ -3895,7 +3895,7 @@
       {
         "field": "UNIVERSE_SYNC_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:1127",
+          "api/data_api.py:1238",
           "pilots/feature_flags.py:49"
         ],
         "name_literal_site_count": 2,

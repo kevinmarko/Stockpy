@@ -1,22 +1,33 @@
 import pytest
-import os
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
-from api.data_api import app, require_token
+from api.data_api import app
 from data.market_data import CompositeOptionsProvider, MarketDataError, Quote, get_options_provider
+from settings import settings
 import pandas as pd
 import numpy as np
 
-app.dependency_overrides[require_token] = lambda: True
 client = TestClient(app)
 
 @pytest.fixture
 def mock_dependencies():
+    # NOTE: `app.dependency_overrides[require_token] = lambda: True` used to be
+    # set here at MODULE IMPORT TIME with no teardown. `app` is the shared
+    # FastAPI singleton every test_data_api*.py file imports from
+    # `api.data_api` -- an override with no cleanup stays live for every other
+    # test collected into the same pytest-xdist worker for the rest of the
+    # process, which silently made every `..._401_with_wrong_token`-style test
+    # elsewhere in the suite pass a real token check for free (CI caught this:
+    # `assert 200 == 401` across test_data_api.py/test_data_api_ai.py/etc. once
+    # the full suite ran this file alongside them). Patch the real
+    # `settings.STATE_API_TOKEN` singleton instead -- the same pattern every
+    # other test_data_api*.py file uses -- and present a real matching Bearer
+    # token, scoped to just this fixture's `with` block.
     with patch("data.market_data.get_provider") as mock_get_provider, \
          patch("data.market_data.get_options_provider") as mock_get_options, \
-         patch("api.data_api.settings") as mock_settings, \
-         patch.dict("os.environ", {"STATE_API_TOKEN": "test-token"}):
-        
+         patch.object(settings, "STATE_API_TOKEN", "test-token"), \
+         patch.object(settings, "RISK_FREE_RATE", 0.05):
+
         mock_provider = MagicMock()
         mock_quote = Quote(
             symbol="AAPL",
@@ -29,12 +40,10 @@ def mock_dependencies():
         )
         mock_provider.get_latest_quote.return_value = mock_quote
         mock_get_provider.return_value = mock_provider
-        
+
         mock_options = MagicMock()
         mock_get_options.return_value = mock_options
-        
-        mock_settings.RISK_FREE_RATE = 0.05
-        
+
         yield mock_provider, mock_options
 
 def test_options_chain_chance_of_profit_reference_case(mock_dependencies):
