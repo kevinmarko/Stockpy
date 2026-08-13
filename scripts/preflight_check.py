@@ -149,13 +149,13 @@ Checks (15 total)
                                   regardless of broker mode).
 
 Note: the "(N total)" figure above and the numbered list are historical and
-have drifted from ALL_CHECKS as checks were added over time (25 entries as
+have drifted from ALL_CHECKS as checks were added over time (27 entries as
 of this writing, most recently robinhood_execution_mode /
 robinhood_kill_switch_clear / robinhood_queue_fresh / robinhood_session_present
 / env_no_duplicate_keys / alert_channels_reachable / no_stray_database_files /
-output_dir_matches_local_data_root, none of which carry a number above).
-ALL_CHECKS is the single source of truth for the actual set and order of
-checks that run.
+output_dir_matches_local_data_root / daemon_pid_alive, none of which carry a
+number above). ALL_CHECKS is the single source of truth for the actual set
+and order of checks that run.
 
 no_stray_database_files              — WARNING-ONLY diagnostic tripwire (never
                                         blocking). Resolves the canonical DB
@@ -177,6 +177,20 @@ output_dir_matches_local_data_root   — WARNING-ONLY diagnostic tripwire (never
                                         heartbeat.txt, decision_log.jsonl,
                                         execution_queue.json) outside the shared,
                                         cross-worktree LOCAL_DATA_ROOT location.
+
+daemon_pid_alive                     — WARNING-ONLY diagnostic cross-check (never
+                                        blocking). Sits right next to heartbeat_fresh:
+                                        reads OUTPUT_DIR/daemon.json and reports
+                                        whether the persistent orchestrator daemon
+                                        process is ACTUALLY alive right now
+                                        (externally-verified via os.kill(pid, 0), the
+                                        same probe GET /automation/status and
+                                        `python -m desktop.daemon_status` use) — since
+                                        heartbeat.txt is never written under a daemon
+                                        deployment, a stale/missing heartbeat_fresh
+                                        result alone is ambiguous ("pipeline down" vs.
+                                        "expected under this deployment shape"); this
+                                        check resolves that ambiguity.
 """
 
 from __future__ import annotations
@@ -992,6 +1006,124 @@ def check_heartbeat_fresh(max_age_hours: float = 2.0) -> CheckResult:
         return CheckResult(name, False, f"Could not parse heartbeat timestamp: {exc}")
 
 
+def check_daemon_pid_alive() -> CheckResult:
+    """WARNING-ONLY cross-check: is the persistent orchestrator daemon
+    process actually alive right now, per ``OUTPUT_DIR/daemon.json``?
+
+    Why this sits right next to ``check_heartbeat_fresh``
+    -------------------------------------------------------
+    ``heartbeat_fresh`` above answers "when did ``main_orchestrator.py``'s
+    per-cycle heartbeat last update" -- but ``heartbeat.txt`` is written
+    ONLY by ``main_orchestrator.main()``'s own lifecycle. The persistent
+    orchestrator daemon (``desktop/orchestrator_daemon.py``) runs
+    ``main_orchestrator._main_body()`` directly and deliberately bypasses
+    that lifecycle, so ``heartbeat.txt`` is **permanently absent under a
+    daemon deployment** (see ``pilots/run_status.py``'s module docstring) --
+    meaning ``heartbeat_fresh`` routinely, misleadingly reads as
+    stale/missing for an operator running the daemon, even when the daemon
+    itself is perfectly healthy. That exact ambiguity ("heartbeat looks
+    alarming — is the pipeline actually down, or is this expected?")
+    confused a real operator in practice. This check exists to sit right
+    next to that reading and answer the question a stale heartbeat can't:
+    is the daemon process itself alive on this host, right now. Read
+    together: "heartbeat stale" + "daemon pid alive" means "expected under
+    a daemon deployment, not an outage"; "heartbeat stale" + "daemon pid
+    NOT alive" (or no ``daemon.json`` at all) means the pipeline really is
+    down. For a faster, dedicated version of just this question, see
+    ``python -m desktop.daemon_status``.
+
+    Severity
+    --------
+    Always ``warning=True`` (mirrors ``check_no_stray_database_files`` /
+    ``check_output_dir_matches_local_data_root``'s severity precedent) --
+    never a blocking FAIL. A fresh clone, CI, or an advisory-only deployment
+    that never runs the persistent daemon at all legitimately has no
+    ``daemon.json``, and that alone is not evidence anything is wrong; this
+    check is informational cross-check telemetry, not a deployability gate.
+    Additive and backward-compatible with ``check_heartbeat_fresh`` --
+    a wholly separate ``CheckResult`` under its own name, so
+    ``heartbeat_fresh``'s own existing pass/fail contract and reason-string
+    format are completely untouched.
+
+    Implementation note: reuses ``pilots.run_status._pid_alive`` -- the same
+    externally-verified (``os.kill(pid, 0)``) probe ``GET /automation/status``'s
+    ``daemon.pid_alive`` and ``python -m desktop.daemon_status`` both use --
+    for the actual liveness check, rather than re-deriving that logic here.
+    Deliberately reads ``OUTPUT_DIR/daemon.json`` directly instead of calling
+    ``pilots.run_status.read_daemon_json()`` outright: that function resolves
+    ``OUTPUT_DIR`` via its own top-level ``from settings import settings``
+    import, which is a DIFFERENT reference than this module's own
+    (separately mockable) ``settings`` name -- calling it directly would
+    silently read the real, unpatched global settings singleton in this
+    file's tests instead of the ``tmp_path``-scoped fixture every other check
+    here uses. ``_pid_alive`` itself takes a bare pid and touches no
+    settings, so reusing it carries none of that risk.
+
+    Never raises (CONSTRAINT #6) -- any read/parse failure degrades to an
+    informational warning-PASS, never a new failure mode for the go-live gate.
+    """
+    name = "daemon_pid_alive"
+    daemon_path = settings.OUTPUT_DIR / "daemon.json"
+    if not daemon_path.exists():
+        return CheckResult(
+            name, True,
+            "No daemon.json found under OUTPUT_DIR — the persistent orchestrator "
+            "daemon (desktop/orchestrator_daemon.py) has never been started here, "
+            "or this deployment runs main.py/main_orchestrator.py directly without "
+            "it. Not a failure; informational only.",
+        )
+    try:
+        data = json.loads(daemon_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("daemon.json did not contain a JSON object")
+    except Exception as exc:
+        return CheckResult(
+            name, True,
+            f"⚠️  Could not read/parse daemon.json ({exc}) — cannot cross-check "
+            "daemon liveness. Not a failure; informational only.",
+            warning=True,
+        )
+
+    pid = data.get("pid")
+    state = data.get("state")
+    try:
+        from pilots.run_status import _pid_alive
+        alive = _pid_alive(pid)
+    except Exception as exc:  # noqa: BLE001 - diagnostic must never fail the gate
+        return CheckResult(
+            name, True,
+            f"⚠️  Could not probe daemon pid liveness ({exc}). Not a failure; "
+            "informational only.",
+            warning=True,
+        )
+
+    if alive is True:
+        return CheckResult(
+            name, True,
+            f"Daemon process pid {pid} IS alive right now (self-reported "
+            f"state='{state}'). If heartbeat_fresh above reads stale/missing, "
+            "that is EXPECTED under a daemon deployment (heartbeat.txt is only "
+            "written by main_orchestrator.py's own main() lifecycle, never by "
+            "the persistent daemon) — not evidence of an outage.",
+        )
+    if alive is False:
+        return CheckResult(
+            name, True,
+            f"⚠️  Daemon process pid {pid} is NOT alive (self-reported "
+            f"state='{state}') — daemon.json is stale. If a daemon deployment "
+            "is expected to be running here, restart it: "
+            "python -m desktop.orchestrator_daemon --interval N",
+            warning=True,
+        )
+    return CheckResult(
+        name, True,
+        f"⚠️  Could not determine whether daemon pid {pid!r} (self-reported "
+        f"state='{state}') is alive on this host — pid value in daemon.json is "
+        "missing or unusable.",
+        warning=True,
+    )
+
+
 def check_db_exists() -> CheckResult:
     """Verify that the local SQLite database exists and is non-empty.
 
@@ -1625,6 +1757,7 @@ ALL_CHECKS = [
     check_kill_switch_inactive,
     check_state_snapshot_fresh,
     check_heartbeat_fresh,
+    check_daemon_pid_alive,
     check_db_exists,
     check_no_stray_database_files,
     check_output_dir_matches_local_data_root,

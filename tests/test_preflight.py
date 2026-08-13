@@ -2033,4 +2033,193 @@ class TestOutputDirMatchesLocalDataRoot:
         assert results[0].name == "output_dir_matches_local_data_root"
         assert results[0].passed
         assert results[0].warning
+
+
+# ---------------------------------------------------------------------------
+# daemon_pid_alive
+# ---------------------------------------------------------------------------
+
+class TestDaemonPidAlive:
+    """check_daemon_pid_alive() is a WARNING-ONLY diagnostic cross-check that
+    sits right next to heartbeat_fresh: heartbeat.txt is written ONLY by
+    main_orchestrator.main()'s own lifecycle and is permanently absent under
+    a persistent daemon deployment (desktop/orchestrator_daemon.py bypasses
+    it entirely), so a stale/missing heartbeat_fresh reading is ambiguous on
+    its own. This check answers the question directly: is the daemon
+    process itself alive on this host right now, per an externally-verified
+    os.kill(pid, 0) probe (pilots.run_status._pid_alive) against
+    OUTPUT_DIR/daemon.json -- never a blocking failure.
+
+    Every test uses ``patch("scripts.preflight_check.settings", s)`` (this
+    module's shared convention) with OUTPUT_DIR pointed at a private
+    ``tmp_path`` subdirectory, and patches ``pilots.run_status.os.kill``
+    (never the real OS) to control pid liveness deterministically -- the
+    exact isolation pattern already established in
+    ``tests/test_run_status.py``.
+    """
+
+    def test_no_daemon_json_passes_cleanly_no_warning(self, tmp_path):
+        """No daemon.json at all (fresh clone, CI, or an advisory-only
+        deployment that never runs the persistent daemon) is not evidence of
+        anything wrong -- clean PASS, no warning noise."""
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_daemon_pid_alive()
+
+        assert r.passed
+        assert not r.warning
+        assert r.name == "daemon_pid_alive"
+        assert "No daemon.json found" in r.reason
+
+    def test_malformed_json_degrades_to_warning_never_raises(self, tmp_path):
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        (tmp_path / "daemon.json").write_text("{not valid json", encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_daemon_pid_alive()  # must not raise
+
+        assert r.passed  # warning, never a blocking FAIL
+        assert r.warning is True
+        assert "Could not read/parse" in r.reason
+
+    def test_non_dict_json_degrades_to_warning_never_raises(self, tmp_path):
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        (tmp_path / "daemon.json").write_text("[1, 2, 3]", encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_daemon_pid_alive()
+
+        assert r.passed
+        assert r.warning is True
+        assert "Could not read/parse" in r.reason
+
+    def test_live_pid_passes_cleanly_and_explains_heartbeat_ambiguity(self, tmp_path):
+        """(the operator's real scenario) A live daemon pid -> clean PASS,
+        no warning, and the reason explicitly explains that a stale
+        heartbeat_fresh reading alongside this is EXPECTED, not an outage."""
+        from scripts.preflight_check import check_daemon_pid_alive
+        from pilots import run_status
+
+        payload = {
+            "pid": 4242, "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", return_value=None):
+            r = check_daemon_pid_alive()
+
+        assert r.passed
+        assert not r.warning
+        assert "IS alive right now" in r.reason
+        assert "4242" in r.reason
+        assert "EXPECTED under a daemon deployment" in r.reason
+
+    def test_dead_pid_warns_with_restart_instructions(self, tmp_path):
+        """(the operator's other real scenario) A stale daemon.json naming a
+        pid that no longer exists -> WARNING naming the pid and giving the
+        exact restart command, never a blocking FAIL."""
+        from scripts.preflight_check import check_daemon_pid_alive
+        from pilots import run_status
+
+        payload = {
+            "pid": 9999, "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", side_effect=ProcessLookupError):
+            r = check_daemon_pid_alive()
+
+        assert r.passed  # warning, never a blocking FAIL
+        assert r.warning is True
+        assert "NOT alive" in r.reason
+        assert "9999" in r.reason
+        assert "python -m desktop.orchestrator_daemon --interval N" in r.reason
+
+    def test_unusable_pid_value_warns_unknown_never_raises(self, tmp_path):
+        """A malformed pid (e.g. a string, or missing entirely) is
+        unknowable -- CONSTRAINT #4: never collapse to a fabricated
+        alive/dead claim; degrades to an honest warning-PASS."""
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        payload = {
+            "pid": "not-a-pid", "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_daemon_pid_alive()  # must not raise
+
+        assert r.passed
+        assert r.warning is True
+        assert "Could not determine" in r.reason
+
+    def test_pid_alive_import_raising_degrades_to_warning_never_fail(self, tmp_path):
+        """A broken pilots.run_status import/call must not become a new
+        failure mode for the go-live gate -- mirrors this file's other
+        diagnostic checks' raising-dependency tests."""
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        payload = {
+            "pid": 4242, "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch("pilots.run_status._pid_alive", side_effect=RuntimeError("boom")):
+            r = check_daemon_pid_alive()  # must not raise
+
+        assert r.passed
+        assert r.warning is True
+        assert "Could not probe daemon pid liveness" in r.reason
+
+    def test_included_in_all_checks(self):
+        from scripts.preflight_check import ALL_CHECKS, check_daemon_pid_alive
+        assert check_daemon_pid_alive in ALL_CHECKS
+
+    def test_not_in_advisory_auto_skip(self):
+        """Unlike heartbeat_fresh, this diagnostic is useful regardless of
+        ADVISORY_ONLY -- it must not be silently skipped in advisory mode."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "daemon_pid_alive" not in _ADVISORY_AUTO_SKIP
+
+    def test_run_checks_never_fails_gate_on_dead_daemon_pid(self, tmp_path):
+        """End-to-end: a dead daemon pid surfaces in run_checks() results as
+        warning=True and does not, by itself, cause main()'s exit code to be
+        1 (warnings don't count toward the fail total). ALL_CHECKS is
+        patched to just this one check so the test is isolated from every
+        other check's environment requirements.
+        """
+        from scripts.preflight_check import run_checks, check_daemon_pid_alive
+        from pilots import run_status
+
+        payload = {
+            "pid": 9999, "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.ALL_CHECKS", [check_daemon_pid_alive]), \
+             patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", side_effect=ProcessLookupError):
+            results = run_checks(skip=[])
+
+        assert len(results) == 1
+        assert results[0].name == "daemon_pid_alive"
+        assert results[0].passed
+        assert results[0].warning
         assert all(r.passed for r in results)  # exit-code-relevant condition
