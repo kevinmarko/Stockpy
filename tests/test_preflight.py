@@ -67,6 +67,10 @@ def _settings(tmp_path: Path, **overrides) -> MagicMock:
     m.ALPACA_PAPER = overrides.get("ALPACA_PAPER", True)
     m.DRY_RUN = overrides.get("DRY_RUN", False)
     m.OUTPUT_DIR = overrides.get("OUTPUT_DIR", tmp_path)
+    # LOCAL_DATA_ROOT (PR #718) — default to a private tmp_path subdirectory so
+    # the OUTPUT_DIR/LOCAL_DATA_ROOT parity check (TestOutputDirMatchesLocalDataRoot)
+    # never touches the real machine's actual ~/.stockpy_local.
+    m.LOCAL_DATA_ROOT = overrides.get("LOCAL_DATA_ROOT", tmp_path / "local_data_root")
     m.PAPER_TRADING_START_DATE = overrides.get("PAPER_TRADING_START_DATE", None)
     # ADVISORY_ONLY defaults to True (project default) so tests that call
     # run_checks() without an override don't trigger the broker checks.
@@ -1867,6 +1871,166 @@ class TestNoStrayDatabaseFiles:
 
         assert len(results) == 1
         assert results[0].name == "no_stray_database_files"
+        assert results[0].passed
+        assert results[0].warning
+        assert all(r.passed for r in results)  # exit-code-relevant condition
+
+
+# ---------------------------------------------------------------------------
+# output_dir_matches_local_data_root
+# ---------------------------------------------------------------------------
+
+class TestOutputDirMatchesLocalDataRoot:
+    """check_output_dir_matches_local_data_root() is a WARNING-ONLY diagnostic
+    tripwire for the OUTPUT_DIR-migration incident: a stale/legacy
+    ``OUTPUT_DIR=./output`` line in ``.env`` (predating settings.LOCAL_DATA_ROOT
+    entirely) silently and completely defeated the OUTPUT_DIR half of the
+    LOCAL_DATA_ROOT migration -- state_snapshot.json, daemon.json, heartbeat.txt,
+    decision_log.jsonl, and execution_queue.json kept writing to the old
+    repo-relative path while everything anchored directly to LOCAL_DATA_ROOT
+    (the DB, models, caches, logs) correctly moved.
+
+    Every test uses ``patch("scripts.preflight_check.settings", s)`` (this
+    module's shared convention, since the check reads ``settings.OUTPUT_DIR``/
+    ``settings.LOCAL_DATA_ROOT`` at call time) with both fields pointed at
+    private ``tmp_path`` subdirectories, so nothing here ever touches the real
+    machine's actual settings or its real ``~/.stockpy_local``.
+    """
+
+    def test_output_dir_derived_from_local_data_root_passes_cleanly(self, tmp_path):
+        """(a) OUTPUT_DIR unset/derived -- i.e. it already equals
+        LOCAL_DATA_ROOT / "output", exactly what the model_validator would
+        have produced with no override -- must PASS with no warning noise."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        local_data_root = tmp_path / "stockpy_local"
+        local_data_root.mkdir()
+        output_dir = local_data_root / "output"
+        output_dir.mkdir()
+
+        s = _settings(tmp_path, OUTPUT_DIR=output_dir, LOCAL_DATA_ROOT=local_data_root)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_output_dir_matches_local_data_root()
+
+        assert r.passed
+        assert not r.warning
+        assert r.name == "output_dir_matches_local_data_root"
+        assert "matches the LOCAL_DATA_ROOT-derived default" in r.reason
+
+    def test_explicit_override_to_different_path_warns_with_both_paths_named(self, tmp_path):
+        """(b) OUTPUT_DIR explicitly overridden to a DIFFERENT directory (the
+        real incident's exact shape: a stale ./output left over from before
+        LOCAL_DATA_ROOT existed) must produce a WARNING (never a blocking
+        FAIL) naming both the actual OUTPUT_DIR and the LOCAL_DATA_ROOT-derived
+        path it would otherwise be, plus the actionable fix."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        local_data_root = tmp_path / "stockpy_local"
+        local_data_root.mkdir()
+        stale_output_dir = tmp_path / "legacy_repo_output"
+        stale_output_dir.mkdir()
+
+        s = _settings(tmp_path, OUTPUT_DIR=stale_output_dir, LOCAL_DATA_ROOT=local_data_root)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_output_dir_matches_local_data_root()
+
+        assert r.passed  # WARNING, never a blocking FAIL
+        assert r.warning is True
+        assert str(stale_output_dir.resolve()) in r.reason
+        assert str((local_data_root / "output").resolve()) in r.reason
+        assert "OUTPUT_DIR=" in r.reason
+        assert "LOCAL_DATA_ROOT" in r.reason
+        assert "state_snapshot.json" in r.reason
+        assert "daemon.json" in r.reason
+        assert "heartbeat.txt" in r.reason
+        assert "decision_log.jsonl" in r.reason
+        assert "execution_queue.json" in r.reason
+
+    def test_override_coincidentally_matching_derived_path_passes_cleanly(self, tmp_path):
+        """(c) An OUTPUT_DIR override that happens to coincidentally resolve
+        to the exact same path LOCAL_DATA_ROOT / "output" would derive --
+        e.g. via a non-normalized string containing a redundant ".." segment
+        -- must PASS with no false alarm."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        local_data_root = tmp_path / "stockpy_local"
+        local_data_root.mkdir()
+        output_dir = local_data_root / "output"
+        output_dir.mkdir()
+        # A differently-spelled but equivalent path once resolved: goes down
+        # into a sibling dir and back up into "output".
+        coincidental_override = local_data_root / "output" / ".." / "output"
+
+        s = _settings(
+            tmp_path, OUTPUT_DIR=coincidental_override, LOCAL_DATA_ROOT=local_data_root
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_output_dir_matches_local_data_root()
+
+        assert r.passed
+        assert not r.warning
+        assert "matches the LOCAL_DATA_ROOT-derived default" in r.reason
+
+    def test_missing_output_dir_degrades_to_clean_pass_never_raises(self, tmp_path):
+        """A None OUTPUT_DIR (should not occur in production once the
+        model_validator has run, but this check must never assume that)
+        degrades to a clean, non-crashing PASS."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        s = _settings(tmp_path, OUTPUT_DIR=None, LOCAL_DATA_ROOT=tmp_path / "stockpy_local")
+        with patch("scripts.preflight_check.settings", s):
+            r = check_output_dir_matches_local_data_root()  # must not raise
+
+        assert r.passed
+        assert not r.warning
+
+    def test_settings_attribute_access_raising_degrades_to_warning_pass_never_fail(self, tmp_path):
+        """A broken settings object itself must not become a new failure mode
+        for the go-live gate -- mirrors check_no_stray_database_files's own
+        raising-resolver test."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        class _BrokenSettings:
+            @property
+            def OUTPUT_DIR(self):
+                raise RuntimeError("settings broken")
+
+            LOCAL_DATA_ROOT = None
+
+        with patch("scripts.preflight_check.settings", _BrokenSettings()):
+            r = check_output_dir_matches_local_data_root()  # must not raise
+
+        assert r.passed
+        assert r.warning is True
+
+    def test_included_in_all_checks(self):
+        from scripts.preflight_check import ALL_CHECKS, check_output_dir_matches_local_data_root
+        assert check_output_dir_matches_local_data_root in ALL_CHECKS
+
+    def test_run_checks_never_fails_gate_on_output_dir_mismatch(self, tmp_path):
+        """End-to-end: a mismatched OUTPUT_DIR surfaces in run_checks() results
+        as warning=True and does not, by itself, cause main()'s exit code to
+        be 1 (warnings don't count toward the fail total). ALL_CHECKS is
+        patched to just this one check so the test is isolated from every
+        other check's environment requirements.
+        """
+        from scripts.preflight_check import (
+            run_checks,
+            check_output_dir_matches_local_data_root,
+        )
+
+        local_data_root = tmp_path / "stockpy_local"
+        local_data_root.mkdir()
+        stale_output_dir = tmp_path / "legacy_repo_output"
+        stale_output_dir.mkdir()
+
+        s = _settings(tmp_path, OUTPUT_DIR=stale_output_dir, LOCAL_DATA_ROOT=local_data_root)
+        with patch("scripts.preflight_check.ALL_CHECKS", [check_output_dir_matches_local_data_root]), \
+             patch("scripts.preflight_check.settings", s):
+            results = run_checks(skip=[])
+
+        assert len(results) == 1
+        assert results[0].name == "output_dir_matches_local_data_root"
         assert results[0].passed
         assert results[0].warning
         assert all(r.passed for r in results)  # exit-code-relevant condition

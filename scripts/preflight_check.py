@@ -149,12 +149,13 @@ Checks (15 total)
                                   regardless of broker mode).
 
 Note: the "(N total)" figure above and the numbered list are historical and
-have drifted from ALL_CHECKS as checks were added over time (24 entries as
+have drifted from ALL_CHECKS as checks were added over time (25 entries as
 of this writing, most recently robinhood_execution_mode /
 robinhood_kill_switch_clear / robinhood_queue_fresh / robinhood_session_present
-/ env_no_duplicate_keys / alert_channels_reachable / no_stray_database_files,
-none of which carry a number above). ALL_CHECKS is the single source of truth
-for the actual set and order of checks that run.
+/ env_no_duplicate_keys / alert_channels_reachable / no_stray_database_files /
+output_dir_matches_local_data_root, none of which carry a number above).
+ALL_CHECKS is the single source of truth for the actual set and order of
+checks that run.
 
 no_stray_database_files              — WARNING-ONLY diagnostic tripwire (never
                                         blocking). Resolves the canonical DB
@@ -165,6 +166,17 @@ no_stray_database_files              — WARNING-ONLY diagnostic tripwire (never
                                         something is actively writing to a stale,
                                         non-canonical DB file. Skipped as a no-op
                                         when DATABASE_URL is not sqlite-backed.
+
+output_dir_matches_local_data_root   — WARNING-ONLY diagnostic tripwire (never
+                                        blocking). Compares settings.OUTPUT_DIR
+                                        against settings.LOCAL_DATA_ROOT / "output"
+                                        (what it would be if nothing overrode it)
+                                        and flags a mismatch — i.e. a stale/legacy
+                                        OUTPUT_DIR= line in .env is keeping output
+                                        artifacts (state_snapshot.json, daemon.json,
+                                        heartbeat.txt, decision_log.jsonl,
+                                        execution_queue.json) outside the shared,
+                                        cross-worktree LOCAL_DATA_ROOT location.
 """
 
 from __future__ import annotations
@@ -1155,6 +1167,110 @@ def check_no_stray_database_files(max_age_hours: float = 24.0) -> CheckResult:
         )
 
 
+def check_output_dir_matches_local_data_root() -> CheckResult:
+    """WARNING-ONLY tripwire: detect ``settings.OUTPUT_DIR`` pinned away from
+    the ``settings.LOCAL_DATA_ROOT``-derived default by a stale/legacy
+    ``.env`` override (Defense-in-depth for the 2026-08 OUTPUT_DIR-migration
+    incident, sibling to ``check_no_stray_database_files`` above).
+
+    Background
+    ----------
+    ``settings.LOCAL_DATA_ROOT`` (PR #718) is an external, machine-global
+    root (default ``~/.stockpy_local``) meant to hold every locally-generated
+    model/data/output artifact, shared across every git worktree and the
+    live production daemon. ``settings.OUTPUT_DIR`` is supposed to derive its
+    default from ``LOCAL_DATA_ROOT / "output"`` via a ``model_validator`` --
+    BUT an operator's explicit ``OUTPUT_DIR=...`` in ``.env`` always wins
+    over that derived default (intentional design, so the migration never
+    silently changes behavior for someone who deliberately customized it).
+
+    A real incident showed the failure mode this check exists to catch: an
+    operator's ``.env`` had ``OUTPUT_DIR=./output`` set since before
+    ``LOCAL_DATA_ROOT`` ever existed -- a leftover/legacy value, not a
+    deliberate recent customization. This silently and completely defeated
+    the entire ``OUTPUT_DIR`` half of the ``LOCAL_DATA_ROOT`` migration:
+    ``state_snapshot.json``, ``daemon.json``, ``decision_log.jsonl``,
+    ``execution_queue.json``, ``heartbeat.txt``, and everything else routed
+    through ``settings.OUTPUT_DIR`` kept writing to the old repo-relative
+    ``./output`` directory, while everything anchored *directly* to
+    ``LOCAL_DATA_ROOT`` (the DB, models, caches, logs -- none of which go
+    through ``OUTPUT_DIR``) correctly moved. ``daemon.json`` looked "stuck at
+    the old path" and ``heartbeat.txt`` looked impossibly stale even though
+    the daemon was actually running fine -- because the check/tooling was
+    implicitly looking in the wrong place relative to what the operator
+    expected after the ``LOCAL_DATA_ROOT`` rollout.
+
+    What it checks
+    ---------------
+    Compares the resolved ``settings.OUTPUT_DIR`` against what it WOULD be
+    if nothing overrode it (``settings.LOCAL_DATA_ROOT / "output"``).
+
+    Severity
+    --------
+    Mirrors ``check_no_stray_database_files``'s severity precedent -- this
+    is a diagnostic tripwire, never a blocking gate, since an explicit
+    ``OUTPUT_DIR`` override can be a deliberate, valid operator choice (e.g.
+    a dedicated output volume):
+      * Resolved paths match (no override, or an override that happens to
+        coincidentally point at the exact same resolved path) -> clean
+        PASS, no noise.
+      * Resolved paths differ -> WARNING (never a blocking FAIL) naming both
+        the actual resolved ``OUTPUT_DIR`` and the ``LOCAL_DATA_ROOT``-derived
+        path it would otherwise be, explaining that
+        ``state_snapshot.json``/``daemon.json``/``heartbeat.txt``/
+        ``decision_log.jsonl``/``execution_queue.json`` are NOT in the
+        shared cross-worktree location, and giving the exact fix: remove or
+        comment out the ``OUTPUT_DIR=`` line in ``.env`` to let it derive
+        from ``LOCAL_DATA_ROOT`` automatically.
+
+    Degrades gracefully to a clean PASS (never raises, per this module's
+    fail-closed-but-never-crash convention for diagnostic checks) when
+    ``settings.LOCAL_DATA_ROOT``/``settings.OUTPUT_DIR`` are unavailable,
+    ``None``, or malformed -- this check's job is purely diagnostic and must
+    never become a new failure mode for the go-live gate.
+    """
+    name = "output_dir_matches_local_data_root"
+    try:
+        output_dir = getattr(settings, "OUTPUT_DIR", None)
+        local_data_root = getattr(settings, "LOCAL_DATA_ROOT", None)
+        if output_dir is None or local_data_root is None:
+            return CheckResult(
+                name, True,
+                "settings.OUTPUT_DIR or settings.LOCAL_DATA_ROOT is unavailable -- "
+                "skipping the OUTPUT_DIR/LOCAL_DATA_ROOT parity check.",
+            )
+        actual = Path(output_dir).resolve()
+        expected = (Path(local_data_root) / "output").resolve()
+    except Exception as exc:
+        return CheckResult(
+            name, True,
+            f"⚠️  output_dir_matches_local_data_root check could not run ({exc}) -- "
+            "skipping.",
+            warning=True,
+        )
+
+    if actual == expected:
+        return CheckResult(
+            name, True,
+            f"settings.OUTPUT_DIR ({actual}) matches the LOCAL_DATA_ROOT-derived "
+            "default -- output artifacts are in the shared, cross-worktree location.",
+        )
+
+    return CheckResult(
+        name, True,
+        f"⚠️  settings.OUTPUT_DIR is pinned to {actual}, which differs from the "
+        f"LOCAL_DATA_ROOT-derived default of {expected}. An explicit OUTPUT_DIR= "
+        "override in .env is keeping output artifacts -- including "
+        "state_snapshot.json, daemon.json, heartbeat.txt, decision_log.jsonl, and "
+        "execution_queue.json -- OUTSIDE the shared, cross-worktree LOCAL_DATA_ROOT "
+        "location, so tooling and other worktrees/checkouts expecting the "
+        "LOCAL_DATA_ROOT path will see stale or missing data even though the "
+        "pipeline itself may be running fine. Fix: remove or comment out the "
+        "OUTPUT_DIR= line in .env to let it derive from LOCAL_DATA_ROOT automatically.",
+        warning=True,
+    )
+
+
 def check_paper_trading_duration(min_days: int = 90) -> CheckResult:
     """Verify that paper trading has run for at least ``min_days`` days.
 
@@ -1511,6 +1627,7 @@ ALL_CHECKS = [
     check_heartbeat_fresh,
     check_db_exists,
     check_no_stray_database_files,
+    check_output_dir_matches_local_data_root,
     check_paper_trading_duration,
     check_validation_reports,
     check_no_unexpected_risk_blocks,
