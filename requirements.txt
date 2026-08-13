@@ -154,3 +154,5 @@ mcp<2.0.0
 tabulate
 
 google-antigravity>=0.1.0
+langgraph
+qdrant-client

@@ -2676,7 +2676,10 @@ export interface ExecutionQueueIntent {
   gate_reasons: string[];
   allow_place: boolean;
   rationale: string;
-  client_order_id: string;
+  strategy?: string;
+  sources?: string[];
+  proposed_price?: number | null;
+  client_order_id?: string | null;
   /**
    * Real per-intent attribution (never guessed from `rationale` free text —
    * CONSTRAINT #4): `"advisory"` for the base advisory engine, `"composed"`
@@ -3347,3 +3350,27 @@ export interface MultiAgentResponse {
   errors: string[];
   workflow_status: string;
 }
+
+export interface SignalModuleContribution {
+  name: string;
+  score: number | null;
+  weight: number;
+  contribution: number | null;
+}
+
+export interface SymbolSignalBreakdown {
+  symbol: string;
+  action: string | null;
+  conviction: number | null;
+  final_score: number | null;
+  modules: SignalModuleContribution[];
+}
+
+export interface ModelComparisonEntry {
+  model: string;
+  rmse: number;
+  mae: number;
+  horizon: number;
+}
+
+export type ForecastSkillWeights = Record<string, number>;

@@ -1398,6 +1398,18 @@ class Settings(BaseSettings):
             "always reassembled in deterministic symbol order regardless of value."
         ),
     )
+    GRAVITY_REQUIRE_NATIVE: bool = Field(
+        default=False,
+        description="If True, the Gravity AI Review Suite requires the native daemon to be running. If False, it bypasses native-only integration checks.",
+    )
+    QDRANT_URL: str = Field(
+        default="http://localhost:6333",
+        description="URL for the Qdrant vector database.",
+    )
+    QDRANT_COLLECTION: str = Field(
+        default="investyo_news",
+        description="Collection name in Qdrant for RAG operations.",
+    )
     # Number of worker threads for the per-ticker forecasting loop in
     # main_orchestrator.run_pipeline(). Each ForecastingEngine.generate_forecast()
     # call fits models on local arrays and returns a dict — the engine is stateless

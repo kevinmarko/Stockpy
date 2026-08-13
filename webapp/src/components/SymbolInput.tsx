@@ -9,6 +9,7 @@ import {
 import { Button } from "./ui";
 import { api } from "../api/client";
 import type { UniverseSymbol } from "../api/types";
+import { useDebounce } from "../hooks/useDebounce";
 
 /**
  * Shared symbol entry bar for the per-symbol research screens (Data Explorer,
@@ -77,6 +78,7 @@ export function SymbolInput({
   pending?: boolean;
 }) {
   const [value, setValue] = useState(initial);
+  const debouncedValue = useDebounce(value, 150);
   const [universe, setUniverse] = useState<UniverseSymbol[]>(universeCache ?? []);
   const [open, setOpen] = useState(false);
   // -1 = nothing highlighted → Enter submits the typed text (free-text default);
@@ -96,7 +98,7 @@ export function SymbolInput({
     };
   }, []);
 
-  const q = value.trim().toUpperCase();
+  const q = debouncedValue.trim().toUpperCase();
   const suggestions = useMemo(() => {
     if (!q) return [];
     const starts: UniverseSymbol[] = [];

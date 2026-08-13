@@ -75,6 +75,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # NON-secret tunables the GUI may write. Each maps to a pydantic Settings field.
 # Keep this list aligned with settings.py; anything not here is rejected.
 ALLOWED_KEYS: tuple[str, ...] = (
+    "QDRANT_URL",
+    "QDRANT_COLLECTION",
+    "GRAVITY_REQUIRE_NATIVE",
     # Financial constants
     "RISK_FREE_RATE",
     "MARKET_RISK_PREMIUM",

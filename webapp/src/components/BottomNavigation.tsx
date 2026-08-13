@@ -35,7 +35,7 @@ export function BottomNav() {
               <span className="nav-ico" aria-hidden>
                 <Icon size={20} strokeWidth={2.5} />
               </span>
-              {it.label}
+              <span className="nav-label">{it.label}</span>
             </button>
           );
         })}
@@ -49,7 +49,7 @@ export function BottomNav() {
           <span className="nav-ico" aria-hidden>
             <Menu size={20} strokeWidth={2.5} />
           </span>
-          More
+          <span className="nav-label">More</span>
         </button>
       </nav>
       {moreOpen && (

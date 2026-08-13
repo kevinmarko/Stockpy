@@ -9,6 +9,7 @@ import type {
 } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
+import { useDebounce } from "../hooks/useDebounce";
 import { useMutation } from "../hooks/useMutation";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
@@ -963,6 +964,7 @@ export function OptionsMatrix() {
   const [openSymbol, setOpenSymbol] = useState<string | null>(null);
   const [showRecompute, setShowRecompute] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebounce(searchQuery, 150);
   const { openChat } = useChat();
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
@@ -976,7 +978,7 @@ export function OptionsMatrix() {
   const visible = useMemo(() => {
     const activeFilter = FILTERS.find((f) => f.key === filter)!;
     const rows = directives.filter(
-      (d) => activeFilter.test(d) && d.Symbol.toLowerCase().includes(searchQuery.toLowerCase())
+      (d) => activeFilter.test(d) && d.Symbol.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
     );
     const sorted = [...rows];
     if (sort === "premium") sorted.sort(byNum((d) => d.Net_Premium));
@@ -984,7 +986,7 @@ export function OptionsMatrix() {
     else if (sort === "sigma") sorted.sort(byNum((d) => d.Sigma_GARCH));
     else sorted.sort((a, b) => a.Symbol.localeCompare(b.Symbol));
     return sorted;
-  }, [directives, filter, sort, searchQuery]);
+  }, [directives, filter, sort, debouncedSearchQuery]);
 
   const openDirective = openSymbol
     ? directives.find((d) => d.Symbol === openSymbol) ?? null

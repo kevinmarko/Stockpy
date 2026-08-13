@@ -5,13 +5,13 @@ import { DensityToggle } from "./DensityToggle";
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
-import { usePoll } from "../hooks/usePoll";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useAutoRefresh } from "./AutoRefreshContext";
+import { useExecutionMode } from "./ExecutionModeContext";
 import { computeMarketSession } from "../marketSession";
-import type { AutomationStatus, ObservabilitySummary } from "../api/types";
+import { Chip } from "./ExecutionQueueSection";
+import type { ObservabilitySummary } from "../api/types";
 
-const AUTOMATION_POLL_MS = 30_000;
 // Regime is a slow-moving macro read (recomputed once per pipeline cycle,
 // not per request) sourced from the heavier observability summary -- polled
 // far less often than the kill-switch/heartbeat status so this always-on bar
@@ -27,14 +27,8 @@ export function TopStatusBar() {
 
   const { safetyTelemetryEnabled, autoRefreshIntervalMs } = useAutoRefresh();
 
-  const automation = useApi<AutomationStatus>(() => api.getAutomationStatus(), []);
-  // Kill-switch/heartbeat telemetry -- deliberately outside the
-  // market-session/visibility/category auto-refresh gates (a plain usePoll,
-  // not useAutoPoll). A stale kill-switch reading is a safety issue, not a
-  // battery optimization, so it gets its own independent toggle
-  // (safetyTelemetryEnabled) rather than folding under the data auto-refresh
-  // master switch.
-  usePoll(automation.reload, AUTOMATION_POLL_MS, safetyTelemetryEnabled);
+  // ExecutionModeContext now handles the polling for automation status
+  const { mode, advisoryOnly, killSwitchActive, data: automationData, refresh: refreshAutomation } = useExecutionMode();
 
   const regime = useApi<ObservabilitySummary>(() => api.getObservabilitySummary("1M", 30), []);
   // Heavy composite read -- the Math.max is a FLOOR, not an override: this
@@ -53,10 +47,8 @@ export function TopStatusBar() {
   const pauseMutation = useMutation((r: string) => api.pauseAutomation(r));
   const resumeMutation = useMutation((r: string) => api.resumeAutomation(r));
 
-  const killSwitchActive = automation.data?.kill_switch.active ?? null;
-  const advisoryOnly = automation.data?.advisory_only ?? true;
-  const daemonAlive = automation.data?.daemon.alive ?? null;
-  const snapshotAgeSeconds = automation.data?.pipeline.snapshot_age_seconds ?? null;
+  const daemonAlive = automationData?.daemon?.alive ?? null;
+  const snapshotAgeSeconds = automationData?.pipeline?.snapshot_age_seconds ?? null;
   const resumeBlocked = killSwitchActive === false ? false : !advisoryOnly;
   const busy = pauseMutation.pending || resumeMutation.pending;
 
@@ -74,7 +66,7 @@ export function TopStatusBar() {
       : await pauseMutation.run(reason);
     if (!result) return; // mutation error -- Notice below stays visible via the toast fallback
     setShowKillSwitchModal(false);
-    automation.reload();
+    refreshAutomation();
     addToast({
       type: killSwitchActive ? "success" : "error",
       title: killSwitchActive ? "Kill Switch RESET (resumed)" : "Kill Switch TRIPPED (paused)",
@@ -116,7 +108,7 @@ export function TopStatusBar() {
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--s-4)" }}>
           {/* Heartbeat — real daemon liveness + snapshot age, GET /automation/status */}
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }} title={automation.error ?? undefined}>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
             <span style={{ color: heartbeatColor }}>{heartbeatIcon}</span>
             <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{heartbeatLabel}</span>
             <span style={{ color: "var(--text-muted)", fontSize: "var(--t-micro)" }}>({snapshotAgeLabel})</span>
@@ -131,6 +123,13 @@ export function TopStatusBar() {
                 ⚠
               </span>
             )}
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1-5)" }}>
+            <Chip
+              label={`Mode: ${mode}`}
+              tone={mode === "LIVE" ? "decline" : mode === "PAPER" ? "caution" : "muted"}
+            />
           </div>
 
           {/* Macro Regime — read-only; there is no operator override for the

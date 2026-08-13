@@ -4,8 +4,11 @@ import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import type { ExecutionQueue, ExecutionQueueIntent } from "../api/types";
 import { EmptyState, ErrorState, Loading, StaleDataNotice } from "./ui";
+import { useExecutionMode } from "./ExecutionModeContext";
+import { useMutation } from "../hooks/useMutation";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
+import { SignalContributionPanel } from "./SignalContributionPanel";
 
 /**
  * Read-only view of the gated Robinhood execution queue
@@ -25,6 +28,7 @@ export function ExecutionQueueSection() {
   const [filterFollowType, setFilterFollowType] = useState("ALL");
   const [filterStatus, setFilterStatus] = useState("ALL");
   const [minConviction, setMinConviction] = useState(0);
+  const [reviewedIds, setReviewedIds] = useState<Set<string>>(new Set());
 
   const { data, loading, error, status, stale, cachedAt, reload } =
     useApi<ExecutionQueue>(
@@ -194,11 +198,36 @@ export function ExecutionQueueSection() {
                   <Chip label={`${data.n_placeable}/${data.n_intents} placeable`} tone="muted" />
                   <Chip label={`as of ${timeAgo(data.generated_at)}`} tone="muted" />
                 </div>
+                
                 <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
-                  {data.intents.map((intent) => (
-                    <IntentRow key={intent.client_order_id || `${intent.symbol}-${intent.side}`} intent={intent} mode={data.mode} />
+                  {data.intents
+                    .filter(intent => !reviewedIds.has(intent.client_order_id || `${intent.symbol}-${intent.side}`))
+                    .map((intent) => (
+                      <IntentRow 
+                        key={intent.client_order_id || `${intent.symbol}-${intent.side}`} 
+                        intent={intent} 
+                        queueGeneratedAt={data.generated_at}
+                        onReviewed={() => setReviewedIds(prev => new Set(prev).add(intent.client_order_id || `${intent.symbol}-${intent.side}`))}
+                      />
                   ))}
                 </div>
+
+                {reviewedIds.size > 0 && (
+                  <div style={{ marginTop: "var(--s-4)" }}>
+                    <h3 style={{ fontSize: "var(--t-body)", color: theme.textSecondary, marginBottom: "var(--s-2)" }}>Reviewed</h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
+                      {data.intents
+                        .filter(intent => reviewedIds.has(intent.client_order_id || `${intent.symbol}-${intent.side}`))
+                        .map((intent) => (
+                          <div key={`rev-${intent.client_order_id || `${intent.symbol}-${intent.side}`}`} style={{ padding: "var(--s-2) var(--s-3)", background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: "var(--r-sm)", opacity: 0.7, display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
+                            <span style={{ color: theme.growth }}>✓</span>
+                            <span style={{ fontWeight: 600 }}>{intent.symbol} {intent.action}</span>
+                            <span style={{ color: theme.textMuted, fontSize: "var(--t-caption)" }}>Reviewed and logged to decision journal.</span>
+                          </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           )}
@@ -247,7 +276,35 @@ export function Chip({
   );
 }
 
-function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: string }) {
+function IntentRow({ intent, queueGeneratedAt, onReviewed }: { intent: ExecutionQueueIntent; queueGeneratedAt: string | null; onReviewed: () => void }) {
+  const { advisoryOnly } = useExecutionMode();
+  const [expanded, setExpanded] = useState(false);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+
+  const mutation = useMutation((actionTaken: "acted" | "passed") =>
+    api.logDecision({
+      symbol: intent.symbol,
+      action_taken: actionTaken,
+      signal_action: intent.action,
+      conviction: intent.conviction,
+      notes: "Reviewed from execution queue"
+    })
+  );
+
+  const handleAction = async (e: React.MouseEvent, action: "acted" | "passed") => {
+    e.stopPropagation();
+    const res = await mutation.run(action);
+    if (res) {
+      if (!advisoryOnly && action === "acted") {
+        setActionNotice("To execute, run the robinhood-execution skill in Claude Code");
+        // We delay hiding it to let the user read it
+        setTimeout(() => onReviewed(), 4000);
+      } else {
+        onReviewed();
+      }
+    }
+  };
+
   const size =
     intent.qty !== null
       ? `${intent.qty} sh`
@@ -257,14 +314,18 @@ function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: strin
   return (
     <div
       data-testid="execution-intent-row"
+      onClick={() => setExpanded(!expanded)}
       style={{
         padding: "var(--s-2-5) var(--s-3)",
         background: theme.surface,
         border: `1px solid ${theme.border}`,
         borderRadius: "var(--r-sm)",
+        cursor: "pointer",
+        transition: "background 0.2s"
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--s-2)", flexWrap: "wrap" }}>
+        <span style={{ fontSize: "var(--t-caption)", color: theme.textMuted }}>{expanded ? "▼" : "▶"}</span>
         <Link
           to={`/symbol/${encodeURIComponent(intent.symbol)}`}
           style={{ fontWeight: 700, color: theme.textPrimary, textDecoration: "none" }}
@@ -291,67 +352,77 @@ function IntentRow({ intent, mode }: { intent: ExecutionQueueIntent; mode: strin
           )}
         </span>
       </div>
-      {intent.rationale && (
-        <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)", marginTop: "var(--s-1-5)" }}>{intent.rationale}</div>
-      )}
-      {!intent.allow_place && intent.gate_reasons.length > 0 && (
-        <div style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
-          {intent.gate_reasons.join(", ")}
-        </div>
-      )}
-      {intent.allow_place && mode === "review" && (
-        <div
-          style={{
-            marginTop: "var(--s-3)",
-            padding: "var(--s-3)",
-            borderRadius: "var(--r-sm)",
-            background: "rgba(220, 38, 38, 0.05)",
-            border: `1px solid ${theme.decline}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: "var(--s-3)",
-          }}
-        >
-          <div>
-            <div style={{ color: theme.textPrimary, fontWeight: 700, fontSize: "var(--t-caption)", marginBottom: 4 }}>
-              Risk Approval Required
+      
+      {expanded && (
+        <div style={{ marginTop: "var(--s-3)", padding: "var(--s-3)", background: theme.base, borderRadius: "var(--r-sm)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-3)", marginBottom: "var(--s-3)" }}>
+            <div>
+              <div style={{ color: theme.textSecondary, fontSize: "var(--t-micro)", textTransform: "uppercase", fontWeight: 600 }}>Rationale</div>
+              <div style={{ color: theme.textPrimary, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
+                {intent.rationale || "No rationale provided."}
+              </div>
             </div>
-            <div style={{ color: theme.textSecondary, fontSize: "var(--t-caption)" }}>
-              This order requires explicit operator approval before execution.
+            <div>
+              <div style={{ color: theme.textSecondary, fontSize: "var(--t-micro)", textTransform: "uppercase", fontWeight: 600 }}>Metadata</div>
+              <div style={{ color: theme.textPrimary, fontSize: "var(--t-caption)", marginTop: "var(--s-1)", display: "flex", flexDirection: "column", gap: "var(--s-1)" }}>
+                <div><strong>Strategy:</strong> {intent.strategy || "Unknown"}</div>
+                <div><strong>Sources:</strong> {(intent.sources || []).join(", ") || "None"}</div>
+                <div><strong>Generated:</strong> {timeAgo(queueGeneratedAt)}</div>
+              </div>
             </div>
           </div>
-          <div style={{ display: "flex", gap: "var(--s-2)" }}>
-            <button
-              style={{
-                padding: "8px 16px",
-                borderRadius: "var(--r-sm)",
-                background: theme.decline,
-                color: "#ffffff",
-                fontWeight: 700,
-                border: "none",
-                cursor: "pointer",
-                fontSize: "var(--t-caption)",
-              }}
-            >
-              REJECT
-            </button>
-            <button
-              style={{
-                padding: "8px 16px",
-                borderRadius: "var(--r-sm)",
-                background: "transparent",
-                color: theme.growth,
-                fontWeight: 700,
-                border: `1px solid ${theme.growth}`,
-                cursor: "pointer",
-                fontSize: "var(--t-caption)",
-              }}
-            >
-              APPROVE
-            </button>
+          
+          <div style={{ marginTop: "var(--s-3)" }}>
+            <SignalContributionPanel symbol={intent.symbol} />
           </div>
+
+          {!intent.allow_place && intent.gate_reasons.length > 0 && (
+            <div style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-2)", padding: "var(--s-2)", background: "rgba(220, 38, 38, 0.05)", borderRadius: "var(--r-sm)" }}>
+              <strong>Gate Reasons:</strong> {intent.gate_reasons.join("; ")}
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
+            {actionNotice ? (
+              <div style={{ color: theme.growth, fontSize: "var(--t-caption)", fontWeight: 600 }}>{actionNotice}</div>
+            ) : (
+              <>
+                <button
+                  onClick={(e) => handleAction(e, "passed")}
+                  disabled={mutation.pending}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: "var(--r-sm)",
+                    background: "transparent",
+                    color: theme.textPrimary,
+                    border: `1px solid ${theme.border}`,
+                    cursor: mutation.pending ? "not-allowed" : "pointer",
+                    fontSize: "var(--t-caption)",
+                    fontWeight: 600
+                  }}
+                >
+                  Pass
+                </button>
+                <button
+                  onClick={(e) => handleAction(e, "acted")}
+                  disabled={mutation.pending}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: "var(--r-sm)",
+                    background: theme.accent,
+                    color: "#fff",
+                    border: "none",
+                    cursor: mutation.pending ? "not-allowed" : "pointer",
+                    fontSize: "var(--t-caption)",
+                    fontWeight: 600
+                  }}
+                >
+                  Mark as Reviewed
+                </button>
+              </>
+            )}
+          </div>
+          {mutation.error && <div style={{ color: theme.caution, fontSize: "var(--t-caption)", marginTop: "var(--s-1)", textAlign: "right" }}>{mutation.error}</div>}
         </div>
       )}
     </div>

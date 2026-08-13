@@ -3730,6 +3730,9 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("SIZING_CAP_AUDIT_ENABLED", "bool", {}),
             ("SIZING_CAP_ALERT_ENABLED", "bool", {}),
             ("SIZING_CAP_ALERT_THRESHOLD_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("USE_DUAL_MOMENTUM_OVERLAY", "bool", {}),
+            ("DUAL_MOMENTUM_SAFE_ASSET", "str", {}),
+            ("DUAL_MOMENTUM_RISKY_ASSETS", "json", {}),
         ],
     ),
     (
@@ -3742,6 +3745,9 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("RISK_GATE_ENFORCE_MARKET_HOURS", "bool", {}),
             ("META_LABEL_MIN_CONFIDENCE", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
             ("DRY_RUN", "bool", {}),
+            ("EXECUTION_PRIORITY_QUEUE_ENABLED", "bool", {}),
+            ("EXECUTION_QUEUE_LEAK_RATE_PER_SEC", "float", {"min": 0.0, "max": 100.0, "step": 0.5}),
+            ("FLATTEN_ON_KILL", "bool", {}),
         ],
     ),
     (
@@ -3754,6 +3760,15 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("FORECAST_MODEL_PERSISTENCE_ENABLED", "bool", {}),
             ("FORECAST_MODEL_RETRAIN_DAYS", "int", {"min": 1, "max": 3650, "step": 1}),
             ("BETA_LOOKBACK_DAYS", "int", {"min": 1, "max": 3650, "step": 1}),
+            ("BERT_LLA_ENABLED", "bool", {}),
+            ("BERT_LLA_WINDOW_SIZE", "int", {"min": 1, "max": 1000, "step": 1}),
+            ("BERT_LLA_MIN_SENTIMENT_COVERAGE", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
+            ("BERT_LLA_BLEND_ENABLED", "bool", {}),
+            ("BERT_LLA_ABLATION_ENABLED", "bool", {}),
+            ("CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", "bool", {}),
+            ("CNN_LSTM_PROCESS_POOL_WORKERS", "int", {"min": 1, "max": 64, "step": 1}),
+            ("CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS", "int", {"min": 1, "max": 3600, "step": 10}),
+            ("FORECAST_CNN_LSTM_WALKFORWARD_SCALING", "bool", {}),
         ],
     ),
     (
@@ -3763,6 +3778,8 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("MARKET_DATA_QUOTE_TTL_SECONDS", "int", {"min": 0, "max": 86400, "step": 1}),
             ("MARKET_DATA_BARS_TTL_SECONDS", "int", {"min": 0, "max": 86400, "step": 1}),
             ("FUNDAMENTALS_SOURCE", "enum", {"options": ["yahoo", "yfinance_info", "fmp"]}),
+            ("MARKET_DATA_WS_ENABLED", "bool", {}),
+            ("HISTORICAL_STORE_ENABLED", "bool", {}),
         ],
     ),
     (
@@ -3773,6 +3790,7 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("LOG_LEVEL", "enum", {"options": ["DEBUG", "INFO", "WARNING", "ERROR"]}),
             ("ADVISORY_REUSE_PIPELINE_COMPUTE", "bool", {}),
             ("ADVISORY_ONLY", "bool", {}),
+            ("ROBINHOOD_AUTO_REFRESH_ENABLED", "bool", {}),
         ],
     ),
     (
@@ -3786,8 +3804,34 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("PROMPT_REGISTRY_ENABLED", "bool", {}),
             ("PROMPT_REGISTRY_BACKEND", "str", {}),
             ("ORCHESTRATOR_DAEMON_ENABLED", "bool", {}),
-            ("PILOTS_API_ENABLED", "bool", {}),
             ("CORS_ALLOWED_ORIGINS", "json", {}),
+            ("GRAVITY_REQUIRE_NATIVE", "bool", {}),
+            ("PILOTS_API_ENABLED", "bool", {}),
+        ],
+    ),
+    (
+        "Options & Pairs Snapshots",
+        [
+            ("OPTIONS_MATRIX_ENABLED", "bool", {}),
+            ("OPTIONS_TRUE_IVR_ENABLED", "bool", {}),
+            ("PAIRS_SNAPSHOT_ENABLED", "bool", {}),
+        ],
+    ),
+    (
+        "ML, Data Capture & Audit",
+        [
+            ("META_LABELING_ENABLED", "bool", {}),
+            ("NEWS_HISTORY_CAPTURE_ENABLED", "bool", {}),
+            ("PIT_CAPTURE_ENABLED", "bool", {}),
+            ("SENTIMENT_AUDIT_ENABLED", "bool", {}),
+            ("SENTIMENT_DESENTENCIZE_ENABLED", "bool", {}),
+            ("EXCURSION_INTRADAY_ENABLED", "bool", {}),
+        ],
+    ),
+    (
+        "Validation Gates",
+        [
+            ("VALIDATION_HARNESS_OOS_GATE_ENABLED", "bool", {}),
         ],
     ),
     (
@@ -3798,9 +3842,16 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", "bool", {}),
         ],
     ),
+    (
+        "RAG Configuration",
+        [
+            ("QDRANT_URL", "str", {}),
+            ("QDRANT_COLLECTION", "str", {}),
+        ],
+    ),
 ]
 
-# Flat {key: (kind, extras)} index built once — its keyset IS the editor scope.
+# Flat {key: (kind, extras)} index built once — its keyset IS the editor scope
 _TUNABLE_INDEX: Dict[str, tuple] = {
     key: (kind, extras)
     for _group, _specs in _TUNABLE_GROUPS
@@ -4239,10 +4290,16 @@ _FMP_GROUPS = [
             ("FMP_INSIDER_REFRESH_DAYS", "int", {"min": 1, "max": 30, "step": 1}),
             ("FMP_INSIDER_MIN_LAG_DAYS", "int", {"min": 0, "max": 90, "step": 1}),
             ("FMP_SECTOR_SNAPSHOT_ENABLED", "bool", {}),
+
+            ("FMP_NEWS_ENABLED", "bool", {}),
+            ("FMP_NEWS_PAGE_LIMIT", "int", {"min": 1, "max": 1000, "step": 1}),
+            ("FMP_NEWS_MAX_PAGES", "int", {"min": 1, "max": 1000, "step": 1}),
+            ("FMP_OPTIONS_HEALTH_ENABLED", "bool", {}),
+            ("FMP_OPTIONS_CONTEXT_ENABLED", "bool", {}),
+            ("FMP_PEERS_ENABLED", "bool", {}),
         ],
     ),
 ]
-
 _FMP_INDEX = {
     key: (kind, extras)
     for _group, _specs in _FMP_GROUPS

@@ -669,6 +669,12 @@ button:focus-visible {
   line-height: 1;
 }
 
+@media (max-width: 400px) {
+  .nav-item:not(.active) .nav-label {
+    display: none;
+  }
+}
+
 /* ---- Sidebar (desktop nav; hidden on mobile) ---- */
 .sidebar {
   display: none;
@@ -1438,6 +1444,20 @@ button:focus-visible {
   color: var(--accent);
   text-decoration: underline;
 }
+
+/* ---- Utilities ---- */
+.flex-row { display: flex; align-items: center; }
+.flex-col { display: flex; flex-direction: column; }
+.flex-wrap { flex-wrap: wrap; }
+.justify-between { justify-content: space-between; }
+.justify-center { justify-content: center; }
+.gap-1 { gap: var(--s-1); }
+.gap-2 { gap: var(--s-2); }
+.gap-3 { gap: var(--s-3); }
+.gap-4 { gap: var(--s-4); }
+.w-full { width: 100%; }
+.text-center { text-align: center; }
+.text-muted { color: var(--text-muted); }
 
 /* ---- Reduced motion ----
    Kills every animation/transition in the file, including the two `infinite`

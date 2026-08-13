@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { useAutoPoll } from "../hooks/useAutoPoll";
+import { useExecutionMode } from "../components/ExecutionModeContext";
 import { useBrokerageLoginJob } from "../hooks/useBrokerageLoginJob";
 import type {
   AgenticDiscovery,
@@ -45,6 +46,7 @@ import { timeAgo } from "../format";
  * docstring for why order placement itself is out of reach entirely.
  */
 export function AgenticTrading() {
+  const { mode } = useExecutionMode();
   const status = useApi<AgenticStatus>(() => api.getAgenticStatus(), []);
   const brokerageStatus = useApi<BrokerageStatus>(() => api.getBrokerageStatus(), []);
 
@@ -109,6 +111,10 @@ export function AgenticTrading() {
               label={brokerageStatus.data?.connected ? "Robinhood Connected" : "Robinhood Disconnected"}
               tone={brokerageStatus.data?.connected ? "growth" : "caution"}
             />
+            <Chip
+              label={`Mode: ${mode}`}
+              tone={mode === "LIVE" ? "decline" : mode === "PAPER" ? "caution" : "muted"}
+            />
           </div>
           <p style={{ color: theme.textSecondary, marginTop: "var(--s-1)", marginBottom: 0 }}>
             What the agent is doing, what it's found, and the gated controls that drive it.
@@ -159,7 +165,9 @@ export function AgenticTrading() {
 
       <DiscoverySection refreshToken={refreshToken} />
 
-      <ExecutionQueueSection />
+      <div id="execution-queue">
+        <ExecutionQueueSection />
+      </div>
 
       <RlhfReviewQueue refreshToken={refreshToken} />
 
@@ -237,9 +245,17 @@ function AgentStatusHeader({
           value={
             data.agent_loop.reason
               ? data.agent_loop.reason
-              : `${data.agent_loop.cycle_count} cycles — last ${
-                  data.agent_loop.last_cycle_iso ? timeAgo(data.agent_loop.last_cycle_iso) : "—"
-                }, ${data.agent_loop.backlog_count} unactioned backlog`
+              : (
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", flexWrap: "wrap" }}>
+                  <span>{data.agent_loop.cycle_count} cycles</span>
+                  <span style={{ color: theme.textMuted }}>•</span>
+                  <span>last {data.agent_loop.last_cycle_iso ? timeAgo(data.agent_loop.last_cycle_iso) : "—"}</span>
+                  <span style={{ color: theme.textMuted }}>•</span>
+                  <a href="#execution-queue" style={{ textDecoration: "none" }}>
+                    <Chip label={`${data.agent_loop.backlog_count} in backlog`} tone={data.agent_loop.backlog_count > 0 ? "caution" : "muted"} />
+                  </a>
+                </div>
+              )
           }
         />
         <StatRow
@@ -339,7 +355,7 @@ function ExecutionLadder({ currentMode }: { currentMode: string }) {
   );
 }
 
-function StatRow({ label, value }: { label: string; value: string }) {
+function StatRow({ label, value }: { label: string; value: ReactNode }) {
   // NOT the shared .row/.row-end pattern -- that CSS hard-codes
   // `white-space: nowrap` on the value column (correct for its real callers'
   // short values like a price or a badge), which overlapped the label here
@@ -371,6 +387,17 @@ function DiscoverySection({ refreshToken }: { refreshToken: number }) {
   // no 30s poll of its own, unlike status.
   const discovery = useApi<AgenticDiscovery>(() => api.getAgenticDiscovery(), [refreshToken]);
   const [adding, setAdding] = useState(false);
+  const [highConvictionOnly, setHighConvictionOnly] = useState(false);
+
+  let displayedCandidates = discovery.data?.candidates ?? [];
+  if (highConvictionOnly) {
+    displayedCandidates = displayedCandidates.filter(c => c.conviction !== null && c.conviction >= 0.7);
+  }
+  displayedCandidates = [...displayedCandidates].sort((a, b) => {
+    const aConv = a.conviction ?? -1;
+    const bConv = b.conviction ?? -1;
+    return bConv - aConv;
+  });
 
   return (
     <SectionCard
@@ -403,11 +430,35 @@ function DiscoverySection({ refreshToken }: { refreshToken: number }) {
               hint={discovery.data.reason ?? "No scan has run yet."}
             />
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)", marginBottom: "var(--s-4)" }}>
-              {discovery.data.candidates.map((c) => (
-                <CandidateRow key={c.symbol} c={c} />
-              ))}
-            </div>
+            <>
+              <div style={{ marginBottom: "var(--s-3)" }}>
+                <button
+                  onClick={() => setHighConvictionOnly(prev => !prev)}
+                  style={{
+                    padding: "4px 12px",
+                    borderRadius: "var(--r-pill)",
+                    background: highConvictionOnly ? theme.accent : "transparent",
+                    color: highConvictionOnly ? "#fff" : theme.textPrimary,
+                    border: `1px solid ${highConvictionOnly ? theme.accent : theme.border}`,
+                    fontSize: "var(--t-caption)",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  High Conviction (≥70%)
+                </button>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)", marginBottom: "var(--s-4)" }}>
+                {displayedCandidates.map((c) => (
+                  <CandidateRow key={c.symbol} c={c} />
+                ))}
+                {displayedCandidates.length === 0 && (
+                  <p style={{ color: theme.textMuted, fontSize: "var(--t-body)", fontStyle: "italic", textAlign: "center", padding: "var(--s-3) 0" }}>
+                    No candidates match the selected filters.
+                  </p>
+                )}
+              </div>
+            </>
           )}
 
           <div style={{ marginBottom: "var(--s-2)" }}>

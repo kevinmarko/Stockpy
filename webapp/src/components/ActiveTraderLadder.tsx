@@ -7,9 +7,13 @@ import DemoDataBadge from './DemoDataBadge';
 export default function ActiveTraderLadder({
   symbol = 'SPY',
   currentPrice = null,
+  intentPrice = null,
+  intentSide = null,
 }: {
   symbol?: string;
   currentPrice?: number | null;
+  intentPrice?: number | null;
+  intentSide?: string | null;
 }) {
   // Live top-of-book price/bid/ask over WebSocket (falls back to REST
   // polling server-side -- see api/ws_api.py -- and reconnects with
@@ -103,19 +107,29 @@ export default function ActiveTraderLadder({
 
             <div style={{ display: "flex", flexDirection: "column" }}>
               {/* Asks (descending price) */}
-              {[...ladder.asks].reverse().map((ask, i) => (
-                <div key={`ask-${i}`} className="ladder-row">
-                  <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
-                  <div className="ladder-cell" style={{ fontWeight: 600, color: "var(--decline)" }}>${ask.price.toFixed(2)}</div>
-                  <div className="ladder-cell">
-                    <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{ask.size}</span>
-                    <div
-                      className="ladder-size-bar ladder-size-bar-ask"
-                      style={{ width: `${Math.min(100, (ask.size / 2000) * 100)}%` }}
-                    />
+              {[...ladder.asks].reverse().map((ask, i) => {
+                const isIntent = intentPrice != null && Math.abs(ask.price - intentPrice) < 0.001 && intentSide?.toUpperCase() === "BUY";
+                return (
+                  <div 
+                    key={`ask-${i}`} 
+                    className="ladder-row"
+                    style={isIntent ? { background: "rgba(56, 189, 248, 0.15)", border: "1px solid rgba(56, 189, 248, 0.5)" } : {}}
+                  >
+                    <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
+                    <div className="ladder-cell" style={{ fontWeight: 600, color: "var(--decline)" }}>
+                      ${ask.price.toFixed(2)}
+                      {isIntent && <span style={{ marginLeft: "4px", fontSize: "10px", color: "var(--accent)" }}>◀ BUY</span>}
+                    </div>
+                    <div className="ladder-cell">
+                      <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{ask.size}</span>
+                      <div
+                        className="ladder-size-bar ladder-size-bar-ask"
+                        style={{ width: `${Math.min(100, (ask.size / 2000) * 100)}%` }}
+                      />
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               {/* Current Price */}
               <div
@@ -139,19 +153,29 @@ export default function ActiveTraderLadder({
               </div>
 
               {/* Bids (descending price) */}
-              {ladder.bids.map((bid, i) => (
-                <div key={`bid-${i}`} className="ladder-row">
-                  <div className="ladder-cell">
-                    <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{bid.size}</span>
-                    <div
-                      className="ladder-size-bar ladder-size-bar-bid"
-                      style={{ width: `${Math.min(100, (bid.size / 2000) * 100)}%` }}
-                    />
+              {ladder.bids.map((bid, i) => {
+                const isIntent = intentPrice != null && Math.abs(bid.price - intentPrice) < 0.001 && intentSide?.toUpperCase() === "SELL";
+                return (
+                  <div 
+                    key={`bid-${i}`} 
+                    className="ladder-row"
+                    style={isIntent ? { background: "rgba(56, 189, 248, 0.15)", border: "1px solid rgba(56, 189, 248, 0.5)" } : {}}
+                  >
+                    <div className="ladder-cell">
+                      <span style={{ position: "relative", zIndex: 1, color: "var(--text-secondary)" }}>{bid.size}</span>
+                      <div
+                        className="ladder-size-bar ladder-size-bar-bid"
+                        style={{ width: `${Math.min(100, (bid.size / 2000) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="ladder-cell" style={{ fontWeight: 600, color: "var(--growth)" }}>
+                      ${bid.price.toFixed(2)}
+                      {isIntent && <span style={{ marginLeft: "4px", fontSize: "10px", color: "var(--accent)" }}>◀ SELL</span>}
+                    </div>
+                    <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
                   </div>
-                  <div className="ladder-cell" style={{ fontWeight: 600, color: "var(--growth)" }}>${bid.price.toFixed(2)}</div>
-                  <div className="ladder-cell" style={{ color: "var(--text-muted)" }}>-</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}

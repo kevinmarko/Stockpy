@@ -2,8 +2,7 @@ import React, { useState } from "react";
 import { useSearchParams } from "react-router";
 import { api, ApiError } from "../api/client";
 import type { MultiAgentResponse } from "../api/types";
-import { PageHeader } from "../components/PageHeader";
-import { BrainCircuit, Search, AlertCircle, CheckCircle2, ChevronRight, Activity, MessageSquare } from "lucide-react";
+import { BrainCircuit, Search, AlertCircle, CheckCircle2, Activity, MessageSquare } from "lucide-react";
 
 export const MultiAgentAnalysis: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -39,11 +38,13 @@ export const MultiAgentAnalysis: React.FC = () => {
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto px-4 py-8">
-      <PageHeader
-        title="Multi-Agent Analysis"
-        description="Run deep research and execution planning via autonomous AI agents."
-        icon={BrainCircuit}
-      />
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <BrainCircuit className="w-6 h-6" />
+          Multi-Agent Analysis
+        </h1>
+        <p className="text-gray-500 mt-1">Run deep research and execution planning via autonomous AI agents.</p>
+      </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
         <div className="p-6">

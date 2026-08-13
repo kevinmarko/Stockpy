@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 246,
+    "live_safe": 248,
     "no_op": 2,
-    "restart_required": 78,
-    "total": 326
+    "restart_required": 79,
+    "total": 329
   },
   "dynamic_sites": [
     {
@@ -49,21 +49,21 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 2932,
+      "line": 2936,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3878,
+      "line": 3933,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 3963,
+      "line": 4018,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -124,7 +124,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 338,
+  "files_scanned": 342,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -300,6 +300,8 @@
     "PROMPT_REGISTRY_URL",
     "PROMPT_REGISTRY_WRITES_ENABLED",
     "PYTRENDS_ENABLED",
+    "QDRANT_COLLECTION",
+    "QDRANT_URL",
     "QUEUE_SOURCE_MAX_AGE_SECONDS",
     "RAG_EMBEDDING_PROVIDER",
     "RAG_INDEX_LOOKBACK_DAYS",
@@ -380,16 +382,16 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 662,
+    "attr": 664,
     "factory_param": 4,
-    "getattr_const": 244,
-    "os_environ": 16
+    "getattr_const": 245,
+    "os_environ": 17
   },
   "read_forms_distinct_fields": {
-    "attr": 200,
+    "attr": 202,
     "factory_param": 4,
     "getattr_const": 149,
-    "os_environ": 13
+    "os_environ": 14
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
   "restart_required": {
@@ -592,7 +594,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:299",
+        "site": "api/pilots_api.py:302",
         "via": []
       },
       {
@@ -1100,7 +1102,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4129",
+        "site": "api/pilots_api.py:4184",
         "via": []
       }
     ],
@@ -1111,7 +1113,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4128",
+        "site": "api/pilots_api.py:4183",
         "via": []
       }
     ],
@@ -1122,7 +1124,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4253",
+        "site": "api/pilots_api.py:4314",
         "via": []
       },
       {
@@ -1197,7 +1199,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4233",
+        "site": "api/pilots_api.py:4288",
         "via": []
       },
       {
@@ -1228,7 +1230,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:552",
+        "site": "api/pilots_api.py:556",
         "via": []
       }
     ],
@@ -1479,6 +1481,17 @@
           "init_body"
         ],
         "site": "data/market_data.py:1809",
+        "via": []
+      }
+    ],
+    "GRAVITY_REQUIRE_NATIVE": [
+      {
+        "discarded": false,
+        "form": "os_environ",
+        "rules": [
+          "os_environ"
+        ],
+        "site": "Gravity AI Review Suite.py:4493",
         "via": []
       }
     ],
@@ -2072,7 +2085,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:547",
+        "site": "api/pilots_api.py:551",
         "via": []
       },
       {
@@ -2109,7 +2122,7 @@
     "init_self_assign": 40,
     "method_self_assign": 4,
     "module_level": 47,
-    "os_environ": 16
+    "os_environ": 17
   },
   "restart_required_via_name_literal_only": [
     "EDGAR_FULLTEXT_CHUNK_TOKENS",

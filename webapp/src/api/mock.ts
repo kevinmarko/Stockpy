@@ -1531,57 +1531,53 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   // ---- Financial Constants ----
   {
     group: "Financial Constants", key: "RISK_FREE_RATE", type: "number",
-    value: 0.045, default: 0.045, min: 0, max: 1, step: 0.005,
+    value: 0.045, default: 0.045, min: 0.0, max: 1.0, step: 0.005,
     description: null,
   },
   {
     group: "Financial Constants", key: "MARKET_RISK_PREMIUM", type: "number",
-    value: 0.055, default: 0.055, min: 0, max: 1, step: 0.005,
+    value: 0.055, default: 0.055, min: 0.0, max: 1.0, step: 0.005,
     description: null,
   },
   {
     group: "Financial Constants", key: "REQUIRED_RETURN_RATE", type: "number",
-    value: 0.08, default: 0.08, min: 0, max: 1, step: 0.005,
+    value: 0.08, default: 0.08, min: 0.0, max: 1.0, step: 0.005,
     description: null,
   },
   {
     group: "Financial Constants", key: "MAX_PORTFOLIO_HEAT", type: "number",
-    value: 0.06, default: 0.06, min: 0, max: 1, step: 0.01,
+    value: 0.06, default: 0.06, min: 0.0, max: 1.0, step: 0.01,
     description: null,
   },
   // ---- Position Sizing ----
   {
     group: "Position Sizing", key: "KELLY_FRACTION", type: "number",
-    value: 0.5, default: 0.5, min: 0, max: 1, step: 0.05,
+    value: 0.5, default: 0.5, min: 0.0, max: 1.0, step: 0.05,
     description: null,
   },
   {
     group: "Position Sizing", key: "KELLY_CAP", type: "number",
-    value: 0.2, default: 0.2, min: 0, max: 1, step: 0.01,
+    value: 0.2, default: 0.2, min: 0.0, max: 1.0, step: 0.01,
     description: null,
   },
   {
     group: "Position Sizing", key: "VOL_TARGET", type: "number",
-    value: 0.1, default: 0.1, min: 0, max: 1, step: 0.01,
+    value: 0.1, default: 0.1, min: 0.0, max: 1.0, step: 0.01,
     description: null,
   },
   {
     group: "Position Sizing", key: "MAX_LEVERAGE", type: "number",
-    value: 2.0, default: 2.0, min: 0, max: 10, step: 0.1,
+    value: 2.0, default: 2.0, min: 0.0, max: 10.0, step: 0.1,
     description: null,
   },
   {
     group: "Position Sizing", key: "MAX_POSITION_WEIGHT", type: "number",
-    value: 1.0, default: 1.0, min: 0, max: 5, step: 0.05,
+    value: 1.0, default: 1.0, min: 0.0, max: 5.0, step: 0.05,
     description: null,
   },
-  // Portfolio-level gross exposure cap + cap-aware escalation + cap-event
-  // audit/alerting (sizing/position_sizer.py, sizing/cap_audit_store.py) --
-  // same "no description in settings.py" convention as the five sizing
-  // fields above.
   {
     group: "Position Sizing", key: "MAX_PORTFOLIO_GROSS", type: "number",
-    value: 3.0, default: 3.0, min: 0, max: 20, step: 0.1,
+    value: 3.0, default: 3.0, min: 0.0, max: 20.0, step: 0.1,
     description: null,
   },
   {
@@ -1596,7 +1592,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Position Sizing", key: "SIZING_CAP_ESCALATION_FACTOR", type: "number",
-    value: 0.5, default: 0.5, min: 0, max: 1, step: 0.05,
+    value: 0.5, default: 0.5, min: 0.0, max: 1.0, step: 0.05,
     description: null,
   },
   {
@@ -1611,18 +1607,33 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Position Sizing", key: "SIZING_CAP_ALERT_THRESHOLD_PCT", type: "number",
-    value: 0.30, default: 0.30, min: 0, max: 1, step: 0.05,
+    value: 0.3, default: 0.3, min: 0.0, max: 1.0, step: 0.05,
     description: null,
+  },
+  {
+    group: "Position Sizing", key: "USE_DUAL_MOMENTUM_OVERLAY", type: "boolean",
+    value: false, default: false,
+    description: "When True, the Dual Momentum allocator pre-screens the ticker list each run. If the allocator selects the safe asset (BIL), tickers in the risky universes (SPY, VEU) have their Kelly Target set to 0.0.",
+  },
+  {
+    group: "Position Sizing", key: "DUAL_MOMENTUM_SAFE_ASSET", type: "string",
+    value: "BIL", default: "BIL",
+    description: "Ticker used as the safe/defensive asset in the Dual Momentum overlay.",
+  },
+  {
+    group: "Position Sizing", key: "DUAL_MOMENTUM_RISKY_ASSETS", type: "string",
+    value: "PydanticUndefined", default: "PydanticUndefined",
+    description: "Risky ETFs compared in the Dual Momentum cross-sectional filter.",
   },
   // ---- Risk Gate ----
   {
     group: "Risk Gate", key: "MAX_CORRELATION", type: "number",
-    value: 0.85, default: 0.85, min: 0, max: 1, step: 0.05,
+    value: 0.85, default: 0.85, min: 0.0, max: 1.0, step: 0.05,
     description: "Max absolute pairwise return correlation before a new position is blocked.",
   },
   {
     group: "Risk Gate", key: "DAILY_LOSS_LIMIT_PCT", type: "number",
-    value: 0.02, default: 0.02, min: 0, max: 1, step: 0.005,
+    value: 0.02, default: 0.02, min: 0.0, max: 1.0, step: 0.005,
     description: "Halt new BUY orders when intraday P&L drops below this fraction of start-of-day equity.",
   },
   {
@@ -1632,23 +1643,38 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Risk Gate", key: "HMM_RISK_OFF_BLOCK_THRESHOLD", type: "number",
-    value: 0.8, default: 0.8, min: 0, max: 1, step: 0.05,
+    value: 0.8, default: 0.8, min: 0.0, max: 1.0, step: 0.05,
     description: "Block new long orders when HMM risk-off probability exceeds this.",
   },
   {
     group: "Risk Gate", key: "RISK_GATE_ENFORCE_MARKET_HOURS", type: "boolean",
     value: true, default: true,
-    description: "Block orders outside NYSE RTH (09:30–16:00 ET).",
+    description: "Block orders outside NYSE RTH (09:30\u201316:00 ET).",
   },
   {
     group: "Risk Gate", key: "META_LABEL_MIN_CONFIDENCE", type: "number",
-    value: 0.4, default: 0.4, min: 0, max: 1, step: 0.05,
+    value: 0.4, default: 0.4, min: 0.0, max: 1.0, step: 0.05,
     description: "Minimum meta-label probability for a primary signal to contribute to sizing. If predict_proba < META_LABEL_MIN_CONFIDENCE, the meta_label_composite is forced to 0.0 (position zeroed for the cycle).",
   },
   {
     group: "Risk Gate", key: "DRY_RUN", type: "boolean",
     value: false, default: false,
     description: "Log orders but do not submit to broker.",
+  },
+  {
+    group: "Risk Gate", key: "EXECUTION_PRIORITY_QUEUE_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in: route OrderIntents through execution/priority_queue.py's leaky-bucket priority queue before submission, prioritizing risk-reducing (SELL/TRIM) intents over new BUYs when nearing the submission-rate budget. Does NOT replace or bypass MAX_ORDER_RATE_PER_MIN's hard cap (execution/risk_gate.py) or execution/kill_switch.py -- both remain the sole authorization gate, checked at submission exactly as before. False (default) preserves the exact current sequential per-row submission order -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention.",
+  },
+  {
+    group: "Risk Gate", key: "EXECUTION_QUEUE_LEAK_RATE_PER_SEC", type: "number",
+    value: 2.0, default: 2.0, min: 0.0, max: 100.0, step: 0.5,
+    description: "Leaky-bucket drain rate (order submissions/sec) when EXECUTION_PRIORITY_QUEUE_ENABLED=true. Only paces submission ordering within a single cycle's queue drain -- independent of MAX_ORDER_RATE_PER_MIN's separate 60s rolling-window cap.",
+  },
+  {
+    group: "Risk Gate", key: "FLATTEN_ON_KILL", type: "boolean",
+    value: false, default: false,
+    description: "Log CRITICAL position-flatten reminder when kill switch activates.",
   },
   // ---- Forecasting ----
   {
@@ -1658,39 +1684,82 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Forecasting", key: "FORECAST_PROPHET_WEIGHT", type: "number",
-    value: 0.25, default: 0.25, min: 0, max: 1, step: 0.05,
+    value: 0.25, default: 0.25, min: 0.0, max: 1.0, step: 0.05,
     description: "Weight given to the Prophet 30-day forecast when blending it into the static ensemble at the 30-day horizon: final = base*(1-w) + prophet*w. 0.0 disables Prophet's influence on the blend.",
   },
   {
     group: "Forecasting", key: "FORECAST_SKILL_WEIGHTING_ENABLED", type: "boolean",
     value: false, default: false,
-    description: "Opt-in activation of inverse-RMSE skill-weighted multi-model forecast blending (ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM weighted by recent realized accuracy via forecasting.forecast_tracker.ForecastTracker). When False (the default) the static sector-preference blend is used unchanged.",
+    description: "Opt-in activation of inverse-RMSE skill-weighted multi-model forecast blending (ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM weighted by recent realized accuracy via forecasting.forecast_tracker.ForecastTracker). When False (the default) the static sector-preference blend is used unchanged \u2014 matching the FORECAST_USE_GARCH_SIGMA opt-in convention. When True, a persistent ForecastTracker is threaded into every ForecastingEngine construction, self-provisioning its forecast_errors table in quant_platform.db (no migration required).",
   },
   {
     group: "Forecasting", key: "FORECAST_SKILL_WINDOW_DAYS", type: "number",
     value: 180, default: 180, min: 1, max: 3650, step: 1,
-    description: "Rolling window (calendar days) over which per-model RMSE is computed for inverse-skill forecast blending. Increase for stability; decrease for faster adaptation.",
+    description: "Rolling window (calendar days) over which per-model RMSE is computed for inverse-skill forecast blending. Increase for stability; decrease for faster adaptation. Cold-start equal weighting applies when fewer than FORECAST_SKILL_MIN_OBS completed observations exist. MUST exceed the max forecast horizon (90d): a 'completed' row for horizon 90 needs forecast_ts \u2264 now-85d, while the window only counts forecast_ts \u2265 now-WINDOW; with WINDOW=60 those two bands are mutually exclusive so h=60/h=90 could never warm up. 180 gives every horizon a real eligibility band.",
   },
   {
     group: "Forecasting", key: "FORECAST_MODEL_PERSISTENCE_ENABLED", type: "boolean",
     value: false, default: false,
-    description: "Opt-in: persist the trained CNN-LSTM (.keras + both MinMaxScalers) and Prophet model to disk per ticker instead of retraining from scratch every cycle.",
+    description: "Opt-in: persist the trained CNN-LSTM (.keras + both MinMaxScalers) and Prophet model to disk per ticker (forecasting/model_persistence.py) instead of retraining from scratch every cycle. Split train from inference the same way regime/hmm_regime.py's HMMRegimeDetector does: a fresh model is fit only when no cached artifact exists for the ticker or it is older than FORECAST_MODEL_RETRAIN_DAYS; otherwise the cached model is loaded and only inference (predict) runs. Behavior-preserving BETWEEN retrains (same fitted weights -> same forecast for repeated calls); only changes WHEN a fit happens. When False (the default) every call retrains from scratch, matching pre-persistence behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention. Requires TensorFlow/Prophet to be installed; a missing library or a corrupt/unreadable cached artifact degrades to a fresh fit (never raises).",
   },
   {
     group: "Forecasting", key: "FORECAST_MODEL_RETRAIN_DAYS", type: "number",
     value: 7, default: 7, min: 1, max: 3650, step: 1,
-    description: "Days a persisted CNN-LSTM/Prophet model artifact remains valid before the next generate_forecast() call for that ticker triggers a fresh fit. Only consulted when FORECAST_MODEL_PERSISTENCE_ENABLED=True.",
+    description: "Days a persisted CNN-LSTM/Prophet model artifact remains valid before the next generate_forecast() call for that ticker triggers a fresh fit (mirrors regime/hmm_regime.py's HMMRegimeDetector(retrain_freq_days=7) convention). Only consulted when FORECAST_MODEL_PERSISTENCE_ENABLED=True.",
   },
   {
     group: "Forecasting", key: "BETA_LOOKBACK_DAYS", type: "number",
     value: 504, default: 504, min: 1, max: 3650, step: 1,
     description: "Trailing calendar days of daily returns used to compute beta in the Yahoo-derived fundamentals engine (Cov(stock,SPY)/Var(SPY)). ~2 years.",
   },
+  {
+    group: "Forecasting", key: "BERT_LLA_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Master switch for the BERT-LLA multi-horizon forecaster (forecasting/bert_lla.py -- PyTorch dual-LSTM + self-attention, three registered ablations: lstm_baseline, lstm_attention, bert_lla). False (the default) is a complete no-op: ForecastingEngine.run_bert_lla_forecast() returns the zero sentinel without ever touching torch. Requires the optional torch package (already in requirements-optional.txt for local FinBERT inference) -- absent, the same zero-sentinel behavior applies regardless of this flag.",
+  },
+  {
+    group: "Forecasting", key: "BERT_LLA_WINDOW_SIZE", type: "number",
+    value: 22, default: 22, min: 1, max: 1000, step: 1,
+    description: "Lookback window (trading days) BERT-LLA's LSTM layers consume, replacing the CNN-LSTM path's hardcoded LSTM_LOOKBACK=60 -- matches the source methodology's 22-trading-day window. Only consulted once BERT_LLA_ENABLED is True.",
+  },
+  {
+    group: "Forecasting", key: "BERT_LLA_MIN_SENTIMENT_COVERAGE", type: "number",
+    value: 0.5, default: 0.5, min: 0.0, max: 1.0, step: 0.05,
+    description: "Hard gate for the 'bert_lla' ablation specifically (not lstm_baseline/lstm_attention, which consume no sentiment): the minimum fraction of rows in the feature window that must have an OBSERVED composite-sentiment-index reading (signals.sentiment_index) before training proceeds. Below this threshold, run_bert_lla_forecast returns the zero sentinel rather than training on a mostly mask-zeroed sentiment channel (CONSTRAINT #4) -- SENTIMENT_INGESTION_ENABLED defaults False and SENTIMENT_PIT_MIN_MONTHS=6 is this platform's own bar for trusting sentiment history, so this gate will bind for months after an operator first enables sentiment ingestion, by design. Only consulted once BERT_LLA_ENABLED is True.",
+  },
+  {
+    group: "Forecasting", key: "BERT_LLA_BLEND_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Whether the 'bert_lla' ablation's price (not lstm_baseline/lstm_attention -- those are comparison-only and NEVER blend-eligible regardless of this flag) is added to ForecastingEngine's model_forecasts dict and therefore influences the live skill-weighted blended forecast. False (the default): bert_lla still RECORDS to forecast_errors for the webapp's model-comparison chart, but its error history accrues honestly before it can ever move a recommendation -- mirrors FORECAST_SKILL_WEIGHTING_ENABLED's 'measure first, act later' posture. Only consulted once BERT_LLA_ENABLED is True.",
+  },
+  {
+    group: "Forecasting", key: "BERT_LLA_ABLATION_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "When True, generate_forecast() runs all three BERT-LLA ablations (lstm_baseline, lstm_attention, bert_lla) instead of just 'bert_lla' alone -- three PyTorch trainings per ticker per cycle instead of one. False (the default) keeps the marginal compute cost to a single model. Only consulted once BERT_LLA_ENABLED is True.",
+  },
+  {
+    group: "Forecasting", key: "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Fix for the CNN-LSTM/TensorFlow deadlock documented in docs/known_issues/cnn_lstm_tf_deadlock.md (issue #381). Root cause: TensorFlow and pyarrow each ship an independently-compiled copy of the same Abseil sync primitive; whichever library's Python-level init runs first in the PROCESS wins that symbol, and if pandas/pyarrow initialize first, the first real multi-threaded TF eager op (a Conv1D/LSTM .fit()) deadlocks forever. Reordering forecasting_engine.py's own imports (always-on, unconditional) only helps when this module is the first thing in the whole process to touch pandas -- true in an isolated test script, false in main.py/main_orchestrator.py/pipeline/production_steps.py, which all import pandas before forecasting_engine is ever reached (those three files carry their own guarded `import tensorflow` before their own `import pandas` as a defense-in-depth second layer -- see Fix 2 in the doc -- but that convention is unenforced for any OTHER entry point, script, or notebook that happens to reach this code path). When True (the default), ForecastingEngine.run_cnn_lstm_forecast runs the actual TF-touching work (model fit+predict, and cached-model load+predict) in a persistent multiprocessing 'spawn' worker pool (repo-root cnn_lstm_process_pool.py) whose worker module (repo-root cnn_lstm_worker.py -- deliberately NOT inside forecasting/, since that package's __init__ eagerly imports pandas) imports tensorflow before anything else -- a fresh interpreter per worker means the parent process's import order can no longer matter, unlike the module-level reorder alone or the entry-point guards. This is what actually removes the process-scope constraint, rather than merely mitigating it by convention: it protects EVERY caller, known or not, not just the three files that remember the guard. All feature engineering / windowing / scaling stays in the parent process unchanged (pandas-only, never touches TF). Any subprocess failure (timeout, BrokenProcessPool, real training exception) is caught by run_cnn_lstm_forecast's existing outer try/except and degrades to the zero-result sentinel -- never crashes the pipeline (CONSTRAINT #6). This default flipped True on 2026-07-31 (Round 7 of the known-issues doc) once Round 6 (2026-07-27) verified subprocess isolation end-to-end against the real native deadlock on real production data in the actual macOS arm64 + Framework-Python environment the deadlock was originally confirmed on -- the earlier caveat about this being verified only against the mocked test suite no longer applies. Set False only to restore the legacy in-process path (byte-identical to this flag's original pre-2026-07-31 default); doing so re-exposes the process-scope import-order hazard for any entry point that doesn't carry its own guarded `import tensorflow` before `import pandas`/`import pyarrow`.",
+  },
+  {
+    group: "Forecasting", key: "CNN_LSTM_PROCESS_POOL_WORKERS", type: "number",
+    value: 1, default: 1, min: 1, max: 64, step: 1,
+    description: "Worker-process count for the CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED pool (repo-root cnn_lstm_process_pool.py). Workers are persistent (survive across tickers/cycles, each pays the TensorFlow import cost only once) so CNN-LSTM fits queued from pipeline/production_steps.py's per-ticker ThreadPoolExecutor fan-out share this fixed-size pool rather than spawning a fresh interpreter per ticker. Keep small -- each worker holds a full TensorFlow process in memory.",
+  },
+  {
+    group: "Forecasting", key: "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS", type: "number",
+    value: 300, default: 300, min: 1, max: 3600, step: 10,
+    description: "Max seconds to wait for a single CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED fit-or-predict call before giving up and falling back to the zero-result sentinel (never blocks the pipeline indefinitely -- the entire point of this fix is to replace an unbounded hang with a bounded, recoverable failure). 50 epochs with EarlyStopping(patience=5) on the modest window sizes this codebase trains on should complete well within the default.",
+  },
+  {
+    group: "Forecasting", key: "FORECAST_CNN_LSTM_WALKFORWARD_SCALING", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in, stricter alternative to ForecastingEngine.fit_scalers_on_train's single train/reserve MinMaxScaler split. That split is already leak-free for the live single-shot forecast (the emitted forecast never depends on future data relative to inference time), but an EARLY training window's scale still reflects statistics pooled from LATER rows within the train span via the one shared scaler. When True, ForecastingEngine.run_cnn_lstm_forecast builds training windows via fit_scalers_walkforward_windows instead: each supervised window is scaled using only an expanding min/max computed from rows strictly at/before that window's own end (vectorized via numpy cumulative min/max, not a per-window sklearn refit). The final live inference window is unaffected either way -- it still uses the train-span scaler, since at inference time 'now' truly is the most recent data available. False (the default) reproduces pre-existing behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention. Intended for high-fidelity walk-forward backtesting, not the live pipeline; costs more compute per fit.",
+  },
   // ---- Market Data ----
   {
-    // Honest absent value: settings.py's real default IS None (auto-select
-    // by key availability) -- never fabricated as "alpaca"/"yfinance".
-    group: "Market Data", key: "MARKET_DATA_PROVIDER", type: "enum",
+    group: "Market Data", key: "MARKET_DATA_PROVIDER", type: "string",
     value: null, default: null, options: ["alpaca", "yfinance", "fmp"],
     description: "Force a specific market-data backend: 'fmp', 'alpaca' or 'yfinance'. When unset the platform auto-selects based on key availability (Alpaca if its keys are present, else yfinance). Setting FMP_API_KEY alone NEVER auto-elects FMP: unlike the Alpaca ladder, FMP is chosen only by explicitly setting this to 'fmp', so an operator who adds the key to enable the analyst or earnings feed does not silently have their quote/bars source change underneath them. FMP quotes/bars additionally require FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention).",
   },
@@ -1702,12 +1771,22 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   {
     group: "Market Data", key: "MARKET_DATA_BARS_TTL_SECONDS", type: "number",
     value: 900, default: 900, min: 0, max: 86400, step: 1,
-    description: "In-process OHLCV intraday-bars cache TTL in seconds (never persisted to disk).",
+    description: "In-process OHLCV intraday-bars cache TTL in seconds (never persisted to disk). Bars are daily-resolution, so a few-minutes TTL collapses the repeated per-symbol history fetches (universe pre-fetch + advisory refetch + GUI panels) into a single network pull within the window. Defaults to 15 min to align with DATA_FRESHNESS_TTL_SECONDS (the cross-cycle persisted-freshness gate); this is the in-process, single-cycle companion to that gate.",
   },
   {
-    group: "Market Data", key: "FUNDAMENTALS_SOURCE", type: "enum",
+    group: "Market Data", key: "FUNDAMENTALS_SOURCE", type: "string",
     value: "yahoo", default: "yahoo", options: ["yahoo", "yfinance_info", "fmp"],
-    description: "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep — see section 25). Finnhub is no longer a fundamentals source. Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
+    description: "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep \u2014 see section 25). Finnhub is no longer a fundamentals source. Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
+  },
+  {
+    group: "Market Data", key: "MARKET_DATA_WS_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in: subscribe to Alpaca's real-time StockDataStream WebSocket for quotes, SUPPLEMENTING (never replacing) the REST-polling CompositeProvider -- see data/market_data_ws.py. Only takes effect when the active quote provider is AlpacaProvider; otherwise a no-op with an INFO log. False (default) reproduces the exact current REST-only behavior -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention. Any WS failure (connect, subscribe, disconnect, missing credentials) degrades to the existing REST path -- never crashes the pipeline.",
+  },
+  {
+    group: "Market Data", key: "HISTORICAL_STORE_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Master flag for HistoricalStore DB routing. When True, OHLCV bars and account snapshots are read from / written to quant_platform.db. First call for a symbol = full BARS_BACKFILL_DAYS backfill; subsequent calls = delta only. Set False to reproduce pre-Tier-2.3 behavior (all fetches go directly to the live provider).",
   },
   // ---- Runtime & Ops ----
   {
@@ -1721,36 +1800,40 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     description: "Poll interval (seconds) for the Launcher pipeline-progress indicator.",
   },
   {
-    group: "Runtime & Ops", key: "LOG_LEVEL", type: "enum",
+    group: "Runtime & Ops", key: "LOG_LEVEL", type: "string",
     value: "INFO", default: "INFO", options: ["DEBUG", "INFO", "WARNING", "ERROR"],
     description: null,
   },
   {
     group: "Runtime & Ops", key: "ADVISORY_REUSE_PIPELINE_COMPUTE", type: "boolean",
     value: false, default: false,
-    description: "Opt-in, OUTPUT-CHANGING: main_orchestrator.py's advisory overlay reuses run_pipeline's already-computed GARCH/forecast values for that ticker instead of independently refitting a second time. When False (the default), every advisory-overlay call refits independently, reproducing the exact pre-dedup behavior.",
+    description: "Opt-in, OUTPUT-CHANGING: main_orchestrator.py's advisory overlay (engine.advisory.evaluate(), run AFTER run_pipeline() has already GARCH-fit and forecast-fit every ticker once) reuses run_pipeline's already-computed dashboard_df['GARCH_Vol'] / dashboard_df['Forecast_30'] for that ticker instead of independently refitting GJR-GARCH and the full ARIMA/Holt-Winters/CNN-LSTM/Prophet forecast ensemble a SECOND time -- eliminating the single largest redundant CPU cost per cycle. advisory.evaluate() only trusts a precomputed value when it is a real positive number; a missing/zero/failed upstream value falls through to the original independent fit (dead-letter safe -- CONSTRAINT #6), so this can only ever REMOVE a redundant fit, never silently drop one that already ran. StrategyEngine.evaluate_security() is deliberately NOT reused here (run_pipeline's own call omits context_extras, unlike advisory.evaluate()'s -- reusing it would silently zero out the cross-sectional-momentum/multifactor signal contributions), so scoring itself is always freshly computed with correct context. Because a fresh independent fit and a reused one are not guaranteed bit-identical (CNN-LSTM's random weight init, GARCH's numerical optimizer), turning this on can move Advisory_* column values slightly -- hence default False and its own opt-in flag, unlike the byte-identical PR A hot-path changes. When False (the default), every advisory-overlay call passes precomputed_garch=None/precomputed_forecast=None, reproducing the exact pre-dedup behavior.",
   },
   {
     group: "Runtime & Ops", key: "ADVISORY_ONLY", type: "boolean",
     value: true, default: true,
-    description: "When True, ALL broker order submission is suppressed. The pipeline still runs end-to-end (signals, sizing, HTML report, JSON payload) but order execution returns immediately. Set False ONLY when broker execution is intentionally re-enabled.",
+    description: "When True, ALL broker order submission is suppressed. The pipeline still runs end-to-end (signals, sizing, HTML report, JSON payload) but main_orchestrator._execute_broker_orders() returns immediately and the GUI Strategy Matrix execution-mode toggle is disabled. Set False ONLY when broker execution is intentionally re-enabled.",
   },
-  // ---- Advanced / Config (the 7 keys the real Streamlit tab's own
-  // _SETTINGS_LAYOUT, gui/panels/settings_manager.py:36-77, already served) ----
+  {
+    group: "Runtime & Ops", key: "ROBINHOOD_AUTO_REFRESH_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "When True, fetch_account_snapshot() automatically re-logs-in to Robinhood whenever the cached snapshot exceeds max_age_hours. Default False: device-approval login needs a human to tap approve, so an unattended background attempt can never succeed \u2014 live login only happens when explicitly forced (--refresh-account, or the webapp's Connect/Refresh flows); all other callers get the cached snapshot regardless of staleness.",
+  },
+  // ---- Advanced / Config ----
   {
     group: "Advanced / Config", key: "SECTOR_FORECAST_CONFIG_PATH", type: "string",
     value: "forecasting/sector_configs.json", default: "forecasting/sector_configs.json",
-    description: "Path to the committed per-sector forecast config artifact (model+horizon per sector, derived from an offline walk-forward backtest). Loaded once at ForecastingEngine init; the hardcoded default dict is used as fallback when the file is missing or invalid.",
+    description: "Path to the committed per-sector forecast config artifact (model+horizon per sector, derived from an offline walk-forward backtest \u2014 see validation/sector_forecast_backtest.py). Loaded once at ForecastingEngine init; the hardcoded default dict is used as fallback when the file is missing or invalid. Offline/deterministic at runtime \u2014 no network.",
   },
   {
     group: "Advanced / Config", key: "SECTOR_FORECAST_CONFIGS", type: "string",
-    value: "{}", default: "{}",
-    description: 'Optional per-sector override merged OVER the artifact/hardcoded default. JSON dict in .env, e.g. {"Technology": {"days": 30, "model": "MC"}}. Empty dict (the default) leaves the artifact/hardcoded default unchanged (fully backward-compatible).',
+    value: "PydanticUndefined", default: "PydanticUndefined",
+    description: "Optional per-sector override merged OVER the artifact/hardcoded default. JSON dict in .env, e.g. {\"Technology\": {\"days\": 30, \"model\": \"MC\"}}. Empty dict (the default) leaves the artifact/hardcoded default unchanged (fully backward-compatible).",
   },
   {
     group: "Advanced / Config", key: "PROMPT_REGISTRY_ENABLED", type: "boolean",
     value: false, default: false,
-    description: "Master switch. False (default) → baseline-only, zero network calls. Set True to enable remote manifest fetch and cache.",
+    description: "Master switch.  False (default) \u2192 baseline-only, zero network calls. Set True to enable remote manifest fetch and cache.",
   },
   {
     group: "Advanced / Config", key: "PROMPT_REGISTRY_BACKEND", type: "string",
@@ -1763,15 +1846,99 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     description: "Route the desktop shell's always-on refresh loop and the Launcher tab's manual run trigger through the persistent orchestrator daemon instead of spawning a fresh subprocess per cycle. False (default) preserves today's exact subprocess behavior everywhere.",
   },
   {
-    group: "Advanced / Config", key: "PILOTS_API_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Host the Pilots API inside the persistent orchestrator daemon process, alongside the existing Control API. False (default) preserves today's exact behavior -- pilots_api.py remains a manually-launched standalone service.",
+    group: "Advanced / Config", key: "CORS_ALLOWED_ORIGINS", type: "string",
+    value: "PydanticUndefined", default: "PydanticUndefined",
+    description: "Allowed browser origins for the read-only State API / Pilots API CORS policy. JSON array in .env, e.g. [\"http://localhost:3000\", \"https://app.example.com\"].",
   },
   {
-    group: "Advanced / Config", key: "CORS_ALLOWED_ORIGINS", type: "string",
-    value: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
-    default: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
-    description: 'Allowed browser origins for the read-only State API / Pilots API CORS policy. JSON array in .env, e.g. ["http://localhost:3000", "https://app.example.com"].',
+    group: "Advanced / Config", key: "GRAVITY_REQUIRE_NATIVE", type: "boolean",
+    value: false, default: false,
+    description: "If True, the Gravity AI Review Suite requires the native daemon to be running. If False, it bypasses native-only integration checks.",
+  },
+  {
+    group: "Advanced / Config", key: "PILOTS_API_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Host the Pilots API (api/pilots_api.py) inside the persistent orchestrator daemon process (desktop/orchestrator_daemon.py) on PILOTS_API_PORT, alongside the existing Control API. False (default) preserves today's exact behavior \u2014 pilots_api.py remains a manually-launched standalone `uvicorn` service, unaffected by the daemon's lifecycle. Only takes effect when the daemon entrypoint itself is run \u2014 does not require ORCHESTRATOR_DAEMON_ENABLED (that flag controls the DESKTOP SHELL's choice of subprocess; this flag controls what the daemon PROCESS hosts once launched, by either path).",
+  },
+  // ---- Options & Pairs Snapshots ----
+  {
+    group: "Options & Pairs Snapshots", key: "OPTIONS_MATRIX_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "When True, the pipeline persists the per-symbol options premium directive matrix to output/options_matrix.json for the Pilots PWA (GET /options, GET /symbols/{ticker}/options). Default False.",
+  },
+  {
+    group: "Options & Pairs Snapshots", key: "OPTIONS_TRUE_IVR_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in: wires a real, options-chain-derived True_IVR into technical_options_engine.build_premium_directive() -- the GUI Technical Options Matrix tab, the get_options_directive MCP tool, api/metrics_api.py, execution/options_queue_builder.py, and every other build_premium_directive caller -- instead of leaving true IV rank exclusive to main_orchestrator.py's pipeline/production_steps.py::OptionsAnalysisStep path. When True, build_premium_directive fetches a live 30-calendar-day ATM IV via volatility.iv_engine.get_30d_atm_iv() (a fresh, lightweight DataEngine constructed with no FRED key purely for its fetch_options_chain() -- CompositeProvider/data/market_data.py has no chain-shaped method to reuse, so this mirrors exactly what OptionsAnalysisStep already does rather than inventing a second convention) and ranks it against the SAME iv_history table (volatility.iv_engine.IVHistoryStore) OptionsAnalysisStep writes to via calculate_true_ivr() -- strictly prior days only, never a lookahead. The result is surfaced as a NEW True_IVR row key alongside the existing realized-vol-only IVR_Proxy (never replacing it -- both stay so provenance is honest); generate_strategy_pricing_matrix's true_ivr argument prefers True_IVR over IVR_Proxy when the flag is on and a finite value was computed, falling back to IVR_Proxy exactly as today otherwise. Any failure at any step -- no live chain data, an empty iv_history table during warm-start (this repo's dev/CI sandboxes never populate GUI/MCP-path history since only OptionsAnalysisStep's orchestrator path writes to it), a network error, or any exception -- degrades to float('nan') for True_IVR and never crashes or changes IVR_Proxy/Cash-Wait fallback behavior (CONSTRAINT #4/#6). False (the default) reproduces today's exact behavior byte-for-byte -- no new network call, no new DB read, True_IVR always NaN. Enabling this adds one live options-chain fetch per symbol per render (GUI)/per call (MCP) -- a real, non-trivial network cost the realized-vol proxy never had.",
+  },
+  {
+    group: "Options & Pairs Snapshots", key: "PAIRS_SNAPSHOT_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "When True, the pipeline persists the cointegrated pairs radar (ranking + current spread state) to output/pairs.json for the Pilots PWA (GET /pairs). Expensive O(n^2) scan; default False.",
+  },
+  // ---- ML, Data Capture & Audit ----
+  {
+    group: "ML, Data Capture & Audit", key: "META_LABELING_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "Enable startup registration of trained meta-labelers into global_meta_registry (ml/meta_bootstrap.py). No-op when no saved model exists; set False to disable meta-labeling entirely.",
+  },
+  {
+    group: "ML, Data Capture & Audit", key: "NEWS_HISTORY_CAPTURE_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "When True, NewsCatalystSignal.pre_compute() writes each cycle's live news-sentiment scores to HistoricalStore's news_history table (via HistoricalStore.save_news_sentiment()), forward-archiving real point-in-time history so a genuine backtest becomes possible after enough history accumulates. No backtest reads this table yet. Dead-lettered: any capture failure is logged and never crashes the pipeline. Set False to disable forward-going capture entirely.",
+  },
+  {
+    group: "ML, Data Capture & Audit", key: "PIT_CAPTURE_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "When True, the orchestrator writes TODAY's cross-sectional PIT feature snapshot to ml/data/cache/ (via ml.data.store.PITFeatureStore) right after signal pre_compute, so the ML training panel accumulates real point-in-time snapshots for future incremental retrains. Dead-lettered: any capture failure is logged and never crashes the pipeline. Set False to disable forward-going capture entirely.",
+  },
+  {
+    group: "ML, Data Capture & Audit", key: "SENTIMENT_AUDIT_ENABLED", type: "boolean",
+    value: true, default: true,
+    description: "When True, sentiment-ingestion sources write each ingested document to HistoricalStore's sentiment_ingestion_audit table (via HistoricalStore.save_sentiment_documents()) -- the per-document point-in-time archive underlying the credibility-weighted sentiment signal (Sentiment Pipeline Phase 2+). Same on/off shape as NEWS_HISTORY_CAPTURE_ENABLED. Dead-lettered: any capture failure is logged and never crashes the pipeline. Has no effect while SENTIMENT_INGESTION_ENABLED is False (nothing is ever fetched to archive in the first place).",
+  },
+  {
+    group: "ML, Data Capture & Audit", key: "SENTIMENT_DESENTENCIZE_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "When True, ingested document text has periods replaced with semicolons before FinBERT scoring (a real but marginal trick to discourage sentence-boundary truncation on run-on social posts). Off by default: it can corrupt numerics ($4.50), cashtags ($AAPL), and abbreviations (U.S.) -- see tests/test_sentiment_sources.py's desentencize-safety cases before enabling.",
+  },
+  {
+    group: "ML, Data Capture & Audit", key: "EXCURSION_INTRADAY_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in (Phase-1 audit item B2): evaluation_engine.calculate_edge_ratio consumes hourly bars (MarketDataProvider.get_intraday_bars(..., interval='1h')) over the trade hold window instead of daily bars, for finer Maximum Favorable/Adverse Excursion (MFE/MAE) resolution on same-day or short holds. Daily bars are already genuine (not fabricated) and adequate for multi-day holds; this only adds intraday precision. Any hourly-fetch failure (provider error, unsupported interval, empty result) degrades to the existing daily-bar path rather than raising -- never blocks the excursion calculation. False (the default) reproduces pre-existing daily-only behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention.",
+  },
+  // ---- Validation Gates ----
+  {
+    group: "Validation Gates", key: "VALIDATION_HARNESS_OOS_GATE_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "Opt-in fix for StrategyValidationHarness's deployability gate. Two related integrity gaps: (1) report.sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover were computed from self.strategy_fn(X, y, X, y) -- a 'test' set IDENTICAL to the training set, i.e. an IN-SAMPLE number feeding the 'net-of-cost Sharpe > 0.5' / 'MaxDD < 30%' deployability criteria -- while only PBO/DSR were genuinely out-of-sample (via CombinatorialPurgedCV). (2) CombinatorialPurgedCV's own DSR/PBO Sharpes were computed on GROSS (cost-free) returns even though the in-sample Sharpe/MaxDD leg applied _apply_cost_model's turnover-scaled cost -- an inconsistent cost basis between the two gate legs. When True, run_cpcv_evaluation applies the same turnover-scaled cost model to every CPCV path's train/test returns before any Sharpe/PBO/DSR/drawdown statistic is computed from them, and the harness's reported sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover become the MEAN of each metric computed independently on every CPCV path's own genuinely held-out (purged+embargoed) OOS returns for the DSR-selected strategy, instead of the full-sample in-sample fit -- see run_cpcv_evaluation's docstring for why this is a per-path mean rather than one concatenated equity curve (CPCV's combinatorial test blocks are deliberately reused across paths). equity_curve/benchmark_curve/macro_benchmark_curve are UNCHANGED either way (still the full-sample series) -- a single non-overlapping OOS equity curve needs the AFML CPCV backtest-path-recombination algorithm, not implemented here (a real, separate follow-up, not silently faked). False (the default) reproduces pre-existing behavior exactly: every currently-recorded docs/VALIDATION_STRATEGY_FIX_LOG.md PBO/DSR/Sharpe/MaxDD baseline for the registered STRATEGY_REGISTRY fleet was measured with this flag off, and this sandboxed dev/CI environment has no live-market network access to re-verify the fleet against the corrected numbers -- flipping this on requires re-running scripts/refresh_validations.py against live data and updating that log, exactly like this codebase's other opt-in correctness levers (e.g. FORECAST_CNN_LSTM_WALKFORWARD_SCALING above, ETF_TRANSMISSION_SIZING_ENABLED).",
+  },
+  // ---- RLHF Calibration ----
+  {
+    group: "RLHF Calibration", key: "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "When True, a proposal whose confidence clears RLHF_CALIBRATION_CONFIDENCE_THRESHOLD is marked reviewed automatically (auto_approved=True, human_rating stays null -- never a fabricated rating) instead of waiting for a human. Default False: this changes what counts as 'reviewed' without a human in the loop, so it stays opt-in rather than defaulting on like RLHF_CALIBRATION_ENABLED.",
+  },
+  {
+    group: "RLHF Calibration", key: "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD", type: "number",
+    value: 0.8, default: 0.8, min: 0.0, max: 1.0, step: 0.05,
+    description: "Confidence [0,1] at or above which a new proposal is auto-approved (skips mandatory human review) when RLHF_CALIBRATION_AUTO_APPROVE_ENABLED is True.",
+  },
+  {
+    group: "RLHF Calibration", key: "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", type: "boolean",
+    value: false, default: false,
+    description: "When True, a proposal that receives a 5-star human_rating is automatically appended to the SFT JSONL export the moment the review is submitted, instead of requiring a separate POST /rlhf/export-sft call. Default False (opt-in).",
+  },
+  // ---- RAG Configuration ----
+  {
+    group: "RAG Configuration", key: "QDRANT_URL", type: "string",
+    value: "http://localhost:6333", default: "http://localhost:6333",
+    description: "URL for the Qdrant vector database.",
+  },
+  {
+    group: "RAG Configuration", key: "QDRANT_COLLECTION", type: "string",
+    value: "investyo_news", default: "investyo_news",
+    description: "Collection name in Qdrant for RAG operations.",
   },
 ];
 
@@ -2282,6 +2449,54 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
     group: "Diagnostic & Supplement Feeds", key: "FMP_SECTOR_SNAPSHOT_ENABLED", type: "boolean",
     value: false, default: false,
     description: "Fetch sector valuation & performance snapshots.",
+  },
+  {
+    key: "FMP_NEWS_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description: "Master switch for the FMP company-news feed (data.fmp_client.stock_news, wrapping /news/stock). False (the default) is a complete no-op reproducing today's exact behavior — signals/news_catalyst.py's headline fetch stays on its existing Finnhub-only path, and data/sentiment_sources.py's 'fmp_news' SentimentSource returns [] without any network call. When True AND FMP_API_KEY is set, FMP becomes the PRIMARY provider for company headlines (signals/news_catalyst.py::fetch_company_headlines dispatches FMP-first, falling back to Finnhub only on an FMP failure) and 'fmp_news' becomes eligible for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP key: /news/stock returns >=6 months of real history (vs. Finnhub's free-tier ~3-month cap) with working from/to date-window + page/limit pagination. Deliberately does NOT touch /news/press-releases — that endpoint returned a plan-entitlement rejection ('Restricted Endpoint') against the account this integration was verified with; see docs/FMP_INTEGRATION.md.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_NEWS_PAGE_LIMIT",
+    value: 100,
+    default: 100,
+    type: "number",
+    description: "Articles requested per /news/stock page (the 'limit' query param). 100 matches the page size verified live 2026-08 against a real FMP key over a multi-day window. Only consulted when FMP_NEWS_ENABLED is True.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_NEWS_MAX_PAGES",
+    value: 10,
+    default: 10,
+    type: "number",
+    description: "Hard ceiling on pages fetched per symbol per call into data.fmp_client.stock_news, bounding a wide backfill window (e.g. scripts/backfill_news_history.py --months 6) so a dense news day/symbol cannot loop indefinitely. Once the ceiling is reached the remaining (older) articles in the window are simply not fetched -- callers that need full coverage should narrow --months or accept the honest gap (CONSTRAINT #4: never a fabricated substitute for the missing pages, just fewer real rows). Only consulted when FMP_NEWS_ENABLED is True.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_OPTIONS_HEALTH_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description: "Master switch for the FMP fundamental-health overlay bundled into the options premium-directive matrix (reporting/options_snapshot.py::write_options_matrix → technical_options_engine.build_premium_directive). False (the default) is a complete no-op reproducing today's exact behavior: Altman_Z_Score, Piotroski_F_Score, Net_Debt_EBITDA, FCF_Yield, and Realized_Vol_30D all stay None and zero additional FMP requests are attempted. When True, gates three endpoints for every symbol in the options matrix: Altman Z-Score + Piotroski F-Score (`/financial-scores`), Net Debt/EBITDA + FCF Yield (`/ratios-ttm`), and 30-day realized volatility (`/standard-deviation`). Single gate bundling all three — they are always fetched together for one overlay concept ('is this credit-spread candidate financially healthy'), matching the FMP_SECTOR_SNAPSHOT_ENABLED / FMP_INSIDER_ENABLED precedent of one flag per logically-bundled feature. Does NOT gate Days_To_Earnings/Earnings_Risk — those reuse the EXISTING FMP_EARNINGS_ENABLED earnings-calendar gate via the durable earnings-events store, not a fresh fetch of their own.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_OPTIONS_CONTEXT_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description: "Master switch for the FMP market/qualitative-context overlay bundled into the options premium-directive matrix (reporting/options_snapshot.py::write_options_matrix → technical_options_engine.build_premium_directive). False (the default) is a complete no-op reproducing today's exact behavior: News_Snippets stays [], Peers stays [], and zero additional FMP requests are attempted. When True, gates two endpoints for every symbol in the options matrix: recent news headlines, capped at 3 per symbol (`/news/stock` via data.fmp_feeds_company.fetch_stock_news), and the peer-comparison ticker group (`/peers` via data.fmp_feeds_market.fetch_peer_group). Kept separate from FMP_OPTIONS_HEALTH_ENABLED even though the call-site pattern is identical (a bundled gate checked before the per-symbol loop, independent try/except per sub-fetch inside it) because it is a different overlay concept — market/qualitative context (what is being said about this name, and what else trades like it) rather than balance-sheet health.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_PEERS_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description: "Master switch for the on-demand GET /data/peers/{symbol} endpoint (api/data_api.py) — a single, per-click, operator-triggered FMP peer-group lookup (`/peers` via data.fmp_feeds_market.fetch_peer_group) for the webapp's 'Suggest peers for this ticker' affordance on SymbolComparison. False (the default) is a complete no-op: the endpoint returns an empty peer list + an honest reason, with ZERO network calls — fetch_peer_group is never even imported. Deliberately kept SEPARATE from FMP_OPTIONS_CONTEXT_ENABLED, which already gates a DIFFERENT call site of the same fetch_peer_group function: a per-cycle BATCH fetch across the whole options-matrix universe (reporting/options_snapshot.py). Same rate-limit-cadence reasoning as the FMP_INSIDER_ENABLED / FMP_SECTOR_SNAPSHOT_ENABLED precedent above — one flag per call-site SHAPE, not per underlying vendor function: a single user-triggered click and a per-cycle loop over an entire universe have completely different cost/cadence profiles and must be independently controllable.",
+    group: "FMP Settings",
   },
 ];
 

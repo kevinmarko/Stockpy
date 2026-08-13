@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDensity } from "./DensityContext";
 import { useDebounce } from "../hooks/useDebounce";
 
@@ -15,9 +16,12 @@ interface DataTableProps<T> {
   groupByKey?: keyof T;
   onRowClick?: (row: T) => void;
   copyableJson?: boolean;
-  pageSize?: number;
   debounceMs?: number;
 }
+
+type ListItem<T> =
+  | { type: "group"; groupName: string; count: number }
+  | { type: "row"; row: T; index: number; bg: string };
 
 export function DataTable<T extends Record<string, any>>({
   data,
@@ -25,7 +29,6 @@ export function DataTable<T extends Record<string, any>>({
   groupByKey,
   onRowClick,
   copyableJson = true,
-  pageSize = 50,
   debounceMs = 0,
 }: DataTableProps<T>) {
   const { density } = useDensity();
@@ -34,7 +37,8 @@ export function DataTable<T extends Record<string, any>>({
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, debounceMs);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-  const [page, setPage] = useState(1);
+
+  const parentRef = useRef<HTMLDivElement>(null);
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -64,14 +68,6 @@ export function DataTable<T extends Record<string, any>>({
     });
   }, [filteredData, sortKey, sortDir]);
 
-  const totalPages = Math.max(1, Math.ceil(sortedData.length / pageSize));
-  const paginatedData = useMemo(() => {
-    if (groupByKey || !pageSize) return sortedData;
-    const start = (page - 1) * pageSize;
-    return sortedData.slice(start, start + pageSize);
-  }, [sortedData, page, pageSize, groupByKey]);
-
-  // Grouped logic if groupByKey is provided
   const groups = useMemo(() => {
     if (!groupByKey) return null;
     const map = new Map<string, T[]>();
@@ -82,6 +78,35 @@ export function DataTable<T extends Record<string, any>>({
     });
     return map;
   }, [sortedData, groupByKey]);
+
+  const items = useMemo<ListItem<T>[]>(() => {
+    if (groups) {
+      const list: ListItem<T>[] = [];
+      Array.from(groups.entries()).forEach(([groupName, groupRows]) => {
+        list.push({ type: "group", groupName, count: groupRows.length });
+        if (expandedGroups[groupName] ?? true) {
+          groupRows.forEach((row, idx) => {
+            list.push({ type: "row", row, index: idx, bg: "var(--surface)" });
+          });
+        }
+      });
+      return list;
+    } else {
+      return sortedData.map((row, idx) => ({
+        type: "row",
+        row,
+        index: idx,
+        bg: idx % 2 === 0 ? "var(--surface)" : "var(--surface-2)",
+      }));
+    }
+  }, [groups, sortedData, expandedGroups]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => (density === "compact" ? 32 : 48),
+    overscan: 10,
+  });
 
   const toggleGroup = (key: string) => {
     setExpandedGroups((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));
@@ -94,6 +119,7 @@ export function DataTable<T extends Record<string, any>>({
   };
 
   const cellPadding = density === "compact" ? "var(--s-1-5) var(--s-2-5)" : "var(--s-3) var(--s-4)";
+  const virtualItems = rowVirtualizer.getVirtualItems();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-3)" }}>
@@ -103,10 +129,7 @@ export function DataTable<T extends Record<string, any>>({
           type="text"
           placeholder="Filter data..."
           value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(1);
-          }}
+          onChange={(e) => setSearch(e.target.value)}
           style={{
             background: "var(--surface)",
             color: "var(--text-primary)",
@@ -118,13 +141,21 @@ export function DataTable<T extends Record<string, any>>({
           }}
         />
         <span style={{ fontSize: "var(--t-micro)", color: "var(--text-muted)" }}>
-          Showing {sortedData.length} records {totalPages > 1 && `(Page ${page} of ${totalPages})`}
+          Showing {sortedData.length} records
         </span>
       </div>
 
-      <div style={{ overflowX: "auto", border: "1px solid var(--border)", borderRadius: "var(--r-sm)" }}>
+      <div
+        ref={parentRef}
+        style={{
+          maxHeight: "600px",
+          overflow: "auto",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--r-sm)",
+        }}
+      >
         <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "var(--t-body)" }}>
-          <thead>
+          <thead style={{ position: "sticky", top: 0, zIndex: 1 }}>
             <tr style={{ background: "var(--surface-2)", borderBottom: "1px solid var(--border)" }}>
               {columns.map((col) => (
                 <th
@@ -146,84 +177,62 @@ export function DataTable<T extends Record<string, any>>({
             </tr>
           </thead>
           <tbody>
-            {groups ? (
-              Array.from(groups.entries()).map(([groupName, groupRows]) => {
-                const isExpanded = expandedGroups[groupName] ?? true;
-                return (
-                  <React.Fragment key={groupName}>
-                    <tr
-                      onClick={() => toggleGroup(groupName)}
-                      style={{ background: "var(--surface-3)", cursor: "pointer", borderBottom: "1px solid var(--border)" }}
-                    >
-                      <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ padding: cellPadding, fontWeight: 700 }}>
-                        {isExpanded ? "▼" : "▶"} {groupName} ({groupRows.length} events)
-                      </td>
-                    </tr>
-                    {isExpanded &&
-                      groupRows.map((row, idx) => (
-                        <tr
-                          key={idx}
-                          onClick={() => onRowClick && onRowClick(row)}
-                          style={{
-                            borderBottom: "1px solid var(--border)",
-                            background: "var(--surface)",
-                            cursor: onRowClick ? "pointer" : "default",
-                          }}
-                        >
-                          {columns.map((col) => (
-                            <td key={col.key} style={{ padding: cellPadding }}>
-                              {col.render ? col.render(row) : row[col.key]}
-                            </td>
-                          ))}
-                          {copyableJson && (
-                            <td style={{ padding: cellPadding }}>
-                              <button
-                                onClick={(e) => copyRowJson(row, e)}
-                                style={{
-                                  background: "var(--surface-2)",
-                                  border: "1px solid var(--border)",
-                                  borderRadius: "var(--r-xs)",
-                                  color: "var(--text-muted)",
-                                  fontSize: "var(--t-micro)",
-                                  padding: "2px 6px",
-                                  cursor: "pointer",
-                                }}
-                              >
-                                JSON
-                              </button>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                  </React.Fragment>
-                );
-              })
-            ) : paginatedData.length === 0 ? (
+            {virtualItems.length > 0 && (
+              <tr>
+                <td style={{ height: `${virtualItems[0].start}px`, padding: 0 }} colSpan={columns.length + (copyableJson ? 1 : 0)} />
+              </tr>
+            )}
+            
+            {items.length === 0 && (
               <tr>
                 <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ padding: "var(--s-4)", textAlign: "center", color: "var(--text-muted)" }}>
                   No matching records found.
                 </td>
               </tr>
-            ) : (
-              paginatedData.map((row, idx) => (
+            )}
+
+            {virtualItems.map((virtualRow) => {
+              const item = items[virtualRow.index];
+              
+              if (item.type === "group") {
+                const isExpanded = expandedGroups[item.groupName] ?? true;
+                return (
+                  <tr
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
+                    onClick={() => toggleGroup(item.groupName)}
+                    style={{ background: "var(--surface-3)", cursor: "pointer", borderBottom: "1px solid var(--border)" }}
+                  >
+                    <td colSpan={columns.length + (copyableJson ? 1 : 0)} style={{ padding: cellPadding, fontWeight: 700 }}>
+                      {isExpanded ? "▼" : "▶"} {item.groupName} ({item.count} events)
+                    </td>
+                  </tr>
+                );
+              }
+
+              // Row item
+              return (
                 <tr
-                  key={idx}
-                  onClick={() => onRowClick && onRowClick(row)}
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
+                  onClick={() => onRowClick && onRowClick(item.row)}
                   style={{
                     borderBottom: "1px solid var(--border)",
-                    background: idx % 2 === 0 ? "var(--surface)" : "var(--surface-2)",
+                    background: item.bg,
                     cursor: onRowClick ? "pointer" : "default",
                   }}
                 >
                   {columns.map((col) => (
                     <td key={col.key} style={{ padding: cellPadding }}>
-                      {col.render ? col.render(row) : row[col.key]}
+                      {col.render ? col.render(item.row) : item.row[col.key]}
                     </td>
                   ))}
                   {copyableJson && (
                     <td style={{ padding: cellPadding }}>
                       <button
-                        onClick={(e) => copyRowJson(row, e)}
+                        onClick={(e) => copyRowJson(item.row, e)}
                         style={{
                           background: "var(--surface-2)",
                           border: "1px solid var(--border)",
@@ -239,49 +248,20 @@ export function DataTable<T extends Record<string, any>>({
                     </td>
                   )}
                 </tr>
-              ))
+              );
+            })}
+            
+            {virtualItems.length > 0 && (
+              <tr>
+                <td
+                  style={{ height: `${rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end}px`, padding: 0 }}
+                  colSpan={columns.length + (copyableJson ? 1 : 0)}
+                />
+              </tr>
             )}
           </tbody>
         </table>
       </div>
-
-      {!groupByKey && totalPages > 1 && (
-        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "var(--s-2)" }}>
-          <button
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            style={{
-              background: "var(--surface-2)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--r-xs)",
-              color: "var(--text-primary)",
-              padding: "var(--s-1) var(--s-3)",
-              cursor: page <= 1 ? "not-allowed" : "pointer",
-              opacity: page <= 1 ? 0.5 : 1,
-            }}
-          >
-            Previous
-          </button>
-          <span style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>
-            Page {page} of {totalPages}
-          </span>
-          <button
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            style={{
-              background: "var(--surface-2)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--r-xs)",
-              color: "var(--text-primary)",
-              padding: "var(--s-1) var(--s-3)",
-              cursor: page >= totalPages ? "not-allowed" : "pointer",
-              opacity: page >= totalPages ? 0.5 : 1,
-            }}
-          >
-            Next
-          </button>
-        </div>
-      )}
     </div>
   );
 }

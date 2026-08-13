@@ -1,69 +1,53 @@
-"""
-agents/research_agent.py
-=========================
-Research Agent nodes for gathering market data and news.
-"""
 import logging
-from typing import Dict, Any
-
-from agents.state import MultiAgentState
+from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
-def fetch_market_data(state: MultiAgentState) -> Dict[str, Any]:
-    """Fetches market data for the requested symbols."""
-    symbols = state.get("symbols", [])
-    errors = state.get("errors", [])
-    if not symbols:
-        return {"errors": errors + ["No symbols provided for research."]}
-        
-    try:
-        from data_engine import DataEngine
-        from settings import settings
-        
-        # Use DataEngine to fetch data
-        engine = DataEngine(fred_api_key=getattr(settings, "FRED_API_KEY", ""))
-        
-        # Fetch technicals and fundamentals
-        tech_data = engine.fetch_technical_raw_cached(symbols)
-        fund_data = engine.fetch_fundamentals_raw(symbols)
-        
-        # We store these raw inputs under signals for the execution agent to score
-        return {
-            "signals": {
-                "technical_raw": {sym: df.to_dict() if hasattr(df, "to_dict") else df for sym, df in tech_data.items()},
-                "fundamental_raw": fund_data
-            }
-        }
-    except Exception as exc:
-        logger.error(f"Research fetch failed: {exc}")
-        return {"errors": errors + [f"Market data fetch error: {exc}"]}
-
-def retrieve_news(state: MultiAgentState) -> Dict[str, Any]:
-    """Retrieves relevant news using Qdrant (via rag_orchestrator logic)."""
-    errors = state.get("errors", [])
-    query = state.get("query", "")
+def run_research(tickers: List[str], context: Dict[str, Any], query: str, provider: Any) -> Dict[str, Any]:
+    from data_engine import DataEngine
+    from settings import settings
+    from agents.rag_orchestrator import retrieve_documents, relevance_filter
     
-    if not query:
-        # Default query based on symbols if none provided
-        symbols = state.get("symbols", [])
-        if symbols:
-            query = f"Recent news for {', '.join(symbols)}"
-        else:
-            return {"relevant_news": []}
-            
+    engine = DataEngine(fred_api_key=getattr(settings, "FRED_API_KEY", ""))
+    
+    # 1. Fetch Fundamentals (we need to know if they are valid)
+    fund_data = engine.fetch_fundamentals_raw(tickers)
+    # Check if fundamentals are valid (i.e. not completely missing)
+    fundamentals_valid = any(bool(v.get('info', {})) for v in fund_data.values())
+    
+    # 2. Retrieve News using RAG logic
+    rag_query = query if query else f"Recent news and updates for {', '.join(tickers)}"
+    rag_state = {"query": rag_query, "portfolio_context": [], "retrieved_docs": [], "relevant_docs": [], "final_analysis": ""}
+    
     try:
-        from agents.rag_orchestrator import retrieve_documents, relevance_filter
-        
-        # Adapt state to RAGState for the existing functions
-        rag_state = {"query": query, "portfolio_context": [], "retrieved_docs": [], "relevant_docs": [], "final_analysis": ""}
-        
         retrieved = retrieve_documents(rag_state)
         rag_state.update(retrieved)
-        
         filtered = relevance_filter(rag_state)
+        relevant_news = filtered.get("relevant_docs", [])
+    except Exception as e:
+        logger.warning(f"Failed to retrieve news: {e}")
+        relevant_news = []
         
-        return {"relevant_news": filtered.get("relevant_docs", [])}
-    except Exception as exc:
-        logger.error(f"News retrieval failed: {exc}")
-        return {"errors": errors + [f"News retrieval error: {exc}"]}
+    news_context = ""
+    for idx, doc in enumerate(relevant_news):
+        news_context += f"{idx+1}. [{doc.get('ticker', 'N/A')}] {doc.get('title', '')}\n"
+    
+    if not news_context:
+        news_context = "No relevant news found."
+        
+    # Optional: use provider to summarize news if a provider is configured and available
+    if provider and relevant_news:
+        try:
+            summary = provider.call(f"Summarize the following news for {tickers}:\n{news_context}")
+            if summary:
+                news_context = summary
+        except Exception as e:
+            logger.warning(f"Research provider summary failed: {e}")
+            
+    return {
+        "signals": {
+            "fundamental_raw": fund_data,
+        },
+        "news_context": news_context,
+        "fundamentals_valid": fundamentals_valid
+    }
