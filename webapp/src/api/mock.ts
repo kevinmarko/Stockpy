@@ -40,7 +40,8 @@ import type {
   CalibrationSummary,
   CircuitBreakerSummary,
   CircuitBreakerTrip,
-  ControlStatus, CronStatus,
+  ControlStatus,
+  CronStatus,
   CorrelationCluster,
   DecisionCreateRequest,
   DecisionCreateResult,
@@ -275,7 +276,7 @@ function h(
   pbo: number | null,
   dd: number | null,
   deployable: boolean,
-  stress = true
+  stress = true,
 ): Headline {
   return {
     sharpe,
@@ -288,7 +289,7 @@ function h(
 }
 
 function holdings(
-  symbols: [string, number, number, (number | null)?][] // [symbol, weight(raw), score, meta_label_composite_override?]
+  symbols: [string, number, number, (number | null)?][], // [symbol, weight(raw), score, meta_label_composite_override?]
 ): Holding[] {
   const total = symbols.reduce((s, [, w]) => s + w, 0);
 
@@ -297,7 +298,9 @@ function holdings(
   // no Math.random() so mock data is stable across renders/reloads.
   const byScoreDesc = [...symbols].sort((a, b) => b[2] - a[2]);
   const buyCount = Math.min(2, byScoreDesc.length);
-  const buySymbols = new Set(byScoreDesc.slice(0, buyCount).map(([symbol]) => symbol));
+  const buySymbols = new Set(
+    byScoreDesc.slice(0, buyCount).map(([symbol]) => symbol),
+  );
   const maxScore = byScoreDesc[0]?.[2] ?? 0;
   const minScore = byScoreDesc[byScoreDesc.length - 1]?.[2] ?? 0;
   const scoreSpread = maxScore - minScore || 1;
@@ -319,7 +322,9 @@ function holdings(
     // passed through unchanged to exercise the honest "not computed" render
     // path -- never fabricate a value where the real API would say null.
     const metaLabelComposite =
-      metaOverride !== undefined ? metaOverride : +(0.55 + normalized * 0.35).toFixed(3);
+      metaOverride !== undefined
+        ? metaOverride
+        : +(0.55 + normalized * 0.35).toFixed(3);
 
     const buyLow = price * 0.94;
     const buyHigh = price * 0.98;
@@ -820,7 +825,11 @@ function newsCoverageFor(id: string): NewsCoverage | null {
   return {
     archived_score_count: 47,
     headline_volume_7d: 9,
-    universe_score_distribution: { positive: 0.41, neutral: 0.38, negative: 0.21 },
+    universe_score_distribution: {
+      positive: 0.41,
+      neutral: 0.38,
+      negative: 0.21,
+    },
   };
 }
 
@@ -848,13 +857,11 @@ function synthCurve(
   range: PerfRange,
   drift: number,
   vol: number,
-  base = 100
+  base = 100,
 ) {
   const days = RANGE_DAYS[range];
   const step = days > 200 ? Math.ceil(days / 120) : 1;
-  const rng = seeded(
-    [...id].reduce((a, c) => a + c.charCodeAt(0), 0) + days
-  );
+  const rng = seeded([...id].reduce((a, c) => a + c.charCodeAt(0), 0) + days);
   const dailyDrift = drift / 252;
   const dailyVol = vol / Math.sqrt(252);
   let v = base;
@@ -941,7 +948,10 @@ export function __resetMockDataUniverse() {
 // NVDA, ...) deliberately has NO entry here -- undefined, rendered as a dash
 // by the UI, not a fabricated 0 -- since most of this codebase's rating
 // history in practice belongs to non-held, screened-and-rejected candidates.
-let MOCK_RATING_OVERRIDES: Record<string, { consecutive_bad_cycles: number; excluded: boolean }> = {
+let MOCK_RATING_OVERRIDES: Record<
+  string,
+  { consecutive_bad_cycles: number; excluded: boolean }
+> = {
   XOM: { consecutive_bad_cycles: 6, excluded: true },
   T: { consecutive_bad_cycles: 2, excluded: false },
 };
@@ -1047,11 +1057,14 @@ const _mockLoginJobs: Record<string, _MockLoginJob> = {};
  *  from elapsed time -- no separate "advance the mock forward" call needed,
  *  so a real 2s-interval poll and a test's `vi.advanceTimersByTime` both
  *  just work. */
-function _mockLoginJobStatus(jobId: string, job: _MockLoginJob): BrokerageLoginJob {
+function _mockLoginJobStatus(
+  jobId: string,
+  job: _MockLoginJob,
+): BrokerageLoginJob {
   const elapsedSeconds = (Date.now() - job.startedAt) / 1000;
   const secondsRemaining = Math.max(
     0,
-    Math.round(BROKERAGE_LOGIN_DEADLINE_SECONDS - elapsedSeconds)
+    Math.round(BROKERAGE_LOGIN_DEADLINE_SECONDS - elapsedSeconds),
   );
   const connected = readBrokerageConnected();
 
@@ -1208,9 +1221,30 @@ function readForecastBackfillTimeout(): boolean {
  *  ml/forecast_backfill.py actually writes to `self.metrics[model_key]`. */
 function mockForecastBackfillPartialSummary(): ForecastBackfillJob["partial_summary"] {
   const metrics_so_far = {
-    timeseries_momentum_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 0, split_date: "CPCV", is_active: true },
-    timeseries_momentum_30d: { accuracy: 0.5340, auc: 0.5580, n_train: 9416, n_test: 0, split_date: "CPCV", is_active: true },
-    rsi2_mean_reversion_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 6820, n_test: 0, split_date: "CPCV", is_active: true },
+    timeseries_momentum_10d: {
+      accuracy: 0.5215,
+      auc: 0.542,
+      n_train: 9480,
+      n_test: 0,
+      split_date: "CPCV",
+      is_active: true,
+    },
+    timeseries_momentum_30d: {
+      accuracy: 0.534,
+      auc: 0.558,
+      n_train: 9416,
+      n_test: 0,
+      split_date: "CPCV",
+      is_active: true,
+    },
+    rsi2_mean_reversion_10d: {
+      accuracy: 0.518,
+      auc: 0.531,
+      n_train: 6820,
+      n_test: 0,
+      split_date: "CPCV",
+      is_active: true,
+    },
   };
   return {
     trained: Object.keys(metrics_so_far).sort(),
@@ -1236,12 +1270,18 @@ function _findRunningForecastBackfillJobId(): string | null {
   return null;
 }
 
-function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfillJob): ForecastBackfillJob {
+function _mockForecastBackfillJobStatus(
+  jobId: string,
+  job: _MockForecastBackfillJob,
+): ForecastBackfillJob {
   const elapsedSeconds = (Date.now() - job.startedAt) / 1000;
   const SECONDS_PER_PHASE = 2;
   const TOTAL_STEPS = 7;
   const TOTAL_SECONDS = TOTAL_STEPS * SECONDS_PER_PHASE;
-  const secondsRemaining = Math.max(0, Math.round(TOTAL_SECONDS - elapsedSeconds));
+  const secondsRemaining = Math.max(
+    0,
+    Math.round(TOTAL_SECONDS - elapsedSeconds),
+  );
 
   // Time-derived phase/step, shared by every branch below -- including the
   // terminal ones -- so a cancelled/failed job honestly reports whatever
@@ -1256,15 +1296,34 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
   // testing against the mock.
   let phase: ForecastBackfillPhase | null;
   let step: number;
-  if (elapsedSeconds < 1) { phase = null; step = 0; }
-  else if (elapsedSeconds < 2) { phase = "fetching_data"; step = 1; }
-  else if (elapsedSeconds < 4) { phase = "technical_features"; step = 2; }
-  else if (elapsedSeconds < 6) { phase = "primary_signals"; step = 3; }
-  else if (elapsedSeconds < 8) { phase = "meta_targets"; step = 4; }
-  else if (elapsedSeconds < 10) { phase = "backtraining"; step = 5; }
-  else if (elapsedSeconds < 12) { phase = "backfilling"; step = 6; }
-  else if (elapsedSeconds < 14) { phase = "exporting"; step = 7; }
-  else { phase = "exporting"; step = TOTAL_STEPS; }
+  if (elapsedSeconds < 1) {
+    phase = null;
+    step = 0;
+  } else if (elapsedSeconds < 2) {
+    phase = "fetching_data";
+    step = 1;
+  } else if (elapsedSeconds < 4) {
+    phase = "technical_features";
+    step = 2;
+  } else if (elapsedSeconds < 6) {
+    phase = "primary_signals";
+    step = 3;
+  } else if (elapsedSeconds < 8) {
+    phase = "meta_targets";
+    step = 4;
+  } else if (elapsedSeconds < 10) {
+    phase = "backtraining";
+    step = 5;
+  } else if (elapsedSeconds < 12) {
+    phase = "backfilling";
+    step = 6;
+  } else if (elapsedSeconds < 14) {
+    phase = "exporting";
+    step = 7;
+  } else {
+    phase = "exporting";
+    step = TOTAL_STEPS;
+  }
 
   if (job.cancelled) {
     return {
@@ -1308,7 +1367,8 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
       phase: "technical_features",
       step: 2,
       total_steps: TOTAL_STEPS,
-      error: "Training data contained fewer than the minimum required samples for one or more horizons.",
+      error:
+        "Training data contained fewer than the minimum required samples for one or more horizons.",
       error_type: "value_error",
       summary: null,
       sample_rows: null,
@@ -1342,7 +1402,8 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
         // The real backend only starts populating partial_summary once
         // step-5 combos begin training (phase: "backtraining"), same as
         // ml/forecast_backfill_worker.py's on_combo_trained callback.
-        partial_summary: elapsedSeconds >= 8 ? mockForecastBackfillPartialSummary() : null,
+        partial_summary:
+          elapsedSeconds >= 8 ? mockForecastBackfillPartialSummary() : null,
         seconds_remaining: secondsRemaining,
       };
     }
@@ -1400,7 +1461,8 @@ function _mockForecastBackfillJobStatus(jobId: string, job: _MockForecastBackfil
 // BROKERAGE_REFRESH_DEGRADED_KEY above:
 //   localStorage.setItem("stockpy.mock.brokerage_auto_refresh_disabled", "1")  // simulate the server gate off
 //   localStorage.removeItem("stockpy.mock.brokerage_auto_refresh_disabled")    // back to the default-True gate
-const BROKERAGE_AUTO_REFRESH_DISABLED_KEY = "stockpy.mock.brokerage_auto_refresh_disabled";
+const BROKERAGE_AUTO_REFRESH_DISABLED_KEY =
+  "stockpy.mock.brokerage_auto_refresh_disabled";
 
 function readBrokerageAutoRefreshEnabled(): boolean {
   try {
@@ -1593,15 +1655,19 @@ function llmRow(
   providerSelectorSetting: string | null,
   providerChoice: string | null, // live override or default; null = fixed-provider capability
   fixedProviderKeys: string[],
-  overrides: LlmMockOverrides
+  overrides: LlmMockOverrides,
 ): LlmCapabilityRow {
   const masterOn = overrides.toggles[toggleKey] ?? false;
   const activeProvider: LlmProviderName | null =
     providerChoice && providerChoice !== "none"
       ? (providerChoice as LlmProviderName)
       : null;
-  const enabled = providerSelectorSetting ? masterOn && providerChoice !== "none" : masterOn;
-  const providerKeys = activeProvider ? [LLM_PROVIDER_KEY_MAP[activeProvider]] : fixedProviderKeys;
+  const enabled = providerSelectorSetting
+    ? masterOn && providerChoice !== "none"
+    : masterOn;
+  const providerKeys = activeProvider
+    ? [LLM_PROVIDER_KEY_MAP[activeProvider]]
+    : fixedProviderKeys;
   return {
     key,
     label,
@@ -1631,7 +1697,7 @@ function mockLlmStatus(): LlmStatus {
       "LLM_COMMENTARY_RATIONALE_PROVIDER",
       providerVal("LLM_COMMENTARY_RATIONALE_PROVIDER", "claude"),
       ["ANTHROPIC_API_KEY"],
-      ov
+      ov,
     ),
     llmRow(
       "gemini_alerts",
@@ -1641,7 +1707,7 @@ function mockLlmStatus(): LlmStatus {
       "LLM_COMMENTARY_ALERT_PROVIDER",
       providerVal("LLM_COMMENTARY_ALERT_PROVIDER", "gemini"),
       ["GEMINI_API_KEY"],
-      ov
+      ov,
     ),
     llmRow(
       "gemini_vision",
@@ -1651,7 +1717,7 @@ function mockLlmStatus(): LlmStatus {
       null,
       null,
       ["GEMINI_API_KEY"],
-      ov
+      ov,
     ),
     llmRow(
       "gravity_ai_runner",
@@ -1661,7 +1727,7 @@ function mockLlmStatus(): LlmStatus {
       null,
       null,
       ["ANTHROPIC_API_KEY", "GEMINI_API_KEY"],
-      ov
+      ov,
     ),
     llmRow(
       "opal_research",
@@ -1671,7 +1737,7 @@ function mockLlmStatus(): LlmStatus {
       "OPAL_RESEARCH_PROVIDER",
       providerVal("OPAL_RESEARCH_PROVIDER", "openai"),
       ["OPENAI_API_KEY"],
-      ov
+      ov,
     ),
   ];
 
@@ -1685,7 +1751,8 @@ function mockLlmStatus(): LlmStatus {
       attentionReason = "invalid_key";
       break;
     }
-    if (row.status === "missing_key" && attentionReason === null) attentionReason = "missing_key";
+    if (row.status === "missing_key" && attentionReason === null)
+      attentionReason = "missing_key";
   }
 
   return {
@@ -1707,7 +1774,8 @@ function mockLlmStatus(): LlmStatus {
     // Always writable in the mock (matches mockStrategyMatrix's convention
     // below) so the demo can exercise the write flow with zero config.
     writable: true,
-    writable_note: "Toggle and provider writes persist to .env and apply on the next daemon restart.",
+    writable_note:
+      "Toggle and provider writes persist to .env and apply on the next daemon restart.",
   };
 }
 
@@ -1734,17 +1802,76 @@ const STRATEGY_BASE: {
   versionHash: string;
   modifiedDaysAgo: number;
 }[] = [
-  { name: "macro_regime", weight: 45, pinned: false, scored: 20, versionHash: "a1b2c3d4e5f6", modifiedDaysAgo: 12 },
-  { name: "macd_momentum", weight: 20, pinned: false, scored: 20, versionHash: "1a2b3c4d5e6f", modifiedDaysAgo: 40 },
-  { name: "aroon_trend", weight: 15, pinned: false, scored: 20, versionHash: "9f8e7d6c5b4a", modifiedDaysAgo: 88 },
-  { name: "graham_value", weight: 20, pinned: false, scored: 18, versionHash: "0d1e2f3a4b5c", modifiedDaysAgo: 5 },
-  { name: "dividend_quality", weight: 15, pinned: false, scored: 12, versionHash: "6c5b4a39281f", modifiedDaysAgo: 61 },
-  { name: "multifactor", weight: 15, pinned: false, scored: 19, versionHash: "3e4f5a6b7c8d", modifiedDaysAgo: 2 },
-  { name: "cross_sectional_momentum", weight: 15, pinned: false, scored: 20, versionHash: "7a8b9c0d1e2f", modifiedDaysAgo: 30 },
-  { name: "regime_multiplier", weight: 0, pinned: true, scored: 20, versionHash: "f1e2d3c4b5a6", modifiedDaysAgo: 200 },
+  {
+    name: "macro_regime",
+    weight: 45,
+    pinned: false,
+    scored: 20,
+    versionHash: "a1b2c3d4e5f6",
+    modifiedDaysAgo: 12,
+  },
+  {
+    name: "macd_momentum",
+    weight: 20,
+    pinned: false,
+    scored: 20,
+    versionHash: "1a2b3c4d5e6f",
+    modifiedDaysAgo: 40,
+  },
+  {
+    name: "aroon_trend",
+    weight: 15,
+    pinned: false,
+    scored: 20,
+    versionHash: "9f8e7d6c5b4a",
+    modifiedDaysAgo: 88,
+  },
+  {
+    name: "graham_value",
+    weight: 20,
+    pinned: false,
+    scored: 18,
+    versionHash: "0d1e2f3a4b5c",
+    modifiedDaysAgo: 5,
+  },
+  {
+    name: "dividend_quality",
+    weight: 15,
+    pinned: false,
+    scored: 12,
+    versionHash: "6c5b4a39281f",
+    modifiedDaysAgo: 61,
+  },
+  {
+    name: "multifactor",
+    weight: 15,
+    pinned: false,
+    scored: 19,
+    versionHash: "3e4f5a6b7c8d",
+    modifiedDaysAgo: 2,
+  },
+  {
+    name: "cross_sectional_momentum",
+    weight: 15,
+    pinned: false,
+    scored: 20,
+    versionHash: "7a8b9c0d1e2f",
+    modifiedDaysAgo: 30,
+  },
+  {
+    name: "regime_multiplier",
+    weight: 0,
+    pinned: true,
+    scored: 20,
+    versionHash: "f1e2d3c4b5a6",
+    modifiedDaysAgo: 200,
+  },
 ];
 
-function readStrategyOverrides(): { weights: Record<string, number>; disabled: string[] } | null {
+function readStrategyOverrides(): {
+  weights: Record<string, number>;
+  disabled: string[];
+} | null {
   try {
     const raw = localStorage.getItem(STRATEGY_KEY);
     return raw ? JSON.parse(raw) : null;
@@ -1803,7 +1930,9 @@ function mockStrategyMatrix(): StrategyMatrix {
       symbols_scored: b.scored,
       pinned_zero: b.pinned,
       version_hash: b.versionHash,
-      last_modified: new Date(Date.now() - b.modifiedDaysAgo * 86_400_000).toISOString(),
+      last_modified: new Date(
+        Date.now() - b.modifiedDaysAgo * 86_400_000,
+      ).toISOString(),
     };
   });
   return {
@@ -1899,7 +2028,10 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   DRY_RUN: ["gui/app.py:145"],
   MARKET_DATA_PROVIDER: ["data/market_data.py:1834"],
   MARKET_DATA_QUOTE_TTL_SECONDS: ["data/market_data.py:1771"],
-  MARKET_DATA_BARS_TTL_SECONDS: ["data/market_data.py:1776", "data/market_data.py:2094"],
+  MARKET_DATA_BARS_TTL_SECONDS: [
+    "data/market_data.py:1776",
+    "data/market_data.py:2094",
+  ],
   FUNDAMENTALS_SOURCE: ["data/market_data.py:1809"],
   DASHBOARD_REFRESH_SECONDS: ["gui/app.py:146", "gui/panels/__init__.py:87"],
   LOG_LEVEL: ["alerting.py:118", "gui/app.py:83"],
@@ -1911,7 +2043,10 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1895"],
   EDGAR_FULLTEXT_FORMS: ["api/pilots_api.py:4128"],
   EDGAR_FULLTEXT_CHUNK_TOKENS: ["api/pilots_api.py:4129"],
-  FINNHUB_RATE_LIMIT_PER_MIN: ["data/market_data.py:1470", "data/market_data.py:1504"],
+  FINNHUB_RATE_LIMIT_PER_MIN: [
+    "data/market_data.py:1470",
+    "data/market_data.py:1504",
+  ],
   FMP_QUOTES_REALTIME: ["data/market_data.py:979"],
   FMP_BARS_ADJUSTMENT: ["data/market_data.py:1850"],
   FMP_ECON_INDICATORS: ["api/pilots_api.py:4233"],
@@ -2028,49 +2163,103 @@ function mockLiveness(key: string): TunableLiveness {
 const TUNABLE_DEFS: MockTunableDef[] = [
   // ---- Financial Constants ----
   {
-    group: "Financial Constants", key: "RISK_FREE_RATE", type: "number",
-    value: 0.045, default: 0.045, min: 0, max: 1, step: 0.005,
+    group: "Financial Constants",
+    key: "RISK_FREE_RATE",
+    type: "number",
+    value: 0.045,
+    default: 0.045,
+    min: 0,
+    max: 1,
+    step: 0.005,
     description: null,
   },
   {
-    group: "Financial Constants", key: "MARKET_RISK_PREMIUM", type: "number",
-    value: 0.055, default: 0.055, min: 0, max: 1, step: 0.005,
+    group: "Financial Constants",
+    key: "MARKET_RISK_PREMIUM",
+    type: "number",
+    value: 0.055,
+    default: 0.055,
+    min: 0,
+    max: 1,
+    step: 0.005,
     description: null,
   },
   {
-    group: "Financial Constants", key: "REQUIRED_RETURN_RATE", type: "number",
-    value: 0.08, default: 0.08, min: 0, max: 1, step: 0.005,
+    group: "Financial Constants",
+    key: "REQUIRED_RETURN_RATE",
+    type: "number",
+    value: 0.08,
+    default: 0.08,
+    min: 0,
+    max: 1,
+    step: 0.005,
     description: null,
   },
   {
-    group: "Financial Constants", key: "MAX_PORTFOLIO_HEAT", type: "number",
-    value: 0.06, default: 0.06, min: 0, max: 1, step: 0.01,
+    group: "Financial Constants",
+    key: "MAX_PORTFOLIO_HEAT",
+    type: "number",
+    value: 0.06,
+    default: 0.06,
+    min: 0,
+    max: 1,
+    step: 0.01,
     description: null,
   },
   // ---- Position Sizing ----
   {
-    group: "Position Sizing", key: "KELLY_FRACTION", type: "number",
-    value: 0.5, default: 0.5, min: 0, max: 1, step: 0.05,
+    group: "Position Sizing",
+    key: "KELLY_FRACTION",
+    type: "number",
+    value: 0.5,
+    default: 0.5,
+    min: 0,
+    max: 1,
+    step: 0.05,
     description: null,
   },
   {
-    group: "Position Sizing", key: "KELLY_CAP", type: "number",
-    value: 0.2, default: 0.2, min: 0, max: 1, step: 0.01,
+    group: "Position Sizing",
+    key: "KELLY_CAP",
+    type: "number",
+    value: 0.2,
+    default: 0.2,
+    min: 0,
+    max: 1,
+    step: 0.01,
     description: null,
   },
   {
-    group: "Position Sizing", key: "VOL_TARGET", type: "number",
-    value: 0.1, default: 0.1, min: 0, max: 1, step: 0.01,
+    group: "Position Sizing",
+    key: "VOL_TARGET",
+    type: "number",
+    value: 0.1,
+    default: 0.1,
+    min: 0,
+    max: 1,
+    step: 0.01,
     description: null,
   },
   {
-    group: "Position Sizing", key: "MAX_LEVERAGE", type: "number",
-    value: 2.0, default: 2.0, min: 0, max: 10, step: 0.1,
+    group: "Position Sizing",
+    key: "MAX_LEVERAGE",
+    type: "number",
+    value: 2.0,
+    default: 2.0,
+    min: 0,
+    max: 10,
+    step: 0.1,
     description: null,
   },
   {
-    group: "Position Sizing", key: "MAX_POSITION_WEIGHT", type: "number",
-    value: 1.0, default: 1.0, min: 0, max: 5, step: 0.05,
+    group: "Position Sizing",
+    key: "MAX_POSITION_WEIGHT",
+    type: "number",
+    value: 1.0,
+    default: 1.0,
+    min: 0,
+    max: 5,
+    step: 0.05,
     description: null,
   },
   // Portfolio-level gross exposure cap + cap-aware escalation + cap-event
@@ -2078,226 +2267,739 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   // same "no description in settings.py" convention as the five sizing
   // fields above.
   {
-    group: "Position Sizing", key: "MAX_PORTFOLIO_GROSS", type: "number",
-    value: 3.0, default: 3.0, min: 0, max: 20, step: 0.1,
+    group: "Position Sizing",
+    key: "MAX_PORTFOLIO_GROSS",
+    type: "number",
+    value: 3.0,
+    default: 3.0,
+    min: 0,
+    max: 20,
+    step: 0.1,
     description: null,
   },
   {
-    group: "Position Sizing", key: "SIZING_CAP_ESCALATION_ENABLED", type: "boolean",
-    value: false, default: false,
+    group: "Position Sizing",
+    key: "SIZING_CAP_ESCALATION_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
     description: null,
   },
   {
-    group: "Position Sizing", key: "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES", type: "number",
-    value: 5, default: 5, min: 1, max: 100, step: 1,
+    group: "Position Sizing",
+    key: "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES",
+    type: "number",
+    value: 5,
+    default: 5,
+    min: 1,
+    max: 100,
+    step: 1,
     description: null,
   },
   {
-    group: "Position Sizing", key: "SIZING_CAP_ESCALATION_FACTOR", type: "number",
-    value: 0.5, default: 0.5, min: 0, max: 1, step: 0.05,
+    group: "Position Sizing",
+    key: "SIZING_CAP_ESCALATION_FACTOR",
+    type: "number",
+    value: 0.5,
+    default: 0.5,
+    min: 0,
+    max: 1,
+    step: 0.05,
     description: null,
   },
   {
-    group: "Position Sizing", key: "SIZING_CAP_AUDIT_ENABLED", type: "boolean",
-    value: true, default: true,
+    group: "Position Sizing",
+    key: "SIZING_CAP_AUDIT_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
     description: null,
   },
   {
-    group: "Position Sizing", key: "SIZING_CAP_ALERT_ENABLED", type: "boolean",
-    value: false, default: false,
+    group: "Position Sizing",
+    key: "SIZING_CAP_ALERT_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
     description: null,
   },
   {
-    group: "Position Sizing", key: "SIZING_CAP_ALERT_THRESHOLD_PCT", type: "number",
-    value: 0.30, default: 0.30, min: 0, max: 1, step: 0.05,
+    group: "Position Sizing",
+    key: "SIZING_CAP_ALERT_THRESHOLD_PCT",
+    type: "number",
+    value: 0.3,
+    default: 0.3,
+    min: 0,
+    max: 1,
+    step: 0.05,
     description: null,
   },
   // ---- Symbol Rating (Tracked Universe auto-drop, rating/symbol_rating_store.py) ----
   {
-    group: "Symbol Rating", key: "SYMBOL_RATING_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Compute and persist a per-symbol rating every cycle. Diagnostic-only -- no symbol is excluded by this flag alone.",
+    group: "Symbol Rating",
+    key: "SYMBOL_RATING_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Compute and persist a per-symbol rating every cycle. Diagnostic-only -- no symbol is excluded by this flag alone.",
   },
   {
-    group: "Symbol Rating", key: "SYMBOL_RATING_BAD_SCORE_THRESHOLD", type: "number",
-    value: 35.0, default: 35.0, min: 0, max: 100, step: 1,
-    description: "A symbol's score below this is rated BAD this cycle. Matches strategy_engine.py's own RISK REDUCE cutoff.",
+    group: "Symbol Rating",
+    key: "SYMBOL_RATING_BAD_SCORE_THRESHOLD",
+    type: "number",
+    value: 35.0,
+    default: 35.0,
+    min: 0,
+    max: 100,
+    step: 1,
+    description:
+      "A symbol's score below this is rated BAD this cycle. Matches strategy_engine.py's own RISK REDUCE cutoff.",
   },
   {
-    group: "Symbol Rating", key: "SYMBOL_RATING_AUTO_DROP_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Opt-in. When on, a non-held symbol rated BAD for SYMBOL_RATING_DROP_THRESHOLD_CYCLES cycles in a row is dropped from the Tracked Universe. A held position is never dropped.",
+    group: "Symbol Rating",
+    key: "SYMBOL_RATING_AUTO_DROP_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Opt-in. When on, a non-held symbol rated BAD for SYMBOL_RATING_DROP_THRESHOLD_CYCLES cycles in a row is dropped from the Tracked Universe. A held position is never dropped.",
   },
   {
-    group: "Symbol Rating", key: "SYMBOL_RATING_DROP_THRESHOLD_CYCLES", type: "number",
-    value: 5, default: 5, min: 1, max: 100, step: 1,
+    group: "Symbol Rating",
+    key: "SYMBOL_RATING_DROP_THRESHOLD_CYCLES",
+    type: "number",
+    value: 5,
+    default: 5,
+    min: 1,
+    max: 100,
+    step: 1,
     description: null,
   },
   // ---- Risk Gate ----
   {
-    group: "Risk Gate", key: "MAX_CORRELATION", type: "number",
-    value: 0.85, default: 0.85, min: 0, max: 1, step: 0.05,
-    description: "Max absolute pairwise return correlation before a new position is blocked.",
+    group: "Risk Gate",
+    key: "MAX_CORRELATION",
+    type: "number",
+    value: 0.85,
+    default: 0.85,
+    min: 0,
+    max: 1,
+    step: 0.05,
+    description:
+      "Max absolute pairwise return correlation before a new position is blocked.",
   },
   {
-    group: "Risk Gate", key: "DAILY_LOSS_LIMIT_PCT", type: "number",
-    value: 0.02, default: 0.02, min: 0, max: 1, step: 0.005,
-    description: "Halt new BUY orders when intraday P&L drops below this fraction of start-of-day equity.",
+    group: "Risk Gate",
+    key: "DAILY_LOSS_LIMIT_PCT",
+    type: "number",
+    value: 0.02,
+    default: 0.02,
+    min: 0,
+    max: 1,
+    step: 0.005,
+    description:
+      "Halt new BUY orders when intraday P&L drops below this fraction of start-of-day equity.",
   },
   {
-    group: "Risk Gate", key: "MAX_ORDER_RATE_PER_MIN", type: "number",
-    value: 10, default: 10, min: 1, max: 1000, step: 1,
+    group: "Risk Gate",
+    key: "MAX_ORDER_RATE_PER_MIN",
+    type: "number",
+    value: 10,
+    default: 10,
+    min: 1,
+    max: 1000,
+    step: 1,
     description: "Maximum order submissions in any 60-second rolling window.",
   },
   {
-    group: "Risk Gate", key: "HMM_RISK_OFF_BLOCK_THRESHOLD", type: "number",
-    value: 0.8, default: 0.8, min: 0, max: 1, step: 0.05,
-    description: "Block new long orders when HMM risk-off probability exceeds this.",
+    group: "Risk Gate",
+    key: "HMM_RISK_OFF_BLOCK_THRESHOLD",
+    type: "number",
+    value: 0.8,
+    default: 0.8,
+    min: 0,
+    max: 1,
+    step: 0.05,
+    description:
+      "Block new long orders when HMM risk-off probability exceeds this.",
   },
   {
-    group: "Risk Gate", key: "RISK_GATE_ENFORCE_MARKET_HOURS", type: "boolean",
-    value: true, default: true,
+    group: "Risk Gate",
+    key: "RISK_GATE_ENFORCE_MARKET_HOURS",
+    type: "boolean",
+    value: true,
+    default: true,
     description: "Block orders outside NYSE RTH (09:30–16:00 ET).",
   },
   {
-    group: "Risk Gate", key: "META_LABEL_MIN_CONFIDENCE", type: "number",
-    value: 0.4, default: 0.4, min: 0, max: 1, step: 0.05,
-    description: "Minimum meta-label probability for a primary signal to contribute to sizing. If predict_proba < META_LABEL_MIN_CONFIDENCE, the meta_label_composite is forced to 0.0 (position zeroed for the cycle).",
+    group: "Risk Gate",
+    key: "META_LABEL_MIN_CONFIDENCE",
+    type: "number",
+    value: 0.4,
+    default: 0.4,
+    min: 0,
+    max: 1,
+    step: 0.05,
+    description:
+      "Minimum meta-label probability for a primary signal to contribute to sizing. If predict_proba < META_LABEL_MIN_CONFIDENCE, the meta_label_composite is forced to 0.0 (position zeroed for the cycle).",
   },
   {
-    group: "Risk Gate", key: "DRY_RUN", type: "boolean",
-    value: false, default: false,
+    group: "Risk Gate",
+    key: "DRY_RUN",
+    type: "boolean",
+    value: false,
+    default: false,
     description: "Log orders but do not submit to broker.",
   },
   // ---- Forecasting ----
   {
-    group: "Forecasting", key: "FORECAST_USE_GARCH_SIGMA", type: "boolean",
-    value: true, default: true,
-    description: "Use the GJR-GARCH(1,1) volatility estimate (annualized, converted to daily via /sqrt(252)) as the Monte Carlo sigma instead of naive historical stdev. False restores the pre-GARCH log-return-std behavior.",
+    group: "Forecasting",
+    key: "FORECAST_USE_GARCH_SIGMA",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Use the GJR-GARCH(1,1) volatility estimate (annualized, converted to daily via /sqrt(252)) as the Monte Carlo sigma instead of naive historical stdev. False restores the pre-GARCH log-return-std behavior.",
   },
   {
-    group: "Forecasting", key: "FORECAST_PROPHET_WEIGHT", type: "number",
-    value: 0.25, default: 0.25, min: 0, max: 1, step: 0.05,
-    description: "Weight given to the Prophet 30-day forecast when blending it into the static ensemble at the 30-day horizon: final = base*(1-w) + prophet*w. 0.0 disables Prophet's influence on the blend.",
+    group: "Forecasting",
+    key: "FORECAST_PROPHET_WEIGHT",
+    type: "number",
+    value: 0.25,
+    default: 0.25,
+    min: 0,
+    max: 1,
+    step: 0.05,
+    description:
+      "Weight given to the Prophet 30-day forecast when blending it into the static ensemble at the 30-day horizon: final = base*(1-w) + prophet*w. 0.0 disables Prophet's influence on the blend.",
   },
   {
-    group: "Forecasting", key: "FORECAST_SKILL_WEIGHTING_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Opt-in activation of inverse-RMSE skill-weighted multi-model forecast blending (ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM weighted by recent realized accuracy via forecasting.forecast_tracker.ForecastTracker). When False (the default) the static sector-preference blend is used unchanged.",
+    group: "Forecasting",
+    key: "FORECAST_SKILL_WEIGHTING_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Opt-in activation of inverse-RMSE skill-weighted multi-model forecast blending (ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM weighted by recent realized accuracy via forecasting.forecast_tracker.ForecastTracker). When False (the default) the static sector-preference blend is used unchanged.",
   },
   {
-    group: "Forecasting", key: "FORECAST_SKILL_WINDOW_DAYS", type: "number",
-    value: 180, default: 180, min: 1, max: 3650, step: 1,
-    description: "Rolling window (calendar days) over which per-model RMSE is computed for inverse-skill forecast blending. Increase for stability; decrease for faster adaptation.",
+    group: "Forecasting",
+    key: "FORECAST_SKILL_WINDOW_DAYS",
+    type: "number",
+    value: 180,
+    default: 180,
+    min: 1,
+    max: 3650,
+    step: 1,
+    description:
+      "Rolling window (calendar days) over which per-model RMSE is computed for inverse-skill forecast blending. Increase for stability; decrease for faster adaptation.",
   },
   {
-    group: "Forecasting", key: "FORECAST_MODEL_PERSISTENCE_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Opt-in: persist the trained CNN-LSTM (.keras + both MinMaxScalers) and Prophet model to disk per ticker instead of retraining from scratch every cycle.",
+    group: "Forecasting",
+    key: "FORECAST_MODEL_PERSISTENCE_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Opt-in: persist the trained CNN-LSTM (.keras + both MinMaxScalers) and Prophet model to disk per ticker instead of retraining from scratch every cycle.",
   },
   {
-    group: "Forecasting", key: "FORECAST_MODEL_RETRAIN_DAYS", type: "number",
-    value: 7, default: 7, min: 1, max: 3650, step: 1,
-    description: "Days a persisted CNN-LSTM/Prophet model artifact remains valid before the next generate_forecast() call for that ticker triggers a fresh fit. Only consulted when FORECAST_MODEL_PERSISTENCE_ENABLED=True.",
+    group: "Forecasting",
+    key: "FORECAST_MODEL_RETRAIN_DAYS",
+    type: "number",
+    value: 7,
+    default: 7,
+    min: 1,
+    max: 3650,
+    step: 1,
+    description:
+      "Days a persisted CNN-LSTM/Prophet model artifact remains valid before the next generate_forecast() call for that ticker triggers a fresh fit. Only consulted when FORECAST_MODEL_PERSISTENCE_ENABLED=True.",
   },
   {
-    group: "Forecasting", key: "BETA_LOOKBACK_DAYS", type: "number",
-    value: 504, default: 504, min: 1, max: 3650, step: 1,
-    description: "Trailing calendar days of daily returns used to compute beta in the Yahoo-derived fundamentals engine (Cov(stock,SPY)/Var(SPY)). ~2 years.",
+    group: "Forecasting",
+    key: "BETA_LOOKBACK_DAYS",
+    type: "number",
+    value: 504,
+    default: 504,
+    min: 1,
+    max: 3650,
+    step: 1,
+    description:
+      "Trailing calendar days of daily returns used to compute beta in the Yahoo-derived fundamentals engine (Cov(stock,SPY)/Var(SPY)). ~2 years.",
   },
   // ---- Market Data ----
   {
     // Honest absent value: settings.py's real default IS None (auto-select
     // by key availability) -- never fabricated as "alpaca"/"yfinance".
-    group: "Market Data", key: "MARKET_DATA_PROVIDER", type: "enum",
-    value: null, default: null, options: ["alpaca", "yfinance", "fmp"],
-    description: "Force a specific market-data backend: 'fmp', 'alpaca' or 'yfinance'. When unset the platform auto-selects based on key availability (Alpaca if its keys are present, else yfinance). Setting FMP_API_KEY alone NEVER auto-elects FMP: unlike the Alpaca ladder, FMP is chosen only by explicitly setting this to 'fmp', so an operator who adds the key to enable the analyst or earnings feed does not silently have their quote/bars source change underneath them. FMP quotes/bars additionally require FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention).",
+    group: "Market Data",
+    key: "MARKET_DATA_PROVIDER",
+    type: "enum",
+    value: null,
+    default: null,
+    options: ["alpaca", "yfinance", "fmp"],
+    description:
+      "Force a specific market-data backend: 'fmp', 'alpaca' or 'yfinance'. When unset the platform auto-selects based on key availability (Alpaca if its keys are present, else yfinance). Setting FMP_API_KEY alone NEVER auto-elects FMP: unlike the Alpaca ladder, FMP is chosen only by explicitly setting this to 'fmp', so an operator who adds the key to enable the analyst or earnings feed does not silently have their quote/bars source change underneath them. FMP quotes/bars additionally require FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention).",
   },
   {
-    group: "Market Data", key: "MARKET_DATA_QUOTE_TTL_SECONDS", type: "number",
-    value: 30, default: 30, min: 0, max: 86400, step: 1,
-    description: "In-process quote cache TTL in seconds (never persisted to disk).",
+    group: "Market Data",
+    key: "MARKET_DATA_QUOTE_TTL_SECONDS",
+    type: "number",
+    value: 30,
+    default: 30,
+    min: 0,
+    max: 86400,
+    step: 1,
+    description:
+      "In-process quote cache TTL in seconds (never persisted to disk).",
   },
   {
-    group: "Market Data", key: "MARKET_DATA_BARS_TTL_SECONDS", type: "number",
-    value: 900, default: 900, min: 0, max: 86400, step: 1,
-    description: "In-process OHLCV intraday-bars cache TTL in seconds (never persisted to disk).",
+    group: "Market Data",
+    key: "MARKET_DATA_BARS_TTL_SECONDS",
+    type: "number",
+    value: 900,
+    default: 900,
+    min: 0,
+    max: 86400,
+    step: 1,
+    description:
+      "In-process OHLCV intraday-bars cache TTL in seconds (never persisted to disk).",
   },
   {
-    group: "Market Data", key: "FUNDAMENTALS_SOURCE", type: "enum",
-    value: "yahoo", default: "yahoo", options: ["yahoo", "yfinance_info", "fmp"],
-    description: "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep — see section 25). Finnhub is no longer a fundamentals source. Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
+    group: "Market Data",
+    key: "FUNDAMENTALS_SOURCE",
+    type: "enum",
+    value: "yahoo",
+    default: "yahoo",
+    options: ["yahoo", "yfinance_info", "fmp"],
+    description:
+      "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep — see section 25). Finnhub is no longer a fundamentals source. Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
   },
   // ---- Runtime & Ops ----
   {
-    group: "Runtime & Ops", key: "DASHBOARD_REFRESH_SECONDS", type: "number",
-    value: 1800, default: 1800, min: 1, max: 86400, step: 1,
-    description: "Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min.",
+    group: "Runtime & Ops",
+    key: "DASHBOARD_REFRESH_SECONDS",
+    type: "number",
+    value: 1800,
+    default: 1800,
+    min: 1,
+    max: 86400,
+    step: 1,
+    description:
+      "Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min.",
   },
   {
-    group: "Runtime & Ops", key: "PROGRESS_POLL_SECONDS", type: "number",
-    value: 5, default: 5, min: 1, max: 3600, step: 1,
-    description: "Poll interval (seconds) for the Launcher pipeline-progress indicator.",
+    group: "Runtime & Ops",
+    key: "PROGRESS_POLL_SECONDS",
+    type: "number",
+    value: 5,
+    default: 5,
+    min: 1,
+    max: 3600,
+    step: 1,
+    description:
+      "Poll interval (seconds) for the Launcher pipeline-progress indicator.",
   },
   {
-    group: "Runtime & Ops", key: "LOG_LEVEL", type: "enum",
-    value: "INFO", default: "INFO", options: ["DEBUG", "INFO", "WARNING", "ERROR"],
+    group: "Runtime & Ops",
+    key: "LOG_LEVEL",
+    type: "enum",
+    value: "INFO",
+    default: "INFO",
+    options: ["DEBUG", "INFO", "WARNING", "ERROR"],
     description: null,
   },
   {
-    group: "Runtime & Ops", key: "ADVISORY_REUSE_PIPELINE_COMPUTE", type: "boolean",
-    value: false, default: false,
-    description: "Opt-in, OUTPUT-CHANGING: main_orchestrator.py's advisory overlay reuses run_pipeline's already-computed GARCH/forecast values for that ticker instead of independently refitting a second time. When False (the default), every advisory-overlay call refits independently, reproducing the exact pre-dedup behavior.",
+    group: "Runtime & Ops",
+    key: "ADVISORY_REUSE_PIPELINE_COMPUTE",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Opt-in, OUTPUT-CHANGING: main_orchestrator.py's advisory overlay reuses run_pipeline's already-computed GARCH/forecast values for that ticker instead of independently refitting a second time. When False (the default), every advisory-overlay call refits independently, reproducing the exact pre-dedup behavior.",
   },
   {
-    group: "Runtime & Ops", key: "ADVISORY_ONLY", type: "boolean",
-    value: true, default: true,
-    description: "When True, ALL broker order submission is suppressed. The pipeline still runs end-to-end (signals, sizing, HTML report, JSON payload) but order execution returns immediately. Set False ONLY when broker execution is intentionally re-enabled.",
+    group: "Runtime & Ops",
+    key: "ADVISORY_ONLY",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "When True, ALL broker order submission is suppressed. The pipeline still runs end-to-end (signals, sizing, HTML report, JSON payload) but order execution returns immediately. Set False ONLY when broker execution is intentionally re-enabled.",
   },
   // ---- Advanced / Config (the 7 keys the real Streamlit tab's own
   // _SETTINGS_LAYOUT, gui/panels/settings_manager.py:36-77, already served) ----
   {
-    group: "Advanced / Config", key: "SECTOR_FORECAST_CONFIG_PATH", type: "string",
-    value: "forecasting/sector_configs.json", default: "forecasting/sector_configs.json",
-    description: "Path to the committed per-sector forecast config artifact (model+horizon per sector, derived from an offline walk-forward backtest). Loaded once at ForecastingEngine init; the hardcoded default dict is used as fallback when the file is missing or invalid.",
+    group: "Advanced / Config",
+    key: "SECTOR_FORECAST_CONFIG_PATH",
+    type: "string",
+    value: "forecasting/sector_configs.json",
+    default: "forecasting/sector_configs.json",
+    description:
+      "Path to the committed per-sector forecast config artifact (model+horizon per sector, derived from an offline walk-forward backtest). Loaded once at ForecastingEngine init; the hardcoded default dict is used as fallback when the file is missing or invalid.",
   },
   {
-    group: "Advanced / Config", key: "SECTOR_FORECAST_CONFIGS", type: "string",
-    value: "{}", default: "{}",
-    description: 'Optional per-sector override merged OVER the artifact/hardcoded default. JSON dict in .env, e.g. {"Technology": {"days": 30, "model": "MC"}}. Empty dict (the default) leaves the artifact/hardcoded default unchanged (fully backward-compatible).',
+    group: "Advanced / Config",
+    key: "SECTOR_FORECAST_CONFIGS",
+    type: "string",
+    value: "{}",
+    default: "{}",
+    description:
+      'Optional per-sector override merged OVER the artifact/hardcoded default. JSON dict in .env, e.g. {"Technology": {"days": 30, "model": "MC"}}. Empty dict (the default) leaves the artifact/hardcoded default unchanged (fully backward-compatible).',
   },
   {
-    group: "Advanced / Config", key: "PROMPT_REGISTRY_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch. False (default) → baseline-only, zero network calls. Set True to enable remote manifest fetch and cache.",
+    group: "Advanced / Config",
+    key: "PROMPT_REGISTRY_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch. False (default) → baseline-only, zero network calls. Set True to enable remote manifest fetch and cache.",
   },
   {
-    group: "Advanced / Config", key: "PROMPT_REGISTRY_BACKEND", type: "string",
-    value: "http", default: "http",
-    description: "Storage backend: 'http' (default, protected HTTPS endpoint), 'local' (LocalJSONStore from a file path), or 'firestore' (lazy import).",
+    group: "Advanced / Config",
+    key: "PROMPT_REGISTRY_BACKEND",
+    type: "string",
+    value: "http",
+    default: "http",
+    description:
+      "Storage backend: 'http' (default, protected HTTPS endpoint), 'local' (LocalJSONStore from a file path), or 'firestore' (lazy import).",
   },
   {
-    group: "Advanced / Config", key: "ORCHESTRATOR_DAEMON_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Route the desktop shell's always-on refresh loop and the Launcher tab's manual run trigger through the persistent orchestrator daemon instead of spawning a fresh subprocess per cycle. False (default) preserves today's exact subprocess behavior everywhere.",
+    group: "Advanced / Config",
+    key: "ORCHESTRATOR_DAEMON_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Route the desktop shell's always-on refresh loop and the Launcher tab's manual run trigger through the persistent orchestrator daemon instead of spawning a fresh subprocess per cycle. False (default) preserves today's exact subprocess behavior everywhere.",
   },
   {
-    group: "Advanced / Config", key: "ORCHESTRATOR_EXTENDED_HOURS_ONLY", type: "boolean",
-    value: true, default: true,
-    description: "Skip automatic interval-triggered pipeline cycles (daemon timer and main.py --interval) outside the 4am-8pm ET weekday window (engine.advisory_agent.is_extended_hours) -- not strict 9:30-16:00 RTH. Manual/on-demand triggers (webapp buttons, API calls) are never gated. No holiday calendar is applied (same known limitation as is_us_market_open); default True fixes previously-unconditional 24/7 automatic runs.",
+    group: "Advanced / Config",
+    key: "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Skip automatic interval-triggered pipeline cycles (daemon timer and main.py --interval) outside the 4am-8pm ET weekday window (engine.advisory_agent.is_extended_hours) -- not strict 9:30-16:00 RTH. Manual/on-demand triggers (webapp buttons, API calls) are never gated. No holiday calendar is applied (same known limitation as is_us_market_open); default True fixes previously-unconditional 24/7 automatic runs.",
   },
   {
-    group: "Advanced / Config", key: "CORS_ALLOWED_ORIGINS", type: "string",
-    value: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
-    default: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
-    description: 'Allowed browser origins for the read-only State API / Pilots API CORS policy. JSON array in .env, e.g. ["http://localhost:3000", "https://app.example.com"].',
+    group: "Advanced / Config",
+    key: "CORS_ALLOWED_ORIGINS",
+    type: "string",
+    value:
+      '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    default:
+      '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    description:
+      'Allowed browser origins for the read-only State API / Pilots API CORS policy. JSON array in .env, e.g. ["http://localhost:3000", "https://app.example.com"].',
+  },
+  {
+    key: "USE_DUAL_MOMENTUM_OVERLAY",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "When True, the Dual Momentum allocator pre-screens the ticker list each run. If the allocator selects the safe asset (BIL), tickers in the risky universes (SPY, VEU) have their Kelly Target set to 0.0.",
+    group: "New Features",
+  },
+  {
+    key: "DUAL_MOMENTUM_SAFE_ASSET",
+    value: "BIL",
+    default: "BIL",
+    type: "string",
+    description:
+      "Ticker used as the safe/defensive asset in the Dual Momentum overlay.",
+    group: "New Features",
+  },
+  {
+    key: "DUAL_MOMENTUM_RISKY_ASSETS",
+    value: '["SPY", "VEU"]',
+    default: '["SPY", "VEU"]',
+    type: "string",
+    description:
+      "Risky ETFs compared in the Dual Momentum cross-sectional filter.",
+    group: "New Features",
+  },
+  {
+    key: "EXECUTION_PRIORITY_QUEUE_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Opt-in: route OrderIntents through execution/priority_queue.py's leaky-bucket priority queue before submission, prioritizing risk-reducing (SELL/TRIM) intents over new BUYs when nearing the submission-rate budget. Does NOT replace or bypass MAX_ORDER_RATE_PER_MIN's hard cap (execution/risk_gate.py) or execution/kill_switch.py -- both remain the sole authorization gate, checked at submission exactly as before. False (default) preserves the exact current sequential per-row submission order -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention.",
+    group: "New Features",
+  },
+  {
+    key: "EXECUTION_QUEUE_LEAK_RATE_PER_SEC",
+    value: 2.0,
+    default: 2.0,
+    type: "number",
+    description:
+      "Leaky-bucket drain rate (order submissions/sec) when EXECUTION_PRIORITY_QUEUE_ENABLED=true. Only paces submission ordering within a single cycle's queue drain -- independent of MAX_ORDER_RATE_PER_MIN's separate 60s rolling-window cap.",
+    group: "New Features",
+  },
+  {
+    key: "FLATTEN_ON_KILL",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Log CRITICAL position-flatten reminder when kill switch activates.",
+    group: "New Features",
+  },
+  {
+    key: "BERT_LLA_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "Master switch for the BERT-LLA multi-horizon forecaster (forecasting/bert_lla.py -- PyTorch dual-LSTM + self-attention, three registered ablations: lstm_baseline, lstm_attention, bert_lla). False (the default) is a complete no-op: ForecastingEngine.run_bert_lla_forecast() returns the zero sentinel without ever touching torch. Requires the optional torch package (already in requirements-optional.txt for local FinBERT inference) -- absent, the same zero-sentinel behavior applies regardless of this flag.",
+    group: "New Features",
+  },
+  {
+    key: "BERT_LLA_WINDOW_SIZE",
+    value: 22,
+    default: 22,
+    type: "number",
+    description:
+      "Lookback window (trading days) BERT-LLA's LSTM layers consume, replacing the CNN-LSTM path's hardcoded LSTM_LOOKBACK=60 -- matches the source methodology's 22-trading-day window. Only consulted once BERT_LLA_ENABLED is True.",
+    group: "New Features",
+  },
+  {
+    key: "BERT_LLA_MIN_SENTIMENT_COVERAGE",
+    value: 0.5,
+    default: 0.5,
+    type: "number",
+    description:
+      "Hard gate for the 'bert_lla' ablation specifically (not lstm_baseline/lstm_attention, which consume no sentiment): the minimum fraction of rows in the feature window that must have an OBSERVED composite-sentiment-index reading (signals.sentiment_index) before training proceeds. Below this threshold, run_bert_lla_forecast returns the zero sentinel rather than training on a mostly mask-zeroed sentiment channel (CONSTRAINT #4) -- SENTIMENT_INGESTION_ENABLED defaults False and SENTIMENT_PIT_MIN_MONTHS=6 is this platform's own bar for trusting sentiment history, so this gate will bind for months after an operator first enables sentiment ingestion, by design. Only consulted once BERT_LLA_ENABLED is True.",
+    group: "New Features",
+  },
+  {
+    key: "BERT_LLA_BLEND_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "Whether the 'bert_lla' ablation's price (not lstm_baseline/lstm_attention -- those are comparison-only and NEVER blend-eligible regardless of this flag) is added to ForecastingEngine's model_forecasts dict and therefore influences the live skill-weighted blended forecast. False (the default): bert_lla still RECORDS to forecast_errors for the webapp's model-comparison chart, but its error history accrues honestly before it can ever move a recommendation -- mirrors FORECAST_SKILL_WEIGHTING_ENABLED's 'measure first, act later' posture. Only consulted once BERT_LLA_ENABLED is True.",
+    group: "New Features",
+  },
+  {
+    key: "BERT_LLA_ABLATION_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "When True, generate_forecast() runs all three BERT-LLA ablations (lstm_baseline, lstm_attention, bert_lla) instead of just 'bert_lla' alone -- three PyTorch trainings per ticker per cycle instead of one. False (the default) keeps the marginal compute cost to a single model. Only consulted once BERT_LLA_ENABLED is True.",
+    group: "New Features",
+  },
+  {
+    key: "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "Fix for the CNN-LSTM/TensorFlow deadlock documented in docs/known_issues/cnn_lstm_tf_deadlock.md (issue #381). Root cause: TensorFlow and pyarrow each ship an independently-compiled copy of the same Abseil sync primitive; whichever library's Python-level init runs first in the PROCESS wins that symbol, and if pandas/pyarrow initialize first, the first real multi-threaded TF eager op (a Conv1D/LSTM .fit()) deadlocks forever. Reordering forecasting_engine.py's own imports (always-on, unconditional) only helps when this module is the first thing in the whole process to touch pandas -- true in an isolated test script, false in main.py/main_orchestrator.py/pipeline/production_steps.py, which all import pandas before forecasting_engine is ever reached (those three files carry their own guarded `import tensorflow` before their own `import pandas` as a defense-in-depth second layer -- see Fix 2 in the doc -- but that convention is unenforced for any OTHER entry point, script, or notebook that happens to reach this code path). When True (the default), ForecastingEngine.run_cnn_lstm_forecast runs the actual TF-touching work (model fit+predict, and cached-model load+predict) in a persistent worker pool (repo-root cnn_lstm_process_pool.py) whose worker module (repo-root cnn_lstm_worker.py -- deliberately NOT inside forecasting/, since that package's __init__ eagerly imports pandas) imports tensorflow before anything else and runs as its own genuine OS process, launched via subprocess.Popen -- a fresh interpreter per worker means the parent process's import order can no longer matter, unlike the module-level reorder alone or the entry-point guards. This is what actually removes the process-scope constraint, rather than merely mitigating it by convention: it protects EVERY caller, known or not, not just the three files that remember the guard. As of 2026-08-04 (Round 8 of the known-issues doc), workers are launched with subprocess.Popen rather than multiprocessing -- a second, distinct deadlock (unrelated to the Abseil ODR collision above) was found in multiprocessing-managed worker processes specifically; see Round 8 for the full ablation matrix. All feature engineering / windowing / scaling stays in the parent process unchanged (pandas-only, never touches TF). Any subprocess failure (timeout, a dead/unresponsive worker, real training exception) is caught by run_cnn_lstm_forecast's existing outer try/except and degrades to the zero-result sentinel -- never crashes the pipeline (CONSTRAINT #6). This default flipped True on 2026-07-31 (Round 7 of the known-issues doc) once Round 6 (2026-07-27) verified subprocess isolation end-to-end against the real native deadlock on real production data in the actual macOS arm64 + Framework-Python environment the deadlock was originally confirmed on -- the earlier caveat about this being verified only against the mocked test suite no longer applies. Set False only to restore the legacy in-process path (byte-identical to this flag's original pre-2026-07-31 default); doing so re-exposes the process-scope import-order hazard for any entry point that doesn't carry its own guarded `import tensorflow` before `import pandas`/`import pyarrow`.",
+    group: "New Features",
+  },
+  {
+    key: "CNN_LSTM_PROCESS_POOL_WORKERS",
+    value: 1,
+    default: 1,
+    type: "number",
+    description:
+      "Worker-process count for the CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED pool (repo-root cnn_lstm_process_pool.py). Workers are persistent (survive across tickers/cycles, each pays the TensorFlow import cost only once) so CNN-LSTM fits queued from pipeline/production_steps.py's per-ticker ThreadPoolExecutor fan-out share this fixed-size pool rather than spawning a fresh interpreter per ticker. Keep small -- each worker holds a full TensorFlow process in memory.",
+    group: "New Features",
+  },
+  {
+    key: "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS",
+    value: 300,
+    default: 300,
+    type: "number",
+    description:
+      "Max seconds to wait for a single CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED fit-or-predict call before giving up and falling back to the zero-result sentinel (never blocks the pipeline indefinitely -- the entire point of this fix is to replace an unbounded hang with a bounded, recoverable failure). 50 epochs with EarlyStopping(patience=5) on the modest window sizes this codebase trains on should complete well within the default.",
+    group: "New Features",
+  },
+  {
+    key: "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "Opt-in, stricter alternative to ForecastingEngine.fit_scalers_on_train's single train/reserve MinMaxScaler split. That split is already leak-free for the live single-shot forecast (the emitted forecast never depends on future data relative to inference time), but an EARLY training window's scale still reflects statistics pooled from LATER rows within the train span via the one shared scaler. When True, ForecastingEngine.run_cnn_lstm_forecast builds training windows via fit_scalers_walkforward_windows instead: each supervised window is scaled using only an expanding min/max computed from rows strictly at/before that window's own end (vectorized via numpy cumulative min/max, not a per-window sklearn refit). The final live inference window is unaffected either way -- it still uses the train-span scaler, since at inference time 'now' truly is the most recent data available. False (the default) reproduces pre-existing behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention. Intended for high-fidelity walk-forward backtesting, not the live pipeline; costs more compute per fit.",
+    group: "New Features",
+  },
+  {
+    key: "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Opt-in: LGBMCrossSectionalRanker.train() calls CombinatorialPurgedCV.split() directly on the (date, ticker) MultiIndex panel (PR #648's native MultiIndex support) instead of flattening to a date-only index first before purging/embargoing. Default False preserves today's exact flatten-path behavior for every existing caller -- train()'s own use_native_multiindex_cv kwarg always overrides this when explicitly passed (True or False); this setting is only consulted when a caller leaves that kwarg unset (None). The native path additionally REQUIRES an explicit t1 (raises ValueError otherwise) -- CombinatorialPurgedCV cannot safely synthesize a default t1 across a MultiIndex -- while the flatten path keeps silently synthesizing a 'next row' default t1 when none is supplied, exactly as it always has.",
+    group: "New Features",
+  },
+  {
+    key: "MARKET_DATA_WS_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Opt-in: subscribe to Alpaca's real-time StockDataStream WebSocket for quotes, SUPPLEMENTING (never replacing) the REST-polling CompositeProvider -- see data/market_data_ws.py. Only takes effect when the active quote provider is AlpacaProvider; otherwise a no-op with an INFO log. False (default) reproduces the exact current REST-only behavior -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention. Any WS failure (connect, subscribe, disconnect, missing credentials) degrades to the existing REST path -- never crashes the pipeline.",
+    group: "New Features",
+  },
+  {
+    key: "HISTORICAL_STORE_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "Master flag for HistoricalStore DB routing. When True, OHLCV bars and account snapshots are read from / written to quant_platform.db. First call for a symbol = full BARS_BACKFILL_DAYS backfill; subsequent calls = delta only. Set False to reproduce pre-Tier-2.3 behavior (all fetches go directly to the live provider).",
+    group: "New Features",
+  },
+  {
+    key: "ROBINHOOD_AUTO_REFRESH_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "When True, fetch_account_snapshot() automatically re-logs-in to Robinhood whenever the cached snapshot exceeds max_age_hours. Default False: device-approval login needs a human to tap approve, so an unattended background attempt can never succeed — live login only happens when explicitly forced (--refresh-account, or the webapp's Connect/Refresh flows); all other callers get the cached snapshot regardless of staleness.",
+    group: "New Features",
+  },
+  {
+    key: "RUNTIME_FLAGS_REFRESH_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Periodically re-check output/runtime_flags.json for changes written by another process and apply them onto this daemon's live settings. False (default) preserves today's exact behavior -- a cross-process write only takes effect on next restart.",
+    group: "New Features",
+  },
+  {
+    key: "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS",
+    value: 30,
+    default: 30,
+    type: "number",
+    description:
+      "Seconds between the orchestrator daemon's checks of output/runtime_flags.json for cross-process changes. Only consulted when RUNTIME_FLAGS_REFRESH_ENABLED is True.",
+    group: "New Features",
+  },
+  {
+    key: "GRAVITY_REQUIRE_NATIVE",
+    value: false,
+    default: false,
+    type: "boolean",
+    description: "Require native implementation for Gravity Review Suite.",
+    group: "New Features",
+  },
+  {
+    key: "OPTIONS_MATRIX_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "When True, the pipeline persists the per-symbol options premium directive matrix to output/options_matrix.json for the Pilots PWA (GET /options, GET /symbols/{ticker}/options). Default False.",
+    group: "New Features",
+  },
+  {
+    key: "OPTIONS_TRUE_IVR_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "Opt-in: wires a real, options-chain-derived True_IVR into technical_options_engine.build_premium_directive() -- the GUI Technical Options Matrix tab, the get_options_directive MCP tool, api/metrics_api.py, execution/options_queue_builder.py, and every other build_premium_directive caller -- instead of leaving true IV rank exclusive to main_orchestrator.py's pipeline/production_steps.py::OptionsAnalysisStep path. When True, build_premium_directive fetches a live 30-calendar-day ATM IV via volatility.iv_engine.get_30d_atm_iv() (a fresh, lightweight DataEngine constructed with no FRED key purely for its fetch_options_chain() -- CompositeProvider/data/market_data.py has no chain-shaped method to reuse, so this mirrors exactly what OptionsAnalysisStep already does rather than inventing a second convention) and ranks it against the SAME iv_history table (volatility.iv_engine.IVHistoryStore) OptionsAnalysisStep writes to via calculate_true_ivr() -- strictly prior days only, never a lookahead. The result is surfaced as a NEW True_IVR row key alongside the existing realized-vol-only IVR_Proxy (never replacing it -- both stay so provenance is honest); generate_strategy_pricing_matrix's true_ivr argument prefers True_IVR over IVR_Proxy when the flag is on and a finite value was computed, falling back to IVR_Proxy exactly as today otherwise. Any failure at any step -- no live chain data, an empty iv_history table during warm-start (this repo's dev/CI sandboxes never populate GUI/MCP-path history since only OptionsAnalysisStep's orchestrator path writes to it), a network error, or any exception -- degrades to float('nan') for True_IVR and never crashes or changes IVR_Proxy/Cash-Wait fallback behavior (CONSTRAINT #4/#6). False (the default) reproduces today's exact behavior byte-for-byte -- no new network call, no new DB read, True_IVR always NaN. Enabling this adds one live options-chain fetch per symbol per render (GUI)/per call (MCP) -- a real, non-trivial network cost the realized-vol proxy never had.",
+    group: "New Features",
+  },
+  {
+    key: "PAIRS_SNAPSHOT_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "When True, the pipeline persists the cointegrated pairs radar (ranking + current spread state) to output/pairs.json for the Pilots PWA (GET /pairs). Expensive O(n^2) scan; default False.",
+    group: "New Features",
+  },
+  {
+    key: "META_LABELING_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "Enable startup registration of trained meta-labelers into global_meta_registry (ml/meta_bootstrap.py). No-op when no saved model exists; set False to disable meta-labeling entirely.",
+    group: "New Features",
+  },
+  {
+    key: "NEWS_HISTORY_CAPTURE_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "When True, NewsCatalystSignal.pre_compute() writes each cycle's live news-sentiment scores to HistoricalStore's news_history table (via HistoricalStore.save_news_sentiment()), forward-archiving real point-in-time history so a genuine backtest becomes possible after enough history accumulates. No backtest reads this table yet. Dead-lettered: any capture failure is logged and never crashes the pipeline. Set False to disable forward-going capture entirely.",
+    group: "New Features",
+  },
+  {
+    key: "PIT_CAPTURE_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "When True, the orchestrator writes TODAY's cross-sectional PIT feature snapshot to ml/data/cache/ (via ml.data.store.PITFeatureStore) right after signal pre_compute, so the ML training panel accumulates real point-in-time snapshots for future incremental retrains. Dead-lettered: any capture failure is logged and never crashes the pipeline. Set False to disable forward-going capture entirely.",
+    group: "New Features",
+  },
+  {
+    key: "SENTIMENT_AUDIT_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "When True, sentiment-ingestion sources write each ingested document to HistoricalStore's sentiment_ingestion_audit table (via HistoricalStore.save_sentiment_documents()) -- the per-document point-in-time archive underlying the credibility-weighted sentiment signal (Sentiment Pipeline Phase 2+). Same on/off shape as NEWS_HISTORY_CAPTURE_ENABLED. Dead-lettered: any capture failure is logged and never crashes the pipeline. Has no effect while SENTIMENT_INGESTION_ENABLED is False (nothing is ever fetched to archive in the first place).",
+    group: "New Features",
+  },
+  {
+    key: "SENTIMENT_DESENTENCIZE_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "When True, ingested document text has periods replaced with semicolons before FinBERT scoring (a real but marginal trick to discourage sentence-boundary truncation on run-on social posts). Off by default: it can corrupt numerics ($4.50), cashtags ($AAPL), and abbreviations (U.S.) -- see tests/test_sentiment_sources.py's desentencize-safety cases before enabling.",
+    group: "New Features",
+  },
+  {
+    key: "EXCURSION_INTRADAY_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Opt-in (Phase-1 audit item B2): evaluation_engine.calculate_edge_ratio consumes hourly bars (MarketDataProvider.get_intraday_bars(..., interval='1h')) over the trade hold window instead of daily bars, for finer Maximum Favorable/Adverse Excursion (MFE/MAE) resolution on same-day or short holds. Daily bars are already genuine (not fabricated) and adequate for multi-day holds; this only adds intraday precision. Any hourly-fetch failure (provider error, unsupported interval, empty result) degrades to the existing daily-bar path rather than raising -- never blocks the excursion calculation. False (the default) reproduces pre-existing daily-only behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention.",
+    group: "New Features",
+  },
+  {
+    key: "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Opt-in fix for validation/metrics.py::deflated_sharpe_ratio's n_trials<=1 shortcut, which unconditionally returns 1.0 (a perfect deflated Sharpe) for any single-trial strategy instead of actually computing the DSR test statistic -- so a strategy with only one configuration always passes the 'DSR > 0.95' deployability gate regardless of how weak its observed Sharpe, skew, or kurtosis actually are. This bug is directly relied on today by 5 STRATEGY_REGISTRY strategies that hit DSR=1.000 exactly via this shortcut -- multifactor_lowvol_size, garch_vol_target, cross_sectional_momentum, relative_strength_xsec, timeseries_momentum (confirmed in docs/VALIDATION_STRATEGY_FIX_LOG.md) -- and are currently recorded deployable=True, so the corrected math ships opt-in rather than silently changing any currently-recorded verdict. False (the default) reproduces the pre-existing `return 1.0` shortcut byte-for-byte. True sets sr_0 = 0.0 (mathematically correct: with genuinely only one trial there is no multiple-testing selection-bias penalty to deflate for) and falls through to compute the REAL z_stat/norm.cdf from the actual sr_observed/skew/kurtosis/n_observations, instead of short-circuiting to a hardcoded perfect pass. Flipping this on requires a follow-up session with live-market data access to re-run scripts/refresh_validations.py against the 5 strategies named above and update docs/VALIDATION_STRATEGY_FIX_LOG.md before this can ever change what's actually live -- exactly like this codebase's other opt-in correctness levers (e.g. VALIDATION_HARNESS_OOS_GATE_ENABLED above).",
+    group: "New Features",
+  },
+  {
+    key: "VALIDATION_HARNESS_OOS_GATE_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Opt-in fix for StrategyValidationHarness's deployability gate. Two related integrity gaps: (1) report.sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover were computed from self.strategy_fn(X, y, X, y) -- a 'test' set IDENTICAL to the training set, i.e. an IN-SAMPLE number feeding the 'net-of-cost Sharpe > 0.5' / 'MaxDD < 30%' deployability criteria -- while only PBO/DSR were genuinely out-of-sample (via CombinatorialPurgedCV). (2) CombinatorialPurgedCV's own DSR/PBO Sharpes were computed on GROSS (cost-free) returns even though the in-sample Sharpe/MaxDD leg applied _apply_cost_model's turnover-scaled cost -- an inconsistent cost basis between the two gate legs. When True, run_cpcv_evaluation applies the same turnover-scaled cost model to every CPCV path's train/test returns before any Sharpe/PBO/DSR/drawdown statistic is computed from them, and the harness's reported sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover become the MEAN of each metric computed independently on every CPCV path's own genuinely held-out (purged+embargoed) OOS returns for the DSR-selected strategy, instead of the full-sample in-sample fit -- see run_cpcv_evaluation's docstring for why this is a per-path mean rather than one concatenated equity curve (CPCV's combinatorial test blocks are deliberately reused across paths). equity_curve/benchmark_curve/macro_benchmark_curve are UNCHANGED either way (still the full-sample series) -- a single non-overlapping OOS equity curve needs the AFML CPCV backtest-path-recombination algorithm, not implemented here (a real, separate follow-up, not silently faked). False (the default) reproduces pre-existing behavior exactly: every currently-recorded docs/VALIDATION_STRATEGY_FIX_LOG.md PBO/DSR/Sharpe/MaxDD baseline for the registered STRATEGY_REGISTRY fleet was measured with this flag off, and this sandboxed dev/CI environment has no live-market network access to re-verify the fleet against the corrected numbers -- flipping this on requires re-running scripts/refresh_validations.py against live data and updating that log, exactly like this codebase's other opt-in correctness levers (e.g. FORECAST_CNN_LSTM_WALKFORWARD_SCALING above, ETF_TRANSMISSION_SIZING_ENABLED).",
+    group: "New Features",
   },
 ];
 
-function readOverrides(storageKey: string): Record<string, number | boolean | string> {
+function readOverrides(
+  storageKey: string,
+): Record<string, number | boolean | string> {
   try {
     const raw = localStorage.getItem(storageKey);
-    return raw ? (JSON.parse(raw) as Record<string, number | boolean | string>) : {};
+    return raw
+      ? (JSON.parse(raw) as Record<string, number | boolean | string>)
+      : {};
   } catch {
     return {};
   }
@@ -2318,7 +3020,7 @@ function readDrift(storageKey: string): string[] {
 function buildTunablesResponse(
   defs: MockTunableDef[],
   overridesKey: string,
-  driftKey: string
+  driftKey: string,
 ): TunablesResponse {
   const ov = readOverrides(overridesKey);
   const groups: TunablesResponse["groups"] = [];
@@ -2356,9 +3058,15 @@ function buildTunablesResponse(
       if (f.liveness) counts[f.liveness.applies] += 1;
     }
   }
-  const present = (Object.keys(counts) as AppliesState[]).filter((s) => counts[s] > 0);
+  const present = (Object.keys(counts) as AppliesState[]).filter(
+    (s) => counts[s] > 0,
+  );
   const summary: AppliesSummary =
-    present.length === 1 ? present[0] : present.length === 0 ? "next_daemon_restart" : "mixed";
+    present.length === 1
+      ? present[0]
+      : present.length === 0
+        ? "next_daemon_restart"
+        : "mixed";
   return {
     applies: summary,
     applies_counts: counts,
@@ -2380,7 +3088,7 @@ function applyTunablesGeneric(
   defs: MockTunableDef[],
   overridesKey: string,
   driftKey: string,
-  confirm: Record<string, string> = {}
+  confirm: Record<string, string> = {},
 ): TunablesUpdateResult {
   const written: Record<string, number | boolean | string> = {};
   const rejected: Record<string, string> = {};
@@ -2401,7 +3109,8 @@ function applyTunablesGeneric(
         (def.min !== undefined && n < def.min) ||
         (def.max !== undefined && n > def.max)
       ) {
-        rejected[key] = `out_of_range: must be within [${def.min}, ${def.max}].`;
+        rejected[key] =
+          `out_of_range: must be within [${def.min}, ${def.max}].`;
         continue;
       }
       written[key] = n;
@@ -2409,7 +3118,8 @@ function applyTunablesGeneric(
       written[key] = Boolean(val);
     } else if (def.type === "enum") {
       if (def.options && !def.options.includes(String(val))) {
-        rejected[key] = `invalid_option: must be one of ${def.options.join(", ")}.`;
+        rejected[key] =
+          `invalid_option: must be one of ${def.options.join(", ")}.`;
         continue;
       }
       written[key] = String(val);
@@ -2447,15 +3157,18 @@ function applyTunablesGeneric(
     perKeyApplies[key] = mockLiveness(key).applies;
   }
   const appliedNow = Object.keys(perKeyApplies).filter(
-    (k) => perKeyApplies[k] === "immediately"
+    (k) => perKeyApplies[k] === "immediately",
   );
   const pending = Object.keys(perKeyApplies).filter(
-    (k) => perKeyApplies[k] !== "immediately"
+    (k) => perKeyApplies[k] !== "immediately",
   );
 
   if (Object.keys(written).length > 0) {
     try {
-      localStorage.setItem(overridesKey, JSON.stringify({ ...readOverrides(overridesKey), ...written }));
+      localStorage.setItem(
+        overridesKey,
+        JSON.stringify({ ...readOverrides(overridesKey), ...written }),
+      );
       // Only a key that did NOT apply live is drifted: a live-applied key is
       // already in force in the running process, so reporting it as pending a
       // restart would be exactly the false claim this feature removes.
@@ -2473,15 +3186,22 @@ function applyTunablesGeneric(
     env_pinned: 0,
   };
   for (const s of Object.values(perKeyApplies)) counts[s] += 1;
-  const present = (Object.keys(counts) as AppliesState[]).filter((s) => counts[s] > 0);
+  const present = (Object.keys(counts) as AppliesState[]).filter(
+    (s) => counts[s] > 0,
+  );
   const summary: AppliesSummary =
-    present.length === 1 ? present[0] : present.length === 0 ? "next_daemon_restart" : "mixed";
+    present.length === 1
+      ? present[0]
+      : present.length === 0
+        ? "next_daemon_restart"
+        : "mixed";
 
   let note: string;
   if (Object.keys(written).length === 0) {
     note = "Nothing was written.";
   } else if (appliedNow.length && !pending.length) {
-    note = "Saved to .env and applied to the running process — no restart needed.";
+    note =
+      "Saved to .env and applied to the running process — no restart needed.";
   } else if (pending.length && !appliedNow.length) {
     note =
       "Saved to .env. The running process keeps the previous values until it restarts (POST /daemon/restart).";
@@ -2509,9 +3229,15 @@ function mockTunables(): TunablesResponse {
 
 function applyTunables(
   values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {}
+  confirm: Record<string, string> = {},
 ): TunablesUpdateResult {
-  return applyTunablesGeneric(values, TUNABLE_DEFS, TUNABLES_KEY, TUNABLES_DRIFT_KEY, confirm);
+  return applyTunablesGeneric(
+    values,
+    TUNABLE_DEFS,
+    TUNABLES_KEY,
+    TUNABLES_DRIFT_KEY,
+    confirm,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2527,240 +3253,492 @@ function applyTunables(
 const SENTIMENT_TUNABLES_KEY = "stockpy.mock.sentiment_tunables";
 const SENTIMENT_TUNABLES_DRIFT_KEY = "stockpy.mock.sentiment_tunables_drift";
 const SECTOR_SELECTION_TUNABLES_KEY = "stockpy.mock.sector_selection_tunables";
-const SECTOR_SELECTION_TUNABLES_DRIFT_KEY = "stockpy.mock.sector_selection_tunables_drift";
+const SECTOR_SELECTION_TUNABLES_DRIFT_KEY =
+  "stockpy.mock.sector_selection_tunables_drift";
 
 const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
   // ---- Sentiment Ingestion Core ----
   {
-    group: "Sentiment Ingestion Core", key: "SENTIMENT_INGESTION_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/Reddit/EDGAR). False is a complete no-op.",
+    group: "Sentiment Ingestion Core",
+    key: "SENTIMENT_INGESTION_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/Reddit/EDGAR). False is a complete no-op.",
   },
   {
-    group: "Sentiment Ingestion Core", key: "SENTIMENT_SOURCES", type: "string",
-    value: "yahoo_rss,gdelt,reddit,edgar", default: "yahoo_rss,gdelt,reddit,edgar",
-    description: "Comma-separated list of enabled sentiment-source provider names.",
+    group: "Sentiment Ingestion Core",
+    key: "SENTIMENT_SOURCES",
+    type: "string",
+    value: "yahoo_rss,gdelt,reddit,edgar",
+    default: "yahoo_rss,gdelt,reddit,edgar",
+    description:
+      "Comma-separated list of enabled sentiment-source provider names.",
   },
   {
-    group: "Sentiment Ingestion Core", key: "SENTIMENT_COMMENT_SOURCES", type: "string",
-    value: "reddit,stocktwits", default: "reddit,stocktwits",
-    description: "Comma-separated subset of SENTIMENT_SOURCES classified as investor-forum comment sources.",
+    group: "Sentiment Ingestion Core",
+    key: "SENTIMENT_COMMENT_SOURCES",
+    type: "string",
+    value: "reddit,stocktwits",
+    default: "reddit,stocktwits",
+    description:
+      "Comma-separated subset of SENTIMENT_SOURCES classified as investor-forum comment sources.",
   },
   {
-    group: "Sentiment Ingestion Core", key: "SENTIMENT_INGESTION_LOOKBACK_DAYS", type: "number",
-    value: 1, default: 1, min: 1, max: 90, step: 1,
-    description: "Calendar days of lookback each ingestion cycle requests from every enabled source.",
+    group: "Sentiment Ingestion Core",
+    key: "SENTIMENT_INGESTION_LOOKBACK_DAYS",
+    type: "number",
+    value: 1,
+    default: 1,
+    min: 1,
+    max: 90,
+    step: 1,
+    description:
+      "Calendar days of lookback each ingestion cycle requests from every enabled source.",
   },
   {
-    group: "Sentiment Ingestion Core", key: "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE", type: "number",
-    value: 2000, default: 2000, min: 1, max: 20000, step: 1,
+    group: "Sentiment Ingestion Core",
+    key: "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE",
+    type: "number",
+    value: 2000,
+    default: 2000,
+    min: 1,
+    max: 20000,
+    step: 1,
     description: "Per-cycle document budget shared across all symbols.",
   },
   {
-    group: "Sentiment Ingestion Core", key: "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE", type: "number",
-    value: 60.0, default: 60.0, min: 1.0, max: 600.0, step: 1.0,
-    description: "Hard wall-clock ceiling (seconds) for the entire per-cycle ingestion run.",
+    group: "Sentiment Ingestion Core",
+    key: "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE",
+    type: "number",
+    value: 60.0,
+    default: 60.0,
+    min: 1.0,
+    max: 600.0,
+    step: 1.0,
+    description:
+      "Hard wall-clock ceiling (seconds) for the entire per-cycle ingestion run.",
   },
   {
-    group: "Sentiment Ingestion Core", key: "SENTIMENT_CIRCUIT_BREAKER_THRESHOLD", type: "number",
-    value: 3, default: 3, min: 1, max: 20, step: 1,
-    description: "Consecutive failures for a single source within one cycle before it's skipped for the rest of the cycle.",
+    group: "Sentiment Ingestion Core",
+    key: "SENTIMENT_CIRCUIT_BREAKER_THRESHOLD",
+    type: "number",
+    value: 3,
+    default: 3,
+    min: 1,
+    max: 20,
+    step: 1,
+    description:
+      "Consecutive failures for a single source within one cycle before it's skipped for the rest of the cycle.",
   },
   // ---- Sources — Reddit, StockTwits, EDGAR, GDELT, Google News ----
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "STOCKTWITS_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the free, uncredentialed StockTwits source.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "STOCKTWITS_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for the free, uncredentialed StockTwits source.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "REDDIT_USER_AGENT", type: "string",
-    value: "stockpy-sentiment-ingestion/0.1", default: "stockpy-sentiment-ingestion/0.1",
-    description: "User-Agent header sent with every Reddit API request, per Reddit's API rules.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "REDDIT_USER_AGENT",
+    type: "string",
+    value: "stockpy-sentiment-ingestion/0.1",
+    default: "stockpy-sentiment-ingestion/0.1",
+    description:
+      "User-Agent header sent with every Reddit API request, per Reddit's API rules.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "REDDIT_BACKFILL_MAX_PAGES", type: "number",
-    value: 10, default: 10, min: 1, max: 100, step: 1,
-    description: "Max pages RedditSource paginates through for a historical backfill request.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "REDDIT_BACKFILL_MAX_PAGES",
+    type: "number",
+    value: 10,
+    default: 10,
+    min: 1,
+    max: 100,
+    step: 1,
+    description:
+      "Max pages RedditSource paginates through for a historical backfill request.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GOOGLE_NEWS_LOOKBACK_WINDOW", type: "string",
-    value: "7d", default: "7d",
-    description: "Lookback window passed as Google News RSS's `when:` query parameter.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "GOOGLE_NEWS_LOOKBACK_WINDOW",
+    type: "string",
+    value: "7d",
+    default: "7d",
+    description:
+      "Lookback window passed as Google News RSS's `when:` query parameter.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "EDGAR_FULLTEXT_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the SEC EDGAR full-text search (10-K/10-Q) additions to EdgarSource.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "EDGAR_FULLTEXT_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for the SEC EDGAR full-text search (10-K/10-Q) additions to EdgarSource.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "EDGAR_FULLTEXT_FORMS", type: "string",
-    value: "8-K,10-K,10-Q", default: "8-K,10-K,10-Q",
-    description: "Comma-separated SEC form types requested from EDGAR full-text search.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "EDGAR_FULLTEXT_FORMS",
+    type: "string",
+    value: "8-K,10-K,10-Q",
+    default: "8-K,10-K,10-Q",
+    description:
+      "Comma-separated SEC form types requested from EDGAR full-text search.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "EDGAR_FULLTEXT_CHUNK_TOKENS", type: "number",
-    value: 512, default: 512, min: 64, max: 4096, step: 64,
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "EDGAR_FULLTEXT_CHUNK_TOKENS",
+    type: "number",
+    value: 512,
+    default: 512,
+    min: 64,
+    max: 4096,
+    step: 64,
     description: "Maximum tokens per filing-text chunk for FinBERT scoring.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_MIN_REQUEST_INTERVAL_SECONDS", type: "number",
-    value: 5.0, default: 5.0, min: 0.0, max: 60.0, step: 0.5,
-    description: "Minimum seconds between GDELT DOC API request issuance, shared process-wide.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
+    type: "number",
+    value: 5.0,
+    default: 5.0,
+    min: 0.0,
+    max: 60.0,
+    step: 0.5,
+    description:
+      "Minimum seconds between GDELT DOC API request issuance, shared process-wide.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_MAX_RETRIES", type: "number",
-    value: 2, default: 2, min: 0, max: 10, step: 1,
-    description: "Retries after a GDELT HTTP 429/5xx before the request is given up on.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "GDELT_MAX_RETRIES",
+    type: "number",
+    value: 2,
+    default: 2,
+    min: 0,
+    max: 10,
+    step: 1,
+    description:
+      "Retries after a GDELT HTTP 429/5xx before the request is given up on.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_RETRY_BACKOFF_SECONDS", type: "number",
-    value: 5.0, default: 5.0, min: 0.5, max: 60.0, step: 0.5,
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "GDELT_RETRY_BACKOFF_SECONDS",
+    type: "number",
+    value: 5.0,
+    default: 5.0,
+    min: 0.5,
+    max: 60.0,
+    step: 0.5,
     description: "Base seconds for the GDELT retry backoff.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_COOLDOWN_THRESHOLD", type: "number",
-    value: 3, default: 3, min: 1, max: 10, step: 1,
-    description: "Consecutive failed GDELT requests after which calls are skipped outright for a cooldown period.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "GDELT_COOLDOWN_THRESHOLD",
+    type: "number",
+    value: 3,
+    default: 3,
+    min: 1,
+    max: 10,
+    step: 1,
+    description:
+      "Consecutive failed GDELT requests after which calls are skipped outright for a cooldown period.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News", key: "GDELT_COOLDOWN_SECONDS", type: "number",
-    value: 300.0, default: 300.0, min: 10.0, max: 3600.0, step: 10.0,
-    description: "How long the GDELT cooldown stays open once the failure threshold is reached.",
+    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    key: "GDELT_COOLDOWN_SECONDS",
+    type: "number",
+    value: 300.0,
+    default: 300.0,
+    min: 10.0,
+    max: 3600.0,
+    step: 10.0,
+    description:
+      "How long the GDELT cooldown stays open once the failure threshold is reached.",
   },
   // ---- FinBERT & Catalyst Scoring ----
   {
-    group: "FinBERT & Catalyst Scoring", key: "FINBERT_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Use ProsusAI/FinBERT for headline sentiment when `transformers` is installed; falls back to a keyword lexicon otherwise.",
+    group: "FinBERT & Catalyst Scoring",
+    key: "FINBERT_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Use ProsusAI/FinBERT for headline sentiment when `transformers` is installed; falls back to a keyword lexicon otherwise.",
   },
   {
-    group: "FinBERT & Catalyst Scoring", key: "FINBERT_BATCH_SIZE", type: "number",
-    value: 16, default: 16, min: 1, max: 128, step: 1,
-    description: "Headlines per forward pass when a real FinBERT pipeline is loaded.",
+    group: "FinBERT & Catalyst Scoring",
+    key: "FINBERT_BATCH_SIZE",
+    type: "number",
+    value: 16,
+    default: 16,
+    min: 1,
+    max: 128,
+    step: 1,
+    description:
+      "Headlines per forward pass when a real FinBERT pipeline is loaded.",
   },
   {
-    group: "FinBERT & Catalyst Scoring", key: "FINBERT_SCORE_CACHE_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Cache FinBERT/lexicon headline scores by content hash so an unchanged headline is not re-scored.",
+    group: "FinBERT & Catalyst Scoring",
+    key: "FINBERT_SCORE_CACHE_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Cache FinBERT/lexicon headline scores by content hash so an unchanged headline is not re-scored.",
   },
   {
-    group: "FinBERT & Catalyst Scoring", key: "NEWS_LOOKBACK_DAYS", type: "number",
-    value: 7, default: 7, min: 1, max: 90, step: 1,
-    description: "Calendar days of Finnhub company_news headlines scored per symbol per cycle.",
+    group: "FinBERT & Catalyst Scoring",
+    key: "NEWS_LOOKBACK_DAYS",
+    type: "number",
+    value: 7,
+    default: 7,
+    min: 1,
+    max: 90,
+    step: 1,
+    description:
+      "Calendar days of Finnhub company_news headlines scored per symbol per cycle.",
   },
   {
-    group: "FinBERT & Catalyst Scoring", key: "FINNHUB_RATE_LIMIT_PER_MIN", type: "number",
-    value: 50, default: 50, min: 1, max: 60, step: 1,
-    description: "Finnhub sliding-window call budget per 60s (free tier ceiling: 60).",
+    group: "FinBERT & Catalyst Scoring",
+    key: "FINNHUB_RATE_LIMIT_PER_MIN",
+    type: "number",
+    value: 50,
+    default: 50,
+    min: 1,
+    max: 60,
+    step: 1,
+    description:
+      "Finnhub sliding-window call budget per 60s (free tier ceiling: 60).",
   },
   {
-    group: "FinBERT & Catalyst Scoring", key: "SENTIMENT_SOCIAL_BLEND_WEIGHT", type: "number",
-    value: 0.4, default: 0.4, min: 0.0, max: 1.0, step: 0.05,
-    description: "Weight on the multi-source social sentiment component of the blended catalyst score.",
+    group: "FinBERT & Catalyst Scoring",
+    key: "SENTIMENT_SOCIAL_BLEND_WEIGHT",
+    type: "number",
+    value: 0.4,
+    default: 0.4,
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    description:
+      "Weight on the multi-source social sentiment component of the blended catalyst score.",
   },
   // ---- AI Credibility Verification ----
   {
-    group: "AI Credibility Verification", key: "SENTIMENT_LLM_VERIFICATION_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "When True, borderline-credibility documents are verified via an LLM call instead of the heuristic placeholder.",
+    group: "AI Credibility Verification",
+    key: "SENTIMENT_LLM_VERIFICATION_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "When True, borderline-credibility documents are verified via an LLM call instead of the heuristic placeholder.",
   },
   {
-    group: "AI Credibility Verification", key: "SENTIMENT_LLM_VERIFICATION_PROVIDER", type: "enum",
-    value: "none", default: "none", options: ["claude", "gemini", "openai", "none"],
+    group: "AI Credibility Verification",
+    key: "SENTIMENT_LLM_VERIFICATION_PROVIDER",
+    type: "enum",
+    value: "none",
+    default: "none",
+    options: ["claude", "gemini", "openai", "none"],
     description: "Which LLM provider backs sentiment-document verification.",
   },
   {
-    group: "AI Credibility Verification", key: "SENTIMENT_LLM_VERIFICATION_MAX_CALLS_PER_CYCLE", type: "number",
-    value: 25, default: 25, min: 0, max: 500, step: 1,
-    description: "Per-batch cap on real LLM calls made for credibility verification.",
+    group: "AI Credibility Verification",
+    key: "SENTIMENT_LLM_VERIFICATION_MAX_CALLS_PER_CYCLE",
+    type: "number",
+    value: 25,
+    default: 25,
+    min: 0,
+    max: 500,
+    step: 1,
+    description:
+      "Per-batch cap on real LLM calls made for credibility verification.",
   },
   // ---- Attention & Sector Heat ----
   {
-    group: "Attention & Sector Heat", key: "SECTOR_HEAT_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the GDELT article-volume-based Sector Heat Factor attention feature.",
+    group: "Attention & Sector Heat",
+    key: "SECTOR_HEAT_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for the GDELT article-volume-based Sector Heat Factor attention feature.",
   },
   {
-    group: "Attention & Sector Heat", key: "SECTOR_HEAT_SMOOTHING_SIGMA", type: "number",
-    value: 1.0, default: 1.0, min: 0.1, max: 10.0, step: 0.1,
-    description: "Gaussian smoothing sigma applied to the raw daily GDELT article-volume series.",
+    group: "Attention & Sector Heat",
+    key: "SECTOR_HEAT_SMOOTHING_SIGMA",
+    type: "number",
+    value: 1.0,
+    default: 1.0,
+    min: 0.1,
+    max: 10.0,
+    step: 0.1,
+    description:
+      "Gaussian smoothing sigma applied to the raw daily GDELT article-volume series.",
   },
   {
-    group: "Attention & Sector Heat", key: "SECTOR_HEAT_LOOKBACK_DAYS", type: "number",
-    value: 7, default: 7, min: 1, max: 90, step: 1,
-    description: "Calendar days of GDELT article-volume history used to compute the Sector Heat Factor.",
+    group: "Attention & Sector Heat",
+    key: "SECTOR_HEAT_LOOKBACK_DAYS",
+    type: "number",
+    value: 7,
+    default: 7,
+    min: 1,
+    max: 90,
+    step: 1,
+    description:
+      "Calendar days of GDELT article-volume history used to compute the Sector Heat Factor.",
   },
   {
-    group: "Attention & Sector Heat", key: "WIKIPEDIA_ATTENTION_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the Wikipedia-pageviews-based retail-attention feature.",
+    group: "Attention & Sector Heat",
+    key: "WIKIPEDIA_ATTENTION_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for the Wikipedia-pageviews-based retail-attention feature.",
   },
   {
-    group: "Attention & Sector Heat", key: "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS", type: "number",
-    value: 30, default: 30, min: 1, max: 365, step: 1,
-    description: "Calendar days of Wikipedia pageview history used to compute the attention baseline/z-score.",
+    group: "Attention & Sector Heat",
+    key: "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
+    type: "number",
+    value: 30,
+    default: 30,
+    min: 1,
+    max: 365,
+    step: 1,
+    description:
+      "Calendar days of Wikipedia pageview history used to compute the attention baseline/z-score.",
   },
   {
-    group: "Attention & Sector Heat", key: "PYTRENDS_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Best-effort optional Google Trends overlay on top of the Wikipedia-pageviews attention feature.",
+    group: "Attention & Sector Heat",
+    key: "PYTRENDS_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Best-effort optional Google Trends overlay on top of the Wikipedia-pageviews attention feature.",
   },
 ];
 
 const SECTOR_SELECTION_TUNABLE_DEFS: MockTunableDef[] = [
   {
-    group: "Related Sector Selection", key: "SECTOR_SELECTION_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the semantic Related Sector Selection feature's Gaussian-response Sector Heat term.",
+    group: "Related Sector Selection",
+    key: "SECTOR_SELECTION_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for the semantic Related Sector Selection feature's Gaussian-response Sector Heat term.",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SELECTION_TOP_N", type: "number",
-    value: 3, default: 3, min: 1, max: 11, step: 1,
-    description: "Default number of top-ranked related sectors selected per target symbol.",
+    group: "Related Sector Selection",
+    key: "SECTOR_SELECTION_TOP_N",
+    type: "number",
+    value: 3,
+    default: 3,
+    min: 1,
+    max: 11,
+    step: 1,
+    description:
+      "Default number of top-ranked related sectors selected per target symbol.",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SELECTION_W1", type: "number",
-    value: 0.4, default: 0.4, min: 0.0, max: 1.0, step: 0.05,
-    description: "Default news-volume weight, mirrored from the composite sentiment index.",
+    group: "Related Sector Selection",
+    key: "SECTOR_SELECTION_W1",
+    type: "number",
+    value: 0.4,
+    default: 0.4,
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    description:
+      "Default news-volume weight, mirrored from the composite sentiment index.",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SELECTION_W2", type: "number",
-    value: 0.1, default: 0.1, min: 0.0, max: 1.0, step: 0.05,
+    group: "Related Sector Selection",
+    key: "SECTOR_SELECTION_W2",
+    type: "number",
+    value: 0.1,
+    default: 0.1,
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
     description: "Default review-volume weight.",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SELECTION_HEAT_LOOKBACK_DAYS", type: "number",
-    value: 22, default: 22, min: 1, max: 252, step: 1,
-    description: "Trailing trading days of sentiment volume summed per candidate sector before min-max normalization.",
+    group: "Related Sector Selection",
+    key: "SECTOR_SELECTION_HEAT_LOOKBACK_DAYS",
+    type: "number",
+    value: 22,
+    default: 22,
+    min: 1,
+    max: 252,
+    step: 1,
+    description:
+      "Trailing trading days of sentiment volume summed per candidate sector before min-max normalization.",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SELECTION_HEAT_A", type: "number",
-    value: 0.8, default: 0.8, min: 0.0, max: 5.0, step: 0.05,
+    group: "Related Sector Selection",
+    key: "SECTOR_SELECTION_HEAT_A",
+    type: "number",
+    value: 0.8,
+    default: 0.8,
+    min: 0.0,
+    max: 5.0,
+    step: 0.05,
     description: "Gaussian amplitude 'a' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SELECTION_HEAT_B", type: "number",
-    value: 1.0, default: 1.0, min: 0.0, max: 5.0, step: 0.05,
+    group: "Related Sector Selection",
+    key: "SECTOR_SELECTION_HEAT_B",
+    type: "number",
+    value: 1.0,
+    default: 1.0,
+    min: 0.0,
+    max: 5.0,
+    step: 0.05,
     description: "Gaussian center 'b' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SELECTION_HEAT_C", type: "number",
-    value: 0.6, default: 0.6, min: 0.05, max: 5.0, step: 0.05,
+    group: "Related Sector Selection",
+    key: "SECTOR_SELECTION_HEAT_C",
+    type: "number",
+    value: 0.6,
+    default: 0.6,
+    min: 0.05,
+    max: 5.0,
+    step: 0.05,
     description: "Gaussian width 'c' in SHF = a * exp(-(x-b)^2 / (2c^2)).",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SIMILARITY_EMBEDDER", type: "enum",
-    value: "sbert", default: "sbert", options: ["sbert", "openai", "none"],
+    group: "Related Sector Selection",
+    key: "SECTOR_SIMILARITY_EMBEDDER",
+    type: "enum",
+    value: "sbert",
+    default: "sbert",
+    options: ["sbert", "openai", "none"],
     description: "Embedding backend for the semantic-similarity term.",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SIMILARITY_MODEL", type: "string",
-    value: "sentence-transformers/all-MiniLM-L6-v2", default: "sentence-transformers/all-MiniLM-L6-v2",
-    description: "Hugging Face model id loaded when SECTOR_SIMILARITY_EMBEDDER is 'sbert'.",
+    group: "Related Sector Selection",
+    key: "SECTOR_SIMILARITY_MODEL",
+    type: "string",
+    value: "sentence-transformers/all-MiniLM-L6-v2",
+    default: "sentence-transformers/all-MiniLM-L6-v2",
+    description:
+      "Hugging Face model id loaded when SECTOR_SIMILARITY_EMBEDDER is 'sbert'.",
   },
   {
-    group: "Related Sector Selection", key: "SECTOR_SIMILARITY_POOLING", type: "enum",
-    value: "max", default: "max", options: ["max", "mean"],
+    group: "Related Sector Selection",
+    key: "SECTOR_SIMILARITY_POOLING",
+    type: "enum",
+    value: "max",
+    default: "max",
+    options: ["max", "mean"],
     description: "Pooling strategy applied to SBERT token embeddings.",
   },
 ];
@@ -2768,271 +3746,577 @@ const SECTOR_SELECTION_TUNABLE_DEFS: MockTunableDef[] = [
 const FMP_TUNABLES_KEY = "stockpy.mock.fmp_tunables";
 const FMP_TUNABLES_DRIFT_KEY = "stockpy.mock.fmp_tunables_drift";
 const ETF_TRANSMISSION_TUNABLES_KEY = "stockpy.mock.etf_transmission_tunables";
-const ETF_TRANSMISSION_TUNABLES_DRIFT_KEY = "stockpy.mock.etf_transmission_tunables_drift";
+const ETF_TRANSMISSION_TUNABLES_DRIFT_KEY =
+  "stockpy.mock.etf_transmission_tunables_drift";
 const CACHE_LONG_SHORT_TUNABLES_KEY = "stockpy.mock.cache_long_short_tunables";
-const CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY = "stockpy.mock.cache_long_short_tunables_drift";
+const CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY =
+  "stockpy.mock.cache_long_short_tunables_drift";
 
 const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   {
-    group: "Client & Resiliency", key: "FMP_BASE_URL", type: "string",
-    value: "https://financialmodelingprep.com/stable", default: "https://financialmodelingprep.com/stable",
+    group: "Client & Resiliency",
+    key: "FMP_BASE_URL",
+    type: "string",
+    value: "https://financialmodelingprep.com/stable",
+    default: "https://financialmodelingprep.com/stable",
     description: "Financial Modeling Prep API base URL.",
   },
   {
-    group: "Client & Resiliency", key: "FMP_TIMEOUT_SECONDS", type: "number",
-    value: 10.0, default: 10.0, min: 1.0, max: 120.0, step: 1.0,
+    group: "Client & Resiliency",
+    key: "FMP_TIMEOUT_SECONDS",
+    type: "number",
+    value: 10.0,
+    default: 10.0,
+    min: 1.0,
+    max: 120.0,
+    step: 1.0,
     description: "Per-request HTTP timeout in seconds.",
   },
   {
-    group: "Client & Resiliency", key: "FMP_MIN_REQUEST_INTERVAL_SECONDS", type: "number",
-    value: 0.25, default: 0.25, min: 0.0, max: 60.0, step: 0.05,
-    description: "Minimum interval between requests in seconds (0.25 = 240 req/min).",
+    group: "Client & Resiliency",
+    key: "FMP_MIN_REQUEST_INTERVAL_SECONDS",
+    type: "number",
+    value: 0.25,
+    default: 0.25,
+    min: 0.0,
+    max: 60.0,
+    step: 0.05,
+    description:
+      "Minimum interval between requests in seconds (0.25 = 240 req/min).",
   },
   {
-    group: "Client & Resiliency", key: "FMP_MAX_RETRIES", type: "number",
-    value: 2, default: 2, min: 0, max: 10, step: 1,
+    group: "Client & Resiliency",
+    key: "FMP_MAX_RETRIES",
+    type: "number",
+    value: 2,
+    default: 2,
+    min: 0,
+    max: 10,
+    step: 1,
     description: "Max retries on rate limit or server error.",
   },
   {
-    group: "Client & Resiliency", key: "FMP_RETRY_BACKOFF_SECONDS", type: "number",
-    value: 2.0, default: 2.0, min: 0.1, max: 60.0, step: 0.5,
+    group: "Client & Resiliency",
+    key: "FMP_RETRY_BACKOFF_SECONDS",
+    type: "number",
+    value: 2.0,
+    default: 2.0,
+    min: 0.1,
+    max: 60.0,
+    step: 0.5,
     description: "Base backoff duration in seconds for retries.",
   },
   {
-    group: "Client & Resiliency", key: "FMP_COOLDOWN_THRESHOLD", type: "number",
-    value: 5, default: 5, min: 1, max: 20, step: 1,
+    group: "Client & Resiliency",
+    key: "FMP_COOLDOWN_THRESHOLD",
+    type: "number",
+    value: 5,
+    default: 5,
+    min: 1,
+    max: 20,
+    step: 1,
     description: "Consecutive failures before opening the circuit breaker.",
   },
   {
-    group: "Client & Resiliency", key: "FMP_COOLDOWN_SECONDS", type: "number",
-    value: 300.0, default: 300.0, min: 1.0, max: 3600.0, step: 10.0,
+    group: "Client & Resiliency",
+    key: "FMP_COOLDOWN_SECONDS",
+    type: "number",
+    value: 300.0,
+    default: 300.0,
+    min: 1.0,
+    max: 3600.0,
+    step: 10.0,
     description: "Duration in seconds the circuit breaker remains open.",
   },
   {
-    group: "Client & Resiliency", key: "FMP_FALLBACK_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Fall through to secondary providers (Alpaca/yfinance/Yahoo) on FMP failure.",
+    group: "Client & Resiliency",
+    key: "FMP_FALLBACK_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Fall through to secondary providers (Alpaca/yfinance/Yahoo) on FMP failure.",
   },
   {
-    group: "Client & Resiliency", key: "FMP_MAX_SECONDS_PER_CYCLE", type: "number",
-    value: 120.0, default: 120.0, min: 1.0, max: 600.0, step: 1.0,
-    description: "Maximum wall-clock seconds allowed for FMP calls in a single pipeline cycle.",
+    group: "Client & Resiliency",
+    key: "FMP_MAX_SECONDS_PER_CYCLE",
+    type: "number",
+    value: 120.0,
+    default: 120.0,
+    min: 1.0,
+    max: 600.0,
+    step: 1.0,
+    description:
+      "Maximum wall-clock seconds allowed for FMP calls in a single pipeline cycle.",
   },
   {
-    group: "Primary Feeds", key: "FMP_QUOTES_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Use FMP as the quote provider (requires MARKET_DATA_PROVIDER=fmp).",
+    group: "Primary Feeds",
+    key: "FMP_QUOTES_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Use FMP as the quote provider (requires MARKET_DATA_PROVIDER=fmp).",
   },
   {
-    group: "Primary Feeds", key: "FMP_QUOTES_REALTIME", type: "boolean",
-    value: false, default: false,
+    group: "Primary Feeds",
+    key: "FMP_QUOTES_REALTIME",
+    type: "boolean",
+    value: false,
+    default: false,
     description: "Treat FMP quotes as real-time rather than delayed.",
   },
   {
-    group: "Primary Feeds", key: "FMP_BARS_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Use FMP for historical OHLCV bars (requires MARKET_DATA_PROVIDER=fmp).",
+    group: "Primary Feeds",
+    key: "FMP_BARS_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Use FMP for historical OHLCV bars (requires MARKET_DATA_PROVIDER=fmp).",
   },
   {
-    group: "Primary Feeds", key: "FMP_BARS_ADJUSTMENT", type: "enum",
-    value: "dividend-adjusted", default: "dividend-adjusted", options: ["dividend-adjusted", "light", "full", "non-split-adjusted"],
+    group: "Primary Feeds",
+    key: "FMP_BARS_ADJUSTMENT",
+    type: "enum",
+    value: "dividend-adjusted",
+    default: "dividend-adjusted",
+    options: ["dividend-adjusted", "light", "full", "non-split-adjusted"],
     description: "Adjustment mode for historical EOD bars.",
   },
   {
-    group: "Primary Feeds", key: "FMP_FUNDAMENTALS_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Use FMP for company fundamental data (requires FUNDAMENTALS_SOURCE=fmp).",
+    group: "Primary Feeds",
+    key: "FMP_FUNDAMENTALS_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Use FMP for company fundamental data (requires FUNDAMENTALS_SOURCE=fmp).",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_ANALYST_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Fetch analyst consensus & price targets into diagnostic columns.",
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_ANALYST_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Fetch analyst consensus & price targets into diagnostic columns.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_ANALYST_REFRESH_HOURS", type: "number",
-    value: 24, default: 24, min: 1, max: 168, step: 1,
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_ANALYST_REFRESH_HOURS",
+    type: "number",
+    value: 24,
+    default: 24,
+    min: 1,
+    max: 168,
+    step: 1,
     description: "Refresh interval for analyst consensus data in hours.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_EARNINGS_ENABLED", type: "boolean",
-    value: false, default: false,
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_EARNINGS_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
     description: "Fetch earnings calendar & surprises into diagnostic columns.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_EARNINGS_REFRESH_HOURS", type: "number",
-    value: 12, default: 12, min: 1, max: 168, step: 1,
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_EARNINGS_REFRESH_HOURS",
+    type: "number",
+    value: 12,
+    default: 12,
+    min: 1,
+    max: 168,
+    step: 1,
     description: "Refresh interval for earnings data in hours.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_MACRO_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Fetch treasury rates & economic indicators into macro_history.",
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_MACRO_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Fetch treasury rates & economic indicators into macro_history.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_ECON_INDICATORS", type: "string",
-    value: "unemploymentRate", default: "unemploymentRate",
-    description: "Comma-separated list of FMP economic indicator series to fetch.",
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_ECON_INDICATORS",
+    type: "string",
+    value: "unemploymentRate",
+    default: "unemploymentRate",
+    description:
+      "Comma-separated list of FMP economic indicator series to fetch.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_INSIDER_ENABLED", type: "boolean",
-    value: false, default: false,
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_INSIDER_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
     description: "Fetch insider trading statistics into diagnostic columns.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_INSIDER_REFRESH_DAYS", type: "number",
-    value: 7, default: 7, min: 1, max: 30, step: 1,
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_INSIDER_REFRESH_DAYS",
+    type: "number",
+    value: 7,
+    default: 7,
+    min: 1,
+    max: 30,
+    step: 1,
     description: "Refresh interval for insider trading data in days.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_INSIDER_MIN_LAG_DAYS", type: "number",
-    value: 45, default: 45, min: 0, max: 90, step: 1,
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_INSIDER_MIN_LAG_DAYS",
+    type: "number",
+    value: 45,
+    default: 45,
+    min: 0,
+    max: 90,
+    step: 1,
     description: "Minimum lag days required before analyzing insider trades.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_SECTOR_SNAPSHOT_ENABLED", type: "boolean",
-    value: false, default: false,
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_SECTOR_SNAPSHOT_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
     description: "Fetch sector valuation & performance snapshots.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_UNIVERSE_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Use FMP's historical S&P 500 constituent-changes feed as the primary source for survivorship-bias reconstruction (Wikipedia demoted to fallback).",
+    group: "Diagnostic & Supplement Feeds",
+    key: "FMP_UNIVERSE_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Use FMP's historical S&P 500 constituent-changes feed as the primary source for survivorship-bias reconstruction (Wikipedia demoted to fallback).",
+  },
+  {
+    key: "FMP_NEWS_ENABLED",
+    value: true,
+    default: true,
+    type: "boolean",
+    description:
+      "Master switch for the FMP company-news feed (data.fmp_client.stock_news, wrapping /news/stock). False (the default) is a complete no-op reproducing today's exact behavior — signals/news_catalyst.py's headline fetch stays on its existing Finnhub-only path, and data/sentiment_sources.py's 'fmp_news' SentimentSource returns [] without any network call. When True AND FMP_API_KEY is set, FMP becomes the PRIMARY provider for company headlines (signals/news_catalyst.py::fetch_company_headlines dispatches FMP-first, falling back to Finnhub only on an FMP failure) and 'fmp_news' becomes eligible for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP key: /news/stock returns >=6 months of real history (vs. Finnhub's free-tier ~3-month cap) with working from/to date-window + page/limit pagination. Deliberately does NOT touch /news/press-releases — that endpoint returned a plan-entitlement rejection ('Restricted Endpoint') against the account this integration was verified with; see docs/FMP_INTEGRATION.md.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_NEWS_PAGE_LIMIT",
+    value: 100,
+    default: 100,
+    type: "number",
+    description:
+      "Articles requested per /news/stock page (the 'limit' query param). 100 matches the page size verified live 2026-08 against a real FMP key over a multi-day window. Only consulted when FMP_NEWS_ENABLED is True.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_NEWS_MAX_PAGES",
+    value: 10,
+    default: 10,
+    type: "number",
+    description:
+      "Hard ceiling on pages fetched per symbol per call into data.fmp_client.stock_news, bounding a wide backfill window (e.g. scripts/backfill_news_history.py --months 6) so a dense news day/symbol cannot loop indefinitely. Once the ceiling is reached the remaining (older) articles in the window are simply not fetched -- callers that need full coverage should narrow --months or accept the honest gap (CONSTRAINT #4: never a fabricated substitute for the missing pages, just fewer real rows). Only consulted when FMP_NEWS_ENABLED is True.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_OPTIONS_HEALTH_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Master switch for the FMP fundamental-health overlay bundled into the options premium-directive matrix (reporting/options_snapshot.py::write_options_matrix → technical_options_engine.build_premium_directive). False (the default) is a complete no-op reproducing today's exact behavior: Altman_Z_Score, Piotroski_F_Score, Net_Debt_EBITDA, FCF_Yield, and Realized_Vol_30D all stay None and zero additional FMP requests are attempted. When True, gates three endpoints for every symbol in the options matrix: Altman Z-Score + Piotroski F-Score (`/financial-scores`), Net Debt/EBITDA + FCF Yield (`/ratios-ttm`), and 30-day realized volatility (`/standard-deviation`). Single gate bundling all three — they are always fetched together for one overlay concept ('is this credit-spread candidate financially healthy'), matching the FMP_SECTOR_SNAPSHOT_ENABLED / FMP_INSIDER_ENABLED precedent of one flag per logically-bundled feature. Does NOT gate Days_To_Earnings/Earnings_Risk — those reuse the EXISTING FMP_EARNINGS_ENABLED earnings-calendar gate via the durable earnings-events store, not a fresh fetch of their own.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_OPTIONS_CONTEXT_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Master switch for the FMP market/qualitative-context overlay bundled into the options premium-directive matrix (reporting/options_snapshot.py::write_options_matrix → technical_options_engine.build_premium_directive). False (the default) is a complete no-op reproducing today's exact behavior: News_Snippets stays [], Peers stays [], and zero additional FMP requests are attempted. When True, gates two endpoints for every symbol in the options matrix: recent news headlines, capped at 3 per symbol (`/news/stock` via data.fmp_feeds_company.fetch_stock_news), and the peer-comparison ticker group (`/peers` via data.fmp_feeds_market.fetch_peer_group). Kept separate from FMP_OPTIONS_HEALTH_ENABLED even though the call-site pattern is identical (a bundled gate checked before the per-symbol loop, independent try/except per sub-fetch inside it) because it is a different overlay concept — market/qualitative context (what is being said about this name, and what else trades like it) rather than balance-sheet health.",
+    group: "FMP Settings",
+  },
+  {
+    key: "FMP_PEERS_ENABLED",
+    value: false,
+    default: false,
+    type: "boolean",
+    description:
+      "Master switch for the on-demand GET /data/peers/{symbol} endpoint (api/data_api.py) — a single, per-click, operator-triggered FMP peer-group lookup (`/peers` via data.fmp_feeds_market.fetch_peer_group) for the webapp's 'Suggest peers for this ticker' affordance on SymbolComparison. False (the default) is a complete no-op: the endpoint returns an empty peer list + an honest reason, with ZERO network calls — fetch_peer_group is never even imported. Deliberately kept SEPARATE from FMP_OPTIONS_CONTEXT_ENABLED, which already gates a DIFFERENT call site of the same fetch_peer_group function: a per-cycle BATCH fetch across the whole options-matrix universe (reporting/options_snapshot.py). Same rate-limit-cadence reasoning as the FMP_INSIDER_ENABLED / FMP_SECTOR_SNAPSHOT_ENABLED precedent above — one flag per call-site SHAPE, not per underlying vendor function: a single user-triggered click and a per-cycle loop over an entire universe have completely different cost/cadence profiles and must be independently controllable.",
+    group: "FMP Settings",
   },
 ];
 
 const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
   {
-    group: "Holdings Ingestion", key: "ETF_HOLDINGS_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for ETF constituent holdings ingestion (EDGAR N-PORT).",
+    group: "Holdings Ingestion",
+    key: "ETF_HOLDINGS_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for ETF constituent holdings ingestion (EDGAR N-PORT).",
   },
   {
-    group: "Holdings Ingestion", key: "ETF_HOLDINGS_TICKERS", type: "string",
-    value: '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
-    default: '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
+    group: "Holdings Ingestion",
+    key: "ETF_HOLDINGS_TICKERS",
+    type: "string",
+    value:
+      '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
+    default:
+      '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
     description: "JSON array of ETF tickers to ingest holdings for.",
   },
   {
-    group: "Holdings Ingestion", key: "ETF_HOLDINGS_REFRESH_DAYS", type: "number",
-    value: 7, default: 7, min: 1, max: 90, step: 1,
+    group: "Holdings Ingestion",
+    key: "ETF_HOLDINGS_REFRESH_DAYS",
+    type: "number",
+    value: 7,
+    default: 7,
+    min: 1,
+    max: 90,
+    step: 1,
     description: "Refresh interval for ETF constituent holdings in days.",
   },
   {
-    group: "Holdings Ingestion", key: "ETF_HOLDINGS_ISSUER_CSV_ENABLED", type: "boolean",
-    value: false, default: false,
+    group: "Holdings Ingestion",
+    key: "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
     description: "Allow secondary CSV ingestion directly from issuer sites.",
   },
   {
-    group: "Holdings Ingestion", key: "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE", type: "number",
-    value: 60.0, default: 60.0, min: 1.0, max: 300.0, step: 1.0,
-    description: "Max wall-clock seconds allocated for ETF holdings ingestion per cycle.",
+    group: "Holdings Ingestion",
+    key: "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
+    type: "number",
+    value: 60.0,
+    default: 60.0,
+    min: 1.0,
+    max: 300.0,
+    step: 1.0,
+    description:
+      "Max wall-clock seconds allocated for ETF holdings ingestion per cycle.",
   },
   {
-    group: "Holdings Ingestion", key: "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD", type: "number",
-    value: 3, default: 3, min: 1, max: 20, step: 1,
+    group: "Holdings Ingestion",
+    key: "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
+    type: "number",
+    value: 3,
+    default: 3,
+    min: 1,
+    max: 20,
+    step: 1,
     description: "Consecutive ingestion failures before circuit breaker trips.",
   },
   {
-    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for ETF volatility-transmission measurement columns.",
+    group: "Measurement & Residualization",
+    key: "ETF_TRANSMISSION_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for ETF volatility-transmission measurement columns.",
   },
   {
-    group: "Measurement & Residualization", key: "ETF_HOLDINGS_MARKET_PROXY", type: "string",
-    value: "SPY", default: "SPY",
+    group: "Measurement & Residualization",
+    key: "ETF_HOLDINGS_MARKET_PROXY",
+    type: "string",
+    value: "SPY",
+    default: "SPY",
     description: "Market benchmark ticker used for residualization.",
   },
   {
-    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_WRAPPERS", type: "string",
-    value: '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
-    default: '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
-    description: "JSON array of candidate wrapper ETFs considered as transmission wrappers.",
+    group: "Measurement & Residualization",
+    key: "ETF_TRANSMISSION_WRAPPERS",
+    type: "string",
+    value:
+      '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
+    default:
+      '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
+    description:
+      "JSON array of candidate wrapper ETFs considered as transmission wrappers.",
   },
   {
-    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_EXCLUDED_SYMBOLS", type: "string",
-    value: "[]", default: "[]",
-    description: "JSON array of extra symbols excluded from ETF transmission calculation.",
+    group: "Measurement & Residualization",
+    key: "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
+    type: "string",
+    value: "[]",
+    default: "[]",
+    description:
+      "JSON array of extra symbols excluded from ETF transmission calculation.",
   },
   {
-    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_WINDOW_DAYS", type: "number",
-    value: 60, default: 60, min: 10, max: 504, step: 1,
+    group: "Measurement & Residualization",
+    key: "ETF_TRANSMISSION_WINDOW_DAYS",
+    type: "number",
+    value: 60,
+    default: 60,
+    min: 10,
+    max: 504,
+    step: 1,
     description: "Rolling window days for ETF comovement R² calculation.",
   },
   {
-    group: "Measurement & Residualization", key: "ETF_TRANSMISSION_MIN_OBS", type: "number",
-    value: 60, default: 60, min: 5, max: 252, step: 1,
+    group: "Measurement & Residualization",
+    key: "ETF_TRANSMISSION_MIN_OBS",
+    type: "number",
+    value: 60,
+    default: 60,
+    min: 5,
+    max: 252,
+    step: 1,
     description: "Minimum required observation days in the rolling window.",
   },
   {
-    group: "Position Sizing Derate", key: "ETF_TRANSMISSION_SIZING_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Enable position sizing derate based on ETF ownership & comovement.",
+    group: "Position Sizing Derate",
+    key: "ETF_TRANSMISSION_SIZING_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Enable position sizing derate based on ETF ownership & comovement.",
   },
   {
-    group: "Position Sizing Derate", key: "ETF_TRANSMISSION_MAX_DERATE", type: "number",
-    value: 0.30, default: 0.30, min: 0.0, max: 1.0, step: 0.05,
-    description: "Maximum sizing derate fraction (e.g. 0.30 = up to 30% reduction).",
+    group: "Position Sizing Derate",
+    key: "ETF_TRANSMISSION_MAX_DERATE",
+    type: "number",
+    value: 0.3,
+    default: 0.3,
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    description:
+      "Maximum sizing derate fraction (e.g. 0.30 = up to 30% reduction).",
   },
   {
-    group: "Position Sizing Derate", key: "ETF_TRANSMISSION_OWNERSHIP_REFERENCE", type: "number",
-    value: 0.20, default: 0.20, min: 0.01, max: 1.0, step: 0.01,
+    group: "Position Sizing Derate",
+    key: "ETF_TRANSMISSION_OWNERSHIP_REFERENCE",
+    type: "number",
+    value: 0.2,
+    default: 0.2,
+    min: 0.01,
+    max: 1.0,
+    step: 0.01,
     description: "Reference ETF ownership percentage scaling the derate.",
   },
   {
-    group: "Position Sizing Derate", key: "ETF_TRANSMISSION_MIN_MULTIPLIER", type: "number",
-    value: 0.50, default: 0.50, min: 0.0, max: 1.0, step: 0.05,
+    group: "Position Sizing Derate",
+    key: "ETF_TRANSMISSION_MIN_MULTIPLIER",
+    type: "number",
+    value: 0.5,
+    default: 0.5,
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
     description: "Floor for the position sizing multiplier.",
   },
   {
-    group: "Portfolio Covariance Adjustment", key: "ETF_TRANSMISSION_PORTFOLIO_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Enable ETF-co-ownership-adjusted portfolio covariance matrix.",
+    group: "Portfolio Covariance Adjustment",
+    key: "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Enable ETF-co-ownership-adjusted portfolio covariance matrix.",
   },
   {
-    group: "Portfolio Covariance Adjustment", key: "ETF_TRANSMISSION_COV_INFLATION", type: "number",
-    value: 0.25, default: 0.25, min: 0.0, max: 5.0, step: 0.05,
-    description: "Off-diagonal covariance inflation factor for overlapping ETF holdings.",
+    group: "Portfolio Covariance Adjustment",
+    key: "ETF_TRANSMISSION_COV_INFLATION",
+    type: "number",
+    value: 0.25,
+    default: 0.25,
+    min: 0.0,
+    max: 5.0,
+    step: 0.05,
+    description:
+      "Off-diagonal covariance inflation factor for overlapping ETF holdings.",
   },
   {
-    group: "Portfolio Covariance Adjustment", key: "ETF_TRANSMISSION_COV_WINDOW_DAYS", type: "number",
-    value: 60, default: 60, min: 10, max: 504, step: 1,
-    description: "Rolling window days for ETF portfolio covariance calculation.",
+    group: "Portfolio Covariance Adjustment",
+    key: "ETF_TRANSMISSION_COV_WINDOW_DAYS",
+    type: "number",
+    value: 60,
+    default: 60,
+    min: 10,
+    max: 504,
+    step: 1,
+    description:
+      "Rolling window days for ETF portfolio covariance calculation.",
   },
 ];
 
 const CACHE_LONG_SHORT_TUNABLE_DEFS: MockTunableDef[] = [
   {
-    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the Cache Long/Short tax-loss-harvesting advisory strategy.",
+    group: "Cache Long/Short Overlay",
+    key: "CACHE_LONG_SHORT_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Master switch for the Cache Long/Short tax-loss-harvesting advisory strategy.",
   },
   {
-    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_WRITES_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Dedicated fail-closed flag for the position-writing endpoints (start, approve-bulk).",
+    group: "Cache Long/Short Overlay",
+    key: "CACHE_LONG_SHORT_WRITES_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Dedicated fail-closed flag for the position-writing endpoints (start, approve-bulk).",
   },
   {
-    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_MIN_CORRELATION", type: "number",
-    value: 0.75, default: 0.75, min: 0.0, max: 1.0, step: 0.05,
+    group: "Cache Long/Short Overlay",
+    key: "CACHE_LONG_SHORT_MIN_CORRELATION",
+    type: "number",
+    value: 0.75,
+    default: 0.75,
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
     description: "Min correlation to trigger drift alert.",
   },
   {
-    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT", type: "number",
-    value: 0.05, default: 0.05, min: 0.0, max: 1.0, step: 0.01,
-    description: "Percentage loss to trigger a tax-loss-harvesting recommendation.",
+    group: "Cache Long/Short Overlay",
+    key: "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
+    type: "number",
+    value: 0.05,
+    default: 0.05,
+    min: 0.0,
+    max: 1.0,
+    step: 0.01,
+    description:
+      "Percentage loss to trigger a tax-loss-harvesting recommendation.",
   },
   {
-    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS", type: "number",
-    value: 3600, default: 3600, min: 60, max: 86400, step: 60,
-    description: "Interval (seconds) for the Cache Long/Short background worker loop.",
+    group: "Cache Long/Short Overlay",
+    key: "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
+    type: "number",
+    value: 3600,
+    default: 3600,
+    min: 60,
+    max: 86400,
+    step: 60,
+    description:
+      "Interval (seconds) for the Cache Long/Short background worker loop.",
   },
   {
     // JSON-array field -- kept as a "string" type like every other JSON-blob
     // tunable (ETF_HOLDINGS_TICKERS, SECTOR_FORECAST_CONFIGS, etc.); the
     // frontend's TunableFieldType has no separate "json" member.
-    group: "Cache Long/Short Overlay", key: "CACHE_LONG_SHORT_PROXY_CANDIDATES", type: "string",
-    value: '["SPY","QQQ","XLK","XLF","XLV","XLE"]', default: '["SPY","QQQ","XLK","XLF","XLV","XLE"]',
-    description: "JSON array of candidate proxy ETFs screened for a concentrated ticker's hedge leg.",
+    group: "Cache Long/Short Overlay",
+    key: "CACHE_LONG_SHORT_PROXY_CANDIDATES",
+    type: "string",
+    value: '["SPY","QQQ","XLK","XLF","XLV","XLE"]',
+    default: '["SPY","QQQ","XLK","XLF","XLV","XLE"]',
+    description:
+      "JSON array of candidate proxy ETFs screened for a concentrated ticker's hedge leg.",
   },
 ];
 
@@ -3045,239 +4329,389 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
   // -- Write & Execution Gates (settings_keysets.DANGEROUS_KEYS -- typed
   // confirmation required on write) --
   {
-    group: "Write & Execution Gates", key: "ADVISORY_ONLY", type: "boolean",
-    value: true, default: true,
-    description: "The execution quarantine -- when True, ALL broker order submission is suppressed.",
+    group: "Write & Execution Gates",
+    key: "ADVISORY_ONLY",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "The execution quarantine -- when True, ALL broker order submission is suppressed.",
   },
   {
-    group: "Write & Execution Gates", key: "DRY_RUN", type: "boolean",
-    value: false, default: false,
-    description: "The second execution quarantine -- turning it off is what makes logged orders become submitted orders.",
+    group: "Write & Execution Gates",
+    key: "DRY_RUN",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "The second execution quarantine -- turning it off is what makes logged orders become submitted orders.",
   },
   {
-    group: "Write & Execution Gates", key: "ROBINHOOD_EXECUTION_MODE", type: "enum",
-    value: "off", default: "off", options: ["off", "review", "live"],
-    description: "Moving this to 'live' is what lets the Robinhood execution bridge place real orders.",
+    group: "Write & Execution Gates",
+    key: "ROBINHOOD_EXECUTION_MODE",
+    type: "enum",
+    value: "off",
+    default: "off",
+    options: ["off", "review", "live"],
+    description:
+      "Moving this to 'live' is what lets the Robinhood execution bridge place real orders.",
   },
   {
-    group: "Write & Execution Gates", key: "MACRO_REGIME_GATE_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "The recession/credit-event BUY veto (Sahm Rule, VIX, HY OAS). Setting it False bypasses that veto entirely.",
+    group: "Write & Execution Gates",
+    key: "MACRO_REGIME_GATE_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "The recession/credit-event BUY veto (Sahm Rule, VIX, HY OAS). Setting it False bypasses that veto entirely.",
   },
   {
-    group: "Write & Execution Gates", key: "FMP_BARS_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Read FMP_BARS_ADJUSTMENT before enabling -- an adjustment-convention mismatch corrupts every return series, indicator, and backtest.",
+    group: "Write & Execution Gates",
+    key: "FMP_BARS_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Read FMP_BARS_ADJUSTMENT before enabling -- an adjustment-convention mismatch corrupts every return series, indicator, and backtest.",
   },
   {
-    group: "Write & Execution Gates", key: "FMP_BARS_ADJUSTMENT", type: "enum",
-    value: "dividend-adjusted", default: "dividend-adjusted",
+    group: "Write & Execution Gates",
+    key: "FMP_BARS_ADJUSTMENT",
+    type: "enum",
+    value: "dividend-adjusted",
+    default: "dividend-adjusted",
     options: ["dividend-adjusted", "light", "full", "non-split-adjusted"],
-    description: "The single highest-risk value in the FMP integration -- 'full' looks like the obvious pick and is wrong (split-only, not dividend-adjusted).",
+    description:
+      "The single highest-risk value in the FMP integration -- 'full' looks like the obvious pick and is wrong (split-only, not dividend-adjusted).",
   },
   {
-    group: "Write & Execution Gates", key: "CORS_ALLOWED_ORIGINS", type: "string",
-    value: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
-    default: '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
-    description: "Which browser origins the State API and Pilots API accept requests from.",
+    group: "Write & Execution Gates",
+    key: "CORS_ALLOWED_ORIGINS",
+    type: "string",
+    value:
+      '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    default:
+      '["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:5173"]',
+    description:
+      "Which browser origins the State API and Pilots API accept requests from.",
   },
   {
-    group: "Write & Execution Gates", key: "AI_GENERATION_API_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Master gate for the three paid Claude/Gemini/Opal generation endpoints on the Data API.",
+    group: "Write & Execution Gates",
+    key: "AI_GENERATION_API_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Master gate for the three paid Claude/Gemini/Opal generation endpoints on the Data API.",
   },
   {
-    group: "Write & Execution Gates", key: "AUTOMATION_WRITES_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates POST /automation/resume, which re-enables live order submission after ADVISORY_ONLY was previously engaged.",
+    group: "Write & Execution Gates",
+    key: "AUTOMATION_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates POST /automation/resume, which re-enables live order submission after ADVISORY_ONLY was previously engaged.",
   },
   {
-    group: "Write & Execution Gates", key: "BROKERAGE_REFRESH_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates POST /brokerage/refresh -- a real live login against the operator's actual brokerage account, bypassing the daily cache.",
+    group: "Write & Execution Gates",
+    key: "BROKERAGE_REFRESH_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates POST /brokerage/refresh -- a real live login against the operator's actual brokerage account, bypassing the daily cache.",
   },
   {
-    group: "Write & Execution Gates", key: "CACHE_LONG_SHORT_WRITES_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates the Cache Long/Short position-writing endpoints (start, approve-bulk) -- changes what a trading strategy recommends.",
+    group: "Write & Execution Gates",
+    key: "CACHE_LONG_SHORT_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates the Cache Long/Short position-writing endpoints (start, approve-bulk) -- changes what a trading strategy recommends.",
   },
   {
-    group: "Write & Execution Gates", key: "COMMAND_EXECUTION_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "The highest-risk flag in this group -- enables the 'command' job type, which can execute the kill switch or arbitrary orchestrator flags.",
+    group: "Write & Execution Gates",
+    key: "COMMAND_EXECUTION_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "The highest-risk flag in this group -- enables the 'command' job type, which can execute the kill switch or arbitrary orchestrator flags.",
   },
   {
-    group: "Write & Execution Gates", key: "DEAD_LETTER_RETRY_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates POST /dead-letter/retry, which spawns a real main.py subprocess for one symbol.",
+    group: "Write & Execution Gates",
+    key: "DEAD_LETTER_RETRY_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates POST /dead-letter/retry, which spawns a real main.py subprocess for one symbol.",
   },
   {
-    group: "Write & Execution Gates", key: "GENERAL_SETTINGS_WRITES_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates PUT /settings/tunables -- Kelly sizing, risk-gate, and forecasting knobs.",
+    group: "Write & Execution Gates",
+    key: "GENERAL_SETTINGS_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates PUT /settings/tunables -- Kelly sizing, risk-gate, and forecasting knobs.",
   },
   {
-    group: "Write & Execution Gates", key: "LLM_WRITES_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates PUT /llm/setting -- which LLM provider narrates a rationale, and whether Gravity AI / Opal research can fire.",
+    group: "Write & Execution Gates",
+    key: "LLM_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates PUT /llm/setting -- which LLM provider narrates a rationale, and whether Gravity AI / Opal research can fire.",
   },
   {
-    group: "Write & Execution Gates", key: "MACRO_GATE_WRITES_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates PUT /observability/macro-gate, the write path for MACRO_REGIME_GATE_ENABLED itself.",
+    group: "Write & Execution Gates",
+    key: "MACRO_GATE_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates PUT /observability/macro-gate, the write path for MACRO_REGIME_GATE_ENABLED itself.",
   },
   {
-    group: "Write & Execution Gates", key: "MCP_OAUTH_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Whether investyo_mcp_server.py's OAuth authorization-server endpoints are live.",
+    group: "Write & Execution Gates",
+    key: "MCP_OAUTH_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Whether investyo_mcp_server.py's OAuth authorization-server endpoints are live.",
   },
   {
-    group: "Write & Execution Gates", key: "PROMPT_REGISTRY_WRITES_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates PUT /prompts/pin -- changes which prompt text the platform actually runs.",
+    group: "Write & Execution Gates",
+    key: "PROMPT_REGISTRY_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates PUT /prompts/pin -- changes which prompt text the platform actually runs.",
   },
   {
-    group: "Write & Execution Gates", key: "RAG_QUERY_API_ENABLED", type: "boolean",
-    value: true, default: true,
+    group: "Write & Execution Gates",
+    key: "RAG_QUERY_API_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
     description: "Gates POST /rag/query, a paid external LLM call.",
   },
   {
-    group: "Write & Execution Gates", key: "STRATEGY_WRITES_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates PUT /strategy/modules -- signal weights and the disabled-module set, which changes what the platform recommends.",
+    group: "Write & Execution Gates",
+    key: "STRATEGY_WRITES_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates PUT /strategy/modules -- signal weights and the disabled-module set, which changes what the platform recommends.",
   },
   // -- Write gates NOT in DANGEROUS_KEYS (pilots/feature_flags.py's
   // WRITE_GATE_REASONS -- visible, no typed confirmation required) --
   {
-    group: "Write & Execution Gates", key: "BROKERAGE_CONNECT_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates POST /brokerage/connect and /disconnect -- real brokerage-credential intake.",
+    group: "Write & Execution Gates",
+    key: "BROKERAGE_CONNECT_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates POST /brokerage/connect and /disconnect -- real brokerage-credential intake.",
   },
   {
-    group: "Write & Execution Gates", key: "UNIVERSE_SYNC_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates POST /data/sync -- refreshes the tracked ticker universe from the configured sources.",
+    group: "Write & Execution Gates",
+    key: "UNIVERSE_SYNC_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates POST /data/sync -- refreshes the tracked ticker universe from the configured sources.",
   },
   {
-    group: "Write & Execution Gates", key: "AGENTIC_DISCOVERY_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates PUT /agentic/scan-config -- the Robinhood broker-scan configuration for the agentic-discovery skill.",
+    group: "Write & Execution Gates",
+    key: "AGENTIC_DISCOVERY_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates PUT /agentic/scan-config -- the Robinhood broker-scan configuration for the agentic-discovery skill.",
   },
   {
-    group: "Write & Execution Gates", key: "JOBS_API_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates background job execution and SSE log-streaming endpoints on the orchestrator Control API.",
+    group: "Write & Execution Gates",
+    key: "JOBS_API_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates background job execution and SSE log-streaming endpoints on the orchestrator Control API.",
   },
   {
-    group: "Write & Execution Gates", key: "PILOTS_API_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Whether the Pilots API is hosted inside the persistent orchestrator daemon process at all -- a process-startup switch, not a per-request guard.",
+    group: "Write & Execution Gates",
+    key: "PILOTS_API_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Whether the Pilots API is hosted inside the persistent orchestrator daemon process at all -- a process-startup switch, not a per-request guard.",
   },
   {
-    group: "Write & Execution Gates", key: "RLHF_CALIBRATION_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Gates the RLHF Calibration Review Queue's write endpoints -- defaults on since every proposal is hypothetical/paper-only.",
+    group: "Write & Execution Gates",
+    key: "RLHF_CALIBRATION_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Gates the RLHF Calibration Review Queue's write endpoints -- defaults on since every proposal is hypothetical/paper-only.",
   },
   // -- Diagnostic & Data Features (read-only measurement/data-source
   // master switches, feed no scoring or sizing decision) --
   {
-    group: "Diagnostic & Data Features", key: "SECTOR_HEAT_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Enables Sector Heat Factor computation from GDELT article volume.",
+    group: "Diagnostic & Data Features",
+    key: "SECTOR_HEAT_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Enables Sector Heat Factor computation from GDELT article volume.",
   },
   {
-    group: "Diagnostic & Data Features", key: "WIKIPEDIA_ATTENTION_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Enables Attention Score computation from Wikipedia pageviews.",
+    group: "Diagnostic & Data Features",
+    key: "WIKIPEDIA_ATTENTION_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Enables Attention Score computation from Wikipedia pageviews.",
   },
   {
-    group: "Diagnostic & Data Features", key: "ETF_HOLDINGS_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Enables fetching ETF constituent baskets for exposure analysis.",
+    group: "Diagnostic & Data Features",
+    key: "ETF_HOLDINGS_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Enables fetching ETF constituent baskets for exposure analysis.",
   },
   {
-    group: "Diagnostic & Data Features", key: "ETF_TRANSMISSION_ENABLED", type: "boolean",
-    value: true, default: true,
-    description: "Enables ETF volatility-transmission measurement columns (diagnostic only -- not read by scoring or sizing).",
+    group: "Diagnostic & Data Features",
+    key: "ETF_TRANSMISSION_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
+    description:
+      "Enables ETF volatility-transmission measurement columns (diagnostic only -- not read by scoring or sizing).",
   },
   {
-    group: "Diagnostic & Data Features", key: "MARKET_DATA_LATENCY_TRACKING_ENABLED", type: "boolean",
-    value: true, default: true,
+    group: "Diagnostic & Data Features",
+    key: "MARKET_DATA_LATENCY_TRACKING_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
     description: "Tracks and surfaces real-time market data feed latency.",
   },
   {
-    group: "Diagnostic & Data Features", key: "SENTIMENT_INDEX_ENABLED", type: "boolean",
-    value: true, default: true,
+    group: "Diagnostic & Data Features",
+    key: "SENTIMENT_INDEX_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
     description: "Computes composite sentiment index from news and reviews.",
   },
   {
-    group: "Diagnostic & Data Features", key: "EDGAR_FULLTEXT_ENABLED", type: "boolean",
-    value: true, default: true,
+    group: "Diagnostic & Data Features",
+    key: "EDGAR_FULLTEXT_ENABLED",
+    type: "boolean",
+    value: true,
+    default: true,
     description: "Enables full-text ingestion of 10-K/10-Q SEC filings.",
   },
 ];
 
 function mockSentimentTunables(): TunablesResponse {
-  return buildTunablesResponse(SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY);
+  return buildTunablesResponse(
+    SENTIMENT_TUNABLE_DEFS,
+    SENTIMENT_TUNABLES_KEY,
+    SENTIMENT_TUNABLES_DRIFT_KEY,
+  );
 }
 
 function applySentimentTunables(
   values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {}
+  confirm: Record<string, string> = {},
 ): TunablesUpdateResult {
-  return applyTunablesGeneric(values, SENTIMENT_TUNABLE_DEFS, SENTIMENT_TUNABLES_KEY, SENTIMENT_TUNABLES_DRIFT_KEY, confirm);
+  return applyTunablesGeneric(
+    values,
+    SENTIMENT_TUNABLE_DEFS,
+    SENTIMENT_TUNABLES_KEY,
+    SENTIMENT_TUNABLES_DRIFT_KEY,
+    confirm,
+  );
 }
 
 function mockSectorSelectionTunables(): TunablesResponse {
   return buildTunablesResponse(
     SECTOR_SELECTION_TUNABLE_DEFS,
     SECTOR_SELECTION_TUNABLES_KEY,
-    SECTOR_SELECTION_TUNABLES_DRIFT_KEY
+    SECTOR_SELECTION_TUNABLES_DRIFT_KEY,
   );
 }
 
 function applySectorSelectionTunables(
   values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {}
+  confirm: Record<string, string> = {},
 ): TunablesUpdateResult {
   return applyTunablesGeneric(
     values,
     SECTOR_SELECTION_TUNABLE_DEFS,
     SECTOR_SELECTION_TUNABLES_KEY,
     SECTOR_SELECTION_TUNABLES_DRIFT_KEY,
-    confirm
+    confirm,
   );
 }
 
 function mockFmpTunables(): TunablesResponse {
-  return buildTunablesResponse(FMP_TUNABLE_DEFS, FMP_TUNABLES_KEY, FMP_TUNABLES_DRIFT_KEY);
+  return buildTunablesResponse(
+    FMP_TUNABLE_DEFS,
+    FMP_TUNABLES_KEY,
+    FMP_TUNABLES_DRIFT_KEY,
+  );
 }
 
 function applyFmpTunables(
   values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {}
+  confirm: Record<string, string> = {},
 ): TunablesUpdateResult {
-  return applyTunablesGeneric(values, FMP_TUNABLE_DEFS, FMP_TUNABLES_KEY, FMP_TUNABLES_DRIFT_KEY, confirm);
+  return applyTunablesGeneric(
+    values,
+    FMP_TUNABLE_DEFS,
+    FMP_TUNABLES_KEY,
+    FMP_TUNABLES_DRIFT_KEY,
+    confirm,
+  );
 }
 
 function mockEtfTransmissionTunables(): TunablesResponse {
   return buildTunablesResponse(
     ETF_TRANSMISSION_TUNABLE_DEFS,
     ETF_TRANSMISSION_TUNABLES_KEY,
-    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY
+    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
   );
 }
 
 function applyEtfTransmissionTunables(
   values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {}
+  confirm: Record<string, string> = {},
 ): TunablesUpdateResult {
   return applyTunablesGeneric(
     values,
     ETF_TRANSMISSION_TUNABLE_DEFS,
     ETF_TRANSMISSION_TUNABLES_KEY,
     ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
-    confirm
+    confirm,
   );
 }
 
@@ -3285,44 +4719,45 @@ function mockCacheLongShortTunables(): TunablesResponse {
   return buildTunablesResponse(
     CACHE_LONG_SHORT_TUNABLE_DEFS,
     CACHE_LONG_SHORT_TUNABLES_KEY,
-    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY
+    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY,
   );
 }
 
 function applyCacheLongShortTunables(
   values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {}
+  confirm: Record<string, string> = {},
 ): TunablesUpdateResult {
   return applyTunablesGeneric(
     values,
     CACHE_LONG_SHORT_TUNABLE_DEFS,
     CACHE_LONG_SHORT_TUNABLES_KEY,
     CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY,
-    confirm
+    confirm,
   );
 }
 
 const FEATURE_FLAGS_TUNABLES_KEY = "stockpy.mock.feature_flags_tunables";
-const FEATURE_FLAGS_TUNABLES_DRIFT_KEY = "stockpy.mock.feature_flags_tunables_drift";
+const FEATURE_FLAGS_TUNABLES_DRIFT_KEY =
+  "stockpy.mock.feature_flags_tunables_drift";
 
 function mockFeatureFlagsTunables(): TunablesResponse {
   return buildTunablesResponse(
     FEATURE_FLAGS_TUNABLE_DEFS,
     FEATURE_FLAGS_TUNABLES_KEY,
-    FEATURE_FLAGS_TUNABLES_DRIFT_KEY
+    FEATURE_FLAGS_TUNABLES_DRIFT_KEY,
   );
 }
 
 function applyFeatureFlagsTunables(
   values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {}
+  confirm: Record<string, string> = {},
 ): TunablesUpdateResult {
   return applyTunablesGeneric(
     values,
     FEATURE_FLAGS_TUNABLE_DEFS,
     FEATURE_FLAGS_TUNABLES_KEY,
     FEATURE_FLAGS_TUNABLES_DRIFT_KEY,
-    confirm
+    confirm,
   );
 }
 
@@ -3341,7 +4776,7 @@ function rt(
   quantity: number,
   entry: number,
   exit: number,
-  holdDays: number
+  holdDays: number,
 ): RealizedTrade {
   const pnl = +((exit - entry) * quantity).toFixed(2);
   const now = Date.now();
@@ -3375,7 +4810,8 @@ function realizedSummary(trades: RealizedTrade[]) {
       trades.reduce((a, t) => a + (t.return_pct ?? 0), 0) / (trades.length || 1)
     ).toFixed(2),
     avg_holding_days: +(
-      trades.reduce((a, t) => a + (t.holding_days ?? 0), 0) / (trades.length || 1)
+      trades.reduce((a, t) => a + (t.holding_days ?? 0), 0) /
+      (trades.length || 1)
     ).toFixed(1),
     best_trade_pnl: pnls.length ? Math.max(...pnls) : null,
     worst_trade_pnl: pnls.length ? Math.min(...pnls) : null,
@@ -3393,7 +4829,8 @@ function mockAlerts(): AlertsFeed {
       {
         timestamp: new Date(now - 8 * 60000).toISOString(),
         level: "INFO",
-        message: "Refresh complete — 6 symbols evaluated, 2 BUY / 3 HOLD / 1 SELL.",
+        message:
+          "Refresh complete — 6 symbols evaluated, 2 BUY / 3 HOLD / 1 SELL.",
         extra: { type: "run_summary", symbols: 6 },
       },
       {
@@ -3433,14 +4870,24 @@ function mockForecast(ticker: string, horizon = 30): ForecastSkill {
       reason: "No forecast history yet — run the pipeline to accumulate it.",
     };
   }
-  const rng = seeded([...sym].reduce((a, c) => a + c.charCodeAt(0), 0) + horizon);
+  const rng = seeded(
+    [...sym].reduce((a, c) => a + c.charCodeAt(0), 0) + horizon,
+  );
   // BERT-LLA's three ablations only show up for AAPL in this fixture --
   // BERT_LLA_ENABLED defaults False in production (matching the attention
   // overlay fixture's own symbol choice above), so every OTHER symbol
   // honestly shows just the four models that are always potentially active.
   const models =
     sym === "AAPL"
-      ? ["arima", "monte_carlo", "holt_winters", "cnn_lstm", "lstm_baseline", "lstm_attention", "bert_lla"]
+      ? [
+          "arima",
+          "monte_carlo",
+          "holt_winters",
+          "cnn_lstm",
+          "lstm_baseline",
+          "lstm_attention",
+          "bert_lla",
+        ]
       : ["arima", "monte_carlo", "holt_winters", "cnn_lstm"];
   const curve = models.flatMap((m) =>
     [-0.3, -0.1, 0.1, 0.3].map((center) => ({
@@ -3450,7 +4897,7 @@ function mockForecast(ticker: string, horizon = 30): ForecastSkill {
       // some bins honestly null (too few samples)
       mean_pct_error: rng() < 0.2 ? null : +((rng() - 0.5) * 0.12).toFixed(4),
       count: Math.floor(rng() * 12) + 1,
-    }))
+    })),
   );
   const raw = models.map(() => 0.1 + rng());
   const tot = raw.reduce((a, b) => a + b, 0);
@@ -3465,7 +4912,12 @@ function mockForecast(ticker: string, horizon = 30): ForecastSkill {
     .map((m) => {
       const rmse = +(1 + rng() * 8).toFixed(2);
       const mae = +(rmse * (0.7 + rng() * 0.25)).toFixed(2);
-      return { model_name: m, n: Math.floor(rng() * completed * 0.6) + 5, rmse, mae };
+      return {
+        model_name: m,
+        n: Math.floor(rng() * completed * 0.6) + 5,
+        rmse,
+        mae,
+      };
     })
     .sort((a, b) => a.rmse - b.rmse);
   return {
@@ -3624,7 +5076,9 @@ function mockBertLlaAttention(symbol: string): ForecastAttention {
   const total = raw.reduce((a, b) => a + b, 0);
   const now = Date.now();
   const weights = raw.map((v, i) => ({
-    date: new Date(now - (windowSize - 1 - i) * 86_400_000).toISOString().slice(0, 10),
+    date: new Date(now - (windowSize - 1 - i) * 86_400_000)
+      .toISOString()
+      .slice(0, 10),
     alpha: +(v / total).toFixed(4),
   }));
   return { model: "bert_lla", window_size: windowSize, weights };
@@ -3693,9 +5147,11 @@ const MODELS: ModelRow[] = [
     pbo: 0.267,
     n_train: 260,
     deployable: false,
-    notes: "LightGBM LambdaRank — modest weight until validated at >200 OOS dates.",
+    notes:
+      "LightGBM LambdaRank — modest weight until validated at >200 OOS dates.",
     age_days: daysSinceTrained(MODEL_FRESH_TRAINED_DATE),
-    needs_retrain: daysSinceTrained(MODEL_FRESH_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
+    needs_retrain:
+      daysSinceTrained(MODEL_FRESH_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
     // Real cpcv_dsr/pbo above -> a real (if unimpressive) CPCV OOS Sharpe/
     // MaxDD too. max_dd is a POSITIVE magnitude fraction (0.28 = 28%),
     // matching compute_max_drawdown's convention -- see ModelRow's doc.
@@ -3712,7 +5168,8 @@ const MODELS: ModelRow[] = [
     deployable: false,
     notes: "Binary classifier predicting P(timeseries_momentum correct).",
     age_days: daysSinceTrained(MODEL_FRESH_TRAINED_DATE),
-    needs_retrain: daysSinceTrained(MODEL_FRESH_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
+    needs_retrain:
+      daysSinceTrained(MODEL_FRESH_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
     // Un-validated (cpcv_dsr/pbo null above) -> both new fields stay null
     // too, matching this fixture's existing honesty pattern.
     cpcv_mean_oos_sharpe: null,
@@ -3731,7 +5188,8 @@ const MODELS: ModelRow[] = [
     deployable: false,
     notes: "Binary classifier predicting P(cross_sectional_momentum correct).",
     age_days: daysSinceTrained(MODEL_STALE_TRAINED_DATE),
-    needs_retrain: daysSinceTrained(MODEL_STALE_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
+    needs_retrain:
+      daysSinceTrained(MODEL_STALE_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
     cpcv_mean_oos_sharpe: null,
     cpcv_mean_oos_max_dd: null,
   },
@@ -3746,7 +5204,8 @@ const MODELS: ModelRow[] = [
     pbo: null,
     n_train: null,
     deployable: false,
-    notes: "Registered but not yet trained -- no dated run to compute an age from.",
+    notes:
+      "Registered but not yet trained -- no dated run to compute an age from.",
     age_days: null,
     needs_retrain: null,
     cpcv_mean_oos_sharpe: null,
@@ -3783,14 +5242,20 @@ const HEALTH_GATE_LABELS: Record<StrategyHealthGate["key"], string> = {
   max_drawdown: "Max Drawdown",
 };
 
-const HEALTH_GATE_DIRECTIONS: Record<StrategyHealthGate["key"], "above" | "below"> = {
+const HEALTH_GATE_DIRECTIONS: Record<
+  StrategyHealthGate["key"],
+  "above" | "below"
+> = {
   pbo: "below",
   dsr: "above",
   sharpe: "above",
   max_drawdown: "below",
 };
 
-function healthGate(key: StrategyHealthGate["key"], value: number | null): StrategyHealthGate {
+function healthGate(
+  key: StrategyHealthGate["key"],
+  value: number | null,
+): StrategyHealthGate {
   const threshold = HEALTH_THRESHOLDS[key];
   const direction = HEALTH_GATE_DIRECTIONS[key];
   const passed =
@@ -3799,7 +5264,14 @@ function healthGate(key: StrategyHealthGate["key"], value: number | null): Strat
       : direction === "below"
         ? value < threshold
         : value > threshold;
-  return { key, label: HEALTH_GATE_LABELS[key], value, threshold, direction, passed };
+  return {
+    key,
+    label: HEALTH_GATE_LABELS[key],
+    value,
+    threshold,
+    direction,
+    passed,
+  };
 }
 
 /** Order matches the real backend's PBO/DSR/Sharpe/MaxDD gate ordering. */
@@ -3807,7 +5279,7 @@ function healthGates(
   sharpe: number | null,
   dsr: number | null,
   pbo: number | null,
-  maxDrawdown: number | null
+  maxDrawdown: number | null,
 ): StrategyHealthGate[] {
   return [
     healthGate("pbo", pbo),
@@ -3818,16 +5290,18 @@ function healthGates(
 }
 
 function healthTrend(
-  points: [string, number, number, number, number, boolean][]
+  points: [string, number, number, number, number, boolean][],
 ): StrategyHealthTrendPoint[] {
-  return points.map(([report_date, pbo, dsr, sharpe, max_drawdown, deployable]) => ({
-    report_date,
-    pbo,
-    dsr,
-    sharpe,
-    max_drawdown,
-    deployable,
-  }));
+  return points.map(
+    ([report_date, pbo, dsr, sharpe, max_drawdown, deployable]) => ({
+      report_date,
+      pbo,
+      dsr,
+      sharpe,
+      max_drawdown,
+      deployable,
+    }),
+  );
 }
 
 const STRATEGY_HEALTH_ROWS: StrategyHealthRow[] = [
@@ -4022,14 +5496,56 @@ const VALIDATION_TREND_SNAPSHOT: ValidationTrendSnapshot = {
   strategies_reason: null,
   trend: {
     timeseries_momentum: [
-      { report_date: "2026-05-04", pbo: 0.34, dsr: 0.951, sharpe: 0.94, max_drawdown: 0.21, deployable: true },
-      { report_date: "2026-06-01", pbo: 0.24, dsr: 0.964, sharpe: 1.03, max_drawdown: 0.2, deployable: true },
-      { report_date: "2026-07-06", pbo: 0.31, dsr: 0.972, sharpe: 1.12, max_drawdown: 0.19, deployable: true },
+      {
+        report_date: "2026-05-04",
+        pbo: 0.34,
+        dsr: 0.951,
+        sharpe: 0.94,
+        max_drawdown: 0.21,
+        deployable: true,
+      },
+      {
+        report_date: "2026-06-01",
+        pbo: 0.24,
+        dsr: 0.964,
+        sharpe: 1.03,
+        max_drawdown: 0.2,
+        deployable: true,
+      },
+      {
+        report_date: "2026-07-06",
+        pbo: 0.31,
+        dsr: 0.972,
+        sharpe: 1.12,
+        max_drawdown: 0.19,
+        deployable: true,
+      },
     ],
     multifactor_lowvol_size: [
-      { report_date: "2026-06-10", pbo: 0.41, dsr: 0.89, sharpe: 0.42, max_drawdown: 0.27, deployable: false },
-      { report_date: "2026-06-28", pbo: 0.33, dsr: 0.91, sharpe: 0.52, max_drawdown: 0.24, deployable: false },
-      { report_date: "2026-07-14", pbo: 0.28, dsr: 0.93, sharpe: 0.61, max_drawdown: 0.22, deployable: false },
+      {
+        report_date: "2026-06-10",
+        pbo: 0.41,
+        dsr: 0.89,
+        sharpe: 0.42,
+        max_drawdown: 0.27,
+        deployable: false,
+      },
+      {
+        report_date: "2026-06-28",
+        pbo: 0.33,
+        dsr: 0.91,
+        sharpe: 0.52,
+        max_drawdown: 0.24,
+        deployable: false,
+      },
+      {
+        report_date: "2026-07-14",
+        pbo: 0.28,
+        dsr: 0.93,
+        sharpe: 0.61,
+        max_drawdown: 0.22,
+        deployable: false,
+      },
     ],
     // garch_vol_target, short_vol_condor_pit, cross_sectional_momentum: only
     // 0-1 recorded runs so far -- honestly omitted, not fabricated
@@ -4059,7 +5575,8 @@ const GRAVITY_AUDIT_STATUS_MOCK: GravityAuditStatus = {
     enabled: true,
     generated_at: "2026-07-20T14:32:07+00:00",
     health: "warn",
-    health_caption: "⚠ 1 model disagreement(s); Claude skipped=0 / Gemini skipped=0.",
+    health_caption:
+      "⚠ 1 model disagreement(s); Claude skipped=0 / Gemini skipped=0.",
     total_steps: 8,
     claude_passed: 8,
     claude_failed: 0,
@@ -4069,14 +5586,86 @@ const GRAVITY_AUDIT_STATUS_MOCK: GravityAuditStatus = {
     gemini_skipped: 0,
     disagreements: 1,
     steps: [
-      { step_number: 1, step_title: "Data & Schema Integrity", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 92, score_gemini: 90, notes: "" },
-      { step_number: 2, step_title: "Strategy & Signal Logic", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 88, score_gemini: 86, notes: "" },
-      { step_number: 3, step_title: "Options Pricing Engine", claude: "✅ PASSED", gemini: "❌ FAILED", disagreement: true, score_claude: 85, score_gemini: 61, notes: "gemini flagged a delta-tolerance edge case Claude did not" },
-      { step_number: 4, step_title: "Forecasting Engine", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 90, score_gemini: 91, notes: "" },
-      { step_number: 5, step_title: "Macro Regime Engine", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 87, score_gemini: 89, notes: "" },
-      { step_number: 6, step_title: "Sizing & Risk", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 93, score_gemini: 92, notes: "" },
-      { step_number: 7, step_title: "Execution & Kill-Switch", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 95, score_gemini: 94, notes: "" },
-      { step_number: 8, step_title: "LLM & Advisory Layer", claude: "✅ PASSED", gemini: "✅ PASSED", disagreement: false, score_claude: 84, score_gemini: 88, notes: "" },
+      {
+        step_number: 1,
+        step_title: "Data & Schema Integrity",
+        claude: "✅ PASSED",
+        gemini: "✅ PASSED",
+        disagreement: false,
+        score_claude: 92,
+        score_gemini: 90,
+        notes: "",
+      },
+      {
+        step_number: 2,
+        step_title: "Strategy & Signal Logic",
+        claude: "✅ PASSED",
+        gemini: "✅ PASSED",
+        disagreement: false,
+        score_claude: 88,
+        score_gemini: 86,
+        notes: "",
+      },
+      {
+        step_number: 3,
+        step_title: "Options Pricing Engine",
+        claude: "✅ PASSED",
+        gemini: "❌ FAILED",
+        disagreement: true,
+        score_claude: 85,
+        score_gemini: 61,
+        notes: "gemini flagged a delta-tolerance edge case Claude did not",
+      },
+      {
+        step_number: 4,
+        step_title: "Forecasting Engine",
+        claude: "✅ PASSED",
+        gemini: "✅ PASSED",
+        disagreement: false,
+        score_claude: 90,
+        score_gemini: 91,
+        notes: "",
+      },
+      {
+        step_number: 5,
+        step_title: "Macro Regime Engine",
+        claude: "✅ PASSED",
+        gemini: "✅ PASSED",
+        disagreement: false,
+        score_claude: 87,
+        score_gemini: 89,
+        notes: "",
+      },
+      {
+        step_number: 6,
+        step_title: "Sizing & Risk",
+        claude: "✅ PASSED",
+        gemini: "✅ PASSED",
+        disagreement: false,
+        score_claude: 93,
+        score_gemini: 92,
+        notes: "",
+      },
+      {
+        step_number: 7,
+        step_title: "Execution & Kill-Switch",
+        claude: "✅ PASSED",
+        gemini: "✅ PASSED",
+        disagreement: false,
+        score_claude: 95,
+        score_gemini: 94,
+        notes: "",
+      },
+      {
+        step_number: 8,
+        step_title: "LLM & Advisory Layer",
+        claude: "✅ PASSED",
+        gemini: "✅ PASSED",
+        disagreement: false,
+        score_claude: 84,
+        score_gemini: 88,
+        notes: "",
+      },
     ],
   },
   legacy_audit: {
@@ -4085,8 +5674,16 @@ const GRAVITY_AUDIT_STATUS_MOCK: GravityAuditStatus = {
     steps: [
       { step: "step_1_pandera_schema", passed: true, status: "PASSED" },
       { step: "step_2_lookahead_perturbation", passed: true, status: "PASSED" },
-      { step: "step_3_5_discrepancy_analysis", passed: true, status: "Perfect Alignment" },
-      { step: "step_4_signal_registry_health", passed: false, status: "FAILED" },
+      {
+        step: "step_3_5_discrepancy_analysis",
+        passed: true,
+        status: "Perfect Alignment",
+      },
+      {
+        step: "step_4_signal_registry_health",
+        passed: false,
+        status: "FAILED",
+      },
       { step: "step_7_simulation_impact", passed: true, status: "OK / OK" },
     ],
     reason: null,
@@ -4147,12 +5744,22 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
     // + analyst consensus (settings.FMP_ANALYST_ENABLED, read from the existing
     // HistoricalStore analyst-snapshot table).
     News_Snippets: [
-      { title: "Apple Unveils New Services Push Ahead of Holiday Quarter", url: "https://example.com/news/aapl-1", published_date: "2026-08-01T14:05:00Z", site: "Reuters" },
-      { title: "Analysts Raise Price Targets on Apple After Strong Guidance", url: "https://example.com/news/aapl-2", published_date: "2026-07-31T09:20:00Z", site: "Bloomberg" },
+      {
+        title: "Apple Unveils New Services Push Ahead of Holiday Quarter",
+        url: "https://example.com/news/aapl-1",
+        published_date: "2026-08-01T14:05:00Z",
+        site: "Reuters",
+      },
+      {
+        title: "Analysts Raise Price Targets on Apple After Strong Guidance",
+        url: "https://example.com/news/aapl-2",
+        published_date: "2026-07-31T09:20:00Z",
+        site: "Bloomberg",
+      },
     ],
     Peers: ["MSFT", "GOOGL", "AMZN"],
     Analyst_Target_Consensus: 235.5,
-    Analyst_Target_Upside: (235.5 / 214.9) - 1,
+    Analyst_Target_Upside: 235.5 / 214.9 - 1,
     Analyst_Grade_Score: 0.42,
   },
   {
@@ -4188,7 +5795,9 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
     // comment): this directive is structurally clean, but earnings inside
     // the target DTE window flips Integrity_OK to false anyway.
     Integrity_OK: false,
-    Integrity_Issues: ["⚠️ Earnings Announcement scheduled in 12 days (within target DTE 30)"],
+    Integrity_Issues: [
+      "⚠️ Earnings Announcement scheduled in 12 days (within target DTE 30)",
+    ],
     // Altman Z < 1.8 is the "Distress" zone.
     Altman_Z_Score: 1.4,
     Piotroski_F_Score: 3,
@@ -4202,11 +5811,16 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
     // so the detail sheet's decline coloring and "weak" grade badge are
     // exercised alongside AAPL's upside/buy-leaning case above.
     News_Snippets: [
-      { title: "Microsoft Cloud Growth Slows Amid Enterprise Spending Pullback", url: "https://example.com/news/msft-1", published_date: "2026-07-30T11:00:00Z", site: "CNBC" },
+      {
+        title: "Microsoft Cloud Growth Slows Amid Enterprise Spending Pullback",
+        url: "https://example.com/news/msft-1",
+        published_date: "2026-07-30T11:00:00Z",
+        site: "CNBC",
+      },
     ],
     Peers: ["AAPL", "GOOGL", "ORCL"],
     Analyst_Target_Consensus: 405.0,
-    Analyst_Target_Upside: (405.0 / 431.2) - 1,
+    Analyst_Target_Upside: 405.0 / 431.2 - 1,
     Analyst_Grade_Score: -0.22,
   },
   {
@@ -4275,7 +5889,9 @@ const OPTIONS_DIRECTIVES: OptionsDirective[] = [
     Long_Strike: null,
     Short_Delta: 0.3,
     Long_Delta: null,
-    Legs: [{ Side: "Short", Type: "Call", Strike: 290.0, Price: 3.05, Delta: 0.3 }],
+    Legs: [
+      { Side: "Short", Type: "Call", Strike: 290.0, Price: 3.05, Delta: 0.3 },
+    ],
     Integrity_OK: true,
     Integrity_Issues: [],
   },
@@ -4422,16 +6038,53 @@ function mockPairs(): PairsRadar {
 // symbol never scored by the pipeline" honesty branch (unmatched_symbols).
 // Plain numbers (not `FactorExposure`'s nullable fields) -- this fixture
 // never has a missing factor for a matched symbol.
-const ATTRIBUTION_FACTORS: Record<string, Record<keyof FactorExposure, number>> = {
-  AAPL: { value_z: -0.3, quality_z: 1.1, lowvol_z: 0.2, size_z: -1.8, multifactor_composite: 0.25 },
-  MSFT: { value_z: -0.5, quality_z: 1.3, lowvol_z: 0.3, size_z: -1.9, multifactor_composite: 0.3 },
-  NVDA: { value_z: -0.9, quality_z: 0.8, lowvol_z: -1.1, size_z: -1.6, multifactor_composite: 0.15 },
-  V: { value_z: 0.4, quality_z: 1.6, lowvol_z: 0.6, size_z: -1.2, multifactor_composite: 0.55 },
-  COST: { value_z: -0.2, quality_z: 1.2, lowvol_z: 0.9, size_z: -0.3, multifactor_composite: 0.5 },
+const ATTRIBUTION_FACTORS: Record<
+  string,
+  Record<keyof FactorExposure, number>
+> = {
+  AAPL: {
+    value_z: -0.3,
+    quality_z: 1.1,
+    lowvol_z: 0.2,
+    size_z: -1.8,
+    multifactor_composite: 0.25,
+  },
+  MSFT: {
+    value_z: -0.5,
+    quality_z: 1.3,
+    lowvol_z: 0.3,
+    size_z: -1.9,
+    multifactor_composite: 0.3,
+  },
+  NVDA: {
+    value_z: -0.9,
+    quality_z: 0.8,
+    lowvol_z: -1.1,
+    size_z: -1.6,
+    multifactor_composite: 0.15,
+  },
+  V: {
+    value_z: 0.4,
+    quality_z: 1.6,
+    lowvol_z: 0.6,
+    size_z: -1.2,
+    multifactor_composite: 0.55,
+  },
+  COST: {
+    value_z: -0.2,
+    quality_z: 1.2,
+    lowvol_z: 0.9,
+    size_z: -0.3,
+    multifactor_composite: 0.5,
+  },
 };
 
 const ATTRIBUTION_FACTOR_KEYS: (keyof FactorExposure)[] = [
-  "value_z", "quality_z", "lowvol_z", "size_z", "multifactor_composite",
+  "value_z",
+  "quality_z",
+  "lowvol_z",
+  "size_z",
+  "multifactor_composite",
 ];
 
 // Hand-grouped clusters over PORTFOLIO's six holdings: mega-cap tech
@@ -4453,13 +6106,15 @@ function mockPortfolioAttribution(): PortfolioAttribution {
   // only satisfies PortfolioPositionView's nullable typing (a real account
   // position can lack a live quote) and is never exercised here.
   const heldValues: Record<string, number> = Object.fromEntries(
-    PORTFOLIO.positions.map((p) => [p.symbol, p.market_value ?? 0])
+    PORTFOLIO.positions.map((p) => [p.symbol, p.market_value ?? 0]),
   );
   const heldSymbols = Object.keys(heldValues);
   const totalValue = Object.values(heldValues).reduce((a, b) => a + b, 0);
 
   const matched = heldSymbols.filter((s) => s in ATTRIBUTION_FACTORS).sort();
-  const unmatched = heldSymbols.filter((s) => !(s in ATTRIBUTION_FACTORS)).sort();
+  const unmatched = heldSymbols
+    .filter((s) => !(s in ATTRIBUTION_FACTORS))
+    .sort();
   const matchedValue = matched.reduce((a, s) => a + heldValues[s], 0);
 
   const exposures = Object.fromEntries(
@@ -4467,27 +6122,29 @@ function mockPortfolioAttribution(): PortfolioAttribution {
       if (matchedValue <= 0) return [k, null];
       const sum = matched.reduce(
         (a, s) => a + ATTRIBUTION_FACTORS[s][k] * heldValues[s],
-        0
+        0,
       );
       return [k, sum / matchedValue];
-    })
+    }),
   ) as unknown as FactorExposure;
 
   const asOf = new Date(Date.now() - 5_400_000).toISOString();
 
-  const clusters: CorrelationCluster[] = ATTRIBUTION_CLUSTER_GROUPS
-    .map((g) => {
-      const symbolsHeld = g.symbols.filter((s) => heldSymbols.includes(s));
-      const clusterValue = symbolsHeld.reduce((a, s) => a + (heldValues[s] ?? 0), 0);
-      return {
-        cluster_id: g.id,
-        symbols: [...symbolsHeld].sort(),
-        n_symbols: symbolsHeld.length,
-        avg_intra_corr: g.avg_intra_corr,
-        weight_pct: totalValue > 0 ? clusterValue / totalValue : null,
-        insufficient_history: false,
-      };
-    })
+  const clusters: CorrelationCluster[] = ATTRIBUTION_CLUSTER_GROUPS.map((g) => {
+    const symbolsHeld = g.symbols.filter((s) => heldSymbols.includes(s));
+    const clusterValue = symbolsHeld.reduce(
+      (a, s) => a + (heldValues[s] ?? 0),
+      0,
+    );
+    return {
+      cluster_id: g.id,
+      symbols: [...symbolsHeld].sort(),
+      n_symbols: symbolsHeld.length,
+      avg_intra_corr: g.avg_intra_corr,
+      weight_pct: totalValue > 0 ? clusterValue / totalValue : null,
+      insufficient_history: false,
+    };
+  })
     .filter((c) => c.n_symbols > 0)
     .sort((a, b) => (b.weight_pct ?? 0) - (a.weight_pct ?? 0));
 
@@ -4532,19 +6189,23 @@ function mockValidateBrinsonFachlerRows(rows: BrinsonFachlerRow[]): string[] {
   const bSum = validRows.reduce((a, r) => a + (r.benchmark_weight_pct || 0), 0);
 
   if (Math.abs(pSum - 100) > 1) {
-    warnings.push(`Portfolio weights sum to ${pSum.toFixed(2)}% (expected ~100%).`);
+    warnings.push(
+      `Portfolio weights sum to ${pSum.toFixed(2)}% (expected ~100%).`,
+    );
   }
   if (Math.abs(bSum - 100) > 1) {
-    warnings.push(`Benchmark weights sum to ${bSum.toFixed(2)}% (expected ~100%).`);
+    warnings.push(
+      `Benchmark weights sum to ${bSum.toFixed(2)}% (expected ~100%).`,
+    );
   }
   if (validRows.some((r) => (r.portfolio_weight_pct || 0) < 0)) {
     warnings.push(
-      "Negative values found in Portfolio Weight — long-only attribution typically requires non-negative weights."
+      "Negative values found in Portfolio Weight — long-only attribution typically requires non-negative weights.",
     );
   }
   if (validRows.some((r) => (r.benchmark_weight_pct || 0) < 0)) {
     warnings.push(
-      "Negative values found in Benchmark Weight — long-only attribution typically requires non-negative weights."
+      "Negative values found in Benchmark Weight — long-only attribution typically requires non-negative weights.",
     );
   }
   if (pSum === 0 && bSum === 0) {
@@ -4553,7 +6214,9 @@ function mockValidateBrinsonFachlerRows(rows: BrinsonFachlerRow[]): string[] {
   return warnings;
 }
 
-function mockComputeBrinsonFachler(rows: BrinsonFachlerRow[]): BrinsonFachlerResult {
+function mockComputeBrinsonFachler(
+  rows: BrinsonFachlerRow[],
+): BrinsonFachlerResult {
   const validRows = rows.filter((r) => r.sector.trim() !== "");
   if (validRows.length === 0) {
     throw new ApiError("No rows with a non-blank sector name.", 422);
@@ -4590,7 +6253,9 @@ function mockComputeBrinsonFachler(rows: BrinsonFachlerRow[]): BrinsonFachlerRes
       allocation_effect: round6(allocationEffect),
       selection_effect: round6(selectionEffect),
       interaction_effect: round6(interactionEffect),
-      total_attribution: round6(allocationEffect + selectionEffect + interactionEffect),
+      total_attribution: round6(
+        allocationEffect + selectionEffect + interactionEffect,
+      ),
     };
   }
 
@@ -4681,7 +6346,7 @@ function mockPortfolioForecastSkill(horizon: number): PortfolioForecastSkill {
       // the per-symbol mockForecast's same convention.
       mean_pct_error: rng() < 0.15 ? null : +((rng() - 0.5) * 0.1).toFixed(4),
       count: Math.floor(rng() * 40) + 5,
-    }))
+    })),
   );
   const raw = models.map(() => 0.1 + rng());
   const tot = raw.reduce((a, b) => a + b, 0);
@@ -4707,27 +6372,35 @@ const FORECAST_SKILL_SYMBOLS = ["AAPL", "MSFT", "NVDA", "TSLA", "AMD"];
 
 function mockForecastSkillBySymbol(horizon: number): ForecastSkillBySymbol {
   const models = ["arima", "monte_carlo", "holt_winters", "cnn_lstm"];
-  const rows: ForecastSkillSymbolRow[] = FORECAST_SKILL_SYMBOLS.map((symbol, i) => {
-    const rng = seeded(horizon * 7919 + symbol.charCodeAt(0) * 31 + i);
-    // One symbol (the last) is deliberately cold-start -- zero history yet,
-    // even though it's part of the requested universe -- to exercise the
-    // "never silently omit a requested symbol" rendering path in mock mode
-    // too, not just in the backend's own unit tests.
-    if (i === FORECAST_SKILL_SYMBOLS.length - 1) {
-      return { symbol, pending: 0, completed: 0, skill_weights: {} };
-    }
-    const raw = models.map(() => 0.1 + rng());
-    const tot = raw.reduce((a, b) => a + b, 0);
-    const skill_weights: Record<string, number> = {};
-    models.forEach((m, j) => (skill_weights[m] = +(raw[j] / tot).toFixed(3)));
-    return {
-      symbol,
-      pending: Math.floor(rng() * 4) + 1,
-      completed: Math.floor(rng() * 60) + 20,
-      skill_weights,
-    };
-  });
-  return { horizon_days: horizon, window_days: 180, min_obs: 30, rows, reason: null };
+  const rows: ForecastSkillSymbolRow[] = FORECAST_SKILL_SYMBOLS.map(
+    (symbol, i) => {
+      const rng = seeded(horizon * 7919 + symbol.charCodeAt(0) * 31 + i);
+      // One symbol (the last) is deliberately cold-start -- zero history yet,
+      // even though it's part of the requested universe -- to exercise the
+      // "never silently omit a requested symbol" rendering path in mock mode
+      // too, not just in the backend's own unit tests.
+      if (i === FORECAST_SKILL_SYMBOLS.length - 1) {
+        return { symbol, pending: 0, completed: 0, skill_weights: {} };
+      }
+      const raw = models.map(() => 0.1 + rng());
+      const tot = raw.reduce((a, b) => a + b, 0);
+      const skill_weights: Record<string, number> = {};
+      models.forEach((m, j) => (skill_weights[m] = +(raw[j] / tot).toFixed(3)));
+      return {
+        symbol,
+        pending: Math.floor(rng() * 4) + 1,
+        completed: Math.floor(rng() * 60) + 20,
+        skill_weights,
+      };
+    },
+  );
+  return {
+    horizon_days: horizon,
+    window_days: 180,
+    min_obs: 30,
+    rows,
+    reason: null,
+  };
 }
 
 // The honest "no forecast history yet" degrade -- exported for the same
@@ -4764,10 +6437,15 @@ function mockLatencyHeatmap(): LatencyHeatmap {
       latency_seconds: latency,
       is_stale: latency > 3,
     };
-  }).sort((a, b) => new Date(b.ingested_at).getTime() - new Date(a.ingested_at).getTime());
+  }).sort(
+    (a, b) =>
+      new Date(b.ingested_at).getTime() - new Date(a.ingested_at).getTime(),
+  );
   const latencies = rows.map((r) => r.latency_seconds).sort((a, b) => a - b);
   const mid = latencies[Math.floor(latencies.length / 2)];
-  const worst = rows.reduce((w, r) => (r.latency_seconds > w.latency_seconds ? r : w));
+  const worst = rows.reduce((w, r) =>
+    r.latency_seconds > w.latency_seconds ? r : w,
+  );
   return {
     tracking_enabled: true,
     count: rows.length,
@@ -4792,7 +6470,8 @@ export function mockLatencyHeatmapDisabled(): LatencyHeatmap {
     worst_symbol: null,
     worst_p95: null,
     rows: [],
-    reason: "MARKET_DATA_LATENCY_TRACKING_ENABLED is False — latency samples are not recorded this process.",
+    reason:
+      "MARKET_DATA_LATENCY_TRACKING_ENABLED is False — latency samples are not recorded this process.",
   };
 }
 
@@ -4802,7 +6481,8 @@ function mockRiskGateBlocks(): RiskGateBlockLog {
     {
       ts: new Date(now - 40 * 60_000).toISOString(),
       check: "max_correlation",
-      reason: "Correlation with the existing NVDA position (0.86) exceeds the 0.80 threshold.",
+      reason:
+        "Correlation with the existing NVDA position (0.86) exceeds the 0.80 threshold.",
       symbol: "AMD",
       side: "buy",
       qty: 12,
@@ -4811,7 +6491,8 @@ function mockRiskGateBlocks(): RiskGateBlockLog {
     {
       ts: new Date(now - 6 * 3600_000).toISOString(),
       check: "portfolio_heat",
-      reason: "Adding this position would raise portfolio heat to 6.4%, above the 5% cap.",
+      reason:
+        "Adding this position would raise portfolio heat to 6.4%, above the 5% cap.",
       symbol: "TSLA",
       side: "buy",
       qty: 5,
@@ -4927,7 +6608,7 @@ function mockSystemTelemetry(): SystemTelemetry {
 // backend's shape -- closing the gap where PR #427 added mockSystemTelemetry
 // with this honest branch reachable only via a test-only hand-built object.
 export function mockSystemTelemetryUnavailable(
-  reason = "psutil is not available in this environment."
+  reason = "psutil is not available in this environment.",
 ): SystemTelemetry {
   return {
     psutil_available: false,
@@ -4957,19 +6638,37 @@ function mockSizingCapEvents(): SizingCapEvent[] {
   const now = Date.now();
   return [
     {
-      id: 3, timestamp: new Date(now - 30 * 60_000).toISOString(), cycle_id: "cycle-118",
-      symbol: "NVDA", strategy_id: "timeseries_momentum", raw_weight: 0.32, final_weight: 0.20,
-      binding_constraint: "kelly_cap", was_capped: true,
+      id: 3,
+      timestamp: new Date(now - 30 * 60_000).toISOString(),
+      cycle_id: "cycle-118",
+      symbol: "NVDA",
+      strategy_id: "timeseries_momentum",
+      raw_weight: 0.32,
+      final_weight: 0.2,
+      binding_constraint: "kelly_cap",
+      was_capped: true,
     },
     {
-      id: 2, timestamp: new Date(now - 90 * 60_000).toISOString(), cycle_id: "cycle-117",
-      symbol: "TSLA", strategy_id: null, raw_weight: 0.28, final_weight: 0.28,
-      binding_constraint: null, was_capped: false,
+      id: 2,
+      timestamp: new Date(now - 90 * 60_000).toISOString(),
+      cycle_id: "cycle-117",
+      symbol: "TSLA",
+      strategy_id: null,
+      raw_weight: 0.28,
+      final_weight: 0.28,
+      binding_constraint: null,
+      was_capped: false,
     },
     {
-      id: 1, timestamp: new Date(now - 150 * 60_000).toISOString(), cycle_id: "cycle-116",
-      symbol: "SPY", strategy_id: "multifactor_lowvol_size", raw_weight: 4.10, final_weight: 3.0,
-      binding_constraint: "portfolio_gross", was_capped: true,
+      id: 1,
+      timestamp: new Date(now - 150 * 60_000).toISOString(),
+      cycle_id: "cycle-116",
+      symbol: "SPY",
+      strategy_id: "multifactor_lowvol_size",
+      raw_weight: 4.1,
+      final_weight: 3.0,
+      binding_constraint: "portfolio_gross",
+      was_capped: true,
     },
   ];
 }
@@ -5001,7 +6700,8 @@ export function mockSizingCapAuditDisabled(): SizingCapAuditTrail {
     escalation_enabled: false,
     escalation_threshold_cycles: 5,
     escalation_factor: 0.5,
-    reason: "SIZING_CAP_AUDIT_ENABLED is False -- the durable cap-event log is not being written this run.",
+    reason:
+      "SIZING_CAP_AUDIT_ENABLED is False -- the durable cap-event log is not being written this run.",
   };
 }
 
@@ -5009,9 +6709,27 @@ export function mockSizingCapAuditDisabled(): SizingCapAuditTrail {
 function mockEtfTransmissionSummary(): EtfTransmissionSummary {
   return {
     rows: [
-      { symbol: "SPY", etf_ownership_pct: 1.0, etf_comovement_r2: 1.0, etf_primary_wrapper: "SPY", etf_transmission_multiplier: null },
-      { symbol: "NVDA", etf_ownership_pct: 0.42, etf_comovement_r2: 0.81, etf_primary_wrapper: "QQQ", etf_transmission_multiplier: 0.74 },
-      { symbol: "JPM", etf_ownership_pct: 0.18, etf_comovement_r2: 0.55, etf_primary_wrapper: "XLF", etf_transmission_multiplier: 0.94 },
+      {
+        symbol: "SPY",
+        etf_ownership_pct: 1.0,
+        etf_comovement_r2: 1.0,
+        etf_primary_wrapper: "SPY",
+        etf_transmission_multiplier: null,
+      },
+      {
+        symbol: "NVDA",
+        etf_ownership_pct: 0.42,
+        etf_comovement_r2: 0.81,
+        etf_primary_wrapper: "QQQ",
+        etf_transmission_multiplier: 0.74,
+      },
+      {
+        symbol: "JPM",
+        etf_ownership_pct: 0.18,
+        etf_comovement_r2: 0.55,
+        etf_primary_wrapper: "XLF",
+        etf_transmission_multiplier: 0.94,
+      },
     ],
     measurement_enabled: true,
     sizing_enabled: true,
@@ -5028,7 +6746,8 @@ export function mockEtfTransmissionDisabled(): EtfTransmissionSummary {
     measurement_enabled: false,
     sizing_enabled: false,
     portfolio_enabled: false,
-    reason: "ETF_TRANSMISSION_ENABLED is False -- measurement columns are not computed this cycle.",
+    reason:
+      "ETF_TRANSMISSION_ENABLED is False -- measurement columns are not computed this cycle.",
   };
 }
 
@@ -5041,7 +6760,7 @@ function mockHeartbeatSummary(): HeartbeatSummary {
     status: "🟢 Fresh",
     history_available: false,
     history_note:
-      "The legacy Streamlit \"Heartbeat Age Trend\" sparkline is a 60-sample ring buffer held only in st.session_state -- never persisted to disk -- so there is no durable history for this endpoint to serve honestly. Only the current sample is real.",
+      'The legacy Streamlit "Heartbeat Age Trend" sparkline is a 60-sample ring buffer held only in st.session_state -- never persisted to disk -- so there is no durable history for this endpoint to serve honestly. Only the current sample is real.',
     reason: null,
   };
 }
@@ -5054,8 +6773,9 @@ export function mockHeartbeatNoData(): HeartbeatSummary {
     status: "⚪ No heartbeat",
     history_available: false,
     history_note:
-      "The legacy Streamlit \"Heartbeat Age Trend\" sparkline is a 60-sample ring buffer held only in st.session_state -- never persisted to disk -- so there is no durable history for this endpoint to serve honestly. Only the current sample is real.",
-    reason: "No heartbeat file yet -- output/heartbeat.txt is written only by main_orchestrator.py's async heartbeat task.",
+      'The legacy Streamlit "Heartbeat Age Trend" sparkline is a 60-sample ring buffer held only in st.session_state -- never persisted to disk -- so there is no durable history for this endpoint to serve honestly. Only the current sample is real.',
+    reason:
+      "No heartbeat file yet -- output/heartbeat.txt is written only by main_orchestrator.py's async heartbeat task.",
   };
 }
 
@@ -5066,9 +6786,17 @@ export function mockHeartbeatNoData(): HeartbeatSummary {
 function mockStrategyPnlSummary(): StrategyPnlSummary {
   return {
     rows: [
-      { strategy_id: "timeseries_momentum", realized_pnl: 842.15, trade_count: 11 },
-      { strategy_id: "cross_sectional_momentum", realized_pnl: 213.40, trade_count: 4 },
-      { strategy_id: null, realized_pnl: -58.20, trade_count: 2 },
+      {
+        strategy_id: "timeseries_momentum",
+        realized_pnl: 842.15,
+        trade_count: 11,
+      },
+      {
+        strategy_id: "cross_sectional_momentum",
+        realized_pnl: 213.4,
+        trade_count: 4,
+      },
+      { strategy_id: null, realized_pnl: -58.2, trade_count: 2 },
     ],
     total_realized_pnl: 997.35,
     reason: null,
@@ -5078,10 +6806,17 @@ function mockStrategyPnlSummary(): StrategyPnlSummary {
 // The honest "no closed trades yet" degrade -- exported for the same reason
 // as mockSizingCapAuditDisabled above.
 export function mockStrategyPnlEmpty(): StrategyPnlSummary {
-  return { rows: [], total_realized_pnl: null, reason: "No closed trades in the transactions store yet." };
+  return {
+    rows: [],
+    total_realized_pnl: null,
+    reason: "No closed trades in the transactions store yet.",
+  };
 }
 
-function mockObservabilitySummary(range: PerfRange, horizon: number): ObservabilitySummary {
+function mockObservabilitySummary(
+  range: PerfRange,
+  horizon: number,
+): ObservabilitySummary {
   return {
     portfolio_risk: mockPortfolioRisk(),
     portfolio_heat: mockPortfolioHeat(),
@@ -5108,8 +6843,12 @@ function mockObservabilitySummary(range: PerfRange, horizon: number): Observabil
     etf_transmission: readObservabilityColdStart()
       ? mockEtfTransmissionDisabled()
       : mockEtfTransmissionSummary(),
-    heartbeat: readObservabilityColdStart() ? mockHeartbeatNoData() : mockHeartbeatSummary(),
-    strategy_pnl: readObservabilityColdStart() ? mockStrategyPnlEmpty() : mockStrategyPnlSummary(),
+    heartbeat: readObservabilityColdStart()
+      ? mockHeartbeatNoData()
+      : mockHeartbeatSummary(),
+    strategy_pnl: readObservabilityColdStart()
+      ? mockStrategyPnlEmpty()
+      : mockStrategyPnlSummary(),
   };
 }
 
@@ -5119,7 +6858,8 @@ function mockObservabilitySummary(range: PerfRange, horizon: number): Observabil
 // the "kept but unparsed" rendering path, not just an all-INFO happy path.
 function mockObservabilityLogs(limit: number): LogAggregation {
   const now = Date.now();
-  const iso = (minsAgo: number) => new Date(now - minsAgo * 60_000).toISOString();
+  const iso = (minsAgo: number) =>
+    new Date(now - minsAgo * 60_000).toISOString();
   const all: LogAggregationEntry[] = [
     {
       timestamp: iso(58),
@@ -5174,7 +6914,14 @@ function mockObservabilityLogs(limit: number): LogAggregation {
   return {
     log_path: "logs/investyo.log",
     total_lines: all.length,
-    tally: { CRITICAL: 1, ERROR: 1, WARNING: 1, INFO: 2, DEBUG: 0, UNPARSED: 1 },
+    tally: {
+      CRITICAL: 1,
+      ERROR: 1,
+      WARNING: 1,
+      INFO: 2,
+      DEBUG: 0,
+      UNPARSED: 1,
+    },
     systemic_count: 1,
     symbol_specific_count: 2,
     entries,
@@ -5203,12 +6950,19 @@ function mockObservabilityLogs(limit: number): LogAggregation {
 // test-only hand-built object.
 export function mockEmptyLogAggregation(
   reason: string,
-  logPath: string | null = "logs/investyo.log"
+  logPath: string | null = "logs/investyo.log",
 ): LogAggregation {
   return {
     log_path: logPath,
     total_lines: 0,
-    tally: { CRITICAL: 0, ERROR: 0, WARNING: 0, INFO: 0, DEBUG: 0, UNPARSED: 0 },
+    tally: {
+      CRITICAL: 0,
+      ERROR: 0,
+      WARNING: 0,
+      INFO: 0,
+      DEBUG: 0,
+      UNPARSED: 0,
+    },
     systemic_count: 0,
     symbol_specific_count: 0,
     entries: [],
@@ -5235,7 +6989,7 @@ function controlRun(
   minsAgo: number,
   durationSeconds: number | null,
   reason: string,
-  error: string | null
+  error: string | null,
 ): RunRecord {
   const now = Date.now();
   const started = now - minsAgo * 60_000;
@@ -5266,10 +7020,18 @@ const CONTROL_RUN_HISTORY: RunRecord[] = [
     128,
     6.1,
     "manual",
-    "ForecastingEngine: insufficient bars for NVDA (need >=22, got 9)"
+    "ForecastingEngine: insufficient bars for NVDA (need >=22, got 9)",
   ),
   // An interval-triggered run with no `mode` recorded -> honest "—" in the UI.
-  controlRun("orch-mock-5c88", "succeeded", undefined, 305, 44.2, "interval", null),
+  controlRun(
+    "orch-mock-5c88",
+    "succeeded",
+    undefined,
+    305,
+    44.2,
+    "interval",
+    null,
+  ),
 ];
 
 // GET /runs/history's durable fixture -- deliberately LONGER than
@@ -5280,8 +7042,24 @@ const CONTROL_RUN_HISTORY: RunRecord[] = [
 // entries, unlike CONTROL_RUN_HISTORY which a test injects one into directly.
 const RUN_HISTORY_DURABLE: RunRecord[] = [
   ...CONTROL_RUN_HISTORY,
-  controlRun("orch-mock-5b41", "succeeded", "full", 365, 39.7, "interval", null),
-  controlRun("orch-mock-5a02", "succeeded", "data", 425, 11.9, "interval", null),
+  controlRun(
+    "orch-mock-5b41",
+    "succeeded",
+    "full",
+    365,
+    39.7,
+    "interval",
+    null,
+  ),
+  controlRun(
+    "orch-mock-5a02",
+    "succeeded",
+    "data",
+    425,
+    11.9,
+    "interval",
+    null,
+  ),
   controlRun(
     "orch-mock-4f93",
     "failed",
@@ -5289,11 +7067,35 @@ const RUN_HISTORY_DURABLE: RunRecord[] = [
     488,
     22.3,
     "manual",
-    "DataEngine: Robinhood login failed after 3 retries (session expired)"
+    "DataEngine: Robinhood login failed after 3 retries (session expired)",
   ),
-  controlRun("orch-mock-4e6c", "succeeded", "metrics", 550, 9.4, "interval", null),
-  controlRun("orch-mock-4d21", "succeeded", "full", 612, 43.1, "interval", null),
-  controlRun("orch-mock-4c05", "succeeded", "data", 675, 13.2, "interval", null),
+  controlRun(
+    "orch-mock-4e6c",
+    "succeeded",
+    "metrics",
+    550,
+    9.4,
+    "interval",
+    null,
+  ),
+  controlRun(
+    "orch-mock-4d21",
+    "succeeded",
+    "full",
+    612,
+    43.1,
+    "interval",
+    null,
+  ),
+  controlRun(
+    "orch-mock-4c05",
+    "succeeded",
+    "data",
+    675,
+    13.2,
+    "interval",
+    null,
+  ),
 ];
 
 function mockControlStatus(): ControlStatus {
@@ -5477,26 +7279,88 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
       name: "main.py",
       invocation: "python3 main.py",
       aliases: [],
-      description: "Clean advisory orchestrator — one full cycle (or loop with --interval).",
+      description:
+        "Clean advisory orchestrator — one full cycle (or loop with --interval).",
       positionals: [],
       subcommands: [],
       options: [
-        { name: "--interval", aliases: ["--interval"], description: "refresh cadence in seconds (0 = run once)", default: 0, choices: null, required: false, arg_kind: "optional", metavar: "SECONDS", takes_value: true },
-        { name: "--refresh-account", aliases: ["--refresh-account"], description: "force a fresh Robinhood login this run", default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
-        { name: "--agent", aliases: ["--agent"], description: null, default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
+        {
+          name: "--interval",
+          aliases: ["--interval"],
+          description: "refresh cadence in seconds (0 = run once)",
+          default: 0,
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: "SECONDS",
+          takes_value: true,
+        },
+        {
+          name: "--refresh-account",
+          aliases: ["--refresh-account"],
+          description: "force a fresh Robinhood login this run",
+          default: false,
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: false,
+        },
+        {
+          name: "--agent",
+          aliases: ["--agent"],
+          description: null,
+          default: false,
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: false,
+        },
       ],
     },
     {
       name: "validation.harness",
       invocation: "python -m validation.harness",
       aliases: [],
-      description: "Run the strategy validation harness (PBO/DSR/Sharpe/MaxDD gates).",
+      description:
+        "Run the strategy validation harness (PBO/DSR/Sharpe/MaxDD gates).",
       positionals: [],
       subcommands: [],
       options: [
-        { name: "--strategy", aliases: ["--strategy"], description: "registered strategy name", default: null, choices: null, required: true, arg_kind: "required", metavar: null, takes_value: true },
-        { name: "--start", aliases: ["--start"], description: "backtest start date", default: "2020-01-01", choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: true },
-        { name: "--end", aliases: ["--end"], description: "backtest end date", default: "2023-12-31", choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: true },
+        {
+          name: "--strategy",
+          aliases: ["--strategy"],
+          description: "registered strategy name",
+          default: null,
+          choices: null,
+          required: true,
+          arg_kind: "required",
+          metavar: null,
+          takes_value: true,
+        },
+        {
+          name: "--start",
+          aliases: ["--start"],
+          description: "backtest start date",
+          default: "2020-01-01",
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: true,
+        },
+        {
+          name: "--end",
+          aliases: ["--end"],
+          description: "backtest end date",
+          default: "2023-12-31",
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: true,
+        },
       ],
     },
     {
@@ -5507,9 +7371,39 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
       positionals: [],
       subcommands: [],
       options: [
-        { name: "--json", aliases: ["--json"], description: "machine-readable JSON output", default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
-        { name: "--skip", aliases: ["--skip"], description: "checks to skip", default: null, choices: null, required: false, arg_kind: "variadic", metavar: "CHECK", takes_value: true },
-        { name: "--fire-alerts", aliases: ["--fire-alerts"], description: "send alerts on failure", default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
+        {
+          name: "--json",
+          aliases: ["--json"],
+          description: "machine-readable JSON output",
+          default: false,
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: false,
+        },
+        {
+          name: "--skip",
+          aliases: ["--skip"],
+          description: "checks to skip",
+          default: null,
+          choices: null,
+          required: false,
+          arg_kind: "variadic",
+          metavar: "CHECK",
+          takes_value: true,
+        },
+        {
+          name: "--fire-alerts",
+          aliases: ["--fire-alerts"],
+          description: "send alerts on failure",
+          default: false,
+          choices: null,
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: false,
+        },
       ],
     },
     {
@@ -5518,12 +7412,36 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
       aliases: [],
       description: "Diff two state snapshots.",
       positionals: [
-        { name: "prev", description: "earlier snapshot", default: null, choices: null, arg_kind: "optional", metavar: null },
-        { name: "curr", description: "later snapshot", default: null, choices: null, arg_kind: "optional", metavar: null },
+        {
+          name: "prev",
+          description: "earlier snapshot",
+          default: null,
+          choices: null,
+          arg_kind: "optional",
+          metavar: null,
+        },
+        {
+          name: "curr",
+          description: "later snapshot",
+          default: null,
+          choices: null,
+          arg_kind: "optional",
+          metavar: null,
+        },
       ],
       subcommands: [],
       options: [
-        { name: "--format", aliases: ["--format"], description: "output format", default: "markdown", choices: ["markdown", "json"], required: false, arg_kind: "optional", metavar: null, takes_value: true },
+        {
+          name: "--format",
+          aliases: ["--format"],
+          description: "output format",
+          default: "markdown",
+          choices: ["markdown", "json"],
+          required: false,
+          arg_kind: "optional",
+          metavar: null,
+          takes_value: true,
+        },
       ],
     },
     {
@@ -5540,12 +7458,39 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
           aliases: ["g"],
           description: "fetch one prompt",
           positionals: [
-            { name: "id", description: "prompt id", default: null, choices: null, arg_kind: "required", metavar: null },
+            {
+              name: "id",
+              description: "prompt id",
+              default: null,
+              choices: null,
+              arg_kind: "required",
+              metavar: null,
+            },
           ],
           subcommands: [],
           options: [
-            { name: "--version", aliases: ["--version", "-v"], description: "pin a specific version", default: null, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: true },
-            { name: "--raw", aliases: ["--raw"], description: "print the raw template", default: false, choices: null, required: false, arg_kind: "optional", metavar: null, takes_value: false },
+            {
+              name: "--version",
+              aliases: ["--version", "-v"],
+              description: "pin a specific version",
+              default: null,
+              choices: null,
+              required: false,
+              arg_kind: "optional",
+              metavar: null,
+              takes_value: true,
+            },
+            {
+              name: "--raw",
+              aliases: ["--raw"],
+              description: "print the raw template",
+              default: false,
+              choices: null,
+              required: false,
+              arg_kind: "optional",
+              metavar: null,
+              takes_value: false,
+            },
           ],
         },
         {
@@ -5716,7 +7661,13 @@ const MOCK_AGENT_LOOP: AgentLoopStatus = {
 // running -> cancelled) is believable rather than always-terminal.
 const _mockJobs: Record<
   string,
-  { jobType: string; commandName: string | null; startedAt: number; createdAt: string; cancelled: boolean }
+  {
+    jobType: string;
+    commandName: string | null;
+    startedAt: number;
+    createdAt: string;
+    cancelled: boolean;
+  }
 > = {};
 
 // ---------------------------------------------------------------------------
@@ -5755,8 +7706,8 @@ const _MOCK_PROMPT_FIXTURES: Record<string, _MockPromptFixture> = {
     body:
       "You are Gravity, the AI code auditor for the InvestYo quant platform. " +
       "Verify vectorization, lookahead-bias freedom, and honest degradation on " +
-      "every changed file. Respond in JSON: {\"status\": \"PASSED/FAILED\", " +
-      "\"score\": 0-100, \"findings\": []}. (mock remote body)",
+      'every changed file. Respond in JSON: {"status": "PASSED/FAILED", ' +
+      '"score": 0-100, "findings": []}. (mock remote body)',
   },
   "gravity.step_01": {
     unpinnedVersion: "1.1.0",
@@ -5765,7 +7716,7 @@ const _MOCK_PROMPT_FIXTURES: Record<string, _MockPromptFixture> = {
     body:
       "Analyze the provided source code for Step 1. Verify vectorized " +
       "Pandas/NumPy operations and a relational database schema. Respond in " +
-      "JSON: {\"status\": \"PASSED/FAILED\", \"score\": 0-100}. (mock cached body)",
+      'JSON: {"status": "PASSED/FAILED", "score": 0-100}. (mock cached body)',
   },
   "gravity.step_02": {
     unpinnedVersion: "baseline",
@@ -5851,7 +7802,11 @@ export const emptySentimentDynamicsExtras = {
   sector_heat_factor: null,
 } satisfies Pick<
   SentimentDynamics,
-  "source_breakdown" | "raw_sentiment_avg" | "dampened_sentiment_score" | "attention_score" | "sector_heat_factor"
+  | "source_breakdown"
+  | "raw_sentiment_avg"
+  | "dampened_sentiment_score"
+  | "attention_score"
+  | "sector_heat_factor"
 >;
 
 export const mockNoProviderSentimentFixture: SentimentDynamics = {
@@ -5894,7 +7849,7 @@ export const mockApi = {
 
   async getPerformance(
     id: string,
-    range: PerfRange
+    range: PerfRange,
   ): Promise<PerformanceResponse> {
     const p = findPilot(id);
     if (!p) throw notFound(id);
@@ -5939,7 +7894,7 @@ export const mockApi = {
    */
   async simulatePilotAllocation(
     pilotId: string,
-    payload: PilotSimulationRequest
+    payload: PilotSimulationRequest,
   ): Promise<PilotSimulationResult> {
     const p = findPilot(pilotId);
     if (!p) throw notFound(pilotId);
@@ -5969,7 +7924,10 @@ export const mockApi = {
     const sharpeDelta = (rng() - 0.5) * 0.4 * sizeFactor;
     const ddDelta = (rng() - 0.35) * 0.06 * sizeFactor;
     const projectedSharpe = +(baseSharpe + sharpeDelta).toFixed(3);
-    const projectedDD = Math.min(1, Math.max(0, +(baseDD + ddDelta).toFixed(3)));
+    const projectedDD = Math.min(
+      1,
+      Math.max(0, +(baseDD + ddDelta).toFixed(3)),
+    );
     // Occasionally an honest partial-coverage Pilot (a symbol missing a
     // live quote this cycle) rather than every Pilot reporting full coverage.
     const symbolsCovered = Math.max(0, symbolsTotal - (rng() < 0.3 ? 1 : 0));
@@ -5981,7 +7939,10 @@ export const mockApi = {
       projected: { sharpe_ratio: projectedSharpe, max_drawdown: projectedDD },
       heat_pct_current: heatCurrent,
       heat_pct_projected: null,
-      coverage: { symbols_covered: symbolsCovered, symbols_total: symbolsTotal },
+      coverage: {
+        symbols_covered: symbolsCovered,
+        symbols_total: symbolsTotal,
+      },
       reason: null,
     });
   },
@@ -6013,18 +7974,33 @@ export const mockApi = {
     // shape GET /data/sync-report actually returns: a ticker-keyed map, not a
     // pre-sorted array with server-computed counts (the component reshapes it
     // client-side, same as the live endpoint forces it to).
-    const ROWS: Record<string, { coverage: CoverageStatus; held: boolean; diagnostic: string }> = {
+    const ROWS: Record<
+      string,
+      { coverage: CoverageStatus; held: boolean; diagnostic: string }
+    > = {
       AAPL: { coverage: "full", held: true, diagnostic: "" },
       MSFT: { coverage: "full", held: true, diagnostic: "" },
       NVDA: { coverage: "stale", held: true, diagnostic: "" },
-      V: { coverage: "quotes_only", held: true, diagnostic: "fundamentals:empty" },
+      V: {
+        coverage: "quotes_only",
+        held: true,
+        diagnostic: "fundamentals:empty",
+      },
       COST: { coverage: "full", held: true, diagnostic: "" },
       // Held in Robinhood but no live quote — a real position with unknown
       // current price, matching data.portfolio_sync.SymbolStatus (avg_cost is
       // NaN only when not held, not when merely uncovered).
-      DUK: { coverage: "equity_only", held: true, diagnostic: "quote:NotFoundError" },
+      DUK: {
+        coverage: "equity_only",
+        held: true,
+        diagnostic: "quote:NotFoundError",
+      },
       // On a watchlist only (never held) and unreachable on both legs.
-      T: { coverage: "uncovered", held: false, diagnostic: "quote:NotFoundError,fundamentals:empty" },
+      T: {
+        coverage: "uncovered",
+        held: false,
+        diagnostic: "quote:NotFoundError,fundamentals:empty",
+      },
       // Probe was skipped entirely (offline/degraded mode) — never a
       // fabricated FULL/UNCOVERED guess when the probe didn't actually run.
       XOM: { coverage: "unknown", held: false, diagnostic: "probe_skipped" },
@@ -6035,17 +8011,23 @@ export const mockApi = {
       const { coverage, held, diagnostic } = ROWS[symbol];
       // FULL/STALE/QUOTES_ONLY all mean the quote leg succeeded — only
       // fundamentals coverage (and, for STALE, freshness) differs.
-      const covered = coverage === "full" || coverage === "stale" || coverage === "quotes_only";
+      const covered =
+        coverage === "full" ||
+        coverage === "stale" ||
+        coverage === "quotes_only";
       const rng = seeded([...symbol].reduce((a, c) => a + c.charCodeAt(0), 0));
       const position = PORTFOLIO.positions.find((p) => p.symbol === symbol);
       symbols[symbol] = {
         symbol,
         coverage,
         held,
-        quantity: held ? position?.qty ?? 10 : 0,
-        avg_cost: held ? position?.avg_cost ?? +(50 + rng() * 300).toFixed(2) : null,
+        quantity: held ? (position?.qty ?? 10) : 0,
+        avg_cost: held
+          ? (position?.avg_cost ?? +(50 + rng() * 300).toFixed(2))
+          : null,
         current_price: covered ? +(50 + rng() * 400).toFixed(2) : null,
-        cost_basis_delta_per_share: covered && held ? +((rng() - 0.5) * 40).toFixed(2) : null,
+        cost_basis_delta_per_share:
+          covered && held ? +((rng() - 0.5) * 40).toFixed(2) : null,
         market_value: covered ? +(1000 + rng() * 9000).toFixed(2) : null,
         is_stale_quote: coverage === "stale",
         quote_source: covered ? "alpaca" : "",
@@ -6053,7 +8035,8 @@ export const mockApi = {
         forecast_available: covered,
         watchlists: held ? [] : ["file:watchlist.txt"],
         diagnostic,
-        rating_consecutive_bad_cycles: MOCK_RATING_OVERRIDES[symbol]?.consecutive_bad_cycles ?? null,
+        rating_consecutive_bad_cycles:
+          MOCK_RATING_OVERRIDES[symbol]?.consecutive_bad_cycles ?? null,
         rating_excluded: MOCK_RATING_OVERRIDES[symbol]?.excluded ?? false,
       };
     }
@@ -6108,7 +8091,7 @@ export const mockApi = {
 
     // Aggregate signal = mean of this symbol's blended score across holders.
     const scores = CATALOG.flatMap((p) =>
-      p.holdings.filter((x) => x.symbol === sym).map((x) => x.score)
+      p.holdings.filter((x) => x.symbol === sym).map((x) => x.score),
     );
     const score = scores.length
       ? +(scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(3)
@@ -6137,7 +8120,8 @@ export const mockApi = {
         rationale: held_by_pilots.length
           ? `Held by ${held_by_pilots.length} Pilot(s); largest allocation in ${held_by_pilots[0].name}.`
           : "Portfolio position with no active Pilot signal.",
-        kelly_target: position_pct == null ? null : +(position_pct * 0.5).toFixed(4),
+        kelly_target:
+          position_pct == null ? null : +(position_pct * 0.5).toFixed(4),
         score,
       },
       factors: {
@@ -6150,7 +8134,10 @@ export const mockApi = {
         lowvol_z: +((rng() - 0.5) * 2).toFixed(3),
         size_z: +((rng() - 0.5) * 2).toFixed(3),
         multifactor_composite: +((rng() - 0.5) * 1.5).toFixed(3),
-        score_components: { momentum: +rng().toFixed(3), trend: +rng().toFixed(3) },
+        score_components: {
+          momentum: +rng().toFixed(3),
+          trend: +rng().toFixed(3),
+        },
       },
       ranges: {
         buy_range: `Buy Zone: $${(price * 0.97).toFixed(2)} - $${price.toFixed(2)}`,
@@ -6185,7 +8172,8 @@ export const mockApi = {
           : {
               kelly_target_pre_regime:
                 position_pct == null ? null : +(position_pct * 0.55).toFixed(4),
-              kelly_target_post_regime: position_pct == null ? null : +(position_pct * 0.5).toFixed(4),
+              kelly_target_post_regime:
+                position_pct == null ? null : +(position_pct * 0.5).toFixed(4),
               regime_multiplier: +(0.8 + rng() * 0.4).toFixed(3),
               meta_label_composite: 1.0,
               max_position_weight: 1.0,
@@ -6200,7 +8188,7 @@ export const mockApi = {
     // upper-case + de-dupe) so the mock/live parity gate exercises the error
     // path too, not just the happy path.
     const deduped = Array.from(
-      new Set(tickers.map((t) => t.trim().toUpperCase()).filter(Boolean))
+      new Set(tickers.map((t) => t.trim().toUpperCase()).filter(Boolean)),
     );
     if (deduped.length < 2) {
       throw new ApiError("Select at least 2 symbols to compare.", 422);
@@ -6233,14 +8221,16 @@ export const mockApi = {
 
       const rng = seeded([...sym].reduce((a, c) => a + c.charCodeAt(0), 0));
       const scores = CATALOG.flatMap((p) =>
-        p.holdings.filter((x) => x.symbol === sym).map((x) => x.score)
+        p.holdings.filter((x) => x.symbol === sym).map((x) => x.score),
       );
       const score = scores.length
         ? +(scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(3)
         : null;
-      const conviction = score == null ? null : +(0.55 + score * 0.35).toFixed(2);
+      const conviction =
+        score == null ? null : +(0.55 + score * 0.35).toFixed(2);
       const action = score != null && score >= 0.5 ? "BUY" : "HOLD";
-      const kelly_target = score == null ? null : +(Math.max(score, 0) * 0.1).toFixed(4);
+      const kelly_target =
+        score == null ? null : +(Math.max(score, 0) * 0.1).toFixed(4);
 
       // DUK deliberately carries no meta_label_composite/regime_multiplier —
       // both fields are null whenever the strategy engine didn't produce a
@@ -6266,7 +8256,9 @@ export const mockApi = {
         conviction,
         garch_vol: +(0.15 + rng() * 0.35).toFixed(3),
         meta_label_composite: hasRegimeFields ? 1.0 : null,
-        regime_multiplier: hasRegimeFields ? +(0.8 + rng() * 0.4).toFixed(2) : null,
+        regime_multiplier: hasRegimeFields
+          ? +(0.8 + rng() * 0.4).toFixed(2)
+          : null,
         score_components: {
           momentum: +rng().toFixed(3),
           trend: +rng().toFixed(3),
@@ -6280,8 +8272,10 @@ export const mockApi = {
 
     const modules = Array.from(
       new Set(
-        rows.flatMap((r) => (r.score_components ? Object.keys(r.score_components) : []))
-      )
+        rows.flatMap((r) =>
+          r.score_components ? Object.keys(r.score_components) : [],
+        ),
+      ),
     ).sort();
 
     return delay({
@@ -6303,7 +8297,13 @@ export const mockApi = {
       // positions -- a distinct (near-flat, lower-vol) series, not a scaled
       // copy of the equity curve, so the overlay toggle visibly shows a
       // DIFFERENT line (G14).
-      buying_power_curve: synthCurve("account-buying-power", range, 0.01, 0.03, 6100),
+      buying_power_curve: synthCurve(
+        "account-buying-power",
+        range,
+        0.01,
+        0.03,
+        6100,
+      ),
     });
   },
 
@@ -6354,7 +8354,9 @@ export const mockApi = {
     const planned = p.holdings.map((hd) => ({
       symbol: hd.symbol,
       side: "BUY" as const,
-      target_notional: +Math.min(allocated * hd.weight, NOTIONAL_CAP).toFixed(2),
+      target_notional: +Math.min(allocated * hd.weight, NOTIONAL_CAP).toFixed(
+        2,
+      ),
       weight: hd.weight,
       conviction: +(0.55 + hd.score * 0.35).toFixed(2),
       allow_place: false, // mock is review-mode; nothing is ever placeable
@@ -6410,12 +8412,16 @@ export const mockApi = {
         },
         progress: null,
         kill_switch: readKillSwitch(),
-        errors: { generated_at: new Date(now - 5 * 60_000).toISOString(), entry_count: 0, entries: [] },
+        errors: {
+          generated_at: new Date(now - 5 * 60_000).toISOString(),
+          entry_count: 0,
+          entries: [],
+        },
         advisory_only: true,
         dry_run: false,
-  alpaca_paper: false,
+        alpaca_paper: false,
       },
-      120
+      120,
     );
   },
 
@@ -6433,8 +8439,7 @@ export const mockApi = {
         cron: {
           source: "deploy/crontab.txt",
           installed: null,
-          note:
-            "Parsed from the repo file — the intended schedule. This API never runs `crontab -l`, so it cannot confirm what is actually installed on the host; it may differ.",
+          note: "Parsed from the repo file — the intended schedule. This API never runs `crontab -l`, so it cannot confirm what is actually installed on the host; it may differ.",
           entries: [
             {
               schedule: "0 21 * * 1-5",
@@ -6454,7 +8459,8 @@ export const mockApi = {
               schedule: "0 6 * * 0",
               command:
                 "cd /opt/investyo && .venv/bin/python scripts/backfill_edgar_fundamentals.py --tickers all >> /opt/investyo/logs/edgar_backfill.log 2>&1",
-              comment: "Weekly: Full EDGAR backfill sweep (Sundays at 06:00 UTC / 2 AM ET)",
+              comment:
+                "Weekly: Full EDGAR backfill sweep (Sundays at 06:00 UTC / 2 AM ET)",
             },
             {
               schedule: "0 7 3 * *",
@@ -6466,7 +8472,7 @@ export const mockApi = {
           ],
         },
       },
-      80
+      80,
     );
   },
 
@@ -6489,7 +8495,7 @@ export const mockApi = {
   }> {
     return delay(
       { run_id: `orch-mock-${Date.now()}`, state: "queued", mode: "data" },
-      300
+      300,
     );
   },
 
@@ -6500,7 +8506,7 @@ export const mockApi = {
   }> {
     return delay(
       { run_id: `orch-mock-${Date.now()}`, state: "queued", mode: "metrics" },
-      300
+      300,
     );
   },
 
@@ -6509,15 +8515,26 @@ export const mockApi = {
     if (ks.active) {
       return delay(
         {
-          ok: false, run_id: null, state: null, error: "kill_switch_active",
-          existing_run_id: null, kill_switch_reason: ks.reason,
+          ok: false,
+          run_id: null,
+          state: null,
+          error: "kill_switch_active",
+          existing_run_id: null,
+          kill_switch_reason: ks.reason,
         },
-        150
+        150,
       );
     }
     return delay(
-      { ok: true, run_id: `orch-mock-${Date.now()}`, state: "queued", error: null, existing_run_id: null, kill_switch_reason: null },
-      300
+      {
+        ok: true,
+        run_id: `orch-mock-${Date.now()}`,
+        state: "queued",
+        error: null,
+        existing_run_id: null,
+        kill_switch_reason: null,
+      },
+      300,
     );
   },
 
@@ -6539,11 +8556,13 @@ export const mockApi = {
         written: String(seconds),
         applies: "next_daemon_restart",
       },
-      150
+      150,
     );
   },
 
-  async setExecutionMode(req: ExecutionModeUpdateRequest): Promise<ExecutionModeUpdateResult> {
+  async setExecutionMode(
+    req: ExecutionModeUpdateRequest,
+  ): Promise<ExecutionModeUpdateResult> {
     // Mirrors api/pilots_api.py's _require_dangerous_confirmation: every
     // settings_keysets.DANGEROUS_KEYS field this write is about to touch
     // (ADVISORY_ONLY always; DRY_RUN too when mode != "advisory" -- ALPACA_PAPER
@@ -6552,15 +8571,20 @@ export const mockApi = {
     // -- same all-or-nothing, same 422. Hardcoded rather than derived (this file
     // has no settings_keysets.py port) -- assumes these stay in DANGEROUS_KEYS,
     // which MOCK_DANGEROUS_KEYS above (copied from the same real set) also does.
-    const dangerousKeys = req.mode === "advisory" ? ["ADVISORY_ONLY"] : ["ADVISORY_ONLY", "DRY_RUN"];
+    const dangerousKeys =
+      req.mode === "advisory"
+        ? ["ADVISORY_ONLY"]
+        : ["ADVISORY_ONLY", "DRY_RUN"];
     const confirm = req.confirm ?? {};
     const missing = dangerousKeys.filter((k) => !(k in confirm));
-    const mismatched = dangerousKeys.filter((k) => k in confirm && confirm[k] !== k);
+    const mismatched = dangerousKeys.filter(
+      (k) => k in confirm && confirm[k] !== k,
+    );
     if (missing.length || mismatched.length) {
       throw new ApiError(
         `${missing.length ? "confirmation_required" : "confirmation_mismatch"}: this change touches ` +
           `safety-critical setting(s) (${dangerousKeys.join(", ")}) and requires typed confirmation.`,
-        422
+        422,
       );
     }
     return delay(
@@ -6574,7 +8598,7 @@ export const mockApi = {
         applies: "next_daemon_restart",
         note: "Execution mode updated.",
       },
-      150
+      150,
     );
   },
 
@@ -6585,7 +8609,7 @@ export const mockApi = {
         has_account_snapshot: readBrokerageConnected(),
         auto_refresh_enabled: readBrokerageAutoRefreshEnabled(),
       },
-      80
+      80,
     );
   },
 
@@ -6601,7 +8625,10 @@ export const mockApi = {
     return delay(mockLlmStatus(), 80);
   },
 
-  async putLlmSetting(key: string, value: boolean | string): Promise<LlmSettingUpdateResult> {
+  async putLlmSetting(
+    key: string,
+    value: boolean | string,
+  ): Promise<LlmSettingUpdateResult> {
     writeLlmOverride(key, value);
     return delay(
       {
@@ -6613,11 +8640,13 @@ export const mockApi = {
           "and any already-launched pipeline still use the previous value " +
           "until restarted.",
       },
-      150
+      150,
     );
   },
 
-  async connectBrokerage(creds: BrokerageConnectRequest): Promise<BrokerageLoginJob> {
+  async connectBrokerage(
+    creds: BrokerageConnectRequest,
+  ): Promise<BrokerageLoginJob> {
     // Never contacts a real broker and never persists the credential strings
     // themselves -- only a boolean "connected" marker (writeBrokerageConnected,
     // flipped once the job actually SUCCEEDS -- see _mockLoginJobStatus).
@@ -6670,7 +8699,9 @@ export const mockApi = {
     return delay(_mockLoginJobStatus(jobId, job), 80);
   },
 
-  async cancelBrokerageLogin(jobId: string): Promise<BrokerageLoginCancelResult> {
+  async cancelBrokerageLogin(
+    jobId: string,
+  ): Promise<BrokerageLoginCancelResult> {
     const job = _mockLoginJobs[jobId];
     if (!job) throw new ApiError("Unknown login job.", 404);
     job.cancelled = true;
@@ -6686,12 +8717,14 @@ export const mockApi = {
     });
   },
 
-  async getPortfolioAttribution(_lookbackDays = 60): Promise<PortfolioAttribution> {
+  async getPortfolioAttribution(
+    _lookbackDays = 60,
+  ): Promise<PortfolioAttribution> {
     return delay(mockPortfolioAttribution());
   },
 
   async getBrinsonFachlerAttribution(
-    rows: BrinsonFachlerRow[]
+    rows: BrinsonFachlerRow[],
   ): Promise<BrinsonFachlerResult> {
     // Throws ApiError(..., 422) synchronously on structurally bad input --
     // matches the live endpoint's honesty contract (a 422 shows the server's
@@ -6708,7 +8741,10 @@ export const mockApi = {
     return delay(mockForecast(ticker, horizon));
   },
 
-  async getSectorSelection(target: string, n = 3): Promise<SectorSelectionView> {
+  async getSectorSelection(
+    target: string,
+    n = 3,
+  ): Promise<SectorSelectionView> {
     return delay(mockSectorSelection(target, n));
   },
 
@@ -6743,7 +8779,10 @@ export const mockApi = {
   async generateCommentary(ticker: string): Promise<AiCommentaryResponse> {
     const sym = ticker.trim().toUpperCase();
     if (sym === "NVDA") {
-      return delay({ available: false, reason: "missing_key", payload: null }, 400);
+      return delay(
+        { available: false, reason: "missing_key", payload: null },
+        400,
+      );
     }
     return delay(
       {
@@ -6759,7 +8798,7 @@ export const mockApi = {
           invalidation: `A daily close below the 200-day SMA invalidates the uptrend thesis for ${sym}.`,
         },
       },
-      400
+      400,
     );
   },
 
@@ -6775,7 +8814,7 @@ export const mockApi = {
           payload: null,
           chart_png_base64: MOCK_CHART_PNG_BASE64,
         },
-        400
+        400,
       );
     }
     return delay(
@@ -6785,21 +8824,27 @@ export const mockApi = {
         payload: {
           pattern_name: "ascending triangle",
           trend_direction: "bullish",
-          support_levels: ["recent low near the 50-day average", "prior breakout zone"],
+          support_levels: [
+            "recent low near the 50-day average",
+            "prior breakout zone",
+          ],
           resistance_levels: ["swing high from the last rally"],
           narrative: `${sym} is consolidating in a tightening range with a flat resistance line and rising higher-lows underneath it — a classic ascending-triangle continuation setup. A close above the recent swing high would confirm the breakout; volume has been contracting into the apex, typical ahead of a resolution.`,
           confidence: "medium",
         },
         chart_png_base64: MOCK_CHART_PNG_BASE64,
       },
-      400
+      400,
     );
   },
 
   async generateResearch(ticker: string): Promise<AiResearchResponse> {
     const sym = ticker.trim().toUpperCase();
     if (sym === "NVDA") {
-      return delay({ available: false, reason: "disabled", payload: null }, 400);
+      return delay(
+        { available: false, reason: "disabled", payload: null },
+        400,
+      );
     }
     return delay(
       {
@@ -6819,10 +8864,11 @@ export const mockApi = {
             "Announced a new product line extension covered by several trade outlets",
           ],
           data_confidence: "medium",
-          sources_note: "Based on 4 Finnhub headlines from the past 7 days and the most recent earnings date.",
+          sources_note:
+            "Based on 4 Finnhub headlines from the past 7 days and the most recent earnings date.",
         },
       },
-      400
+      400,
     );
   },
 
@@ -6854,12 +8900,18 @@ export const mockApi = {
       z_score_series: [],
     };
     if (!symY || !symX) {
-      return delay({ ...notFoundBase, reason: "Both Symbol Y and Symbol X are required." }, 250);
+      return delay(
+        { ...notFoundBase, reason: "Both Symbol Y and Symbol X are required." },
+        250,
+      );
     }
     if (symY === symX) {
       return delay(
-        { ...notFoundBase, reason: "Symbol Y and Symbol X must be different tickers." },
-        250
+        {
+          ...notFoundBase,
+          reason: "Symbol Y and Symbol X must be different tickers.",
+        },
+        250,
       );
     }
     if (symY === "ZZZ" || symX === "ZZZ") {
@@ -6868,16 +8920,19 @@ export const mockApi = {
           ...notFoundBase,
           reason: `Insufficient aligned history for ${symY}/${symX} — one or both symbols may be unavailable from the provider.`,
         },
-        450
+        450,
       );
     }
 
-    const rng = seeded([...symY, ...symX].reduce((a, c) => a + c.charCodeAt(0), 0));
+    const rng = seeded(
+      [...symY, ...symX].reduce((a, c) => a + c.charCodeAt(0), 0),
+    );
     const z = +((rng() - 0.5) * 6).toFixed(2);
     const halfLife = +(8 + rng() * 40).toFixed(1);
     const rollingP = +(rng() * 0.15).toFixed(4);
     const position = z > 2 ? -1 : z < -2 ? 1 : 0;
-    const halfLifeTradeable = halfLife >= 5 && halfLife <= 60 && rollingP <= 0.1;
+    const halfLifeTradeable =
+      halfLife >= 5 && halfLife <= 60 && rollingP <= 0.1;
     const signal =
       rollingP > 0.1
         ? "No signal — not cointegrated (ADF p>0.10)"
@@ -6890,10 +8945,15 @@ export const mockApi = {
             : "Flat — no entry (|z|<2)";
     const n = 90;
     const series = Array.from({ length: n }, (_, i) => ({
-      date: new Date(Date.now() - (n - i) * 86_400_000).toISOString().slice(0, 10),
+      date: new Date(Date.now() - (n - i) * 86_400_000)
+        .toISOString()
+        .slice(0, 10),
       z_score: +(Math.sin(i / 9 + rng()) * 2 + (rng() - 0.5)).toFixed(2),
     }));
-    series[series.length - 1] = { date: series[series.length - 1].date, z_score: z };
+    series[series.length - 1] = {
+      date: series[series.length - 1].date,
+      z_score: z,
+    };
 
     return delay(
       {
@@ -6912,15 +8972,24 @@ export const mockApi = {
         aligned_bars: 240,
         z_score_series: series,
       },
-      450
+      450,
     );
   },
 
   async scanPairs(req: PairsScanRequest): Promise<PairsScanResult> {
     const requested = Array.from(
-      new Set(req.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))
+      new Set(req.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)),
     );
-    const known = new Set(["XOM", "CVX", "V", "JPM", "MSFT", "AAPL", "HD", "COST"]);
+    const known = new Set([
+      "XOM",
+      "CVX",
+      "V",
+      "JPM",
+      "MSFT",
+      "AAPL",
+      "HD",
+      "COST",
+    ]);
     const missing = requested.filter((s) => !known.has(s));
     const usable = requested.filter((s) => known.has(s));
 
@@ -6934,13 +9003,13 @@ export const mockApi = {
           reason:
             "Insufficient aligned history to scan — need at least two symbols with ~60+ overlapping daily bars after the inner-join.",
         },
-        400
+        400,
       );
     }
 
     const usableSet = new Set(usable);
     const pairs = mockPairs().pairs.filter(
-      (p) => usableSet.has(p.ticker1) && usableSet.has(p.ticker2)
+      (p) => usableSet.has(p.ticker1) && usableSet.has(p.ticker2),
     );
     return delay(
       {
@@ -6953,13 +9022,15 @@ export const mockApi = {
             ? null
             : "No cointegrated pairs found for this universe at the selected p-value with a 5–60 day half-life.",
       },
-      500
+      500,
     );
   },
 
-  async recomputeOptions(req: OptionsRecomputeRequest): Promise<OptionsRecomputeResult> {
+  async recomputeOptions(
+    req: OptionsRecomputeRequest,
+  ): Promise<OptionsRecomputeResult> {
     const requested = Array.from(
-      new Set(req.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))
+      new Set(req.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)),
     );
     const directives: OptionsDirective[] = [];
     const errors: string[] = [];
@@ -6988,8 +9059,16 @@ export const mockApi = {
         : bullish
           ? "Call Debit Spread"
           : "Cash";
-      const action = strategy === "Cash" ? "Wait" : sellRegime ? "Sell to Open" : "Buy to Open";
-      const netPremium = strategy === "Cash" ? 0 : +((sellRegime ? 1 : -1) * (0.3 + rng()) * 2).toFixed(2);
+      const action =
+        strategy === "Cash"
+          ? "Wait"
+          : sellRegime
+            ? "Sell to Open"
+            : "Buy to Open";
+      const netPremium =
+        strategy === "Cash"
+          ? 0
+          : +((sellRegime ? 1 : -1) * (0.3 + rng()) * 2).toFixed(2);
       directives.push({
         Symbol: sym,
         Price: price,
@@ -7002,15 +9081,24 @@ export const mockApi = {
         Aroon_Oscillator: +((rng() - 0.5) * 100).toFixed(1),
         Coppock_Curve: +((rng() - 0.5) * 20).toFixed(1),
         Net_Premium: netPremium,
-        Realizable_Daily_Theta: strategy === "Cash" ? 0 : +(netPremium * 0.03).toFixed(3),
+        Realizable_Daily_Theta:
+          strategy === "Cash" ? 0 : +(netPremium * 0.03).toFixed(3),
         ATM_Delta: +(0.4 + rng() * 0.2).toFixed(3),
         ATM_Gamma: +(rng() * 0.05).toFixed(4),
         ATM_Vega: +(rng() * 0.15).toFixed(3),
         ATM_Theta_Daily: +(-rng() * 0.05).toFixed(3),
-        Short_Strike: strategy === "Cash" ? null : +(price * (sellRegime ? 0.97 : 1.03)).toFixed(2),
-        Long_Strike: strategy === "Cash" ? null : +(price * (sellRegime ? 0.94 : 1.06)).toFixed(2),
-        Short_Delta: strategy === "Cash" ? null : +(sellRegime ? -0.3 : 0.3).toFixed(2),
-        Long_Delta: strategy === "Cash" ? null : +(sellRegime ? -0.15 : 0.15).toFixed(2),
+        Short_Strike:
+          strategy === "Cash"
+            ? null
+            : +(price * (sellRegime ? 0.97 : 1.03)).toFixed(2),
+        Long_Strike:
+          strategy === "Cash"
+            ? null
+            : +(price * (sellRegime ? 0.94 : 1.06)).toFixed(2),
+        Short_Delta:
+          strategy === "Cash" ? null : +(sellRegime ? -0.3 : 0.3).toFixed(2),
+        Long_Delta:
+          strategy === "Cash" ? null : +(sellRegime ? -0.15 : 0.15).toFixed(2),
         Legs: [],
         Integrity_OK: true,
         Integrity_Issues: [],
@@ -7024,13 +9112,13 @@ export const mockApi = {
         market_regime: "RISK ON",
         target_dte: req.target_dte ?? 30,
       },
-      600
+      600,
     );
   },
 
   async getObservabilitySummary(
     range: PerfRange,
-    horizon = 30
+    horizon = 30,
   ): Promise<ObservabilitySummary> {
     return delay(mockObservabilitySummary(range, horizon));
   },
@@ -7039,11 +9127,14 @@ export const mockApi = {
     return delay(
       readObservabilityColdStart()
         ? mockEmptyLogAggregation("No log file yet at logs/investyo.log.")
-        : mockObservabilityLogs(limit)
+        : mockObservabilityLogs(limit),
     );
   },
 
-  async putMacroGate(enabled: boolean, _reason: string): Promise<MacroGateUpdateResult> {
+  async putMacroGate(
+    enabled: boolean,
+    _reason: string,
+  ): Promise<MacroGateUpdateResult> {
     writeMacroGateEnabled(enabled);
     return delay(
       {
@@ -7055,7 +9146,7 @@ export const mockApi = {
           "and any already-launched pipeline still use the previous value " +
           "until restarted.",
       },
-      150
+      150,
     );
   },
 
@@ -7086,21 +9177,41 @@ export const mockApi = {
       calibration: {
         bins: [
           {
-            bin_low: 0.4, bin_high: 0.5, bin_center: 0.45, conviction_mean: 0.46,
-            win_rate: 0.42, count: 12, perfect_calibration: 0.45,
+            bin_low: 0.4,
+            bin_high: 0.5,
+            bin_center: 0.45,
+            conviction_mean: 0.46,
+            win_rate: 0.42,
+            count: 12,
+            perfect_calibration: 0.45,
           },
           {
-            bin_low: 0.5, bin_high: 0.6, bin_center: 0.55, conviction_mean: 0.55,
-            win_rate: 0.58, count: 18, perfect_calibration: 0.55,
+            bin_low: 0.5,
+            bin_high: 0.6,
+            bin_center: 0.55,
+            conviction_mean: 0.55,
+            win_rate: 0.58,
+            count: 18,
+            perfect_calibration: 0.55,
           },
           {
-            bin_low: 0.6, bin_high: 0.7, bin_center: 0.65, conviction_mean: 0.66,
-            win_rate: 0.71, count: 9, perfect_calibration: 0.65,
+            bin_low: 0.6,
+            bin_high: 0.7,
+            bin_center: 0.65,
+            conviction_mean: 0.66,
+            win_rate: 0.71,
+            count: 9,
+            perfect_calibration: 0.65,
           },
           {
             // under min_trades_per_bin -> win_rate null (insufficient data)
-            bin_low: 0.9, bin_high: 1.0, bin_center: 0.95, conviction_mean: 0.95,
-            win_rate: null, count: 2, perfect_calibration: 0.95,
+            bin_low: 0.9,
+            bin_high: 1.0,
+            bin_center: 0.95,
+            conviction_mean: 0.95,
+            win_rate: null,
+            count: 2,
+            perfect_calibration: 0.95,
           },
         ],
         total: 41,
@@ -7124,45 +9235,97 @@ export const mockApi = {
         n_with_exit: 1,
         rows: [
           {
-            symbol: "AAPL", signal_ts: "2026-06-20T14:00:00Z", signal_action: "BUY",
-            conviction: 0.72, action_taken: "acted", model_return: 0.055,
-            actual_return: 0.028, days_held: 14, trade_id: 42, completed: true,
+            symbol: "AAPL",
+            signal_ts: "2026-06-20T14:00:00Z",
+            signal_action: "BUY",
+            conviction: 0.72,
+            action_taken: "acted",
+            model_return: 0.055,
+            actual_return: 0.028,
+            days_held: 14,
+            trade_id: 42,
+            completed: true,
           },
           {
-            symbol: "MSFT", signal_ts: "2026-06-22T14:00:00Z", signal_action: "STRONG BUY",
-            conviction: 0.81, action_taken: "passed", model_return: 0.031,
-            actual_return: null, days_held: null, trade_id: null, completed: true,
+            symbol: "MSFT",
+            signal_ts: "2026-06-22T14:00:00Z",
+            signal_action: "STRONG BUY",
+            conviction: 0.81,
+            action_taken: "passed",
+            model_return: 0.031,
+            actual_return: null,
+            days_held: null,
+            trade_id: null,
+            completed: true,
           },
           {
             // horizon not elapsed -> model_return null, not completed
-            symbol: "NVDA", signal_ts: "2026-07-15T14:00:00Z", signal_action: "BUY",
-            conviction: 0.66, action_taken: "passed", model_return: null,
-            actual_return: null, days_held: null, trade_id: null, completed: false,
+            symbol: "NVDA",
+            signal_ts: "2026-07-15T14:00:00Z",
+            signal_action: "BUY",
+            conviction: 0.66,
+            action_taken: "passed",
+            model_return: null,
+            actual_return: null,
+            days_held: null,
+            trade_id: null,
+            completed: false,
           },
         ],
         reason: null,
       },
       mfe_mae: {
         points: [
-          { symbol: "AAPL", mfe: 0.082, mae: 0.031, edge_ratio: 2.65, conviction: 0.72, action: "BUY" },
-          { symbol: "MSFT", mfe: 0.054, mae: 0.048, edge_ratio: 1.13, conviction: 0.81, action: "HOLD" },
+          {
+            symbol: "AAPL",
+            mfe: 0.082,
+            mae: 0.031,
+            edge_ratio: 2.65,
+            conviction: 0.72,
+            action: "BUY",
+          },
+          {
+            symbol: "MSFT",
+            mfe: 0.054,
+            mae: 0.048,
+            edge_ratio: 1.13,
+            conviction: 0.81,
+            action: "HOLD",
+          },
           // honest null edge_ratio (MAE was 0 -> undefined ratio, not fabricated)
-          { symbol: "XOM", mfe: 0.026, mae: 0.061, edge_ratio: null, conviction: null, action: "SELL" },
+          {
+            symbol: "XOM",
+            mfe: 0.026,
+            mae: 0.061,
+            edge_ratio: null,
+            conviction: null,
+            action: "SELL",
+          },
         ],
         reason: null,
       },
       recent_decisions: {
         decisions: [
           {
-            symbol: "AAPL", action_taken: "acted", signal_action: "BUY", conviction: 0.72,
-            notes: "took full size", timestamp: "2026-07-16T15:12:00Z",
-            signal_ts: "2026-06-20T14:00:00Z", trade_id: 42,
+            symbol: "AAPL",
+            action_taken: "acted",
+            signal_action: "BUY",
+            conviction: 0.72,
+            notes: "took full size",
+            timestamp: "2026-07-16T15:12:00Z",
+            signal_ts: "2026-06-20T14:00:00Z",
+            trade_id: 42,
           },
           {
             // unlinked: no trade matched within 24h -> trade_id null, never fabricated
-            symbol: "MSFT", action_taken: "passed", signal_action: "STRONG BUY", conviction: 0.81,
-            notes: "", timestamp: "2026-07-15T09:03:00Z",
-            signal_ts: "2026-06-22T14:00:00Z", trade_id: null,
+            symbol: "MSFT",
+            action_taken: "passed",
+            signal_action: "STRONG BUY",
+            conviction: 0.81,
+            notes: "",
+            timestamp: "2026-07-15T09:03:00Z",
+            signal_ts: "2026-06-22T14:00:00Z",
+            trade_id: null,
           },
         ],
         reason: null,
@@ -7174,28 +9337,43 @@ export const mockApi = {
     return delay<EdgeByStrategy>({
       rows: [
         {
-          strategy: "trend-following", n_trades: 8, mean_edge_ratio: 2.31,
-          median_edge_ratio: 2.05, mean_mfe: 0.074, mean_mae: 0.033,
+          strategy: "trend-following",
+          n_trades: 8,
+          mean_edge_ratio: 2.31,
+          median_edge_ratio: 2.05,
+          mean_mfe: 0.074,
+          mean_mae: 0.033,
         },
         {
-          strategy: "dip-buyer", n_trades: 5, mean_edge_ratio: 1.42,
-          median_edge_ratio: 1.28, mean_mfe: 0.051, mean_mae: 0.041,
+          strategy: "dip-buyer",
+          n_trades: 5,
+          mean_edge_ratio: 1.42,
+          median_edge_ratio: 1.28,
+          mean_mfe: 0.051,
+          mean_mae: 0.041,
         },
         {
-          strategy: "(untagged)", n_trades: 3, mean_edge_ratio: 0.88,
-          median_edge_ratio: 0.9, mean_mfe: 0.029, mean_mae: 0.036,
+          strategy: "(untagged)",
+          n_trades: 3,
+          mean_edge_ratio: 0.88,
+          median_edge_ratio: 0.9,
+          mean_mfe: 0.029,
+          mean_mae: 0.036,
         },
       ],
       reason: null,
     });
   },
 
-  async logDecision(body: DecisionCreateRequest): Promise<DecisionCreateResult> {
+  async logDecision(
+    body: DecisionCreateRequest,
+  ): Promise<DecisionCreateResult> {
     // Mock trade-link resolution: only an "acted" AAPL decision matches a
     // (mock) trade within 24h -> trade_id set, trade_linked true. Every other
     // case is honestly unlinked (trade_id null) — exercising BOTH render paths
     // ("linked to trade #N" vs "no trade match within 24h").
-    const linked = body.action_taken === "acted" && body.symbol.toUpperCase() === "AAPL";
+    const linked =
+      body.action_taken === "acted" && body.symbol.toUpperCase() === "AAPL";
     const entry = {
       symbol: body.symbol.toUpperCase(),
       action_taken: body.action_taken,
@@ -7210,7 +9388,10 @@ export const mockApi = {
     return delay<DecisionCreateResult>({ ...entry, trade_linked: linked }, 150);
   },
 
-  async getDecisions(opts?: { symbol?: string; limit?: number }): Promise<DecisionEntry[]> {
+  async getDecisions(opts?: {
+    symbol?: string;
+    limit?: number;
+  }): Promise<DecisionEntry[]> {
     let rows = MOCK_DECISION_LOG;
     if (opts?.symbol) {
       const sym = opts.symbol.toUpperCase();
@@ -7223,14 +9404,21 @@ export const mockApi = {
     return delay(MOCK_COMMAND_MANIFEST);
   },
 
-  async getExecutionQueue(params?: ExecutionQueueParams): Promise<ExecutionQueue> {
+  async getExecutionQueue(
+    params?: ExecutionQueueParams,
+  ): Promise<ExecutionQueue> {
     let items = MOCK_EXECUTION_QUEUE.intents;
     if (params) {
       if (params.action && params.action !== "ALL") {
-        items = items.filter((i) => i.action.toUpperCase() === params.action?.toUpperCase());
+        items = items.filter(
+          (i) => i.action.toUpperCase() === params.action?.toUpperCase(),
+        );
       }
       if (params.follow_type && params.follow_type !== "ALL") {
-        items = items.filter((i) => i.follow_type?.toLowerCase() === params.follow_type?.toLowerCase());
+        items = items.filter(
+          (i) =>
+            i.follow_type?.toLowerCase() === params.follow_type?.toLowerCase(),
+        );
       }
       if (params.status_filter && params.status_filter !== "ALL") {
         if (params.status_filter === "Ready") {
@@ -7240,15 +9428,19 @@ export const mockApi = {
         }
       }
       if (params.min_conviction !== undefined && params.min_conviction > 0) {
-        items = items.filter((i) => i.conviction !== null && i.conviction >= (params.min_conviction ?? 0));
+        items = items.filter(
+          (i) =>
+            i.conviction !== null &&
+            i.conviction >= (params.min_conviction ?? 0),
+        );
       }
     }
     const available_follow_types = Array.from(
       new Set(
         MOCK_EXECUTION_QUEUE.intents
           .map((i) => i.follow_type)
-          .filter((v): v is string => Boolean(v))
-      )
+          .filter((v): v is string => Boolean(v)),
+      ),
     ).sort();
     return delay({
       ...MOCK_EXECUTION_QUEUE,
@@ -7260,14 +9452,14 @@ export const mockApi = {
   },
 
   async setStrategyModules(
-    body: StrategyModulesUpdate
+    body: StrategyModulesUpdate,
   ): Promise<StrategyModulesUpdateResult> {
     // Persist so a subsequent GET reflects the change, and set the drift marker
     // (the .env write does not reach the "running process" until restart).
     try {
       localStorage.setItem(
         STRATEGY_KEY,
-        JSON.stringify({ weights: body.weights, disabled: body.disabled })
+        JSON.stringify({ weights: body.weights, disabled: body.disabled }),
       );
       localStorage.setItem(STRATEGY_DRIFT_KEY, "1");
     } catch {
@@ -7292,15 +9484,16 @@ export const mockApi = {
           title: "Daily: Full pipeline refresh + morning digest",
           description: "Runs the master orchestrator",
           schedule: "0 21 * * 1-5",
-          command: "cd /opt/investyo && .venv/bin/python main_orchestrator.py"
+          command: "cd /opt/investyo && .venv/bin/python main_orchestrator.py",
         },
         {
           title: "Daily: Strategy validation staleness",
           description: "Fires a CRITICAL alert",
           schedule: "0 8 * * *",
-          command: "cd /opt/investyo && .venv/bin/python scripts/preflight_check.py"
-        }
-      ]
+          command:
+            "cd /opt/investyo && .venv/bin/python scripts/preflight_check.py",
+        },
+      ],
     };
   },
 
@@ -7310,7 +9503,7 @@ export const mockApi = {
 
   async updateTunables(
     values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {}
+    confirm: SettingsConfirmMap = {},
   ): Promise<TunablesUpdateResult> {
     return delay(applyTunables(values, confirm));
   },
@@ -7321,7 +9514,7 @@ export const mockApi = {
 
   async updateSentimentSettings(
     values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {}
+    confirm: SettingsConfirmMap = {},
   ): Promise<TunablesUpdateResult> {
     return delay(applySentimentTunables(values, confirm));
   },
@@ -7332,7 +9525,7 @@ export const mockApi = {
 
   async updateSectorSelectionSettings(
     values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {}
+    confirm: SettingsConfirmMap = {},
   ): Promise<TunablesUpdateResult> {
     return delay(applySectorSelectionTunables(values, confirm));
   },
@@ -7343,11 +9536,10 @@ export const mockApi = {
 
   async updateFmpSettings(
     values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {}
+    confirm: SettingsConfirmMap = {},
   ): Promise<TunablesUpdateResult> {
     return delay(applyFmpTunables(values, confirm));
   },
-
 
   async getFeatureFlags(): Promise<TunablesResponse> {
     return delay(mockFeatureFlagsTunables());
@@ -7355,7 +9547,7 @@ export const mockApi = {
 
   async updateFeatureFlags(
     values: Record<string, any>,
-    confirm?: SettingsConfirmMap
+    confirm?: SettingsConfirmMap,
   ): Promise<TunablesUpdateResult> {
     return delay(applyFeatureFlagsTunables(values, confirm ?? {}));
   },
@@ -7366,7 +9558,7 @@ export const mockApi = {
 
   async updateEtfTransmissionSettings(
     values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {}
+    confirm: SettingsConfirmMap = {},
   ): Promise<TunablesUpdateResult> {
     return delay(applyEtfTransmissionTunables(values, confirm));
   },
@@ -7377,7 +9569,7 @@ export const mockApi = {
 
   async updateCacheLongShortSettings(
     values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {}
+    confirm: SettingsConfirmMap = {},
   ): Promise<TunablesUpdateResult> {
     return delay(applyCacheLongShortTunables(values, confirm));
   },
@@ -7431,7 +9623,7 @@ export const mockApi = {
   // a small fixed peer list for a couple of fixture symbols, and an honest
   // empty list + reason for anything else (never a fabricated peer group).
   async getPeers(
-    symbol: string
+    symbol: string,
   ): Promise<{ symbol: string; peers: string[]; reason: string | null }> {
     const sym = symbol.toUpperCase().trim();
     const PEER_GROUPS: Record<string, string[]> = {
@@ -7457,7 +9649,10 @@ export const mockApi = {
     });
   },
 
-  async getMacroHistory(series = "VIXCLS", lookbackDays = 180): Promise<MacroHistorySeries> {
+  async getMacroHistory(
+    series = "VIXCLS",
+    lookbackDays = 180,
+  ): Promise<MacroHistorySeries> {
     const seriesId = series.trim().toUpperCase();
     // macro_history has been backfilled for much longer than news_history
     // (the sentiment archive only started 2026-07 -- see getSentimentHistory
@@ -7477,7 +9672,11 @@ export const mockApi = {
       const gap = i === 3;
       points.push({ date, value: gap ? null : +vix.toFixed(2) });
     }
-    return delay<MacroHistorySeries>({ series_id: seriesId, points, reason: null });
+    return delay<MacroHistorySeries>({
+      series_id: seriesId,
+      points,
+      reason: null,
+    });
   },
 
   // Mirrors api/data_api.py::get_quotes's real per-symbol dead-letter
@@ -7504,7 +9703,9 @@ export const mockApi = {
         price,
         bid: +(price - 0.05).toFixed(2),
         ask: +(price + 0.05).toFixed(2),
-        timestamp: new Date(Date.now() - (delayed ? 15 * 60_000 : 2_000)).toISOString(),
+        timestamp: new Date(
+          Date.now() - (delayed ? 15 * 60_000 : 2_000),
+        ).toISOString(),
         is_stale: delayed,
         source: delayed ? "yfinance" : "alpaca",
       };
@@ -7525,18 +9726,60 @@ export const mockApi = {
     // fixture (no conviction/score/price/buy_range/sector) so the UI's "—" path
     // is exercised, never a fabricated 0 (CONSTRAINT #4).
     const all: Recommendation[] = [
-      { symbol: "NVDA", action: "STRONG BUY", conviction: 0.88, score: 118.4, buy_range: "Buy Zone: $118.00 - $126.00", sector: "Information Technology", price: 128.72 },
-      { symbol: "AAPL", action: "BUY", conviction: 0.72, score: 96.8, buy_range: "Buy Zone: $210.00 - $222.00", sector: "Information Technology", price: 224.15 },
-      { symbol: "JPM", action: "BUY", conviction: 0.64, score: 78.9, buy_range: "Buy Zone: $196.00 - $203.00", sector: "Financials", price: 205.6 },
-      { symbol: "XOM", action: "BUY", conviction: 0.58, score: 71.2, buy_range: "Buy Zone: $106.00 - $111.00", sector: "Energy", price: 112.4 },
-      { symbol: "ZZ", action: "BUY", conviction: null, score: null, buy_range: null, sector: null, price: null },
+      {
+        symbol: "NVDA",
+        action: "STRONG BUY",
+        conviction: 0.88,
+        score: 118.4,
+        buy_range: "Buy Zone: $118.00 - $126.00",
+        sector: "Information Technology",
+        price: 128.72,
+      },
+      {
+        symbol: "AAPL",
+        action: "BUY",
+        conviction: 0.72,
+        score: 96.8,
+        buy_range: "Buy Zone: $210.00 - $222.00",
+        sector: "Information Technology",
+        price: 224.15,
+      },
+      {
+        symbol: "JPM",
+        action: "BUY",
+        conviction: 0.64,
+        score: 78.9,
+        buy_range: "Buy Zone: $196.00 - $203.00",
+        sector: "Financials",
+        price: 205.6,
+      },
+      {
+        symbol: "XOM",
+        action: "BUY",
+        conviction: 0.58,
+        score: 71.2,
+        buy_range: "Buy Zone: $106.00 - $111.00",
+        sector: "Energy",
+        price: 112.4,
+      },
+      {
+        symbol: "ZZ",
+        action: "BUY",
+        conviction: null,
+        score: null,
+        buy_range: null,
+        sector: null,
+        price: null,
+      },
     ];
     const recommendations = all.slice(0, Math.max(1, Math.min(limit, 200)));
     return delay<RecommendationsResponse>({
       recommendations,
       count: recommendations.length,
       as_of: "2026-07-11T21:05:00+00:00",
-      reason: recommendations.length ? null : "No BUY-rated recommendations in the latest snapshot yet.",
+      reason: recommendations.length
+        ? null
+        : "No BUY-rated recommendations in the latest snapshot yet.",
     });
   },
 
@@ -7547,10 +9790,12 @@ export const mockApi = {
     });
   },
 
-  async updateDataUniverse(symbols: string[]): Promise<{ status: string; symbols: string[] }> {
+  async updateDataUniverse(
+    symbols: string[],
+  ): Promise<{ status: string; symbols: string[] }> {
     // Mirror the backend PUT: strip/upper/dedupe, then replace the whole list.
     const cleaned = Array.from(
-      new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))
+      new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)),
     );
     MOCK_DATA_UNIVERSE = cleaned;
     return delay({ status: "updated", symbols: [...cleaned] });
@@ -7581,12 +9826,27 @@ export const mockApi = {
       });
     }
     const modules: SignalModuleScore[] = [
-      { name: "timeseries_momentum", score: 0.62, weight: 20, contribution: 12.4 },
-      { name: "cross_sectional_momentum", score: 0.31, weight: 15, contribution: 4.65 },
+      {
+        name: "timeseries_momentum",
+        score: 0.62,
+        weight: 20,
+        contribution: 12.4,
+      },
+      {
+        name: "cross_sectional_momentum",
+        score: 0.31,
+        weight: 15,
+        contribution: 4.65,
+      },
       { name: "multifactor", score: -0.18, weight: 15, contribution: -2.7 },
       { name: "macd_momentum", score: 0.44, weight: 12, contribution: 5.28 },
       // honest null: this module didn't run for the symbol this cycle
-      { name: "rsi2_mean_reversion", score: null, weight: 10, contribution: null },
+      {
+        name: "rsi2_mean_reversion",
+        score: null,
+        weight: 10,
+        contribution: null,
+      },
     ];
     return delay<SignalBreakdown>({
       symbol: s,
@@ -7600,8 +9860,12 @@ export const mockApi = {
   async getSignalImportance(symbols: string[]): Promise<SignalImportance> {
     // Deterministic per the request's symbol set so the fixture is stable
     // across re-renders, but varies if the caller's universe changes.
-    const requested = symbols.map((s) => s.trim().toUpperCase()).filter(Boolean);
-    const rng = seeded(requested.reduce((a, s) => a + s.length, requested.length * 13));
+    const requested = symbols
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean);
+    const rng = seeded(
+      requested.reduce((a, s) => a + s.length, requested.length * 13),
+    );
     const names = [
       "timeseries_momentum",
       "cross_sectional_momentum",
@@ -7647,18 +9911,25 @@ export const mockApi = {
     // rows sum to ~1.0 -- computed AFTER the raw values above are fixed, not
     // interleaved with them, so the denominator is stable regardless of
     // rounding order.
-    const totalContribution = rows.reduce((sum, r) => sum + (r.mean_abs_contribution ?? 0), 0);
+    const totalContribution = rows.reduce(
+      (sum, r) => sum + (r.mean_abs_contribution ?? 0),
+      0,
+    );
     for (const r of rows) {
       r.normalized_contribution =
         r.mean_abs_contribution == null || totalContribution <= 0
           ? null
           : +(r.mean_abs_contribution / totalContribution).toFixed(4);
     }
-    rows.sort((a, b) => (b.mean_abs_contribution ?? -1) - (a.mean_abs_contribution ?? -1));
+    rows.sort(
+      (a, b) =>
+        (b.mean_abs_contribution ?? -1) - (a.mean_abs_contribution ?? -1),
+    );
     return delay<SignalImportance>({
       rows,
       n_symbols_requested: Math.min(requested.length, 25),
-      n_symbols_scored: requested.length > 0 ? Math.max(1, requested.length - 1) : 0,
+      n_symbols_scored:
+        requested.length > 0 ? Math.max(1, requested.length - 1) : 0,
     });
   },
 
@@ -7713,7 +9984,7 @@ export const mockApi = {
         multiplier: 0.5,
       },
       provider_used: "fmp",
-      source_breakdown: { "Reuters": 1, "Bloomberg": 1, "MarketWatch": 1 },
+      source_breakdown: { Reuters: 1, Bloomberg: 1, MarketWatch: 1 },
       raw_sentiment_avg: 0.12,
       dampened_sentiment_score: 0.06,
       attention_score: 1.45,
@@ -7721,7 +9992,10 @@ export const mockApi = {
     });
   },
 
-  async getSentimentHistory(symbol: string, _lookbackDays = 180): Promise<SentimentHistory> {
+  async getSentimentHistory(
+    symbol: string,
+    _lookbackDays = 180,
+  ): Promise<SentimentHistory> {
     const sym = symbol.toUpperCase();
     if (!SYMBOL_UNIVERSE.has(sym)) {
       return delay<SentimentHistory>({
@@ -7817,7 +10091,8 @@ export const mockApi = {
     // Always writable in the mock (matches mockStrategyMatrix's convention
     // above) so the demo can exercise the write flow with zero config.
     const writable = true;
-    const note = "Scan configs are saved immediately and take effect on the agentic-discovery skill's next run.";
+    const note =
+      "Scan configs are saved immediately and take effect on the agentic-discovery skill's next run.";
     if (!configs.some((c) => c.enabled)) {
       return delay({
         generated_at: null,
@@ -7850,16 +10125,18 @@ export const mockApi = {
       created_at: idx >= 0 ? configs[idx].created_at : now,
       updated_at: now,
     };
-    const next = idx >= 0 ? configs.map((c, i) => (i === idx ? row : c)) : [...configs, row];
+    const next =
+      idx >= 0
+        ? configs.map((c, i) => (i === idx ? row : c))
+        : [...configs, row];
     writeScanConfigs(next);
     return delay(
       {
         scan_config: row,
         applies: "next_discovery_run",
-        note:
-          "Saved to output/scan_configs.json. Takes effect the next time the agentic-discovery skill runs a scan — it is not applied automatically.",
+        note: "Saved to output/scan_configs.json. Takes effect the next time the agentic-discovery skill runs a scan — it is not applied automatically.",
       },
-      150
+      150,
     );
   },
 
@@ -7868,7 +10145,10 @@ export const mockApi = {
     // Mirror the writer's strict validation → 422 invalid_symbol (thrown
     // synchronously, like getEquityFundamentals' bad-input branch above).
     if (!MOCK_SYMBOL_RE.test(sym)) {
-      throw new ApiError(`invalid_symbol: '${symbol}' is not a valid ticker symbol.`, 422);
+      throw new ApiError(
+        `invalid_symbol: '${symbol}' is not a valid ticker symbol.`,
+        422,
+      );
     }
     const watched = readWatched();
     const already = watched.includes(sym);
@@ -7884,7 +10164,7 @@ export const mockApi = {
           ? `${sym} is already on the watchlist.`
           : "Added to watchlist.txt — the pipeline will evaluate it on the next run. No order was placed.",
       },
-      150
+      150,
     );
   },
 
@@ -7895,25 +10175,41 @@ export const mockApi = {
     // `ORDER BY created_at DESC`, not fixture declaration order.
     const pending = MOCK_RLHF_PROPOSALS.filter((p) => p.status === "pending")
       .slice()
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )
       .slice(0, cap);
     const reviewed = MOCK_RLHF_PROPOSALS.filter((p) => p.status === "reviewed");
-    const rated = reviewed.filter((p): p is RlhfProposal & { human_rating: 1 | 2 | 3 | 4 | 5 } => p.human_rating != null);
+    const rated = reviewed.filter(
+      (p): p is RlhfProposal & { human_rating: 1 | 2 | 3 | 4 | 5 } =>
+        p.human_rating != null,
+    );
 
-    const distribution: Record<string, number> = { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 };
+    const distribution: Record<string, number> = {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0,
+      "5": 0,
+    };
     for (const p of rated) {
-      distribution[String(p.human_rating)] = (distribution[String(p.human_rating)] ?? 0) + 1;
+      distribution[String(p.human_rating)] =
+        (distribution[String(p.human_rating)] ?? 0) + 1;
     }
 
     const kpis: RlhfKpis = {
-      pending_count: MOCK_RLHF_PROPOSALS.filter((p) => p.status === "pending").length,
+      pending_count: MOCK_RLHF_PROPOSALS.filter((p) => p.status === "pending")
+        .length,
       reviewed_count: reviewed.length,
       average_human_rating: rated.length
         ? rated.reduce((sum, p) => sum + p.human_rating, 0) / rated.length
         : null,
       rating_distribution: distribution,
-      auto_approved_count: MOCK_RLHF_PROPOSALS.filter((p) => p.auto_approved).length,
-      sft_exported_count: MOCK_RLHF_PROPOSALS.filter((p) => p.sft_exported).length,
+      auto_approved_count: MOCK_RLHF_PROPOSALS.filter((p) => p.auto_approved)
+        .length,
+      sft_exported_count: MOCK_RLHF_PROPOSALS.filter((p) => p.sft_exported)
+        .length,
     };
 
     return delay({
@@ -7927,16 +10223,25 @@ export const mockApi = {
     });
   },
 
-  async submitRlhfReview(id: number, body: RlhfReviewSubmitRequest): Promise<RlhfReviewSubmitResult> {
+  async submitRlhfReview(
+    id: number,
+    body: RlhfReviewSubmitRequest,
+  ): Promise<RlhfReviewSubmitResult> {
     const proposal = MOCK_RLHF_PROPOSALS.find((p) => p.id === id);
     if (!proposal) {
       throw new ApiError(`not_found: no RLHF proposal with id ${id}.`, 404);
     }
     if (proposal.status === "reviewed") {
-      throw new ApiError(`already_reviewed: proposal ${id} was already reviewed.`, 409);
+      throw new ApiError(
+        `already_reviewed: proposal ${id} was already reviewed.`,
+        409,
+      );
     }
     if (body.human_rating < 1 || body.human_rating > 5) {
-      throw new ApiError("invalid_rating: human_rating must be between 1 and 5.", 422);
+      throw new ApiError(
+        "invalid_rating: human_rating must be between 1 and 5.",
+        422,
+      );
     }
 
     proposal.status = "reviewed";
@@ -7951,7 +10256,7 @@ export const mockApi = {
 
   async exportRlhfSft(): Promise<RlhfSftExportResult> {
     const eligible = MOCK_RLHF_PROPOSALS.filter(
-      (p) => p.status === "reviewed" && p.human_rating === 5 && !p.sft_exported
+      (p) => p.status === "reviewed" && p.human_rating === 5 && !p.sft_exported,
     );
     for (const p of eligible) p.sft_exported = true;
     return delay(
@@ -7960,42 +10265,73 @@ export const mockApi = {
         file: "output/rlhf_sft_export.jsonl",
         proposal_ids: eligible.map((p) => p.id),
       },
-      200
+      200,
     );
   },
 
-  async createJob(job_type: string, params?: Record<string, unknown>): Promise<JobRecord> {
+  async createJob(
+    job_type: string,
+    params?: Record<string, unknown>,
+  ): Promise<JobRecord> {
     // job_type === "command" mirrors the backend's two HIGH_STAKES_COMMANDS
     // gates (see commandParse.ts) so the frontend can exercise the full
     // confirm/error flow offline, plus the app_shell.py hard-disallow.
     if (job_type === "command") {
       const command = typeof params?.command === "string" ? params.command : "";
-      const args = Array.isArray(params?.args) ? (params.args as unknown[]) : [];
+      const args = Array.isArray(params?.args)
+        ? (params.args as unknown[])
+        : [];
       const confirmed = params?.confirm === true;
 
       if (command === "app_shell.py") {
         throw new ApiError("app_shell.py cannot be executed remotely.", 400);
       }
-      if (command === "execution.kill_switch" && (args.includes("--activate") || args.includes("--deactivate")) && !confirmed) {
-        throw new ApiError("confirmation required: this command activates/deactivates the global kill switch.", 400);
+      if (
+        command === "execution.kill_switch" &&
+        (args.includes("--activate") || args.includes("--deactivate")) &&
+        !confirmed
+      ) {
+        throw new ApiError(
+          "confirmation required: this command activates/deactivates the global kill switch.",
+          400,
+        );
       }
-      if (command === "main.py" && args.includes("--refresh-account") && !confirmed) {
-        throw new ApiError("confirmation required: this command forces a fresh Robinhood login.", 400);
+      if (
+        command === "main.py" &&
+        args.includes("--refresh-account") &&
+        !confirmed
+      ) {
+        throw new ApiError(
+          "confirmation required: this command forces a fresh Robinhood login.",
+          400,
+        );
       }
     }
 
     const job_id = `mock-job-${Object.keys(_mockJobs).length + 1}`;
-    const commandName = job_type === "command" && typeof params?.command === "string" ? params.command : null;
+    const commandName =
+      job_type === "command" && typeof params?.command === "string"
+        ? params.command
+        : null;
     const createdAt = new Date().toISOString();
-    _mockJobs[job_id] = { jobType: job_type, commandName, startedAt: Date.now(), createdAt, cancelled: false };
-    return delay({
-      job_id,
-      job_type: job_type as any,
-      status: "running",
-      cancellable: job_type !== "orchestrator",
-      command_name: commandName,
-      created_at: createdAt,
-    }, 150);
+    _mockJobs[job_id] = {
+      jobType: job_type,
+      commandName,
+      startedAt: Date.now(),
+      createdAt,
+      cancelled: false,
+    };
+    return delay(
+      {
+        job_id,
+        job_type: job_type as any,
+        status: "running",
+        cancellable: job_type !== "orchestrator",
+        command_name: commandName,
+        created_at: createdAt,
+      },
+      150,
+    );
   },
 
   async getJobStatus(job_id: string): Promise<JobRecord> {
@@ -8012,19 +10348,25 @@ export const mockApi = {
         : Date.now() - job.startedAt < 2000
           ? "running"
           : "success";
-    return delay({
-      job_id,
-      job_type: (job?.jobType ?? "preflight") as any,
-      status,
-      exit_code: status === "running" ? null : status === "cancelled" ? -15 : 0,
-      is_running: status === "running",
-      cancellable,
-      command_name: job?.commandName ?? null,
-      created_at: job?.createdAt ?? new Date().toISOString(),
-    }, 100);
+    return delay(
+      {
+        job_id,
+        job_type: (job?.jobType ?? "preflight") as any,
+        status,
+        exit_code:
+          status === "running" ? null : status === "cancelled" ? -15 : 0,
+        is_running: status === "running",
+        cancellable,
+        command_name: job?.commandName ?? null,
+        created_at: job?.createdAt ?? new Date().toISOString(),
+      },
+      100,
+    );
   },
 
-  async cancelJob(job_id: string): Promise<{ job_id: string; cancelled: boolean }> {
+  async cancelJob(
+    job_id: string,
+  ): Promise<{ job_id: string; cancelled: boolean }> {
     const job = _mockJobs[job_id];
     if (job) job.cancelled = true;
     return delay({ job_id, cancelled: true }, 100);
@@ -8034,9 +10376,10 @@ export const mockApi = {
     return delay(
       {
         restarting: true,
-        message: "(mock) Process exiting in ~0.5s. No real process was restarted.",
+        message:
+          "(mock) Process exiting in ~0.5s. No real process was restarted.",
       },
-      150
+      150,
     );
   },
 
@@ -8072,7 +10415,7 @@ export const mockApi = {
         applies: "immediately",
         note: `(mock) Retry launched for ${sym} (advisory-only — no orders placed).`,
       },
-      200
+      200,
     );
   },
 
@@ -8121,7 +10464,8 @@ export const mockApi = {
     // never fabricated for an id that wouldn't actually have one.
     const has_baseline = true;
     if (version) {
-      const known = version === "baseline" || fx.cachedVersions.includes(version);
+      const known =
+        version === "baseline" || fx.cachedVersions.includes(version);
       if (!known) {
         return delay<PromptBody>({
           id,
@@ -8138,8 +10482,14 @@ export const mockApi = {
       // real endpoint's contract — source is only populated for the
       // full-resolution-chain lookup below).
       return delay<PromptBody>({
-        id, version, found: true, body: fx.body, source: null, reason: null,
-        cached_versions: fx.cachedVersions, has_baseline,
+        id,
+        version,
+        found: true,
+        body: fx.body,
+        source: null,
+        reason: null,
+        cached_versions: fx.cachedVersions,
+        has_baseline,
       });
     }
     const pinned = _MOCK_PROMPT_PINS[id] ?? null;
@@ -8163,11 +10513,13 @@ export const mockApi = {
       delete _MOCK_PROMPT_PINS[id];
     } else {
       const fx = _MOCK_PROMPT_FIXTURES[id];
-      const known = Boolean(fx) && (req.version === "baseline" || fx.cachedVersions.includes(req.version));
+      const known =
+        Boolean(fx) &&
+        (req.version === "baseline" || fx.cachedVersions.includes(req.version));
       if (!known) {
         throw new ApiError(
           `Version '${req.version}' of '${id}' not found in the manifest, disk cache, or committed baseline.`,
-          422
+          422,
         );
       }
       _MOCK_PROMPT_PINS[id] = req.version;
@@ -8184,7 +10536,7 @@ export const mockApi = {
             ? `Pin cleared for '${id}'. Saved to .env; effective on next daemon restart.`
             : `Pinned '${id}' -> '${req.version}'. Saved to .env; effective on next daemon restart.`,
       },
-      150
+      150,
     );
   },
 
@@ -8206,7 +10558,7 @@ export const mockApi = {
         applies: "next_daemon_restart",
         note: `(mock) Synced ${default_tickers.length} symbol(s). Submitted to DEFAULT_TICKERS in .env; effective on next daemon restart.`,
       },
-      600
+      600,
     );
   },
 
@@ -8230,8 +10582,16 @@ export const mockApi = {
     return delay({
       macro_data: [
         { subject: "VIX (Volatility)", value: 78, trend: "up" as const },
-        { subject: "Sahm Rule (Recession Signal)", value: 92, trend: "flat" as const },
-        { subject: "High-Yield OAS (Credit Stress)", value: 84, trend: "down" as const },
+        {
+          subject: "Sahm Rule (Recession Signal)",
+          value: 92,
+          trend: "flat" as const,
+        },
+        {
+          subject: "High-Yield OAS (Credit Stress)",
+          value: 84,
+          trend: "down" as const,
+        },
         { subject: "Yield Curve (10Y-2Y)", value: 61, trend: "flat" as const },
         { subject: "Market Regime", value: 100, trend: "flat" as const },
       ],
@@ -8267,12 +10627,42 @@ export const mockApi = {
     // flagged is_synthetic so the chart shows a Demo Data badge.
     return delay({
       data: [
-        { name: "Jan", "SF-GARCH-LSTM": 2.1, "Bond-BERT": 1.8, "Benchmark (SPY)": 1.5 },
-        { name: "Feb", "SF-GARCH-LSTM": 4.5, "Bond-BERT": 3.2, "Benchmark (SPY)": 3.0 },
-        { name: "Mar", "SF-GARCH-LSTM": 3.8, "Bond-BERT": 4.0, "Benchmark (SPY)": 2.8 },
-        { name: "Apr", "SF-GARCH-LSTM": 6.2, "Bond-BERT": 5.5, "Benchmark (SPY)": 4.2 },
-        { name: "May", "SF-GARCH-LSTM": 8.0, "Bond-BERT": 6.8, "Benchmark (SPY)": 5.5 },
-        { name: "Jun", "SF-GARCH-LSTM": 10.5, "Bond-BERT": 8.2, "Benchmark (SPY)": 6.1 },
+        {
+          name: "Jan",
+          "SF-GARCH-LSTM": 2.1,
+          "Bond-BERT": 1.8,
+          "Benchmark (SPY)": 1.5,
+        },
+        {
+          name: "Feb",
+          "SF-GARCH-LSTM": 4.5,
+          "Bond-BERT": 3.2,
+          "Benchmark (SPY)": 3.0,
+        },
+        {
+          name: "Mar",
+          "SF-GARCH-LSTM": 3.8,
+          "Bond-BERT": 4.0,
+          "Benchmark (SPY)": 2.8,
+        },
+        {
+          name: "Apr",
+          "SF-GARCH-LSTM": 6.2,
+          "Bond-BERT": 5.5,
+          "Benchmark (SPY)": 4.2,
+        },
+        {
+          name: "May",
+          "SF-GARCH-LSTM": 8.0,
+          "Bond-BERT": 6.8,
+          "Benchmark (SPY)": 5.5,
+        },
+        {
+          name: "Jun",
+          "SF-GARCH-LSTM": 10.5,
+          "Bond-BERT": 8.2,
+          "Benchmark (SPY)": 6.1,
+        },
       ],
       is_synthetic: true,
     });
@@ -8293,7 +10683,14 @@ export const mockApi = {
   async getForecastBackfill() {
     return delay(mockForecastBackfill());
   },
-  async runForecastBackfill(_params?: { tickers?: string[]; start_date?: string; end_date?: string; use_fmp?: boolean; strategy_ids?: string[]; theta_c?: number }) {
+  async runForecastBackfill(_params?: {
+    tickers?: string[];
+    start_date?: string;
+    end_date?: string;
+    use_fmp?: boolean;
+    strategy_ids?: string[];
+    theta_c?: number;
+  }) {
     // Single-flight, mirrors the real backend's ml/forecast_backfill_job.py
     // guard: reject (409-equivalent) rather than silently starting a second
     // concurrent run -- guarded synchronously (before any job mutation), so
@@ -8302,7 +10699,7 @@ export const mockApi = {
     if (existingJobId) {
       throw new ForecastBackfillConflictError(
         "A forecast backfill run is already in progress.",
-        existingJobId
+        existingJobId,
       );
     }
     _mockForecastBackfillJobSeq++;
@@ -8332,13 +10729,13 @@ export const mockApi = {
     job.cancelled = true;
     return delay(_mockForecastBackfillJobStatus(jobId, job));
   },
-  
+
   // ---- Cache Long/Short ----
-  async getClsConcentratedPositions(): Promise<{ positions: CacheLongShortConcentratedPosition[] }> {
+  async getClsConcentratedPositions(): Promise<{
+    positions: CacheLongShortConcentratedPosition[];
+  }> {
     return delay({
-      positions: [
-        { ticker: "AAPL", market_value: 12000, pct_equity: 0.25 },
-      ]
+      positions: [{ ticker: "AAPL", market_value: 12000, pct_equity: 0.25 }],
     });
   },
   async getClsDashboard(): Promise<CacheLongShortDashboard> {
@@ -8349,17 +10746,29 @@ export const mockApi = {
         long_exposure: 45000,
         short_exposure: 20000,
         net_exposure: 25000,
-        gross_exposure: 65000
-      }
+        gross_exposure: 65000,
+      },
     });
   },
   async getClsPendingApprovals(): Promise<CacheLongShortPendingTrade[]> {
     return delay([
-      { lot_id: 101, position_id: 1, cost_basis: 150.5, unrealized_loss_pct: -0.12 },
-      { lot_id: 102, position_id: 2, cost_basis: 300.2, unrealized_loss_pct: -0.07 },
+      {
+        lot_id: 101,
+        position_id: 1,
+        cost_basis: 150.5,
+        unrealized_loss_pct: -0.12,
+      },
+      {
+        lot_id: 102,
+        position_id: 2,
+        cost_basis: 300.2,
+        unrealized_loss_pct: -0.07,
+      },
     ]);
   },
-  async simulateCls(req: CacheLongShortSimulateRequest): Promise<CacheLongShortSimulateResult> {
+  async simulateCls(
+    req: CacheLongShortSimulateRequest,
+  ): Promise<CacheLongShortSimulateResult> {
     // "ZZZ" is this codebase's established honesty-branch trigger for
     // on-demand analyze/simulate mocks (see analyzePairs above) --
     // exercises the "no usable proxy hedge found" path a real ticker with
@@ -8378,20 +10787,24 @@ export const mockApi = {
       reason: null,
       beta: 1.2,
       proxy_ticker: "XLK",
-      correlation_coefficient: 0.85
+      correlation_coefficient: 0.85,
     });
   },
-  async startCls(req: CacheLongShortStartRequest): Promise<CacheLongShortStartResult> {
+  async startCls(
+    req: CacheLongShortStartRequest,
+  ): Promise<CacheLongShortStartResult> {
     return delay({
       status: "started",
       position_id: 99,
-      ticker: req.ticker
+      ticker: req.ticker,
     });
   },
-  async approveClsBulk(lotIds: number[]): Promise<CacheLongShortApproveBulkResult> {
+  async approveClsBulk(
+    lotIds: number[],
+  ): Promise<CacheLongShortApproveBulkResult> {
     return delay({
       status: "approved",
-      count: lotIds.length
+      count: lotIds.length,
     });
   },
   async getPaperBrokerAccount() {
@@ -8413,7 +10826,7 @@ export const mockApi = {
     return buildTunablesResponse(
       PAPER_BROKER_TUNABLE_DEFS,
       "mock_paper_broker_tunables",
-      "mock_paper_broker_drift"
+      "mock_paper_broker_drift",
     );
   },
   async updatePaperBrokerSettings(update: any, confirm?: any) {
@@ -8422,12 +10835,16 @@ export const mockApi = {
       PAPER_BROKER_TUNABLE_DEFS,
       "mock_paper_broker_tunables",
       "mock_paper_broker_drift",
-      confirm
+      confirm,
     );
   },
   // ---- Live Trade Approvals ----
   async getPendingLiveTrades() {
-    return delay({ proposals: mockLiveTradeProposals.filter((p) => p.status === "pending_approval") });
+    return delay({
+      proposals: mockLiveTradeProposals.filter(
+        (p) => p.status === "pending_approval",
+      ),
+    });
   },
   async approveLiveTrade(token: string) {
     const proposal = mockLiveTradeProposals.find((p) => p.token === token);
@@ -8451,7 +10868,6 @@ export const mockApi = {
   },
 };
 
-
 // ---------------------------------------------------------------------------
 // Report Library (G5) + Dead-Letter Queue (G6) fixtures.
 //
@@ -8468,16 +10884,56 @@ export const mockApi = {
 // per-test-override convention (see Commands.test.tsx).
 // ---------------------------------------------------------------------------
 const MOCK_REPORTS: ReportFile[] = [
-  { name: "daily_report.html", kind: "daily_report", size: 48213, mtime: "2026-07-30T21:05:11+00:00" },
-  { name: "daily_report_dashboard.html", kind: "dashboard", size: 1931842, mtime: "2026-07-30T06:02:47+00:00" },
-  { name: "volatility_bands_dashboard.html", kind: "dashboard", size: 512340, mtime: "2026-07-30T06:02:51+00:00" },
-  { name: "briefing_2026-07-30.md", kind: "briefing", size: 2104, mtime: "2026-07-30T12:00:03+00:00" },
-  { name: "briefing_2026-07-29.md", kind: "briefing", size: 1987, mtime: "2026-07-29T12:00:04+00:00" },
-  { name: "trend_following_validation_summary.json", kind: "validation_summary", size: 918, mtime: "2026-07-28T18:22:10+00:00" },
-  { name: "validation_trend-following_20260728183012.html", kind: "validation_html", size: 76004, mtime: "2026-07-28T18:30:12+00:00" },
+  {
+    name: "daily_report.html",
+    kind: "daily_report",
+    size: 48213,
+    mtime: "2026-07-30T21:05:11+00:00",
+  },
+  {
+    name: "daily_report_dashboard.html",
+    kind: "dashboard",
+    size: 1931842,
+    mtime: "2026-07-30T06:02:47+00:00",
+  },
+  {
+    name: "volatility_bands_dashboard.html",
+    kind: "dashboard",
+    size: 512340,
+    mtime: "2026-07-30T06:02:51+00:00",
+  },
+  {
+    name: "briefing_2026-07-30.md",
+    kind: "briefing",
+    size: 2104,
+    mtime: "2026-07-30T12:00:03+00:00",
+  },
+  {
+    name: "briefing_2026-07-29.md",
+    kind: "briefing",
+    size: 1987,
+    mtime: "2026-07-29T12:00:04+00:00",
+  },
+  {
+    name: "trend_following_validation_summary.json",
+    kind: "validation_summary",
+    size: 918,
+    mtime: "2026-07-28T18:22:10+00:00",
+  },
+  {
+    name: "validation_trend-following_20260728183012.html",
+    kind: "validation_html",
+    size: 76004,
+    mtime: "2026-07-28T18:30:12+00:00",
+  },
   // Honesty branch: listed successfully (stat succeeded) but unreadable/
   // malformed at content-read time -- see MOCK_REPORT_CONTENT below.
-  { name: "corrupt_validation_summary.json", kind: "validation_summary", size: 41, mtime: "2026-07-27T09:10:00+00:00" },
+  {
+    name: "corrupt_validation_summary.json",
+    kind: "validation_summary",
+    size: 41,
+    mtime: "2026-07-27T09:10:00+00:00",
+  },
 ];
 
 const MOCK_REPORT_MANIFEST: ReportManifest = {
@@ -8603,12 +11059,38 @@ const MOCK_DEAD_LETTER: DeadLetterQueue = {
 // a wall-to-wall happy path.
 function mockAiDisagreements(): AiDisagreementsResponse {
   const rows = [
-    { symbol: "AAPL", advisory_action: "BUY", claude_verdict: "bullish", gemini_verdict: "bullish", disagreement: false },
-    { symbol: "NVDA", advisory_action: "STRONG BUY", claude_verdict: "bullish", gemini_verdict: "bearish", disagreement: true },
-    { symbol: "MSFT", advisory_action: "HOLD", claude_verdict: "neutral", gemini_verdict: null, disagreement: false },
-    { symbol: "DUK", advisory_action: "SELL", claude_verdict: null, gemini_verdict: null, disagreement: false },
+    {
+      symbol: "AAPL",
+      advisory_action: "BUY",
+      claude_verdict: "bullish",
+      gemini_verdict: "bullish",
+      disagreement: false,
+    },
+    {
+      symbol: "NVDA",
+      advisory_action: "STRONG BUY",
+      claude_verdict: "bullish",
+      gemini_verdict: "bearish",
+      disagreement: true,
+    },
+    {
+      symbol: "MSFT",
+      advisory_action: "HOLD",
+      claude_verdict: "neutral",
+      gemini_verdict: null,
+      disagreement: false,
+    },
+    {
+      symbol: "DUK",
+      advisory_action: "SELL",
+      claude_verdict: null,
+      gemini_verdict: null,
+      disagreement: false,
+    },
   ];
-  const bothPresent = rows.filter((r) => r.claude_verdict !== null && r.gemini_verdict !== null).length;
+  const bothPresent = rows.filter(
+    (r) => r.claude_verdict !== null && r.gemini_verdict !== null,
+  ).length;
   const disagreements = rows.filter((r) => r.disagreement).length;
   return {
     rows,
@@ -8627,8 +11109,14 @@ function mockAiDisagreements(): AiDisagreementsResponse {
 export function mockAiDisagreementsEmpty(): AiDisagreementsResponse {
   return {
     rows: [],
-    summary: { total_symbols: 0, both_present: 0, agreements: 0, disagreements: 0 },
-    reason: "No state snapshot yet — run the pipeline to populate the signal universe.",
+    summary: {
+      total_symbols: 0,
+      both_present: 0,
+      agreements: 0,
+      disagreements: 0,
+    },
+    reason:
+      "No state snapshot yet — run the pipeline to populate the signal universe.",
   };
 }
 
@@ -8654,14 +11142,70 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
     timestamp: new Date().toISOString(),
     horizons: [10, 30, 60, 90],
     metrics: {
-      timeseries_momentum_10d: { accuracy: 0.5215, auc: 0.5420, n_train: 9480, n_test: 0, split_date: "CPCV", is_active: true },
-      timeseries_momentum_30d: { accuracy: 0.5340, auc: 0.5580, n_train: 9416, n_test: 0, split_date: "CPCV", is_active: true },
-      timeseries_momentum_60d: { accuracy: 0.5480, auc: 0.5720, n_train: 9320, n_test: 0, split_date: "CPCV", is_active: true },
-      timeseries_momentum_90d: { accuracy: 0.5620, auc: 0.5910, n_train: 9224, n_test: 0, split_date: "CPCV", is_active: true },
-      rsi2_mean_reversion_10d: { accuracy: 0.5180, auc: 0.5310, n_train: 6820, n_test: 0, split_date: "CPCV", is_active: true },
-      rsi2_mean_reversion_30d: { accuracy: 0.5410, auc: 0.5640, n_train: 6754, n_test: 0, split_date: "CPCV", is_active: true },
-      rsi2_mean_reversion_60d: { accuracy: 0.5590, auc: 0.5830, n_train: 6658, n_test: 0, split_date: "CPCV", is_active: true },
-      rsi2_mean_reversion_90d: { accuracy: 0.5740, auc: 0.6050, n_train: 6562, n_test: 0, split_date: "CPCV", is_active: true },
+      timeseries_momentum_10d: {
+        accuracy: 0.5215,
+        auc: 0.542,
+        n_train: 9480,
+        n_test: 0,
+        split_date: "CPCV",
+        is_active: true,
+      },
+      timeseries_momentum_30d: {
+        accuracy: 0.534,
+        auc: 0.558,
+        n_train: 9416,
+        n_test: 0,
+        split_date: "CPCV",
+        is_active: true,
+      },
+      timeseries_momentum_60d: {
+        accuracy: 0.548,
+        auc: 0.572,
+        n_train: 9320,
+        n_test: 0,
+        split_date: "CPCV",
+        is_active: true,
+      },
+      timeseries_momentum_90d: {
+        accuracy: 0.562,
+        auc: 0.591,
+        n_train: 9224,
+        n_test: 0,
+        split_date: "CPCV",
+        is_active: true,
+      },
+      rsi2_mean_reversion_10d: {
+        accuracy: 0.518,
+        auc: 0.531,
+        n_train: 6820,
+        n_test: 0,
+        split_date: "CPCV",
+        is_active: true,
+      },
+      rsi2_mean_reversion_30d: {
+        accuracy: 0.541,
+        auc: 0.564,
+        n_train: 6754,
+        n_test: 0,
+        split_date: "CPCV",
+        is_active: true,
+      },
+      rsi2_mean_reversion_60d: {
+        accuracy: 0.559,
+        auc: 0.583,
+        n_train: 6658,
+        n_test: 0,
+        split_date: "CPCV",
+        is_active: true,
+      },
+      rsi2_mean_reversion_90d: {
+        accuracy: 0.574,
+        auc: 0.605,
+        n_train: 6562,
+        n_test: 0,
+        split_date: "CPCV",
+        is_active: true,
+      },
       // Illustrative "Diagnostic" (is_active: false) row -- any registered
       // SignalModule with meta_label_features declared can train here, but
       // ml/forecast_backfill.py only marks the fixed
@@ -8669,7 +11213,14 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
       // trio as `is_active: true`. Keeping a false-branch example in the
       // mock exercises the "Diagnostic" badge and bottom-of-table sort in
       // tests, rather than only ever rendering the all-Active happy path.
-      macd_momentum_10d: { accuracy: 0.5040, auc: 0.5080, n_train: 5210, n_test: 0, split_date: "CPCV", is_active: false },
+      macd_momentum_10d: {
+        accuracy: 0.504,
+        auc: 0.508,
+        n_train: 5210,
+        n_test: 0,
+        split_date: "CPCV",
+        is_active: false,
+      },
     },
     tickers: ["AAPL", "MSFT", "AMZN", "NVDA", "JPM", "JNJ", "XOM", "WMT"],
     total_rows: 11080,
@@ -8683,8 +11234,6 @@ export const MOCK_META = {
   minAmount: MIN_AMOUNT,
   sectors: SECTORS,
 };
-
-
 
 // Mirrors the real api/pilots_api.py::_PAPER_BROKER_GROUPS exactly (field
 // names, types, and defaults) -- this fixture previously invented fields
@@ -8704,7 +11253,8 @@ const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
     type: "string",
     value: "fmp_paper",
     default: "fmp_paper",
-    description: "Selects the active broker backend ('alpaca' or 'fmp_paper'). Defaults to 'fmp_paper'. A runtime guard forces 'alpaca' if 'fmp_paper' is used while genuinely going live. 'robinhood' is reserved for a future automated broker; any unrecognized value falls through to 'alpaca'.",
+    description:
+      "Selects the active broker backend ('alpaca' or 'fmp_paper'). Defaults to 'fmp_paper'. A runtime guard forces 'alpaca' if 'fmp_paper' is used while genuinely going live. 'robinhood' is reserved for a future automated broker; any unrecognized value falls through to 'alpaca'.",
   },
   {
     group: "Paper Broker Configuration",
@@ -8715,7 +11265,8 @@ const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
     min: 0,
     max: 10000000,
     step: 1000,
-    description: "Starting cash balance seeded into a fresh paper trading account the first time it's constructed. Only takes effect when BROKER_BACKEND='fmp_paper'.",
+    description:
+      "Starting cash balance seeded into a fresh paper trading account the first time it's constructed. Only takes effect when BROKER_BACKEND='fmp_paper'.",
   },
   {
     group: "Paper Broker Configuration",
@@ -8723,7 +11274,8 @@ const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
     type: "boolean",
     value: true,
     default: true,
-    description: "Gates POST /pilots/paper-broker/reset. If false, resets are blocked.",
+    description:
+      "Gates POST /pilots/paper-broker/reset. If false, resets are blocked.",
   },
 ];
 
@@ -8837,4 +11389,3 @@ let mockLiveTradeProposals: LiveTradeProposal[] = [
 export function __setMockLiveTradeProposals(proposals: LiveTradeProposal[]) {
   mockLiveTradeProposals = proposals;
 }
-
