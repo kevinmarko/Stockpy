@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "aea65831f2f34a5a80312cbb7ccb5734307a0ec2",
+    "git_commit": "3af227405366e3ae1a9ccf1e2336d92141c5611f",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3008,7 +3008,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 374,
+    "files_scanned": 375,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3036,10 +3036,10 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 715,
+      "total_reads": 716,
       "distinct_fields": 226,
       "counts": {
-        "OUTPUT_DIR": 128,
+        "OUTPUT_DIR": 129,
         "SIGNAL_WEIGHTS": 21,
         "DASHBOARD_REFRESH_SECONDS": 18,
         "DISABLED_SIGNAL_MODULES": 14,
@@ -3268,8 +3268,8 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 259,
-      "distinct_fields": 157,
+      "total_reads": 261,
+      "distinct_fields": 159,
       "counts": {
         "FMP_API_KEY": 11,
         "ADVISORY_ONLY": 8,
@@ -3399,6 +3399,7 @@
         "GDELT_RETRY_BACKOFF_SECONDS": 1,
         "LLM_COMMENTARY_CACHE_PATH": 1,
         "LLM_STATUS_MAX_AGE_HOURS": 1,
+        "LOCAL_DATA_ROOT": 1,
         "MARKET_DATA_LATENCY_TRACKING_ENABLED": 1,
         "MARKET_DATA_WS_RECONNECT_BASE_SECONDS": 1,
         "MARKET_DATA_WS_RECONNECT_MAX_SECONDS": 1,
@@ -3409,6 +3410,7 @@
         "NEWS_LOOKBACK_DAYS": 1,
         "OPAL_RESEARCH_TIMEOUT_SECONDS": 1,
         "OPTIONS_MATRIX_ENABLED": 1,
+        "OUTPUT_DIR": 1,
         "PAIRS_SNAPSHOT_ENABLED": 1,
         "PAIRS_SNAPSHOT_MAX_PAIRS": 1,
         "PAPER_TRADING_START_DATE": 1,

@@ -67,6 +67,10 @@ def _settings(tmp_path: Path, **overrides) -> MagicMock:
     m.ALPACA_PAPER = overrides.get("ALPACA_PAPER", True)
     m.DRY_RUN = overrides.get("DRY_RUN", False)
     m.OUTPUT_DIR = overrides.get("OUTPUT_DIR", tmp_path)
+    # LOCAL_DATA_ROOT (PR #718) — default to a private tmp_path subdirectory so
+    # the OUTPUT_DIR/LOCAL_DATA_ROOT parity check (TestOutputDirMatchesLocalDataRoot)
+    # never touches the real machine's actual ~/.stockpy_local.
+    m.LOCAL_DATA_ROOT = overrides.get("LOCAL_DATA_ROOT", tmp_path / "local_data_root")
     m.PAPER_TRADING_START_DATE = overrides.get("PAPER_TRADING_START_DATE", None)
     # ADVISORY_ONLY defaults to True (project default) so tests that call
     # run_checks() without an override don't trigger the broker checks.
@@ -1867,6 +1871,355 @@ class TestNoStrayDatabaseFiles:
 
         assert len(results) == 1
         assert results[0].name == "no_stray_database_files"
+        assert results[0].passed
+        assert results[0].warning
+        assert all(r.passed for r in results)  # exit-code-relevant condition
+
+
+# ---------------------------------------------------------------------------
+# output_dir_matches_local_data_root
+# ---------------------------------------------------------------------------
+
+class TestOutputDirMatchesLocalDataRoot:
+    """check_output_dir_matches_local_data_root() is a WARNING-ONLY diagnostic
+    tripwire for the OUTPUT_DIR-migration incident: a stale/legacy
+    ``OUTPUT_DIR=./output`` line in ``.env`` (predating settings.LOCAL_DATA_ROOT
+    entirely) silently and completely defeated the OUTPUT_DIR half of the
+    LOCAL_DATA_ROOT migration -- state_snapshot.json, daemon.json, heartbeat.txt,
+    decision_log.jsonl, and execution_queue.json kept writing to the old
+    repo-relative path while everything anchored directly to LOCAL_DATA_ROOT
+    (the DB, models, caches, logs) correctly moved.
+
+    Every test uses ``patch("scripts.preflight_check.settings", s)`` (this
+    module's shared convention, since the check reads ``settings.OUTPUT_DIR``/
+    ``settings.LOCAL_DATA_ROOT`` at call time) with both fields pointed at
+    private ``tmp_path`` subdirectories, so nothing here ever touches the real
+    machine's actual settings or its real ``~/.stockpy_local``.
+    """
+
+    def test_output_dir_derived_from_local_data_root_passes_cleanly(self, tmp_path):
+        """(a) OUTPUT_DIR unset/derived -- i.e. it already equals
+        LOCAL_DATA_ROOT / "output", exactly what the model_validator would
+        have produced with no override -- must PASS with no warning noise."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        local_data_root = tmp_path / "stockpy_local"
+        local_data_root.mkdir()
+        output_dir = local_data_root / "output"
+        output_dir.mkdir()
+
+        s = _settings(tmp_path, OUTPUT_DIR=output_dir, LOCAL_DATA_ROOT=local_data_root)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_output_dir_matches_local_data_root()
+
+        assert r.passed
+        assert not r.warning
+        assert r.name == "output_dir_matches_local_data_root"
+        assert "matches the LOCAL_DATA_ROOT-derived default" in r.reason
+
+    def test_explicit_override_to_different_path_warns_with_both_paths_named(self, tmp_path):
+        """(b) OUTPUT_DIR explicitly overridden to a DIFFERENT directory (the
+        real incident's exact shape: a stale ./output left over from before
+        LOCAL_DATA_ROOT existed) must produce a WARNING (never a blocking
+        FAIL) naming both the actual OUTPUT_DIR and the LOCAL_DATA_ROOT-derived
+        path it would otherwise be, plus the actionable fix."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        local_data_root = tmp_path / "stockpy_local"
+        local_data_root.mkdir()
+        stale_output_dir = tmp_path / "legacy_repo_output"
+        stale_output_dir.mkdir()
+
+        s = _settings(tmp_path, OUTPUT_DIR=stale_output_dir, LOCAL_DATA_ROOT=local_data_root)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_output_dir_matches_local_data_root()
+
+        assert r.passed  # WARNING, never a blocking FAIL
+        assert r.warning is True
+        assert str(stale_output_dir.resolve()) in r.reason
+        assert str((local_data_root / "output").resolve()) in r.reason
+        assert "OUTPUT_DIR=" in r.reason
+        assert "LOCAL_DATA_ROOT" in r.reason
+        assert "state_snapshot.json" in r.reason
+        assert "daemon.json" in r.reason
+        assert "heartbeat.txt" in r.reason
+        assert "decision_log.jsonl" in r.reason
+        assert "execution_queue.json" in r.reason
+
+    def test_override_coincidentally_matching_derived_path_passes_cleanly(self, tmp_path):
+        """(c) An OUTPUT_DIR override that happens to coincidentally resolve
+        to the exact same path LOCAL_DATA_ROOT / "output" would derive --
+        e.g. via a non-normalized string containing a redundant ".." segment
+        -- must PASS with no false alarm."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        local_data_root = tmp_path / "stockpy_local"
+        local_data_root.mkdir()
+        output_dir = local_data_root / "output"
+        output_dir.mkdir()
+        # A differently-spelled but equivalent path once resolved: goes down
+        # into a sibling dir and back up into "output".
+        coincidental_override = local_data_root / "output" / ".." / "output"
+
+        s = _settings(
+            tmp_path, OUTPUT_DIR=coincidental_override, LOCAL_DATA_ROOT=local_data_root
+        )
+        with patch("scripts.preflight_check.settings", s):
+            r = check_output_dir_matches_local_data_root()
+
+        assert r.passed
+        assert not r.warning
+        assert "matches the LOCAL_DATA_ROOT-derived default" in r.reason
+
+    def test_missing_output_dir_degrades_to_clean_pass_never_raises(self, tmp_path):
+        """A None OUTPUT_DIR (should not occur in production once the
+        model_validator has run, but this check must never assume that)
+        degrades to a clean, non-crashing PASS."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        s = _settings(tmp_path, OUTPUT_DIR=None, LOCAL_DATA_ROOT=tmp_path / "stockpy_local")
+        with patch("scripts.preflight_check.settings", s):
+            r = check_output_dir_matches_local_data_root()  # must not raise
+
+        assert r.passed
+        assert not r.warning
+
+    def test_settings_attribute_access_raising_degrades_to_warning_pass_never_fail(self, tmp_path):
+        """A broken settings object itself must not become a new failure mode
+        for the go-live gate -- mirrors check_no_stray_database_files's own
+        raising-resolver test."""
+        from scripts.preflight_check import check_output_dir_matches_local_data_root
+
+        class _BrokenSettings:
+            @property
+            def OUTPUT_DIR(self):
+                raise RuntimeError("settings broken")
+
+            LOCAL_DATA_ROOT = None
+
+        with patch("scripts.preflight_check.settings", _BrokenSettings()):
+            r = check_output_dir_matches_local_data_root()  # must not raise
+
+        assert r.passed
+        assert r.warning is True
+
+    def test_included_in_all_checks(self):
+        from scripts.preflight_check import ALL_CHECKS, check_output_dir_matches_local_data_root
+        assert check_output_dir_matches_local_data_root in ALL_CHECKS
+
+    def test_run_checks_never_fails_gate_on_output_dir_mismatch(self, tmp_path):
+        """End-to-end: a mismatched OUTPUT_DIR surfaces in run_checks() results
+        as warning=True and does not, by itself, cause main()'s exit code to
+        be 1 (warnings don't count toward the fail total). ALL_CHECKS is
+        patched to just this one check so the test is isolated from every
+        other check's environment requirements.
+        """
+        from scripts.preflight_check import (
+            run_checks,
+            check_output_dir_matches_local_data_root,
+        )
+
+        local_data_root = tmp_path / "stockpy_local"
+        local_data_root.mkdir()
+        stale_output_dir = tmp_path / "legacy_repo_output"
+        stale_output_dir.mkdir()
+
+        s = _settings(tmp_path, OUTPUT_DIR=stale_output_dir, LOCAL_DATA_ROOT=local_data_root)
+        with patch("scripts.preflight_check.ALL_CHECKS", [check_output_dir_matches_local_data_root]), \
+             patch("scripts.preflight_check.settings", s):
+            results = run_checks(skip=[])
+
+        assert len(results) == 1
+        assert results[0].name == "output_dir_matches_local_data_root"
+        assert results[0].passed
+        assert results[0].warning
+
+
+# ---------------------------------------------------------------------------
+# daemon_pid_alive
+# ---------------------------------------------------------------------------
+
+class TestDaemonPidAlive:
+    """check_daemon_pid_alive() is a WARNING-ONLY diagnostic cross-check that
+    sits right next to heartbeat_fresh: heartbeat.txt is written ONLY by
+    main_orchestrator.main()'s own lifecycle and is permanently absent under
+    a persistent daemon deployment (desktop/orchestrator_daemon.py bypasses
+    it entirely), so a stale/missing heartbeat_fresh reading is ambiguous on
+    its own. This check answers the question directly: is the daemon
+    process itself alive on this host right now, per an externally-verified
+    os.kill(pid, 0) probe (pilots.run_status._pid_alive) against
+    OUTPUT_DIR/daemon.json -- never a blocking failure.
+
+    Every test uses ``patch("scripts.preflight_check.settings", s)`` (this
+    module's shared convention) with OUTPUT_DIR pointed at a private
+    ``tmp_path`` subdirectory, and patches ``pilots.run_status.os.kill``
+    (never the real OS) to control pid liveness deterministically -- the
+    exact isolation pattern already established in
+    ``tests/test_run_status.py``.
+    """
+
+    def test_no_daemon_json_passes_cleanly_no_warning(self, tmp_path):
+        """No daemon.json at all (fresh clone, CI, or an advisory-only
+        deployment that never runs the persistent daemon) is not evidence of
+        anything wrong -- clean PASS, no warning noise."""
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_daemon_pid_alive()
+
+        assert r.passed
+        assert not r.warning
+        assert r.name == "daemon_pid_alive"
+        assert "No daemon.json found" in r.reason
+
+    def test_malformed_json_degrades_to_warning_never_raises(self, tmp_path):
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        (tmp_path / "daemon.json").write_text("{not valid json", encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_daemon_pid_alive()  # must not raise
+
+        assert r.passed  # warning, never a blocking FAIL
+        assert r.warning is True
+        assert "Could not read/parse" in r.reason
+
+    def test_non_dict_json_degrades_to_warning_never_raises(self, tmp_path):
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        (tmp_path / "daemon.json").write_text("[1, 2, 3]", encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_daemon_pid_alive()
+
+        assert r.passed
+        assert r.warning is True
+        assert "Could not read/parse" in r.reason
+
+    def test_live_pid_passes_cleanly_and_explains_heartbeat_ambiguity(self, tmp_path):
+        """(the operator's real scenario) A live daemon pid -> clean PASS,
+        no warning, and the reason explicitly explains that a stale
+        heartbeat_fresh reading alongside this is EXPECTED, not an outage."""
+        from scripts.preflight_check import check_daemon_pid_alive
+        from pilots import run_status
+
+        payload = {
+            "pid": 4242, "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", return_value=None):
+            r = check_daemon_pid_alive()
+
+        assert r.passed
+        assert not r.warning
+        assert "IS alive right now" in r.reason
+        assert "4242" in r.reason
+        assert "EXPECTED under a daemon deployment" in r.reason
+
+    def test_dead_pid_warns_with_restart_instructions(self, tmp_path):
+        """(the operator's other real scenario) A stale daemon.json naming a
+        pid that no longer exists -> WARNING naming the pid and giving the
+        exact restart command, never a blocking FAIL."""
+        from scripts.preflight_check import check_daemon_pid_alive
+        from pilots import run_status
+
+        payload = {
+            "pid": 9999, "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", side_effect=ProcessLookupError):
+            r = check_daemon_pid_alive()
+
+        assert r.passed  # warning, never a blocking FAIL
+        assert r.warning is True
+        assert "NOT alive" in r.reason
+        assert "9999" in r.reason
+        assert "python -m desktop.orchestrator_daemon --interval N" in r.reason
+
+    def test_unusable_pid_value_warns_unknown_never_raises(self, tmp_path):
+        """A malformed pid (e.g. a string, or missing entirely) is
+        unknowable -- CONSTRAINT #4: never collapse to a fabricated
+        alive/dead claim; degrades to an honest warning-PASS."""
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        payload = {
+            "pid": "not-a-pid", "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s):
+            r = check_daemon_pid_alive()  # must not raise
+
+        assert r.passed
+        assert r.warning is True
+        assert "Could not determine" in r.reason
+
+    def test_pid_alive_import_raising_degrades_to_warning_never_fail(self, tmp_path):
+        """A broken pilots.run_status import/call must not become a new
+        failure mode for the go-live gate -- mirrors this file's other
+        diagnostic checks' raising-dependency tests."""
+        from scripts.preflight_check import check_daemon_pid_alive
+
+        payload = {
+            "pid": 4242, "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.settings", s), \
+             patch("pilots.run_status._pid_alive", side_effect=RuntimeError("boom")):
+            r = check_daemon_pid_alive()  # must not raise
+
+        assert r.passed
+        assert r.warning is True
+        assert "Could not probe daemon pid liveness" in r.reason
+
+    def test_included_in_all_checks(self):
+        from scripts.preflight_check import ALL_CHECKS, check_daemon_pid_alive
+        assert check_daemon_pid_alive in ALL_CHECKS
+
+    def test_not_in_advisory_auto_skip(self):
+        """Unlike heartbeat_fresh, this diagnostic is useful regardless of
+        ADVISORY_ONLY -- it must not be silently skipped in advisory mode."""
+        from scripts.preflight_check import _ADVISORY_AUTO_SKIP
+        assert "daemon_pid_alive" not in _ADVISORY_AUTO_SKIP
+
+    def test_run_checks_never_fails_gate_on_dead_daemon_pid(self, tmp_path):
+        """End-to-end: a dead daemon pid surfaces in run_checks() results as
+        warning=True and does not, by itself, cause main()'s exit code to be
+        1 (warnings don't count toward the fail total). ALL_CHECKS is
+        patched to just this one check so the test is isolated from every
+        other check's environment requirements.
+        """
+        from scripts.preflight_check import run_checks, check_daemon_pid_alive
+        from pilots import run_status
+
+        payload = {
+            "pid": 9999, "state": "started", "interval_seconds": 300,
+            "started_at": "2026-08-13T05:00:00+00:00", "stopped_at": None,
+            "port": 8601, "pilots_api_port": None,
+        }
+        (tmp_path / "daemon.json").write_text(json.dumps(payload), encoding="utf-8")
+        s = _settings(tmp_path, OUTPUT_DIR=tmp_path)
+        with patch("scripts.preflight_check.ALL_CHECKS", [check_daemon_pid_alive]), \
+             patch("scripts.preflight_check.settings", s), \
+             patch.object(run_status.os, "kill", side_effect=ProcessLookupError):
+            results = run_checks(skip=[])
+
+        assert len(results) == 1
+        assert results[0].name == "daemon_pid_alive"
         assert results[0].passed
         assert results[0].warning
         assert all(r.passed for r in results)  # exit-code-relevant condition

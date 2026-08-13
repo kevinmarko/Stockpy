@@ -138,7 +138,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 374,
+  "files_scanned": 375,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -419,15 +419,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 782,
+    "attr": 783,
     "factory_param": 4,
-    "getattr_const": 259,
+    "getattr_const": 261,
     "os_environ": 25
   },
   "read_forms_distinct_fields": {
     "attr": 229,
     "factory_param": 4,
-    "getattr_const": 157,
+    "getattr_const": 159,
     "os_environ": 18
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
