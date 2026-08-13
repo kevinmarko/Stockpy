@@ -513,6 +513,47 @@ class TestModuleSurface:
         assert FT is ForecastTracker
 
 
+class TestDefaultDbPathResolvesThroughDbConfig:
+    """Regression coverage for a real incident: ForecastTracker.__init__ used
+    to default db_path to the bare literal "quant_platform.db" (CWD-relative),
+    bypassing db_config.resolve_database_url()/settings.LOCAL_DATA_ROOT
+    entirely -- every sibling store (data/historical_store.py,
+    data/paper_account_store.py, transactions_store.py, ...) resolves through
+    that seam, but this one didn't. Confirmed live: with
+    FORECAST_SKILL_WEIGHTING_ENABLED=true (a real operator's actual .env),
+    main_orchestrator.py's EngineContext.build() constructs a bare
+    ForecastTracker() every cycle, so this wrote ~2 million real
+    forecast_errors rows to a stray CWD-relative file that never migrated
+    alongside the rest of the platform's data when settings.LOCAL_DATA_ROOT
+    was introduced -- a live split-brain between the intended shared location
+    and this one stray file, undetected until caught by direct inspection."""
+
+    def test_omitted_db_path_resolves_via_resolve_database_url(self, monkeypatch, tmp_path):
+        fake_db = str(tmp_path / "resolved.db")
+        monkeypatch.setattr(
+            "db_config.resolve_database_url", lambda: f"sqlite:///{fake_db}"
+        )
+        tracker = ForecastTracker()
+        assert tracker._db_path == fake_db
+
+    def test_explicit_db_path_still_wins(self, tmp_path):
+        explicit = str(tmp_path / "explicit.db")
+        tracker = ForecastTracker(db_path=explicit)
+        assert tracker._db_path == explicit
+
+    def test_non_sqlite_database_url_falls_back_to_the_historical_literal(self, monkeypatch):
+        """This class only ever talks to sqlite (sqlite3.connect(), not
+        SQLAlchemy) -- an operator-configured postgresql:// DATABASE_URL
+        can't be honored here, so it degrades to the pre-fix literal rather
+        than raising or silently mis-resolving."""
+        monkeypatch.setattr(
+            "db_config.resolve_database_url",
+            lambda: "postgresql://user:pass@host/db",
+        )
+        tracker = ForecastTracker()
+        assert tracker._db_path == "quant_platform.db"
+
+
 class TestGetForecastReliabilityCurve:
     """Tests for get_forecast_reliability_curve() -- distinct from
     evaluation_engine.py's calibration_curve() (conviction-vs-win-rate from

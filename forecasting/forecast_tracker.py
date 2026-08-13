@@ -120,7 +120,23 @@ class ForecastTracker:
         ON forecast_errors (symbol, model_name, horizon_days, forecast_ts)
     """
 
-    def __init__(self, db_path: str = "quant_platform.db", *, readonly: bool = False) -> None:
+    def __init__(self, db_path: Optional[str] = None, *, readonly: bool = False) -> None:
+        if db_path is None:
+            # This class talks to sqlite directly (sqlite3.connect(), not
+            # SQLAlchemy), so it needs a bare filesystem path -- not the
+            # sqlite:///<path> URL db_config.resolve_database_url() returns.
+            # Only ever resolves to something other than settings.LOCAL_DATA_ROOT
+            # / "quant_platform.db" if the operator has explicitly set a custom
+            # DATABASE_URL; a non-sqlite (e.g. postgresql://) override falls
+            # back to the historical CWD-relative literal, since this class has
+            # never supported any backend other than sqlite.
+            from db_config import resolve_database_url
+            resolved = resolve_database_url()
+            if resolved.startswith("sqlite"):
+                from sqlalchemy.engine import make_url
+                db_path = make_url(resolved).database or "quant_platform.db"
+            else:
+                db_path = "quant_platform.db"
         self._db_path = db_path
         self._readonly = readonly
         # ONE reused sqlite connection (opened lazily on first data-method use)
