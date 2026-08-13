@@ -161,4 +161,108 @@ describe("ExecutionQueueSection (real mock API)", () => {
       expect.objectContaining({ follow_type: "trend-following" })
     );
   });
+
+  describe("expanded row: signal panel + review-decision flow", () => {
+    it("expanding a row renders its SignalContributionPanel and real strategy/sources/price metadata", async () => {
+      renderSection();
+      const rows = await screen.findAllByTestId("execution-intent-row");
+      const aaplRow = rows.find((r) => r.textContent?.includes("AAPL"))!;
+
+      fireEvent.click(within(aaplRow).getByRole("button", { name: /Toggle details/i }));
+
+      // SignalContributionPanel's own module bars come from GET
+      // /metrics/signals/{symbol} rendered via recharts, which never
+      // measures real pixel sizes in jsdom -- so, matching this codebase's
+      // chart-testing convention (see SignalContributionPanel.test.tsx),
+      // assert on the chart's mount point rather than chart-internal tick
+      // text, which is enough to prove the panel actually mounted and
+      // fetched, not just that the drawer opened.
+      await waitFor(() => {
+        expect(aaplRow.querySelector(".recharts-responsive-container")).not.toBeNull();
+      });
+
+      // The queue's own real attribution fields (types.ts step 3 additions),
+      // never fabricated client-side.
+      expect(within(aaplRow).getByText(/timeseries_momentum/)).toBeInTheDocument();
+      expect(within(aaplRow).getByText(/fmp_news, edgar_8k/)).toBeInTheDocument();
+      expect(within(aaplRow).getByText(/\$231\.42/)).toBeInTheDocument();
+    });
+
+    it("'Mark as Reviewed' logs an 'acted' decision via api.logDecision and never touches an order-placement endpoint", async () => {
+      const logSpy = vi.spyOn(api, "logDecision");
+      renderSection();
+      const rows = await screen.findAllByTestId("execution-intent-row");
+      const aaplRow = rows.find((r) => r.textContent?.includes("AAPL"))!;
+      fireEvent.click(within(aaplRow).getByRole("button", { name: /Toggle details/i }));
+
+      fireEvent.click(await within(aaplRow).findByRole("button", { name: /Mark as Reviewed/i }));
+
+      await waitFor(() => {
+        expect(within(aaplRow).getByText("✓ Reviewed")).toBeInTheDocument();
+      });
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ symbol: "AAPL", action_taken: "acted", signal_action: "BUY" })
+      );
+      // The only client exposing order placement is the Robinhood MCP itself
+      // (reached solely from a live Claude Code session per this component's
+      // own docstring) -- nothing on the `api` client used here has such a
+      // method, so there is structurally no other call this component could
+      // have made.
+      expect(Object.keys(api)).not.toContain("placeOrder");
+      expect(Object.keys(api).some((k) => /placeorder|submitorder|executeorder/i.test(k))).toBe(false);
+    });
+
+    it("'Pass' logs a 'passed' decision and shows the passed status, without calling logDecision twice", async () => {
+      const logSpy = vi.spyOn(api, "logDecision");
+      renderSection();
+      const rows = await screen.findAllByTestId("execution-intent-row");
+      const tslaRow = rows.find((r) => r.textContent?.includes("TSLA"))!;
+      fireEvent.click(within(tslaRow).getByRole("button", { name: /Toggle details/i }));
+
+      fireEvent.click(await within(tslaRow).findByRole("button", { name: /^Pass$/i }));
+
+      await waitFor(() => {
+        expect(within(tslaRow).getByText("✗ Passed")).toBeInTheDocument();
+      });
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ symbol: "TSLA", action_taken: "passed" })
+      );
+      // Once reviewed, the Pass/Mark-as-Reviewed buttons are gone -- can't
+      // double-log a decision for the same row.
+      expect(within(tslaRow).queryByRole("button", { name: /^Pass$/i })).not.toBeInTheDocument();
+      expect(within(tslaRow).queryByRole("button", { name: /Mark as Reviewed/i })).not.toBeInTheDocument();
+    });
+
+    it("shows the non-advisory operator-review copy pointing at the robinhood-execution skill when advisoryOnly is false", async () => {
+      // ExecutionModeCtx defaults advisoryOnly=true with no provider; render
+      // with a real ExecutionModeProvider whose underlying automation-status
+      // fetch is live-mode so advisoryOnly resolves false.
+      const { ExecutionModeProvider } = await import("./ExecutionModeContext");
+      vi.spyOn(api, "getAutomationStatus").mockResolvedValue({
+        advisory_only: false,
+        alpaca_paper: false,
+        dry_run: false,
+        kill_switch: { active: false, reason: null },
+        daemon: { alive: true },
+        pipeline: { snapshot_age_seconds: 5 },
+      } as any);
+
+      render(
+        <MemoryRouter>
+          <ExecutionModeProvider>
+            <ExecutionQueueSection />
+          </ExecutionModeProvider>
+        </MemoryRouter>
+      );
+      const rows = await screen.findAllByTestId("execution-intent-row");
+      const aaplRow = rows.find((r) => r.textContent?.includes("AAPL"))!;
+      fireEvent.click(within(aaplRow).getByRole("button", { name: /Toggle details/i }));
+
+      expect(
+        await within(aaplRow).findByText(/robinhood-execution skill in Claude Code/i)
+      ).toBeInTheDocument();
+    });
+  });
 });

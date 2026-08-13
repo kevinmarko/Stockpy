@@ -10,6 +10,7 @@ import type {
 import { useApi } from "../hooks/useApi";
 import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useMutation } from "../hooks/useMutation";
+import { useDebounce } from "../hooks/useDebounce";
 import { Button, ErrorState, Input, InfoTip, Loading, Notice, Select, StaleDataNotice } from "../components/ui";
 import { Modal } from "../components/Modal";
 import { TabGuide } from "../components/TabGuide";
@@ -978,6 +979,12 @@ export function OptionsMatrix() {
   const [openSymbol, setOpenSymbol] = useState<string | null>(null);
   const [showRecompute, setShowRecompute] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // Debounced before it drives the `visible` useMemo below -- the
+  // directive-list filter/sort is real recomputation work (not just a
+  // string comparison), so an un-debounced per-keystroke value would
+  // re-filter/re-sort on every character typed. Matches the pattern
+  // SymbolInput.tsx already uses for its own search input.
+  const debouncedSearchQuery = useDebounce(searchQuery, 150);
   const { openChat } = useChat();
 
   const back = () => (window.history.length > 1 ? nav(-1) : nav("/"));
@@ -991,7 +998,7 @@ export function OptionsMatrix() {
   const visible = useMemo(() => {
     const activeFilter = FILTERS.find((f) => f.key === filter)!;
     const rows = directives.filter(
-      (d) => activeFilter.test(d) && d.Symbol.toLowerCase().includes(searchQuery.toLowerCase())
+      (d) => activeFilter.test(d) && d.Symbol.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
     );
     const sorted = [...rows];
     if (sort === "premium") sorted.sort(byNum((d) => d.Net_Premium));
@@ -999,7 +1006,7 @@ export function OptionsMatrix() {
     else if (sort === "sigma") sorted.sort(byNum((d) => d.Sigma_GARCH));
     else sorted.sort((a, b) => a.Symbol.localeCompare(b.Symbol));
     return sorted;
-  }, [directives, filter, sort, searchQuery]);
+  }, [directives, filter, sort, debouncedSearchQuery]);
 
   const openDirective = openSymbol
     ? directives.find((d) => d.Symbol === openSymbol) ?? null

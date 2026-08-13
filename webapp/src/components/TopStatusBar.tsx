@@ -10,6 +10,7 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { useAutoRefresh } from "./AutoRefreshContext";
 import { computeMarketSession } from "../marketSession";
 import { useExecutionMode } from "../hooks/useExecutionMode";
+import { Chip } from "./ui";
 import type { ObservabilitySummary } from "../api/types";
 
 const AUTOMATION_POLL_MS = 30_000;
@@ -27,7 +28,7 @@ export function TopStatusBar() {
 
   const { safetyTelemetryEnabled, autoRefreshIntervalMs } = useAutoRefresh();
 
-  const { data: automationData, reload: reloadAutomation, error: automationError } = useExecutionMode();
+  const { data: automationData, reload: reloadAutomation, error: automationError, mode } = useExecutionMode();
   // Kill-switch/heartbeat telemetry -- deliberately outside the
   // market-session/visibility/category auto-refresh gates (a plain usePoll,
   // not useAutoPoll). A stale kill-switch reading is a safety issue, not a
@@ -143,6 +144,16 @@ export function TopStatusBar() {
                 ⚠
               </span>
             )}
+          </div>
+
+          {/* Execution mode — from the shared ExecutionModeContext (single
+              GET /automation/status poll, de-duplicated across this bar,
+              AgenticTrading, and ExecutionQueueSection). */}
+          <div style={{ display: "flex", alignItems: "center" }}>
+            <Chip
+              label={`Mode: ${mode}`}
+              tone={mode === "LIVE" ? "decline" : mode === "PAPER" ? "caution" : "muted"}
+            />
           </div>
 
           {/* Macro Regime — read-only; there is no operator override for the

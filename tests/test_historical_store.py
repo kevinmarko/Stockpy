@@ -346,6 +346,85 @@ class TestGetBars:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Phase 1 — TestGetBarsBulk (2026-08 performance fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestGetBarsBulk:
+    """get_bars_bulk() concurrently fetches multiple symbols via a bounded
+    ThreadPoolExecutor. Two concerns proven here: (1) the method actually
+    exists and runs without NameError (PR 725's version omitted the
+    `ThreadPoolExecutor` import entirely, guaranteeing one on every call);
+    (2) one symbol's failure never drops any other symbol's successful
+    result (CLAUDE.md's per-ticker try/except convention).
+    """
+
+    def test_mixed_success_and_failure_isolates_per_symbol(self, tmp_path, monkeypatch):
+        """One symbol raising inside get_bars() must not affect the others --
+        the bulk call returns only the symbols that actually succeeded."""
+        store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        good_df = _make_ohlcv(10)
+
+        def _fake_get_bars(symbol, lookback_days=504, *, provider=None):
+            if symbol == "BAD":
+                raise RuntimeError("provider exploded for BAD")
+            return good_df
+
+        monkeypatch.setattr(store, "get_bars", _fake_get_bars)
+
+        result = store.get_bars_bulk(["AAPL", "BAD", "MSFT"], lookback_days=30)
+
+        assert set(result.keys()) == {"AAPL", "MSFT"}
+        assert "BAD" not in result
+        for df in result.values():
+            assert not df.empty
+
+    def test_multi_symbol_call_exercises_thread_pool_without_nameerror(self, tmp_path, monkeypatch):
+        """A basic multi-symbol call with workers > 1 must not raise NameError
+        (the exact bug PR 725 shipped by omitting the ThreadPoolExecutor
+        import) and must return a result for every symbol."""
+        from settings import settings as _settings
+
+        store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        good_df = _make_ohlcv(10)
+        monkeypatch.setattr(store, "get_bars", lambda symbol, lookback_days=504, **kw: good_df)
+        monkeypatch.setattr(_settings, "DATA_FETCH_MAX_CONCURRENCY", 4, raising=False)
+
+        symbols = ["AAPL", "MSFT", "GOOG", "TSLA"]
+        result = store.get_bars_bulk(symbols, lookback_days=30)
+
+        assert set(result.keys()) == set(symbols)
+
+    def test_empty_symbol_list_returns_empty_dict(self, tmp_path):
+        store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        assert store.get_bars_bulk([], lookback_days=30) == {}
+
+    def test_symbols_uppercased(self, tmp_path, monkeypatch):
+        store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+        good_df = _make_ohlcv(5)
+        seen = []
+
+        def _fake_get_bars(symbol, lookback_days=504, *, provider=None):
+            seen.append(symbol)
+            return good_df
+
+        monkeypatch.setattr(store, "get_bars", _fake_get_bars)
+        result = store.get_bars_bulk(["aapl"], lookback_days=30)
+
+        assert seen == ["AAPL"]
+        assert "AAPL" in result
+
+    def test_all_symbols_fail_returns_empty_dict(self, tmp_path, monkeypatch):
+        store = HistoricalStore(db_path=str(tmp_path / "test.db"))
+
+        def _always_raise(symbol, lookback_days=504, *, provider=None):
+            raise RuntimeError("total outage")
+
+        monkeypatch.setattr(store, "get_bars", _always_raise)
+        result = store.get_bars_bulk(["AAPL", "MSFT"], lookback_days=30)
+        assert result == {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 1 — TestColumnContract
 # ─────────────────────────────────────────────────────────────────────────────
 

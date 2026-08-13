@@ -5,7 +5,7 @@ import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { useExecutionMode } from "../hooks/useExecutionMode";
 import type { ExecutionQueue, ExecutionQueueIntent, DecisionCreateRequest } from "../api/types";
-import { EmptyState, ErrorState, Loading, StaleDataNotice, Notice } from "./ui";
+import { Chip, EmptyState, ErrorState, Loading, StaleDataNotice, Notice } from "./ui";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
 import { ChevronDown, ChevronRight, Check, X } from "lucide-react";
@@ -235,30 +235,6 @@ export function ModeBadge({ mode }: { mode: string }) {
   return <Chip label={`mode: ${mode}`} tone={tone} />;
 }
 
-export function Chip({
-  label,
-  tone,
-}: {
-  label: string;
-  tone: "growth" | "decline" | "caution" | "muted";
-}) {
-  const color = tone === "muted" ? theme.textMuted : theme[tone];
-  return (
-    <span
-      style={{
-        fontSize: "var(--t-micro)",
-        fontWeight: 600,
-        padding: "3px 8px",
-        borderRadius: "var(--r-pill)",
-        border: `1px solid ${color}`,
-        color,
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-
 function IntentRow({ intent, mode, queueGeneratedAt }: { intent: ExecutionQueueIntent; mode: string; queueGeneratedAt: string | null }) {
   const [expanded, setExpanded] = useState(false);
   const [reviewed, setReviewed] = useState<"acted" | "passed" | null>(null);
@@ -376,7 +352,14 @@ function IntentRow({ intent, mode, queueGeneratedAt }: { intent: ExecutionQueueI
 
           {/* Metadata row */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-3)", fontSize: "var(--t-micro)", color: theme.textMuted, marginBottom: "var(--s-3)" }}>
-            {intent.follow_type && <span><strong>Strategy:</strong> {formatFollowType(intent.follow_type)}</span>}
+            {intent.follow_type && <span><strong>Attribution:</strong> {formatFollowType(intent.follow_type)}</span>}
+            {intent.strategy && <span><strong>Strategy:</strong> {intent.strategy}</span>}
+            {intent.sources && intent.sources.length > 0 && (
+              <span><strong>Sources:</strong> {intent.sources.join(", ")}</span>
+            )}
+            {intent.proposed_price != null && (
+              <span><strong>Proposed price:</strong> ${intent.proposed_price.toFixed(2)}</span>
+            )}
             {intent.client_order_id && <span><strong>Order ID:</strong> {intent.client_order_id}</span>}
             {queueGeneratedAt && <span><strong>Generated:</strong> {timeAgo(queueGeneratedAt)}</span>}
           </div>

@@ -5788,7 +5788,12 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
  * label (never a guessed/free-text category — CONSTRAINT #4): AAPL is a base
  * advisory-engine intent, TSLA is attributed to the "trend-following" mock
  * Pilot (a real id in MOCK_PILOTS below) to demonstrate the Strategy filter
- * against a genuine follow.
+ * against a genuine follow. `strategy`/`sources`/`proposed_price` are the
+ * queue builder's real per-intent attribution fields (never guessed —
+ * CONSTRAINT #4): AAPL carries all three so the expanded row's metadata and
+ * SignalContributionPanel have something real-looking to show; TSLA omits
+ * `sources` (a Pilot-follow intent has no underlying news/sentiment sources
+ * of its own) to exercise the "field genuinely absent" rendering path too.
  */
 const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
   generated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
@@ -5814,6 +5819,9 @@ const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
       rationale: "Strong momentum, low realized vol, HMM risk-on regime.",
       client_order_id: "advisory-AAPL-buy-1",
       follow_type: "advisory",
+      strategy: "timeseries_momentum",
+      sources: ["fmp_news", "edgar_8k"],
+      proposed_price: 231.42,
     },
     {
       symbol: "TSLA",
@@ -5828,6 +5836,8 @@ const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
       rationale: "Pilot follow (trend-following) risk-reduce exit.",
       client_order_id: "follow-trend-following-TSLA-sell-1",
       follow_type: "trend-following",
+      strategy: "trend_following_pilot_mirror",
+      proposed_price: 214.9,
     },
   ],
 };
