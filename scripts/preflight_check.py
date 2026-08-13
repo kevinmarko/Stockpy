@@ -149,12 +149,22 @@ Checks (15 total)
                                   regardless of broker mode).
 
 Note: the "(N total)" figure above and the numbered list are historical and
-have drifted from ALL_CHECKS as checks were added over time (23 entries as
+have drifted from ALL_CHECKS as checks were added over time (24 entries as
 of this writing, most recently robinhood_execution_mode /
 robinhood_kill_switch_clear / robinhood_queue_fresh / robinhood_session_present
-/ env_no_duplicate_keys / alert_channels_reachable, none of which carry a
-number above). ALL_CHECKS is the single source of truth for the actual set
-and order of checks that run.
+/ env_no_duplicate_keys / alert_channels_reachable / no_stray_database_files,
+none of which carry a number above). ALL_CHECKS is the single source of truth
+for the actual set and order of checks that run.
+
+no_stray_database_files              — WARNING-ONLY diagnostic tripwire (never
+                                        blocking). Resolves the canonical DB
+                                        location via db_config.resolve_database_url()
+                                        and flags a same-named quant_platform.db
+                                        file found elsewhere (repo root) that was
+                                        modified within the last 24h — i.e.
+                                        something is actively writing to a stale,
+                                        non-canonical DB file. Skipped as a no-op
+                                        when DATABASE_URL is not sqlite-backed.
 """
 
 from __future__ import annotations
@@ -995,6 +1005,156 @@ def check_db_exists() -> CheckResult:
     )
 
 
+def check_no_stray_database_files(max_age_hours: float = 24.0) -> CheckResult:
+    """WARNING-ONLY tripwire: detect a stray ``quant_platform.db`` file being
+    actively written OUTSIDE the canonical location (Defense-in-depth for the
+    2026-08 forecast_tracker.py incident).
+
+    Background
+    ----------
+    ``settings.LOCAL_DATA_ROOT`` (PR #718) moved every store's default SQLite
+    file to a machine-global root shared across worktrees. A hardcoded
+    CWD-relative default in ``forecasting/forecast_tracker.py`` bypassed
+    ``db_config.resolve_database_url()`` -- the single source of truth every
+    store is supposed to use -- and kept writing to a STALE, non-canonical
+    ``quant_platform.db`` at the repo root for hours after the live daemon
+    restarted onto the new code, silently accumulating ~2 million rows in the
+    wrong file while every other table correctly moved to the canonical path.
+    That was caught only by manual ``lsof`` + mtime/row-count inspection; this
+    check automates the same signal going forward.
+
+    What it checks
+    ---------------
+    Resolves the canonical database path via ``db_config.resolve_database_url()``
+    and looks for a file with the SAME BASENAME (in case an operator renamed
+    the canonical DB) at a small, explicit set of candidate locations --
+    NOT an unbounded filesystem walk. Currently just the repo root
+    (``_REPO_ROOT``), since that is exactly where the real incident's stray
+    file lived and is the one place a hardcoded CWD-relative default would
+    plausibly write to.
+
+    Severity
+    --------
+    This is a diagnostic tripwire, not a go/no-go gate -- mirrors
+    ``check_state_snapshot_fresh``'s "warning-only PASS under an explained
+    condition" precedent:
+      * No stray file found -> clean PASS, no noise.
+      * A stray file exists but its mtime is older than ``max_age_hours``
+        (default 24h -- long enough that a leftover nobody has touched in a
+        while doesn't false-alarm, short enough to still catch a process that
+        is actively writing to it within roughly one operating day; this
+        doesn't need to be precisely tuned, only to separate "being written
+        right now" from "abandoned months ago") -> clean PASS. A genuinely
+        stale leftover (e.g. pre-``LOCAL_DATA_ROOT`` migration) is not itself
+        a problem worth flagging every run.
+      * A stray file exists AND was modified within ``max_age_hours`` ->
+        WARNING (never a blocking FAIL) naming the exact stray path, its
+        last-modified time, and the canonical path it should be at instead,
+        so the operator knows to go find and kill whichever process has it
+        open (e.g. ``lsof <path>``).
+
+    Degrades gracefully to a no-op PASS (never raises, per this module's
+    fail-closed-but-never-crash convention for diagnostic checks) when
+    ``resolve_database_url()`` doesn't return a sqlite-shaped URL (e.g. an
+    operator running on Postgres) or any other resolution step fails --
+    this check only makes sense for the sqlite-default deployment shape.
+    """
+    name = "no_stray_database_files"
+    try:
+        from db_config import resolve_database_url
+        from sqlalchemy.engine import make_url
+
+        db_url = resolve_database_url()
+        url = make_url(db_url)
+    except Exception as exc:
+        return CheckResult(
+            name, True,
+            f"⚠️  Could not resolve the canonical database URL ({exc}) — skipping "
+            "stray-file check.",
+            warning=True,
+        )
+
+    if url.get_backend_name() != "sqlite":
+        return CheckResult(
+            name, True,
+            "DATABASE_URL is not sqlite-backed — stray-file check only applies to "
+            "the default local SQLite deployment.",
+        )
+
+    db_database = url.database
+    if not db_database or db_database == ":memory:":
+        return CheckResult(
+            name, True,
+            "Canonical database is in-memory sqlite — stray-file check not applicable.",
+        )
+
+    try:
+        canonical_path = Path(db_database).resolve()
+        filename = canonical_path.name
+
+        # Bounded, explicit search scope -- NOT an unbounded filesystem walk.
+        # The real incident's stray file was always at the repo root of
+        # whichever checkout was running the pre-fix code, so that is the
+        # one candidate location this check looks at.
+        candidate_dirs = [_REPO_ROOT]
+        stray_files: list[Path] = []
+        for d in candidate_dirs:
+            candidate = d / filename
+            if not candidate.exists():
+                continue
+            try:
+                if candidate.resolve() == canonical_path:
+                    continue  # same physical file (e.g. LOCAL_DATA_ROOT == repo root)
+            except OSError:
+                continue
+            stray_files.append(candidate)
+
+        if not stray_files:
+            return CheckResult(
+                name, True,
+                f"No stray '{filename}' found outside the canonical location "
+                f"({canonical_path}).",
+            )
+
+        now = datetime.now(timezone.utc)
+        for stray in stray_files:
+            try:
+                mtime = datetime.fromtimestamp(stray.stat().st_mtime, tz=timezone.utc)
+            except OSError:
+                continue
+            age = now - mtime
+            if age <= timedelta(hours=max_age_hours):
+                return CheckResult(
+                    name, True,
+                    f"⚠️  Stray database file {stray} was last modified "
+                    f"{age.total_seconds() / 3600:.1f}h ago (within the "
+                    f"{max_age_hours:.0f}h freshness window) — something appears to "
+                    f"be ACTIVELY WRITING to it instead of the canonical location "
+                    f"{canonical_path}. Investigate which process has it open (e.g. "
+                    f"`lsof {stray}`) before more data accumulates at the wrong path "
+                    "— this is the exact failure mode that hit forecast_tracker.py "
+                    "(a hardcoded CWD-relative default that bypassed "
+                    "db_config.resolve_database_url()).",
+                    warning=True,
+                )
+
+        # Stray file(s) exist but none were touched recently -- a stale
+        # leftover, not an active split-brain write target. Clean PASS.
+        return CheckResult(
+            name, True,
+            "Stray database file(s) found ("
+            + ", ".join(str(s) for s in stray_files)
+            + f") but none modified within the last {max_age_hours:.0f}h — likely a "
+            "stale leftover, not an active write target.",
+        )
+    except Exception as exc:
+        return CheckResult(
+            name, True,
+            f"⚠️  no_stray_database_files check could not run ({exc}).",
+            warning=True,
+        )
+
+
 def check_paper_trading_duration(min_days: int = 90) -> CheckResult:
     """Verify that paper trading has run for at least ``min_days`` days.
 
@@ -1350,6 +1510,7 @@ ALL_CHECKS = [
     check_state_snapshot_fresh,
     check_heartbeat_fresh,
     check_db_exists,
+    check_no_stray_database_files,
     check_paper_trading_duration,
     check_validation_reports,
     check_no_unexpected_risk_blocks,

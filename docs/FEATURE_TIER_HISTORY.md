@@ -41,6 +41,7 @@ Sections in this file (search for the `##` heading):
 - AI Control Center tab
 - Prompt Registry
 - Robinhood login: TOTP MFA → device-approval push (`data/robinhood_login.py`, `data/robinhood_login_worker.py`, `data/robinhood_session.py`, `api/_rh_login.py`) (2026-08)
+- `settings.LOCAL_DATA_ROOT` consolidation (PR #718) + the ForecastTracker split-brain incident it exposed (PR #720) (2026-08-13)
 
 **Critical invariants that must never regress are still summarized in `CLAUDE.md`
 where they're load-bearing for every session** (e.g. ADVISORY_ONLY quarantine,
@@ -2117,3 +2118,92 @@ that approving it completes within the deadline, whether a denied approval is
 distinguishable from an ignored one (reading the library's source, it appears not to be),
 and whether the session-pickle fix measurably reduces how often a real account is
 re-challenged.
+
+---
+
+## `settings.LOCAL_DATA_ROOT` consolidation + the ForecastTracker split-brain incident it exposed (PR #718, PR #720, 2026-08-13)
+
+**Why.** This repo runs roughly 19 simultaneous git worktrees against the same remote, and
+untracked files are worktree-local in git by design — a model trained, a cache warmed, or a
+DB row written in one worktree was invisible from every other one, even though nothing was
+ever deleted. The incident that triggered this: an operator trained an ML model, it "looked
+gone" in a different worktree the next session, and root-causing that turned up the general
+problem — `quant_platform.db`, `output/`, logs, and every model/feature/universe cache all
+resolved CWD- or repo-relative, so up to ~19 checkouts meant up to ~19 physically distinct
+copies of state that should have been one.
+
+**What shipped — Part 1: `settings.LOCAL_DATA_ROOT` (PR #718).**
+- New `settings.LOCAL_DATA_ROOT` field (default `Path.home() / ".stockpy_local"`) — a
+  machine-global root living OUTSIDE every git worktree/checkout, shared by every checkout on
+  the machine with zero per-worktree `.env` setup. `settings.OUTPUT_DIR` becomes
+  `Optional[Path]` (default `None`); a new `_derive_local_data_root_paths`
+  `@model_validator(mode="after")` fills it in as `<LOCAL_DATA_ROOT>/output` when unset (an
+  explicit `OUTPUT_DIR` override still wins, unchanged) and re-anchors `PROMPT_CACHE_DIR`,
+  `LLM_COMMENTARY_CACHE_PATH`, and `GRAVITY_AI_RUNNER_OUTPUT_PATH` the same way.
+- Subfolder layout: `{root}/quant_platform.db`, `{root}/output/`, `{root}/logs/`,
+  `{root}/ml_models/` (+ `forecast_cache`), `{root}/ml_feature_cache/`,
+  `{root}/universe_cache.parquet`, `{root}/api_cache/cache.db`, `{root}/robinhood_cache/`.
+- Landed in three buckets: `c5d6c365` (the setting itself + `OUTPUT_DIR` derivation),
+  `a6c6c295`/`9c53d4db` (anchor ML model-artifact/feature/universe-cache paths and DB +
+  output-derived cache paths), `ef1bc9a0` (relocate the remaining logs/caches —
+  `alerting.py`, `gui/orchestrator_runner.py`, `investyo_mcp_server.py`,
+  `cache/cache_store.py`, `data/robinhood_portfolio.py`, `data/robinhood_orders.py`,
+  `data/portfolio_sync.py` — plus the new migration script below).
+- New `scripts/migrate_to_local_data_root.py` — dry-run by default, `--apply` to actually
+  move the ~1.7GB of pre-existing repo-relative artifacts, `--verify` to sanity-check all 11
+  source/destination pairs post-migration; never silently overwrites an already-populated
+  destination.
+- Two stale, force-committed `.pkl` model files
+  (`ml/models/meta_cross_sectional_momentum_20260706.pkl`,
+  `ml/models/meta_timeseries_momentum_20260706.pkl` — already `.gitignore`d but previously
+  force-added) were untracked from git in the same pass — the same failure mode that had
+  previously corrupted `quant_platform.db`/`data/universe_cache.parquet` via merge.
+- A same-day follow-up (`a3666abb`) closed two verification gaps found after landing:
+  `scripts/migrate_to_local_data_root.py` wasn't yet calling `scripts._bootstrap.bootstrap()`
+  at module top (the convention every `scripts/*.py` entry point follows), and two tests in
+  `tests/test_env_loading.py`/`tests/test_runtime_flags_writer.py` still asserted the
+  pre-migration repo-relative `runtime_flags.DEFAULT_STORE_PATH`.
+
+**What shipped — Part 2: the ForecastTracker split-brain incident + fix (PR #720, same-day
+follow-up).**
+- **Root cause.** `forecasting/forecast_tracker.py`'s
+  `ForecastTracker.__init__(self, db_path: str = "quant_platform.db", ...)` hardcoded a bare,
+  CWD-relative literal instead of resolving through `db_config.resolve_database_url()` — the
+  same seam every sibling store (`data/historical_store.py`, `data/paper_account_store.py`,
+  `transactions_store.py`, `sizing/cap_audit_store.py`, ...) already used. This one module
+  was missed entirely during PR #718.
+- **Real impact.** This operator's actual `.env` has `FORECAST_SKILL_WEIGHTING_ENABLED=true`,
+  so `main_orchestrator.py::EngineContext.build()` constructs a bare `ForecastTracker()` every
+  cycle. Once PR #718 merged and the daemon restarted onto the new code, every other table
+  (`price_bars`, `account_snapshots`, `symbol_rating_events`, ...) correctly and exclusively
+  moved to writing at `settings.LOCAL_DATA_ROOT/quant_platform.db` — but `forecast_errors`
+  kept writing to the old CWD-relative path for hours, undetected by any automated check,
+  caught only by direct manual row-count/mtime inspection. At the time of the fix,
+  **1,974,166** real `forecast_errors` rows sat in the old location; zero existed yet in the
+  new one — a live split, not merely a future risk.
+- **Fix.** `db_path` now defaults to `None` and is resolved via
+  `db_config.resolve_database_url()` at construction time. This class talks to sqlite
+  directly (`sqlite3.connect()`, never SQLAlchemy), so the resolved `sqlite:///<path>` URL is
+  parsed down to a bare filesystem path via `sqlalchemy.engine.make_url(...).database`; a
+  non-sqlite `DATABASE_URL` (this class has never supported anything but sqlite) falls back
+  to the historical literal rather than raising or silently mis-resolving.
+- **Still pending, deliberately.** Does NOT reconcile the ~1.97M already-diverged
+  `forecast_errors` rows between the old and new locations — that's a data operation on a
+  live trading platform's database, not a code change, and is deferred pending the operator's
+  explicit sign-off on approach. See
+  `docs/known_issues/forecast_tracker_local_data_root_split.md` for the full write-up.
+
+**New env var:** `LOCAL_DATA_ROOT` (default `~/.stockpy_local`; a
+`settings_keysets.BOOTSTRAP_KEY_REASONS` member — restart required to change).
+
+**Test surface.** `make ci` (offline pytest, `-m "not network and not slow"`): **10,227+
+passed, 0 failed** across both PRs (10,227 passed / 13 skipped as of PR #718's
+verification-gap fix, `a3666abb`). PR #720 adds
+`tests/test_forecast_tracker.py::TestDefaultDbPathResolvesThroughDbConfig` — 3 new regression
+tests pinning the default-resolves-via-`db_config` / explicit-override-wins /
+non-sqlite-falls-back-to-the-historical-literal behavior — with the full file at 62 passed and
+the broader forecasting suite at 170 passed (2 pre-existing, environment-dependent failures
+confirmed identical with and without the fix). `scripts/migrate_to_local_data_root.py` has
+its own `tests/test_migrate_to_local_data_root.py` (planning logic, dry-run no-op, `--apply`
+moves including directory-merge-into-preexisting-empty-dest, destination-exists skip,
+missing-source skip).

@@ -364,6 +364,7 @@ Run this EVERY trading morning before 09:00 ET:
 | Δ Since Last Run reviewed | Open `output/daily_report.html` — check top band for unexpected action flips or conviction drops |
 | Regime & VIX checked | Observability tab → recession telemetry (Sahm Rule / HY OAS / VIX / regime) |
 | Conviction calibration glanced | Reports tab → Conviction Calibration (win-rate bars near the diagonal) |
+| **(post-deploy only)** DB tables landing in one place | After any deploy touching DB-path resolution (e.g. `settings.LOCAL_DATA_ROOT`-related changes): a daemon restart without error is NOT proof every code path picked up the new path — verify by direct inspection (`lsof` on the DB file, compare row counts/mtimes across old and new locations) that all tables are writing to the same, expected DB. See `docs/known_issues/forecast_tracker_local_data_root_split.md` for the concrete precedent (`forecast_errors` kept writing to the old DB for hours after a restart while every other table had moved). |
 
 ---
 
@@ -1115,17 +1116,22 @@ python3 main.py
 | Missing recommendation for held symbol > 5 consecutive days (§3.2) | Pause + investigate data source; check Dead-Letter Queue |
 | Account snapshot stale > 48 h (§3.1) | Force refresh first (`--refresh-account`); pause only if live fetch also fails |
 | Macro regime shows RECESSION AND HMM agrees | Pause new signal evaluation; monitor daily |
-| Suspicious pipeline output (all signals identical, all BUY, all NaN) | Pause immediately; run `python scripts/preflight_check.py` and check `logs/investyo.log` |
+| Suspicious pipeline output (all signals identical, all BUY, all NaN) | Pause immediately; run `python scripts/preflight_check.py` and check `$LOCAL_DATA_ROOT/logs/investyo.log` (default `~/.stockpy_local/logs/investyo.log`) |
 
 ### Back up the database before any destructive investigation
 
+`quant_platform.db` lives under `settings.LOCAL_DATA_ROOT` (default `~/.stockpy_local/`),
+not the repo root — see `docs/architecture/data-layer.md`'s `settings.LOCAL_DATA_ROOT`
+subsection.
+
 ```bash
-cp quant_platform.db quant_platform_backup_$(date +%Y%m%d_%H%M%S).db
+cp ~/.stockpy_local/quant_platform.db ~/.stockpy_local/quant_platform_backup_$(date +%Y%m%d_%H%M%S).db
 ```
 
 ### Incident log
 
-Document every pause in `output/decision_log.jsonl` via the Reports tab → Decision
+Document every pause in `$LOCAL_DATA_ROOT/output/decision_log.jsonl` (default
+`~/.stockpy_local/output/decision_log.jsonl`) via the Reports tab → Decision
 Journal (entry type: "modified", notes: describe the anomaly and resolution). This keeps
 a timestamped operator log that the calibration tracker can correlate with signal
 accuracy changes.

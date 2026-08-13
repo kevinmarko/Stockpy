@@ -419,7 +419,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 781,
+    "attr": 782,
     "factory_param": 4,
     "getattr_const": 259,
     "os_environ": 25
@@ -849,6 +849,15 @@
           "cross_module_init_helper"
         ],
         "site": "execution/live_trade_proposals_store.py:103",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "cross_module_init_helper"
+        ],
+        "site": "forecasting/forecast_tracker.py:134",
         "via": []
       },
       {
@@ -2747,7 +2756,7 @@
   ],
   "restart_required_reason_counts": {
     "closure_value": 1,
-    "cross_module_init_helper": 66,
+    "cross_module_init_helper": 67,
     "decorator_arg": 13,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 11,

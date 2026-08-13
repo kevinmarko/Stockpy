@@ -38,7 +38,7 @@
 
 | Path under `{LOCAL_DATA_ROOT}` | What lives there | Replaces (pre-2026-08) |
 |---|---|---|
-| `quant_platform.db` (+ `-wal` / `-shm`) | The SQLite trading DB (`db_config.resolve_database_url()`'s default) | `db_config.DEFAULT_DB_FILE` at the repo root |
+| `quant_platform.db` (+ `-wal` / `-shm`) | The SQLite trading DB (`db_config.resolve_database_url()`'s default), including the `forecast_errors` table written by `forecasting/forecast_tracker.py::ForecastTracker` (Tier 2.2 forecast-skill tracker) | `db_config.DEFAULT_DB_FILE` at the repo root |
 | `output/` | `state_snapshot.json`, `history/`, `daemon.json`, `decision_log.jsonl`, `runtime_flags.json`, `prompt_cache/`, `rag_index/index.faiss`, `sector_embedding_cache.json`, … (unchanged internal structure) | `settings.OUTPUT_DIR`'s old repo-root `output/` |
 | `logs/` | `investyo.log` (rotating handler) and other platform logs | `alerting._LOGS_DIR` at the repo root |
 | `ml_models/` (+ `ml_models/forecast_cache/`) | Trained `.pkl`/`.keras` model artifacts and the CNN-LSTM per-ticker forecast cache — see `docs/architecture/ml-and-reports.md` | `ml/lgbm_ranker._MODELS_DIR`, `ml/meta_labeling._MODELS_DIR`, `ml/forecast_backfill._MODELS_DIR`, `forecasting/model_persistence.MODELS_DIR` |
@@ -48,3 +48,5 @@
 | `robinhood_cache/` (`account_snapshot.json`, `robinhood_orders.json`, `sync_report.json`) | Daily Robinhood account/orders/sync-report JSON caches | 3 modules' own `_CACHE_PATH` under the repo-root `cache/` dir |
 
 `ml/registry.yaml` is NOT relocated — it stays tracked in-repo, pointing at the artifacts above by filename convention only (see `docs/architecture/ml-and-reports.md`). Migrating the ~1.7GB of pre-existing artifacts already sitting at their old repo-relative paths is an explicit, opt-in, re-runnable step — `scripts/migrate_to_local_data_root.py` (`--dry-run` default, `--apply` to actually move, `--verify` for a post-migration sanity report) — never automatic on process start.
+
+**Incident note (2026-08, fixed in PR #720):** `forecasting/forecast_tracker.py`'s `ForecastTracker.__init__` was missed by the original migration inventory and kept a hardcoded, CWD-relative `db_path="quant_platform.db"` default that bypassed `db_config.resolve_database_url()` entirely, so its `forecast_errors` table kept writing to the old repo-relative location for hours after the live daemon restarted onto the merged migration. It now resolves its default the same way every sibling store does. See `docs/known_issues/forecast_tracker_local_data_root_split.md` for the full write-up.

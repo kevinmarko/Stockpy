@@ -15,6 +15,7 @@ documentation library index.
 | [`vite_plugin_pwa_workbox_dev_chain_unfixable.md`](vite_plugin_pwa_workbox_dev_chain_unfixable.md) | **Resolved** — targeted `overrides` entry in `webapp/package.json`; `npm audit` now 0 findings (was 8 high) |
 | [`pip_audit_stale_ambient_env_false_positive.md`](pip_audit_stale_ambient_env_false_positive.md) | **Resolved — false positive.** A reported 36-vulnerability pip-audit result was scanning the wrong Python environment; a rebuilt `.venv` showed zero |
 | [`2026_08_security_quality_review.md`](2026_08_security_quality_review.md) | **Findings fixed, documented.** A 2026-08-05 proactive security/quality review (no open GitHub issues existed at the time) |
+| [`forecast_tracker_local_data_root_split.md`](forecast_tracker_local_data_root_split.md) | **Code fixed (PR #720); data reconciliation still pending.** `ForecastTracker` kept writing `forecast_errors` to the old repo-relative DB after the `LOCAL_DATA_ROOT` migration, splitting it from every other table for hours undetected — see CLAUDE.md's `settings.LOCAL_DATA_ROOT` bullet |
 
 Three of these (`cnn_lstm_tf_deadlock.md`, `lightgbm_faiss_libomp_collision_segfault.md`,
 `robinhood_device_approval_login_hang_risk.md`) are also individually cross-linked from
