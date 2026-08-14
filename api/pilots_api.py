@@ -5756,7 +5756,11 @@ def post_paper_broker_strategy_options_execute(body: Optional[StrategyOptionsExe
     symbols = body.symbols if body else None
     dry_run = body.dry_run if body else False
     max_notional = body.max_notional if body else None
-    return execute_strategy_options(symbols=symbols, dry_run=dry_run, max_notional=max_notional)
+    try:
+        return execute_strategy_options(symbols=symbols, dry_run=dry_run, max_notional=max_notional)
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: strategy-options/execute failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while executing strategy options; see server logs for detail."}
 
 @app.get("/pilots/paper-broker/greeks", dependencies=[Depends(require_read_token)])
 def get_paper_broker_portfolio_greeks() -> Dict[str, Any]:
@@ -5778,12 +5782,16 @@ def post_paper_broker_manage_exits(body: Optional[ManageExitsRequest] = None) ->
     profit_target_pct = body.profit_target_pct if body else None
     stop_loss_multiple = body.stop_loss_multiple if body else None
     manage_dte_threshold = body.manage_dte_threshold if body else None
-    return manage_position_exits(
-        dry_run=dry_run,
-        profit_target_pct=profit_target_pct,
-        stop_loss_multiple=stop_loss_multiple,
-        manage_dte_threshold=manage_dte_threshold,
-    )
+    try:
+        return manage_position_exits(
+            dry_run=dry_run,
+            profit_target_pct=profit_target_pct,
+            stop_loss_multiple=stop_loss_multiple,
+            manage_dte_threshold=manage_dte_threshold,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: manage-exits failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while managing position exits; see server logs for detail."}
 
 @app.post(
     "/pilots/paper-broker/roll",
@@ -6102,11 +6110,15 @@ class OptionsAlertTestRequest(BaseModel):
 def post_options_alerts_test(body: OptionsAlertTestRequest) -> Dict[str, Any]:
     """Dispatches a test options alert to configured notification channels (Discord, Slack, Email, File, Console)."""
     from pilots.options_alerts import dispatch_options_alert
-    return dispatch_options_alert(
-        alert_type=body.alert_type,
-        payload=body.payload,
-        channels=body.channels,
-    )
+    try:
+        return dispatch_options_alert(
+            alert_type=body.alert_type,
+            payload=body.payload,
+            channels=body.channels,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: alerts/test failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while dispatching test alert; see server logs for detail."}
 @app.get("/pilots/options/dispersion/opportunities", dependencies=[Depends(require_read_token)])
 def get_options_dispersion_opportunities(
     indices: Optional[str] = None,
@@ -6129,12 +6141,16 @@ def get_options_dispersion_opportunities(
 def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str, Any]:
     """Executes a vega-neutral dispersion basket into the paper broker."""
     from pilots.dispersion_trading import execute_dispersion_trade
-    return execute_dispersion_trade(
-        index_symbol=body.index_symbol,
-        basket=body.basket,
-        dry_run=body.dry_run,
-        is_live=body.is_live,
-    )
+    try:
+        return execute_dispersion_trade(
+            index_symbol=body.index_symbol,
+            basket=body.basket,
+            dry_run=body.dry_run,
+            is_live=body.is_live,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: dispersion/execute failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while executing dispersion trade; see server logs for detail."}
 
 
 @app.get("/pilots/options/zero-dte/signals", dependencies=[Depends(require_read_token)])

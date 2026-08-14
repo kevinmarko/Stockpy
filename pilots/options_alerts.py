@@ -39,6 +39,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 from settings import settings
 
@@ -118,11 +119,21 @@ def post_webhook(
     ts = datetime.now(timezone.utc).isoformat()
 
     try:
-        # Detect webhook provider format
-        if "discord.com/api/webhooks" in url or "discordapp.com/api/webhooks" in url:
+        # Detect webhook provider format via a real hostname parse -- a plain
+        # substring/`.endswith()` check on the raw URL string can be spoofed
+        # by e.g. "evil.example.com/discord.com/api/webhooks" or a lookalike
+        # subdomain, which would pick the wrong payload shape for whatever
+        # host the request actually goes to (CodeQL py/incomplete-url-
+        # substring-sanitization). `webhook_url` is always operator-
+        # configured (settings.OPTIONS_ALERT_WEBHOOK_URL or an explicit
+        # override), never externally supplied, so this isn't reachable by
+        # an attacker today -- fixed anyway since the correct check is no
+        # more code.
+        host = (urlparse(url).hostname or "").lower()
+        if host in ("discord.com", "discordapp.com") and "/api/webhooks" in urlparse(url).path:
             content = f"{emoji} **[{level.upper()}]** `{ts}`\n{message}"
             body_dict: Dict[str, Any] = {"content": content}
-        elif "hooks.slack.com" in url:
+        elif host == "hooks.slack.com" or host.endswith(".slack.com"):
             text = f"{emoji} *[{level.upper()}]* `{ts}`\n{message}"
             body_dict = {"text": text}
         else:
