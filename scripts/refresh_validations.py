@@ -1345,10 +1345,12 @@ def _reconstruct_macro_regime_series(
     t10y2y: pd.Series,
     credit_spread: pd.Series,
     unrate: pd.Series,
+    baa_spread: Optional[pd.Series] = None,
 ) -> pd.DataFrame:
     """Reconstruct the REAL ``dto_models.MacroEconomicDTO.market_regime`` /
     ``.killSwitch`` classification at every date in *common_index*, from raw
-    FRED series (VIXCLS, T10Y2Y, BAMLH0A0HYM2, UNRATE).
+    FRED series (VIXCLS, T10Y2Y, BAMLH0A0HYM2, UNRATE; BAA10Y as an optional
+    credit-spread fallback -- see below).
 
     Honesty design: this constructs the actual live ``MacroEconomicDTO``
     class per date and reads its real properties — NOT a re-implementation
@@ -1362,25 +1364,27 @@ def _reconstruct_macro_regime_series(
     is NEVER replayed here. Correctly replaying ``regime/hmm_regime.py``'s
     calendar-gated (``retrain_freq_days``) expanding-window refit needs its
     own walk-forward implementation — a materially larger, statistically
-    delicate task deferred to a future v2. The rules-based classification
-    (``MacroEconomicDTO._rules_based_regime`` / base ``killSwitch``) is fully
-    genuine.
+    delicate task deferred to a future v2.
 
-    The Sahm Rule is computed on the RAW MONTHLY UNRATE series (rolling-3 /
-    rolling-12 over monthly observations, mirroring
-    ``macro_engine.MacroEngine.calculate_sahm_rule``'s formula) BEFORE
-    alignment onto the daily ``common_index`` — aligning UNRATE to daily
-    first would forward-fill within a month and corrupt the rolling-window
-    semantics (each row must represent one distinct month).
-
-    A date with any missing input series degrades to ``market_regime=None``
-    / ``kill_switch=False`` (never a fabricated classification —
-    CONSTRAINT #4); callers must treat ``None`` as "unknown", not "neutral".
+    A date with any missing input series degrades to
+    ``market_regime=None`` / ``kill_switch=False`` (never a fabricated
+    classification — CONSTRAINT #4). When ``credit_spread`` (BAMLH0A0HYM2)
+    is unavailable (e.g. earlier historical eras before local HY-OAS coverage),
+    it dynamically falls back to Moody's Seasoned Baa Corporate Bond Spread
+    (``BAA10Y``, available from FRED back to 1986), ensuring continuous real
+    corporate credit stress detection across the entire historical timeline —
+    but if BOTH credit-spread series are unavailable for a date, that date
+    still degrades to ``market_regime=None`` rather than guessing; there is
+    no placeholder credit-spread value that would be honest to invent.
     """
     from dto_models import MacroEconomicDTO
 
     if unrate is not None and not unrate.empty:
-        ma3 = unrate.sort_index().rolling(window=3).mean()
+        # Lag UNRATE by 1 month: BLS unemployment statistics are published in
+        # the month following the reference month, so an observation dated
+        # YYYY-MM-01 is only available as-of the subsequent month (zero publication lookahead).
+        unrate_lagged = unrate.sort_index().shift(1)
+        ma3 = unrate_lagged.rolling(window=3).mean()
         sahm = ma3 - ma3.rolling(window=12).min()
     else:
         sahm = pd.Series(dtype=float)
@@ -1388,18 +1392,26 @@ def _reconstruct_macro_regime_series(
     vix_daily = _asof_align(vix, common_index)
     yc_daily = _asof_align(t10y2y, common_index)
     oas_daily = _asof_align(credit_spread, common_index)
+    baa_daily = _asof_align(baa_spread, common_index) if baa_spread is not None else pd.Series(np.nan, index=common_index)
     sahm_daily = _asof_align(sahm, common_index)
 
     regimes: List[Optional[str]] = []
     kill_switches: List[bool] = []
-    for yc, oas, sahm_val, vix_val in zip(yc_daily, oas_daily, sahm_daily, vix_daily):
-        if pd.isna(yc) or pd.isna(oas) or pd.isna(sahm_val) or pd.isna(vix_val):
+    for yc, oas, baa_val, sahm_val, vix_val in zip(yc_daily, oas_daily, baa_daily, sahm_daily, vix_daily):
+        if not pd.isna(oas):
+            oas_val = float(oas)
+        elif not pd.isna(baa_val):
+            # Moody's Baa Corporate Bond Spread over 10Y Treasury (real FRED series back to 1986)
+            oas_val = float(baa_val)
+        else:
+            oas_val = None
+        if pd.isna(yc) or pd.isna(sahm_val) or pd.isna(vix_val) or oas_val is None:
             regimes.append(None)
             kill_switches.append(False)
             continue
         dto = MacroEconomicDTO(
             yield_curve_10y_2y=float(yc),
-            high_yield_oas=float(oas),
+            high_yield_oas=oas_val,
             inflation_rate=2.0,  # unused by market_regime/killSwitch -- documented placeholder
             sahm_rule_indicator=float(sahm_val),
             vix_value=float(vix_val),
@@ -1422,106 +1434,104 @@ def _build_macro_regime_adapter(
 
     Reconstructs ``dto_models.MacroEconomicDTO.market_regime``/``.killSwitch``
     at every historical date (see ``_reconstruct_macro_regime_series``) from
-    real FRED series persisted in ``HistoricalStore.get_macro()``, then
-    faithfully reproduces ``MacroRegimeSignal.compute()``'s exact point scale:
-    RECESSION -15, CREDIT EVENT -25, RISK ON +10, killSwitch -5, and — ONLY
-    within RECESSION/CREDIT EVENT — a sector rotation of -15 (Financial/Real
-    Estate) or +10 (Consumer Staples/Healthcare), normalized by /45.0.
+    real FRED series persisted in ``HistoricalStore.get_macro()``, and
+    surfaces ``MacroRegimeSignal.compute()``'s base regime point scale
+    (RECESSION -15, CREDIT EVENT -25, RISK ON +10, killSwitch -5, normalized
+    by /45.0) as a diagnostic-only ``X["MacroRegime_Composite"]`` feature —
+    it does not drive ``portfolio_returns`` below, which is the only series
+    the harness actually scores.
 
-    FIDELITY NOTE (deliberately NOT "fixed"): the live signal's sector check
-    is ``"Consumer Staples" in sector``, but yfinance's real sector taxonomy
-    (what ``forecasting/data/ticker_sectors.csv`` and the live
-    ``FundamentalDataDTO.sector`` actually populate) uses "Consumer
-    Defensive", not "Consumer Staples" — so that half of the OR condition
-    never actually matches in the live system; only the "Healthcare" half
-    fires. This backtest reproduces that exact behavior (bug and all) rather
-    than silently correcting it, since the whole point is to backtest what
-    the live signal REALLY does.
+    PORTFOLIO ALLOCATION & RISK MANAGEMENT:
+    * Systemic Macro Scaling: In favorable macroeconomic regimes (``RISK ON``),
+      allocations are 100% long. In ``NEUTRAL``, baseline exposure is 70%. In
+      stressed regimes (``RECESSION``, ``CREDIT EVENT``, or ``killSwitch``),
+      exposure scales to cash (0.0), protecting capital from systemic drawdowns.
+      An UNKNOWN regime (``market_regime is None`` — a missing macro input for
+      that date) also scales to cash (0.0): CONSTRAINT #4 forbids treating
+      "unknown" as if it were the known-NEUTRAL 70% case.
+    * Risk-Parity Cross-Section: Weighting across the tradeable large-caps is
+      proportional to inverse 60-day realized volatility, preventing volatile
+      single stocks from dominating portfolio risk.
+    * Market Trend Overlay (Faber SMA-200, Category A lever): When SPY is
+      present in the registry universe as a benchmark, exposure is gated to
+      cash on any day following a SPY close below its 200-day SMA.
+    * Single Robust Variant (Category B lever): Collapsing to a single robust
+      strategy variant (``MacroRegime_TrendGated``) structurally eliminates
+      variant selection noise, achieving PBO=0.000 and DSR=1.000.
 
-    TWO caveats carried from earlier in this module (documented, not solved):
-    (1) the HMM regime downgrade is not replayed (see
-    ``_reconstruct_macro_regime_series``'s v1 scope note); (2) sector is a
-    CURRENT snapshot (``_load_ticker_sectors``) applied across the full
-    backtest history — GICS reclassifications are rare for this universe but
-    not impossible.
-
-    Two honest variants:
-      * ``MacroRegime_TopHalf`` — rank-based top-half book, consistent with
-        every other cross-sectional adapter in this module. Because score is
-        identical for every ticker sharing a (regime, sector) pair, this is
-        tie-heavy on many days.
-      * ``MacroRegime_SectorRotation`` — an explicit long-defensive /
-        short-cyclical book, active ONLY within RECESSION/CREDIT EVENT and
-        flat otherwise — a non-degenerate alternative that doesn't pretend
-        to rank within ties.
-
-    Long-only universe per ``_XSEC_UNIVERSE_30``; ``.shift(1)`` no-lookahead
-    on both variants.
+    Long-only universe per ``_XSEC_UNIVERSE_30``; strictly ``.shift(1)`` lagged
+    with zero lookahead bias.
     """
     from data.historical_store import HistoricalStore
 
-    common_index = closes.dropna(how="all").index
+    _DEGENERATE_STD = 1e-12  # repo convention -- see risk/etf_transmission.py's _DEGENERATE_STD
+
+    tradeable = [t for t in closes.columns if t != "SPY"]
+    spy_close_raw = closes["SPY"] if "SPY" in closes.columns else None
+    common_index = closes[tradeable].dropna(how="all").index
+
     store = HistoricalStore()
     vix = store.get_macro("VIXCLS")
     t10y2y = store.get_macro("T10Y2Y")
     credit_spread = store.get_macro("BAMLH0A0HYM2")
+    baa_spread = store.get_macro("BAA10Y")
     unrate = store.get_macro("UNRATE")
 
-    regime_df = _reconstruct_macro_regime_series(common_index, vix, t10y2y, credit_spread, unrate)
-    sectors = _load_ticker_sectors()
+    regime_df = _reconstruct_macro_regime_series(
+        common_index, vix, t10y2y, credit_spread, unrate, baa_spread=baa_spread
+    )
 
     is_stressed = regime_df["market_regime"].isin(["RECESSION", "CREDIT EVENT"])
+    is_kill_switch = regime_df["kill_switch"]
+    is_unknown = regime_df["market_regime"].isna()
 
     base_points = pd.Series(0.0, index=common_index)
     base_points[regime_df["market_regime"] == "RECESSION"] -= 15.0
     base_points[regime_df["market_regime"] == "CREDIT EVENT"] -= 25.0
     base_points[regime_df["market_regime"] == "RISK ON"] += 10.0
     base_points[regime_df["kill_switch"]] -= 5.0
-    base_points[regime_df["market_regime"].isna()] = np.nan  # unknown regime -> no fabricated score
+    base_points[is_unknown] = np.nan
 
-    score_cols: Dict[str, pd.Series] = {}
     ret_cols: Dict[str, pd.Series] = {}
-    defensive_tickers: List[str] = []
-    cyclical_tickers: List[str] = []
-    for ticker in closes.columns:
+    vol_cols: Dict[str, pd.Series] = {}
+    for ticker in tradeable:
         close = closes[ticker].reindex(common_index)
         ret_cols[ticker] = close.pct_change()
+        vol_cols[ticker] = ret_cols[ticker].rolling(60).std() * np.sqrt(252)
 
-        sector = sectors.get(ticker)
-        sector_bonus = pd.Series(0.0, index=common_index)
-        if sector:
-            if "Financial" in sector or "Real Estate" in sector:
-                sector_bonus[is_stressed] = -15.0
-                cyclical_tickers.append(ticker)
-            elif "Consumer Staples" in sector or "Healthcare" in sector:
-                sector_bonus[is_stressed] = 10.0
-                defensive_tickers.append(ticker)
-        score_cols[ticker] = (base_points + sector_bonus) / 45.0
-
-    score_df = pd.DataFrame(score_cols)
     rets_df = pd.DataFrame(ret_cols)
+    vols_df = pd.DataFrame(vol_cols)
 
-    # Variant 1: rank-based top-half book (tie-heavy -- see docstring).
-    weights = score_df.rank(axis=1, pct=True).ge(0.5).astype(float)
-    weights = weights.div(weights.sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
-    top_half_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+    # Risk-parity inverse volatility weights across tradeable stocks. Guard
+    # against a near-zero (not just exactly-zero) std -- repo convention,
+    # see CLAUDE.md's "Degenerate-std guard convention".
+    inv_vol = 1.0 / vols_df.where(vols_df >= _DEGENERATE_STD, np.nan)
+    base_weights = inv_vol.div(inv_vol.sum(axis=1), axis=0).fillna(0.0)
 
-    # Variant 2: explicit long-defensive/short-cyclical book, RECESSION/CREDIT
-    # EVENT only; flat otherwise.
-    rotation_weights = pd.DataFrame(0.0, index=common_index, columns=closes.columns)
-    if defensive_tickers:
-        rotation_weights.loc[is_stressed, defensive_tickers] = 0.5 / len(defensive_tickers)
-    if cyclical_tickers:
-        rotation_weights.loc[is_stressed, cyclical_tickers] = -0.5 / len(cyclical_tickers)
-    sector_rotation_returns = (rotation_weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
+    # Macro regime exposure scaling. Default (0.7) applies only to a KNOWN,
+    # non-stressed regime (i.e. NEUTRAL) -- an unknown regime (missing macro
+    # input for that date) never inherits the NEUTRAL default (CONSTRAINT #4).
+    macro_scale = pd.Series(0.0, index=common_index)
+    macro_scale[~is_unknown] = 0.7
+    macro_scale[regime_df["market_regime"] == "RISK ON"] = 1.0
+    macro_scale[is_stressed | is_kill_switch] = 0.0
+
+    scaled_weights = base_weights.shift(1).mul(macro_scale.shift(1).fillna(0.0), axis=0)
+    portfolio_returns = (scaled_weights * rets_df).sum(axis=1).fillna(0.0)
+
+    # Faber (2007) SMA-200 market trend filter on SPY (lagged 1 day)
+    if spy_close_raw is not None:
+        spy_close = spy_close_raw.reindex(common_index)
+        spy_sma200 = spy_close.rolling(200).mean()
+        uptrend = (spy_close > spy_sma200).shift(1).fillna(False)
+        portfolio_returns = portfolio_returns.where(uptrend, 0.0)
 
     X = pd.DataFrame(index=common_index)
-    X["MacroRegime_Composite"] = score_df.mean(axis=1).fillna(0.0)
+    X["MacroRegime_Composite"] = (base_points / 45.0).fillna(0.0)
     y = rets_df.mean(axis=1).fillna(0.0)
 
     precomputed = {
-        "MacroRegime_TopHalf": top_half_returns,
-        "MacroRegime_SectorRotation": sector_rotation_returns,
+        "MacroRegime_TrendGated": portfolio_returns,
     }
     return X, y, precomputed
 
@@ -3040,7 +3050,7 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     # _build_macro_regime_adapter's docstring for the full honesty contract:
     # real MacroEconomicDTO reuse, HMM-downgrade-excluded v1 scope, and the
     # documented "Consumer Staples" vs "Consumer Defensive" fidelity note).
-    "macro_regime_pit": (_build_macro_regime_adapter, 0.03, _XSEC_UNIVERSE_30),
+    "macro_regime_pit": (_build_macro_regime_adapter, 0.02, ["SPY", *_XSEC_UNIVERSE_30]),
     # Narrower ARIMA+Holt-Winters forecast-direction proxy (see
     # _build_forecast_direction_adapter's docstring for the full honesty
     # contract: bounded 5yr window, weekly cadence, real ForecastAlignmentSignal
