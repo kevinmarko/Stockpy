@@ -5570,6 +5570,18 @@ class CacheLongShortApproveBulkRequest(BaseModel):
 class PaperBrokerResetRequest(BaseModel):
     cash: Optional[float] = Field(default=None, gt=0)
 
+class OptionsOrderRequestModel(BaseModel):
+    symbol: str
+    asset_type: Optional[str] = "option"
+    side: Optional[str] = "buy"
+    quantity: Optional[float] = 1.0
+    dollar_amount: Optional[float] = None
+    order_type: Optional[str] = "market"
+    limit_price: Optional[float] = None
+    expiration: Optional[str] = None
+    legs: Optional[List[Dict[str, Any]]] = None
+    isLive: bool = False
+
 @app.get("/pilots/cache-long-short/concentrated-positions", dependencies=[Depends(require_read_token)])
 def get_cls_concentrated_positions() -> Dict[str, Any]:
     """Real held (long) positions exceeding 20% of account equity, sourced
@@ -5648,6 +5660,23 @@ def post_paper_broker_reset(body: Optional[PaperBrokerResetRequest] = None) -> D
     store.reset_account(starting_cash=starting_cash)
     acc = store.get_account()
     return {"status": "ok", "message": "Paper account reset", "cash": acc.cash}
+
+@app.post("/brokerage/options/order", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
+def post_brokerage_options_order(body: OptionsOrderRequestModel) -> Dict[str, Any]:
+    """Execute a paper or live options/stock order from the options chain screen."""
+    from pilots.paper_broker import execute_paper_order
+    return execute_paper_order(
+        symbol=body.symbol,
+        asset_type=body.asset_type or "option",
+        side=body.side or "buy",
+        quantity=body.quantity,
+        dollar_amount=body.dollar_amount,
+        order_type=body.order_type or "market",
+        limit_price=body.limit_price,
+        expiration=body.expiration,
+        legs=body.legs,
+        is_live=body.isLive,
+    )
 
 @app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])
 def get_live_trade_pending() -> Dict[str, Any]:

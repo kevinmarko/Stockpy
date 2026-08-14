@@ -1,40 +1,23 @@
-# Task Tracker — Options Backtest Dedup + Redundant-Recompute Fix
+# Task Tracker: Phased Stock & Options Order Input & Execution System
 
-- [x] Read CLAUDE.md Branch Workflow + Agent Workflow sections
-- [x] `git fetch origin && git rebase origin/main` (confirmed already up to date)
-- [x] Read `validation/options_selling_backtest.py` in full
-- [x] Read `scripts/refresh_validations.py`'s options-adapter registry section + `run_validations`
-      dispatch loop (confirmed all 6 adapters slice the same `closes_df["SPY"]` column, so a
-      content-based cache key will hit across all 6 within one `run_validations()` sweep)
-- [x] Read existing test coverage (`tests/test_options_selling_backtest_stress.py`,
-      `tests/test_refresh_validations.py::TestBuildOptionsStrategiesAdapters`) — confirmed no
-      existing byte-identical-behavior or call-count-instrumentation test covers either finding
-- [x] Derive the algebraic unification proof for Finding A's shared MTM formula (credit spreads,
-      debit spreads, covered call all reduce to one expression)
-- [x] Write `implementation_plan.md` / `task.md` / `walkthrough.md`
-- [x] Capture pre-refactor golden output (6 strategies x synthetic SPY, seed=22/scale=0.016/n=450)
-      for the byte-identical regression test, BEFORE touching production code —
-      `tests/fixtures/options_selling_backtest_golden.json`
-- [x] `git checkout -b refactor-options-backtest-shared-mtm-cache`
-- [x] Implement Finding A: `_OptionLeg`, `_simulate_leg_mtm_pnl`, refactor all 6 branches in
-      `simulate_options_strategy_returns` to delegate to it
-- [x] Implement Finding B: `_CycleEntry`, `_CyclePlan`, `_compute_cycle_plan`,
-      `_closes_fingerprint`, `_CYCLE_PLAN_CACHE`, `_get_cycle_plan`, `_reset_cycle_plan_cache`;
-      refactor `simulate_options_strategy_returns` to use the cached plan
-- [x] Add `TestSharedMtmHelperByteIdentical` regression test (golden fixture-backed)
-- [x] Add `TestSharedMtmHelperDirectFormulaEquivalence` (Iron Condor + Call Debit Spread, the two
-      strategies the golden fixture's window happens not to activate)
-- [x] Add `TestCyclePlanCacheAvoidsRedundantRecompute` instrumentation tests (3 tests: call-count,
-      cache-key content-distinguishing, closes=None-vs-explicit correctness)
-- [x] Add `docs/architecture/validation-and-signals.md` bullet
-- [x] Add `tests/fixtures/README.md` exception note for the new golden fixture
-- [x] Run offline+network suite: `tests/test_options_selling_backtest_stress.py -v` → 55 passed
-- [x] Run `tests/test_refresh_validations.py -v` → 95 passed, 1 pre-existing unrelated warning
-- [x] Run `tests/test_stress_gate.py tests/test_technical_options_engine.py
-      tests/test_validation_vrp_premium_selling_registry.py tests/test_vrp_premium_selling.py -v`
-      → 102 passed
-- [x] Run `ruff check . --select=F821,F822,F823,E9` → All checks passed
-- [x] Copy `implementation_plan.md`/`task.md`/`walkthrough.md` into `.claude/` on the branch
-- [ ] `git add` (incl. `-f` for the gitignored fixture JSON), commit, `gh pr create` against `main`
-      (do NOT merge)
-- [ ] Report branch name, PR URL, and full verification output back to caller
+- [x] **Phase 1: Core Sizing & Pricing Modules** <!-- id: p1 -->
+  - [x] Implement `pilots/price_provider.py` (real FMP fields: price, previousClose, dayLow, dayHigh) <!-- id: p1_1 -->
+  - [x] Implement `pilots/order_sizing.py` (dollar to contracts/shares, 75% cash cap calculation) <!-- id: p1_2 -->
+  - [x] Write unit tests: `tests/test_price_provider.py` and `tests/test_order_sizing.py` <!-- id: p1_3 -->
+  - [x] Verify Phase 1 tests pass (`8 passed`) <!-- id: p1_4 -->
+- [x] **Phase 2: Paper Broker Execution Engine** <!-- id: p2 -->
+  - [x] Implement `pilots/paper_broker_options_order.py` (stock and option order execution against PaperAccountStore) <!-- id: p2_1 -->
+  - [x] Update `pilots/paper_broker.py` to expose `execute_paper_order` <!-- id: p2_2 -->
+  - [x] Write unit tests in `tests/test_paper_broker_options_order.py` <!-- id: p2_3 -->
+  - [x] Verify Phase 2 tests pass (`24 passed across test suite`) <!-- id: p2_4 -->
+- [x] **Phase 3: REST API & Parity Layer** <!-- id: p3 -->
+  - [x] Add `OptionsOrderRequestModel` and route `POST /brokerage/options/order` in `api/pilots_api.py` <!-- id: p3_1 -->
+  - [x] Update `webapp/src/api/types.ts` with `OptionsOrderRequest` and `OptionsOrderResult` <!-- id: p3_2 -->
+  - [x] Update `webapp/src/api/mock.ts` with mock paper account mutation <!-- id: p3_3 -->
+  - [x] Run backend api tests `pytest tests/test_pilots_api.py` (`377 passed`) <!-- id: p3_4 -->
+- [x] **Phase 4: Frontend UI & Verification** <!-- id: p4 -->
+  - [x] Overhaul `webapp/src/components/options/OptionsOrderTicket.tsx` (sizing modes, 75% preset chip, limit/market, stock trading, cash validation, watchlist) <!-- id: p4_1 -->
+  - [x] Update `webapp/src/screens/OptionsChain.tsx` (Trade Stock action in banner) <!-- id: p4_2 -->
+  - [x] Run webapp typecheck (`npm run --prefix webapp typecheck` - `0 errors`) <!-- id: p4_3 -->
+  - [x] Run webapp unit tests (`npm test --prefix webapp` - `137 test files, 1547 passed`) <!-- id: p4_4 -->
+  - [x] Sync PR artifacts to `.claude/` <!-- id: p4_5 -->

@@ -3908,8 +3908,14 @@ export interface OptionChainResponse {
 
 export interface OptionsOrderRequest {
   symbol: string;
-  expiration: string;
-  legs: {
+  asset_type?: 'option' | 'stock';
+  side?: 'buy' | 'sell';
+  quantity?: number;
+  dollar_amount?: number;
+  order_type?: 'market' | 'limit';
+  limit_price?: number;
+  expiration?: string;
+  legs?: {
     contract: OptionContract;
     type: 'call' | 'put';
     action: 'Buy' | 'Sell';
