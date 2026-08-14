@@ -6171,6 +6171,66 @@ def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]
     )
 
 
+@app.get("/pilots/options/vpin/metrics", dependencies=[Depends(require_read_token)])
+def get_options_vpin_metrics_endpoint(
+    symbol: str = Query(..., min_length=1),
+    num_buckets: Optional[int] = 50,
+    bucket_size: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Returns volume-synchronized probability of toxicity (VPIN), regime, and bucket history."""
+    from pilots.options_vpin import get_options_vpin_metrics
+    return get_options_vpin_metrics(
+        symbol=symbol,
+        num_buckets=num_buckets or 50,
+        bucket_size=bucket_size,
+    )
+
+
+class OptionsSorAnalyzeRequest(BaseModel):
+    symbol: Optional[str] = None
+    legs: List[Dict[str, Any]] = []
+    spot_price: Optional[float] = None
+    quotes_map: Optional[Dict[str, Any]] = None
+    vpin: Optional[float] = None
+    urgency: Optional[str] = "NORMAL"
+
+
+@app.post("/pilots/options/sor/analyze", dependencies=[Depends(require_read_token)])
+def post_options_sor_analyze(body: OptionsSorAnalyzeRequest) -> Dict[str, Any]:
+    """Analyzes Complex Order Book (COB) net package routing vs Synthetic Legging execution."""
+    from pilots.options_sor import analyze_routing_options
+    res = analyze_routing_options(
+        legs=body.legs,
+        spot_price=float(body.spot_price or 0.0),
+        quotes_map=body.quotes_map,
+    )
+    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
+
+
+class OptionsSorSimulateLeggingRequest(BaseModel):
+    legs: List[Dict[str, Any]] = []
+    spot_price: Optional[float] = None
+    volatility: Optional[float] = 0.20
+    latency_seconds: Optional[float] = 2.0
+    num_simulations: Optional[int] = 1000
+    drift: Optional[float] = 0.0
+
+
+@app.post("/pilots/options/sor/simulate-legging", dependencies=[Depends(require_read_token)])
+def post_options_sor_simulate_legging(body: OptionsSorSimulateLeggingRequest) -> Dict[str, Any]:
+    """Runs Monte Carlo simulation of inter-leg execution latency and adverse selection hazard."""
+    from pilots.options_sor import simulate_legging_execution
+    res = simulate_legging_execution(
+        legs=body.legs,
+        spot_price=float(body.spot_price or 0.0),
+        volatility=body.volatility if body.volatility is not None else 0.20,
+        latency_seconds=body.latency_seconds if body.latency_seconds is not None else 2.0,
+        num_simulations=body.num_simulations if body.num_simulations is not None else 1000,
+    )
+    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
+
+
+
 @app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])
 def get_live_trade_pending() -> Dict[str, Any]:
     from pilots.live_trade_proposals import get_pending_proposals

@@ -1412,9 +1412,205 @@ class TestOptionsZeroDteEndpoints:
         mock_store.apply_multi_leg_fill.assert_called_once()
 
 
+# ---------------------------------------------------------------------------
+# 7. GET /pilots/options/vpin/metrics
+# ---------------------------------------------------------------------------
 
 
+class TestOptionsVpinEndpoint:
+    def test_get_vpin_metrics_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/vpin/metrics?symbol=SPY&num_buckets=20",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert "vpin" in body
+        assert 0.0 <= body["vpin"] <= 1.0
+        assert body["toxicity_regime"] in ["LOW", "MODERATE", "HIGH_TOXICITY"]
+        assert isinstance(body["is_toxic"], bool)
+        assert "bucket_history" in body
+        assert len(body["bucket_history"]) > 0
+        assert "recommended_spread_concession" in body
+        assert "sample_time" in body
+
+    def test_get_vpin_metrics_missing_symbol_422(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/vpin/metrics",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_get_vpin_metrics_fail_open_without_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=""):
+            resp = _client.get("/pilots/options/vpin/metrics?symbol=NVDA")
+        assert resp.status_code == 200
+        assert resp.json()["symbol"] == "NVDA"
+
+    def test_get_vpin_metrics_fails_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/vpin/metrics?symbol=SPY",
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
 
 
+# ---------------------------------------------------------------------------
+# 8. POST /pilots/options/sor/analyze
+# ---------------------------------------------------------------------------
 
+
+class TestOptionsSorAnalyzeEndpoint:
+    def test_post_sor_analyze_multi_leg_success(self):
+        payload = {
+            "symbol": "SPY",
+            "spot_price": 500.0,
+            "vpin": 0.15,
+            "urgency": "NORMAL",
+            "legs": [
+                {
+                    "symbol": "SPY 2026-09-18 $490.00 PUT",
+                    "action": "SELL",
+                    "type": "PUT",
+                    "strike": 490.0,
+                    "bid": 2.50,
+                    "ask": 2.60,
+                    "delta": -0.30,
+                    "gamma": 0.02,
+                    "ratio": 1,
+                },
+                {
+                    "symbol": "SPY 2026-09-18 $485.00 PUT",
+                    "action": "BUY",
+                    "type": "PUT",
+                    "strike": 485.0,
+                    "bid": 1.40,
+                    "ask": 1.48,
+                    "delta": -0.20,
+                    "gamma": 0.015,
+                    "ratio": 1,
+                },
+            ],
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/sor/analyze",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["valid"] is True
+        assert body["symbol"] == "SPY"
+        assert body["legs_count"] == 2
+        assert "cob_pricing" in body
+        assert "synthetic_legging" in body
+        assert body["recommended_policy"] in ["COB_NET_PACKAGE", "LEG_PASSIVE_FIRST", "SPLIT_DIRECT"]
+        assert "policy_rationale" in body
+        assert "policies_comparison" in body
+
+    def test_post_sor_analyze_empty_legs_graceful_fallback(self):
+        payload = {"symbol": "AAPL", "legs": []}
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/sor/analyze",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["valid"] is False
+        assert body["legs_count"] == 0
+        assert body["recommended_policy"] == "COB_NET_PACKAGE"
+
+    def test_post_sor_analyze_fails_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/sor/analyze",
+                json={"legs": []},
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# 9. POST /pilots/options/sor/simulate-legging
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsSorSimulateLeggingEndpoint:
+    def test_post_sor_simulate_legging_success(self):
+        payload = {
+            "legs": [
+                {
+                    "symbol": "SPY 2026-09-18 $500.00 CALL",
+                    "action": "BUY",
+                    "type": "CALL",
+                    "strike": 500.0,
+                    "bid": 5.00,
+                    "ask": 5.20,
+                    "delta": 0.50,
+                    "gamma": 0.02,
+                },
+                {
+                    "symbol": "SPY 2026-09-18 $510.00 CALL",
+                    "action": "SELL",
+                    "type": "CALL",
+                    "strike": 510.0,
+                    "bid": 2.10,
+                    "ask": 2.15,
+                    "delta": 0.30,
+                    "gamma": 0.015,
+                },
+            ],
+            "spot_price": 500.0,
+            "volatility": 0.22,
+            "latency_seconds": 2.0,
+            "num_simulations": 500,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/sor/simulate-legging",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["valid"] is True
+        assert body["num_simulations"] == 500
+        assert body["latency_seconds"] == 2.0
+        assert 0.0 <= body["hung_leg_probability"] <= 1.0
+        assert "expected_slippage" in body
+        assert "expected_net_savings" in body
+        assert "distribution" in body
+        assert "percentiles" in body["distribution"]
+        assert body["recommended_policy"] in ["COB_NET_PACKAGE", "LEG_PASSIVE_FIRST", "SPLIT_DIRECT"]
+
+    def test_post_sor_simulate_legging_empty_legs_fallback(self):
+        payload = {"legs": [], "num_simulations": 100}
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/sor/simulate-legging",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["valid"] is False
+        assert body["hung_leg_probability"] == 0.0
+        assert body["recommended_policy"] == "COB_NET_PACKAGE"
+
+
+    def test_post_sor_simulate_legging_fails_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/sor/simulate-legging",
+                json={"legs": []},
+                headers={"Authorization": "Bearer INVALID_TOKEN"},
+            )
+        assert resp.status_code == 401
 

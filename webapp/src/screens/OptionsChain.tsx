@@ -15,9 +15,11 @@ import { VolForecastScanner } from "../components/options/VolForecastScanner";
 import { GammaScalperView } from "../components/options/GammaScalperView";
 import { DispersionScanner } from "../components/options/DispersionScanner";
 import { ZeroDteDesk } from "../components/options/ZeroDteDesk";
+import { VpinGauge } from "../components/options/VpinGauge";
+import { SmartOrderRouterView } from "../components/options/SmartOrderRouterView";
 import { TabGuide } from "../components/TabGuide";
 
-type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte";
+type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte" | "vpin" | "sor";
 
 export function OptionsChain() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -203,6 +205,8 @@ export function OptionsChain() {
           { key: "gamma", label: "⚡ Gamma Scalp" },
           { key: "dispersion", label: "🌐 Dispersion" },
           { key: "zerodte", label: "⚡ 0DTE" },
+          { key: "vpin", label: "⏱ VPIN" },
+          { key: "sor", label: "🔀 Smart Router" },
           { key: "flow", label: "🌊 Flow" },
           { key: "crush", label: "⚡ Crush" },
         ].map(tab => {
@@ -243,6 +247,10 @@ export function OptionsChain() {
           <DispersionScanner initialIndex={ticker} />
         ) : activeTab === "zerodte" ? (
           <ZeroDteDesk initialSymbol={ticker} />
+        ) : activeTab === "vpin" ? (
+          <VpinGauge initialSymbol={ticker || "SPY"} />
+        ) : activeTab === "sor" ? (
+          <SmartOrderRouterView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />
         ) : activeTab === "flow" ? (
           <UnusualFlowFeed initialSymbol={ticker} />
         ) : activeTab === "crush" ? (

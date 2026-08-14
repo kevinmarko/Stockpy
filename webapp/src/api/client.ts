@@ -174,6 +174,11 @@ import type {
   ZeroDteSignalResponse,
   ZeroDteTradeRequest,
   ZeroDteExecutionResult,
+  VpinMetricsResponse,
+  SorAnalysisRequest,
+  SorAnalysisResponse,
+  LeggingSimulationRequest,
+  LeggingSimulationResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -1086,6 +1091,18 @@ const liveApi = {
   },
   executeZeroDteTrade: (request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number }) =>
     http<ZeroDteExecutionResult>("/pilots/options/zero-dte/execute", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getVpinMetrics: (symbol: string) =>
+    http<VpinMetricsResponse>(`/pilots/options/vpin/metrics?symbol=${encodeURIComponent(symbol)}`),
+  analyzeOptionsRouting: (request: SorAnalysisRequest) =>
+    http<SorAnalysisResponse>("/pilots/options/sor/analyze", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  simulateOptionsLegging: (request: LeggingSimulationRequest) =>
+    http<LeggingSimulationResponse>("/pilots/options/sor/simulate-legging", {
       method: "POST",
       body: JSON.stringify(request),
     }),

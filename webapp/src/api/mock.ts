@@ -232,6 +232,13 @@ import type {
   ZeroDteSignalResponse,
   ZeroDteTradeRequest,
   ZeroDteExecutionResult,
+  VpinBucket,
+  VpinMetricsResponse,
+  SorLegBreakdown,
+  SorAnalysisRequest,
+  SorAnalysisResponse,
+  LeggingSimulationRequest,
+  LeggingSimulationResponse,
 } from "./types";
 
 const SECTORS = [
@@ -12923,6 +12930,178 @@ export const mockApi = {
       strategy: "0DTE Intraday Momentum Breakout",
       message: `Executed ${contracts}x ${sym} ${strike} ${type} @ $${entry.toFixed(2)}. Profit target set at $${target.toFixed(2)} (+75%), Stop loss at $${stop.toFixed(2)} (-30%), Hard Time Stop at 15:45 ET.`,
       placed_at: new Date().toISOString(),
+    });
+  },
+  async getVpinMetrics(symbol: string) {
+    const sym = symbol.toUpperCase();
+    const vpinMap: Record<string, { vpin: number; regime: "LOW" | "MODERATE" | "HIGH_TOXICITY"; concession: number; pct: number }> = {
+      SPY: { vpin: 0.184, regime: "LOW", concession: 0.00, pct: 28 },
+      QQQ: { vpin: 0.282, regime: "MODERATE", concession: 0.02, pct: 64 },
+      TSLA: { vpin: 0.428, regime: "HIGH_TOXICITY", concession: 0.08, pct: 94 },
+      NVDA: { vpin: 0.385, regime: "HIGH_TOXICITY", concession: 0.05, pct: 88 },
+      AAPL: { vpin: 0.195, regime: "LOW", concession: 0.00, pct: 32 },
+      MSFT: { vpin: 0.210, regime: "MODERATE", concession: 0.01, pct: 45 },
+    };
+    const info = vpinMap[sym] || { vpin: 0.265, regime: "MODERATE" as const, concession: 0.02, pct: 58 };
+    
+    const numBuckets = 50;
+    const bucketSize = 10000;
+    const basePrice = sym === "SPY" ? 546.50 : sym === "QQQ" ? 481.10 : sym === "TSLA" ? 214.30 : sym === "NVDA" ? 128.50 : 200.0;
+    const buckets: VpinBucket[] = [];
+    let currentP = basePrice;
+    
+    for (let i = 1; i <= numBuckets; i++) {
+      const priceDelta = (Math.sin(i * 0.4) * 0.35) + ((i % 3 === 0 ? 0.2 : -0.15));
+      const nextP = Number((currentP + priceDelta).toFixed(2));
+      const buyPct = Math.max(0.1, Math.min(0.9, 0.5 + (priceDelta / 1.5)));
+      const buyVol = Math.round(bucketSize * buyPct);
+      const sellVol = bucketSize - buyVol;
+      const imbalance = Math.abs(buyVol - sellVol);
+      
+      buckets.push({
+        bucket_index: i,
+        buy_volume: buyVol,
+        sell_volume: sellVol,
+        total_volume: bucketSize,
+        price_start: currentP,
+        price_end: nextP,
+        price_change: Number((nextP - currentP).toFixed(2)),
+        imbalance,
+        timestamp: new Date(Date.now() - (numBuckets - i) * 120_000).toISOString(),
+      });
+      currentP = nextP;
+    }
+
+    return delay<VpinMetricsResponse>({
+      symbol: sym,
+      vpin: info.vpin,
+      regime: info.regime,
+      toxicity_percentile: info.pct,
+      bucket_size: bucketSize,
+      num_buckets: numBuckets,
+      buckets,
+      defensive_spread_concession: info.concession,
+      warning_message: info.regime === "HIGH_TOXICITY"
+        ? `High Microstructure Toxicity (VPIN ${(info.vpin * 100).toFixed(1)}% > 35.0%). Institutional informed flow detected. Defensive concession applied: +$${info.concession.toFixed(2)}/contract.`
+        : null,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async analyzeOptionsRouting(request: SorAnalysisRequest) {
+    const sym = request.symbol.toUpperCase();
+    const legs = request.legs && request.legs.length > 0 ? request.legs : [
+      { strike: 540, option_type: "PUT" as const, action: "SELL" as const, bid: 3.10, ask: 3.25, mid: 3.175 },
+      { strike: 535, option_type: "PUT" as const, action: "BUY" as const, bid: 1.80, ask: 1.95, mid: 1.875 },
+    ];
+    const latency = request.latency_ms || 250;
+    
+    let cobNetMid = 0;
+    let cobNatural = 0;
+    let syntheticNet = 0;
+    
+    const breakdown: SorLegBreakdown[] = legs.map((leg) => {
+      const b = leg.bid ?? 2.0;
+      const a = leg.ask ?? 2.2;
+      const m = leg.mid ?? (b + a) / 2;
+      const isSell = leg.action === "SELL";
+      
+      if (isSell) {
+        cobNetMid += m;
+        cobNatural += b;
+        syntheticNet += m + (a - b) * 0.35;
+      } else {
+        cobNetMid -= m;
+        cobNatural -= a;
+        syntheticNet -= (m - (a - b) * 0.35);
+      }
+      
+      return {
+        strike: leg.strike,
+        option_type: leg.option_type,
+        action: leg.action,
+        bid: b,
+        ask: a,
+        mid: m,
+        fill_priority: isSell ? 1 : 2,
+        fill_style: isSell ? ("PASSIVE" as const) : ("ACTIVE" as const),
+      };
+    });
+
+    const absNetMid = Math.abs(cobNetMid);
+    const absNatural = Math.abs(cobNatural);
+    const absSynthetic = Math.abs(syntheticNet);
+    
+    const savings = Math.max(12.50, Number(((absSynthetic - absNatural) * 100).toFixed(2)));
+    const hungProb = Math.min(0.25, Number((0.02 + (latency / 1000) * 0.045).toFixed(4)));
+    const adverseCost = Number((hungProb * 48.0).toFixed(2));
+    
+    let recommended: "COB_NET_PACKAGE" | "LEG_PASSIVE_FIRST" | "SPLIT_DIRECT" = "LEG_PASSIVE_FIRST";
+    let rationale = `Synthetic legging captures $${savings.toFixed(2)} edge with low hung leg hazard (${(hungProb * 100).toFixed(1)}% @ ${latency}ms).`;
+    
+    if (latency > 1500 || hungProb > 0.15) {
+      recommended = "COB_NET_PACKAGE";
+      rationale = `High execution latency (${latency}ms) creates unacceptable hung leg hazard (${(hungProb * 100).toFixed(1)}%). Direct atomic COB package route recommended.`;
+    }
+
+    return delay<SorAnalysisResponse>({
+      symbol: sym,
+      recommended_route: recommended,
+      cob_net_price: Number(absNetMid.toFixed(2)),
+      cob_natural_price: Number(absNatural.toFixed(2)),
+      synthetic_net_price: Number(absSynthetic.toFixed(2)),
+      expected_savings: savings,
+      hung_leg_probability: hungProb,
+      adverse_selection_cost: adverseCost,
+      latency_ms: latency,
+      legs_breakdown: breakdown,
+      rationale,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async simulateOptionsLegging(request: LeggingSimulationRequest) {
+    const sym = request.symbol.toUpperCase();
+    const numSims = request.num_simulations || 1000;
+    const latencySec = request.latency_seconds || 0.25;
+    
+    const latencies = [50, 100, 250, 500, 1000, 2000, 5000];
+    const latencyCurve = latencies.map((ms) => {
+      const rate = Number((0.015 + (ms / 1000) * 0.052).toFixed(4));
+      const edge = Number(Math.max(-20, 28.50 - (ms / 1000) * 8.40).toFixed(2));
+      return {
+        latency_ms: ms,
+        hung_leg_rate: rate,
+        expected_edge: edge,
+      };
+    });
+
+    const bins = [
+      { bin_edge: -40, count: 18, probability: 0.018 },
+      { bin_edge: -30, count: 32, probability: 0.032 },
+      { bin_edge: -20, count: 54, probability: 0.054 },
+      { bin_edge: -10, count: 86, probability: 0.086 },
+      { bin_edge: 0, count: 120, probability: 0.120 },
+      { bin_edge: 10, count: 185, probability: 0.185 },
+      { bin_edge: 20, count: 245, probability: 0.245 },
+      { bin_edge: 30, count: 155, probability: 0.155 },
+      { bin_edge: 40, count: 80, probability: 0.080 },
+      { bin_edge: 50, count: 25, probability: 0.025 },
+    ];
+
+    const hungRate = Number((0.02 + latencySec * 0.048).toFixed(4));
+    const expEdge = Number((24.80 - latencySec * 6.50).toFixed(2));
+
+    return delay<LeggingSimulationResponse>({
+      symbol: sym,
+      num_simulations: numSims,
+      latency_seconds: latencySec,
+      hung_leg_rate: hungRate,
+      expected_edge_dollars: expEdge,
+      edge_std_dollars: 14.20,
+      worst_case_loss_dollars: -58.00,
+      p95_adverse_selection: -26.50,
+      pnl_distribution: bins,
+      latency_curve: latencyCurve,
+      as_of: new Date().toISOString(),
     });
   },
 

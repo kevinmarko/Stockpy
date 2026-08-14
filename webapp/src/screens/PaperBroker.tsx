@@ -13,6 +13,8 @@ import { VolForecastScanner } from "../components/options/VolForecastScanner";
 import { GammaScalperView } from "../components/options/GammaScalperView";
 import { DispersionScanner } from "../components/options/DispersionScanner";
 import { ZeroDteDesk } from "../components/options/ZeroDteDesk";
+import { VpinGauge } from "../components/options/VpinGauge";
+import { SmartOrderRouterView } from "../components/options/SmartOrderRouterView";
 import type { RollOrderRequest } from "../api/types";
 
 export function PaperBroker() {
@@ -34,6 +36,8 @@ export function PaperBroker() {
   const [showGammaScalper, setShowGammaScalper] = useState(false);
   const [showDispersion, setShowDispersion] = useState(false);
   const [showZeroDte, setShowZeroDte] = useState(false);
+  const [showVpin, setShowVpin] = useState(false);
+  const [showSor, setShowSor] = useState(false);
 
   // Position Roll state
   const [rollingPosition, setRollingPosition] = useState<{ symbol: string; qty: number } | null>(null);
@@ -271,6 +275,36 @@ export function PaperBroker() {
             ⚡ 0DTE Desk
           </button>
           <button
+            onClick={() => setShowVpin(!showVpin)}
+            style={{
+              padding: "8px 14px",
+              background: showVpin ? theme.accent : theme.surface,
+              border: `1px solid ${showVpin ? theme.accent : theme.border}`,
+              color: showVpin ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            ⏱ VPIN Toxicity
+          </button>
+          <button
+            onClick={() => setShowSor(!showSor)}
+            style={{
+              padding: "8px 14px",
+              background: showSor ? theme.growth : theme.surface,
+              border: `1px solid ${showSor ? theme.growth : theme.border}`,
+              color: showSor ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🔀 Smart Router
+          </button>
+          <button
             onClick={() => setShowVolScanner(!showVolScanner)}
             style={{
               padding: "8px 14px",
@@ -382,6 +416,23 @@ export function PaperBroker() {
               deltaHedge.reload();
             }}
             onClose={() => setShowZeroDte(false)}
+          />
+        )}
+
+        {/* VPIN Toxicity Meter Desk */}
+        {showVpin && (
+          <VpinGauge
+            initialSymbol="SPY"
+            onClose={() => setShowVpin(false)}
+          />
+        )}
+
+        {/* Multi-Leg Smart Order Router (SOR) & Legging Desk */}
+        {showSor && (
+          <SmartOrderRouterView
+            initialSymbol="SPY"
+            spotPrice={account.data?.equity ? 546.50 : 546.50}
+            onClose={() => setShowSor(false)}
           />
         )}
 

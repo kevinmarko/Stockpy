@@ -4562,6 +4562,111 @@ export interface ZeroDteExecutionResult {
   placed_at?: string;
 }
 
+export interface VpinBucket {
+  bucket_index: number;
+  buy_volume: number;
+  sell_volume: number;
+  total_volume: number;
+  price_start: number;
+  price_end: number;
+  price_change: number;
+  imbalance: number;
+  timestamp?: string;
+}
 
+export interface VpinMetricsResponse {
+  symbol: string;
+  vpin: number;
+  regime: "LOW" | "MODERATE" | "HIGH_TOXICITY";
+  toxicity_percentile?: number;
+  bucket_size: number;
+  num_buckets: number;
+  buckets: VpinBucket[];
+  defensive_spread_concession?: number;
+  warning_message?: string | null;
+  as_of?: string;
+}
 
+export interface SorLeg {
+  symbol?: string;
+  option_type: "CALL" | "PUT";
+  strike: number;
+  expiration?: string;
+  action: "BUY" | "SELL";
+  ratio?: number;
+  bid?: number;
+  ask?: number;
+  mid?: number;
+}
 
+export interface SorLegBreakdown {
+  strike: number;
+  option_type: "CALL" | "PUT";
+  action: "BUY" | "SELL";
+  bid: number;
+  ask: number;
+  mid: number;
+  fill_priority: number;
+  fill_style: "PASSIVE" | "ACTIVE";
+}
+
+export interface SorAnalysisRequest {
+  symbol: string;
+  spot_price?: number;
+  legs: SorLeg[];
+  latency_ms?: number;
+  order_size?: number;
+}
+
+export interface SorAnalysisResponse {
+  symbol: string;
+  recommended_route: "COB_NET_PACKAGE" | "LEG_PASSIVE_FIRST" | "SPLIT_DIRECT";
+  cob_net_price: number;
+  cob_natural_price: number;
+  synthetic_net_price: number;
+  expected_savings: number;
+  hung_leg_probability: number;
+  adverse_selection_cost: number;
+  latency_ms: number;
+  legs_breakdown: SorLegBreakdown[];
+  rationale: string;
+  as_of?: string;
+}
+
+export interface LeggingSimulationRequest {
+  symbol: string;
+  spot_price?: number;
+  volatility?: number;
+  latency_seconds?: number;
+  num_simulations?: number;
+  legs?: {
+    strike: number;
+    option_type: "CALL" | "PUT";
+    action: "BUY" | "SELL";
+    bid?: number;
+    ask?: number;
+    mid?: number;
+  }[];
+}
+
+export interface LeggingSimulationResponse {
+  symbol: string;
+  num_simulations: number;
+  latency_seconds: number;
+  hung_leg_rate: number;
+  expected_edge_dollars: number;
+  edge_std_dollars: number;
+  worst_case_loss_dollars: number;
+  p95_adverse_selection: number;
+  pnl_distribution: {
+    bin_edge: number;
+    count: number;
+    probability: number;
+  }[];
+  latency_curve: {
+    latency_ms: number;
+    hung_leg_rate: number;
+    expected_edge: number;
+  }[];
+  as_of?: string;
+}
