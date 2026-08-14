@@ -1349,7 +1349,8 @@ def _reconstruct_macro_regime_series(
 ) -> pd.DataFrame:
     """Reconstruct the REAL ``dto_models.MacroEconomicDTO.market_regime`` /
     ``.killSwitch`` classification at every date in *common_index*, from raw
-    FRED series (VIXCLS, T10Y2Y, BAMLH0A0HYM2, UNRATE).
+    FRED series (VIXCLS, T10Y2Y, BAMLH0A0HYM2, UNRATE; BAA10Y as an optional
+    credit-spread fallback -- see below).
 
     Honesty design: this constructs the actual live ``MacroEconomicDTO``
     class per date and reads its real properties — NOT a re-implementation
@@ -1365,17 +1366,18 @@ def _reconstruct_macro_regime_series(
     own walk-forward implementation — a materially larger, statistically
     delicate task deferred to a future v2.
 
-    A date with missing VIX/yield-curve/Sahm series degrades to
+    A date with any missing input series degrades to
     ``market_regime=None`` / ``kill_switch=False`` (never a fabricated
     classification — CONSTRAINT #4). When ``credit_spread`` (BAMLH0A0HYM2)
     is unavailable (e.g. earlier historical eras before local HY-OAS coverage),
     it dynamically falls back to Moody's Seasoned Baa Corporate Bond Spread
     (``BAA10Y``, available from FRED back to 1986), ensuring continuous real
-    corporate credit stress detection across the entire historical timeline.
+    corporate credit stress detection across the entire historical timeline —
+    but if BOTH credit-spread series are unavailable for a date, that date
+    still degrades to ``market_regime=None`` rather than guessing; there is
+    no placeholder credit-spread value that would be honest to invent.
     """
     from dto_models import MacroEconomicDTO
-
-    _SAFE_CREDIT_SPREAD = 4.0
 
     if unrate is not None and not unrate.empty:
         # Lag UNRATE by 1 month: BLS unemployment statistics are published in
@@ -1396,17 +1398,17 @@ def _reconstruct_macro_regime_series(
     regimes: List[Optional[str]] = []
     kill_switches: List[bool] = []
     for yc, oas, baa_val, sahm_val, vix_val in zip(yc_daily, oas_daily, baa_daily, sahm_daily, vix_daily):
-        if pd.isna(yc) or pd.isna(sahm_val) or pd.isna(vix_val):
-            regimes.append(None)
-            kill_switches.append(False)
-            continue
         if not pd.isna(oas):
             oas_val = float(oas)
         elif not pd.isna(baa_val):
             # Moody's Baa Corporate Bond Spread over 10Y Treasury (real FRED series back to 1986)
             oas_val = float(baa_val)
         else:
-            oas_val = _SAFE_CREDIT_SPREAD
+            oas_val = None
+        if pd.isna(yc) or pd.isna(sahm_val) or pd.isna(vix_val) or oas_val is None:
+            regimes.append(None)
+            kill_switches.append(False)
+            continue
         dto = MacroEconomicDTO(
             yield_curve_10y_2y=float(yc),
             high_yield_oas=oas_val,
@@ -1432,18 +1434,22 @@ def _build_macro_regime_adapter(
 
     Reconstructs ``dto_models.MacroEconomicDTO.market_regime``/``.killSwitch``
     at every historical date (see ``_reconstruct_macro_regime_series``) from
-    real FRED series persisted in ``HistoricalStore.get_macro()``, then
-    faithfully reproduces ``MacroRegimeSignal.compute()``'s exact point scale:
-    RECESSION -15, CREDIT EVENT -25, RISK ON +10, killSwitch -5, and — ONLY
-    within RECESSION/CREDIT EVENT — a sector rotation of -15 (Financial/Real
-    Estate) or +10 (Consumer Staples/Healthcare), normalized by /45.0.
+    real FRED series persisted in ``HistoricalStore.get_macro()``, and
+    surfaces ``MacroRegimeSignal.compute()``'s base regime point scale
+    (RECESSION -15, CREDIT EVENT -25, RISK ON +10, killSwitch -5, normalized
+    by /45.0) as a diagnostic-only ``X["MacroRegime_Composite"]`` feature —
+    it does not drive ``portfolio_returns`` below, which is the only series
+    the harness actually scores.
 
     PORTFOLIO ALLOCATION & RISK MANAGEMENT:
     * Systemic Macro Scaling: In favorable macroeconomic regimes (``RISK ON``),
       allocations are 100% long. In ``NEUTRAL``, baseline exposure is 70%. In
       stressed regimes (``RECESSION``, ``CREDIT EVENT``, or ``killSwitch``),
       exposure scales to cash (0.0), protecting capital from systemic drawdowns.
-    * Risk-Parity Cross-Section: Weighting across the 30 tradeable large-caps is
+      An UNKNOWN regime (``market_regime is None`` — a missing macro input for
+      that date) also scales to cash (0.0): CONSTRAINT #4 forbids treating
+      "unknown" as if it were the known-NEUTRAL 70% case.
+    * Risk-Parity Cross-Section: Weighting across the tradeable large-caps is
       proportional to inverse 60-day realized volatility, preventing volatile
       single stocks from dominating portfolio risk.
     * Market Trend Overlay (Faber SMA-200, Category A lever): When SPY is
@@ -1457,6 +1463,8 @@ def _build_macro_regime_adapter(
     with zero lookahead bias.
     """
     from data.historical_store import HistoricalStore
+
+    _DEGENERATE_STD = 1e-12  # repo convention -- see risk/etf_transmission.py's _DEGENERATE_STD
 
     tradeable = [t for t in closes.columns if t != "SPY"]
     spy_close_raw = closes["SPY"] if "SPY" in closes.columns else None
@@ -1472,19 +1480,18 @@ def _build_macro_regime_adapter(
     regime_df = _reconstruct_macro_regime_series(
         common_index, vix, t10y2y, credit_spread, unrate, baa_spread=baa_spread
     )
-    sectors = _load_ticker_sectors()
 
     is_stressed = regime_df["market_regime"].isin(["RECESSION", "CREDIT EVENT"])
     is_kill_switch = regime_df["kill_switch"]
+    is_unknown = regime_df["market_regime"].isna()
 
     base_points = pd.Series(0.0, index=common_index)
     base_points[regime_df["market_regime"] == "RECESSION"] -= 15.0
     base_points[regime_df["market_regime"] == "CREDIT EVENT"] -= 25.0
     base_points[regime_df["market_regime"] == "RISK ON"] += 10.0
     base_points[regime_df["kill_switch"]] -= 5.0
-    base_points[regime_df["market_regime"].isna()] = np.nan
+    base_points[is_unknown] = np.nan
 
-    score_cols: Dict[str, pd.Series] = {}
     ret_cols: Dict[str, pd.Series] = {}
     vol_cols: Dict[str, pd.Series] = {}
     for ticker in tradeable:
@@ -1492,25 +1499,20 @@ def _build_macro_regime_adapter(
         ret_cols[ticker] = close.pct_change()
         vol_cols[ticker] = ret_cols[ticker].rolling(60).std() * np.sqrt(252)
 
-        sector = sectors.get(ticker)
-        sector_bonus = pd.Series(0.0, index=common_index)
-        if sector:
-            if "Financial" in sector or "Real Estate" in sector:
-                sector_bonus[is_stressed] = -15.0
-            elif "Consumer Staples" in sector or "Healthcare" in sector:
-                sector_bonus[is_stressed] = 10.0
-        score_cols[ticker] = (base_points + sector_bonus) / 45.0
-
-    score_df = pd.DataFrame(score_cols)
     rets_df = pd.DataFrame(ret_cols)
     vols_df = pd.DataFrame(vol_cols)
 
-    # Risk-parity inverse volatility weights across tradeable stocks
-    inv_vol = 1.0 / vols_df.replace(0.0, np.nan)
+    # Risk-parity inverse volatility weights across tradeable stocks. Guard
+    # against a near-zero (not just exactly-zero) std -- repo convention,
+    # see CLAUDE.md's "Degenerate-std guard convention".
+    inv_vol = 1.0 / vols_df.where(vols_df >= _DEGENERATE_STD, np.nan)
     base_weights = inv_vol.div(inv_vol.sum(axis=1), axis=0).fillna(0.0)
 
-    # Macro regime exposure scaling
-    macro_scale = pd.Series(0.7, index=common_index)
+    # Macro regime exposure scaling. Default (0.7) applies only to a KNOWN,
+    # non-stressed regime (i.e. NEUTRAL) -- an unknown regime (missing macro
+    # input for that date) never inherits the NEUTRAL default (CONSTRAINT #4).
+    macro_scale = pd.Series(0.0, index=common_index)
+    macro_scale[~is_unknown] = 0.7
     macro_scale[regime_df["market_regime"] == "RISK ON"] = 1.0
     macro_scale[is_stressed | is_kill_switch] = 0.0
 
@@ -1525,7 +1527,7 @@ def _build_macro_regime_adapter(
         portfolio_returns = portfolio_returns.where(uptrend, 0.0)
 
     X = pd.DataFrame(index=common_index)
-    X["MacroRegime_Composite"] = score_df.mean(axis=1).fillna(0.0)
+    X["MacroRegime_Composite"] = (base_points / 45.0).fillna(0.0)
     y = rets_df.mean(axis=1).fillna(0.0)
 
     precomputed = {

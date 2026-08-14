@@ -76,10 +76,14 @@ def get_cik(symbol: str) -> Optional[str]:
                 try:
                     data = json.loads(_http_get(SEC_TICKERS_URL).decode("utf-8"))
                     for entry in data.values():
-                        ticker = entry["ticker"].upper()
-                        # Do not overwrite if already populated unless it's a known parent
-                        if ticker not in _cik_cache:
-                            _cik_cache[ticker] = str(entry["cik_str"]).zfill(10)
+                        # SEC's company_tickers.json is not guaranteed to be
+                        # collision-free (ticker reuse across mergers/spin-offs);
+                        # _CIK_OVERRIDES above is the vetted, tested fix for a
+                        # known collision (XOM) -- this loop keeps its original,
+                        # long-standing "last entry wins" semantics rather than
+                        # silently changing conflict resolution for every other
+                        # ticker on an unverified ordering assumption.
+                        _cik_cache[entry["ticker"].upper()] = str(entry["cik_str"]).zfill(10)
                 except Exception as exc:
                     logger.warning("Failed to fetch SEC tickers: %s", exc)
                     return None

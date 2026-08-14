@@ -9,9 +9,10 @@ Fast, fully-offline unit tests (default suite) cover:
   * _reconstruct_macro_regime_series reusing the REAL dto_models.MacroEconomicDTO
     (not a re-implementation), including the documented v1 caveats (no HMM
     downgrade replay, degrade-to-None on missing series)
-  * _build_macro_regime_adapter's score formula fidelity against
-    signals/macro_regime.py's exact point scale, the two book-construction
-    variants, and no-lookahead (.shift(1)) discipline
+  * _build_macro_regime_adapter's diagnostic score formula fidelity against
+    signals/macro_regime.py's exact point scale, the risk-parity/macro-scaled
+    "MacroRegime_TrendGated" portfolio construction, and no-lookahead
+    (.shift(1)) discipline
 
 One @pytest.mark.network + FRED-key-gated integration test exercises the
 adapter against real persisted FRED history end-to-end through
@@ -178,52 +179,38 @@ class TestReconstructMacroRegimeSeries:
 # TestBuildMacroRegimeAdapter
 # ---------------------------------------------------------------------------
 
-def _patched_adapter_call(closes, vix, t10y2y, oas, unrate, sectors):
+def _patched_adapter_call(closes, vix, t10y2y, oas, unrate, baa=None):
+    if baa is None:
+        baa = pd.Series(dtype=float)
     mock_store = MagicMock()
     mock_store.get_macro.side_effect = lambda series_id, **kw: {
-        "VIXCLS": vix, "T10Y2Y": t10y2y, "BAMLH0A0HYM2": oas, "UNRATE": unrate,
+        "VIXCLS": vix, "T10Y2Y": t10y2y, "BAMLH0A0HYM2": oas, "BAA10Y": baa, "UNRATE": unrate,
     }[series_id]
     with patch("data.historical_store.HistoricalStore", return_value=mock_store):
-        with patch("scripts.refresh_validations._load_ticker_sectors", return_value=sectors):
-            return _build_macro_regime_adapter(closes)
+        return _build_macro_regime_adapter(closes)
 
 
 class TestBuildMacroRegimeAdapter:
     _TICKERS = ["AAPL", "JNJ", "XOM", "JPM"]
-    _SECTORS = {
-        "AAPL": "Technology",
-        "JNJ": "Healthcare",
-        "XOM": "Energy",
-        "JPM": "Financial Services",
-    }
 
     def test_returns_three_items_and_variants(self) -> None:
         idx, vix, t10y2y, oas, unrate = _synthetic_macro_series(n_days=800)
         closes = _synthetic_closes(self._TICKERS, idx)
 
-        X, y, pre = _patched_adapter_call(closes, vix, t10y2y, oas, unrate, self._SECTORS)
+        X, y, pre = _patched_adapter_call(closes, vix, t10y2y, oas, unrate)
 
         assert not X.empty and not y.empty
         assert "MacroRegime_Composite" in X.columns
-        assert set(pre.keys()) == {"MacroRegime_TopHalf", "MacroRegime_SectorRotation"}
+        assert set(pre.keys()) == {"MacroRegime_TrendGated"}
         for k, v in pre.items():
             assert v.index.equals(y.index), f"{k} index mismatch"
 
-    def test_sector_rotation_flat_outside_stress_regimes(self) -> None:
-        """RISK ON the entire window -> SectorRotation book must be all zero
-        (it only takes positions within RECESSION/CREDIT EVENT)."""
-        idx = pd.bdate_range("2015-01-01", periods=500)
-        vix = pd.Series(12.0, index=idx)
-        t10y2y = pd.Series(1.5, index=idx)
-        oas = pd.Series(2.0, index=idx)
-        monthly_idx = pd.date_range("2014-01-01", idx[-1], freq="MS")
-        unrate = pd.Series(4.0, index=monthly_idx)
-        closes = _synthetic_closes(self._TICKERS, idx)
-
-        _, _, pre = _patched_adapter_call(closes, vix, t10y2y, oas, unrate, self._SECTORS)
-        assert (pre["MacroRegime_SectorRotation"] == 0.0).all()
-
-    def test_sector_rotation_active_during_credit_event(self) -> None:
+    def test_macro_regime_composite_reflects_point_scale(self) -> None:
+        """X["MacroRegime_Composite"] must reproduce
+        signals/macro_regime.py's base point scale (RECESSION -15,
+        CREDIT EVENT -25, RISK ON +10, killSwitch -5), normalized by /45.0 --
+        with no sector adjustment (removed: it no longer drives any traded
+        return series, only this diagnostic column)."""
         idx = pd.bdate_range("2015-01-01", periods=500)
         vix = pd.Series(12.0, index=idx)
         t10y2y = pd.Series(1.5, index=idx)
@@ -232,59 +219,23 @@ class TestBuildMacroRegimeAdapter:
         unrate = pd.Series(4.0, index=monthly_idx)
         closes = _synthetic_closes(self._TICKERS, idx)
 
-        _, _, pre = _patched_adapter_call(closes, vix, t10y2y, oas, unrate, self._SECTORS)
-        # Some (not necessarily all, due to the .shift(1) lag) days must be nonzero.
-        assert (pre["MacroRegime_SectorRotation"] != 0.0).sum() > 0
-
-    def test_consumer_defensive_sector_gets_no_bonus_fidelity_note(self) -> None:
-        """FIDELITY NOTE: yfinance's real sector taxonomy is 'Consumer
-        Defensive', not 'Consumer Staples' -- the live signal's substring
-        check for 'Consumer Staples' never actually matches. This backtest
-        must reproduce that exact behavior, not silently correct it."""
-        idx = pd.bdate_range("2015-01-01", periods=500)
-        vix = pd.Series(12.0, index=idx)
-        t10y2y = pd.Series(1.5, index=idx)
-        oas = pd.Series(7.0, index=idx)  # CREDIT EVENT throughout
-        monthly_idx = pd.date_range("2014-01-01", idx[-1], freq="MS")
-        unrate = pd.Series(4.0, index=monthly_idx)
-        closes = _synthetic_closes(["KO"], idx)
-
-        _, _, pre = _patched_adapter_call(
-            closes, vix, t10y2y, oas, unrate, {"KO": "Consumer Defensive"}
-        )
-        # KO is the only ticker -> if it got the defensive bonus it would be
-        # the sole long leg; since "Consumer Defensive" never matches
-        # "Consumer Staples", defensive_tickers is empty -> rotation is flat.
-        assert (pre["MacroRegime_SectorRotation"] == 0.0).all()
-
-    def test_healthcare_sector_gets_defensive_bonus(self) -> None:
-        idx = pd.bdate_range("2015-01-01", periods=500)
-        vix = pd.Series(12.0, index=idx)
-        t10y2y = pd.Series(1.5, index=idx)
-        oas = pd.Series(7.0, index=idx)
-        monthly_idx = pd.date_range("2014-01-01", idx[-1], freq="MS")
-        unrate = pd.Series(4.0, index=monthly_idx)
-        closes = _synthetic_closes(["JNJ"], idx)
-
-        _, _, pre = _patched_adapter_call(
-            closes, vix, t10y2y, oas, unrate, {"JNJ": "Healthcare"}
-        )
-        assert (pre["MacroRegime_SectorRotation"] != 0.0).sum() > 0
+        X, _, _ = _patched_adapter_call(closes, vix, t10y2y, oas, unrate)
+        known = X["MacroRegime_Composite"].loc[idx[400]:]  # past Sahm warm-up
+        assert len(known) > 0
+        assert (known - (-25.0 / 45.0)).abs().max() < 1e-9
 
     def test_no_lookahead_shift1(self) -> None:
         idx, vix, t10y2y, oas, unrate = _synthetic_macro_series(n_days=700)
         closes = _synthetic_closes(self._TICKERS, idx)
         cutoff = idx[600]
 
-        _, _, pre_orig = _patched_adapter_call(closes, vix, t10y2y, oas, unrate, self._SECTORS)
-        val_orig = pre_orig["MacroRegime_TopHalf"].loc[cutoff]
+        _, _, pre_orig = _patched_adapter_call(closes, vix, t10y2y, oas, unrate)
+        val_orig = pre_orig["MacroRegime_TrendGated"].loc[cutoff]
 
         perturbed = closes.copy()
         perturbed.loc[perturbed.index > cutoff] *= 5.0
-        _, _, pre_pert = _patched_adapter_call(
-            perturbed, vix, t10y2y, oas, unrate, self._SECTORS
-        )
-        assert val_orig == pytest.approx(pre_pert["MacroRegime_TopHalf"].loc[cutoff])
+        _, _, pre_pert = _patched_adapter_call(perturbed, vix, t10y2y, oas, unrate)
+        assert val_orig == pytest.approx(pre_pert["MacroRegime_TrendGated"].loc[cutoff])
 
     def test_unknown_regime_dates_excluded_never_fabricated(self) -> None:
         """A date range where every macro input is missing (e.g. before the
@@ -294,7 +245,7 @@ class TestBuildMacroRegimeAdapter:
         empty = pd.Series(dtype=float)
         closes = _synthetic_closes(self._TICKERS, idx)
 
-        X, y, pre = _patched_adapter_call(closes, empty, empty, empty, empty, self._SECTORS)
+        X, y, pre = _patched_adapter_call(closes, empty, empty, empty, empty)
         assert X["MacroRegime_Composite"].fillna(0.0).eq(0.0).all()
         for v in pre.values():
             assert (v == 0.0).all()
