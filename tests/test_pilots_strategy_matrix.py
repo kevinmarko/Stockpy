@@ -478,7 +478,16 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # output/state_snapshot.json instead of a live signal computation.
         allowed = allowed | {"data", "datetime"}
     if module_name == "paper_broker":
-        allowed = allowed | {"data"}
+        # pilots.paper_broker's execute_paper_order composes
+        # pilots.paper_broker_options_order.execute_paper_order (a lazy,
+        # function-local import) -- itself independently confirmed
+        # dependency-light by inspection: it imports only
+        # pilots.order_sizing (math+typing only) and pilots.price_provider
+        # (data+logging+typing only, no heavy engine), plus
+        # data.paper_account_store already covered by the `data` allowance
+        # below. `pilots` is allowed here for that one narrow composition,
+        # matching pilots.discovery's identical precedent above.
+        allowed = allowed | {"data", "pilots"}
     if module_name == "live_trade_proposals":
         # pilots.live_trade_proposals mirrors pilots.paper_broker's exact
         # pattern (settings + a dependency-light store module), except its
