@@ -30,9 +30,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+from path_confinement import is_confined
 from prompt_registry.models import PromptRecord
 
 logger = logging.getLogger(__name__)
@@ -115,8 +117,9 @@ _DEFAULT_CACHE_DIR: Path = Path("output") / "prompt_cache"
 def _sanitize_id(prompt_id: str) -> str:
     """Convert a prompt id to a safe directory name.
 
-    Dots and slashes are replaced with underscores so that ``gravity.step_01``
-    becomes ``gravity_step_01`` on the filesystem.
+    Dots, slashes, backslashes, and any non-alphanumeric characters are replaced
+    with underscores so that ``gravity.step_01`` becomes ``gravity_step_01``
+    and directory traversal sequences cannot escape the cache directory.
 
     Examples
     --------
@@ -124,8 +127,13 @@ def _sanitize_id(prompt_id: str) -> str:
     'gravity_step_01'
     >>> _sanitize_id("master_preprompt")
     'master_preprompt'
+    >>> _sanitize_id("../../etc/passwd")
+    '______etc_passwd'
     """
-    return prompt_id.replace(".", "_").replace("/", "_").replace(" ", "_")
+    if not prompt_id:
+        return "_empty_"
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", str(prompt_id).strip())
+    return sanitized or "_empty_"
 
 
 class CacheManager:
@@ -160,17 +168,48 @@ class CacheManager:
     ) -> None:
         self._dir = Path(cache_dir)
         self._keep = max(1, keep_versions)
+        # Resolved once here rather than in every _prompt_dir/_record_path
+        # call — self._dir never changes after construction, so repeating
+        # the resolve() (a filesystem stat) on the cache root itself on
+        # every path-confinement check is pure wasted I/O.
+        self._resolved_dir = self._dir.resolve()
 
     # ------------------------------------------------------------------
     # Path helpers
     # ------------------------------------------------------------------
 
     def _prompt_dir(self, prompt_id: str) -> Path:
-        return self._dir / _sanitize_id(prompt_id)
+        safe_name = _sanitize_id(prompt_id)
+        # `safe_name` is already stripped of every character outside
+        # [a-zA-Z0-9_-] by _sanitize_id (no `/`/`\` can survive), and the
+        # result is immediately containment-checked via is_confined() below
+        # before ever being returned or used for I/O -- CodeQL's
+        # py/path-injection query does not model that guard as a sanitizer
+        # for its own Path.is_relative_to()-based check, so it still flags
+        # the tainted-looking construction here. Reviewed false positive.
+        # codeql[py/path-injection]
+        target = (self._dir / safe_name).resolve()
+        if not is_confined(target, self._resolved_dir):
+            logger.warning("CacheManager._prompt_dir: directory escape attempt for %r", prompt_id)
+            return self._dir / "_invalid_"
+        return self._dir / safe_name
 
     def _record_path(self, prompt_id: str, version: str) -> Path:
-        safe_version = version.replace("/", "_").replace(" ", "_")
-        return self._prompt_dir(prompt_id) / f"{safe_version}.json"
+        safe_version = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(version).strip()) or "default"
+        prompt_dir = self._prompt_dir(prompt_id)
+        # Same reviewed false positive as _prompt_dir above: safe_version is
+        # separator-free and the result is containment-checked by
+        # is_confined() immediately below before use.
+        # codeql[py/path-injection]
+        target = (prompt_dir / f"{safe_version}.json").resolve()
+        if not is_confined(target, self._resolved_dir):
+            logger.warning(
+                "CacheManager._record_path: directory escape attempt for %r@%r",
+                prompt_id,
+                version,
+            )
+            return self._dir / "_invalid_" / "invalid.json"
+        return prompt_dir / f"{safe_version}.json"
 
     # ------------------------------------------------------------------
     # Public API

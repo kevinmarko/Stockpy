@@ -34,17 +34,20 @@ is a stage shows "pending" slightly longer; it never blocks or crashes the GUI.
 
 from __future__ import annotations
 
+import datetime
 import enum
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence
 
+from ml.meta_bootstrap import META_LABELED_SIGNAL_IDS
 from settings import settings
 
 
@@ -767,19 +770,41 @@ def launch_validation_run(strategies: List[str], start: str, end: str) -> RunHan
     if not strategies:
         raise ValueError("launch_validation_run requires at least one strategy")
 
+    _strat_re = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$")
+
+    try:
+        if not isinstance(start, str):
+            raise ValueError("Start date must be a string")
+        datetime.date.fromisoformat(start.strip())
+    except (ValueError, TypeError) as err:
+        raise ValueError(f"Invalid start date: {start!r} (expected YYYY-MM-DD)") from err
+
+    try:
+        if not isinstance(end, str):
+            raise ValueError("End date must be a string")
+        datetime.date.fromisoformat(end.strip())
+    except (ValueError, TypeError) as err:
+        raise ValueError(f"Invalid end date: {end!r} (expected YYYY-MM-DD)") from err
+
+    cleaned_strategies: List[str] = []
+    for strat in strategies:
+        if not isinstance(strat, str) or not _strat_re.match(strat.strip()):
+            raise ValueError(f"Invalid strategy identifier: {strat!r}")
+        cleaned_strategies.append(strat.strip())
+
     settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     cmd: List[str] = [
         sys.executable, "-m", "scripts.refresh_validations",
-        "--strategies", ",".join(strategies),
-        "--start", start,
-        "--end", end,
+        "--strategies", ",".join(cleaned_strategies),
+        "--start", start.strip(),
+        "--end", end.strip(),
     ]
 
     log_file = open(VALIDATION_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
     log_file.write(
         f"# InvestYo validation run @ {time.strftime('%Y-%m-%d %H:%M:%S')} "
-        f"(strategies={','.join(strategies)}, start={start}, end={end})\n"
+        f"(strategies={','.join(cleaned_strategies)}, start={start.strip()}, end={end.strip()})\n"
     )
     log_file.flush()
 
@@ -896,6 +921,10 @@ def launch_train_meta_labelers(signal: Optional[str] = None) -> RunHandle:
 
     cmd: List[str] = [sys.executable, "-m", "scripts.train_meta_labelers"]
     if signal:
+        if signal not in META_LABELED_SIGNAL_IDS:
+            raise ValueError(
+                f"Invalid signal identifier: {signal!r} (expected one of {META_LABELED_SIGNAL_IDS})"
+            )
         cmd.extend(["--signal", signal])
 
     log_file = open(TRAIN_META_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child

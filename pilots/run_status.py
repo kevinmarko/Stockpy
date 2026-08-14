@@ -369,4 +369,4 @@ def parse_crontab_status(path: Optional[Path] = None) -> dict:
         return {"jobs": jobs}
     except OSError as exc:  # noqa: BLE001 - dead-letter (CONSTRAINT #6)
         logger.warning("run_status.parse_crontab_status: could not read %s: %s", target, exc)
-        return {"jobs": [], "error": str(exc)}
+        return {"jobs": [], "error": "Unable to read crontab schedule"}
