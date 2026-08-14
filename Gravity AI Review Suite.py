@@ -3531,6 +3531,7 @@ class GravityAIAuditor:
             import importlib
             import os
             import ast
+            import tempfile
             from dataclasses import fields
             from datetime import datetime, timezone
             from unittest.mock import patch, MagicMock
@@ -3555,6 +3556,44 @@ class GravityAIAuditor:
                 provider.get_intraday_bars.return_value = None
                 provider.get_fundamentals.return_value = {}
                 return provider
+
+            def _run_once_in_empty_universe_sandbox(
+                macro_mock: MagicMock, snap_mock: MagicMock, *, force_account: bool = False,
+            ):
+                """Shared by checks d/e: run main.run_once() in an isolated
+                tempdir with a deterministically empty universe.
+
+                Patches main.settings.DEFAULT_TICKERS AND main.discovery --
+                _build_universe() unions discovery()'s scan candidates in
+                BEFORE it ever consults DEFAULT_TICKERS, and discovery() reads
+                settings.OUTPUT_DIR / "scan_candidates.json", a machine-global
+                LOCAL_DATA_ROOT path that os.chdir(tmp) below does NOT
+                isolate. Without also patching discovery, a machine with a
+                real prior agentic-discovery run would make the universe
+                non-empty here and these "empty universe" checks would flake.
+
+                Returns (result, mock_fetch) so callers can assert on either.
+                """
+                with tempfile.TemporaryDirectory() as tmp:
+                    orig_dir = os.getcwd()
+                    os.chdir(tmp)
+                    try:
+                        with patch("main.fetch_account_snapshot", return_value=snap_mock) as mock_fetch, \
+                             patch("main.get_provider", return_value=_make_run_once_market_provider()), \
+                             patch("main._build_macro_dto", return_value=macro_mock), \
+                             patch("main._fetch_bars_for_universe", return_value={}), \
+                             patch("main._build_context_extras", return_value={}), \
+                             patch("main.settings.DEFAULT_TICKERS", []), \
+                             patch("main.discovery", return_value={"candidates": []}):
+                            _env_bak = os.environ.pop("WATCHLIST", None)
+                            try:
+                                result = run_once(force_account=force_account)
+                            finally:
+                                if _env_bak is not None:
+                                    os.environ["WATCHLIST"] = _env_bak
+                    finally:
+                        os.chdir(orig_dir)
+                return result, mock_fetch
 
             # ── a. RunResult is a frozen dataclass with required fields ───────
             check_a = {"status": "PASS"}
@@ -3646,36 +3685,7 @@ class GravityAIAuditor:
                 macro_mock2.market_regime = "NEUTRAL"
                 macro_mock2.vix_value = 18.0
 
-                import tempfile
-                with tempfile.TemporaryDirectory() as tmp:
-                    orig_dir = os.getcwd()
-                    os.chdir(tmp)
-                    try:
-                        with patch("main.fetch_account_snapshot", return_value=snap_mock2), \
-                             patch("main.get_provider", return_value=_make_run_once_market_provider()), \
-                             patch("main._build_macro_dto", return_value=macro_mock2), \
-                             patch("main._fetch_bars_for_universe", return_value={}), \
-                             patch("main._build_context_extras", return_value={}), \
-                             patch("main.settings.DEFAULT_TICKERS", []), \
-                             patch("main.discovery", return_value={"candidates": []}):
-                            # main.discovery must also be mocked: _build_universe()
-                            # unions discovery()'s scan candidates in BEFORE it ever
-                            # consults DEFAULT_TICKERS, and discovery() reads
-                            # settings.OUTPUT_DIR / "scan_candidates.json" -- a
-                            # machine-global LOCAL_DATA_ROOT path this test's
-                            # os.chdir(tmp) sandbox does NOT isolate. Without this,
-                            # a machine with a real prior agentic-discovery run
-                            # would make `combined` non-empty here and this
-                            # "empty universe" check would flake exactly like the
-                            # DEFAULT_TICKERS gap this PR fixes.
-                            _env_bak = os.environ.pop("WATCHLIST", None)
-                            try:
-                                result = run_once()
-                            finally:
-                                if _env_bak is not None:
-                                    os.environ["WATCHLIST"] = _env_bak
-                    finally:
-                        os.chdir(orig_dir)
+                result, _ = _run_once_in_empty_universe_sandbox(macro_mock2, snap_mock2)
                 assert len(result.recommendations) == 0
                 assert len(result.errors) == 0
             except Exception as exc:
@@ -3697,29 +3707,9 @@ class GravityAIAuditor:
                 macro_mock3.market_regime = "NEUTRAL"
                 macro_mock3.vix_value = 18.0
 
-                import tempfile
-                with tempfile.TemporaryDirectory() as tmp2:
-                    orig_dir2 = os.getcwd()
-                    os.chdir(tmp2)
-                    try:
-                        with patch("main.fetch_account_snapshot", return_value=snap_mock3) as mock_fetch, \
-                             patch("main.get_provider", return_value=_make_run_once_market_provider()), \
-                             patch("main._build_macro_dto", return_value=macro_mock3), \
-                             patch("main._fetch_bars_for_universe", return_value={}), \
-                             patch("main._build_context_extras", return_value={}), \
-                             patch("main.settings.DEFAULT_TICKERS", []), \
-                             patch("main.discovery", return_value={"candidates": []}):
-                            # See check_d above: main.discovery must also be
-                            # mocked for a deterministic universe, same
-                            # machine-global scan_candidates.json gap.
-                            _env_bak2 = os.environ.pop("WATCHLIST", None)
-                            try:
-                                run_once(force_account=True)
-                            finally:
-                                if _env_bak2 is not None:
-                                    os.environ["WATCHLIST"] = _env_bak2
-                    finally:
-                        os.chdir(orig_dir2)
+                _, mock_fetch = _run_once_in_empty_universe_sandbox(
+                    macro_mock3, snap_mock3, force_account=True,
+                )
                 mock_fetch.assert_called_once_with(max_age_hours=20.0, force=True)
             except Exception as exc:
                 check_e = {"status": "FAIL", "error": str(exc)}
@@ -10482,7 +10472,7 @@ class GravityAIAuditor:
            (auto-skip behaviour confirmed via ``run_checks``).
         7. ``validation_reports`` is skipped under ``ADVISORY_ONLY=True``.
         8. ``no_unexpected_risk_blocks`` is skipped under ``ADVISORY_ONLY=True``.
-        9. Total ``ALL_CHECKS`` count is 27 (15 from Stage 2 + 1 from Stage 3 +
+        9. Total ``ALL_CHECKS`` count is 27 (15 from Stage 2 and Stage 3 combined +
            check_robinhood_execution_mode + check_env_no_duplicate_keys +
            check_calibration_drift + check_robinhood_kill_switch_clear +
            check_robinhood_queue_fresh + check_robinhood_session_present +
@@ -10650,15 +10640,17 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # Check 9: total ALL_CHECKS count is 27 (23 from prior tiers +
+            # Check 9: ALL_CHECKS has at least 27 entries (23 from prior tiers +
             # check_broker_backend_matches_live_intent + check_daemon_pid_alive +
             # check_no_stray_database_files + check_output_dir_matches_local_data_root
             # added since -- this count is a simple registry-size tripwire, not a
-            # semantic assertion; bump it whenever a genuinely new preflight check
-            # is added, same as every prior bump documented in this comment's own history).
-            c9 = len(preflight_check.ALL_CHECKS) == 27
+            # semantic assertion. A floor (>=), not exact equality, so a future
+            # legitimately-added preflight check no longer re-breaks this tripwire
+            # (this exact literal has already been manually bumped ~6 times); only
+            # a check being silently REMOVED from the registry should fail it.
+            c9 = len(preflight_check.ALL_CHECKS) >= 27
             audit["checks"].append({
-                "check": f"ALL_CHECKS has 27 entries (got {len(preflight_check.ALL_CHECKS)})",
+                "check": f"ALL_CHECKS has at least 27 entries (got {len(preflight_check.ALL_CHECKS)})",
                 "passed": c9,
             })
             all_pass = all_pass and c9
