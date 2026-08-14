@@ -3656,7 +3656,18 @@ class GravityAIAuditor:
                              patch("main._build_macro_dto", return_value=macro_mock2), \
                              patch("main._fetch_bars_for_universe", return_value={}), \
                              patch("main._build_context_extras", return_value={}), \
-                             patch("main.settings.DEFAULT_TICKERS", []):
+                             patch("main.settings.DEFAULT_TICKERS", []), \
+                             patch("main.discovery", return_value={"candidates": []}):
+                            # main.discovery must also be mocked: _build_universe()
+                            # unions discovery()'s scan candidates in BEFORE it ever
+                            # consults DEFAULT_TICKERS, and discovery() reads
+                            # settings.OUTPUT_DIR / "scan_candidates.json" -- a
+                            # machine-global LOCAL_DATA_ROOT path this test's
+                            # os.chdir(tmp) sandbox does NOT isolate. Without this,
+                            # a machine with a real prior agentic-discovery run
+                            # would make `combined` non-empty here and this
+                            # "empty universe" check would flake exactly like the
+                            # DEFAULT_TICKERS gap this PR fixes.
                             _env_bak = os.environ.pop("WATCHLIST", None)
                             try:
                                 result = run_once()
@@ -3696,7 +3707,11 @@ class GravityAIAuditor:
                              patch("main._build_macro_dto", return_value=macro_mock3), \
                              patch("main._fetch_bars_for_universe", return_value={}), \
                              patch("main._build_context_extras", return_value={}), \
-                             patch("main.settings.DEFAULT_TICKERS", []):
+                             patch("main.settings.DEFAULT_TICKERS", []), \
+                             patch("main.discovery", return_value={"candidates": []}):
+                            # See check_d above: main.discovery must also be
+                            # mocked for a deterministic universe, same
+                            # machine-global scan_candidates.json gap.
                             _env_bak2 = os.environ.pop("WATCHLIST", None)
                             try:
                                 run_once(force_account=True)
@@ -7258,13 +7273,25 @@ class GravityAIAuditor:
                 })
                 all_pass = all_pass and c5
 
-            # Check 6: gravity_verification_report.json written by this suite
+            # Check 6: gravity_verification_report.json written by this suite.
+            # Soft/non-blocking: self._write_gravity_verification_report() runs
+            # at the very end of export_machine_readable_report()'s call
+            # sequence, strictly AFTER this step -- so on a clean, from-scratch
+            # run the file legitimately does not exist yet here. That's a
+            # timing artifact of execution order, not a real failure, so we
+            # report the honest, literal path_exists value (never a fabricated
+            # always-True result -- CONSTRAINT #4) and tag the check "soft"
+            # (matching the established soft-check convention used elsewhere
+            # in this file, e.g. step_74's _chk(..., soft=True)) so a reader
+            # summarizing checks[]["passed"] can tell this apart from a real
+            # regression instead of it silently always reading True.
             gvr = Path("output/gravity_verification_report.json")
-            c6 = gvr.exists() or callable(getattr(self, "_write_gravity_verification_report", None))
+            path_exists = gvr.exists()
             audit["checks"].append({
                 "check": "output/gravity_verification_report.json was written atomically by this suite",
-                "passed": c6,
-                "detail": f"path_exists={gvr.exists()}",
+                "passed": path_exists,
+                "soft": True,
+                "detail": f"path_exists={path_exists}",
             })
             # Don't fail on this: the report is written AFTER this step runs in the
             # export sequence. We record the check for transparency but don't block.
