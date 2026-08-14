@@ -1027,6 +1027,63 @@ _FMP_ECON_CALENDAR_COLUMNS = (
     'Next_Macro_Event_Date',
 )
 
+# Minimum per-feed reservation (seconds) the shared FMP budget tries to
+# guarantee each per-symbol diagnostic feed (analyst/earnings/insider) --
+# see _fmp_next_feed_deadline's docstring for the full contract.
+FMP_FEED_MIN_RESERVATION_SECONDS = 15.0
+
+
+def _fmp_next_feed_deadline(
+    total_deadline: float, min_reservation: float, feeds_left: int
+) -> float:
+    """Compute ONE FMP per-symbol diagnostic feed's own sub-deadline out of
+    the shared per-cycle wall-clock budget (``settings.FMP_MAX_SECONDS_PER_CYCLE``).
+
+    Call this fresh, immediately before each feed runs, with ``feeds_left``
+    counting the feed about to run plus every feed still queued behind it
+    (3 before analyst, 2 before earnings, 1 before insider). This is the
+    single choke point every feed's sub-deadline goes through, so the
+    guarantee below applies uniformly -- no feed is special-cased to reuse
+    the raw total deadline unprotected, which is what silently starved the
+    LAST-queued feed to zero before this fix (an earlier feed's floor claim
+    could exhaust the whole remaining budget, and the last feed had no
+    floor of its own to fall back on).
+
+    Two regimes, chosen based on whether the remaining budget can actually
+    support every still-queued feed getting its floor:
+
+    - **Plenty left** (``remaining >= min_reservation * feeds_left``): this
+      feed may take up to its even fair share (``remaining / feeds_left``)
+      or the floor, whichever is larger -- but is capped so it can never
+      eat into the floor reserved for the feeds still queued behind it
+      (``remaining - min_reservation * (feeds_left - 1)``). This is what
+      guarantees every later feed still gets at least its own floor.
+    - **Budget too small for everyone's floor**: degrades to a plain even
+      split (``remaining / feeds_left``) so no single feed can monopolize
+      what's left. Both regimes reduce to giving the LAST feed
+      (``feeds_left == 1``) 100% of whatever genuinely remains, by
+      construction -- there is nothing left to reserve for after it.
+
+    If the shared budget is already fully exhausted by the time this is
+    called (``remaining <= 0``), every feed correctly gets a deadline of
+    "now" (0 share) -- an honest wall-clock-ceiling-reached degradation
+    (CONSTRAINT #6 style), not the unfair zero-while-budget-remains
+    starvation this function replaces.
+    """
+    import time as _time
+
+    remaining = max(0.0, total_deadline - _time.monotonic())
+    if feeds_left <= 0:
+        return total_deadline
+    if remaining >= min_reservation * feeds_left:
+        share = min(
+            max(remaining / feeds_left, min_reservation),
+            remaining - min_reservation * (feeds_left - 1),
+        )
+    else:
+        share = remaining / feeds_left
+    return min(_time.monotonic() + share, total_deadline)
+
 
 def _apply_fmp_analyst(dashboard_df: pd.DataFrame, deadline: Optional[float] = None) -> None:
     """Populate the three FMP analyst-consensus columns.
@@ -1288,7 +1345,7 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame, deadline: Optional[float] = 
             if future_rows:
                 row = future_rows[0]
                 event_date = row.get("event_date")
-                if event_date and not str(event_date).startswith("1900") and not str(event_date).startswith("__"):
+                if event_date and not str(event_date).startswith("1900"):
                     next_date_map[sym] = str(event_date)
                     try:
                         d_next = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").date()
@@ -1569,15 +1626,22 @@ def _apply_fmp_econ_calendar(dashboard_df: pd.DataFrame) -> None:
         return
 
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
         from zoneinfo import ZoneInfo
         from data.fmp_feeds_market import fetch_economics_calendar
 
         # Use US Eastern — FMP economic calendar dates are in ET, not UTC.
         # Using UTC would roll over to "tomorrow" during US evening hours,
         # incorrectly filtering out same-day events.
-        today_str = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
-        events = fetch_economics_calendar(from_date=today_str)
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        today_str = today.isoformat()
+        # Bound the request to a 60-day lookahead window. Only the earliest
+        # sorted event is ever consumed below, so this is defense-in-depth,
+        # not a correctness fix -- FMP's own behavior for an unbounded `to`
+        # was never confirmed, and this feed defaults ON, so an explicit cap
+        # avoids depending on an unverified vendor default.
+        to_date_str = (today + timedelta(days=60)).isoformat()
+        events = fetch_economics_calendar(from_date=today_str, to_date=to_date_str)
         if not events:
             return
 
@@ -1981,27 +2045,35 @@ class StrategyEvalStep(PipelineStep):
         # scoring, sizing, or execution -- see config.COLUMN_SCHEMA's "FMP
         # DIAGNOSTIC FEEDS" section for why that is also the no-lookahead
         # guarantee for this series.
-        # Shared monotonic wall-clock budget for per-symbol FMP diagnostic feeds.
-        # Split into per-feed sub-deadlines with a minimum reservation to prevent
-        # starvation — if analyst exhausts its share, earnings and insider still
-        # get at least their reserved minimum.
+        # Shared monotonic wall-clock budget for per-symbol FMP diagnostic
+        # feeds, split via _fmp_next_feed_deadline (see its docstring) so
+        # EVERY feed -- including the last-queued one -- is guaranteed at
+        # least FMP_FEED_MIN_RESERVATION_SECONDS whenever the total budget
+        # can support it, degrading to a fair even split otherwise. Fixed
+        # 2026-08 (PR #737 follow-up): the prior version special-cased
+        # insider to reuse the raw total deadline with no floor of its own,
+        # which let analyst+earnings jointly exhaust the whole budget and
+        # silently starve insider to zero symbols every cycle whenever
+        # FMP_MAX_SECONDS_PER_CYCLE was configured below ~45s (the webapp
+        # settings slider permits values as low as 1.0, with no warning).
         import time as _time
         _raw_fmp_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", 120.0)
         _fmp_max_seconds = max(0.0, float(120.0 if _raw_fmp_budget is None else _raw_fmp_budget))
         _fmp_total_deadline = _time.monotonic() + _fmp_max_seconds
-        _num_feeds = 3  # analyst, earnings, insider
-        _per_feed_budget = _fmp_max_seconds / _num_feeds if _num_feeds else _fmp_max_seconds
-        _min_reservation = max(_per_feed_budget, 15.0)  # at least 15s per feed
+        _fmp_min_reservation = min(FMP_FEED_MIN_RESERVATION_SECONDS, _fmp_max_seconds)
 
-        _analyst_deadline = _time.monotonic() + _min_reservation
-        # Earnings and insider deadlines computed after analyst finishes,
-        # splitting remaining time equally.
-        _apply_fmp_analyst(ctx.dashboard_df, deadline=min(_analyst_deadline, _fmp_total_deadline))
-        _remaining = max(0.0, _fmp_total_deadline - _time.monotonic())
-        _earnings_deadline = _time.monotonic() + max(_remaining / 2, min(_min_reservation, _remaining))
-        _apply_fmp_earnings(ctx.dashboard_df, deadline=min(_earnings_deadline, _fmp_total_deadline))
-        _remaining = max(0.0, _fmp_total_deadline - _time.monotonic())
-        _apply_fmp_insider(ctx.dashboard_df, deadline=_fmp_total_deadline)
+        _apply_fmp_analyst(
+            ctx.dashboard_df,
+            deadline=_fmp_next_feed_deadline(_fmp_total_deadline, _fmp_min_reservation, 3),
+        )
+        _apply_fmp_earnings(
+            ctx.dashboard_df,
+            deadline=_fmp_next_feed_deadline(_fmp_total_deadline, _fmp_min_reservation, 2),
+        )
+        _apply_fmp_insider(
+            ctx.dashboard_df,
+            deadline=_fmp_next_feed_deadline(_fmp_total_deadline, _fmp_min_reservation, 1),
+        )
         _apply_fmp_sector(ctx.dashboard_df)
         _apply_fmp_econ_calendar(ctx.dashboard_df)
 

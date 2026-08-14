@@ -3,7 +3,10 @@ tests/test_data_api_peers.py
 =============================
 Fully-offline tests for ``GET /data/peers/{symbol}`` (``api/data_api.py``) --
 the on-demand, per-click FMP peer-group lookup gated by
-``settings.FMP_PEERS_ENABLED`` (default ``False``).
+``settings.FMP_PEERS_ENABLED`` (default ``True`` as of PR #737's FMP rollout;
+was ``False`` before that -- every flag-on/flag-off test below explicitly
+monkeypatches the value it needs regardless of the shipped default, so only
+the one test asserting the real, unpatched default itself needed updating).
 
 Mirrors this series' conventions: ``mock.patch.object(settings,
 "STATE_API_TOKEN", None)`` to exercise the fail-open-on-loopback read path
@@ -46,11 +49,14 @@ def test_flag_off_returns_empty_list_with_honest_reason_and_never_calls_fetch(mo
     mock_fetch.assert_not_called()
 
 
-def test_flag_unset_defaults_to_disabled():
+def test_flag_attribute_exists_with_documented_default():
     # getattr(settings, "FMP_PEERS_ENABLED", False) -- confirms the attribute
     # actually exists on the real Settings model with the documented default,
     # not just that our monkeypatched tests exercise a fabricated attribute.
-    assert getattr(settings, "FMP_PEERS_ENABLED", False) is False
+    # Default flipped False -> True in PR #737's FMP rollout (settings.py);
+    # every other test in this file monkeypatches the value it needs, so this
+    # is the one place that must track the real shipped default.
+    assert getattr(settings, "FMP_PEERS_ENABLED", False) is True
 
 
 # ---------------------------------------------------------------------------

@@ -2758,7 +2758,10 @@ class HistoricalStore:
             from db_config import session_scope, get_dbapi_connection
 
             params: List[Any] = [sym]
-            clauses = " AND event_date != '1900-01-01' AND event_date != '__no_data__'"
+            # '1900-01-01' is the only no-data sentinel this store ever
+            # writes (see mark_earnings_fetched below) -- filtered out here
+            # so it never leaks into a real earnings-date/surprise read.
+            clauses = " AND event_date != '1900-01-01'"
             if on_or_before:
                 clauses += " AND event_date <= ?"
                 params.append(str(on_or_before))

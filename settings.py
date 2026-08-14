@@ -733,9 +733,13 @@ class Settings(BaseSettings):
         default=True,
         description=(
             "Two-gate capability switch for FMP-sourced OHLCV bars, "
-            "independent of FMP_QUOTES_ENABLED. Defaults True by explicit operator decision. "
-            "Requires MARKET_DATA_PROVIDER='fmp'. Read FMP_BARS_ADJUSTMENT before changing: "
-            "'dividend-adjusted' matches incumbent yfinance split+dividend adjustment."
+            "independent of FMP_QUOTES_ENABLED. Defaults True by explicit operator decision, "
+            "accepting that scripts/verify_fmp_bars.py has not been run against a live "
+            "account in this sandbox (no live-market network access). Requires "
+            "MARKET_DATA_PROVIDER='fmp'. Read FMP_BARS_ADJUSTMENT before changing it: "
+            "'dividend-adjusted' matches incumbent yfinance split+dividend adjustment, and an "
+            "adjustment-convention mismatch corrupts every return series, indicator, GARCH fit "
+            "and backtest -- and does so PLAUSIBLY (nothing fails loudly)."
         ),
     )
     FMP_FUNDAMENTALS_ENABLED: bool = Field(
@@ -775,7 +779,15 @@ class Settings(BaseSettings):
             "the PRIMARY provider for company headlines (signals/news_catalyst.py::"
             "fetch_company_headlines dispatches FMP-first, falling back to "
             "Finnhub only on an FMP failure) and 'fmp_news' becomes eligible "
-            "for SENTIMENT_SOURCES."
+            "for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP "
+            "key: /news/stock returns >=6 months of real history (vs. "
+            "Finnhub's free-tier ~3-month cap) with working from/to date-"
+            "window + page/limit pagination -- the one FMP data-fetch flag "
+            "with genuine live verification behind it, not just a probe. "
+            "Deliberately does NOT touch /news/press-releases -- that "
+            "endpoint returned a plan-entitlement rejection ('Restricted "
+            "Endpoint') against the account this integration was verified "
+            "with; see docs/FMP_INTEGRATION.md."
         ),
     )
     FMP_MACRO_ENABLED: bool = Field(
@@ -855,8 +867,19 @@ class Settings(BaseSettings):
             "Master switch for using FMP's historical S&P 500 constituent-"
             "changes endpoint (data/fmp_client.py::historical_sp500_changes) "
             "as the PRIMARY source for universe_engine.py's point-in-time "
-            "survivorship-bias reconstruction. Defaults True by explicit "
-            "operator decision."
+            "survivorship-bias reconstruction, with the legacy Wikipedia "
+            "'Selected changes' table scrape demoted to a fallback -- that "
+            "table was removed from the live Wikipedia page entirely as of "
+            "2026-08, which is what necessitated this feed. Defaults True by "
+            "explicit operator decision, accepting that this endpoint has NOT "
+            "been verified against a live FMP account (endpoint path/field "
+            "names are best-effort from public docs only). "
+            "data/fmp_universe.py::fetch_sp500_changes_via_fmp short-circuits "
+            "to [] on any failure, falling through to the Wikipedia path. "
+            "Wikipedia's current-constituents table (unaffected by the "
+            "removal above) always stays the source of truth for the CURRENT "
+            "roster regardless of this flag; only the historical changes "
+            "half is FMP-eligible."
         ),
     )
     # ── FMP behavior knobs ───────────────────────────────────────────────
@@ -877,8 +900,12 @@ class Settings(BaseSettings):
         default=True,
         description=(
             "Whether FMP-served quotes may be labelled real-time (is_stale=False). "
-            "Defaults True by explicit operator decision. Note: whether /quote is "
-            "genuinely real-time on Starter tier requires live eyeball verification."
+            "Defaults True by explicit operator decision, NOT because this was "
+            "confirmed: whether /quote is genuinely real-time on the Starter tier "
+            "could not be verified from this sandbox, and claiming freshness that "
+            "was not measured is exactly the kind of quiet fabrication CONSTRAINT "
+            "#4 exists to prevent. Confirm against a live market open before "
+            "trusting is_stale=False on this path in a live-capital deployment."
         ),
     )
     FMP_BARS_ADJUSTMENT: str = Field(

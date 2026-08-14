@@ -33,6 +33,7 @@ import pandas as pd
 import pytest
 
 from pipeline.production_steps import (
+    FMP_FEED_MIN_RESERVATION_SECONDS,
     _FMP_ANALYST_COLUMNS,
     _FMP_EARNINGS_COLUMNS,
     _FMP_ECON_CALENDAR_COLUMNS,
@@ -43,6 +44,7 @@ from pipeline.production_steps import (
     _apply_fmp_econ_calendar,
     _apply_fmp_insider,
     _apply_fmp_sector,
+    _fmp_next_feed_deadline,
 )
 
 # (writer, its columns) -- parametrized so a future sixth feed added without a
@@ -290,4 +292,161 @@ class TestSharedDeadline:
             # Subsequent feed immediately skips network because deadline passed
             _apply_fmp_earnings(df, deadline=shared_deadline)
             mock_earnings.assert_not_called()
+
+
+class TestFmpNextFeedDeadline:
+    """Regression coverage for the insider-starvation bug fixed 2026-08 (PR #737
+    follow-up): the original StrategyEvalStep.run deadline-splitting block gave
+    analyst (and partially earnings) a real 15s-floor reservation but passed
+    insider the raw, unprotected _fmp_total_deadline -- so whenever
+    FMP_MAX_SECONDS_PER_CYCLE was configured at or below ~45s (the webapp
+    settings slider permits values as low as 1.0) and analyst+earnings both
+    consumed their full reservations, insider's deadline was already in the
+    past before its loop started and it silently fetched zero symbols, every
+    cycle, forever -- directly contradicting this feature's own documented
+    "guarantees earnings and insider get at least 15s" claim.
+
+    These tests drive _fmp_next_feed_deadline -- the single choke point every
+    feed's sub-deadline now goes through -- with a fully controlled fake
+    monotonic clock, simulating the worst case (every feed consumes its
+    entire allotted share) at several representative total-budget sizes.
+    """
+
+    @staticmethod
+    def _worst_case_shares(total_budget: float, min_reservation: float) -> list[float]:
+        """Simulate feeds_left=3,2,1 each consuming their FULL allotted share
+        (the worst case that starved insider before this fix) and return the
+        wall-clock seconds each of the three feeds actually received."""
+        clock = [0.0]
+
+        def fake_monotonic():
+            return clock[0]
+
+        shares: list[float] = []
+        with patch("time.monotonic", side_effect=fake_monotonic):
+            total_deadline = 0.0 + total_budget
+            for feeds_left in (3, 2, 1):
+                before = clock[0]
+                deadline = _fmp_next_feed_deadline(total_deadline, min_reservation, feeds_left)
+                shares.append(max(0.0, deadline - before))
+                clock[0] = min(deadline, total_deadline)  # this feed uses its FULL share
+        return shares
+
+    def test_default_budget_still_splits_evenly_three_ways(self):
+        """At the shipped default (120s), nothing should change vs. the
+        original design: an even 40/40/40 split in the worst case."""
+        analyst, earnings, insider = self._worst_case_shares(120.0, FMP_FEED_MIN_RESERVATION_SECONDS)
+        assert analyst == pytest.approx(40.0, abs=1e-6)
+        assert earnings == pytest.approx(40.0, abs=1e-6)
+        assert insider == pytest.approx(40.0, abs=1e-6)
+
+    def test_small_budget_no_longer_starves_insider_to_zero(self):
+        """THE regression test: a 30s total budget (well below the 45s = 3x15s
+        floor threshold) used to leave insider with a deadline of exactly the
+        already-passed total deadline once analyst+earnings both consumed
+        their full reservations -- i.e. insider got 0.0s. It must now get a
+        fair, non-zero share."""
+        analyst, earnings, insider = self._worst_case_shares(30.0, 15.0)
+        assert insider > 0.0, "insider must never be fully starved when budget remains"
+        # Below the floor*3 threshold, all three degrade to an equal split.
+        assert analyst == pytest.approx(10.0, abs=1e-6)
+        assert earnings == pytest.approx(10.0, abs=1e-6)
+        assert insider == pytest.approx(10.0, abs=1e-6)
+
+    def test_exact_floor_boundary_guarantees_full_reservation_to_all_three(self):
+        """At total_budget == min_reservation * 3 (the exact boundary), every
+        feed -- including insider -- gets its full 15s floor, not a moment
+        less."""
+        analyst, earnings, insider = self._worst_case_shares(45.0, 15.0)
+        assert analyst == pytest.approx(15.0, abs=1e-6)
+        assert earnings == pytest.approx(15.0, abs=1e-6)
+        assert insider == pytest.approx(15.0, abs=1e-6)
+
+    def test_tiny_operator_configured_budget_never_zeroes_out_a_feed(self):
+        """The webapp FMP settings slider permits FMP_MAX_SECONDS_PER_CYCLE
+        down to 1.0 with no warning about a meaningful floor -- confirm even
+        an extreme low value degrades to a fair split rather than starving
+        any one feed to exactly zero while budget genuinely remains."""
+        for total_budget in (1.0, 3.0, 10.0):
+            min_reservation = min(FMP_FEED_MIN_RESERVATION_SECONDS, total_budget)
+            shares = self._worst_case_shares(total_budget, min_reservation)
+            assert all(s > 0.0 for s in shares), (
+                f"budget={total_budget}: every feed must get a non-zero share, got {shares}"
+            )
+            assert sum(shares) == pytest.approx(total_budget, abs=1e-3)
+
+    def test_unused_budget_still_rolls_over_to_later_feeds(self):
+        """Preserve the pre-fix 'unused budget rolls over' property: if
+        analyst finishes far under its allotted share, earnings/insider must
+        see the larger remaining pool, not just their originally-planned
+        even split."""
+        clock = [0.0]
+
+        def fake_monotonic():
+            return clock[0]
+
+        with patch("time.monotonic", side_effect=fake_monotonic):
+            total_deadline = 120.0
+            analyst_deadline = _fmp_next_feed_deadline(total_deadline, 15.0, 3)
+            assert analyst_deadline == pytest.approx(40.0, abs=1e-6)
+
+            # Analyst finishes after using only 5 of its allotted 40 seconds.
+            clock[0] = 5.0
+            earnings_deadline = _fmp_next_feed_deadline(total_deadline, 15.0, 2)
+            earnings_share = earnings_deadline - clock[0]
+            # 115s remain, split evenly two ways -> 57.5s, far more than the
+            # 40s it would have gotten under a static up-front split.
+            assert earnings_share == pytest.approx(57.5, abs=1e-6)
+
+    def test_already_exhausted_budget_degrades_honestly_not_unfairly(self):
+        """If the shared budget is genuinely exhausted (not merely small) by
+        the time a later feed is reached, that feed correctly gets a
+        zero-second share -- this is honest wall-clock-ceiling-reached
+        degradation (CONSTRAINT #6 style), distinct from the unfair
+        zero-while-budget-remains starvation this fix closes."""
+        clock = [30.0]  # already at/past the total deadline
+
+        def fake_monotonic():
+            return clock[0]
+
+        with patch("time.monotonic", side_effect=fake_monotonic):
+            deadline = _fmp_next_feed_deadline(30.0, 15.0, 1)
+            assert deadline - clock[0] == pytest.approx(0.0, abs=1e-6)
+
+    def test_last_feed_always_receives_one_hundred_percent_of_remaining(self):
+        """feeds_left == 1 (insider's position) must always resolve to the
+        FULL remaining budget, in both the 'plenty left' and 'too small for
+        the floor' regimes -- there is nothing left to reserve for after it."""
+        for total_budget, elapsed in [(120.0, 90.0), (20.0, 5.0), (5.0, 1.0)]:
+            clock = [elapsed]
+
+            def fake_monotonic(_clock=clock):
+                return _clock[0]
+
+            with patch("time.monotonic", side_effect=fake_monotonic):
+                remaining = total_budget - elapsed
+                deadline = _fmp_next_feed_deadline(total_budget, 15.0, 1)
+                assert deadline - elapsed == pytest.approx(remaining, abs=1e-6)
+
+
+class TestStrategyEvalStepFmpDeadlineWiring:
+    """Confirms StrategyEvalStep.run's actual call site (not just the isolated
+    _fmp_next_feed_deadline helper) wires feeds_left=3,2,1 in the correct
+    analyst -> earnings -> insider order, so the guarantee proven above by the
+    helper's own unit tests is genuinely reachable from the real orchestration
+    path -- the exact gap that let the original starvation bug ship unnoticed
+    (the prior test suite only asserted "_apply_fmp_insider(" appears in the
+    source text, never that it receives a protected deadline)."""
+
+    def test_run_source_calls_next_feed_deadline_with_descending_feeds_left(self):
+        import inspect
+
+        import pipeline.production_steps as production_steps
+
+        src = inspect.getsource(production_steps.StrategyEvalStep.run)
+        assert "_fmp_next_feed_deadline(_fmp_total_deadline, _fmp_min_reservation, 3)" in src
+        assert "_fmp_next_feed_deadline(_fmp_total_deadline, _fmp_min_reservation, 2)" in src
+        assert "_fmp_next_feed_deadline(_fmp_total_deadline, _fmp_min_reservation, 1)" in src
+        # The prior unprotected pattern must not reappear.
+        assert "deadline=_fmp_total_deadline)" not in src
 

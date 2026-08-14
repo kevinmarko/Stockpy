@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 272,
+    "live_safe": 273,
     "no_op": 2,
     "restart_required": 91,
-    "total": 365
+    "total": 366
   },
   "dynamic_sites": [
     {
@@ -223,6 +223,7 @@
     "FMP_COOLDOWN_THRESHOLD",
     "FMP_EARNINGS_ENABLED",
     "FMP_EARNINGS_REFRESH_HOURS",
+    "FMP_ECON_CALENDAR_ENABLED",
     "FMP_FALLBACK_ENABLED",
     "FMP_FUNDAMENTALS_ENABLED",
     "FMP_INSIDER_ENABLED",
@@ -422,13 +423,13 @@
   "read_forms": {
     "attr": 789,
     "factory_param": 4,
-    "getattr_const": 261,
+    "getattr_const": 263,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {
     "attr": 231,
     "factory_param": 4,
-    "getattr_const": 159,
+    "getattr_const": 160,
     "os_environ": 17
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -550,7 +551,7 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1885",
+        "site": "data/market_data.py:1894",
         "via": [
           1799
         ]
@@ -583,7 +584,7 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1886",
+        "site": "data/market_data.py:1895",
         "via": [
           1799
         ]
@@ -1387,7 +1388,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4921",
+        "site": "api/pilots_api.py:4922",
         "via": []
       },
       {
@@ -1436,7 +1437,7 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1843",
+        "site": "data/market_data.py:1848",
         "via": [
           1786
         ]
@@ -1449,7 +1450,7 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1850",
+        "site": "data/market_data.py:1859",
         "via": [
           1786
         ]
@@ -1698,7 +1699,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2317",
+        "site": "data/market_data.py:2326",
         "via": []
       }
     ],
@@ -1745,7 +1746,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2318",
+        "site": "data/market_data.py:2327",
         "via": []
       }
     ],
@@ -1950,7 +1951,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2106",
+        "site": "data/market_data.py:2115",
         "via": []
       }
     ],
@@ -1961,7 +1962,7 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1834",
+        "site": "data/market_data.py:1839",
         "via": [
           1786
         ]
