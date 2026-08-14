@@ -1,36 +1,21 @@
-# PR 724 Options Tab Build-Out Complete
+# Walkthrough: Fix Paper Broker Settings Icon Glitch
 
-The original PR plan implemented the fundamental UI structure of the Options Tab, but left a couple of features incomplete. Following user feedback to allow a live order override button, these features have been built out and verified.
+Fixed the visual bug on the webapp Settings ("Tunables & Modules") screen where an unstyled raw SVG icon was expanding to the full width of the container.
 
-## Accomplishments
+## Changes
 
-### 1. Multi-Leg Calendar Spreads 
-The Options Strategy Builder was previously only able to populate the near-term leg of a Calendar Spread.
-- The `OptionsChain` component now passes the `symbol` prop to the `OptionsStrategyBuilder`.
-- When a user selects a **Long Call Calendar**, **Long Put Calendar**, or **Short Put Calendar**, the component fetches the *next* expiration chain on the fly using `api.getOptionsChain()`.
-- The longer-term leg is parsed from the new chain and injected into the strategy builder automatically.
+### Webapp
 
-### 2. Multi-Leg Strategy Aggregates
-The `OptionsOrderTicket` now properly computes and displays the Net Cost (Debit or Credit) and the Combined Greeks for multi-leg strategies.
-- Calculations sum the values of each leg, applying `+1` for Buy legs and `-1` for Sell legs.
-- The Net Cost replaces the individual bid/ask spread for multi-leg strategies.
-- Non-aggregateable fields like volume and chance of profit are gracefully set to "N/A" for the combined ticket.
+#### [SettingsModules.tsx](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/debug_settings_icon_glitch/webapp/src/screens/SettingsModules.tsx)
+- Replaced `PaperBrokerLink`'s unstyled `<svg>` and `settings-link-row` markup with the standard card component structure (`className="card card-pad"`).
+- Integrated `useApi(() => api.getPaperBrokerSettings(), [])` to display dynamic field count summary.
+- Standardized destination route to `/settings/paper-broker`.
 
-### 3. Live Order Confirmation & Routing
-The `OptionsOrderTicket` originally lacked a confirmation flow for Live orders and simply wrote a console log message instead of routing to an API.
-- Reused the `Modal` component to scaffold a "Confirm Live Order" modal dialog that pops up when a user clicks the order button with "Live" mode toggled.
-- Added a warning note explaining that options order placement is currently subject to advisory-only constraints.
-- Wired up a new `postOptionsOrder` endpoint in `api/client.ts` and `api/mock.ts` to process the order once confirmed.
+#### [SettingsModules.test.tsx](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/debug_settings_icon_glitch/webapp/src/screens/SettingsModules.test.tsx)
+- Added unit test suite validating that all settings module links (including Paper Broker) render correctly.
 
-### Verification
-- **Type Safety**: `npm run --prefix webapp typecheck` returned zero errors (`tsc --noEmit`).
-- **Dependencies**: All missing `npm` dependencies were successfully installed during initial checkout.
-- **Backend**: API Parity review confirmed the mock and client implementations are aligned with the new `postOptionsOrder` definitions.
+## Verification Results
 
-## Next Steps
-
-To verify these changes in action, you can run the webapp locally in mock mode:
-```bash
-npm run --prefix webapp dev
-```
-Navigate to any `SymbolDetail` screen and verify the Live order toggle and the Calendar Spread strategy selection.
+### Automated Tests
+- `npm run --prefix webapp typecheck` passed cleanly.
+- `npm run --prefix webapp test` ran 135 test files and passed all 1,540 tests.
