@@ -239,6 +239,11 @@ import type {
   SorAnalysisResponse,
   LeggingSimulationRequest,
   LeggingSimulationResponse,
+  GexStrikePoint,
+  GexProfileResponse,
+  LobLevel,
+  LobQueueSimulationRequest,
+  LobQueueSimulationResponse,
 } from "./types";
 
 const SECTORS = [
@@ -13101,6 +13106,154 @@ export const mockApi = {
       p95_adverse_selection: -26.50,
       pnl_distribution: bins,
       latency_curve: latencyCurve,
+      as_of: new Date().toISOString(),
+    });
+  },
+
+  async getOptionsGexProfile(symbol: string) {
+    const sym = symbol.toUpperCase();
+    const spot = sym === "SPY" ? 546.50 : sym === "QQQ" ? 481.10 : sym === "TSLA" ? 214.30 : sym === "NVDA" ? 128.50 : sym === "AAPL" ? 224.20 : 500.0;
+    
+    const step = sym === "NVDA" ? 2.5 : sym === "TSLA" ? 5.0 : sym === "SPY" ? 2.0 : sym === "QQQ" ? 2.0 : 5.0;
+    const baseStrike = Math.round(spot / step) * step;
+    const strikes: GexStrikePoint[] = [];
+    
+    const zeroGammaFlip = Number((spot * (sym === "TSLA" ? 1.015 : 0.985)).toFixed(2));
+    let callWallStrike = baseStrike + step * 3;
+    let putWallStrike = baseStrike - step * 3;
+    let maxCallGex = -Infinity;
+    let minPutGex = Infinity;
+    let totalNetGex = 0;
+
+    for (let i = -12; i <= 12; i++) {
+      const strike = Number((baseStrike + i * step).toFixed(2));
+      
+      const callWeight = Math.max(0.05, Math.exp(-Math.pow((strike - (spot * 1.02)) / (spot * 0.04), 2)));
+      const putWeight = Math.max(0.05, Math.exp(-Math.pow((strike - (spot * 0.97)) / (spot * 0.04), 2)));
+      
+      const callGex = Number((callWeight * (sym === "SPY" ? 420 : 180) * (1 + Math.sin(i * 0.5) * 0.15)).toFixed(2));
+      const putGex = Number((-putWeight * (sym === "SPY" ? 380 : 160) * (1 + Math.cos(i * 0.5) * 0.15)).toFixed(2));
+      const netGex = Number((callGex + putGex).toFixed(2));
+      totalNetGex += netGex;
+
+      if (callGex > maxCallGex) {
+        maxCallGex = callGex;
+        callWallStrike = strike;
+      }
+      if (putGex < minPutGex) {
+        minPutGex = putGex;
+        putWallStrike = strike;
+      }
+
+      strikes.push({
+        strike,
+        call_gex: callGex,
+        put_gex: putGex,
+        net_gex: netGex,
+        open_interest_calls: Math.round(callWeight * 15000 + 500),
+        open_interest_puts: Math.round(putWeight * 14000 + 400),
+        gamma_calls: Number((callWeight * 0.045).toFixed(4)),
+        gamma_puts: Number((putWeight * 0.042).toFixed(4)),
+      });
+    }
+
+    const isVolDampener = totalNetGex >= 0;
+    const regime: "VOL_DAMPENER" | "VOL_ACCELERATOR" = isVolDampener ? "VOL_DAMPENER" : "VOL_ACCELERATOR";
+    const bias = isVolDampener
+      ? `Positive Gamma Regime ($${totalNetGex.toFixed(1)}M Net GEX). Market makers long gamma; intraday mean-reversion dampens realized volatility (buy dips, sell rips).`
+      : `Negative Gamma Regime ($${totalNetGex.toFixed(1)}M Net GEX). Market makers short gamma; hedging flow accelerates trend momentum and downside volatility cascades.`;
+
+    return delay<GexProfileResponse>({
+      symbol: sym,
+      spot_price: spot,
+      net_gex_dollars: Number(totalNetGex.toFixed(2)),
+      zero_gamma_flip: zeroGammaFlip,
+      call_gamma_wall: callWallStrike,
+      put_gamma_wall: putWallStrike,
+      volatility_regime: regime,
+      strikes,
+      as_of: new Date().toISOString(),
+      dealer_positioning_bias: bias,
+    });
+  },
+
+  async simulateLobQueue(request: LobQueueSimulationRequest) {
+    const sym = request.symbol.toUpperCase();
+    const strike = request.strike || 540;
+    const optionType = request.option_type || "CALL";
+    const side = request.order_side || "BUY";
+    const limitPrice = request.limit_price || 3.15;
+    const orderSize = request.order_size || 5;
+    const latency = request.latency_ms || 25;
+
+    const tick = 0.01;
+    const mid = limitPrice;
+    const spread = 0.04;
+    
+    const bids: LobLevel[] = [];
+    const asks: LobLevel[] = [];
+
+    const isBuy = side === "BUY";
+    const userBidLevel = isBuy ? limitPrice : Number((mid - 0.02).toFixed(2));
+    const userAskLevel = !isBuy ? limitPrice : Number((mid + 0.02).toFixed(2));
+
+    for (let i = 0; i < 6; i++) {
+      const bidP = Number((userBidLevel - i * tick).toFixed(2));
+      const isUserLvl = isBuy && i === 0;
+      const baseOrders = 3 + i * 2;
+      const baseSize = 40 + i * 35;
+      
+      bids.push({
+        price: bidP,
+        size: isUserLvl ? baseSize + orderSize : baseSize,
+        num_orders: isUserLvl ? baseOrders + 1 : baseOrders,
+        is_user_level: isUserLvl,
+        user_queue_position: isUserLvl ? Math.min(3, baseOrders) : undefined,
+      });
+
+      const askP = Number((userAskLevel + i * tick).toFixed(2));
+      const isUserAskLvl = !isBuy && i === 0;
+      const baseAskOrders = 4 + i * 2;
+      const baseAskSize = 45 + i * 30;
+
+      asks.push({
+        price: askP,
+        size: isUserAskLvl ? baseAskSize + orderSize : baseAskSize,
+        num_orders: isUserAskLvl ? baseAskOrders + 1 : baseAskOrders,
+        is_user_level: isUserAskLvl,
+        user_queue_position: isUserAskLvl ? Math.min(3, baseAskOrders) : undefined,
+      });
+    }
+
+    const queuePos = 3;
+    const ordersAhead = 2;
+    const sizeAhead = 28;
+    const fillProb30s = Number(Math.max(0.1, Math.min(0.98, 0.88 - (latency / 1000) * 0.08 - (sizeAhead / 150))).toFixed(3));
+    const fillProb60s = Number(Math.min(0.99, fillProb30s + 0.08).toFixed(3));
+    const fillProb300s = Number(Math.min(0.999, fillProb60s + 0.03).toFixed(3));
+    const estFillTime = Number((8.4 + (sizeAhead * 0.35) + (latency * 0.01)).toFixed(1));
+
+    return delay<LobQueueSimulationResponse>({
+      symbol: sym,
+      strike,
+      option_type: optionType,
+      limit_price: limitPrice,
+      order_size: orderSize,
+      order_side: side,
+      queue_priority_position: queuePos,
+      orders_ahead: ordersAhead,
+      size_ahead: sizeAhead,
+      fill_probability_30s: fillProb30s,
+      fill_probability_60s: fillProb60s,
+      fill_probability_300s: fillProb300s,
+      estimated_fill_time_seconds: estFillTime,
+      fill_time_p50: Number((estFillTime * 0.85).toFixed(1)),
+      fill_time_p95: Number((estFillTime * 1.65).toFixed(1)),
+      bids,
+      asks,
+      spread,
+      mid_price: mid,
+      market_depth_summary: `Queue Priority #${queuePos} at $${limitPrice.toFixed(2)} (${ordersAhead} orders / ${sizeAhead} contracts ahead). Expected fill latency: ~${estFillTime}s (30s P(Fill) = ${(fillProb30s * 100).toFixed(1)}%).`,
       as_of: new Date().toISOString(),
     });
   },

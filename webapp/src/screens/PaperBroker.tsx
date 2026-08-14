@@ -15,6 +15,8 @@ import { DispersionScanner } from "../components/options/DispersionScanner";
 import { ZeroDteDesk } from "../components/options/ZeroDteDesk";
 import { VpinGauge } from "../components/options/VpinGauge";
 import { SmartOrderRouterView } from "../components/options/SmartOrderRouterView";
+import { GexProfileView } from "../components/options/GexProfileView";
+import { LobDepthView } from "../components/options/LobDepthView";
 import type { RollOrderRequest } from "../api/types";
 
 export function PaperBroker() {
@@ -38,6 +40,8 @@ export function PaperBroker() {
   const [showZeroDte, setShowZeroDte] = useState(false);
   const [showVpin, setShowVpin] = useState(false);
   const [showSor, setShowSor] = useState(false);
+  const [showGex, setShowGex] = useState(false);
+  const [showLob, setShowLob] = useState(false);
 
   // Position Roll state
   const [rollingPosition, setRollingPosition] = useState<{ symbol: string; qty: number } | null>(null);
@@ -305,19 +309,34 @@ export function PaperBroker() {
             🔀 Smart Router
           </button>
           <button
-            onClick={() => setShowVolScanner(!showVolScanner)}
+            onClick={() => setShowGex(!showGex)}
             style={{
               padding: "8px 14px",
-              background: showVolScanner ? theme.accent : theme.surface,
-              border: `1px solid ${showVolScanner ? theme.accent : theme.border}`,
-              color: showVolScanner ? "#000" : theme.textPrimary,
+              background: showGex ? theme.accent : theme.surface,
+              border: `1px solid ${showGex ? theme.accent : theme.border}`,
+              color: showGex ? "#000" : theme.textPrimary,
               borderRadius: 4,
               cursor: "pointer",
               fontWeight: 600,
               fontSize: 13,
             }}
           >
-            🎯 Vol Scanner
+            📊 GEX Profile
+          </button>
+          <button
+            onClick={() => setShowLob(!showLob)}
+            style={{
+              padding: "8px 14px",
+              background: showLob ? theme.growth : theme.surface,
+              border: `1px solid ${showLob ? theme.growth : theme.border}`,
+              color: showLob ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🪜 LOB Depth
           </button>
           <button
             onClick={() => setShowGammaScalper(!showGammaScalper)}
@@ -433,6 +452,24 @@ export function PaperBroker() {
             initialSymbol="SPY"
             spotPrice={account.data?.equity ? 546.50 : 546.50}
             onClose={() => setShowSor(false)}
+          />
+        )}
+
+        {/* Options Gamma Exposure (GEX) Profile Desk */}
+        {showGex && (
+          <GexProfileView
+            initialSymbol="SPY"
+            spotPrice={account.data?.equity ? 546.50 : 546.50}
+            onClose={() => setShowGex(false)}
+          />
+        )}
+
+        {/* Level-3 Limit Order Book (LOB) Depth Simulator Desk */}
+        {showLob && (
+          <LobDepthView
+            initialSymbol="SPY"
+            spotPrice={account.data?.equity ? 546.50 : 546.50}
+            onClose={() => setShowLob(false)}
           />
         )}
 

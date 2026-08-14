@@ -1614,3 +1614,153 @@ class TestOptionsSorSimulateLeggingEndpoint:
             )
         assert resp.status_code == 401
 
+
+# ---------------------------------------------------------------------------
+# 10. GET /pilots/options/gex/profile
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsGexProfileEndpoint:
+    def test_get_gex_profile_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/gex/profile?symbol=SPY",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert body["spot_price"] > 0
+        assert "net_gex" in body
+        assert "total_call_gex" in body
+        assert "total_put_gex" in body
+        assert "call_wall_strike" in body
+        assert "put_wall_strike" in body
+        assert "gamma_regime" in body
+        assert body["gamma_regime"] in ["POSITIVE_GAMMA", "NEGATIVE_GAMMA", "NEUTRAL_GAMMA"]
+        assert "regime_description" in body
+        assert "dealer_hedging_flow" in body
+        assert "dealer_hedging_shares_per_1pct_move" in body
+        assert "strikes" in body
+        assert isinstance(body["strikes"], list)
+        if body["strikes"]:
+            stk = body["strikes"][0]
+            assert "strike" in stk
+            assert "call_gex" in stk
+            assert "put_gex" in stk
+            assert "net_gex" in stk
+
+    def test_get_gex_profile_custom_spot_price(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/gex/profile?symbol=AAPL&spot_price=160.0",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert body["spot_price"] == 160.0
+
+    def test_get_gex_profile_no_token_fail_open(self):
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.get("/pilots/options/gex/profile?symbol=NVDA")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "NVDA"
+        assert "net_gex" in body
+
+    def test_get_gex_profile_fails_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/gex/profile?symbol=SPY",
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_get_gex_profile_missing_symbol_validation_error(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/gex/profile",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 11. POST /pilots/options/lob/simulate-queue
+# ---------------------------------------------------------------------------
+
+
+class TestLobSimulateQueueEndpoint:
+    def test_post_lob_simulate_queue_success(self):
+        payload = {
+            "symbol": "SPY",
+            "price_level": 500.0,
+            "order_size": 10.0,
+            "depth_ahead": 50.0,
+            "lambda_limit": 4.0,
+            "mu_cancel": 0.05,
+            "theta_market": 5.0,
+            "time_horizon_sec": 60.0,
+            "num_simulations": 300,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/lob/simulate-queue",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert body["price_level"] == 500.0
+        assert body["order_size"] == 10.0
+        assert body["depth_ahead"] == 50.0
+        assert 0.0 <= body["fill_probability"] <= 1.0
+        assert "expected_wait_time" in body or "expected_fill_time_sec" in body
+        percentiles = body.get("queue_progression_percentiles") or body.get("progression_percentiles") or {}
+        assert "p50" in percentiles
+
+    def test_post_lob_simulate_queue_no_token_fail_open(self):
+        payload = {
+            "symbol": "AAPL",
+            "price_level": 150.0,
+            "order_size": 5.0,
+            "depth_ahead": 20.0,
+            "num_simulations": 100,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.post(
+                "/pilots/options/lob/simulate-queue",
+                json=payload,
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert 0.0 <= body["fill_probability"] <= 1.0
+
+    def test_post_lob_simulate_queue_fails_with_wrong_token(self):
+        payload = {
+            "symbol": "SPY",
+            "price_level": 500.0,
+            "order_size": 5.0,
+            "depth_ahead": 20.0,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/lob/simulate-queue",
+                json=payload,
+                headers={"Authorization": "Bearer BAD_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_lob_simulate_queue_missing_required_fields(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/lob/simulate-queue",
+                json={"symbol": "SPY"},
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+

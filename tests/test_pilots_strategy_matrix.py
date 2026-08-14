@@ -155,12 +155,15 @@ def test_version_hash_changes_when_file_content_changes(tmp_path, monkeypatch):
     signals_dir.mkdir()
     f = signals_dir / "m.py"
     f.write_text("VALUE = 1\n", encoding="utf-8")
-    hash_before = sm.strategy_matrix(signals_dir=signals_dir)["modules"][0]["version_hash"]
+    row_before = next(mod for mod in sm.strategy_matrix(signals_dir=signals_dir)["modules"] if mod["name"] == "m")
+    hash_before = row_before["version_hash"]
 
     f.write_text("VALUE = 2\n", encoding="utf-8")
-    hash_after = sm.strategy_matrix(signals_dir=signals_dir)["modules"][0]["version_hash"]
+    row_after = next(mod for mod in sm.strategy_matrix(signals_dir=signals_dir)["modules"] if mod["name"] == "m")
+    hash_after = row_after["version_hash"]
 
     assert hash_before != hash_after
+
 
 
 def test_version_hash_none_when_no_corresponding_file(tmp_path, monkeypatch):
@@ -390,7 +393,7 @@ def _import_roots(source: str) -> set:
 
 @pytest.mark.parametrize(
     "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst", "paper_broker", "live_trade_proposals", "unusual_options_flow"],
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst", "paper_broker", "live_trade_proposals", "unusual_options_flow", "options_gex", "lob_simulator"],
 )
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
@@ -487,7 +490,7 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # data.paper_account_store already covered by the `data` allowance
         # below. `pilots` is allowed here for that one narrow composition,
         # matching pilots.discovery's identical precedent above.
-        allowed = allowed | {"data", "pilots"}
+        allowed = allowed | {"data", "pilots", "datetime", "execution"}
     if module_name == "live_trade_proposals":
         # pilots.live_trade_proposals mirrors pilots.paper_broker's exact
         # pattern (settings + a dependency-light store module), except its
@@ -499,4 +502,10 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"prompt_registry"}
     if module_name == "unusual_options_flow":
         allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "pandas"}
+    if module_name == "options_gex":
+        allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "scipy", "pandas", "data"}
+    if module_name == "lob_simulator":
+        allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "scipy"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"
+
+

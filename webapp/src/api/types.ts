@@ -4670,3 +4670,71 @@ export interface LeggingSimulationResponse {
   }[];
   as_of?: string;
 }
+
+export interface GexStrikePoint {
+  strike: number;
+  call_gex: number;
+  put_gex: number;
+  net_gex: number;
+  open_interest_calls?: number;
+  open_interest_puts?: number;
+  gamma_calls?: number;
+  gamma_puts?: number;
+}
+
+export interface GexProfileResponse {
+  symbol: string;
+  spot_price: number;
+  net_gex_dollars: number;
+  zero_gamma_flip: number;
+  call_gamma_wall: number;
+  put_gamma_wall: number;
+  volatility_regime: "VOL_DAMPENER" | "VOL_ACCELERATOR";
+  strikes: GexStrikePoint[];
+  as_of?: string;
+  dealer_positioning_bias?: string;
+}
+
+export interface LobLevel {
+  price: number;
+  size: number;
+  num_orders: number;
+  is_user_level?: boolean;
+  user_queue_position?: number;
+}
+
+export interface LobQueueSimulationRequest {
+  symbol: string;
+  strike: number;
+  option_type: "CALL" | "PUT";
+  limit_price: number;
+  order_size: number;
+  order_side: "BUY" | "SELL";
+  latency_ms?: number;
+  arrival_rate_lambda?: number;
+  cancellation_rate_mu?: number;
+}
+
+export interface LobQueueSimulationResponse {
+  symbol: string;
+  strike: number;
+  option_type: "CALL" | "PUT";
+  limit_price: number;
+  order_size: number;
+  order_side: "BUY" | "SELL";
+  queue_priority_position: number;
+  orders_ahead: number;
+  size_ahead: number;
+  fill_probability_30s: number;
+  fill_probability_60s: number;
+  fill_probability_300s: number;
+  estimated_fill_time_seconds: number;
+  fill_time_p50: number;
+  fill_time_p95: number;
+  bids: LobLevel[];
+  asks: LobLevel[];
+  spread: number;
+  mid_price: number;
+  market_depth_summary: string;
+  as_of?: string;
+}

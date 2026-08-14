@@ -6230,6 +6230,46 @@ def post_options_sor_simulate_legging(body: OptionsSorSimulateLeggingRequest) ->
     return res.to_dict() if hasattr(res, "to_dict") else dict(res)
 
 
+@app.get("/pilots/options/gex/profile", dependencies=[Depends(require_read_token)])
+def get_options_gex_profile_endpoint(
+    symbol: str = Query(..., min_length=1),
+    spot_price: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Returns Options Gamma Exposure (GEX) profile, Call/Put Walls, Zero-Gamma Flip, and dealer hedging flow."""
+    from pilots.options_gex import get_options_gex_profile
+    return get_options_gex_profile(symbol=symbol, spot_price=spot_price)
+
+
+class LobSimulateQueueRequest(BaseModel):
+    symbol: Optional[str] = "SPY"
+    price_level: float
+    order_size: float
+    depth_ahead: float
+    lambda_limit: Optional[float] = 4.0
+    mu_cancel: Optional[float] = 0.05
+    theta_market: Optional[float] = 5.0
+    time_horizon_sec: Optional[float] = 60.0
+    num_simulations: Optional[int] = 500
+
+
+@app.post("/pilots/options/lob/simulate-queue", dependencies=[Depends(require_read_token)])
+def post_lob_simulate_queue(body: LobSimulateQueueRequest) -> Dict[str, Any]:
+    """Simulates Limit Order Book (LOB) queue priority progression, fill probability, and latency percentiles."""
+    from pilots.lob_simulator import simulate_queue_fill
+    return simulate_queue_fill(
+        symbol=body.symbol or "SPY",
+        price_level=body.price_level,
+        order_size=body.order_size,
+        depth_ahead=body.depth_ahead,
+        lambda_limit=body.lambda_limit,
+        mu_cancel=body.mu_cancel,
+        theta_market=body.theta_market,
+        time_horizon_sec=body.time_horizon_sec,
+        num_simulations=body.num_simulations,
+    )
+
+
+
 
 @app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])
 def get_live_trade_pending() -> Dict[str, Any]:

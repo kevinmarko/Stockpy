@@ -179,6 +179,9 @@ import type {
   SorAnalysisResponse,
   LeggingSimulationRequest,
   LeggingSimulationResponse,
+  GexProfileResponse,
+  LobQueueSimulationRequest,
+  LobQueueSimulationResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -1103,6 +1106,13 @@ const liveApi = {
     }),
   simulateOptionsLegging: (request: LeggingSimulationRequest) =>
     http<LeggingSimulationResponse>("/pilots/options/sor/simulate-legging", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getOptionsGexProfile: (symbol: string) =>
+    http<GexProfileResponse>(`/pilots/options/gex/profile?symbol=${encodeURIComponent(symbol)}`),
+  simulateLobQueue: (request: LobQueueSimulationRequest) =>
+    http<LobQueueSimulationResponse>("/pilots/options/lob/simulate-queue", {
       method: "POST",
       body: JSON.stringify(request),
     }),
