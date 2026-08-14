@@ -125,6 +125,7 @@ import math
 import sys
 import warnings
 from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -3037,8 +3038,10 @@ def _make_strategy_fn(
     """
 
     def _slice_returns(full_rets: pd.Series, target_idx: pd.Index) -> pd.Series:
-        if full_rets.index.equals(target_idx):
-            return full_rets
+        # target_idx (y_train.index / y_test.index) is always a purged
+        # subset of full_rets.index in practice, so .loc[target_idx] is the
+        # fast path on its own; only fall back to the (slower but tolerant)
+        # intersection when target_idx isn't fully contained.
         try:
             return full_rets.loc[target_idx]
         except KeyError:
@@ -3552,8 +3555,16 @@ def _validate_single_strategy(
     n_cpcv_splits: int,
     n_test_splits: int,
     cost_model: Any,
+    harness_cls: Any,
 ) -> Tuple[str, dict]:
     """Execute walk-forward validation for a single strategy.
+
+    ``harness_cls`` is ``validation.harness.StrategyValidationHarness``,
+    imported once by the caller (``run_validations()``) and passed in here
+    rather than re-imported on every call — this module keeps heavy
+    business-logic imports lazy (see ``StrategyValidationHarness``'s own
+    lazy import inside ``run_validations()``), and re-importing per strategy
+    call would also mean once per worker thread under ``--workers > 1``.
 
     Returns ``(strategy_id, summary_dict)``. Never raises (CONSTRAINT #6).
     """
@@ -3571,8 +3582,6 @@ def _validate_single_strategy(
 
     logger.info("Validating: %s", name)
     try:
-        from validation.harness import StrategyValidationHarness
-
         adapter_fn, turnover, universe = STRATEGY_REGISTRY[name]
         available = [t for t in universe if t in closes_df.columns]
         if not available:
@@ -3633,7 +3642,7 @@ def _validate_single_strategy(
             end_date_str = str(X.index[-1].date())
 
         stress_fn = _resolve_options_selling_stress_fn(name)
-        harness = StrategyValidationHarness(
+        harness = harness_cls(
             strategy_fn=strategy_fn,
             universe_fn=lambda _, u=available: u,
             cost_model=cost_model,
@@ -3712,6 +3721,7 @@ def run_validations(
     ``"error"`` key and ``"deployable": false``).
     """
     from execution.cost_model import TieredCostModel
+    from validation.harness import StrategyValidationHarness
 
     if end_date is None:
         end_date = date.today().isoformat()
@@ -3764,35 +3774,33 @@ def run_validations(
     cost_model = TieredCostModel()
     results: Dict[str, dict] = {}
 
+    worker = partial(
+        _validate_single_strategy,
+        closes_df=closes_df,
+        shares=shares,
+        output_dir=output_dir,
+        n_cpcv_splits=n_cpcv_splits,
+        n_test_splits=n_test_splits,
+        cost_model=cost_model,
+        harness_cls=StrategyValidationHarness,
+    )
+
     workers = int(max_workers) if max_workers is not None else 1
     if workers > 1 and len(strategies) > 1:
         pool_size = min(workers, len(strategies))
         logger.info("Running parallel validation for %d strategies across %d workers …", len(strategies), pool_size)
         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
-            future_to_name = {
-                executor.submit(
-                    _validate_single_strategy,
-                    name,
-                    closes_df,
-                    shares,
-                    output_dir,
-                    n_cpcv_splits,
-                    n_test_splits,
-                    cost_model,
-                ): name
-                for name in strategies
-            }
-            temp_results: Dict[str, dict] = {}
-            for future in concurrent.futures.as_completed(future_to_name):
-                st_name, summary = future.result()
-                temp_results[st_name] = summary
-            # Preserve original requested strategy order
-            results = {name: temp_results[name] for name in strategies if name in temp_results}
+            # executor.map preserves input order (matching this codebase's
+            # established ThreadPoolExecutor convention — see e.g.
+            # data_engine.py/pipeline/steps.py/scripts/backfill_edgar_fundamentals.py)
+            # and results are assigned incrementally as each becomes
+            # available, so an already-completed strategy's result is never
+            # lost even if a later one raises while iterating.
+            for st_name, summary in executor.map(worker, strategies):
+                results[st_name] = summary
     else:
         for name in strategies:
-            st_name, summary = _validate_single_strategy(
-                name, closes_df, shares, output_dir, n_cpcv_splits, n_test_splits, cost_model
-            )
+            st_name, summary = worker(name)
             results[st_name] = summary
 
     return results
