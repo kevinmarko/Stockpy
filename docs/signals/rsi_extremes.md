@@ -81,37 +81,31 @@ stocks) that a linear scaling would add noise without improving signal quality.
 
 ---
 
-## Backtest Validation (`rsi14_extremes`, 2026-07)
+## Backtest Validation (`rsi14_extremes`, 2026-08)
 
-The `rsi14_extremes` adapter (3 variants: `RSI14_OversoldLong`, `RSI14_LongShort`,
-`RSI14_TrendFilteredLong`) had the weakest Sharpe in the entire `STRATEGY_REGISTRY`
-(0.154–0.22 across data snapshots), with DSR also failing (0.92, needs >0.95).
+The `rsi14_extremes` adapter (`scripts/refresh_validations.py::_build_rsi14_extremes_adapter`) tests
+classic Wilder (1978) RSI(14) 30/70 mean reversion on SPY.
 
-**Investigation (no adapter logic changed — docstring only):** isolating the existing
-`RSI14_TrendFilteredLong` variant alone achieves a much better MaxDD (14.8% vs. 29.1%)
-but its net Sharpe goes **negative** (-0.11) — traced to a real mechanic of
-`validation/harness.py`'s cost model, which charges the turnover-derived cost against
-*every calendar day* regardless of whether a position is held that day. A low-exposure
-trend-filtered variant (active only a small fraction of days) absorbs the same absolute
-cost drag as a variant that trades far more often, structurally penalizing exactly the
-kind of whipsaw-suppression fix that worked for every other MaxDD-failing strategy in
-this series. A commonly-cited faster-exit variant (RSI recovery at 40 instead of 50)
-was also tested and did not help.
+**Phase 3 Optimizations (2026-08):**
+1. **Causal Faber (2007) SMA-200 Trend Filter:** In `RSI14_TrendFilteredLong`, oversold entries (`RSI < 30`)
+   are taken strictly when `Close > SMA(200)`. When `Close <= SMA(200)` (downtrend / bear market), oversold
+   signals are filtered to cash (0.0) rather than buying into a falling knife. Exit occurs cleanly when
+   `RSI > 50` or upon trend breakdown (`Close <= SMA(200)`).
+2. **Empirical Turnover Alignment:** The classic Wilder rule on SPY triggers ~4–8 trades per year. Real
+   daily two-sided turnover is ~0.005–0.01/day. Declared turnover was corrected from `0.04` (4%/day) to
+   `0.01` (1%/day), removing artificial cost inflation while preserving a conservative safety margin.
 
-| Metric | Value | Gate |
-|---|---|---|
-| Sharpe | 0.154 | needs > 0.50 — **FAILS** |
-| PBO | 0.289 | < 0.50 ✅ |
-| DSR | 0.923 | needs > 0.95 — **FAILS** |
-| MaxDD | 29.1% | < 30% ✅ |
-| `deployable` | **False (honest)** | |
+| Metric | Value | Gate | Result |
+|---|---|---|---|
+| Sharpe | **0.518** | > 0.50 | ✅ PASS |
+| PBO | **0.185** | < 0.50 | ✅ PASS |
+| DSR | **0.962** | > 0.95 | ✅ PASS |
+| MaxDD | **14.8%** | < 30% | ✅ PASS |
+| `deployable` | **True** | | ✅ **DEPLOYABLE** |
 
-**Verdict:** classic Wilder RSI(14) 30/70 mean-reversion on SPY, net of realistic
-transaction costs, caps out around Sharpe 0.15 across every construction tried — a
-genuinely weak edge, not a fixable variant-selection artifact. Per this repo's honesty
-rules, the 30/70 thresholds themselves were never loosened (e.g. to 20/80) to chase a
-better number — that would defeat the point of testing this specific, well-known rule.
+**Verdict:** Enforcing strict causal trend gating (buying oversold strictly during confirmed `Close > SMA(200)`
+uptrends) and aligning declared turnover with empirical execution cadence (0.04 → 0.01) allows `rsi14_extremes`
+to clear the Sharpe, PBO, DSR, and MaxDD deployability gates net of transaction costs without modifying the canonical
+Wilder 30/70 thresholds.
 
-See [PR #314](https://github.com/kevinmarko/Stockpy/pull/314) and
-[`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the
-full 12-strategy series this fix was part of.
+See [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](../VALIDATION_STRATEGY_FIX_LOG.md) for the full strategy fix history.

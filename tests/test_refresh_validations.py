@@ -156,8 +156,11 @@ class TestRegistryStructure:
             "relative_strength_xsec", "rsi14_extremes", "sortino_drawdown",
             "macro_regime_pit", "forecast_direction_arima_hw",
             "signal_replay_balanced_blend",
+            "put_credit_spread", "call_credit_spread", "call_debit_spread",
+            "put_debit_spread", "covered_call", "vrp_premium_selling",
         ):
             assert name in STRATEGY_REGISTRY, f"{name} missing from STRATEGY_REGISTRY"
+
 
     def test_multifactor_universe_is_multi_ticker(self) -> None:
         from scripts.refresh_validations import STRATEGY_REGISTRY
@@ -998,6 +1001,44 @@ class TestBuildSectorQualityRankAdapter:
         ibm_sector = X.xs("IBM", level="Ticker")["sector"]
         assert not ibm_sector.empty
         assert ibm_sector.isna().all()
+
+
+
+class TestBuildOptionsStrategiesAdapters:
+    def test_options_adapters_return_expected_shapes(self) -> None:
+        import scripts.refresh_validations as rv
+
+        spy = _synthetic_spy(n=350)
+        adapters = [
+            (rv._build_put_credit_spread_adapter, "PutCreditSpread"),
+            (rv._build_call_credit_spread_adapter, "CallCreditSpread"),
+            (rv._build_call_debit_spread_adapter, "CallDebitSpread"),
+            (rv._build_put_debit_spread_adapter, "PutDebitSpread"),
+            (rv._build_covered_call_adapter, "CoveredCall"),
+            (rv._build_vrp_premium_selling_adapter, "VRP_IronCondor"),
+        ]
+        for adapter_fn, pre_key in adapters:
+            X, y, pre = adapter_fn(spy)
+            assert isinstance(X, pd.DataFrame)
+            assert isinstance(y, pd.Series)
+            assert isinstance(pre, dict)
+            assert pre_key in pre
+            assert isinstance(pre[pre_key], pd.Series)
+            assert X.index.equals(y.index)
+            assert pre[pre_key].index.equals(y.index)
+
+    def test_resolve_options_selling_stress_fn(self) -> None:
+        import scripts.refresh_validations as rv
+
+        assert rv._resolve_options_selling_stress_fn("put_credit_spread") is not None
+        assert rv._resolve_options_selling_stress_fn("call_credit_spread") is not None
+        assert rv._resolve_options_selling_stress_fn("covered_call") is not None
+        assert rv._resolve_options_selling_stress_fn("vrp_premium_selling") is not None
+        assert rv._resolve_options_selling_stress_fn("iron_condor") is not None
+        # Non-selling or equity strategies resolve to None
+        assert rv._resolve_options_selling_stress_fn("call_debit_spread") is None
+        assert rv._resolve_options_selling_stress_fn("put_debit_spread") is None
+        assert rv._resolve_options_selling_stress_fn("rsi2_mean_reversion") is None
 
 
 # ---------------------------------------------------------------------------

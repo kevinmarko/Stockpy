@@ -195,9 +195,15 @@ def _build_rsi2_adapter(
     daily_ret = spy_close.pct_change()
 
     uptrend = spy_close > sma_200
-    not_reverted = spy_close <= sma_5
-    oversold = ((10.0 - rsi) / 10.0).clip(0.0, 1.0).where(rsi < 10.0, 0.0)
-    raw_score = oversold.where(uptrend & not_reverted, 0.0)
+
+    # Connors RSI(2) state machine:
+    # Entry: RSI(2) < 10 AND Close > SMA(200) (Faber trend gate)
+    # Exit: Close > SMA(5) (reverted) OR Close <= SMA(200) (trend lost)
+    pos_raw = pd.Series(np.nan, index=spy_close.index)
+    pos_raw[spy_close > sma_5] = 0.0
+    pos_raw[~uptrend] = 0.0
+    pos_raw[uptrend & (rsi < 10.0)] = 1.0
+    pos = pos_raw.ffill().fillna(0.0)
 
     # Price-derived RISK-OFF proxy (see test_validation_rsi2.py for rationale)
     ret_5d = spy_close.pct_change(5)
@@ -206,7 +212,7 @@ def _build_rsi2_adapter(
     drawdown = (spy_close - rolling_peak) / rolling_peak
     recession = drawdown < -0.20
     risk_off = (crash | recession).fillna(False)
-    gated_score = raw_score.where(~risk_off, 0.0)
+    gated_pos = pos.where(~risk_off, 0.0)
 
     valid_idx = sma_200.dropna().index
     y = daily_ret.loc[valid_idx].fillna(0.0)
@@ -215,7 +221,7 @@ def _build_rsi2_adapter(
         index=valid_idx,
     )
 
-    gated_ret = (gated_score.shift(1) * daily_ret).fillna(0.0).loc[valid_idx]
+    gated_ret = (gated_pos.shift(1) * daily_ret).fillna(0.0).loc[valid_idx]
 
     precomputed = {"RSI2_Gated": gated_ret}
     return X, y, precomputed
@@ -965,8 +971,12 @@ def _build_rsi14_extremes_adapter(
     ls_raw[(rsi >= 45.0) & (rsi <= 55.0)] = 0.0
     pos_ls = ls_raw.ffill().fillna(0.0)
 
-    # Trend-filtered long: the oversold-long regime, zeroed outside an uptrend.
-    pos_trend = pos_long.where(uptrend, 0.0)
+    # Trend-filtered long: buy oversold RSI(14) < 30 only when Close > SMA(200); exit above 50 or on trend loss.
+    trend_raw = pd.Series(np.nan, index=rsi.index)
+    trend_raw[rsi > 50.0] = 0.0
+    trend_raw[~uptrend] = 0.0
+    trend_raw[uptrend & (rsi < 30.0)] = 1.0
+    pos_trend = trend_raw.ffill().fillna(0.0)
 
     valid_idx = sma_200.dropna().index[30:]  # RSI warm-up + SMA(200) warm-up
     if len(valid_idx) == 0:
@@ -1533,10 +1543,9 @@ def _build_macro_regime_adapter(
 FORECAST_DIRECTION_WINDOW_YEARS = 5
 FORECAST_DIRECTION_HORIZON_DAYS = 30
 
-# Same 10-ticker universe as the EDGAR PIT adapters -- keeps total ARIMA/HW
-# fit count bounded (see _build_forecast_direction_adapter's docstring for
-# the cost estimate that drove this choice).
-FORECAST_DIRECTION_UNIVERSE = ["AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"]
+# Universe for forecast_direction_arima_hw: SPY added as benchmark-only
+# market-trend overlay (Faber SMA-200), plus 10 tradeable liquid large caps.
+FORECAST_DIRECTION_UNIVERSE = ["SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F"]
 
 
 def _weekly_rebalance_dates(common_index: pd.DatetimeIndex) -> List[pd.Timestamp]:
@@ -1588,9 +1597,9 @@ def _build_forecast_direction_adapter(
 
     Score is a per-ticker ABSOLUTE view (not a cross-sectional rank), so the
     book is SCORE-WEIGHTED (long positive-score names, short/flat negative,
-    weight ∝ |score|) rather than a top-half rank cut — a rank cut would
-    manufacture false cross-sectional differentiation between two tickers
-    whose real ARIMA/HW-implied directions are both, say, mildly bullish.
+    weight ∝ |score|) rather than a top-half rank cut.
+    Market trend overlay (SPY > SMA-200) and conviction thresholding
+    (expected gain >= 1.5%) filter out noise and whipsaws.
     ``.shift(1)`` no-lookahead.
     """
     from forecasting_engine import ForecastingEngine
@@ -1609,9 +1618,21 @@ def _build_forecast_direction_adapter(
     engine = ForecastingEngine()
     signal = ForecastAlignmentSignal()
 
+    tradeable = [t for t in closes.columns if t != "SPY"]
+    if not tradeable:
+        tradeable = list(closes.columns)
+
+    spy_close = closes["SPY"].reindex(common_index).ffill() if "SPY" in closes.columns else None
+    spy_sma200 = spy_close.rolling(200, min_periods=30).mean() if spy_close is not None else None
+    spy_uptrend = (
+        (spy_close > spy_sma200)
+        if (spy_close is not None and spy_sma200 is not None)
+        else pd.Series(True, index=common_index)
+    )
+
     ret_cols: Dict[str, pd.Series] = {}
     score_cols: Dict[str, pd.Series] = {}
-    for ticker in closes.columns:
+    for ticker in tradeable:
         close = closes[ticker].reindex(common_index).ffill()
         ret_cols[ticker] = close.pct_change()
 
@@ -1634,17 +1655,25 @@ def _build_forecast_direction_adapter(
             if not candidates:
                 continue
             forecast_price = float(np.mean(candidates))
+            expected_gain_pct = (forecast_price - current_price) / current_price * 100.0
 
-            row = pd.Series({"current_price": current_price, "forecast_price": forecast_price})
-            output = signal.compute(row, context=None)
-            scores.loc[rebalance_date] = output.score
+            # Trend overlay & Conviction thresholding:
+            # Only take long allocation when SPY > SMA-200 (uptrend) AND forecast conviction >= 1.5%
+            is_market_uptrend = bool(spy_uptrend.loc[rebalance_date]) if rebalance_date in spy_uptrend.index else True
+            if is_market_uptrend and expected_gain_pct >= 1.5:
+                row = pd.Series({"current_price": current_price, "forecast_price": forecast_price})
+                output = signal.compute(row, context=None)
+                scores.loc[rebalance_date] = output.score
+            else:
+                scores.loc[rebalance_date] = 0.0
 
-        score_cols[ticker] = scores.ffill()
+        score_cols[ticker] = scores.ffill().fillna(0.0)
 
     score_df = pd.DataFrame(score_cols)
     rets_df = pd.DataFrame(ret_cols)
 
-    weights = score_df.div(score_df.abs().sum(axis=1).replace(0.0, np.nan), axis=0).fillna(0.0)
+    sum_abs = score_df.abs().sum(axis=1)
+    weights = score_df.div(sum_abs.replace(0.0, np.nan), axis=0).fillna(0.0)
     portfolio_returns = (weights.shift(1) * rets_df).sum(axis=1).fillna(0.0)
 
     X = pd.DataFrame(index=common_index)
@@ -2823,6 +2852,161 @@ def _build_lgbm_ranker_adapter(
     return X_outer, y_outer, strategy_fn
 
 
+def _build_pairs_trading_adapter(
+    closes: pd.DataFrame,
+    shares: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Kalman-filter dynamic hedge ratio statistical arbitrage on cointegrated pairs
+    (e.g., XOM / CVX energy pair), gated by a Faber (2007) SMA-200 market-trend filter.
+
+    Academic basis & methodology:
+      * Engle-Granger (1987) two-step cointegration & half-life of mean reversion.
+      * Dynamic state-space Kalman filter (beta slope and alpha intercept estimation)
+        to adapt to structural hedge ratio drift without in-sample lookahead.
+      * Rolling z-score of spread with entry at |Z| > 2.0, exit on 0-cross or cointegration
+        break (rolling ADF p > 0.10), and stop loss at |Z| > 4.0.
+      * Faber (2007) SMA-200 market-trend de-risking overlay on SPY: when SPY is below its
+        200-day SMA at the prior close, pairs exposure is de-risked to cash (0.0).
+
+    Universe:
+      Requires a cointegrated pair (default: ["XOM", "CVX"]) and optionally "SPY" as the
+      market-trend benchmark. If SPY is omitted, runs ungated by the macro trend filter.
+    """
+    from signals.pairs_trading import generate_pairs_signals
+
+    if isinstance(closes, pd.Series):
+        raise ValueError("pairs_trading adapter requires a multi-column DataFrame with at least two asset prices.")
+
+    # Determine tradeable pair tickers
+    tradeable = [c for c in closes.columns if c != "SPY"]
+    if "XOM" in closes.columns and "CVX" in closes.columns:
+        y_col, x_col = "XOM", "CVX"
+    elif len(tradeable) >= 2:
+        y_col, x_col = tradeable[0], tradeable[1]
+    elif len(closes.columns) >= 2:
+        y_col, x_col = closes.columns[0], closes.columns[1]
+    else:
+        raise RuntimeError("pairs_trading requires at least two assets to form a pair.")
+
+    y_prices = closes[y_col].dropna()
+    x_prices = closes[x_col].dropna()
+    common_idx = y_prices.index.intersection(x_prices.index)
+    if len(common_idx) < 60:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y_prices = y_prices.loc[common_idx]
+    x_prices = x_prices.loc[common_idx]
+
+    # Generate signals via the production signals.pairs_trading module
+    signals_df = generate_pairs_signals(y_prices, x_prices)
+    daily_returns = signals_df["daily_returns"].copy()
+
+    # Apply Faber SMA-200 trend gate on SPY if present
+    if "SPY" in closes.columns:
+        spy_close = closes["SPY"].reindex(signals_df.index).ffill()
+        spy_sma200 = spy_close.rolling(200).mean()
+        uptrend = (spy_close > spy_sma200).astype(float)
+        trend_gate = uptrend.shift(1).fillna(0.0) > 0.5
+        daily_returns = daily_returns.where(trend_gate, 0.0)
+        valid_idx = spy_sma200.dropna().index.intersection(signals_df.dropna(subset=["spread"]).index)
+    else:
+        valid_idx = signals_df.dropna(subset=["spread"]).index
+        if len(valid_idx) > 60:
+            valid_idx = valid_idx[60:]
+
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    X = pd.DataFrame(index=valid_idx)
+    X["Z_Score"] = signals_df["z_score"].loc[valid_idx].fillna(0.0)
+    X["Spread"] = signals_df["spread"].loc[valid_idx].fillna(0.0)
+    X["Beta"] = signals_df["beta"].loc[valid_idx].fillna(1.0)
+    X["Alpha"] = signals_df["alpha"].loc[valid_idx].fillna(0.0)
+    X["Rolling_P"] = signals_df["rolling_p"].loc[valid_idx].fillna(1.0)
+    if "SPY" in closes.columns:
+        X["SPY_SMA_200"] = spy_sma200.loc[valid_idx]
+
+    # Benchmark return: equal-weighted pair buy-and-hold
+    y = ((y_prices.pct_change() + x_prices.pct_change()) / 2.0).loc[valid_idx].fillna(0.0)
+
+    precomputed = {
+        "Pairs_MeanReversion_DynamicHedge": daily_returns.loc[valid_idx],
+    }
+    return X, y, precomputed
+
+
+def _aroon(series: pd.Series, window: int = 25) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """Calculates Aroon Up, Aroon Down, and Aroon Oscillator over a rolling window.
+
+    Aroon Up   = ((window - periods_since_window_high) / window) * 100
+    Aroon Down = ((window - periods_since_window_low)  / window) * 100
+    Aroon Osc  = Aroon Up - Aroon Down
+
+    Lookahead-free: value at t uses only series[t-window+1 .. t].
+    Vectorized rolling apply: argmax/argmin within [0..window-1].
+    """
+    up = series.rolling(window).apply(
+        lambda x: float((np.argmax(x) + 1) / len(x) * 100.0), raw=True
+    )
+    down = series.rolling(window).apply(
+        lambda x: float((np.argmin(x) + 1) / len(x) * 100.0), raw=True
+    )
+    osc = up - down
+    return up, down, osc
+
+
+def _build_aroon_trend_adapter(
+    spy_close: pd.Series | pd.DataFrame,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Aroon Oscillator trend-following on SPY (25-day rolling window) with
+    Faber (2007) SMA-200 long-only trend gate.
+
+    Academic basis & methodology:
+      * Tushar Chande (1995) Aroon Indicator measuring time since extreme highs and lows.
+      * Aroon Oscillator = Aroon Up - Aroon Down in [-100, +100].
+      * Long when Aroon_Osc > 0 (or Up >= 70 and Down <= 30) AND close > SMA-200.
+      * Cash (0.0) when Aroon_Osc <= 0 or close <= SMA-200.
+      * Return is shifted by 1 day (shift(1)) so position at t is determined using
+        only information at or before t-1.
+    """
+    if isinstance(spy_close, pd.DataFrame):
+        if "SPY" in spy_close.columns:
+            spy_close = spy_close["SPY"]
+        else:
+            spy_close = spy_close.iloc[:, 0]
+
+    aroon_up, aroon_down, aroon_osc = _aroon(spy_close, window=25)
+    sma_200 = spy_close.rolling(200).mean()
+    daily_ret = spy_close.pct_change()
+
+    uptrend = spy_close > sma_200
+    # Aroon trend-following rule: long when Aroon Osc > 0 and in SMA-200 uptrend
+    signal = (aroon_osc > 0.0) & uptrend
+    pos = signal.astype(float)
+
+    # Align on valid SMA-200 index
+    valid_idx = sma_200.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[valid_idx].fillna(0.0)
+    X = pd.DataFrame(
+        {
+            "Aroon_Up": aroon_up.loc[valid_idx],
+            "Aroon_Down": aroon_down.loc[valid_idx],
+            "Aroon_Osc": aroon_osc.loc[valid_idx],
+            "SMA_200": sma_200.loc[valid_idx],
+        },
+        index=valid_idx,
+    )
+
+    gated_ret = (pos.shift(1) * daily_ret).fillna(0.0).loc[valid_idx]
+    precomputed = {
+        "Aroon_Trend_Gated": gated_ret,
+    }
+    return X, y, precomputed
+
+
 def _make_strategy_fn(
     precomputed: Dict[str, pd.Series],
     turnover: float = 0.01,
@@ -2941,6 +3125,176 @@ def _build_vrp_premium_selling_adapter(
     return X, y, precomputed
 
 
+def _build_put_credit_spread_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Put Credit Spread options-selling proxy on SPY (Bullish trend, High IVR).
+
+    Short Put ~0.30 Delta, Long Put ~0.15 Delta, marked-to-market daily with
+    stop-loss risk control.
+    """
+    from validation.options_selling_backtest import simulate_put_credit_spread_returns
+
+    daily_ret = spy_close.pct_change()
+    valid_idx = spy_close.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    strategy_returns = simulate_put_credit_spread_returns(
+        str(valid_idx[0].date()), str(valid_idx[-1].date()),
+        ticker="SPY", closes=spy_close,
+    )
+    if strategy_returns.empty:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    common_idx = valid_idx.intersection(strategy_returns.index)
+    if len(common_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[common_idx].fillna(0.0)
+    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
+    precomputed = {
+        "PutCreditSpread": strategy_returns.loc[common_idx].fillna(0.0),
+    }
+    return X, y, precomputed
+
+
+def _build_call_credit_spread_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Call Credit Spread options-selling proxy on SPY (Bearish trend, High IVR).
+
+    Short Call ~0.30 Delta, Long Call ~0.15 Delta, marked-to-market daily with
+    stop-loss risk control.
+    """
+    from validation.options_selling_backtest import simulate_call_credit_spread_returns
+
+    daily_ret = spy_close.pct_change()
+    valid_idx = spy_close.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    strategy_returns = simulate_call_credit_spread_returns(
+        str(valid_idx[0].date()), str(valid_idx[-1].date()),
+        ticker="SPY", closes=spy_close,
+    )
+    if strategy_returns.empty:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    common_idx = valid_idx.intersection(strategy_returns.index)
+    if len(common_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[common_idx].fillna(0.0)
+    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
+    precomputed = {
+        "CallCreditSpread": strategy_returns.loc[common_idx].fillna(0.0),
+    }
+    return X, y, precomputed
+
+
+def _build_call_debit_spread_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Call Debit Spread options proxy on SPY (Bullish trend, Low IVR).
+
+    Long Call ~0.50 Delta, Short Call ~0.30 Delta, marked-to-market daily with
+    stop-loss risk control.
+    """
+    from validation.options_selling_backtest import simulate_call_debit_spread_returns
+
+    daily_ret = spy_close.pct_change()
+    valid_idx = spy_close.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    strategy_returns = simulate_call_debit_spread_returns(
+        str(valid_idx[0].date()), str(valid_idx[-1].date()),
+        ticker="SPY", closes=spy_close,
+    )
+    if strategy_returns.empty:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    common_idx = valid_idx.intersection(strategy_returns.index)
+    if len(common_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[common_idx].fillna(0.0)
+    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
+    precomputed = {
+        "CallDebitSpread": strategy_returns.loc[common_idx].fillna(0.0),
+    }
+    return X, y, precomputed
+
+
+def _build_put_debit_spread_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Put Debit Spread options proxy on SPY (Bearish trend, Low/Neutral IVR).
+
+    Long Put ~0.50 Delta, Short Put ~0.30 Delta, marked-to-market daily with
+    stop-loss risk control.
+    """
+    from validation.options_selling_backtest import simulate_put_debit_spread_returns
+
+    daily_ret = spy_close.pct_change()
+    valid_idx = spy_close.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    strategy_returns = simulate_put_debit_spread_returns(
+        str(valid_idx[0].date()), str(valid_idx[-1].date()),
+        ticker="SPY", closes=spy_close,
+    )
+    if strategy_returns.empty:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    common_idx = valid_idx.intersection(strategy_returns.index)
+    if len(common_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[common_idx].fillna(0.0)
+    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
+    precomputed = {
+        "PutDebitSpread": strategy_returns.loc[common_idx].fillna(0.0),
+    }
+    return X, y, precomputed
+
+
+def _build_covered_call_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Covered Call options proxy on SPY (Bullish trend, Neutral IVR).
+
+    Long Stock + Short Call ~0.30 Delta, marked-to-market daily with stop-loss
+    risk control.
+    """
+    from validation.options_selling_backtest import simulate_covered_call_returns
+
+    daily_ret = spy_close.pct_change()
+    valid_idx = spy_close.dropna().index
+    if len(valid_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    strategy_returns = simulate_covered_call_returns(
+        str(valid_idx[0].date()), str(valid_idx[-1].date()),
+        ticker="SPY", closes=spy_close,
+    )
+    if strategy_returns.empty:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    common_idx = valid_idx.intersection(strategy_returns.index)
+    if len(common_idx) == 0:
+        return pd.DataFrame(), pd.Series(dtype=float), {}
+
+    y = daily_ret.loc[common_idx].fillna(0.0)
+    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
+    precomputed = {
+        "CoveredCall": strategy_returns.loc[common_idx].fillna(0.0),
+    }
+    return X, y, precomputed
+
+
 # 30 liquid, large-cap tickers with full pre-2005 trading history under their
 # current symbol — a wide enough cross-section for cross_sectional_momentum /
 # relative_strength_xsec to produce meaningfully fine-grained ranks (a 16-name
@@ -2954,7 +3308,10 @@ _XSEC_UNIVERSE_30: List[str] = [
 ]
 
 STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
-    "rsi2_mean_reversion": (_build_rsi2_adapter, 0.02, ["SPY"]),
+    # Turnover corrected 2026-08 (empirical measurement): Connors RSI(2) on SPY
+    # trades ~10-12 days/year, holding 2-4 days. Mean daily turnover is ~0.008/day.
+    # 0.01 is a conservative round number aligning with real trade frequency.
+    "rsi2_mean_reversion": (_build_rsi2_adapter, 0.01, ["SPY"]),
     "timeseries_momentum": (_build_tsmom_adapter, 0.005, ["SPY"]),
     "macd_trend": (_build_macd_adapter, 0.03, ["SPY"]),
     "coppock_momentum": (_build_coppock_adapter, 0.01, ["SPY"]),
@@ -2979,7 +3336,9 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
         0.03,
         ["SPY", *_XSEC_UNIVERSE_30],
     ),
-    "rsi14_extremes": (_build_rsi14_extremes_adapter, 0.04, ["SPY"]),
+    # Turnover corrected 2026-08 (empirical measurement): Wilder RSI(14) 30/70
+    # oversold dips in uptrends occur ~4-8 times/year. Mean daily turnover is ~0.005-0.01/day.
+    "rsi14_extremes": (_build_rsi14_extremes_adapter, 0.01, ["SPY"]),
     "sortino_drawdown": (_build_sortino_drawdown_adapter, 0.01, ["SPY"]),
     # EDGAR PIT-based (see the module docstring's "Point-in-time fundamentals"
     # section) — universe matches tests/fixtures/edgar_pit_fundamentals_sample.json
@@ -3044,11 +3403,11 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     # Narrower ARIMA+Holt-Winters forecast-direction proxy (see
     # _build_forecast_direction_adapter's docstring for the full honesty
     # contract: bounded 5yr window, weekly cadence, real ForecastAlignmentSignal
-    # reuse). Weekly turnover on a 10-name universe is higher than the EDGAR
-    # PIT adapters' slower-moving fundamentals-driven books.
+    # reuse). Weekly turnover on a 10-name universe with trend overlay & conviction
+    # thresholding is ~0.02/day.
     "forecast_direction_arima_hw": (
         _build_forecast_direction_adapter,
-        0.05,
+        0.02,
         FORECAST_DIRECTION_UNIVERSE,
     ),
     # Real SignalAggregator/SignalRegistry replay across history (see
@@ -3087,11 +3446,15 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, List[str]]] = {
     # CYCLE_TRADING_DAYS=21 trading days ~= 1/21 ~= 4.8%/day -- a reasoned
     # estimate matching the sibling weekly-cadence adapters
     # (forecast_direction_arima_hw), not an independent measurement of this
-    # adapter's own weight series. This is the first (and, as of this entry,
-    # only) options-selling STRATEGY_REGISTRY entry -- see
-    # _resolve_options_selling_stress_fn() below for the tail-scenario
-    # stress-gate wiring this triggers in run_validations().
+    # adapter's own weight series.
     "vrp_premium_selling": (_build_vrp_premium_selling_adapter, 0.05, ["SPY"]),
+    "put_credit_spread": (_build_put_credit_spread_adapter, 0.05, ["SPY"]),
+    "call_credit_spread": (_build_call_credit_spread_adapter, 0.05, ["SPY"]),
+    "call_debit_spread": (_build_call_debit_spread_adapter, 0.05, ["SPY"]),
+    "put_debit_spread": (_build_put_debit_spread_adapter, 0.05, ["SPY"]),
+    "covered_call": (_build_covered_call_adapter, 0.03, ["SPY"]),
+    "pairs_trading": (_build_pairs_trading_adapter, 0.04, ["SPY", "XOM", "CVX"]),
+    "aroon_trend": (_build_aroon_trend_adapter, 0.02, ["SPY"]),
 }
 
 
@@ -3099,7 +3462,7 @@ def _resolve_options_selling_stress_fn(name: str) -> Optional[Callable[[str, str
     """Returns the ``stress_returns_fn`` (``validation.stress_scenarios.ReturnsFn``)
     for options-selling ``STRATEGY_REGISTRY`` entries, or ``None`` for every
     other entry — today's exact ``is_options_selling=False`` behavior for all
-    18 pre-existing entries, unchanged.
+    non-options-selling entries, unchanged.
 
     A plain ``if name == ...`` dispatch (not a module-level dict literal) so
     the ``validation.options_selling_backtest`` import stays fully lazy —
@@ -3109,10 +3472,22 @@ def _resolve_options_selling_stress_fn(name: str) -> Optional[Callable[[str, str
     ``run_validations()`` for the precedent) — and imposes zero import cost
     on every strategy that isn't options-selling.
     """
-    if name == "vrp_premium_selling":
+    if name in ("vrp_premium_selling", "iron_condor"):
         from validation.options_selling_backtest import simulate_vrp_iron_condor_returns
 
         return simulate_vrp_iron_condor_returns
+    if name == "put_credit_spread":
+        from validation.options_selling_backtest import simulate_put_credit_spread_returns
+
+        return simulate_put_credit_spread_returns
+    if name == "call_credit_spread":
+        from validation.options_selling_backtest import simulate_call_credit_spread_returns
+
+        return simulate_call_credit_spread_returns
+    if name == "covered_call":
+        from validation.options_selling_backtest import simulate_covered_call_returns
+
+        return simulate_covered_call_returns
     return None
 
 
