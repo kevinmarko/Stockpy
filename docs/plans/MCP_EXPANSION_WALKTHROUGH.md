@@ -128,13 +128,16 @@ place real live orders.
 
 ## Phase 5: VM deploy automation — NOT touched this round
 
-`.github/workflows/deploy_mcp_vm.yml` currently triggers on `push: branches:
-[main]` — fully automatic. This reverses a deliberate, previously-documented
+**Update (PR #731): `.github/workflows/deploy_mcp_vm.yml` has since been
+deleted** (placeholder GCP IDs, no `permissions` block, failed on every
+push to `main` — see docs/known_issues/2026_08_security_quality_review.md
+§5). At the time of this walkthrough it triggered on `push: branches:
+[main]` — fully automatic — which reversed a deliberate, previously-documented
 decision in `docs/handovers/mcp_server_split_brain.md` not to auto-restart production
 from CI. **Not changed in this round** — this file was explicitly out of
-scope. If/when Phase 5 is picked up, switch the trigger to
-`workflow_dispatch` (manual) per the plan's recommended default before this
-is relied on.
+scope, and no longer exists to modify. If/when Phase 5 is picked up, the
+workflow needs to be created fresh with `workflow_dispatch` (manual) as its
+trigger from the start per the plan's recommended default, not `on: push`.
 
 ## Cross-phase verification (this round)
 

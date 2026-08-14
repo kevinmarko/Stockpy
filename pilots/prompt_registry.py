@@ -273,7 +273,7 @@ def get_prompt_body(prompt_id: str, version: Optional[str] = None) -> Dict[str, 
             "found": False,
             "body": None,
             "source": None,
-            "reason": f"Resolution failed: {exc}",
+            "reason": "Resolution failed: internal error",
             "cached_versions": cached_versions,
             "has_baseline": has_baseline,
         }
