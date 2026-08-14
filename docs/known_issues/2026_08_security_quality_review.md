@@ -218,11 +218,11 @@ A comprehensive audit of all 51 historical and open GitHub Security alerts (Code
    - Contained placeholder values (`projects/123456789/...`, `my-project.iam.gserviceaccount.com`), lacked `permissions` block, and failed on every push to main.
 2. **Deleted `.github/workflows/codacy.yml`**:
    - Lacked `CODACY_PROJECT_TOKEN`, ran 45 minutes on every PR/push, and crashed with Scala runtime errors.
-   - **Trade-off Note:** CodeQL is a security/SAST scanner — it does not perform general code-quality or PEP8 style linting. In this repository, `ruff check` in `.github/workflows/ci.yml` and the local `./setup.sh` / pre-commit hooks cover the code quality and linting surface, providing faster feedback (~5s) without the 45m unauthenticated Codacy bottleneck.
+   - **Trade-off Note:** CodeQL is a security/SAST scanner — it does not perform general code-quality or PEP8 style linting. `ruff check` in `.github/workflows/ci.yml` is currently scoped to `--select=F821,F822,F823,E9` (undefined-name and syntax-error checks only, not general style/quality linting), and there is no `.pre-commit-config.yaml` or lint step in `./setup.sh` in this repository. Codacy's general code-quality/style coverage (including the TS/JS webapp code it also scanned) is therefore not currently replaced by an equivalent local or CI gate — this is an accepted, currently-uncovered gap traded for removing the 45m unauthenticated Codacy bottleneck, not a like-for-like replacement.
 
 ### Repo-Wide Exception Sweep
 
-A full codebase sweep across `api/` and `pilots/` for unredacted `str(exc)` or `f"...{exc}..."` returns confirmed that all endpoint error handlers route through `api/_redact.py` (`redact_line` / `RedactingJSONResponse`), with zero raw exception disclosures remaining.
+A full codebase sweep across `api/` for unredacted `str(exc)` or `f"...{exc}..."` returns confirmed that all `api/` endpoint error handlers route through `api/_redact.py` (`redact_line`), with zero raw exception disclosures remaining in that layer. `pilots/run_status.py` and `pilots/prompt_registry.py` fix the same alert class (#15, #46, #47) independently, with hand-written generic replacement strings rather than by importing `redact_line` — `pilots/` is kept dependency-light of `api/`/FastAPI by design (enforced by `tests/test_pilots_strategy_matrix.py::test_pilots_read_helpers_stay_dependency_light`), so this is an intentionally separate, not-yet-consolidated fix, not a `redact_line` call site. (Note: `api/_redact.py` does not define a `RedactingJSONResponse` class — only `redact_line`, `_get_active_secret_values`, and `install_redacting_exception_handler`.)
 
 ### Secret Scanning Status (Alert #1)
 

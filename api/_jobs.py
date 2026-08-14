@@ -19,7 +19,7 @@ import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from gui.orchestrator_runner import (
@@ -156,8 +156,8 @@ class JobManager:
                 if not isinstance(start, str) or not isinstance(end, str):
                     raise ValueError("VALIDATION job start and end must be YYYY-MM-DD strings")
                 try:
-                    datetime.fromisoformat(start.strip())
-                    datetime.fromisoformat(end.strip())
+                    date.fromisoformat(start.strip())
+                    date.fromisoformat(end.strip())
                 except (ValueError, TypeError) as err:
                     raise ValueError(f"Invalid date format (expected YYYY-MM-DD): {err}") from err
                 handle = launch_validation_run(strategies, start, end)

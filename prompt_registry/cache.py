@@ -34,6 +34,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+from path_confinement import is_confined
 from prompt_registry.models import PromptRecord
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,11 @@ class CacheManager:
     ) -> None:
         self._dir = Path(cache_dir)
         self._keep = max(1, keep_versions)
+        # Resolved once here rather than in every _prompt_dir/_record_path
+        # call — self._dir never changes after construction, so repeating
+        # the resolve() (a filesystem stat) on the cache root itself on
+        # every path-confinement check is pure wasted I/O.
+        self._resolved_dir = self._dir.resolve()
 
     # ------------------------------------------------------------------
     # Path helpers
@@ -175,30 +181,22 @@ class CacheManager:
     def _prompt_dir(self, prompt_id: str) -> Path:
         safe_name = _sanitize_id(prompt_id)
         target = (self._dir / safe_name).resolve()
-        base = self._dir.resolve()
-        try:
-            if not target.is_relative_to(base):
-                logger.warning("CacheManager._prompt_dir: directory escape attempt for %r", prompt_id)
-                return self._dir / "_invalid_"
-        except AttributeError:
-            pass
+        if not is_confined(target, self._resolved_dir):
+            logger.warning("CacheManager._prompt_dir: directory escape attempt for %r", prompt_id)
+            return self._dir / "_invalid_"
         return self._dir / safe_name
 
     def _record_path(self, prompt_id: str, version: str) -> Path:
         safe_version = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(version).strip()) or "default"
         prompt_dir = self._prompt_dir(prompt_id)
         target = (prompt_dir / f"{safe_version}.json").resolve()
-        base = self._dir.resolve()
-        try:
-            if not target.is_relative_to(base):
-                logger.warning(
-                    "CacheManager._record_path: directory escape attempt for %r@%r",
-                    prompt_id,
-                    version,
-                )
-                return self._dir / "_invalid_" / "invalid.json"
-        except AttributeError:
-            pass
+        if not is_confined(target, self._resolved_dir):
+            logger.warning(
+                "CacheManager._record_path: directory escape attempt for %r@%r",
+                prompt_id,
+                version,
+            )
+            return self._dir / "_invalid_" / "invalid.json"
         return prompt_dir / f"{safe_version}.json"
 
     # ------------------------------------------------------------------

@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
+from ml.meta_bootstrap import META_LABELED_SIGNAL_IDS
 from settings import settings
 
 
@@ -920,6 +921,10 @@ def launch_train_meta_labelers(signal: Optional[str] = None) -> RunHandle:
 
     cmd: List[str] = [sys.executable, "-m", "scripts.train_meta_labelers"]
     if signal:
+        if signal not in META_LABELED_SIGNAL_IDS:
+            raise ValueError(
+                f"Invalid signal identifier: {signal!r} (expected one of {META_LABELED_SIGNAL_IDS})"
+            )
         cmd.extend(["--signal", signal])
 
     log_file = open(TRAIN_META_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child

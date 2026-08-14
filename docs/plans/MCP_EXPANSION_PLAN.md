@@ -50,11 +50,14 @@ boundary, operational agent skills, and automated VM deployment.
 
 > [!CAUTION]
 > **Infrastructure Deployment — ANSWERED.** The operator confirmed
-> `workflow_dispatch` (manual trigger) over fully automatic `on: push`. Note
-> for whoever builds Phase 5: `.github/workflows/deploy_mcp_vm.yml` landed
-> on `main` via #675 still wired to `on: push: branches: [main]` — the
-> confirmed `workflow_dispatch` change was never applied, so this is a real
-> outstanding fix, not just an open question anymore. Also note
+> `workflow_dispatch` (manual trigger) over fully automatic `on: push`.
+> **Update (PR #731):** `.github/workflows/deploy_mcp_vm.yml` was deleted —
+> it still had placeholder GCP IDs, no `permissions` block, and failed on
+> every push to `main`. Whoever builds Phase 5 now needs to *create* this
+> workflow fresh (see docs/known_issues/2026_08_security_quality_review.md
+> §5), not modify an existing file — build it with `on: workflow_dispatch`
+> from the start per the operator's answer above, rather than the
+> `on: push` state described in the now-removed file. Also note
 > `secrets.GCP_CREDENTIALS` and the IAM binding for VM SSH need to exist in
 > this repo before the workflow can run at all; that setup isn't part of
 > this PR and needs to happen in the GCP console separately.
@@ -414,12 +417,13 @@ ever be placed through this path.
 
 ## Phase 5 — VM deploy automation — ready for a fresh agent to build
 
-### [MODIFY] `.github/workflows/deploy_mcp_vm.yml`
+### [CREATE] `.github/workflows/deploy_mcp_vm.yml`
 
-*   Change the trigger from `on: push: branches: [main]` (its current state
-    on `main` as of this writing — landed via #675 without this change)
-    to `on: workflow_dispatch` — per the operator's earlier answer, this is
-    the confirmed default, not still an open question.
+*   **Update (PR #731):** this file was deleted (broken: placeholder GCP
+    IDs, no `permissions` block, failed on every push to `main`) — this is
+    now a create, not a modify. Build it directly with
+    `on: workflow_dispatch` (per the operator's earlier answer below) —
+    there is no longer an `on: push` trigger on `main` to change away from.
 *   Body: the SSH/restart command itself is already correct (verified
     against `docs/handovers/mcp_server_split_brain.md`'s documented remediation —
     correct `cd /opt/investyo` before `sudo -u investyo`, correct
