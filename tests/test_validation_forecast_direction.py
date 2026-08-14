@@ -243,9 +243,9 @@ class TestBuildForecastDirectionAdapter:
 
     def test_universe_constant_matches_edgar_pit_universe(self) -> None:
         """Sanity-check the module-level universe constant used for
-        registration is the intended 10-ticker EDGAR PIT subset."""
+        registration is the intended SPY benchmark + 10-ticker subset."""
         assert FORECAST_DIRECTION_UNIVERSE == [
-            "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F",
+            "SPY", "AAPL", "JNJ", "XOM", "KO", "JPM", "PG", "INTC", "T", "GE", "F",
         ]
 
 
