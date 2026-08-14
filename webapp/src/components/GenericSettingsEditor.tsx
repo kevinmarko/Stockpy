@@ -706,6 +706,11 @@ function FieldRow({
   // else keeps the description; a restart reason is surfaced separately below
   // so it never displaces the field's own documentation.
   const pinnedCaption = `A shell environment variable is set for ${f.key}, which overrides both .env and the runtime store. Unset it and restart to edit this here.`;
+  // Plain text, NOT pre-wrapped in a <details> here: Input/Select/Textarea/
+  // TagInput already collapse a non-invalid hint into their own "More info"
+  // disclosure (ui.tsx, TagInput.tsx) and show an invalid hint immediately,
+  // un-collapsed. Wrapping it again here would nest a second <details> inside
+  // theirs and would hide a validation error message behind an extra click.
   const hint = !editable ? pinnedCaption : invalid ? rangeMsg : f.description ?? undefined;
 
   return (
@@ -750,7 +755,7 @@ function FieldRow({
             disabled={!editable}
           />
           <p style={{ color: theme.textSecondary, fontSize: "var(--t-label)", margin: "var(--s-1-5) 0 0" }}>
-            {!editable ? pinnedCaption : f.description}
+            {hint}
           </p>
         </>
       ) : f.type === "enum" ? (

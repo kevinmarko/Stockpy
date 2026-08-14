@@ -13,7 +13,7 @@ export function TagInput({
   label?: ReactNode;
   value: string[];
   onChange: (v: string[]) => void;
-  hint?: string;
+  hint?: ReactNode;
   invalid?: boolean;
   id?: string;
   disabled?: boolean;

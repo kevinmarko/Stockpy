@@ -1303,7 +1303,7 @@ class Settings(BaseSettings):
     )
     HMM_RISK_OFF_BLOCK_THRESHOLD: float = Field(
         default=0.80,
-        description="Block new long orders when HMM risk-off probability exceeds this.",
+        description="Block new long orders when HMM risk-off probability exceeds this. The Gaussian HMM models the underlying market regime. A higher value means the system is less likely to block trades (more aggressive), while a lower value makes it more sensitive to volatility and bear market conditions, halting long entries sooner.",
     )
     RISK_GATE_ENFORCE_MARKET_HOURS: bool = Field(
         default=True,
@@ -1313,11 +1313,15 @@ class Settings(BaseSettings):
     # --- HMM regime detector (regime/hmm_regime.py, macro_engine.py) ---
     HMM_N_STATES: int = Field(
         default=3,
-        description="Number of hidden states for the Gaussian HMM regime detector (bull/sideways/bear).",
+        description="Number of hidden states for the Gaussian HMM regime detector (bull/sideways/bear). A 3-state model typically classifies high, medium, and low volatility regimes. Changing this alters the fundamental clustering behavior of the regime model.",
     )
     HMM_RETRAIN_FREQ_DAYS: int = Field(
         default=7,
-        description="Minimum days between HMM refits; fit() calls within this window of the last real fit are no-ops.",
+        description="Minimum days between HMM refits; fit() calls within this window of the last real fit are no-ops. A lower number means the model adapts faster to sudden market shifts (like flash crashes), but increases computational overhead and may cause temporary over-sensitivity to noise.",
+    )
+    OPTIONS_VRP_THRESHOLD: float = Field(
+        default=0.02,
+        description="Minimum Volatility Risk Premium (VRP) required to authorize premium selling (e.g. credit spreads). VRP is the difference between Implied Volatility and Realized Volatility. A higher threshold (e.g. 0.03 = 3%) demands a larger premium buffer before entering trades, increasing selectivity and safety but reducing trade frequency.",
     )
 
     # --- Kill switch (execution/kill_switch.py) ---

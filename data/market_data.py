@@ -2521,3 +2521,58 @@ def reset_provider() -> None:
     """Force-reset the singleton (useful in tests to re-evaluate env vars)."""
     global _default_provider
     _default_provider = None
+
+
+# ---------------------------------------------------------------------------
+# Options Data Provider (Tiered/Injection Point)
+# ---------------------------------------------------------------------------
+
+class OptionsDataProvider(ABC):
+    """Abstract base class for fetching options chain data."""
+    @abstractmethod
+    def fetch_options_chain(self, symbol: str, expiration: Optional[str] = None) -> Any:
+        """Fetch option chain (if expiration provided) or expirations list."""
+        pass
+
+
+class YFinanceOptionsProvider(OptionsDataProvider):
+    """Options provider backed by yfinance."""
+    def fetch_options_chain(self, symbol: str, expiration: Optional[str] = None) -> Any:
+        try:
+            import yfinance as yf
+            t = yf.Ticker(symbol)
+            if expiration is None:
+                return list(t.options)
+            else:
+                return t.option_chain(expiration)
+        except Exception as e:
+            logger.error("YFinanceOptionsProvider fetch failed for %s (exp=%s): %s", symbol, expiration, e)
+            return [] if expiration is None else None
+
+
+class CompositeOptionsProvider(OptionsDataProvider):
+    """Top-level options provider that routes to the configured backend.
+    Currently uses YFinanceOptionsProvider, but structured to support swapping
+    in other providers (e.g., Alpaca or FMP) in the future.
+    """
+    def __init__(self):
+        # In the future, read env vars (e.g., OPTIONS_DATA_PROVIDER) to select provider
+        self._provider = YFinanceOptionsProvider()
+
+    def fetch_options_chain(self, symbol: str, expiration: Optional[str] = None) -> Any:
+        return self._provider.fetch_options_chain(symbol, expiration)
+
+
+_default_options_provider: Optional[CompositeOptionsProvider] = None
+
+def get_options_provider() -> CompositeOptionsProvider:
+    """Return the module-level CompositeOptionsProvider singleton."""
+    global _default_options_provider
+    if _default_options_provider is None:
+        _default_options_provider = CompositeOptionsProvider()
+    return _default_options_provider
+
+def reset_options_provider() -> None:
+    """Force-reset the options provider singleton."""
+    global _default_options_provider
+    _default_options_provider = None

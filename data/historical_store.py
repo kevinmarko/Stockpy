@@ -83,6 +83,7 @@ import math
 import os
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -215,9 +216,19 @@ _FUNDAMENTALS_HISTORY_ADD_REPORT_DATE_DDL = """
 ALTER TABLE fundamentals_history ADD COLUMN report_date TEXT
 """
 
+# `CREATE INDEX IF NOT EXISTS` with the SAME name is a silent no-op when an
+# index of that name already exists — so widening the column list below (a
+# single-column `symbol` index to a composite `(symbol, as_of DESC)` index)
+# would otherwise never actually take effect on any pre-existing DB. The
+# DROP immediately before the CREATE (see `_ensure_tables`) makes the
+# improved index actually replace the old one, every startup.
+_FUNDAMENTALS_HISTORY_INDEX_DROP_DDL = """
+DROP INDEX IF EXISTS idx_fund_history_symbol
+"""
+
 _FUNDAMENTALS_HISTORY_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS idx_fund_history_symbol
-    ON fundamentals_history (symbol)
+    ON fundamentals_history (symbol, as_of DESC)
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -262,9 +273,16 @@ CREATE TABLE IF NOT EXISTS news_history (
 )
 """
 
+# Same silent-no-op hazard as `_FUNDAMENTALS_HISTORY_INDEX_DROP_DDL` above —
+# the DROP must precede the CREATE for the composite index to actually
+# replace a pre-existing single-column index of the same name.
+_NEWS_HISTORY_INDEX_DROP_DDL = """
+DROP INDEX IF EXISTS idx_news_history_symbol
+"""
+
 _NEWS_HISTORY_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS idx_news_history_symbol
-    ON news_history (symbol)
+    ON news_history (symbol, as_of DESC)
 """
 
 # Timezone used by resolve_trading_day() -- same ZoneInfo pattern already used
@@ -801,10 +819,12 @@ class HistoricalStore:
                 conn.execute(_ACCOUNT_SNAPSHOTS_INDEX_DDL)
                 conn.execute(_ACCOUNT_POSITIONS_DDL)
                 conn.execute(_FUNDAMENTALS_HISTORY_DDL)
+                conn.execute(_FUNDAMENTALS_HISTORY_INDEX_DROP_DDL)
                 conn.execute(_FUNDAMENTALS_HISTORY_INDEX_DDL)
                 conn.execute(_MACRO_HISTORY_DDL)
                 conn.execute(_MACRO_HISTORY_INDEX_DDL)
                 conn.execute(_NEWS_HISTORY_DDL)
+                conn.execute(_NEWS_HISTORY_INDEX_DROP_DDL)
                 conn.execute(_NEWS_HISTORY_INDEX_DDL)
                 conn.execute(_SENTIMENT_INGESTION_AUDIT_DDL)
                 conn.execute(_SENTIMENT_INGESTION_AUDIT_INDEX_DDL)
@@ -1004,6 +1024,44 @@ class HistoricalStore:
                 symbol, exc,
             )
             return self._live_fetch(symbol, lookback_days, _provider)
+
+    def get_bars_bulk(
+        self,
+        symbols: List[str],
+        lookback_days: int = 504,
+        *,
+        provider=None,
+    ) -> Dict[str, pd.DataFrame]:
+        """Fetch price bars for multiple symbols concurrently via bounded
+        worker threads (network/DB I/O bound, same
+        ``settings.DATA_FETCH_MAX_CONCURRENCY`` pattern already used by
+        ``data_engine.py``'s per-ticker loops).
+
+        One symbol's failure never drops any other symbol's result (CLAUDE.md's
+        per-ticker try/except convention) -- returns whatever subset
+        succeeded, logging (not raising) on each individual failure.
+        """
+        symbols = [s.upper() for s in symbols if isinstance(s, str) and s]
+        results: Dict[str, pd.DataFrame] = {}
+        if not symbols:
+            return results
+
+        def _fetch_one(sym: str) -> Tuple[str, Optional[pd.DataFrame]]:
+            try:
+                return sym, self.get_bars(sym, lookback_days, provider=provider)
+            except Exception as exc:  # noqa: BLE001 - per-ticker isolation, never abort the batch
+                logger.error(f"get_bars_bulk: failed to fetch {sym}: {exc}")
+                return sym, None
+
+        from settings import settings as _s  # avoid circular import
+
+        workers = max(1, min(len(symbols), int(getattr(_s, "DATA_FETCH_MAX_CONCURRENCY", 8))))
+        if workers == 1 or len(symbols) <= 1:
+            pairs = [_fetch_one(sym) for sym in symbols]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                pairs = list(pool.map(_fetch_one, symbols))
+        return {sym: df for sym, df in pairs if df is not None}
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public API — Account snapshots (Phase 2)

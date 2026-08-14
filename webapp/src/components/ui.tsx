@@ -12,7 +12,7 @@ import {
 } from "react";
 import type { Headline, PilotCategory } from "../api/types";
 import { fmtNum, fmtPct, timeAgo } from "../format";
-import { categoryColor } from "../theme";
+import { categoryColor, theme } from "../theme";
 
 /**
  * InfoTip — touch-accessible replacement for native `title="..."` attributes.
@@ -212,6 +212,37 @@ export function CategoryChip({ category }: { category: PilotCategory }) {
 }
 
 /**
+ * Small pill-shaped status/attribution badge — the shared primitive used
+ * across execution-queue rows, mode/kill-switch indicators, and similar
+ * compact labels. Lives here (not in a feature file) so no feature component
+ * has to import UI from a sibling feature file; see TopStatusBar.tsx and
+ * ExecutionQueueSection.tsx for two independent consumers.
+ */
+export function Chip({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "growth" | "decline" | "caution" | "muted";
+}) {
+  const color = tone === "muted" ? theme.textMuted : theme[tone];
+  return (
+    <span
+      style={{
+        fontSize: "var(--t-micro)",
+        fontWeight: 600,
+        padding: "3px 8px",
+        borderRadius: "var(--r-pill)",
+        border: `1px solid ${color}`,
+        color,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+/**
  * Deployable / not-deployable honesty badge. Never softened. `deployable` is
  * `null` for a Pilot with no backtest yet at all (vs. `false` for one that
  * failed a gate) — both render the same "not deployable" treatment here;
@@ -334,7 +365,7 @@ export function EmptyState({
   hint,
 }: {
   title: string;
-  hint?: string;
+  hint?: ReactNode;
 }) {
   return (
     <div className="empty">
@@ -479,7 +510,7 @@ export function Input({
   type?: "text" | "number" | "email" | "password";
   inputMode?: "text" | "numeric" | "decimal" | "email";
   invalid?: boolean;
-  hint?: string;
+  hint?: ReactNode;
   id?: string;
   disabled?: boolean;
   min?: number;
@@ -576,7 +607,7 @@ export function Select({
   onChange: (e: ChangeEvent<HTMLSelectElement>) => void;
   options: { value: string; label: string }[];
   invalid?: boolean;
-  hint?: string;
+  hint?: ReactNode;
   id?: string;
   disabled?: boolean;
   testId?: string;
@@ -665,7 +696,7 @@ export function Textarea({
   rows?: number;
   placeholder?: string;
   invalid?: boolean;
-  hint?: string;
+  hint?: ReactNode;
   id?: string;
   disabled?: boolean;
   spellCheck?: boolean;

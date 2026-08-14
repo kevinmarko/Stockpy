@@ -135,11 +135,14 @@ import type {
   CacheLongShortStartResult,
   CacheLongShortDashboard,
   CacheLongShortPendingTrade,
-    PaperBrokerAccount,
+  PaperBrokerAccount,
   PaperBrokerPosition,
   PaperBrokerOrder,
   PaperBrokerResetResult,
-CacheLongShortApproveBulkResult,
+  CacheLongShortApproveBulkResult,
+  OptionChainResponse,
+  OptionsOrderRequest,
+  OptionsOrderResult,
 } from "./types";
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
@@ -385,6 +388,10 @@ const liveApi = {
   getOptions: () => http<OptionsMatrix>("/options"),
   getSymbolOptions: (ticker: string) =>
     http<SymbolOptions>(`/symbols/${encodeURIComponent(ticker)}/options`),
+  getOptionsChain: (ticker: string, expiration?: string) =>
+    http<OptionChainResponse>(
+      `/data/options/chain/${encodeURIComponent(ticker)}${expiration ? `?expiration=${encodeURIComponent(expiration)}` : ""}`
+    ),
   getPairs: () => http<PairsRadar>("/pairs"),
   // ---- On-demand Options/Pairs recompute (data base, :8603) — webapp porting
   // backlog items 8a/8b. Distinct from getOptions/getPairs above (which only
@@ -405,6 +412,11 @@ const liveApi = {
     }),
   recomputeOptions: (req: OptionsRecomputeRequest) =>
     http<OptionsRecomputeResult>("/data/options/recompute", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  postOptionsOrder: (req: OptionsOrderRequest) =>
+    http<OptionsOrderResult>("/brokerage/options/order", {
       method: "POST",
       body: JSON.stringify(req),
     }),

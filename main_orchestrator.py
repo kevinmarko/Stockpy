@@ -256,8 +256,31 @@ async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
     # closed the one remaining tech-bars call site that bypassed it.
     tech_task = asyncio.to_thread(de.fetch_technical_raw_cached, list(set(tickers + ["SPY"])))
     
-    macro_raw, fund_raw, tech_raw = await asyncio.gather(macro_task, fund_task, tech_task)
-    telemetry.info("Data fetching completed successfully.")
+    # return_exceptions=True + per-task dead-letter isolation below: one
+    # sub-fetch raising must never take down the other two, and each
+    # fallback sentinel matches that sub-fetch's OWN real return type
+    # (macro_raw/fund_raw/tech_raw are all Dict[str, Any]-shaped per
+    # DataEngine's own type hints -- NOT pd.DataFrame(), which would satisfy
+    # today's callers by accident via DataFrame.get() but silently break
+    # .items()/`in`/json.dumps() for any other consumer).
+    results = await asyncio.gather(macro_task, fund_task, tech_task, return_exceptions=True)
+
+    macro_raw = results[0]
+    if isinstance(macro_raw, Exception):
+        telemetry.warning(f"Macro data fetch failed (dead-letter): {macro_raw}")
+        macro_raw = {}
+
+    fund_raw = results[1]
+    if isinstance(fund_raw, Exception):
+        telemetry.warning(f"Fundamentals data fetch failed (dead-letter): {fund_raw}")
+        fund_raw = {}
+
+    tech_raw = results[2]
+    if isinstance(tech_raw, Exception):
+        telemetry.warning(f"Technical pricing data fetch failed (dead-letter): {tech_raw}")
+        tech_raw = {}
+
+    telemetry.info("Data fetching completed successfully (with dead-letter isolation).")
     return macro_raw, fund_raw, tech_raw
 
 

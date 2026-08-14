@@ -204,6 +204,16 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "A highly correlated alternative security (like a sector ETF) bought when selling the original asset for tax-loss harvesting to maintain market exposure while waiting out the wash-sale rule window.",
   "correlation drift":
     "When a proxy security stops tracking its target asset closely enough. A background process continually monitors this correlation and flags if the proxy relationship weakens below a safety threshold.",
+  "options delta":
+    "The rate of change of an option's price per $1 move in the underlying stock. Calls have positive delta (0 to 1), puts have negative delta (-1 to 0). A delta of 0.30 means the option price moves ~$0.30 for each $1 stock move.",
+  "options theta":
+    "The daily time-decay of an option's price — how much value the option loses each day just from the passage of time, all else equal. Always negative for long positions.",
+  "options gamma":
+    "The rate of change of delta per $1 move in the underlying. High gamma means delta changes rapidly, making the position more sensitive to large stock moves.",
+  "implied volatility":
+    "The market's forward-looking expectation of the underlying's annualized volatility, backed out of the option's current market price via the Black-Scholes model. Higher IV means pricier options.",
+  "chance of profit":
+    "The estimated probability that an option position is profitable at expiration, accounting for the premium paid. Derived from Black-Scholes: for a call, it is N(d2) where d2 uses the break-even price (strike + premium) instead of the strike alone.",
 };
 
 /** tabKey → help. Keyed by a stable per-screen slug (see each screen's usage). */
@@ -468,6 +478,12 @@ export const TAB_HELP: Record<string, TabHelp> = {
     description:
       "A systematic tax-loss harvesting (TLH) overlay. It monitors concentrated equity positions for TLH opportunities, generating a proxy hedge (like a highly-correlated sector ETF) to maintain beta exposure while avoiding wash-sale rules. Pending trades are routed here for approval before taking effect.",
     keyConcepts: ["tax loss harvesting", "proxy hedge", "correlation drift"],
+  },
+  "options-chain": {
+    title: "Options Chain Explorer",
+    description:
+      "Interactive options chain for a single symbol — browse available expirations, inspect bid/ask/IV/Greeks per strike, and see the statistically-grounded Chance of Profit for each contract. Chain data comes from yfinance; the underlying spot price for Greek calculations comes from the FMP quote endpoint for reliability. Use Builder mode to construct common multi-leg strategies (spreads, straddles, calendars) from the chain, then review the combined order in the ticket — Paper orders simulate a fill, and Live orders require an explicit confirmation and remain subject to advisory-only constraints (no order is actually routed to a broker yet).",
+    keyConcepts: ["options delta", "options theta", "implied volatility", "chance of profit"],
   },
 };
 

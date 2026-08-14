@@ -331,6 +331,12 @@ export function SymbolDetail() {
           <div className="num" style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
             {fmtUsd(identity.price)}
           </div>
+          <button 
+            className="btn btn-outline" 
+            onClick={() => nav(`/symbol/${ticker}/options`)}
+          >
+            Trade Options
+          </button>
         </div>
       </div>
 
