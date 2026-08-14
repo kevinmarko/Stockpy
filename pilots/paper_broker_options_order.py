@@ -54,9 +54,13 @@ def execute_paper_order(
         return {"ok": False, "order_id": client_order_id, "message": f"Storage initialization failed: {e}"}
 
     if asset_type == "stock":
-        fill_price = float(limit_price) if (limit_price and limit_price > 0) else get_current_price(symbol, fallback_price=10.0)
+        fill_price = float(limit_price) if (limit_price and limit_price > 0) else get_current_price(symbol)
         if fill_price <= 0:
-            fill_price = 10.0  # Fallback reference
+            return {
+                "ok": False,
+                "order_id": client_order_id,
+                "message": f"No live quote available for {symbol}; order rejected rather than filled at a fabricated price.",
+            }
 
         if dollar_amount and dollar_amount > 0:
             qty = calculate_stock_sizing(dollar_amount, fill_price, allow_fractional=True)
@@ -95,6 +99,22 @@ def execute_paper_order(
     else:
         # Option execution
         legs_list = legs or []
+
+        # This paper broker cannot honestly price a multi-leg strategy from a
+        # single symbol's quote (matching execution/fmp_paper_broker.py's
+        # documented V1 behavior) -- reject rather than silently fill only
+        # the first leg while charging commission for all of them.
+        if len(legs_list) > 1:
+            return {
+                "ok": False,
+                "order_id": client_order_id,
+                "message": (
+                    "Multi-leg option orders are not yet supported by the paper broker "
+                    "(a single-symbol quote cannot honestly price a spread/condor); "
+                    "please submit each leg individually."
+                ),
+            }
+
         primary_leg = legs_list[0] if legs_list else None
 
         if primary_leg:
@@ -102,19 +122,35 @@ def execute_paper_order(
             strike = contract_data.get("strike", 0.0)
             opt_type = primary_leg.get("type", "call").upper()
             action = primary_leg.get("action", side).lower()
-            exp_date = expiration or "STANDARD"
-            order_symbol = f"{symbol} {exp_date} ${strike:.2f} {opt_type}"
+            if not expiration:
+                return {
+                    "ok": False,
+                    "order_id": client_order_id,
+                    "message": "Option expiration is required to identify the contract; order rejected.",
+                }
+            order_symbol = f"{symbol} {expiration} ${strike:.2f} {opt_type}"
 
             ask = contract_data.get("ask", 0.0)
             bid = contract_data.get("bid", 0.0)
             last = contract_data.get("lastPrice", 0.0)
-            mark = last if last > 0 else (ask + bid) / 2 if (ask + bid) > 0 else (ask or bid or 0.50)
+            mark = last if last > 0 else (ask + bid) / 2 if (ask + bid) > 0 else (ask or bid or 0.0)
             leg_price = limit_price if (order_type == "limit" and limit_price and limit_price > 0) else (ask if action == "buy" else (bid if bid > 0 else mark))
             if leg_price <= 0:
-                leg_price = 0.50
+                return {
+                    "ok": False,
+                    "order_id": client_order_id,
+                    "message": f"No live quote available for {order_symbol}; order rejected rather than filled at a fabricated price.",
+                }
         else:
             order_symbol = f"{symbol}-OPTION"
-            leg_price = limit_price if (order_type == "limit" and limit_price and limit_price > 0) else 0.50
+            if order_type == "limit" and limit_price and limit_price > 0:
+                leg_price = limit_price
+            else:
+                return {
+                    "ok": False,
+                    "order_id": client_order_id,
+                    "message": "No option contract or limit price provided; cannot honestly price this order.",
+                }
             action = side
 
         if dollar_amount and dollar_amount > 0:

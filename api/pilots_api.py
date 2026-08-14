@@ -5661,7 +5661,7 @@ def post_paper_broker_reset(body: Optional[PaperBrokerResetRequest] = None) -> D
     acc = store.get_account()
     return {"status": "ok", "message": "Paper account reset", "cash": acc.cash}
 
-@app.post("/brokerage/options/order", dependencies=[Depends(require_read_token)])
+@app.post("/brokerage/options/order", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
 def post_brokerage_options_order(body: OptionsOrderRequestModel) -> Dict[str, Any]:
     """Execute a paper or live options/stock order from the options chain screen."""
     from pilots.paper_broker import execute_paper_order

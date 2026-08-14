@@ -31,7 +31,7 @@ export const OptionsOrderTicket: React.FC<Props> = ({
   initialAction = 'Buy',
   onClear,
 }) => {
-  const isStock = assetType === 'stock' || legs.length === 0;
+  const isStock = assetType === 'stock';
   const [stockAction, setStockAction] = useState<'Buy' | 'Sell'>(initialAction);
   const [sizingMode, setSizingMode] = useState<'dollar' | 'quantity'>('dollar');
   const [dollarAmount, setDollarAmount] = useState<number>(500);
@@ -103,6 +103,13 @@ export const OptionsOrderTicket: React.FC<Props> = ({
     }
   }, [defaultPrice, limitPrice]);
 
+  // Fail closed on incomplete data: an option ticket with no leg selected
+  // has nothing safe to price or submit. All hooks above must still run
+  // unconditionally on every render, so this guard comes after them.
+  if (!isStock && legs.length === 0) {
+    return null;
+  }
+
   const effectivePrice = orderType === 'limit' && limitPrice > 0 ? limitPrice : defaultPrice;
 
   // Sizing and derived calculations
@@ -113,11 +120,14 @@ export const OptionsOrderTicket: React.FC<Props> = ({
   if (isStock) {
     if (sizingMode === 'dollar') {
       derivedQuantity = Math.max(1, +(dollarAmount / Math.max(0.01, effectivePrice)).toFixed(2));
-      estimatedTotal = derivedQuantity * effectivePrice;
     } else {
       derivedQuantity = Math.max(1, quantity);
-      estimatedTotal = derivedQuantity * effectivePrice;
     }
+    // Commission: $0.005 / share, min $1.00 -- matches the backend's
+    // pilots/paper_broker_options_order.py stock-fill commission exactly,
+    // so the displayed estimate doesn't understate the real fill cost.
+    commission = Math.max(1.0, +(derivedQuantity * 0.005).toFixed(2));
+    estimatedTotal = (derivedQuantity * effectivePrice) + commission;
   } else {
     // Option: 1 contract = 100 shares
     const costPerContract = Math.max(0.01, effectivePrice) * 100;

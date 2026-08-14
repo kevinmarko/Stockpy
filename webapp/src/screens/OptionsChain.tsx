@@ -259,6 +259,12 @@ export function OptionsChain() {
         }}>
           <div style={{ width: '100%', maxWidth: 520, boxShadow: '0 8px 32px rgba(0,0,0,0.5)', borderRadius: 16, overflow: 'hidden' }}>
             <OptionsOrderTicket
+              // Force a fresh instance (and thus a full internal-state reset --
+              // limit price, order type, sizing, live toggle) whenever the
+              // trade context switches between stock mode and a specific
+              // option leg, instead of silently reusing stale state from a
+              // previous selection.
+              key={isStockTradeOpen ? `stock-${ticker}` : `option-${selectedLegs.map(l => `${l.type}-${l.contract.strike}-${l.action}`).join('|')}-${selectedExp || ''}`}
               symbol={ticker!}
               expiration={selectedExp || undefined}
               legs={selectedLegs}

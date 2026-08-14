@@ -9377,8 +9377,9 @@ export const mockApi = {
       }, 500);
     }
 
-    if (paperAccount.cash === 0 && paperAccount.equity === 0) {
+    if (!paperAccountInitialized) {
       paperAccount = { equity: 100000, cash: 100000, buying_power: 100000 };
+      paperAccountInitialized = true;
     }
 
     const isStock = req.asset_type === "stock";
@@ -9420,20 +9421,42 @@ export const mockApi = {
       }
     }
 
-    if (paperAccount.cash < totalCost) {
+    // A sell credits cash and reduces inventory; a buy debits cash and
+    // grows it. Mirrors the real backend (data/paper_account_store.py's
+    // apply_fill), which does the same and rejects a sell with no matching
+    // inventory rather than silently accepting it.
+    const orderSide: 'BUY' | 'SELL' = (req.side?.toUpperCase() === 'SELL' || req.legs?.[0]?.action === 'Sell') ? 'SELL' : 'BUY';
+    const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
+
+    if (orderSide === 'SELL') {
+      if (!existingPos || existingPos.qty < qty) {
+        return delay({
+          ok: false,
+          message: `Order rejected: Insufficient funds or inventory for SELL ${qty} ${orderSymbol}.`
+        }, 500);
+      }
+    } else if (paperAccount.cash < totalCost) {
       return delay({
         ok: false,
         message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
       }, 500);
     }
 
-    // Deduct cash
-    paperAccount.cash -= totalCost;
+    if (orderSide === 'SELL') {
+      paperAccount.cash += totalCost;
+    } else {
+      paperAccount.cash -= totalCost;
+    }
     paperAccount.buying_power = paperAccount.cash;
 
     // Update positions
-    const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
-    if (existingPos) {
+    if (orderSide === 'SELL') {
+      existingPos!.qty -= qty;
+      existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - totalCost);
+      if (existingPos!.qty <= 0) {
+        paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
+      }
+    } else if (existingPos) {
       const prevTotal = existingPos.qty * existingPos.avg_cost;
       existingPos.qty += qty;
       existingPos.avg_cost = (prevTotal + totalCost) / existingPos.qty;
@@ -9451,7 +9474,6 @@ export const mockApi = {
     }
 
     const orderId = `mock_ord_${Date.now()}`;
-    const orderSide: 'BUY' | 'SELL' = (req.side?.toUpperCase() === 'SELL' || req.legs?.[0]?.action === 'Sell') ? 'SELL' : 'BUY';
     paperOrders.unshift({
       order_id: orderId,
       symbol: orderSymbol,
@@ -11176,6 +11198,7 @@ export const mockApi = {
   },
   async resetPaperBroker(cash: number) {
     paperAccount = { equity: cash, cash: cash, buying_power: cash };
+    paperAccountInitialized = true;
     paperPositions = [];
     paperOrders = [];
     return { status: "reset", cash };
@@ -11638,6 +11661,10 @@ const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
 ];
 
 let paperAccount: PaperBrokerAccount = { equity: 0, cash: 0, buying_power: 0 };
+// Distinguishes "never seeded" from "legitimately drained to zero by
+// trading" -- the account's cash/equity values alone can't tell those apart,
+// since both are genuinely 0 in the drained case.
+let paperAccountInitialized = false;
 let paperPositions: PaperBrokerPosition[] = [];
 let paperOrders: PaperBrokerOrder[] = [];
 

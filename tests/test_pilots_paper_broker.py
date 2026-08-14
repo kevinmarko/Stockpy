@@ -181,19 +181,46 @@ class TestExecutePaperOrder:
         mock_store = mock_store_cls.return_value
         mock_store.apply_fill.return_value = True
 
-        resp = _client.post(
-            "/brokerage/options/order",
-            json={
-                "symbol": "AGNC",
-                "asset_type": "stock",
-                "side": "buy",
-                "dollar_amount": 500.0,
-                "limit_price": 10.0,
-                "isLive": False,
-            }
-        )
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/brokerage/options/order",
+                json={
+                    "symbol": "AGNC",
+                    "asset_type": "stock",
+                    "side": "buy",
+                    "dollar_amount": 500.0,
+                    "limit_price": 10.0,
+                    "isLive": False,
+                },
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
         assert resp.status_code == 200
         body = resp.json()
         assert body["ok"] is True
         assert "AGNC" in body["message"]
+
+    @patch("pilots.paper_broker_options_order.PaperAccountStore")
+    def test_post_options_order_endpoint_fails_closed_when_writes_disabled(self, mock_store_cls):
+        """Same auth/flag gate as POST /pilots/paper-broker/reset -- an order-
+        execution endpoint that mutates the paper account must not be
+        reachable on the fail-open read tier alone."""
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=False):
+            resp = _client.post(
+                "/brokerage/options/order",
+                json={"symbol": "AGNC", "asset_type": "stock", "dollar_amount": 500.0, "limit_price": 10.0},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+        mock_store_cls.return_value.apply_fill.assert_not_called()
+
+    @patch("pilots.paper_broker_options_order.PaperAccountStore")
+    def test_post_options_order_endpoint_fails_closed_with_wrong_token(self, mock_store_cls):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/brokerage/options/order",
+                json={"symbol": "AGNC", "asset_type": "stock", "dollar_amount": 500.0, "limit_price": 10.0},
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+        mock_store_cls.return_value.apply_fill.assert_not_called()
 

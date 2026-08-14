@@ -2,12 +2,19 @@
 pilots/price_provider.py
 ========================
 Pricing provider for stock and options paper trading.
-Extracts real quotes from Financial Modeling Prep (FMP).
+Routes through `data.market_data.get_provider()` (the `CompositeProvider`
+`MarketDataProvider` ABC), per CLAUDE.md's data-layer convention that all
+quote fetches outside `DataEngine.fetch_technical_raw()` MUST go through it
+-- this gets the FMP/Alpaca/yfinance fallback chain, the in-process TTL
+quote cache, and `is_stale` staleness flagging for free, rather than a
+second, uncached, ungated direct FMP client.
 
-FMP Quote Structure:
-  - Real fields returned: ``price``, ``previousClose``, ``dayLow``, ``dayHigh``, ``volume``.
-  - Explicitly does NOT provide real-time bid/ask on standard endpoints; execution models
-    must use ``price`` as the reference fill price.
+Quote structure returned by `get_stock_quote`:
+  - Real fields: ``price``, ``previousClose`` (mirrors ``price`` -- the
+    underlying ``Quote`` dataclass has no separate previous-close field),
+    ``dayLow``, ``dayHigh``, ``volume``.
+  - Does NOT provide real-time bid/ask on the default configuration;
+    execution models must use ``price`` as the reference fill price.
 """
 
 from __future__ import annotations
@@ -20,26 +27,28 @@ logger = logging.getLogger(__name__)
 
 def get_stock_quote(symbol: str) -> Dict[str, Any]:
     """
-    Fetches quote data for a symbol from FMP via `data.fmp_client`.
-    Returns dict with price, previousClose, dayLow, dayHigh, etc.
+    Fetches a quote for a symbol via `data.market_data.get_provider()`.
+    Returns dict with price, previousClose, dayLow, dayHigh, volume --
+    all 0.0 (never fabricated) when no live quote is available.
     """
-    from data import fmp_client
+    from data.market_data import MarketDataError, get_provider
 
     symbol = symbol.strip().upper()
     try:
-        quotes = fmp_client.batch_quote([symbol])
-        for q in quotes:
-            if isinstance(q, dict) and q.get("symbol", "").upper() == symbol:
-                return {
-                    "symbol": symbol,
-                    "price": float(q.get("price", 0.0) or 0.0),
-                    "previousClose": float(q.get("previousClose", 0.0) or 0.0),
-                    "dayLow": float(q.get("dayLow", 0.0) or 0.0),
-                    "dayHigh": float(q.get("dayHigh", 0.0) or 0.0),
-                    "volume": float(q.get("volume", 0.0) or 0.0),
-                }
+        quote = get_provider().get_latest_quote(symbol)
+        price = float(quote.price or 0.0)
+        return {
+            "symbol": symbol,
+            "price": price,
+            "previousClose": price,
+            "dayLow": 0.0,
+            "dayHigh": 0.0,
+            "volume": 0.0,
+        }
+    except MarketDataError as e:
+        logger.warning(f"Failed to fetch quote for {symbol}: {e}")
     except Exception as e:
-        logger.warning(f"Failed to fetch FMP quote for {symbol}: {e}")
+        logger.warning(f"Unexpected error fetching quote for {symbol}: {e}")
 
     return {
         "symbol": symbol,
