@@ -198,6 +198,147 @@ class Settings(BaseSettings):
         default=True,
         description="Gates POST /pilots/paper-broker/reset endpoint. If False, resets are blocked."
     )
+    PAPER_OPTIONS_AUTO_EXECUTE_ENABLED: bool = Field(
+        default=False,
+        description="Automatically execute valid options strategy directives into the paper broker every cycle.",
+    )
+    MAX_OPTION_NOTIONAL_PER_TRADE: float = Field(
+        default=2500.0,
+        description="Max risk notional collateral per automated options paper trade.",
+    )
+    MAX_CONCURRENT_OPTION_POSITIONS: int = Field(
+        default=10,
+        description="Max total concurrent open option positions in the paper broker.",
+    )
+    OPTIONS_META_LABELER_ENABLED: bool = Field(
+        default=True,
+        description="Enable Stage 4 ML meta-labeling for automated options trade gating and sizing.",
+    )
+    OPTIONS_RISK_FREE_RATE: float = Field(
+        default=0.045,
+        description="Annualized risk-free interest rate for options pricing and Greeks calculation.",
+    )
+    OPTIONS_AUTO_EXIT_ENABLED: bool = Field(
+        default=False,
+        description="Automatically manage and exit option positions on profit target, stop loss, or DTE threshold.",
+    )
+    OPTIONS_PROFIT_TARGET_PCT: float = Field(
+        default=0.50,
+        description="Profit target percentage threshold to trigger automated exit (e.g. 0.50 for 50% max profit).",
+    )
+    OPTIONS_STOP_LOSS_MULTIPLE: float = Field(
+        default=2.0,
+        description="Stop loss multiple of max credit/debit to trigger automated exit (e.g. 2.0 for 200% loss).",
+    )
+    OPTIONS_MANAGE_DTE_THRESHOLD: int = Field(
+        default=21,
+        description="DTE threshold at or below which options positions are proactively closed/rolled (e.g. 21 days).",
+    )
+    OPTIONS_DELTA_HEDGE_ENABLED: bool = Field(
+        default=False,
+        description="Enable automatic dynamic SPY delta hedging for options paper portfolio.",
+    )
+    OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES: float = Field(
+        default=25.0,
+        description="Deadband threshold in SPY delta shares before triggering a dynamic delta hedge order.",
+    )
+    OPTIONS_EARNINGS_CRUSH_ENABLED: bool = Field(
+        default=False,
+        description="Enable automated pre-earnings volatility crush option trading.",
+    )
+    OPTIONS_EARNINGS_MIN_EDGE: float = Field(
+        default=1.25,
+        description="Minimum ratio of implied move over historical median realized move to qualify for earnings crush trade.",
+    )
+    OPTIONS_EARNINGS_WING_MULTIPLIER: float = Field(
+        default=1.20,
+        description="Multiplier on expected move to set outer wings for earnings crush Iron Condors.",
+    )
+    OPTIONS_ALERT_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="Dedicated webhook URL for real-time options alerts (UOA whale sweeps, earnings crush, delta hedging).",
+    )
+    OPTIONS_0DTE_ENABLED: bool = Field(
+        default=False,
+        description="Enable automated 0DTE options momentum breakout trading and lifecycle management.",
+    )
+    OPTIONS_0DTE_PROFIT_TARGET_PCT: float = Field(
+        default=0.75,
+        description="Profit target percentage threshold to trigger 0DTE exit (e.g. 0.75 for +75% gain in premium).",
+    )
+    OPTIONS_0DTE_STOP_LOSS_PCT: float = Field(
+        default=0.30,
+        description="Stop loss percentage threshold to trigger 0DTE exit (e.g. 0.30 for -30% loss).",
+    )
+    OPTIONS_0DTE_HARD_EXIT_TIME: str = Field(
+        default="15:45",
+        description="Mandatory hard exit time (ET, HH:MM) to close all open 0DTE positions and avoid pin/settlement risk.",
+    )
+    OPTIONS_DRL_RISK_AVERSION_GAMMA: float = Field(
+        default=0.10,
+        description=(
+            "Avellaneda-Stoikov (2008) absolute risk-aversion parameter gamma for "
+            "ml/drl_market_maker.py's DRL/AS market-making simulation engine — "
+            "controls inventory-skew strength in the reservation price R(s,q,t) = "
+            "s - q*gamma*sigma^2*(T-t) and the optimal quoting half-spread. "
+            "Matches this module's prior hardcoded DEFAULT_GAMMA default."
+        ),
+    )
+    OPTIONS_VPIN_TOXICITY_THRESHOLD: float = Field(
+        default=0.35,
+        description=(
+            "pilots/options_vpin.py's VPIN (Volume-Synchronized Probability of "
+            "Informed Trading / Toxicity) toxicity gating threshold from the "
+            "Easley/Lopez de Prado/O'Hara literature — VPIN above this value is "
+            "classified HIGH_TOXICITY (vs. LOW/MODERATE) and triggers defensive "
+            "spread-widening via apply_defensive_spread_concession(). Promoted "
+            "from the module's prior hardcoded DEFAULT_TOXICITY_THRESHOLD."
+        ),
+    )
+    OPTIONS_SOR_LEGGING_LATENCY_SECONDS: float = Field(
+        default=2.0,
+        description=(
+            "pilots/options_sor.py's simulate_legging_execution() assumed "
+            "inter-leg execution latency (seconds) between the passive leg "
+            "filling and the active leg completing — drives the Monte Carlo "
+            "spot-drift window (dt_years) underlying every hung-leg-probability "
+            "and adverse-selection-cost estimate in the legging hazard "
+            "simulator. Promoted from the function's prior hardcoded "
+            "latency_seconds=2.0 default."
+        ),
+    )
+    OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE: float = Field(
+        default=5.0,
+        description=(
+            "pilots/lob_simulator.py's DEFAULT_MARKET_ORDER_RATE — the Cont/Stoikov/"
+            "Talreja (2010) market-order Poisson arrival rate theta (orders/sec) used "
+            "as the default/fallback across calculate_cont_stoikov_fill_probability(), "
+            "evaluate_optimal_queue_level(), and simulate_queue_fill() (the live "
+            "POST /pilots/options/lob/simulate-queue resolver) whenever a caller "
+            "doesn't supply an empirically-measured rate from "
+            "compute_lob_arrival_rates(). Promoted from the module's prior "
+            "hardcoded DEFAULT_MARKET_ORDER_RATE = 5.0 default."
+        ),
+    )
+    OPTIONS_GEX_SEARCH_RANGE_PCT: float = Field(
+        default=0.20,
+        description=(
+            "pilots/options_gex.py's calculate_zero_gamma_flip() relative search "
+            "radius (+/- pct of spot) for the initial Brent's-method/bisection "
+            "bracket used to solve for the Zero-Gamma Flip Point (S*) — the spot "
+            "price where aggregate dealer Net GEX crosses zero. Directly "
+            "determines whether zero_gamma_flip/distance_to_flip_pct come back "
+            "populated or None for a given chain (a search range too narrow for "
+            "a symbol's actual OI distribution silently degrades to 'no flip "
+            "found' before the function's own secondary +/-40-60% expanded-grid "
+            "fallback ever engages). Promoted from the module's prior hardcoded "
+            "DEFAULT_SEARCH_RANGE_PCT default; pure promotion, not a behavior "
+            "change."
+        ),
+    )
+
+
+
     LIVE_TRADE_EXECUTION_ENABLED: bool = Field(
         default=False,
         description=(
@@ -2156,6 +2297,9 @@ class Settings(BaseSettings):
             # WHETHER the regime favors selling premium; does not price or
             # select strikes itself.
             "vrp_premium_selling": 10.0,
+            # Institutional options order flow net sentiment score in [-1.0, 1.0]
+            # based on aggressive sweeps vs bids from Unusual Options Activity.
+            "options_flow_sentiment": 10.0,
         },
         description="Weights for individual quantitative signal modules."
     )
@@ -4496,6 +4640,15 @@ class Settings(BaseSettings):
         default_factory=lambda: ["SPY", "QQQ", "XLK", "XLF", "XLV", "XLE"],
         description="Candidate proxy ETFs find_correlated_proxy() screens "
         "against for a concentrated ticker's hedge leg.",
+    )
+    OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD: float = Field(
+        default=2.0,
+        description="pilots/copula_stat_arb.py's pairs-trading entry/exit "
+        "z-score band: |Z_t| >= this value triggers a LONG_SPREAD/SHORT_SPREAD "
+        "entry signal (default matches the module's prior hardcoded literal, "
+        "so this is a no-op until an operator changes it). Read by "
+        "generate_copula_stat_arb_signals' and evaluate_copula_stat_arb_pair's "
+        "z_entry/z_entry_threshold parameter defaults.",
     )
 
     @property

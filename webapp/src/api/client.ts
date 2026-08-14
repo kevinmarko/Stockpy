@@ -139,11 +139,54 @@ import type {
   PaperBrokerPosition,
   PaperBrokerOrder,
   PaperBrokerResetResult,
+  StrategyOptionsCandidatesResponse,
+  StrategyOptionsExecutionResult,
+  PortfolioGreeks,
   CacheLongShortApproveBulkResult,
+
   OptionChainResponse,
   OptionsOrderRequest,
   OptionsOrderResult,
+  OptionsBacktestParams,
+  OptionsBacktestResponse,
+  OptionsMetaModelStatus,
+  OptionsMetaModelRetrainResult,
+  PaperBrokerSettleExpiredResult,
+  ScenarioMatrixResponse,
+  VolSurfaceResponse,
+  DeltaHedgePreview,
+  DeltaHedgeResult,
+  RollOrderRequest,
+  ManageExitsResult,
+  EarningsCrushCandidate,
+  EarningsCrushCandidatesResponse,
+  EarningsCrushExecutionResult,
+  UnusualOptionsFlowResponse,
+  FlowSentimentResponse,
+  HarRvForecastResponse,
+  VolMispricingResponse,
+  GammaScalpRequest,
+  GammaScalpResponse,
+  OptionsAlertTestResult,
+  DispersionBasketResponse,
+  DispersionBasketOrderRequest,
+  DispersionExecutionResult,
+  ZeroDteSignalResponse,
+  ZeroDteTradeRequest,
+  ZeroDteExecutionResult,
+  VpinMetricsResponse,
+  SorAnalysisRequest,
+  SorAnalysisResponse,
+  LeggingSimulationRequest,
+  LeggingSimulationResponse,
+  GexProfileResponse,
+  LobQueueSimulationRequest,
+  LobQueueSimulationResponse,
+  CopulaPairsResponse,
+  MarketMakerSimRequest,
+  MarketMakerSimResponse,
 } from "./types";
+
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
 
@@ -954,7 +997,141 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
     }),
+  getStrategyOptionsCandidates: (symbols?: string[]) => {
+    const q = symbols && symbols.length > 0 ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
+    return http<StrategyOptionsCandidatesResponse>(`/pilots/paper-broker/strategy-options/candidates${q}`);
+  },
+  executeStrategyOptions: (symbols?: string[], dryRun = false, maxNotional?: number) =>
+    http<StrategyOptionsExecutionResult>("/pilots/paper-broker/strategy-options/execute", {
+      method: "POST",
+      body: JSON.stringify({ symbols, dry_run: dryRun, max_notional: maxNotional }),
+    }),
+  getPaperBrokerGreeks: () => http<PortfolioGreeks>("/pilots/paper-broker/greeks"),
+  runOptionsBacktest: (params: OptionsBacktestParams) =>
+    http<OptionsBacktestResponse>("/pilots/options/backtest", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+  getOptionsMetaModelStatus: () => http<OptionsMetaModelStatus>("/pilots/options/meta-model/status"),
+  retrainOptionsMetaModel: () =>
+    http<OptionsMetaModelRetrainResult>("/pilots/options/meta-model/retrain", {
+      method: "POST",
+    }),
+  settleExpiredPaperOptions: () =>
+    http<PaperBrokerSettleExpiredResult>("/pilots/paper-broker/settle-expired", {
+      method: "POST",
+    }),
+  getVolSurface: (symbol: string, expiration?: string) =>
+    http<VolSurfaceResponse>(
+      `/pilots/options/vol-surface?symbol=${encodeURIComponent(symbol)}${expiration ? `&expiration=${encodeURIComponent(expiration)}` : ""}`
+    ),
+  getScenarioMatrix: (params?: { spot_shifts?: number[]; iv_shifts?: number[]; days_forward?: number }) =>
+    http<ScenarioMatrixResponse>("/pilots/paper-broker/scenario-matrix", {
+      method: "POST",
+      body: params ? JSON.stringify(params) : undefined,
+    }),
+  getDeltaHedgePreview: () =>
+    http<DeltaHedgePreview>("/pilots/paper-broker/delta-hedge/preview"),
+  executeDeltaHedge: (params?: { target_delta?: number; confirm?: boolean }) =>
+    http<DeltaHedgeResult>("/pilots/paper-broker/delta-hedge/execute", {
+      method: "POST",
+      body: params ? JSON.stringify(params) : undefined,
+    }),
+  managePaperOptionsExits: (params?: { force?: boolean }) =>
+    http<ManageExitsResult>("/pilots/paper-broker/manage-exits", {
+      method: "POST",
+      body: params ? JSON.stringify(params) : undefined,
+    }),
+  rollPaperOptionPosition: (request: RollOrderRequest) =>
+    http<OptionsOrderResult>("/pilots/paper-broker/roll", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getEarningsCrushCandidates: (symbols?: string[]) => {
+    const q = symbols && symbols.length > 0 ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
+    return http<EarningsCrushCandidatesResponse>(`/pilots/options/earnings-crush/candidates${q}`);
+  },
+  executeEarningsCrushTrade: (candidate: EarningsCrushCandidate | { symbol: string; strategy?: string; wing_multiplier?: number }) =>
+    http<EarningsCrushExecutionResult>("/pilots/options/earnings-crush/execute", {
+      method: "POST",
+      body: JSON.stringify(candidate),
+    }),
+  getUnusualOptionsFlow: (params?: { symbol?: string; min_vol_oi?: number; min_notional?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.symbol) q.set("symbol", params.symbol);
+    if (params?.min_vol_oi != null) q.set("min_vol_oi", String(params.min_vol_oi));
+    if (params?.min_notional != null) q.set("min_notional", String(params.min_notional));
+    const qs = q.toString() ? `?${q.toString()}` : "";
+    return http<UnusualOptionsFlowResponse>(`/pilots/options/flow/unusual${qs}`);
+  },
+  getOptionsFlowSentiment: (symbol: string) =>
+    http<FlowSentimentResponse>(`/pilots/options/flow/sentiment?symbol=${encodeURIComponent(symbol)}`),
+  getHarRvForecast: (symbol: string) =>
+    http<HarRvForecastResponse>(`/pilots/options/forecast/har-rv?symbol=${encodeURIComponent(symbol)}`),
+  getVolMispricing: (symbol: string, expiration?: string) =>
+    http<VolMispricingResponse>(
+      `/pilots/options/forecast/mispricing?symbol=${encodeURIComponent(symbol)}${expiration ? `&expiration=${encodeURIComponent(expiration)}` : ""}`
+    ),
+  simulateGammaScalping: (request: GammaScalpRequest) =>
+    http<GammaScalpResponse>("/pilots/options/gamma-scalp/simulate", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  testOptionsAlert: (params?: { alert_type?: string; symbol?: string; dry_run?: boolean }) =>
+    http<OptionsAlertTestResult>("/pilots/options/alerts/test", {
+      method: "POST",
+      body: params ? JSON.stringify(params) : undefined,
+    }),
+  getDispersionOpportunities: (index_symbol?: string) => {
+    const q = index_symbol ? `?index_symbol=${encodeURIComponent(index_symbol)}` : "";
+    return http<DispersionBasketResponse>(`/pilots/options/dispersion/opportunities${q}`);
+  },
+  executeDispersionBasket: (request: DispersionBasketOrderRequest | { opportunity_id?: string; index_symbol: string; regime?: string; basket_size_usd?: number }) =>
+    http<DispersionExecutionResult>("/pilots/options/dispersion/execute", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getZeroDteSignals: (symbol?: string) => {
+    const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+    return http<ZeroDteSignalResponse>(`/pilots/options/zero-dte/signals${q}`);
+  },
+  executeZeroDteTrade: (request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number }) =>
+    http<ZeroDteExecutionResult>("/pilots/options/zero-dte/execute", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getVpinMetrics: (symbol: string) =>
+    http<VpinMetricsResponse>(`/pilots/options/vpin/metrics?symbol=${encodeURIComponent(symbol)}`),
+  analyzeOptionsRouting: (request: SorAnalysisRequest) =>
+    http<SorAnalysisResponse>("/pilots/options/sor/analyze", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  simulateOptionsLegging: (request: LeggingSimulationRequest) =>
+    http<LeggingSimulationResponse>("/pilots/options/sor/simulate-legging", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getOptionsGexProfile: (symbol: string) =>
+    http<GexProfileResponse>(`/pilots/options/gex/profile?symbol=${encodeURIComponent(symbol)}`),
+  simulateLobQueue: (request: LobQueueSimulationRequest) =>
+    http<LobQueueSimulationResponse>("/pilots/options/lob/simulate-queue", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getCopulaPairsAnalysis: (pair?: string) => {
+    const q = pair ? `?pair=${encodeURIComponent(pair)}` : "";
+    return http<CopulaPairsResponse>(`/pilots/options/copula/pairs${q}`);
+  },
+  simulateMarketMakerAgent: (request: MarketMakerSimRequest) =>
+    http<MarketMakerSimResponse>("/pilots/options/market-maker/simulate", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+
   // ---- Live Trade Approvals ----
+
+
   getPendingLiveTrades: () => http<{ proposals: LiveTradeProposal[] }>("/pilots/execution/pending"),
   approveLiveTrade: (token: string) =>
     http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/approve`, { method: "POST" }),

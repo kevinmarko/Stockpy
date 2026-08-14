@@ -80,10 +80,11 @@ def test_insufficient_funds_rejection(mock_store_cls):
 
 
 @patch("pilots.paper_broker_options_order.PaperAccountStore")
-def test_multi_leg_option_order_rejected(mock_store_cls):
-    """A 2+ leg strategy is rejected outright rather than silently filling
-    only legs[0] while charging commission for every leg."""
+def test_multi_leg_option_order_fills_debit_spread(mock_store_cls):
+    """A 2-leg vertical debit spread calculates net debit and commission,
+    calling apply_multi_leg_fill on PaperAccountStore."""
     mock_store = mock_store_cls.return_value
+    mock_store.apply_multi_leg_fill.return_value = True
 
     legs = [
         {"contract": {"strike": 150.0, "ask": 2.50, "bid": 2.40}, "type": "call", "action": "Buy"},
@@ -95,11 +96,70 @@ def test_multi_leg_option_order_rejected(mock_store_cls):
         asset_type="option",
         expiration="2026-09-18",
         legs=legs,
+        quantity=2,
+    )
+    assert res["ok"] is True
+    assert "Vertical Spread filled" in res["message"]
+    assert "2 contract(s)" in res["message"]
+    mock_store.apply_multi_leg_fill.assert_called_once()
+    _, kwargs = mock_store.apply_multi_leg_fill.call_args
+    assert kwargs["symbol"] == "AAPL"
+    assert kwargs["contracts"] == 2
+    assert len(kwargs["legs"]) == 2
+    assert kwargs["commission_and_fees"] == 2 * 2 * 0.65  # $2.60
+
+
+@patch("pilots.paper_broker_options_order.PaperAccountStore")
+def test_multi_leg_option_order_fills_credit_spread(mock_store_cls):
+    """A 2-leg credit spread calculates net credit and collateral,
+    calling apply_multi_leg_fill."""
+    mock_store = mock_store_cls.return_value
+    mock_store.apply_multi_leg_fill.return_value = True
+
+    legs = [
+        {"contract": {"strike": 145.0, "ask": 2.10, "bid": 2.00}, "type": "put", "action": "Sell"},
+        {"contract": {"strike": 140.0, "ask": 0.85, "bid": 0.80}, "type": "put", "action": "Buy"},
+    ]
+
+    res = execute_paper_order(
+        "AAPL",
+        asset_type="option",
+        expiration="2026-09-18",
+        legs=legs,
+        quantity=1,
+    )
+    assert res["ok"] is True
+    assert "Vertical Spread filled" in res["message"]
+    assert "Credit" in res["message"]
+    mock_store.apply_multi_leg_fill.assert_called_once()
+    _, kwargs = mock_store.apply_multi_leg_fill.call_args
+    assert kwargs["net_cash_impact"] > 0  # Net proceeds
+
+
+@patch("pilots.paper_broker_options_order.PaperAccountStore")
+def test_multi_leg_limit_order_unmarketable_rejected(mock_store_cls):
+    """An unmarketable multi-leg limit order is rejected cleanly."""
+    mock_store = mock_store_cls.return_value
+
+    legs = [
+        {"contract": {"strike": 150.0, "ask": 2.50, "bid": 2.40}, "type": "call", "action": "Buy"},
+        {"contract": {"strike": 155.0, "ask": 1.10, "bid": 1.00}, "type": "call", "action": "Sell"},
+    ]
+
+    # Net debit is 2.50 - 1.00 = $1.50/sh. Limit price is $1.00 (below market debit)
+    res = execute_paper_order(
+        "AAPL",
+        asset_type="option",
+        order_type="limit",
+        limit_price=1.00,
+        expiration="2026-09-18",
+        legs=legs,
         quantity=1,
     )
     assert res["ok"] is False
-    assert "Multi-leg" in res["message"]
-    mock_store.apply_fill.assert_not_called()
+    assert "not marketable" in res["message"].lower()
+    mock_store.apply_multi_leg_fill.assert_not_called()
+
 
 
 @patch("pilots.paper_broker_options_order.PaperAccountStore")

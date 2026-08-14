@@ -198,6 +198,58 @@ import type {
   LiveTradeProposal,
   OptionsOrderRequest,
   OptionsOrderResult,
+  ScenarioMatrixResponse,
+  ScenarioMatrixCell,
+  VolSurfaceResponse,
+  VolSmilePoint,
+  VolTermStructurePoint,
+  SkewData,
+  DeltaHedgePreview,
+  DeltaHedgeResult,
+  RollOrderRequest,
+  ManageExitsResult,
+  HistoricalScenarioPreset,
+  EarningsCrushCandidate,
+  EarningsCrushCandidatesResponse,
+  EarningsCrushExecutionResult,
+  UnusualOptionTrade,
+  UnusualOptionsFlowResponse,
+  FlowSentimentData,
+  FlowSentimentResponse,
+  HarRvForecastResponse,
+  VolMispricingResponse,
+  VolMispricingStrike,
+  GammaScalpRequest,
+  GammaScalpResponse,
+  GammaScalpHedgeTrade,
+  OptionsAlertTestResult,
+  DispersionConstituent,
+  DispersionOpportunity,
+  DispersionBasketResponse,
+  DispersionBasketOrderRequest,
+  DispersionExecutionResult,
+  ZeroDteSignal,
+  ZeroDteSignalResponse,
+  ZeroDteTradeRequest,
+  ZeroDteExecutionResult,
+  VpinBucket,
+  VpinMetricsResponse,
+  SorLegBreakdown,
+  SorAnalysisRequest,
+  SorAnalysisResponse,
+  LeggingSimulationRequest,
+  LeggingSimulationResponse,
+  GexStrikePoint,
+  GexProfileResponse,
+  LobLevel,
+  LobQueueSimulationRequest,
+  LobQueueSimulationResponse,
+  CopulaPairsResponse,
+  CopulaTailData,
+  CopulaSeriesPoint,
+  MarketMakerSimRequest,
+  MarketMakerSimResponse,
+  MarketMakerStepPoint,
 } from "./types";
 
 const SECTORS = [
@@ -9393,107 +9445,218 @@ export const mockApi = {
         qty = Math.max(1, +(req.dollar_amount / fillPrice).toFixed(4));
       }
       totalCost = qty * fillPrice;
-    } else {
+
+      const orderSide: 'BUY' | 'SELL' = req.side?.toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+      const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
+
+      if (orderSide === 'SELL' && (!existingPos || existingPos.qty < qty)) {
+        return delay({
+          ok: false,
+          message: `Order rejected: Insufficient funds or inventory for SELL ${qty} ${orderSymbol}.`
+        }, 500);
+      } else if (orderSide === 'BUY' && paperAccount.cash < totalCost) {
+        return delay({
+          ok: false,
+          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
+        }, 500);
+      }
+
+      if (orderSide === 'SELL') {
+        paperAccount.cash += totalCost;
+        existingPos!.qty -= qty;
+        existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - totalCost);
+        if (existingPos!.qty <= 0) {
+          paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
+        }
+      } else {
+        paperAccount.cash -= totalCost;
+        if (existingPos) {
+          const prevTotal = existingPos.qty * existingPos.avg_cost;
+          existingPos.qty += qty;
+          existingPos.avg_cost = (prevTotal + totalCost) / existingPos.qty;
+          existingPos.market_value = (existingPos.market_value || 0) + totalCost;
+        } else {
+          paperPositions.push({
+            symbol: orderSymbol,
+            qty: qty,
+            avg_cost: fillPrice,
+            current_price: fillPrice,
+            market_value: totalCost,
+            unrealized_pl: 0,
+            unrealized_pl_pct: 0
+          });
+        }
+      }
+      paperAccount.buying_power = paperAccount.cash;
+
+      const orderId = `mock_ord_${Date.now()}`;
+      paperOrders.unshift({
+        order_id: orderId,
+        symbol: orderSymbol,
+        side: orderSide,
+        qty: qty,
+        price: fillPrice,
+        status: 'filled',
+        filled_qty: qty,
+        filled_avg_price: fillPrice,
+        created_at: new Date().toISOString()
+      });
+
+      return delay({
+        ok: true,
+        order_id: orderId,
+        message: `Paper stock order for ${qty} shares of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${totalCost.toFixed(2)}).`
+      }, 600);
+
+    } else if (req.legs && req.legs.length > 1) {
+      // Multi-leg option order execution
       let netPrice = req.limit_price || 0.0;
-      if (!netPrice && req.legs && req.legs.length > 0) {
+      if (!netPrice) {
         netPrice = req.legs.reduce((acc, leg) => {
           const mult = leg.action === 'Buy' ? 1 : -1;
           const p = leg.contract.lastPrice || leg.contract.ask || 0.05;
           return acc + (mult * p);
         }, 0);
       }
-      if (Math.abs(netPrice) < 0.01) netPrice = 0.05;
-      fillPrice = Math.abs(netPrice);
+      fillPrice = Math.abs(netPrice) || 0.05;
+      const isDebit = netPrice >= 0;
       const costPerContract = fillPrice * 100;
+
       if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
         qty = Math.max(1, Math.floor(req.dollar_amount / costPerContract));
       }
-      const commission = 0.65 * qty * Math.max(1, req.legs?.length || 1);
-      totalCost = qty * costPerContract + commission;
+      const commission = 0.65 * qty * req.legs.length;
+      totalCost = (qty * costPerContract) + (isDebit ? commission : -commission);
 
-      if (req.legs && req.legs.length === 1) {
-        const leg = req.legs[0];
+      if (isDebit && paperAccount.cash < totalCost) {
+        return delay({
+          ok: false,
+          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
+        }, 500);
+      }
+
+      paperAccount.cash += (isDebit ? -totalCost : totalCost);
+      paperAccount.buying_power = paperAccount.cash;
+
+      const orderId = `mock_ord_${Date.now()}`;
+      const strategyName = `${req.legs.length}-Leg Strategy`;
+
+      // Apply each leg position
+      req.legs.forEach(leg => {
+        const legSymbol = `${req.symbol.toUpperCase()} ${req.expiration || ''} $${leg.contract.strike} ${(leg.type || 'CALL').toUpperCase()}`.trim();
+        const legMult = leg.action === 'Buy' ? 1 : -1;
+        const legQty = qty * legMult;
+        const legPrice = (leg.contract.lastPrice || leg.contract.ask || 0.05) * 100;
+
+        const existingPos = paperPositions.find(p => p.symbol === legSymbol);
+        if (existingPos) {
+          existingPos.qty += legQty;
+          if (Math.abs(existingPos.qty) < 1e-6) {
+            paperPositions = paperPositions.filter(p => p.symbol !== legSymbol);
+          }
+        } else {
+          paperPositions.push({
+            symbol: legSymbol,
+            qty: legQty,
+            avg_cost: legPrice,
+            current_price: legPrice,
+            market_value: Math.abs(legQty) * legPrice,
+            unrealized_pl: 0,
+            unrealized_pl_pct: 0
+          });
+        }
+      });
+
+      paperOrders.unshift({
+        order_id: orderId,
+        symbol: `${strategyName} ${req.symbol.toUpperCase()}`,
+        side: isDebit ? 'BUY' : 'SELL',
+        qty: qty,
+        price: fillPrice,
+        status: 'filled',
+        filled_qty: qty,
+        filled_avg_price: fillPrice,
+        created_at: new Date().toISOString()
+      });
+
+      return delay({
+        ok: true,
+        order_id: orderId,
+        message: `Paper ${strategyName} for ${qty} contract(s) on ${req.symbol.toUpperCase()} filled at ${isDebit ? 'Debit' : 'Credit'} $${fillPrice.toFixed(2)}/sh (Total: $${Math.abs(totalCost).toFixed(2)}).`
+      }, 600);
+
+    } else {
+      // Single leg option order
+      const leg = req.legs?.[0];
+      const legAction = leg?.action || req.side || 'Buy';
+      const isBuy = legAction.toLowerCase() === 'buy';
+
+      let legPrice = req.limit_price || (leg ? (leg.contract.lastPrice || (isBuy ? leg.contract.ask : leg.contract.bid) || 0.05) : 0.05);
+      if (legPrice <= 0) legPrice = 0.05;
+      fillPrice = legPrice;
+      const costPerContract = fillPrice * 100;
+
+      if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
+        qty = Math.max(1, Math.floor(req.dollar_amount / costPerContract));
+      }
+      const commission = 0.65 * qty;
+      totalCost = (qty * costPerContract) + (isBuy ? commission : -commission);
+
+      if (leg) {
         orderSymbol = `${req.symbol.toUpperCase()} ${req.expiration || ''} $${leg.contract.strike} ${(leg.type || 'CALL').toUpperCase()}`.trim();
-      } else if (req.legs && req.legs.length > 1) {
-        orderSymbol = `${req.symbol.toUpperCase()}-${req.legs.length}LEG-${req.expiration || 'OPT'}`;
       } else {
         orderSymbol = `${req.symbol.toUpperCase()} OPTION`;
       }
-    }
 
-    // A sell credits cash and reduces inventory; a buy debits cash and
-    // grows it. Mirrors the real backend (data/paper_account_store.py's
-    // apply_fill), which does the same and rejects a sell with no matching
-    // inventory rather than silently accepting it.
-    const orderSide: 'BUY' | 'SELL' = (req.side?.toUpperCase() === 'SELL' || req.legs?.[0]?.action === 'Sell') ? 'SELL' : 'BUY';
-    const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
-
-    if (orderSide === 'SELL') {
-      if (!existingPos || existingPos.qty < qty) {
+      if (isBuy && paperAccount.cash < totalCost) {
         return delay({
           ok: false,
-          message: `Order rejected: Insufficient funds or inventory for SELL ${qty} ${orderSymbol}.`
+          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
         }, 500);
       }
-    } else if (paperAccount.cash < totalCost) {
-      return delay({
-        ok: false,
-        message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
-      }, 500);
-    }
 
-    if (orderSide === 'SELL') {
-      paperAccount.cash += totalCost;
-    } else {
-      paperAccount.cash -= totalCost;
-    }
-    paperAccount.buying_power = paperAccount.cash;
+      paperAccount.cash += (isBuy ? -totalCost : totalCost);
+      paperAccount.buying_power = paperAccount.cash;
 
-    // Update positions
-    if (orderSide === 'SELL') {
-      existingPos!.qty -= qty;
-      existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - totalCost);
-      if (existingPos!.qty <= 0) {
-        paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
+      const legQty = isBuy ? qty : -qty;
+      const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
+      if (existingPos) {
+        existingPos.qty += legQty;
+        if (Math.abs(existingPos.qty) < 1e-6) {
+          paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
+        }
+      } else {
+        paperPositions.push({
+          symbol: orderSymbol,
+          qty: legQty,
+          avg_cost: fillPrice * 100,
+          current_price: fillPrice * 100,
+          market_value: Math.abs(legQty) * fillPrice * 100,
+          unrealized_pl: 0,
+          unrealized_pl_pct: 0
+        });
       }
-    } else if (existingPos) {
-      const prevTotal = existingPos.qty * existingPos.avg_cost;
-      existingPos.qty += qty;
-      existingPos.avg_cost = (prevTotal + totalCost) / existingPos.qty;
-      existingPos.market_value = (existingPos.market_value || 0) + totalCost;
-    } else {
-      paperPositions.push({
+
+      const orderId = `mock_ord_${Date.now()}`;
+      paperOrders.unshift({
+        order_id: orderId,
         symbol: orderSymbol,
+        side: isBuy ? 'BUY' : 'SELL',
         qty: qty,
-        avg_cost: isStock ? fillPrice : fillPrice * 100,
-        current_price: isStock ? fillPrice : fillPrice * 100,
-        market_value: totalCost,
-        unrealized_pl: 0,
-        unrealized_pl_pct: 0
+        price: fillPrice,
+        status: 'filled',
+        filled_qty: qty,
+        filled_avg_price: fillPrice,
+        created_at: new Date().toISOString()
       });
-    }
 
-    const orderId = `mock_ord_${Date.now()}`;
-    paperOrders.unshift({
-      order_id: orderId,
-      symbol: orderSymbol,
-      side: orderSide,
-      qty: qty,
-      price: fillPrice,
-      status: 'filled',
-      filled_qty: qty,
-      filled_avg_price: fillPrice,
-      created_at: new Date().toISOString()
-    });
-
-    return delay(
-      {
+      return delay({
         ok: true,
         order_id: orderId,
-        message: `Paper ${isStock ? 'stock' : 'option'} order for ${qty} ${isStock ? 'shares' : 'contract(s)'} of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${totalCost.toFixed(2)}).`
-      },
-      600
-    );
+        message: `Paper option order for ${qty} contract(s) of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${Math.abs(totalCost).toFixed(2)}).`
+      }, 600);
+    }
+
   },
 
   async getObservabilitySummary(
@@ -11219,7 +11382,2114 @@ export const mockApi = {
       confirm,
     );
   },
+  async getStrategyOptionsCandidates(_symbols?: string[]) {
+    return delay({
+      count: 2,
+      candidates: [
+        {
+          symbol: "AAPL",
+          strategy: "Put Credit Spread",
+          action: "Open",
+          net_premium: 1.45,
+          ivr: 62.4,
+          trend_bias: "Bullish",
+          target_dte: 30,
+          legs: [
+            { Strike: 150.0, Side: "Short", Type: "PUT", Ratio: 1.0, Price: 2.20 },
+            { Strike: 145.0, Side: "Long", Type: "PUT", Ratio: 1.0, Price: 0.75 },
+          ]
+        },
+        {
+          symbol: "MSFT",
+          strategy: "Iron Condor",
+          action: "Open",
+          net_premium: 2.10,
+          ivr: 58.0,
+          trend_bias: "Neutral",
+          target_dte: 30,
+          legs: [
+            { Strike: 400.0, Side: "Short", Type: "PUT", Ratio: 1.0, Price: 1.80 },
+            { Strike: 395.0, Side: "Long", Type: "PUT", Ratio: 1.0, Price: 0.70 },
+            { Strike: 430.0, Side: "Short", Type: "CALL", Ratio: 1.0, Price: 1.70 },
+            { Strike: 435.0, Side: "Long", Type: "CALL", Ratio: 1.0, Price: 0.70 },
+          ]
+        }
+      ]
+    });
+  },
+  async executeStrategyOptions(_symbols?: string[], dryRun = false, _maxNotional = 2500) {
+    if (dryRun) {
+      return delay({
+        executed_count: 2,
+        skipped_count: 0,
+        failed_count: 0,
+        executed: [
+          { symbol: "AAPL", strategy: "Put Credit Spread", contracts: 2, net_price: 1.45, net_cash_impact: 287.40 },
+          { symbol: "MSFT", strategy: "Iron Condor", contracts: 1, net_price: 2.10, net_cash_impact: 207.40 }
+        ],
+        skipped: [],
+        failed: []
+      });
+    }
+
+    const aaplReq: OptionsOrderRequest = {
+      symbol: "AAPL",
+      asset_type: "option",
+      quantity: 2,
+      limit_price: 1.45,
+      expiration: "2026-09-18",
+      legs: [
+        { action: "Sell", type: "put", contract: { strike: 150, lastPrice: 2.20 } as any },
+        { action: "Buy", type: "put", contract: { strike: 145, lastPrice: 0.75 } as any },
+      ],
+      isLive: false,
+    };
+    await this.postOptionsOrder(aaplReq);
+
+
+    return delay({
+      executed_count: 1,
+      skipped_count: 0,
+      failed_count: 0,
+      executed: [
+        { order_id: `AUTO_OPT_AAPL_${Date.now()}`, symbol: "AAPL", strategy: "Put Credit Spread", contracts: 2, net_price: 1.45, net_cash_impact: 287.40 }
+      ],
+      skipped: [],
+      failed: []
+    });
+  },
+  async getPaperBrokerGreeks() {
+    return delay({
+      total_positions: paperPositions.length,
+      stock_positions_count: paperPositions.filter(p => !p.symbol.includes("$")).length,
+      option_positions_count: paperPositions.filter(p => p.symbol.includes("$")).length,
+      net_delta_shares: 45.2,
+      net_dollar_delta: 6780.0,
+      net_gamma: 0.1245,
+      net_theta_daily: 34.50,
+      net_vega_1pct: -52.80,
+      beta_weighted_delta_spy: 13.56,
+      positions: paperPositions.map(p => {
+        const isOpt = p.symbol.includes("$");
+        return {
+          symbol: p.symbol,
+          asset_type: isOpt ? ("option" as const) : ("stock" as const),
+          base_ticker: p.symbol.split(" ")[0],
+          expiration: isOpt ? "2026-09-18" : undefined,
+          strike: isOpt ? 150 : undefined,
+          option_type: isOpt ? (p.symbol.includes("PUT") ? ("put" as const) : ("call" as const)) : undefined,
+          dte: isOpt ? 35 : undefined,
+          qty: p.qty,
+          spot_price: p.current_price ?? 150,
+          delta_per_unit: isOpt ? 0.35 : 1.0,
+          gamma_per_unit: isOpt ? 0.02 : 0.0,
+          theta_daily_per_unit: isOpt ? -0.15 : 0.0,
+          vega_1pct_per_unit: isOpt ? 0.25 : 0.0,
+          position_delta: isOpt ? p.qty * 100 * 0.35 : p.qty,
+          position_dollar_delta: (isOpt ? p.qty * 100 * 0.35 : p.qty) * (p.current_price ?? 150),
+          position_gamma: isOpt ? p.qty * 100 * 0.02 : 0,
+          position_theta_daily: isOpt ? p.qty * 100 * -0.15 : 0,
+          position_vega_1pct: isOpt ? p.qty * 100 * 0.25 : 0,
+          market_value: p.market_value ?? 0,
+        };
+      }),
+    });
+  },
+  async runOptionsBacktest(params: import("./types").OptionsBacktestParams) {
+    return delay({
+      strategy_name: params.strategy,
+      ticker: params.ticker,
+      start_date: params.start_date,
+      end_date: params.end_date,
+      initial_capital: params.initial_capital || 100000,
+      final_capital: 118450.0,
+      total_return_pct: 18.45,
+      annualized_return_pct: 8.92,
+      sharpe_ratio: 1.42,
+      sortino_ratio: 1.85,
+      max_drawdown_pct: 6.40,
+      total_trades: 48,
+      winning_trades: 39,
+      losing_trades: 9,
+      win_rate_pct: 81.3,
+      profit_factor: 2.35,
+      avg_win: 620.0,
+      avg_loss: 580.0,
+      pbo: 0.12,
+      dsr: 0.98,
+      passes_stress: true,
+      deployable: true,
+      equity_curve: [
+        { date: "2020-01-01", value: 100.0 },
+        { date: "2021-01-01", value: 106.5 },
+        { date: "2022-01-01", value: 111.2 },
+        { date: "2023-01-01", value: 115.8 },
+        { date: "2024-01-01", value: 118.45 },
+      ],
+      trades: [
+        {
+          entry_date: "2023-11-01",
+          exit_date: "2023-11-20",
+          strategy: params.strategy,
+          underlying_entry_price: 435.0,
+          underlying_exit_price: 448.0,
+          entry_net_premium: 150.0,
+          exit_net_cost: 0.0,
+          pnl_dollar: 150.0,
+          pnl_pct: 50.0,
+          exit_reason: "profit_target",
+          holding_days: 19,
+          contracts: 2,
+        },
+      ],
+    });
+  },
+  async getOptionsMetaModelStatus() {
+    return delay({
+      n_samples: 1240,
+      train_accuracy: 78.5,
+      train_roc_auc: 0.812,
+      trained_at: "2026-08-14T12:00:00Z",
+      enabled: true,
+    });
+  },
+  async retrainOptionsMetaModel() {
+    return delay({
+      status: "success",
+      trained_samples: 1240,
+      accuracy: 78.5,
+      roc_auc: 0.812,
+      trained_at: new Date().toISOString(),
+    });
+  },
+  async settleExpiredPaperOptions() {
+    return delay({
+      settled_count: 0,
+      settled: [],
+    });
+  },
+  async getVolSurface(symbol: string, expiration?: string) {
+    const sym = (symbol || "SPY").toUpperCase();
+    const spot = sym === "SPY" ? 505.20 : sym === "QQQ" ? 440.50 : 180.00;
+    const baseIv = sym === "SPY" ? 0.215 : sym === "QQQ" ? 0.245 : 0.285;
+    const strikes = [
+      Math.round(spot * 0.90),
+      Math.round(spot * 0.93),
+      Math.round(spot * 0.95),
+      Math.round(spot * 0.98),
+      Math.round(spot),
+      Math.round(spot * 1.02),
+      Math.round(spot * 1.05),
+      Math.round(spot * 1.08),
+      Math.round(spot * 1.10),
+    ];
+    const smile_points: VolSmilePoint[] = strikes.map((k) => {
+      const moneyness = k / spot;
+      // Parabolic smile with put skew
+      const skewEffect = moneyness < 1.0 ? (1.0 - moneyness) * 0.45 : (moneyness - 1.0) * 0.18;
+      const iv = Number((baseIv + skewEffect).toFixed(4));
+      return {
+        strike: k,
+        iv,
+        moneyness: Number(moneyness.toFixed(4)),
+        call_bid: Number(Math.max(0.05, (spot - k) + 3.5).toFixed(2)),
+        call_ask: Number(Math.max(0.10, (spot - k) + 3.8).toFixed(2)),
+        put_bid: Number(Math.max(0.05, (k - spot) + 3.2).toFixed(2)),
+        put_ask: Number(Math.max(0.10, (k - spot) + 3.5).toFixed(2)),
+      };
+    });
+
+    const term_structure: VolTermStructurePoint[] = [
+      { expiration: "2026-08-21", dte: 7, atm_iv: Number((baseIv - 0.030).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-08-28", dte: 14, atm_iv: Number((baseIv - 0.018).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-09-18", dte: 35, atm_iv: baseIv, historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-10-16", dte: 63, atm_iv: Number((baseIv + 0.012).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-11-20", dte: 98, atm_iv: Number((baseIv + 0.020).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-12-18", dte: 126, atm_iv: Number((baseIv + 0.028).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2027-01-15", dte: 154, atm_iv: Number((baseIv + 0.034).toFixed(4)), historical_realized_vol_30d: 0.165 },
+    ];
+
+    const skew: SkewData = {
+      skew_25delta: 0.035,
+      put_25delta_iv: Number((baseIv + 0.037).toFixed(4)),
+      call_25delta_iv: Number((baseIv + 0.002).toFixed(4)),
+      atm_iv: baseIv,
+      vrp_spread: 0.050,
+      realized_vol_10d: 0.152,
+      realized_vol_20d: 0.160,
+      realized_vol_30d: 0.165,
+      realized_vol_60d: 0.172,
+    };
+
+    return delay<VolSurfaceResponse>({
+      symbol: sym,
+      spot_price: spot,
+      as_of: new Date().toISOString(),
+      expirations: term_structure.map((t) => t.expiration),
+      selected_expiration: expiration || term_structure[2].expiration,
+      smile_points,
+      term_structure,
+      skew,
+    });
+  },
+  async getScenarioMatrix(params?: { spot_shifts?: number[]; iv_shifts?: number[]; days_forward?: number }) {
+    const spot_shifts = params?.spot_shifts || [-0.10, -0.05, -0.03, -0.01, 0, 0.01, 0.03, 0.05, 0.10];
+    const iv_shifts = params?.iv_shifts || [-0.20, -0.10, -0.05, 0, 0.05, 0.10, 0.20];
+    const time_slices = [0, 7, 14, 21];
+    const current_portfolio_value = 100000;
+    const baseSpot = 505.20;
+
+    const matrix: ScenarioMatrixCell[] = [];
+    for (const t of time_slices) {
+      for (const iv of iv_shifts) {
+        for (const s of spot_shifts) {
+          const spot_price = baseSpot * (1 + s);
+          // Nonlinear delta/gamma/vega/theta PnL simulation
+          const deltaPnl = s * 48.5 * baseSpot;
+          const gammaPnl = 0.5 * 0.015 * Math.pow(s * baseSpot, 2);
+          const vegaPnl = (iv * 100) * 12.5;
+          const thetaPnl = t * 18.5; // positive income for net seller
+          const pnl_dollar = Number((deltaPnl + gammaPnl + vegaPnl + thetaPnl).toFixed(2));
+          const pnl_pct = Number((pnl_dollar / current_portfolio_value).toFixed(4));
+          const portfolio_value = Number((current_portfolio_value + pnl_dollar).toFixed(2));
+
+          matrix.push({
+            spot_shift_pct: s,
+            iv_shift_pct: iv,
+            days_forward: t,
+            spot_price: Number(spot_price.toFixed(2)),
+            portfolio_value,
+            pnl_dollar,
+            pnl_pct,
+            net_delta: Number((48.5 + (s * 15.0)).toFixed(2)),
+            net_gamma: Number((0.015 - (t * 0.0003)).toFixed(4)),
+            net_theta: Number((18.5 + (iv * 5.0)).toFixed(2)),
+            net_vega: Number((12.5 - (t * 0.3)).toFixed(2)),
+          });
+        }
+      }
+    }
+
+    const historical_scenarios: HistoricalScenarioPreset[] = [
+      {
+        id: "lehman-2008",
+        name: "Lehman Collapse (2008)",
+        description: "-15% Spot Plunge, +50% Vol Spike",
+        spot_shift_pct: -0.15,
+        iv_shift_pct: 0.50,
+        projected_pnl_dollar: -3820,
+        projected_pnl_pct: -0.0382,
+      },
+      {
+        id: "volmageddon-2018",
+        name: "Volmageddon (Feb 2018)",
+        description: "-4% Spot Gap, +100% Vol Explosion",
+        spot_shift_pct: -0.04,
+        iv_shift_pct: 1.00,
+        projected_pnl_dollar: -2150,
+        projected_pnl_pct: -0.0215,
+      },
+      {
+        id: "covid-2020",
+        name: "COVID Liquidity Shock (Mar 2020)",
+        description: "-12% Spot Drop, +40% Vol Spike",
+        spot_shift_pct: -0.12,
+        iv_shift_pct: 0.40,
+        projected_pnl_dollar: -3120,
+        projected_pnl_pct: -0.0312,
+      },
+      {
+        id: "yen-unwind-2024",
+        name: "Yen Carry Unwind (Aug 2024)",
+        description: "-6% Spot Gap, +30% Vol Expansion",
+        spot_shift_pct: -0.06,
+        iv_shift_pct: 0.30,
+        projected_pnl_dollar: -1480,
+        projected_pnl_pct: -0.0148,
+      },
+    ];
+
+    return delay<ScenarioMatrixResponse>({
+      spot_shifts,
+      iv_shifts,
+      time_slices,
+      matrix,
+      historical_scenarios,
+      current_portfolio_value,
+    });
+  },
+  async getDeltaHedgePreview() {
+    return delay<DeltaHedgePreview>({
+      net_delta_shares: 48.5,
+      net_dollar_delta: 24502.20,
+      beta_weighted_delta_spy: 48.5,
+      spy_spot_price: 505.20,
+      required_hedge_shares: -48,
+      action: "SELL",
+      hedge_symbol: "SPY",
+      estimated_cost: 24249.60,
+      tolerance_band_shares: 25.0,
+      is_within_tolerance: false,
+    });
+  },
+  async executeDeltaHedge(_params?: { target_delta?: number; confirm?: boolean }) {
+    return delay<DeltaHedgeResult>({
+      ok: true,
+      order_id: `ord_hedge_${Date.now()}`,
+      shares: 48,
+      symbol: "SPY",
+      side: "SELL",
+      price: 505.20,
+      message: "Executed delta hedge order: SOLD 48 SPY shares @ $505.20 (Portfolio Delta neutralized to 0.5 shares).",
+    });
+  },
+  async managePaperOptionsExits(_params?: { force?: boolean }) {
+    return delay<ManageExitsResult>({
+      evaluated_count: 3,
+      closed_count: 1,
+      closed_positions: [
+        {
+          symbol: "SPY 2026-09-18 $500.00 PUT",
+          qty: -2,
+          reason: "PROFIT_TARGET_50",
+          pnl_dollar: 340.0,
+          pnl_pct: 0.52,
+          closed_at_price: 1.20,
+        },
+      ],
+      message: "Evaluated 3 option positions: automatically closed 1 position reaching 50% profit target.",
+    });
+  },
+  async rollPaperOptionPosition(request: RollOrderRequest) {
+    const closeSymbol = request.close_legs[0]?.symbol ?? request.symbol;
+    const openSymbol = request.open_legs[0]?.symbol ?? request.symbol;
+    return delay<OptionsOrderResult>({
+      ok: true,
+      order_id: `ord_roll_${Date.now()}`,
+      message: `Successfully rolled ${closeSymbol} to ${openSymbol}. Net credit/debit applied.`,
+    });
+  },
+  async getEarningsCrushCandidates(symbols?: string[]) {
+    const allCandidates: EarningsCrushCandidate[] = [
+      {
+        symbol: "NVDA",
+        company_name: "NVIDIA Corporation",
+        report_date: "2026-08-20",
+        report_timing: "AMC",
+        spot_price: 128.50,
+        atm_iv: 0.68,
+        dte: 3,
+        expected_move_dollar: 11.20,
+        expected_move_pct: 0.087,
+        median_realized_move_pct: 0.054,
+        crush_edge_ratio: 1.61,
+        suggested_strategy: "Iron Condor",
+        short_put_strike: 118,
+        put_wing_strike: 112,
+        short_call_strike: 139,
+        call_wing_strike: 145,
+        expiration: "2026-08-21",
+        estimated_credit: 2.35,
+        edge_passed: true,
+        historical_moves: [4.2, 5.8, 7.1, 3.9, 5.4, 6.2, 4.8, 5.1],
+      },
+      {
+        symbol: "TSLA",
+        company_name: "Tesla Inc.",
+        report_date: "2026-08-19",
+        report_timing: "AMC",
+        spot_price: 218.00,
+        atm_iv: 0.72,
+        dte: 2,
+        expected_move_dollar: 18.50,
+        expected_move_pct: 0.085,
+        median_realized_move_pct: 0.061,
+        crush_edge_ratio: 1.39,
+        suggested_strategy: "Iron Condor",
+        short_put_strike: 200,
+        put_wing_strike: 190,
+        short_call_strike: 235,
+        call_wing_strike: 245,
+        expiration: "2026-08-21",
+        estimated_credit: 3.80,
+        edge_passed: true,
+        historical_moves: [8.5, 5.2, 6.1, 9.4, 4.3, 6.0, 7.2, 5.8],
+      },
+      {
+        symbol: "AMD",
+        company_name: "Advanced Micro Devices",
+        report_date: "2026-08-22",
+        report_timing: "BMO",
+        spot_price: 152.30,
+        atm_iv: 0.59,
+        dte: 5,
+        expected_move_dollar: 11.80,
+        expected_move_pct: 0.077,
+        median_realized_move_pct: 0.058,
+        crush_edge_ratio: 1.33,
+        suggested_strategy: "Iron Condor",
+        short_put_strike: 140,
+        put_wing_strike: 132,
+        short_call_strike: 165,
+        call_wing_strike: 173,
+        expiration: "2026-08-28",
+        estimated_credit: 2.10,
+        edge_passed: true,
+        historical_moves: [5.5, 6.2, 4.9, 7.8, 5.8, 4.1, 6.5, 5.2],
+      },
+      {
+        symbol: "AMZN",
+        company_name: "Amazon.com Inc.",
+        report_date: "2026-08-21",
+        report_timing: "AMC",
+        spot_price: 184.20,
+        atm_iv: 0.44,
+        dte: 4,
+        expected_move_dollar: 9.20,
+        expected_move_pct: 0.050,
+        median_realized_move_pct: 0.042,
+        crush_edge_ratio: 1.19,
+        suggested_strategy: "Iron Condor",
+        short_put_strike: 175,
+        put_wing_strike: 170,
+        short_call_strike: 195,
+        call_wing_strike: 200,
+        expiration: "2026-08-28",
+        estimated_credit: 1.45,
+        edge_passed: false,
+        historical_moves: [3.8, 4.5, 4.2, 6.1, 3.9, 4.1, 5.0, 3.6],
+      },
+      {
+        symbol: "AAPL",
+        company_name: "Apple Inc.",
+        report_date: "2026-08-27",
+        report_timing: "AMC",
+        spot_price: 224.50,
+        atm_iv: 0.32,
+        dte: 10,
+        expected_move_dollar: 8.10,
+        expected_move_pct: 0.036,
+        median_realized_move_pct: 0.034,
+        crush_edge_ratio: 1.06,
+        suggested_strategy: "Iron Condor",
+        short_put_strike: 215,
+        put_wing_strike: 210,
+        short_call_strike: 235,
+        call_wing_strike: 240,
+        expiration: "2026-08-28",
+        estimated_credit: 1.15,
+        edge_passed: false,
+        historical_moves: [2.8, 3.5, 3.4, 4.1, 2.9, 3.1, 3.8, 3.2],
+      },
+    ];
+    const filtered = symbols && symbols.length > 0
+      ? allCandidates.filter(c => symbols.includes(c.symbol))
+      : allCandidates;
+    return delay<EarningsCrushCandidatesResponse>({
+      candidates: filtered,
+      count: filtered.length,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async executeEarningsCrushTrade(candidate: EarningsCrushCandidate | { symbol: string; strategy?: string; wing_multiplier?: number }) {
+    const sym = candidate.symbol;
+    const strat = (candidate as EarningsCrushCandidate).suggested_strategy || "Iron Condor";
+    const credit = (candidate as EarningsCrushCandidate).estimated_credit ?? 2.75;
+    return delay<EarningsCrushExecutionResult>({
+      ok: true,
+      order_id: `ord_crush_${Date.now()}`,
+      symbol: sym,
+      strategy: strat,
+      net_credit: credit,
+      message: `Successfully executed Earnings Crush ${strat} on ${sym} for $${credit.toFixed(2)} net credit. Auto-exit scheduled at 09:35 ET post-announcement.`,
+      placed_at: new Date().toISOString(),
+    });
+  },
+  async getUnusualOptionsFlow(params?: { symbol?: string; min_vol_oi?: number; min_notional?: number }) {
+    const allTrades: UnusualOptionTrade[] = [
+      {
+        id: "uoa_1",
+        symbol: "NVDA",
+        timestamp: "14:48:12",
+        option_type: "CALL",
+        strike: 135.0,
+        expiration: "2026-08-21",
+        dte: 7,
+        trade_type: "SWEEP",
+        sentiment: "BULLISH",
+        aggressor_side: "ASK",
+        volume: 8420,
+        open_interest: 1850,
+        vol_oi_ratio: 4.55,
+        price: 3.45,
+        spot_price: 128.50,
+        notional: 2904900,
+        iv: 0.72,
+        historical_vol_30d: 0.52,
+        iv_expansion_flag: true,
+      },
+      {
+        id: "uoa_2",
+        symbol: "TSLA",
+        timestamp: "14:45:30",
+        option_type: "PUT",
+        strike: 205.0,
+        expiration: "2026-08-21",
+        dte: 7,
+        trade_type: "SWEEP",
+        sentiment: "BEARISH",
+        aggressor_side: "BID",
+        volume: 6200,
+        open_interest: 1400,
+        vol_oi_ratio: 4.43,
+        price: 4.10,
+        spot_price: 218.00,
+        notional: 2542000,
+        iv: 0.76,
+        historical_vol_30d: 0.58,
+        iv_expansion_flag: true,
+      },
+      {
+        id: "uoa_3",
+        symbol: "SPY",
+        timestamp: "14:41:05",
+        option_type: "CALL",
+        strike: 510.0,
+        expiration: "2026-09-18",
+        dte: 35,
+        trade_type: "BLOCK",
+        sentiment: "BULLISH",
+        aggressor_side: "ASK",
+        volume: 15400,
+        open_interest: 3200,
+        vol_oi_ratio: 4.81,
+        price: 8.25,
+        spot_price: 505.20,
+        notional: 12705000,
+        iv: 0.22,
+        historical_vol_30d: 0.16,
+        iv_expansion_flag: false,
+      },
+      {
+        id: "uoa_4",
+        symbol: "AMD",
+        timestamp: "14:38:22",
+        option_type: "CALL",
+        strike: 160.0,
+        expiration: "2026-08-28",
+        dte: 14,
+        trade_type: "SWEEP",
+        sentiment: "BULLISH",
+        aggressor_side: "ASK",
+        volume: 4950,
+        open_interest: 1120,
+        vol_oi_ratio: 4.42,
+        price: 2.80,
+        spot_price: 152.30,
+        notional: 1386000,
+        iv: 0.62,
+        historical_vol_30d: 0.44,
+        iv_expansion_flag: true,
+      },
+      {
+        id: "uoa_5",
+        symbol: "AAPL",
+        timestamp: "14:32:15",
+        option_type: "PUT",
+        strike: 220.0,
+        expiration: "2026-09-18",
+        dte: 35,
+        trade_type: "BLOCK",
+        sentiment: "BEARISH",
+        aggressor_side: "BID",
+        volume: 3800,
+        open_interest: 950,
+        vol_oi_ratio: 4.00,
+        price: 3.90,
+        spot_price: 224.50,
+        notional: 1482000,
+        iv: 0.33,
+        historical_vol_30d: 0.24,
+        iv_expansion_flag: false,
+      },
+      {
+        id: "uoa_6",
+        symbol: "META",
+        timestamp: "14:28:40",
+        option_type: "CALL",
+        strike: 520.0,
+        expiration: "2026-08-28",
+        dte: 14,
+        trade_type: "SWEEP",
+        sentiment: "BULLISH",
+        aggressor_side: "ASK",
+        volume: 2900,
+        open_interest: 680,
+        vol_oi_ratio: 4.26,
+        price: 6.40,
+        spot_price: 498.80,
+        notional: 1856000,
+        iv: 0.45,
+        historical_vol_30d: 0.32,
+        iv_expansion_flag: true,
+      },
+      {
+        id: "uoa_7",
+        symbol: "QQQ",
+        timestamp: "14:20:10",
+        option_type: "PUT",
+        strike: 475.0,
+        expiration: "2026-08-21",
+        dte: 7,
+        trade_type: "SWEEP",
+        sentiment: "BEARISH",
+        aggressor_side: "BID",
+        volume: 7500,
+        open_interest: 2100,
+        vol_oi_ratio: 3.57,
+        price: 2.15,
+        spot_price: 482.10,
+        notional: 1612500,
+        iv: 0.24,
+        historical_vol_30d: 0.18,
+        iv_expansion_flag: false,
+      },
+    ];
+
+    let filtered = allTrades;
+    if (params?.symbol) {
+      filtered = filtered.filter(t => t.symbol.toUpperCase() === params.symbol!.toUpperCase());
+    }
+    if (params?.min_vol_oi != null) {
+      filtered = filtered.filter(t => t.vol_oi_ratio >= params.min_vol_oi!);
+    }
+    if (params?.min_notional != null) {
+      filtered = filtered.filter(t => t.notional >= params.min_notional!);
+    }
+
+    return delay<UnusualOptionsFlowResponse>({
+      trades: filtered,
+      count: filtered.length,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async getOptionsFlowSentiment(symbol: string) {
+    const sentiments: Record<string, FlowSentimentData> = {
+      NVDA: {
+        symbol: "NVDA",
+        sentiment_score: 0.72,
+        bullish_notional: 4200000,
+        bearish_notional: 680000,
+        total_notional: 4880000,
+        call_volume: 24500,
+        put_volume: 5800,
+        put_call_ratio: 0.24,
+        top_active_strikes: [
+          { strike: 135.0, option_type: "CALL", notional: 2904900 },
+          { strike: 140.0, option_type: "CALL", notional: 1295100 },
+          { strike: 120.0, option_type: "PUT", notional: 680000 },
+        ],
+      },
+      TSLA: {
+        symbol: "TSLA",
+        sentiment_score: -0.45,
+        bullish_notional: 1100000,
+        bearish_notional: 2900000,
+        total_notional: 4000000,
+        call_volume: 8200,
+        put_volume: 16400,
+        put_call_ratio: 2.00,
+        top_active_strikes: [
+          { strike: 205.0, option_type: "PUT", notional: 2542000 },
+          { strike: 230.0, option_type: "CALL", notional: 1100000 },
+        ],
+      },
+      SPY: {
+        symbol: "SPY",
+        sentiment_score: 0.54,
+        bullish_notional: 18500000,
+        bearish_notional: 5500000,
+        total_notional: 24000000,
+        call_volume: 98000,
+        put_volume: 42000,
+        put_call_ratio: 0.43,
+        top_active_strikes: [
+          { strike: 510.0, option_type: "CALL", notional: 12705000 },
+          { strike: 500.0, option_type: "PUT", notional: 5500000 },
+        ],
+      },
+    };
+
+    const data = sentiments[symbol.toUpperCase()] || {
+      symbol: symbol.toUpperCase(),
+      sentiment_score: 0.25,
+      bullish_notional: 1200000,
+      bearish_notional: 720000,
+      total_notional: 1920000,
+      call_volume: 6400,
+      put_volume: 3800,
+      put_call_ratio: 0.59,
+      top_active_strikes: [
+        { strike: 100.0, option_type: "CALL", notional: 800000 },
+        { strike: 95.0, option_type: "PUT", notional: 400000 },
+      ],
+    };
+
+    return delay<FlowSentimentResponse>({
+      sentiment: data,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async getHarRvForecast(symbol: string) {
+    const sym = (symbol || "SPY").toUpperCase();
+    const spot = sym === "SPY" ? 505.20 : sym === "QQQ" ? 440.50 : sym === "NVDA" ? 128.50 : sym === "TSLA" ? 218.00 : 180.00;
+    const baseRv = sym === "NVDA" ? 0.48 : sym === "TSLA" ? 0.54 : sym === "QQQ" ? 0.22 : 0.165;
+
+    const rv_daily = Number((baseRv * 0.96).toFixed(4));
+    const rv_weekly = Number((baseRv * 1.02).toFixed(4));
+    const rv_monthly = Number((baseRv * 1.08).toFixed(4));
+
+    const b0 = 0.015;
+    const bd = 0.38;
+    const bw = 0.34;
+    const bm = 0.22;
+
+    const forecast_vol_1d = Number((b0 + bd * rv_daily + bw * rv_weekly + bm * rv_monthly).toFixed(4));
+    const forecast_vol_5d = Number((forecast_vol_1d * 1.02).toFixed(4));
+    const forecast_vol_22d = Number((forecast_vol_1d * 1.05).toFixed(4));
+    const forecast_vol_30d = Number((forecast_vol_1d * 1.06).toFixed(4));
+    const gjr_garch_vol = Number((forecast_vol_30d * 1.03).toFixed(4));
+    const fair_iv_blend = Number(((forecast_vol_30d * 0.65) + (gjr_garch_vol * 0.35)).toFixed(4));
+
+    return delay<HarRvForecastResponse>({
+      symbol: sym,
+      spot_price: spot,
+      as_of: new Date().toISOString(),
+      rv_daily,
+      rv_weekly,
+      rv_monthly,
+      forecast_vol_1d,
+      forecast_vol_5d,
+      forecast_vol_22d,
+      forecast_vol_30d,
+      gjr_garch_vol,
+      fair_iv_blend,
+      coefficients: {
+        beta_0: b0,
+        beta_d: bd,
+        beta_w: bw,
+        beta_m: bm,
+      },
+      r_squared: 0.685,
+      annualized_rv_1d: rv_daily,
+      annualized_rv_5d: rv_weekly,
+      annualized_rv_22d: rv_monthly,
+    });
+  },
+  async getVolMispricing(symbol: string, expiration?: string) {
+    const sym = (symbol || "SPY").toUpperCase();
+    const spot = sym === "SPY" ? 505.20 : sym === "QQQ" ? 440.50 : sym === "NVDA" ? 128.50 : sym === "TSLA" ? 218.00 : 180.00;
+    const fairBase = sym === "NVDA" ? 0.52 : sym === "TSLA" ? 0.58 : sym === "QQQ" ? 0.23 : 0.175;
+    const mktAtmIv = sym === "NVDA" ? 0.68 : sym === "TSLA" ? 0.72 : sym === "QQQ" ? 0.25 : 0.215;
+    const exp = expiration || "2026-09-18";
+    const dte = 35;
+
+    const step = spot > 300 ? 5 : spot > 100 ? 2.5 : 1;
+    const atmStrike = Math.round(spot / step) * step;
+    const strikesList: number[] = [];
+    for (let i = -6; i <= 6; i++) {
+      strikesList.push(Number((atmStrike + i * step).toFixed(2)));
+    }
+
+    const strikes: VolMispricingStrike[] = strikesList.map(k => {
+      const moneyness = k / spot;
+      const skew = moneyness < 1.0 ? (1.0 - moneyness) * 0.45 : (moneyness - 1.0) * 0.20;
+      const market_iv = Number((mktAtmIv + skew + (Math.sin(k * 10) * 0.015)).toFixed(4));
+      const fair_iv = Number((fairBase + (moneyness < 1.0 ? (1.0 - moneyness) * 0.25 : (moneyness - 1.0) * 0.10)).toFixed(4));
+      const iv_spread = Number((market_iv - fair_iv).toFixed(4));
+      const spread_zscore = Number((iv_spread / 0.025).toFixed(2));
+
+      let classification: "RICH" | "CHEAP" | "FAIR" = "FAIR";
+      let suggested_action: "SELL_PREMIUM" | "BUY_GAMMA" | "HOLD" | "NEUTRAL" = "NEUTRAL";
+      let suggested_trade: string | undefined = undefined;
+
+      if (iv_spread >= 0.035 || spread_zscore >= 1.5) {
+        classification = "RICH";
+        suggested_action = "SELL_PREMIUM";
+        suggested_trade = k < spot ? "Sell Put Credit Spread" : "Sell Call Credit Spread";
+      } else if (iv_spread <= -0.015 || spread_zscore <= -1.0) {
+        classification = "CHEAP";
+        suggested_action = "BUY_GAMMA";
+        suggested_trade = "Buy Debit Spread / Long Straddle";
+      } else {
+        classification = "FAIR";
+        suggested_action = "HOLD";
+      }
+
+      const delta = Number((0.50 + (spot - k) / (spot * 0.2)).toFixed(2));
+      const clampedDelta = Math.max(0.02, Math.min(0.98, delta));
+
+      return {
+        strike: k,
+        option_type: k >= spot ? "CALL" : "PUT",
+        market_iv,
+        fair_iv,
+        iv_spread,
+        spread_zscore,
+        classification,
+        suggested_action,
+        bid: Number(Math.max(0.20, Math.abs(spot - k) * 0.8 + 2.5).toFixed(2)),
+        ask: Number(Math.max(0.30, Math.abs(spot - k) * 0.8 + 2.8).toFixed(2)),
+        mid: Number(Math.max(0.25, Math.abs(spot - k) * 0.8 + 2.65).toFixed(2)),
+        delta: clampedDelta,
+        gamma: 0.025,
+        vega: 0.18,
+        theta: -0.08,
+        suggested_trade,
+      };
+    });
+
+    const richCount = strikes.filter(s => s.classification === "RICH").length;
+    const cheapCount = strikes.filter(s => s.classification === "CHEAP").length;
+
+    const trade_recommendations = [
+      {
+        strategy: "Put Credit Spread (Rich Skew Capture)",
+        direction: "SELL_VOL" as const,
+        strikes: [strikesList[2], strikesList[0]],
+        reason: `OTM Puts trade at +${((mktAtmIv - fairBase) * 100).toFixed(1)}% IV premium over HAR-RV fair value. High VRP edge.`,
+        estimated_edge_pct: 18.5,
+      },
+      {
+        strategy: "Iron Condor (Symmetric Overpricing)",
+        direction: "SELL_VOL" as const,
+        strikes: [strikesList[1], strikesList[3], strikesList[9], strikesList[11]],
+        reason: "Wings are elevated +2.1σ vs GJR-GARCH+HAR-RV forecast. Rich IV harvest.",
+        estimated_edge_pct: 22.4,
+      },
+      {
+        strategy: "Long Straddle (Cheap Convexity)",
+        direction: "BUY_VOL" as const,
+        strikes: [atmStrike],
+        reason: "ATM IV compressed relative to short-term RV clustering. Positive Gamma edge.",
+        estimated_edge_pct: 12.0,
+      },
+    ];
+
+    return delay<VolMispricingResponse>({
+      symbol: sym,
+      spot_price: spot,
+      expiration: exp,
+      expirations: ["2026-08-21", "2026-08-28", "2026-09-18", "2026-10-16", "2026-11-20"],
+      dte,
+      fair_iv_baseline: fairBase,
+      market_atm_iv: mktAtmIv,
+      rich_strikes_count: richCount,
+      cheap_strikes_count: cheapCount,
+      strikes,
+      trade_recommendations,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async simulateGammaScalping(request: GammaScalpRequest) {
+    const sym = request.symbol || "SPY";
+    const spot = request.spot_price || 505.20;
+    const contracts = request.contracts || 10;
+    const deltaThresh = request.delta_threshold || 0.15;
+    const steps = request.simulation_steps || 40;
+    const realizedVol = request.realized_vol || 0.25;
+
+    let price_path: number[] = request.underlying_price_path ? [...request.underlying_price_path] : [];
+    if (price_path.length === 0) {
+      price_path = [spot];
+      let currentSpot = spot;
+      const dt = 1 / 252 / 6.5;
+      for (let i = 1; i < steps; i++) {
+        const shock = (Math.sin(i * 0.4) * 0.8 + (Math.random() - 0.48)) * realizedVol * Math.sqrt(dt) * currentSpot * 8;
+        currentSpot = Math.max(10, currentSpot + shock);
+        price_path.push(Number(currentSpot.toFixed(2)));
+      }
+    }
+
+    const initDelta = request.option_type === "PUT" ? -0.50 : request.option_type === "STRADDLE" ? 0.0 : 0.50;
+    const initGamma = 0.035 * contracts;
+    const initTheta = -18.5 * contracts;
+
+    let currentStockPosition = request.option_type === "CALL" ? -Math.round(initDelta * contracts * 100) : request.option_type === "PUT" ? Math.round(Math.abs(initDelta) * contracts * 100) : 0;
+    let currentStockCash = -currentStockPosition * spot;
+    let prevSpot = spot;
+    let cumulativeGammaRent = 0;
+    let cumulativeThetaDecay = 0;
+    let totalStockPnl = 0;
+    let transactionCosts = 0;
+
+    const trades: GammaScalpHedgeTrade[] = [];
+    const pnl_path: GammaScalpResponse["pnl_path"] = [];
+
+    for (let step = 0; step < price_path.length; step++) {
+      const currentPrice = price_path[step];
+      const dS = currentPrice - prevSpot;
+      const stepDt = 1 / 30;
+
+      const rawDelta = initDelta + (initGamma / Math.max(1, contracts)) * (currentPrice - spot);
+      const optionDeltaShares = rawDelta * contracts * 100;
+      const netPortfolioDeltaShares = optionDeltaShares + currentStockPosition;
+      const netDeltaFraction = netPortfolioDeltaShares / (contracts * 100);
+
+      const stepGammaRent = 0.5 * initGamma * 100 * Math.pow(dS, 2);
+      cumulativeGammaRent += stepGammaRent;
+
+      const stepThetaBurn = Math.abs(initTheta) * stepDt;
+      cumulativeThetaDecay += stepThetaBurn;
+
+      let side: "BUY" | "SELL" | "HOLD" = "HOLD";
+      let sharesTraded = 0;
+      let cashFlow = 0;
+
+      if (Math.abs(netDeltaFraction) >= deltaThresh) {
+        sharesTraded = Math.round(-netPortfolioDeltaShares);
+        side = sharesTraded > 0 ? "BUY" : "SELL";
+        cashFlow = -sharesTraded * currentPrice;
+        currentStockPosition += sharesTraded;
+        currentStockCash += cashFlow;
+        transactionCosts += Math.abs(sharesTraded) * 0.005;
+
+        trades.push({
+          step,
+          timestamp: `T+${step}h`,
+          spot_price: currentPrice,
+          pre_delta: Number(netDeltaFraction.toFixed(3)),
+          post_delta: Number(((optionDeltaShares + currentStockPosition) / (contracts * 100)).toFixed(3)),
+          shares_traded: Math.abs(sharesTraded),
+          side,
+          trade_price: currentPrice,
+          cash_flow: Number(cashFlow.toFixed(2)),
+          stock_position: currentStockPosition,
+          option_mtm: Number(((contracts * 100) * Math.max(0.5, 5.0 + (currentPrice - spot) * initDelta + 0.5 * initGamma * Math.pow(currentPrice - spot, 2) - cumulativeThetaDecay / (contracts * 100))).toFixed(2)),
+          total_pnl: Number((cumulativeGammaRent - cumulativeThetaDecay - transactionCosts).toFixed(2)),
+          gamma_rent_cumulative: Number(cumulativeGammaRent.toFixed(2)),
+          theta_decay_cumulative: Number(cumulativeThetaDecay.toFixed(2)),
+        });
+      }
+
+      const stockMtm = currentStockPosition * currentPrice + currentStockCash;
+      totalStockPnl = stockMtm;
+      const optionPnl = (currentPrice - spot) * (initDelta * contracts * 100) + cumulativeGammaRent - cumulativeThetaDecay;
+      const totalPnl = cumulativeGammaRent - cumulativeThetaDecay - transactionCosts;
+
+      pnl_path.push({
+        step,
+        spot: currentPrice,
+        total_pnl: Number(totalPnl.toFixed(2)),
+        gamma_rent: Number(cumulativeGammaRent.toFixed(2)),
+        theta_decay: Number(cumulativeThetaDecay.toFixed(2)),
+        option_mtm: Number(optionPnl.toFixed(2)),
+        stock_pnl: Number(stockMtm.toFixed(2)),
+      });
+
+      prevSpot = currentPrice;
+    }
+
+    const total_pnl = Number((cumulativeGammaRent - cumulativeThetaDecay - transactionCosts).toFixed(2));
+
+    return delay<GammaScalpResponse>({
+      symbol: sym,
+      spot_price: spot,
+      initial_delta: initDelta,
+      initial_gamma: initGamma,
+      initial_theta: initTheta,
+      total_trades: trades.length,
+      rebalance_count: trades.length,
+      delta_threshold: deltaThresh,
+      total_pnl,
+      gamma_rent_total: Number(cumulativeGammaRent.toFixed(2)),
+      theta_burn_total: Number(cumulativeThetaDecay.toFixed(2)),
+      stock_pnl: Number(totalStockPnl.toFixed(2)),
+      option_pnl: Number((total_pnl - totalStockPnl).toFixed(2)),
+      transaction_costs: Number(transactionCosts.toFixed(2)),
+      net_edge: Number((cumulativeGammaRent - cumulativeThetaDecay).toFixed(2)),
+      trades,
+      price_path,
+      pnl_path,
+    });
+  },
+  async testOptionsAlert(params?: { alert_type?: string; symbol?: string; dry_run?: boolean }) {
+    const alertType = params?.alert_type || "UOA";
+    const symbol = params?.symbol || "NVDA";
+    const isDry = params?.dry_run ?? false;
+
+    return delay<OptionsAlertTestResult>({
+      ok: true,
+      dispatched_count: 3,
+      channels: ["Discord Webhook (#options-flow)", "Slack Webhook (#trading-desk)", "System Alert Logger"],
+      results: [
+        {
+          channel: "Discord Webhook (#options-flow)",
+          status: isDry ? "SIMULATED" : "SENT",
+          message: `Dispatched test ${alertType} notification for ${symbol} with rich embed format.`,
+        },
+        {
+          channel: "Slack Webhook (#trading-desk)",
+          status: isDry ? "SIMULATED" : "SENT",
+          message: `Dispatched test ${alertType} block kit message for ${symbol}.`,
+        },
+        {
+          channel: "System Alert Logger",
+          status: "SENT",
+          message: "Event recorded in quant_platform.db alerts table.",
+        },
+      ],
+      as_of: new Date().toISOString(),
+    });
+  },
+  async getDispersionOpportunities(index_symbol?: string) {
+    const qqqConstituents: DispersionConstituent[] = [
+      {
+        symbol: "AAPL",
+        weight: 0.18,
+        spot_price: 224.50,
+        atm_iv: 0.28,
+        realized_vol_30d: 0.20,
+        straddle_strike: 225.0,
+        straddle_bid: 10.20,
+        straddle_ask: 10.60,
+        straddle_mid: 10.40,
+        vega_per_straddle: 0.32,
+        contracts_allocated: 18,
+        leg_action: "BUY",
+        implied_rv_spread: 0.08,
+      },
+      {
+        symbol: "MSFT",
+        weight: 0.16,
+        spot_price: 445.00,
+        atm_iv: 0.26,
+        realized_vol_30d: 0.19,
+        straddle_strike: 445.0,
+        straddle_bid: 21.00,
+        straddle_ask: 21.80,
+        straddle_mid: 21.40,
+        vega_per_straddle: 0.48,
+        contracts_allocated: 12,
+        leg_action: "BUY",
+        implied_rv_spread: 0.07,
+      },
+      {
+        symbol: "NVDA",
+        weight: 0.15,
+        spot_price: 128.50,
+        atm_iv: 0.48,
+        realized_vol_30d: 0.36,
+        straddle_strike: 130.0,
+        straddle_bid: 11.80,
+        straddle_ask: 12.20,
+        straddle_mid: 12.00,
+        vega_per_straddle: 0.22,
+        contracts_allocated: 24,
+        leg_action: "BUY",
+        implied_rv_spread: 0.12,
+      },
+      {
+        symbol: "AMZN",
+        weight: 0.12,
+        spot_price: 185.00,
+        atm_iv: 0.31,
+        realized_vol_30d: 0.22,
+        straddle_strike: 185.0,
+        straddle_bid: 9.40,
+        straddle_ask: 9.80,
+        straddle_mid: 9.60,
+        vega_per_straddle: 0.28,
+        contracts_allocated: 14,
+        leg_action: "BUY",
+        implied_rv_spread: 0.09,
+      },
+      {
+        symbol: "GOOGL",
+        weight: 0.11,
+        spot_price: 172.00,
+        atm_iv: 0.29,
+        realized_vol_30d: 0.21,
+        straddle_strike: 172.5,
+        straddle_bid: 8.60,
+        straddle_ask: 9.00,
+        straddle_mid: 8.80,
+        vega_per_straddle: 0.25,
+        contracts_allocated: 15,
+        leg_action: "BUY",
+        implied_rv_spread: 0.08,
+      },
+      {
+        symbol: "META",
+        weight: 0.10,
+        spot_price: 520.00,
+        atm_iv: 0.38,
+        realized_vol_30d: 0.28,
+        straddle_strike: 520.0,
+        straddle_bid: 28.50,
+        straddle_ask: 29.50,
+        straddle_mid: 29.00,
+        vega_per_straddle: 0.62,
+        contracts_allocated: 6,
+        leg_action: "BUY",
+        implied_rv_spread: 0.10,
+      },
+      {
+        symbol: "TSLA",
+        weight: 0.10,
+        spot_price: 215.00,
+        atm_iv: 0.55,
+        realized_vol_30d: 0.42,
+        straddle_strike: 215.0,
+        straddle_bid: 19.20,
+        straddle_ask: 20.00,
+        straddle_mid: 19.60,
+        vega_per_straddle: 0.35,
+        contracts_allocated: 10,
+        leg_action: "BUY",
+        implied_rv_spread: 0.13,
+      },
+      {
+        symbol: "AVGO",
+        weight: 0.08,
+        spot_price: 155.00,
+        atm_iv: 0.36,
+        realized_vol_30d: 0.27,
+        straddle_strike: 155.0,
+        straddle_bid: 10.50,
+        straddle_ask: 11.10,
+        straddle_mid: 10.80,
+        vega_per_straddle: 0.26,
+        contracts_allocated: 11,
+        leg_action: "BUY",
+        implied_rv_spread: 0.09,
+      },
+    ];
+
+    const spyConstituents: DispersionConstituent[] = [
+      {
+        symbol: "MSFT",
+        weight: 0.14,
+        spot_price: 445.00,
+        atm_iv: 0.26,
+        realized_vol_30d: 0.19,
+        straddle_strike: 445.0,
+        straddle_bid: 21.00,
+        straddle_ask: 21.80,
+        straddle_mid: 21.40,
+        vega_per_straddle: 0.48,
+        contracts_allocated: 10,
+        leg_action: "BUY",
+        implied_rv_spread: 0.07,
+      },
+      {
+        symbol: "AAPL",
+        weight: 0.13,
+        spot_price: 224.50,
+        atm_iv: 0.28,
+        realized_vol_30d: 0.20,
+        straddle_strike: 225.0,
+        straddle_bid: 10.20,
+        straddle_ask: 10.60,
+        straddle_mid: 10.40,
+        vega_per_straddle: 0.32,
+        contracts_allocated: 14,
+        leg_action: "BUY",
+        implied_rv_spread: 0.08,
+      },
+      {
+        symbol: "NVDA",
+        weight: 0.12,
+        spot_price: 128.50,
+        atm_iv: 0.48,
+        realized_vol_30d: 0.36,
+        straddle_strike: 130.0,
+        straddle_bid: 11.80,
+        straddle_ask: 12.20,
+        straddle_mid: 12.00,
+        vega_per_straddle: 0.22,
+        contracts_allocated: 18,
+        leg_action: "BUY",
+        implied_rv_spread: 0.12,
+      },
+      {
+        symbol: "AMZN",
+        weight: 0.09,
+        spot_price: 185.00,
+        atm_iv: 0.31,
+        realized_vol_30d: 0.22,
+        straddle_strike: 185.0,
+        straddle_bid: 9.40,
+        straddle_ask: 9.80,
+        straddle_mid: 9.60,
+        vega_per_straddle: 0.28,
+        contracts_allocated: 11,
+        leg_action: "BUY",
+        implied_rv_spread: 0.09,
+      },
+      {
+        symbol: "META",
+        weight: 0.08,
+        spot_price: 520.00,
+        atm_iv: 0.38,
+        realized_vol_30d: 0.28,
+        straddle_strike: 520.0,
+        straddle_bid: 28.50,
+        straddle_ask: 29.50,
+        straddle_mid: 29.00,
+        vega_per_straddle: 0.62,
+        contracts_allocated: 5,
+        leg_action: "BUY",
+        implied_rv_spread: 0.10,
+      },
+      {
+        symbol: "GOOGL",
+        weight: 0.07,
+        spot_price: 172.00,
+        atm_iv: 0.29,
+        realized_vol_30d: 0.21,
+        straddle_strike: 172.5,
+        straddle_bid: 8.60,
+        straddle_ask: 9.00,
+        straddle_mid: 8.80,
+        vega_per_straddle: 0.25,
+        contracts_allocated: 10,
+        leg_action: "BUY",
+        implied_rv_spread: 0.08,
+      },
+      {
+        symbol: "BRK.B",
+        weight: 0.05,
+        spot_price: 450.00,
+        atm_iv: 0.16,
+        realized_vol_30d: 0.13,
+        straddle_strike: 450.0,
+        straddle_bid: 12.00,
+        straddle_ask: 12.80,
+        straddle_mid: 12.40,
+        vega_per_straddle: 0.40,
+        contracts_allocated: 4,
+        leg_action: "BUY",
+        implied_rv_spread: 0.03,
+      },
+      {
+        symbol: "JPM",
+        weight: 0.05,
+        spot_price: 215.00,
+        atm_iv: 0.22,
+        realized_vol_30d: 0.17,
+        straddle_strike: 215.0,
+        straddle_bid: 7.80,
+        straddle_ask: 8.40,
+        straddle_mid: 8.10,
+        vega_per_straddle: 0.29,
+        contracts_allocated: 6,
+        leg_action: "BUY",
+        implied_rv_spread: 0.05,
+      },
+    ];
+
+    const opportunities: DispersionOpportunity[] = [
+      {
+        id: "disp_qqq_1",
+        index_symbol: "QQQ",
+        index_name: "Invesco QQQ Trust",
+        index_spot: 480.20,
+        index_iv: 0.215,
+        index_rv_30d: 0.152,
+        index_straddle_strike: 480.0,
+        index_straddle_price: 18.50,
+        index_straddle_contracts: 10,
+        index_action: "SELL",
+        implied_correlation: 0.68,
+        realized_correlation: 0.44,
+        correlation_spread: 0.24,
+        regime: "LONG_DISPERSION",
+        trade_recommendation: "Rich Implied Correlation (+24.0% spread). Sell 10x QQQ Straddles, Buy Vega-Neutral Constituent Straddles.",
+        index_vega_total: 340.0,
+        constituents_vega_total: 343.4,
+        net_vega: 3.4,
+        vega_neutrality_ratio: 1.01,
+        net_premium_estimate: 1420.50,
+        expiration: "2026-09-18",
+        dte: 35,
+        constituents: qqqConstituents,
+        as_of: new Date().toISOString(),
+      },
+      {
+        id: "disp_spy_1",
+        index_symbol: "SPY",
+        index_name: "SPDR S&P 500 ETF Trust",
+        index_spot: 545.80,
+        index_iv: 0.148,
+        index_rv_30d: 0.112,
+        index_straddle_strike: 545.0,
+        index_straddle_price: 14.20,
+        index_straddle_contracts: 10,
+        index_action: "SELL",
+        implied_correlation: 0.62,
+        realized_correlation: 0.48,
+        correlation_spread: 0.14,
+        regime: "NEUTRAL",
+        trade_recommendation: "Moderate Implied Correlation (+14.0% spread). Below entry threshold (≥15.0%). Hold / Monitor.",
+        index_vega_total: 420.0,
+        constituents_vega_total: 418.0,
+        net_vega: -2.0,
+        vega_neutrality_ratio: 0.995,
+        net_premium_estimate: 880.00,
+        expiration: "2026-09-18",
+        dte: 35,
+        constituents: spyConstituents,
+        as_of: new Date().toISOString(),
+      },
+    ];
+
+    const filtered = index_symbol
+      ? opportunities.filter((o) => o.index_symbol.toUpperCase() === index_symbol.toUpperCase())
+      : opportunities;
+
+    return delay<DispersionBasketResponse>({
+      opportunities: filtered.length > 0 ? filtered : opportunities,
+      count: filtered.length > 0 ? filtered.length : opportunities.length,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async executeDispersionBasket(request: DispersionBasketOrderRequest | { opportunity_id?: string; index_symbol: string; regime?: string; basket_size_usd?: number }) {
+    const sym = request.index_symbol || "QQQ";
+    return delay<DispersionExecutionResult>({
+      ok: true,
+      basket_id: `bsk_disp_${Date.now()}`,
+      index_symbol: sym,
+      index_order_id: `ord_idx_${Date.now()}`,
+      constituent_order_ids: [
+        `ord_leg_aapl_${Date.now()}`,
+        `ord_leg_msft_${Date.now()}`,
+        `ord_leg_nvda_${Date.now()}`,
+        `ord_leg_amzn_${Date.now()}`,
+        `ord_leg_googl_${Date.now()}`,
+        `ord_leg_meta_${Date.now()}`,
+        `ord_leg_tsla_${Date.now()}`,
+        `ord_leg_avgo_${Date.now()}`,
+      ],
+      strategy: "Dispersion Arbitrage",
+      net_credit_debit: 1420.50,
+      legs_count: 18,
+      message: `Successfully executed vega-neutral Dispersion Arbitrage basket on ${sym}. Placed short index straddle + 8 long constituent straddles (Net Vega: +3.4 $/vol).`,
+      placed_at: new Date().toISOString(),
+    });
+  },
+  async getZeroDteSignals(symbol?: string) {
+    const allSignals: ZeroDteSignal[] = [
+      {
+        symbol: "SPY",
+        spot_price: 546.50,
+        timestamp: "10:14:32",
+        opening_range_high: 545.80,
+        opening_range_low: 544.10,
+        opening_range_width_pct: 0.0031,
+        ttm_squeeze_active: false,
+        ttm_squeeze_bars: 8,
+        momentum_direction: "BULLISH_BREAKOUT",
+        momentum_score: 0.86,
+        relative_volume_15m: 2.15,
+        suggested_action: "BUY_CALL",
+        recommended_contract: {
+          option_type: "CALL",
+          strike: 547.0,
+          expiration: "2026-08-14",
+          dte: 0,
+          delta: 0.51,
+          gamma: 0.082,
+          theta: -1.45,
+          vega: 0.12,
+          bid: 1.85,
+          ask: 1.90,
+          mid: 1.88,
+          implied_vol: 0.18,
+          target_price: 3.29,
+          stop_loss_price: 1.32,
+          hard_exit_time: "15:45 ET",
+        },
+        trigger_reason: "15-min ORB breakout above $545.80 on 2.15x volume acceleration with TTM Squeeze release.",
+      },
+      {
+        symbol: "QQQ",
+        spot_price: 481.10,
+        timestamp: "10:14:15",
+        opening_range_high: 482.40,
+        opening_range_low: 479.80,
+        opening_range_width_pct: 0.0054,
+        ttm_squeeze_active: true,
+        ttm_squeeze_bars: 6,
+        momentum_direction: "IN_RANGE",
+        momentum_score: 0.14,
+        relative_volume_15m: 0.92,
+        suggested_action: "WAIT",
+        recommended_contract: {
+          option_type: "CALL",
+          strike: 482.0,
+          expiration: "2026-08-14",
+          dte: 0,
+          delta: 0.49,
+          gamma: 0.065,
+          theta: -1.82,
+          vega: 0.15,
+          bid: 2.10,
+          ask: 2.20,
+          mid: 2.15,
+          implied_vol: 0.24,
+          target_price: 3.76,
+          stop_loss_price: 1.50,
+          hard_exit_time: "15:45 ET",
+        },
+        trigger_reason: "Inside 15-min range [479.80 - 482.40]. Volatility compression active (TTM Squeeze Red).",
+      },
+      {
+        symbol: "TSLA",
+        spot_price: 214.30,
+        timestamp: "10:13:50",
+        opening_range_high: 221.50,
+        opening_range_low: 216.00,
+        opening_range_width_pct: 0.025,
+        ttm_squeeze_active: false,
+        ttm_squeeze_bars: 5,
+        momentum_direction: "BEARISH_BREAKDOWN",
+        momentum_score: -0.82,
+        relative_volume_15m: 2.40,
+        suggested_action: "BUY_PUT",
+        recommended_contract: {
+          option_type: "PUT",
+          strike: 215.0,
+          expiration: "2026-08-14",
+          dte: 0,
+          delta: -0.48,
+          gamma: 0.058,
+          theta: -2.10,
+          vega: 0.18,
+          bid: 2.40,
+          ask: 2.48,
+          mid: 2.44,
+          implied_vol: 0.62,
+          target_price: 4.27,
+          stop_loss_price: 1.71,
+          hard_exit_time: "15:45 ET",
+        },
+        trigger_reason: "15-min ORB breakdown below $216.00 with heavy 2.40x selling momentum and expanding volatility.",
+      },
+      {
+        symbol: "NVDA",
+        spot_price: 128.50,
+        timestamp: "10:14:02",
+        opening_range_high: 127.80,
+        opening_range_low: 125.60,
+        opening_range_width_pct: 0.017,
+        ttm_squeeze_active: false,
+        ttm_squeeze_bars: 7,
+        momentum_direction: "BULLISH_BREAKOUT",
+        momentum_score: 0.79,
+        relative_volume_15m: 1.95,
+        suggested_action: "BUY_CALL",
+        recommended_contract: {
+          option_type: "CALL",
+          strike: 129.0,
+          expiration: "2026-08-14",
+          dte: 0,
+          delta: 0.47,
+          gamma: 0.092,
+          theta: -1.25,
+          vega: 0.11,
+          bid: 1.45,
+          ask: 1.50,
+          mid: 1.48,
+          implied_vol: 0.52,
+          target_price: 2.59,
+          stop_loss_price: 1.04,
+          hard_exit_time: "15:45 ET",
+        },
+        trigger_reason: "High-gamma breakout above $127.80 with 1.95x volume thrust.",
+      },
+    ];
+
+    const filtered = symbol
+      ? allSignals.filter((s) => s.symbol.toUpperCase() === symbol.toUpperCase())
+      : allSignals;
+
+    return delay<ZeroDteSignalResponse>({
+      signals: filtered.length > 0 ? filtered : allSignals,
+      symbol: symbol || undefined,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async executeZeroDteTrade(request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number }) {
+    const sym = request.symbol;
+    const type = request.option_type || "CALL";
+    const strike = request.strike || 547;
+    const contracts = request.contracts || 5;
+    const entry = (request as ZeroDteTradeRequest).entry_price || 1.88;
+    const target = Number((entry * 1.75).toFixed(2));
+    const stop = Number((entry * 0.70).toFixed(2));
+
+    return delay<ZeroDteExecutionResult>({
+      ok: true,
+      order_id: `ord_0dte_${Date.now()}`,
+      symbol: sym,
+      option_type: type,
+      strike,
+      contracts,
+      fill_price: entry,
+      profit_target_price: target,
+      stop_loss_price: stop,
+      hard_exit_time: "15:45 ET",
+      strategy: "0DTE Intraday Momentum Breakout",
+      message: `Executed ${contracts}x ${sym} ${strike} ${type} @ $${entry.toFixed(2)}. Profit target set at $${target.toFixed(2)} (+75%), Stop loss at $${stop.toFixed(2)} (-30%), Hard Time Stop at 15:45 ET.`,
+      placed_at: new Date().toISOString(),
+    });
+  },
+  async getVpinMetrics(symbol: string) {
+    const sym = symbol.toUpperCase();
+    const vpinMap: Record<string, { vpin: number; regime: "LOW" | "MODERATE" | "HIGH_TOXICITY"; concession: number; pct: number }> = {
+      SPY: { vpin: 0.184, regime: "LOW", concession: 0.00, pct: 28 },
+      QQQ: { vpin: 0.282, regime: "MODERATE", concession: 0.02, pct: 64 },
+      TSLA: { vpin: 0.428, regime: "HIGH_TOXICITY", concession: 0.08, pct: 94 },
+      NVDA: { vpin: 0.385, regime: "HIGH_TOXICITY", concession: 0.05, pct: 88 },
+      AAPL: { vpin: 0.195, regime: "LOW", concession: 0.00, pct: 32 },
+      MSFT: { vpin: 0.210, regime: "MODERATE", concession: 0.01, pct: 45 },
+    };
+    const info = vpinMap[sym] || { vpin: 0.265, regime: "MODERATE" as const, concession: 0.02, pct: 58 };
+    
+    const numBuckets = 50;
+    const bucketSize = 10000;
+    const basePrice = sym === "SPY" ? 546.50 : sym === "QQQ" ? 481.10 : sym === "TSLA" ? 214.30 : sym === "NVDA" ? 128.50 : 200.0;
+    const buckets: VpinBucket[] = [];
+    let currentP = basePrice;
+    
+    for (let i = 1; i <= numBuckets; i++) {
+      const priceDelta = (Math.sin(i * 0.4) * 0.35) + ((i % 3 === 0 ? 0.2 : -0.15));
+      const nextP = Number((currentP + priceDelta).toFixed(2));
+      const buyPct = Math.max(0.1, Math.min(0.9, 0.5 + (priceDelta / 1.5)));
+      const buyVol = Math.round(bucketSize * buyPct);
+      const sellVol = bucketSize - buyVol;
+      const imbalance = Math.abs(buyVol - sellVol);
+      
+      buckets.push({
+        bucket_index: i,
+        buy_volume: buyVol,
+        sell_volume: sellVol,
+        total_volume: bucketSize,
+        price_start: currentP,
+        price_end: nextP,
+        price_change: Number((nextP - currentP).toFixed(2)),
+        imbalance,
+        timestamp: new Date(Date.now() - (numBuckets - i) * 120_000).toISOString(),
+      });
+      currentP = nextP;
+    }
+
+    return delay<VpinMetricsResponse>({
+      symbol: sym,
+      vpin: info.vpin,
+      regime: info.regime,
+      toxicity_percentile: info.pct,
+      bucket_size: bucketSize,
+      num_buckets: numBuckets,
+      buckets,
+      defensive_spread_concession: info.concession,
+      warning_message: info.regime === "HIGH_TOXICITY"
+        ? `High Microstructure Toxicity (VPIN ${(info.vpin * 100).toFixed(1)}% > 35.0%). Institutional informed flow detected. Defensive concession applied: +$${info.concession.toFixed(2)}/contract.`
+        : null,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async analyzeOptionsRouting(request: SorAnalysisRequest) {
+    const sym = request.symbol.toUpperCase();
+    const legs = request.legs && request.legs.length > 0 ? request.legs : [
+      { strike: 540, option_type: "PUT" as const, action: "SELL" as const, bid: 3.10, ask: 3.25, mid: 3.175 },
+      { strike: 535, option_type: "PUT" as const, action: "BUY" as const, bid: 1.80, ask: 1.95, mid: 1.875 },
+    ];
+    const latency = request.latency_ms || 250;
+    
+    let cobNetMid = 0;
+    let cobNatural = 0;
+    let syntheticNet = 0;
+    
+    const breakdown: SorLegBreakdown[] = legs.map((leg) => {
+      const b = leg.bid ?? 2.0;
+      const a = leg.ask ?? 2.2;
+      const m = leg.mid ?? (b + a) / 2;
+      const isSell = leg.action === "SELL";
+      
+      if (isSell) {
+        cobNetMid += m;
+        cobNatural += b;
+        syntheticNet += m + (a - b) * 0.35;
+      } else {
+        cobNetMid -= m;
+        cobNatural -= a;
+        syntheticNet -= (m - (a - b) * 0.35);
+      }
+      
+      return {
+        strike: leg.strike,
+        option_type: leg.option_type,
+        action: leg.action,
+        bid: b,
+        ask: a,
+        mid: m,
+        fill_priority: isSell ? 1 : 2,
+        fill_style: isSell ? ("PASSIVE" as const) : ("ACTIVE" as const),
+      };
+    });
+
+    const absNetMid = Math.abs(cobNetMid);
+    const absNatural = Math.abs(cobNatural);
+    const absSynthetic = Math.abs(syntheticNet);
+    
+    const savings = Math.max(12.50, Number(((absSynthetic - absNatural) * 100).toFixed(2)));
+    const hungProb = Math.min(0.25, Number((0.02 + (latency / 1000) * 0.045).toFixed(4)));
+    const adverseCost = Number((hungProb * 48.0).toFixed(2));
+    
+    let recommended: "COB_NET_PACKAGE" | "LEG_PASSIVE_FIRST" | "SPLIT_DIRECT" = "LEG_PASSIVE_FIRST";
+    let rationale = `Synthetic legging captures $${savings.toFixed(2)} edge with low hung leg hazard (${(hungProb * 100).toFixed(1)}% @ ${latency}ms).`;
+    
+    if (latency > 1500 || hungProb > 0.15) {
+      recommended = "COB_NET_PACKAGE";
+      rationale = `High execution latency (${latency}ms) creates unacceptable hung leg hazard (${(hungProb * 100).toFixed(1)}%). Direct atomic COB package route recommended.`;
+    }
+
+    return delay<SorAnalysisResponse>({
+      symbol: sym,
+      recommended_route: recommended,
+      cob_net_price: Number(absNetMid.toFixed(2)),
+      cob_natural_price: Number(absNatural.toFixed(2)),
+      synthetic_net_price: Number(absSynthetic.toFixed(2)),
+      expected_savings: savings,
+      hung_leg_probability: hungProb,
+      adverse_selection_cost: adverseCost,
+      latency_ms: latency,
+      legs_breakdown: breakdown,
+      rationale,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async simulateOptionsLegging(request: LeggingSimulationRequest) {
+    const sym = request.symbol.toUpperCase();
+    const numSims = request.num_simulations || 1000;
+    const latencySec = request.latency_seconds || 0.25;
+    
+    const latencies = [50, 100, 250, 500, 1000, 2000, 5000];
+    const latencyCurve = latencies.map((ms) => {
+      const rate = Number((0.015 + (ms / 1000) * 0.052).toFixed(4));
+      const edge = Number(Math.max(-20, 28.50 - (ms / 1000) * 8.40).toFixed(2));
+      return {
+        latency_ms: ms,
+        hung_leg_rate: rate,
+        expected_edge: edge,
+      };
+    });
+
+    const bins = [
+      { bin_edge: -40, count: 18, probability: 0.018 },
+      { bin_edge: -30, count: 32, probability: 0.032 },
+      { bin_edge: -20, count: 54, probability: 0.054 },
+      { bin_edge: -10, count: 86, probability: 0.086 },
+      { bin_edge: 0, count: 120, probability: 0.120 },
+      { bin_edge: 10, count: 185, probability: 0.185 },
+      { bin_edge: 20, count: 245, probability: 0.245 },
+      { bin_edge: 30, count: 155, probability: 0.155 },
+      { bin_edge: 40, count: 80, probability: 0.080 },
+      { bin_edge: 50, count: 25, probability: 0.025 },
+    ];
+
+    const hungRate = Number((0.02 + latencySec * 0.048).toFixed(4));
+    const expEdge = Number((24.80 - latencySec * 6.50).toFixed(2));
+
+    return delay<LeggingSimulationResponse>({
+      symbol: sym,
+      num_simulations: numSims,
+      latency_seconds: latencySec,
+      hung_leg_rate: hungRate,
+      expected_edge_dollars: expEdge,
+      edge_std_dollars: 14.20,
+      worst_case_loss_dollars: -58.00,
+      p95_adverse_selection: -26.50,
+      pnl_distribution: bins,
+      latency_curve: latencyCurve,
+      as_of: new Date().toISOString(),
+    });
+  },
+
+  async getOptionsGexProfile(symbol: string) {
+    const sym = symbol.toUpperCase();
+    const spot = sym === "SPY" ? 546.50 : sym === "QQQ" ? 481.10 : sym === "TSLA" ? 214.30 : sym === "NVDA" ? 128.50 : sym === "AAPL" ? 224.20 : 500.0;
+    
+    const step = sym === "NVDA" ? 2.5 : sym === "TSLA" ? 5.0 : sym === "SPY" ? 2.0 : sym === "QQQ" ? 2.0 : 5.0;
+    const baseStrike = Math.round(spot / step) * step;
+    const strikes: GexStrikePoint[] = [];
+    
+    const zeroGammaFlip = Number((spot * (sym === "TSLA" ? 1.015 : 0.985)).toFixed(2));
+    let callWallStrike = baseStrike + step * 3;
+    let putWallStrike = baseStrike - step * 3;
+    let maxCallGex = -Infinity;
+    let minPutGex = Infinity;
+    let totalNetGex = 0;
+
+    for (let i = -12; i <= 12; i++) {
+      const strike = Number((baseStrike + i * step).toFixed(2));
+      
+      const callWeight = Math.max(0.05, Math.exp(-Math.pow((strike - (spot * 1.02)) / (spot * 0.04), 2)));
+      const putWeight = Math.max(0.05, Math.exp(-Math.pow((strike - (spot * 0.97)) / (spot * 0.04), 2)));
+      
+      const callGex = Number((callWeight * (sym === "SPY" ? 420 : 180) * (1 + Math.sin(i * 0.5) * 0.15)).toFixed(2));
+      const putGex = Number((-putWeight * (sym === "SPY" ? 380 : 160) * (1 + Math.cos(i * 0.5) * 0.15)).toFixed(2));
+      const netGex = Number((callGex + putGex).toFixed(2));
+      totalNetGex += netGex;
+
+      if (callGex > maxCallGex) {
+        maxCallGex = callGex;
+        callWallStrike = strike;
+      }
+      if (putGex < minPutGex) {
+        minPutGex = putGex;
+        putWallStrike = strike;
+      }
+
+      strikes.push({
+        strike,
+        call_gex: callGex,
+        put_gex: putGex,
+        net_gex: netGex,
+        open_interest_calls: Math.round(callWeight * 15000 + 500),
+        open_interest_puts: Math.round(putWeight * 14000 + 400),
+        gamma_calls: Number((callWeight * 0.045).toFixed(4)),
+        gamma_puts: Number((putWeight * 0.042).toFixed(4)),
+      });
+    }
+
+    const isVolDampener = totalNetGex >= 0;
+    const regime: "VOL_DAMPENER" | "VOL_ACCELERATOR" = isVolDampener ? "VOL_DAMPENER" : "VOL_ACCELERATOR";
+    const bias = isVolDampener
+      ? `Positive Gamma Regime ($${totalNetGex.toFixed(1)}M Net GEX). Market makers long gamma; intraday mean-reversion dampens realized volatility (buy dips, sell rips).`
+      : `Negative Gamma Regime ($${totalNetGex.toFixed(1)}M Net GEX). Market makers short gamma; hedging flow accelerates trend momentum and downside volatility cascades.`;
+
+    return delay<GexProfileResponse>({
+      symbol: sym,
+      spot_price: spot,
+      net_gex_dollars: Number(totalNetGex.toFixed(2)),
+      zero_gamma_flip: zeroGammaFlip,
+      call_gamma_wall: callWallStrike,
+      put_gamma_wall: putWallStrike,
+      volatility_regime: regime,
+      strikes,
+      as_of: new Date().toISOString(),
+      dealer_positioning_bias: bias,
+    });
+  },
+
+  async simulateLobQueue(request: LobQueueSimulationRequest) {
+    const sym = request.symbol.toUpperCase();
+    const strike = request.strike || 540;
+    const optionType = request.option_type || "CALL";
+    const side = request.order_side || "BUY";
+    const limitPrice = request.limit_price || 3.15;
+    const orderSize = request.order_size || 5;
+    const latency = request.latency_ms || 25;
+
+    const tick = 0.01;
+    const mid = limitPrice;
+    const spread = 0.04;
+    
+    const bids: LobLevel[] = [];
+    const asks: LobLevel[] = [];
+
+    const isBuy = side === "BUY";
+    const userBidLevel = isBuy ? limitPrice : Number((mid - 0.02).toFixed(2));
+    const userAskLevel = !isBuy ? limitPrice : Number((mid + 0.02).toFixed(2));
+
+    for (let i = 0; i < 6; i++) {
+      const bidP = Number((userBidLevel - i * tick).toFixed(2));
+      const isUserLvl = isBuy && i === 0;
+      const baseOrders = 3 + i * 2;
+      const baseSize = 40 + i * 35;
+      
+      bids.push({
+        price: bidP,
+        size: isUserLvl ? baseSize + orderSize : baseSize,
+        num_orders: isUserLvl ? baseOrders + 1 : baseOrders,
+        is_user_level: isUserLvl,
+        user_queue_position: isUserLvl ? Math.min(3, baseOrders) : undefined,
+      });
+
+      const askP = Number((userAskLevel + i * tick).toFixed(2));
+      const isUserAskLvl = !isBuy && i === 0;
+      const baseAskOrders = 4 + i * 2;
+      const baseAskSize = 45 + i * 30;
+
+      asks.push({
+        price: askP,
+        size: isUserAskLvl ? baseAskSize + orderSize : baseAskSize,
+        num_orders: isUserAskLvl ? baseAskOrders + 1 : baseAskOrders,
+        is_user_level: isUserAskLvl,
+        user_queue_position: isUserAskLvl ? Math.min(3, baseAskOrders) : undefined,
+      });
+    }
+
+    const queuePos = 3;
+    const ordersAhead = 2;
+    const sizeAhead = 28;
+    const fillProb30s = Number(Math.max(0.1, Math.min(0.98, 0.88 - (latency / 1000) * 0.08 - (sizeAhead / 150))).toFixed(3));
+    const fillProb60s = Number(Math.min(0.99, fillProb30s + 0.08).toFixed(3));
+    const fillProb300s = Number(Math.min(0.999, fillProb60s + 0.03).toFixed(3));
+    const estFillTime = Number((8.4 + (sizeAhead * 0.35) + (latency * 0.01)).toFixed(1));
+
+    return delay<LobQueueSimulationResponse>({
+      symbol: sym,
+      strike,
+      option_type: optionType,
+      limit_price: limitPrice,
+      order_size: orderSize,
+      order_side: side,
+      queue_priority_position: queuePos,
+      orders_ahead: ordersAhead,
+      size_ahead: sizeAhead,
+      fill_probability_30s: fillProb30s,
+      fill_probability_60s: fillProb60s,
+      fill_probability_300s: fillProb300s,
+      estimated_fill_time_seconds: estFillTime,
+      fill_time_p50: Number((estFillTime * 0.85).toFixed(1)),
+      fill_time_p95: Number((estFillTime * 1.65).toFixed(1)),
+      bids,
+      asks,
+      spread,
+      mid_price: mid,
+      market_depth_summary: `Queue Priority #${queuePos} at $${limitPrice.toFixed(2)} (${ordersAhead} orders / ${sizeAhead} contracts ahead). Expected fill latency: ~${estFillTime}s (30s P(Fill) = ${(fillProb30s * 100).toFixed(1)}%).`,
+      as_of: new Date().toISOString(),
+    });
+  },
+
+  async getCopulaPairsAnalysis(pair?: string) {
+    const p = (pair || "SPY/QQQ").toUpperCase();
+    const parts = p.includes("/") ? p.split("/") : [p, "QQQ"];
+    const assetX = parts[0] || "SPY";
+    const assetY = parts[1] || "QQQ";
+
+    let family: "Clayton" | "Gumbel" | "Frank" = "Clayton";
+    let theta = 2.15;
+    let lambdaL = 0.725;
+    let lambdaU = 0.0;
+    let tau = 0.518;
+    let ouHalfLife = 14.2;
+    let kalmanBeta = 1.23;
+    let kalmanAlpha = -12.4;
+    let spreadZ = 2.18;
+    let currentSpread = 8.45;
+    let action: "LONG_SPREAD" | "SHORT_SPREAD" | "HOLD" | "EXIT" = "SHORT_SPREAD";
+
+    if (p.includes("AMD") || p.includes("NVDA")) {
+      family = "Gumbel";
+      theta = 1.92;
+      lambdaL = 0.0;
+      lambdaU = 0.564;
+      tau = 0.479;
+      ouHalfLife = 8.6;
+      kalmanBeta = 1.45;
+      kalmanAlpha = 4.2;
+      spreadZ = -2.31;
+      currentSpread = -14.2;
+      action = "LONG_SPREAD";
+    } else if (p.includes("GOOGL") || p.includes("META") || p.includes("MSFT") || p.includes("AAPL")) {
+      family = "Frank";
+      theta = 4.65;
+      lambdaL = 0.0;
+      lambdaU = 0.0;
+      tau = 0.442;
+      ouHalfLife = 18.5;
+      kalmanBeta = 0.92;
+      kalmanAlpha = 3.1;
+      spreadZ = 0.42;
+      currentSpread = 1.85;
+      action = "HOLD";
+    }
+
+    const tailData: CopulaTailData = {
+      lower_tail_dependence: Number(lambdaL.toFixed(3)),
+      upper_tail_dependence: Number(lambdaU.toFixed(3)),
+      copula_family: family,
+      theta: Number(theta.toFixed(2)),
+      log_likelihood: 178.4,
+      aic: -352.8,
+      kendall_tau: Number(tau.toFixed(3)),
+    };
+
+    const historical_series: CopulaSeriesPoint[] = [];
+    const baseDate = new Date("2026-06-01");
+    let basePx = 540;
+    let basePy = basePx * kalmanBeta + kalmanAlpha;
+    let curSpread = 0;
+
+    for (let i = 0; i < 60; i++) {
+      const d = new Date(baseDate);
+      d.setDate(d.getDate() + i);
+      const dateStr = d.toISOString().split("T")[0];
+
+      const retX = Math.sin(i * 0.2) * 1.5 + (i % 3 === 0 ? 2 : -1.5) * 0.8;
+      const retY = retX * kalmanBeta + Math.cos(i * 0.3) * 2.2;
+      basePx += retX;
+      basePy += retY;
+
+      const dynamicBeta = Number((kalmanBeta + Math.sin(i * 0.1) * 0.08).toFixed(3));
+      curSpread = Number((basePy - dynamicBeta * basePx - kalmanAlpha).toFixed(2));
+      const zScore = Number((curSpread / 4.2).toFixed(2));
+
+      historical_series.push({
+        date: dateStr,
+        asset_x_price: Number(basePx.toFixed(2)),
+        asset_y_price: Number(basePy.toFixed(2)),
+        kalman_beta: dynamicBeta,
+        spread: curSpread,
+        spread_z_score: zScore,
+        upper_band_2sigma: 2.0,
+        lower_band_2sigma: -2.0,
+      });
+    }
+
+    // Ensure last point aligns with summary
+    const last = historical_series[historical_series.length - 1];
+    last.spread_z_score = spreadZ;
+    last.spread = currentSpread;
+    last.kalman_beta = kalmanBeta;
+
+    return delay<CopulaPairsResponse>({
+      pair: `${assetX}/${assetY}`,
+      asset_x: assetX,
+      asset_y: assetY,
+      copula_family: family,
+      tail_dependence: tailData,
+      kalman_beta: kalmanBeta,
+      kalman_alpha: kalmanAlpha,
+      ou_half_life_days: ouHalfLife,
+      spread_z_score: spreadZ,
+      current_spread: currentSpread,
+      signal_action: action,
+      historical_series,
+      as_of: new Date().toISOString(),
+      status_note: `Fitted ${family} Copula on ${assetX}/${assetY} with dynamic Kalman beta $\\beta_t = ${kalmanBeta}$. Spread Z-Score is ${spreadZ > 0 ? "+" : ""}${spreadZ}σ (OU $\\tau_{1/2} = ${ouHalfLife}d$).`,
+    });
+  },
+
+  async simulateMarketMakerAgent(request: MarketMakerSimRequest) {
+    const sym = (request.symbol || "SPY").toUpperCase();
+    const spot = request.spot_price || 546.50;
+    const gamma = request.risk_aversion_gamma ?? 0.1;
+    const kappa = request.order_flow_intensity_kappa ?? 1.5;
+    const sigma = request.volatility_sigma ?? 0.20;
+    const horizonT = request.time_horizon_t ?? 1.0;
+    const totalSteps = request.time_steps ?? 100;
+    const maxInv = request.max_inventory ?? 10;
+    const orderSize = request.order_size ?? 1;
+
+    const dt = horizonT / totalSteps;
+    const steps: MarketMakerStepPoint[] = [];
+
+    let currentMid = spot;
+    let inventory = 0;
+    let cash = 0;
+    let totalTrades = 0;
+    let buyFills = 0;
+    let sellFills = 0;
+    let sumSpread = 0;
+
+    let pnlHigh = 0;
+    let maxDdDollars = 0;
+
+    for (let step = 0; step < totalSteps; step++) {
+      const timeSec = Math.round(step * (390 * 60 / totalSteps));
+      const tau = Math.max(0.01, horizonT - step * dt);
+
+      // Price drift + shock
+      const shock = (Math.sin(step * 0.35) * 0.15 + (step % 4 === 0 ? 0.25 : -0.2)) * Math.sqrt(dt) * sigma * spot * 0.4;
+      currentMid = Number((currentMid + shock).toFixed(2));
+
+      // Avellaneda-Stoikov Reservation Price: R(s, q, t) = s - q * gamma * sigma^2 * tau
+      const reservation = Number((currentMid - inventory * gamma * (sigma ** 2) * tau * 10).toFixed(2));
+
+      // Optimal half-spreads
+      const halfSpreadBase = Math.max(0.02, (1 / (gamma || 0.01)) * Math.log(1 + (gamma / kappa)) + 0.5 * gamma * (sigma ** 2) * tau * 5);
+      const bidPrice = Number((reservation - halfSpreadBase).toFixed(2));
+      const askPrice = Number((reservation + halfSpreadBase).toFixed(2));
+      const bidSpread = Number((currentMid - bidPrice).toFixed(2));
+      const askSpread = Number((askPrice - currentMid).toFixed(2));
+      sumSpread += (askPrice - bidPrice);
+
+      // Probabilities of fill
+      const probBuy = inventory < maxInv ? Math.min(0.85, 0.45 * Math.exp(-kappa * Math.max(0.01, bidSpread) * 2)) : 0;
+      const probSell = inventory > -maxInv ? Math.min(0.85, 0.45 * Math.exp(-kappa * Math.max(0.01, askSpread) * 2)) : 0;
+
+      let event: "BUY" | "SELL" | null = null;
+      // Deterministic pseudo-random fill based on step pattern for smooth visualization
+      if ((step % 7 === 1 || step % 11 === 0) && probBuy > 0.15 && inventory < maxInv) {
+        event = "BUY";
+        inventory += orderSize;
+        cash -= bidPrice * orderSize;
+        totalTrades++;
+        buyFills++;
+      } else if ((step % 6 === 2 || step % 9 === 0) && probSell > 0.15 && inventory > -maxInv) {
+        event = "SELL";
+        inventory -= orderSize;
+        cash += askPrice * orderSize;
+        totalTrades++;
+        sellFills++;
+      }
+
+      const pnl = Number((cash + inventory * currentMid).toFixed(2));
+      if (pnl > pnlHigh) pnlHigh = pnl;
+      const dd = pnlHigh - pnl;
+      if (dd > maxDdDollars) maxDdDollars = dd;
+
+      steps.push({
+        step,
+        time_sec: timeSec,
+        mid_price: currentMid,
+        reservation_price: reservation,
+        bid_price: bidPrice,
+        ask_price: askPrice,
+        bid_spread: bidSpread,
+        ask_spread: askSpread,
+        inventory,
+        cash: Number(cash.toFixed(2)),
+        pnl,
+        trade_event: event,
+      });
+    }
+
+    const finalPnl = steps[steps.length - 1].pnl;
+    const pnlDeltas = steps.slice(1).map((s, i) => s.pnl - steps[i].pnl);
+    const meanDelta = pnlDeltas.reduce((a, b) => a + b, 0) / (pnlDeltas.length || 1);
+    const stdDelta = Math.sqrt(pnlDeltas.map(d => (d - meanDelta) ** 2).reduce((a, b) => a + b, 0) / (pnlDeltas.length || 1)) || 0.01;
+    const annualizedSharpe = Number(((meanDelta / stdDelta) * Math.sqrt(252 * 390)).toFixed(2));
+    const avgSpread = Number((sumSpread / totalSteps).toFixed(3));
+    const fillRate = Number(((totalTrades / (totalSteps * 2)) * 100).toFixed(1));
+
+    return delay<MarketMakerSimResponse>({
+      symbol: sym,
+      risk_aversion_gamma: gamma,
+      order_flow_intensity_kappa: kappa,
+      volatility_sigma: sigma,
+      max_inventory: maxInv,
+      final_pnl: finalPnl,
+      sharpe_ratio: annualizedSharpe,
+      max_drawdown: Number(maxDdDollars.toFixed(2)),
+      total_trades: totalTrades,
+      fill_rate: fillRate,
+      final_inventory: inventory,
+      avg_spread: avgSpread,
+      steps,
+      as_of: new Date().toISOString(),
+    });
+  },
+
   // ---- Live Trade Approvals ----
+
+
   async getPendingLiveTrades() {
     return delay({
       proposals: mockLiveTradeProposals.filter(

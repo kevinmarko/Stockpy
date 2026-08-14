@@ -3852,6 +3852,85 @@ export interface PaperBrokerResetResult {
   cash: number;
 }
 
+export interface StrategyOptionCandidate {
+  symbol: string;
+  strategy: string;
+  action: string;
+  net_premium: number | null;
+  ivr: number | null;
+  trend_bias: string;
+  target_dte: number;
+  legs: any[];
+}
+
+export interface StrategyOptionsCandidatesResponse {
+  count: number;
+  candidates: StrategyOptionCandidate[];
+}
+
+export interface StrategyOptionsExecutionResult {
+  executed_count: number;
+  skipped_count: number;
+  failed_count: number;
+  executed: Array<{
+    order_id?: string;
+    symbol: string;
+    strategy: string;
+    contracts: number;
+    net_price: number;
+    net_cash_impact: number;
+    legs?: string[];
+  }>;
+  skipped: Array<{
+    symbol: string;
+    reason: string;
+  }>;
+  failed: Array<{
+    symbol: string;
+    reason: string;
+  }>;
+}
+
+export interface PositionGreekBreakdown {
+  symbol: string;
+  asset_type: "stock" | "option";
+  base_ticker: string;
+  expiration?: string;
+  strike?: number;
+  option_type?: "call" | "put";
+  dte?: number;
+  qty: number;
+  spot_price: number;
+  delta_per_unit: number;
+  gamma_per_unit: number;
+  theta_daily_per_unit: number;
+  vega_1pct_per_unit: number;
+  position_delta: number;
+  position_dollar_delta: number;
+  position_gamma: number;
+  position_theta_daily: number;
+  position_vega_1pct: number;
+  market_value: number;
+}
+
+export interface PortfolioGreeks {
+  total_positions: number;
+  stock_positions_count: number;
+  option_positions_count: number;
+  net_delta_shares: number;
+  net_dollar_delta: number;
+  net_gamma: number;
+  net_theta_daily: number;
+  net_vega_1pct: number;
+  beta_weighted_delta_spy: number;
+  positions_with_missing_data?: string[];
+  beta_excluded_symbols?: string[];
+  positions: PositionGreekBreakdown[];
+}
+
+
+
+
 /**
  * A real live-trade order an MCP tool proposed for human approval. This
  * webapp screen (LiveTradeApprovals.tsx) IS the enforcement surface -- there
@@ -3927,4 +4006,835 @@ export interface OptionsOrderResult {
   ok: boolean;
   order_id?: string;
   message: string;
+}
+
+export interface OptionsBacktestParams {
+  strategy: string;
+  ticker: string;
+  start_date: string;
+  end_date: string;
+  initial_capital?: number;
+}
+
+export interface OptionsTradeLogItem {
+  entry_date: string;
+  exit_date: string;
+  strategy: string;
+  underlying_entry_price: number;
+  underlying_exit_price: number;
+  entry_net_premium: number;
+  exit_net_cost: number;
+  pnl_dollar: number;
+  pnl_pct: number;
+  exit_reason: string;
+  holding_days: number;
+  contracts: number;
+}
+
+export interface OptionsBacktestResponse {
+  strategy_name: string;
+  ticker: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  final_capital: number;
+  total_return_pct: number;
+  annualized_return_pct: number;
+  sharpe_ratio: number;
+  sortino_ratio: number;
+  max_drawdown_pct: number;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate_pct: number;
+  profit_factor: number;
+  avg_win: number;
+  avg_loss: number;
+  pbo: number;
+  dsr: number;
+  passes_stress: boolean;
+  deployable: boolean;
+  equity_curve: { date: string; value: number }[];
+  trades: OptionsTradeLogItem[];
+}
+
+export interface OptionsMetaModelStatus {
+  n_samples: number;
+  train_accuracy: number;
+  train_roc_auc: number;
+  trained_at: string | null;
+  enabled: boolean;
+}
+
+export interface OptionsMetaModelRetrainResult {
+  status: string;
+  trained_samples: number;
+  accuracy: number;
+  roc_auc: number;
+  trained_at: string;
+}
+
+export interface PaperBrokerSettleExpiredResult {
+  settled_count: number;
+  settled: any[];
+}
+
+export interface ScenarioMatrixCell {
+  spot_shift_pct: number;
+  iv_shift_pct: number;
+  days_forward: number;
+  spot_price: number;
+  portfolio_value: number;
+  pnl_dollar: number;
+  pnl_pct: number;
+  net_delta: number;
+  net_gamma: number;
+  net_theta: number;
+  net_vega: number;
+}
+
+export interface HistoricalScenarioPreset {
+  id: string;
+  name: string;
+  description: string;
+  spot_shift_pct: number;
+  iv_shift_pct: number;
+  projected_pnl_dollar: number;
+  projected_pnl_pct: number;
+}
+
+export interface ScenarioMatrixResponse {
+  spot_shifts: number[];
+  iv_shifts: number[];
+  time_slices: number[];
+  matrix: ScenarioMatrixCell[];
+  historical_scenarios?: HistoricalScenarioPreset[];
+  current_portfolio_value: number;
+}
+
+export interface VolSmilePoint {
+  strike: number;
+  iv: number;
+  moneyness: number;
+  call_bid?: number;
+  call_ask?: number;
+  put_bid?: number;
+  put_ask?: number;
+}
+
+export interface VolTermStructurePoint {
+  expiration: string;
+  dte: number;
+  atm_iv: number;
+  historical_realized_vol_30d?: number;
+}
+
+export interface SkewData {
+  skew_25delta: number;
+  put_25delta_iv: number;
+  call_25delta_iv: number;
+  atm_iv: number;
+  vrp_spread?: number;
+  realized_vol_10d?: number;
+  realized_vol_20d?: number;
+  realized_vol_30d?: number;
+  realized_vol_60d?: number;
+}
+
+export interface VolSurfaceResponse {
+  symbol: string;
+  spot_price: number;
+  as_of: string;
+  expirations: string[];
+  selected_expiration?: string;
+  smile_points: VolSmilePoint[];
+  term_structure: VolTermStructurePoint[];
+  skew: SkewData;
+}
+
+export interface DeltaHedgePreview {
+  net_delta_shares: number;
+  net_dollar_delta: number;
+  beta_weighted_delta_spy: number;
+  spy_spot_price: number;
+  required_hedge_shares: number;
+  action: "BUY" | "SELL" | "NONE";
+  hedge_symbol: string;
+  estimated_cost: number;
+  tolerance_band_shares: number;
+  is_within_tolerance: boolean;
+}
+
+export interface DeltaHedgeResult {
+  ok: boolean;
+  order_id?: string;
+  shares: number;
+  symbol: string;
+  side: "BUY" | "SELL";
+  price: number;
+  message: string;
+}
+
+/** One leg of a roll's close/open list -- mirrors api/pilots_api.py's
+ * RollOrderRequest.close_legs/open_legs (List[Dict[str, Any]], read by
+ * PaperAccountStore.apply_roll_fill). `symbol` is the full option-leg
+ * symbol string ("{TICKER} {YYYY-MM-DD} ${STRIKE} {CALL|PUT}"). */
+export interface RollOrderLeg {
+  symbol: string;
+  side: "buy" | "sell";
+  qty: number;
+}
+
+/** Matches api/pilots_api.py's RollOrderRequest exactly -- `symbol` plus the
+ * explicit close/open leg lists PaperAccountStore.apply_roll_fill requires,
+ * not a same-symbol target_expiration/target_strike shorthand the backend
+ * has no field for. */
+export interface RollOrderRequest {
+  symbol: string;
+  close_legs: RollOrderLeg[];
+  open_legs: RollOrderLeg[];
+  limit_price?: number;
+  contracts?: number;
+  order_type?: string;
+  is_live?: boolean;
+}
+
+export interface ClosedExitPosition {
+  symbol: string;
+  qty: number;
+  reason: "PROFIT_TARGET_50" | "STOP_LOSS_200" | "DTE_EXPIRY_21" | "MANUAL";
+  pnl_dollar: number;
+  pnl_pct: number;
+  closed_at_price: number;
+}
+
+export interface ManageExitsResult {
+  evaluated_count: number;
+  closed_count: number;
+  closed_positions: ClosedExitPosition[];
+  message: string;
+}
+
+export interface EarningsCrushCandidate {
+  symbol: string;
+  company_name?: string;
+  report_date: string;
+  report_timing?: "AMC" | "BMO" | "DURING_HOURS";
+  spot_price: number;
+  atm_iv: number;
+  dte: number;
+  expected_move_dollar: number;
+  expected_move_pct: number;
+  median_realized_move_pct: number;
+  crush_edge_ratio: number;
+  suggested_strategy: string;
+  call_wing_strike?: number;
+  put_wing_strike?: number;
+  short_call_strike?: number;
+  short_put_strike?: number;
+  expiration?: string;
+  estimated_credit?: number;
+  edge_passed?: boolean;
+  historical_moves?: number[];
+}
+
+export interface EarningsCrushCandidatesResponse {
+  candidates: EarningsCrushCandidate[];
+  count: number;
+  as_of?: string;
+}
+
+export interface EarningsCrushExecutionResult {
+  ok: boolean;
+  order_id?: string;
+  symbol: string;
+  strategy: string;
+  net_credit: number;
+  message: string;
+  placed_at?: string;
+}
+
+export interface UnusualOptionTrade {
+  id: string;
+  symbol: string;
+  timestamp: string;
+  option_type: "CALL" | "PUT";
+  strike: number;
+  expiration: string;
+  dte: number;
+  trade_type: "SWEEP" | "BLOCK" | "SPLIT";
+  sentiment: "BULLISH" | "BEARISH" | "NEUTRAL";
+  aggressor_side: "ASK" | "BID" | "MID";
+  volume: number;
+  open_interest: number;
+  vol_oi_ratio: number;
+  price: number;
+  spot_price?: number;
+  notional: number;
+  iv?: number;
+  historical_vol_30d?: number;
+  iv_expansion_flag?: boolean;
+}
+
+export interface UnusualOptionsFlowResponse {
+  trades: UnusualOptionTrade[];
+  count: number;
+  as_of?: string;
+}
+
+export interface FlowSentimentData {
+  symbol: string;
+  sentiment_score: number;
+  bullish_notional: number;
+  bearish_notional: number;
+  total_notional: number;
+  call_volume: number;
+  put_volume: number;
+  put_call_ratio: number;
+  top_active_strikes?: { strike: number; option_type: "CALL" | "PUT"; notional: number }[];
+}
+
+export interface FlowSentimentResponse {
+  sentiment: FlowSentimentData;
+  as_of?: string;
+}
+
+export interface HarRvForecastResponse {
+  symbol: string;
+  spot_price: number;
+  as_of: string;
+  rv_daily: number;
+  rv_weekly: number;
+  rv_monthly: number;
+  forecast_vol_1d: number;
+  forecast_vol_5d: number;
+  forecast_vol_22d: number;
+  forecast_vol_30d: number;
+  gjr_garch_vol?: number;
+  fair_iv_blend: number;
+  coefficients: {
+    beta_0: number;
+    beta_d: number;
+    beta_w: number;
+    beta_m: number;
+  };
+  r_squared?: number;
+  annualized_rv_1d?: number;
+  annualized_rv_5d?: number;
+  annualized_rv_22d?: number;
+}
+
+export interface VolMispricingStrike {
+  strike: number;
+  option_type: "CALL" | "PUT";
+  market_iv: number;
+  fair_iv: number;
+  iv_spread: number;
+  spread_zscore: number;
+  classification: "RICH" | "CHEAP" | "FAIR";
+  suggested_action: "SELL_PREMIUM" | "BUY_GAMMA" | "HOLD" | "NEUTRAL";
+  bid?: number;
+  ask?: number;
+  mid?: number;
+  delta?: number;
+  gamma?: number;
+  vega?: number;
+  theta?: number;
+  suggested_trade?: string;
+}
+
+export interface VolMispricingResponse {
+  symbol: string;
+  spot_price: number;
+  expiration: string;
+  expirations: string[];
+  dte: number;
+  fair_iv_baseline: number;
+  market_atm_iv: number;
+  rich_strikes_count: number;
+  cheap_strikes_count: number;
+  strikes: VolMispricingStrike[];
+  trade_recommendations: {
+    strategy: string;
+    direction: "SELL_VOL" | "BUY_VOL";
+    strikes: number[];
+    reason: string;
+    estimated_edge_pct: number;
+  }[];
+  as_of: string;
+}
+
+export interface GammaScalpRequest {
+  symbol: string;
+  spot_price: number;
+  option_type: "CALL" | "PUT" | "STRADDLE";
+  strike: number;
+  expiration?: string;
+  dte?: number;
+  iv?: number;
+  contracts: number;
+  delta_threshold: number;
+  simulation_steps?: number;
+  drift?: number;
+  realized_vol?: number;
+  underlying_price_path?: number[];
+}
+
+export interface GammaScalpHedgeTrade {
+  step: number;
+  timestamp: string;
+  spot_price: number;
+  pre_delta: number;
+  post_delta: number;
+  shares_traded: number;
+  side: "BUY" | "SELL" | "HOLD";
+  trade_price: number;
+  cash_flow: number;
+  stock_position: number;
+  option_mtm: number;
+  total_pnl: number;
+  gamma_rent_cumulative: number;
+  theta_decay_cumulative: number;
+}
+
+export interface GammaScalpResponse {
+  symbol: string;
+  spot_price: number;
+  initial_delta: number;
+  initial_gamma: number;
+  initial_theta: number;
+  total_trades: number;
+  rebalance_count: number;
+  delta_threshold: number;
+  total_pnl: number;
+  gamma_rent_total: number;
+  theta_burn_total: number;
+  stock_pnl: number;
+  option_pnl: number;
+  transaction_costs: number;
+  net_edge: number;
+  trades: GammaScalpHedgeTrade[];
+  price_path: number[];
+  pnl_path: {
+    step: number;
+    spot: number;
+    total_pnl: number;
+    gamma_rent: number;
+    theta_decay: number;
+    option_mtm: number;
+    stock_pnl: number;
+  }[];
+}
+
+export interface OptionsAlertTestResult {
+  ok: boolean;
+  dispatched_count: number;
+  channels: string[];
+  results: {
+    channel: string;
+    status: "SENT" | "SIMULATED" | "FAILED";
+    message?: string;
+  }[];
+  as_of?: string;
+}
+
+export interface DispersionConstituent {
+  symbol: string;
+  weight: number;
+  spot_price: number;
+  atm_iv: number;
+  realized_vol_30d: number;
+  straddle_strike: number;
+  straddle_bid: number;
+  straddle_ask: number;
+  straddle_mid: number;
+  vega_per_straddle: number;
+  contracts_allocated: number;
+  leg_action: "BUY" | "SELL";
+  implied_rv_spread?: number;
+}
+
+export interface DispersionOpportunity {
+  id: string;
+  index_symbol: string;
+  index_name?: string;
+  index_spot: number;
+  index_iv: number;
+  index_rv_30d: number;
+  index_straddle_strike: number;
+  index_straddle_price: number;
+  index_straddle_contracts: number;
+  index_action: "SELL" | "BUY";
+  implied_correlation: number;
+  realized_correlation: number;
+  correlation_spread: number;
+  regime: "LONG_DISPERSION" | "SHORT_DISPERSION" | "NEUTRAL";
+  trade_recommendation: string;
+  index_vega_total: number;
+  constituents_vega_total: number;
+  net_vega: number;
+  vega_neutrality_ratio: number;
+  net_premium_estimate: number;
+  expiration: string;
+  dte: number;
+  constituents: DispersionConstituent[];
+  as_of?: string;
+}
+
+export interface DispersionBasketResponse {
+  opportunities: DispersionOpportunity[];
+  count: number;
+  as_of?: string;
+}
+
+export interface DispersionBasketOrderRequest {
+  opportunity_id?: string;
+  index_symbol: string;
+  regime?: string;
+  basket_size_usd?: number;
+  constituents?: string[];
+  notes?: string;
+}
+
+export interface DispersionExecutionResult {
+  ok: boolean;
+  basket_id?: string;
+  index_symbol: string;
+  index_order_id?: string;
+  constituent_order_ids?: string[];
+  strategy: string;
+  net_credit_debit: number;
+  legs_count: number;
+  message: string;
+  placed_at?: string;
+}
+
+export interface ZeroDteContract {
+  option_type: "CALL" | "PUT";
+  strike: number;
+  expiration: string;
+  dte: number;
+  delta: number;
+  gamma?: number;
+  theta?: number;
+  vega?: number;
+  bid: number;
+  ask: number;
+  mid: number;
+  implied_vol: number;
+  target_price: number;
+  stop_loss_price: number;
+  hard_exit_time: string;
+}
+
+export interface ZeroDteSignal {
+  symbol: string;
+  spot_price: number;
+  timestamp: string;
+  opening_range_high: number;
+  opening_range_low: number;
+  opening_range_width_pct: number;
+  ttm_squeeze_active: boolean;
+  ttm_squeeze_bars: number;
+  momentum_direction: "BULLISH_BREAKOUT" | "BEARISH_BREAKDOWN" | "IN_RANGE";
+  momentum_score: number;
+  relative_volume_15m: number;
+  suggested_action: "BUY_CALL" | "BUY_PUT" | "WAIT";
+  recommended_contract?: ZeroDteContract;
+  trigger_reason?: string;
+}
+
+export interface ZeroDteSignalResponse {
+  signals: ZeroDteSignal[];
+  symbol?: string;
+  as_of?: string;
+}
+
+export interface ZeroDteTradeRequest {
+  symbol: string;
+  signal_id?: string;
+  option_type: "CALL" | "PUT";
+  strike: number;
+  contracts: number;
+  entry_price?: number;
+  profit_target_pct?: number;
+  stop_loss_pct?: number;
+  hard_exit_time?: string;
+}
+
+export interface ZeroDteExecutionResult {
+  ok: boolean;
+  order_id?: string;
+  symbol: string;
+  option_type: "CALL" | "PUT";
+  strike: number;
+  contracts: number;
+  fill_price: number;
+  profit_target_price: number;
+  stop_loss_price: number;
+  hard_exit_time: string;
+  strategy: string;
+  message: string;
+  placed_at?: string;
+}
+
+export interface VpinBucket {
+  bucket_index: number;
+  buy_volume: number;
+  sell_volume: number;
+  total_volume: number;
+  price_start: number;
+  price_end: number;
+  price_change: number;
+  imbalance: number;
+  timestamp?: string;
+}
+
+export interface VpinMetricsResponse {
+  symbol: string;
+  vpin: number;
+  regime: "LOW" | "MODERATE" | "HIGH_TOXICITY";
+  toxicity_percentile?: number;
+  bucket_size: number;
+  num_buckets: number;
+  buckets: VpinBucket[];
+  defensive_spread_concession?: number;
+  warning_message?: string | null;
+  as_of?: string;
+}
+
+export interface SorLeg {
+  symbol?: string;
+  option_type: "CALL" | "PUT";
+  strike: number;
+  expiration?: string;
+  action: "BUY" | "SELL";
+  ratio?: number;
+  bid?: number;
+  ask?: number;
+  mid?: number;
+}
+
+export interface SorLegBreakdown {
+  strike: number;
+  option_type: "CALL" | "PUT";
+  action: "BUY" | "SELL";
+  bid: number;
+  ask: number;
+  mid: number;
+  fill_priority: number;
+  fill_style: "PASSIVE" | "ACTIVE";
+}
+
+export interface SorAnalysisRequest {
+  symbol: string;
+  spot_price?: number;
+  legs: SorLeg[];
+  latency_ms?: number;
+  order_size?: number;
+}
+
+export interface SorAnalysisResponse {
+  symbol: string;
+  recommended_route: "COB_NET_PACKAGE" | "LEG_PASSIVE_FIRST" | "SPLIT_DIRECT";
+  cob_net_price: number;
+  cob_natural_price: number;
+  synthetic_net_price: number;
+  expected_savings: number;
+  hung_leg_probability: number;
+  adverse_selection_cost: number;
+  latency_ms: number;
+  legs_breakdown: SorLegBreakdown[];
+  rationale: string;
+  as_of?: string;
+}
+
+export interface LeggingSimulationRequest {
+  symbol: string;
+  spot_price?: number;
+  volatility?: number;
+  latency_seconds?: number;
+  num_simulations?: number;
+  legs?: {
+    strike: number;
+    option_type: "CALL" | "PUT";
+    action: "BUY" | "SELL";
+    bid?: number;
+    ask?: number;
+    mid?: number;
+  }[];
+}
+
+export interface LeggingSimulationResponse {
+  symbol: string;
+  num_simulations: number;
+  latency_seconds: number;
+  hung_leg_rate: number;
+  expected_edge_dollars: number;
+  edge_std_dollars: number;
+  worst_case_loss_dollars: number;
+  p95_adverse_selection: number;
+  pnl_distribution: {
+    bin_edge: number;
+    count: number;
+    probability: number;
+  }[];
+  latency_curve: {
+    latency_ms: number;
+    hung_leg_rate: number;
+    expected_edge: number;
+  }[];
+  as_of?: string;
+}
+
+export interface GexStrikePoint {
+  strike: number;
+  call_gex: number;
+  put_gex: number;
+  net_gex: number;
+  open_interest_calls?: number;
+  open_interest_puts?: number;
+  gamma_calls?: number;
+  gamma_puts?: number;
+}
+
+export interface GexProfileResponse {
+  symbol: string;
+  spot_price: number;
+  net_gex_dollars: number;
+  zero_gamma_flip: number;
+  call_gamma_wall: number;
+  put_gamma_wall: number;
+  volatility_regime: "VOL_DAMPENER" | "VOL_ACCELERATOR";
+  strikes: GexStrikePoint[];
+  as_of?: string;
+  dealer_positioning_bias?: string;
+}
+
+export interface LobLevel {
+  price: number;
+  size: number;
+  num_orders: number;
+  is_user_level?: boolean;
+  user_queue_position?: number;
+}
+
+export interface LobQueueSimulationRequest {
+  symbol: string;
+  strike: number;
+  option_type: "CALL" | "PUT";
+  limit_price: number;
+  order_size: number;
+  order_side: "BUY" | "SELL";
+  latency_ms?: number;
+  arrival_rate_lambda?: number;
+  cancellation_rate_mu?: number;
+}
+
+export interface LobQueueSimulationResponse {
+  symbol: string;
+  strike: number;
+  option_type: "CALL" | "PUT";
+  limit_price: number;
+  order_size: number;
+  order_side: "BUY" | "SELL";
+  queue_priority_position: number;
+  orders_ahead: number;
+  size_ahead: number;
+  fill_probability_30s: number;
+  fill_probability_60s: number;
+  fill_probability_300s: number;
+  estimated_fill_time_seconds: number;
+  fill_time_p50: number;
+  fill_time_p95: number;
+  bids: LobLevel[];
+  asks: LobLevel[];
+  spread: number;
+  mid_price: number;
+  market_depth_summary: string;
+  as_of?: string;
+}
+
+export type CopulaFamily = "Clayton" | "Gumbel" | "Frank" | "Gaussian" | "Student-t";
+
+export interface CopulaTailData {
+  lower_tail_dependence: number;
+  upper_tail_dependence: number;
+  copula_family: CopulaFamily;
+  theta: number;
+  log_likelihood: number;
+  aic: number;
+  kendall_tau: number;
+}
+
+export interface CopulaSeriesPoint {
+  date: string;
+  asset_x_price: number;
+  asset_y_price: number;
+  kalman_beta: number;
+  spread: number;
+  spread_z_score: number;
+  upper_band_2sigma: number;
+  lower_band_2sigma: number;
+}
+
+export interface CopulaPairsResponse {
+  pair: string;
+  asset_x: string;
+  asset_y: string;
+  copula_family: CopulaFamily;
+  tail_dependence: CopulaTailData;
+  kalman_beta: number;
+  kalman_alpha: number;
+  ou_half_life_days: number;
+  spread_z_score: number;
+  current_spread: number;
+  signal_action: "LONG_SPREAD" | "SHORT_SPREAD" | "HOLD" | "EXIT";
+  historical_series: CopulaSeriesPoint[];
+  as_of?: string;
+  status_note?: string;
+}
+
+export interface MarketMakerStepPoint {
+  step: number;
+  time_sec: number;
+  mid_price: number;
+  reservation_price: number;
+  bid_price: number;
+  ask_price: number;
+  bid_spread: number;
+  ask_spread: number;
+  inventory: number;
+  cash: number;
+  pnl: number;
+  trade_event?: "BUY" | "SELL" | null;
+}
+
+export interface MarketMakerSimRequest {
+  symbol: string;
+  spot_price?: number;
+  risk_aversion_gamma?: number;
+  order_flow_intensity_kappa?: number;
+  volatility_sigma?: number;
+  time_horizon_t?: number;
+  time_steps?: number;
+  max_inventory?: number;
+  order_size?: number;
+}
+
+export interface MarketMakerSimResponse {
+  symbol: string;
+  risk_aversion_gamma: number;
+  order_flow_intensity_kappa: number;
+  volatility_sigma: number;
+  max_inventory: number;
+  final_pnl: number;
+  sharpe_ratio: number;
+  max_drawdown: number;
+  total_trades: number;
+  fill_rate: number;
+  final_inventory: number;
+  avg_spread: number;
+  steps: MarketMakerStepPoint[];
+  as_of?: string;
 }

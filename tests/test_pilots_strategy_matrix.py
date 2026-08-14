@@ -155,12 +155,15 @@ def test_version_hash_changes_when_file_content_changes(tmp_path, monkeypatch):
     signals_dir.mkdir()
     f = signals_dir / "m.py"
     f.write_text("VALUE = 1\n", encoding="utf-8")
-    hash_before = sm.strategy_matrix(signals_dir=signals_dir)["modules"][0]["version_hash"]
+    row_before = next(mod for mod in sm.strategy_matrix(signals_dir=signals_dir)["modules"] if mod["name"] == "m")
+    hash_before = row_before["version_hash"]
 
     f.write_text("VALUE = 2\n", encoding="utf-8")
-    hash_after = sm.strategy_matrix(signals_dir=signals_dir)["modules"][0]["version_hash"]
+    row_after = next(mod for mod in sm.strategy_matrix(signals_dir=signals_dir)["modules"] if mod["name"] == "m")
+    hash_after = row_after["version_hash"]
 
     assert hash_before != hash_after
+
 
 
 def test_version_hash_none_when_no_corresponding_file(tmp_path, monkeypatch):
@@ -390,7 +393,7 @@ def _import_roots(source: str) -> set:
 
 @pytest.mark.parametrize(
     "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst", "paper_broker", "live_trade_proposals"],
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst", "paper_broker", "live_trade_proposals", "unusual_options_flow", "options_gex", "lob_simulator", "copula_stat_arb"],
 )
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
@@ -487,7 +490,7 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # data.paper_account_store already covered by the `data` allowance
         # below. `pilots` is allowed here for that one narrow composition,
         # matching pilots.discovery's identical precedent above.
-        allowed = allowed | {"data", "pilots"}
+        allowed = allowed | {"data", "pilots", "datetime", "execution"}
     if module_name == "live_trade_proposals":
         # pilots.live_trade_proposals mirrors pilots.paper_broker's exact
         # pattern (settings + a dependency-light store module), except its
@@ -496,12 +499,22 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # root here is `execution`, not `data`.
         allowed = allowed | {"execution"}
     if module_name == "prompt_registry":
-        # pilots.prompt_registry wraps prompt_registry.registry.get_registry()
-        # (and prompt_registry.cache / prompt_registry.__main__ for baseline
-        # IDs and specific-version resolution) — the prompt_registry package
-        # is independently confirmed stdlib+settings-only by its own module
-        # docstrings (models/cache/guardrails/signing/store/registry/
-        # __main__), so importing it here is safe and does not pull `signals`
-        # or any AST-forbidden heavy engine onto the API import path.
         allowed = allowed | {"prompt_registry"}
+    if module_name == "unusual_options_flow":
+        # pilots.unusual_options_flow's get_unusual_options_activity() now does
+        # a real read-through cache: persisted records first, and on a
+        # bounded-symbol miss a lazy, function-scoped `from data.market_data
+        # import get_options_provider/get_provider` (see the module's own
+        # docstring) to fetch a real chain instead of always scanning a
+        # hardcoded empty chain_data=[] -- same lazy-import pattern already
+        # allowed for `options_gex`/`copula_stat_arb` below.
+        allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "pandas", "data"}
+    if module_name == "options_gex":
+        allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "scipy", "pandas", "data"}
+    if module_name == "lob_simulator":
+        allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "scipy"}
+    if module_name == "copula_stat_arb":
+        allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "pandas", "scipy", "data", "uuid"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"
+
+

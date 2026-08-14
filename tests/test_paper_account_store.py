@@ -162,3 +162,158 @@ def test_reset_account_with_custom_starting_cash(tmp_path):
     assert len(store.get_orders()) == 0
     account = store.get_account()
     assert account.cash == settings.FMP_PAPER_STARTING_CASH
+
+
+def test_apply_multi_leg_debit_spread_fill(store):
+    """Multi-leg debit spread fills atomically, deducting net debit + commission,
+    and creating long and short leg positions."""
+    initial_cash = store.get_account().cash
+
+    legs = [
+        {"symbol": "AAPL 2026-09-18 $150.00 CALL", "side": "buy", "qty": 2.0, "fill_price": 250.0},
+        {"symbol": "AAPL 2026-09-18 $155.00 CALL", "side": "sell", "qty": 2.0, "fill_price": 100.0},
+    ]
+    # Net debit: (2.50 - 1.00) * 100 * 2 = $300.00 debit. Commission: 0.65 * 2 * 2 = $2.60
+    commission = 2.60
+    net_debit = 300.0
+    net_cash_impact = -(net_debit + commission)
+
+    success = store.apply_multi_leg_fill(
+        client_order_id="multi_order_1",
+        symbol="AAPL",
+        strategy_name="Bull Call Spread",
+        contracts=2,
+        legs=legs,
+        net_cash_impact=net_cash_impact,
+        commission_and_fees=commission,
+    )
+    assert success is True
+
+    acc = store.get_account()
+    assert acc.cash == initial_cash + net_cash_impact
+
+    positions = store.get_open_positions()
+    assert len(positions) == 2
+
+    long_pos = next(p for p in positions if "$150.00" in p.symbol)
+    short_pos = next(p for p in positions if "$155.00" in p.symbol)
+
+    assert long_pos.qty == 2.0
+    assert short_pos.qty == -2.0
+
+    # Orders check: parent + 2 legs recorded
+    orders = store.get_orders()
+    assert len(orders) == 3
+    parent = next(o for o in orders if o.client_order_id == "multi_order_1")
+    assert parent.status == OrderStatus.FILLED
+
+
+def test_apply_multi_leg_credit_spread_fill(store):
+    """Multi-leg credit spread fills atomically, adding net credit - commission,
+    and creating short and long leg positions."""
+    initial_cash = store.get_account().cash
+
+    legs = [
+        {"symbol": "AAPL 2026-09-18 $145.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+        {"symbol": "AAPL 2026-09-18 $140.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 80.0},
+    ]
+    # Net credit: (2.00 - 0.80) * 100 * 1 = $120.00 credit. Commission: 0.65 * 1 * 2 = $1.30
+    commission = 1.30
+    net_credit = 120.0
+    net_cash_impact = net_credit - commission
+    # Max risk collateral: (145 - 140 - 1.20) * 100 = $380.00
+    collateral = 380.0
+
+    success = store.apply_multi_leg_fill(
+        client_order_id="credit_order_1",
+        symbol="AAPL",
+        strategy_name="Bull Put Spread",
+        contracts=1,
+        legs=legs,
+        net_cash_impact=net_cash_impact,
+        commission_and_fees=commission,
+        collateral_required=collateral,
+    )
+    assert success is True
+
+    acc = store.get_account()
+    assert acc.cash == initial_cash + net_cash_impact
+
+    positions = store.get_open_positions()
+    assert len(positions) == 2
+    short_put = next(p for p in positions if "$145.00" in p.symbol)
+    assert short_put.qty == -1.0
+
+
+def test_apply_multi_leg_insufficient_cash(store):
+    """Order is rejected if account cash is insufficient for the debit or collateral."""
+    legs = [
+        {"symbol": "AAPL 2026-09-18 $150.00 CALL", "side": "buy", "qty": 1000.0, "fill_price": 500.0},
+    ]
+    success = store.apply_multi_leg_fill(
+        client_order_id="too_big_order",
+        symbol="AAPL",
+        strategy_name="Call",
+        contracts=1000,
+        legs=legs,
+        net_cash_impact=-1000000.0,
+        commission_and_fees=1000.0,
+    )
+    assert success is False
+
+    orders = store.get_orders()
+    assert len(orders) == 1
+    assert orders[0].status == OrderStatus.REJECTED
+
+
+def test_settle_expired_options(store):
+    """Expired options are settled at intrinsic value and removed from open positions."""
+    from datetime import date
+    # Add an in-the-money Call option that expired in the past
+    store.apply_fill(
+        client_order_id="expired_call_order",
+        symbol="AAPL 2023-01-20 $150.00 CALL",
+        side="buy",
+        qty=2.0,
+        fill_price=5.0,
+        status="FILLED",
+    )
+    # Add an out-of-the-money Put option that expired in the past
+    store.apply_fill(
+        client_order_id="expired_put_order",
+        symbol="AAPL 2023-01-20 $100.00 PUT",
+        side="buy",
+        qty=1.0,
+        fill_price=2.0,
+        status="FILLED",
+    )
+
+
+    class MockQuote:
+        price = 160.0
+
+    class MockMarketProvider:
+        def get_latest_quote(self, ticker):
+            return MockQuote()
+
+    # Settle with current date in 2024 (past expiration)
+    settled = store.settle_expired_options(
+        market_provider=MockMarketProvider(),
+        current_date=date(2024, 1, 1),
+    )
+
+    assert len(settled) == 2
+    call_settle = next(s for s in settled if s["option_type"] == "CALL")
+    assert call_settle["intrinsic_per_share"] == 10.0  # 160 - 150
+    assert call_settle["cash_settlement"] == 2000.0  # 10.0 * 2 * 100
+    assert call_settle["status"] == "SETTLED"
+
+    put_settle = next(s for s in settled if s["option_type"] == "PUT")
+    assert put_settle["intrinsic_per_share"] == 0.0  # max(0, 100 - 160)
+    assert put_settle["cash_settlement"] == 0.0
+    assert put_settle["status"] == "EXPIRED"
+
+    # All positions should now be closed
+    assert len(store.get_open_positions()) == 0
+
+

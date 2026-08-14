@@ -239,6 +239,10 @@ class RunResult:
     started_at : datetime  (UTC-aware)
     finished_at : datetime (UTC-aware)
     duration_seconds : float
+    macro_dto : MacroEconomicDTO | None
+        The cycle's real macro context (built once by MacroStep), so callers
+        after run_once() returns (e.g. the automated options executor) can
+        gate on real VIX/regime/HY-OAS state instead of a default None.
     """
 
     snapshot: AccountSnapshot
@@ -247,6 +251,7 @@ class RunResult:
     started_at: datetime
     finished_at: datetime
     duration_seconds: float
+    macro_dto: Optional[MacroEconomicDTO] = None
 
 
 # ---------------------------------------------------------------------------
@@ -968,6 +973,7 @@ def run_once(force_account: bool = False) -> RunResult:
         started_at=started_at,
         finished_at=finished_at,
         duration_seconds=(finished_at - started_at).total_seconds(),
+        macro_dto=ctx.macro_dto,
     )
     if not ctx.stopped:
         _log_summary(result)
@@ -1386,7 +1392,62 @@ def main() -> None:
                 "Options execution queue emit failed (non-critical): %s",
                 _opt_queue_exc,
             )
+
+        # ── Automated Strategy Options Paper Execution & Lifecycle ────────────
+        if (
+            getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False)
+            or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False)
+            or getattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False)
+        ):
+            try:
+                from execution.options_paper_executor import OptionsPaperExecutor
+                _executor = OptionsPaperExecutor()
+
+                # 1. Manage Exits (50% profit target, 2.0x stop loss, 21-DTE gamma)
+                if getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
+                    _exit_res = _executor.execute_auto_exits()
+                    logger.info(
+                        "Automated options exit lifecycle management: %d evaluated, %d closed, %d failed",
+                        _exit_res.get("evaluated_count", 0),
+                        _exit_res.get("closed_count", 0),
+                        _exit_res.get("failed_count", 0),
+                    )
+
+                # 2. Open New Strategy Option Positions
+                if getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False):
+                    # Pass the cycle's real macro_dto (threaded through
+                    # RunResult by run_once()) so the VIX/CREDIT-EVENT
+                    # premium-selling regime gate is actually evaluated instead
+                    # of silently no-op'ing on a default-None macro context.
+                    _exec_res = _executor.execute_strategy_directives(macro_dto=result.macro_dto)
+                    logger.info(
+                        "Automated strategy options paper execution completed: "
+                        "%d executed, %d skipped, %d failed",
+                        _exec_res.get("executed_count", 0),
+                        _exec_res.get("skipped_count", 0),
+                        _exec_res.get("failed_count", 0),
+                    )
+
+                # 3. Dynamic SPY Delta Hedging
+                if getattr(settings, "OPTIONS_DELTA_HEDGE_ENABLED", False):
+                    from pilots.options_hedging import execute_delta_hedge
+                    from pilots.options_risk import calculate_portfolio_greeks
+                    _greeks = calculate_portfolio_greeks(store=_executor.store)
+                    _hedge_res = execute_delta_hedge(store=_executor.store, portfolio_greeks=_greeks)
+                    if _hedge_res.get("executed"):
+                        logger.info(
+                            "Automated SPY delta hedging executed: %s %d SPY @ ~$%.2f",
+                            _hedge_res.get("order", {}).get("side"),
+                            _hedge_res.get("order", {}).get("qty"),
+                            _hedge_res.get("spot_price", 0.0),
+                        )
+            except Exception as _auto_opt_exc:
+                logger.warning(
+                    "Automated strategy options paper execution/lifecycle failed (non-critical): %s",
+                    _auto_opt_exc,
+                )
         # ─────────────────────────────────────────────────────────────────────
+
 
         market = get_provider()
         _write_to_sheet(result, market=market)

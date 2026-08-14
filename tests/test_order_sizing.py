@@ -7,6 +7,7 @@ Tests for pilots/order_sizing.py sizing calculations and safe cash presets.
 from pilots.order_sizing import (
     calculate_stock_sizing,
     calculate_option_sizing,
+    calculate_multi_leg_option_sizing,
     calculate_safe_cash_preset,
     validate_order_sizing,
 )
@@ -58,3 +59,22 @@ def test_validate_order_sizing():
     # Zero cost
     valid, err = validate_order_sizing(0.0, 10000.0)
     assert valid is False
+
+
+def test_calculate_multi_leg_option_sizing():
+    # Net Debit spread: $2500 budget, $2.00 debit ($200/contract) -> 12 contracts
+    assert calculate_multi_leg_option_sizing(2500.0, 2.00) == 12
+
+    # Net Credit spread with strike width: $2500 budget, $1.50 credit, $5.00 width -> max risk = $3.50 ($350/contract) -> 7 contracts
+    assert calculate_multi_leg_option_sizing(2500.0, -1.50, strike_width=5.0) == 7
+
+    # Net Credit spread without strike width: $2500 budget, $1.50 credit -> max risk = $1.50 ($150/contract) -> 16 contracts
+    assert calculate_multi_leg_option_sizing(2500.0, -1.50) == 16
+
+    # Zero cost spread: $100 budget -> 1 contract; $0 budget -> 0 contracts
+    assert calculate_multi_leg_option_sizing(100.0, 0.0) == 1
+    assert calculate_multi_leg_option_sizing(0.0, 0.0) == 0
+
+    # Insufficient budget: $100 budget on $200 contract -> 0 contracts
+    assert calculate_multi_leg_option_sizing(100.0, 2.00) == 0
+

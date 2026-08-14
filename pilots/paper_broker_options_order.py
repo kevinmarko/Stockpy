@@ -97,99 +97,258 @@ def execute_paper_order(
         }
 
     else:
-        # Option execution
+        # Option execution (single-leg and multi-leg strategies)
         legs_list = legs or []
 
-        # This paper broker cannot honestly price a multi-leg strategy from a
-        # single symbol's quote (matching execution/fmp_paper_broker.py's
-        # documented V1 behavior) -- reject rather than silently fill only
-        # the first leg while charging commission for all of them.
         if len(legs_list) > 1:
+            # Multi-leg strategy execution
+            parsed_legs = []
+            signed_prices = []
+            strikes = []
+            types = set()
+            expirations_set = set()
+
+            for idx, leg in enumerate(legs_list):
+                contract_data = leg.get("contract", {})
+                strike = float(contract_data.get("strike", 0.0))
+                strikes.append(strike)
+                opt_type = str(leg.get("type", contract_data.get("type", "call"))).upper()
+                types.add(opt_type)
+                action = str(leg.get("action", side)).lower()
+
+                leg_exp = leg.get("expiration") or contract_data.get("expiration") or expiration
+                if not leg_exp:
+                    return {
+                        "ok": False,
+                        "order_id": client_order_id,
+                        "message": f"Option expiration is required for leg {idx+1}; order rejected.",
+                    }
+                expirations_set.add(leg_exp)
+                leg_symbol = f"{symbol} {leg_exp} ${strike:.2f} {opt_type}"
+
+                ask = float(contract_data.get("ask", 0.0) or 0.0)
+                bid = float(contract_data.get("bid", 0.0) or 0.0)
+                last = float(contract_data.get("lastPrice", 0.0) or 0.0)
+                mark = last if last > 0 else (ask + bid) / 2 if (ask + bid) > 0 else (ask or bid or 0.0)
+
+                leg_price = ask if (action == "buy" and ask > 0) else (bid if (action == "sell" and bid > 0) else mark)
+                if leg_price <= 0:
+                    return {
+                        "ok": False,
+                        "order_id": client_order_id,
+                        "message": f"No live quote available for {leg_symbol}; order rejected rather than filled at a fabricated price.",
+                    }
+
+                signed_price = leg_price if action == "buy" else -leg_price
+                signed_prices.append(signed_price)
+
+                parsed_legs.append({
+                    "symbol": leg_symbol,
+                    "side": action,
+                    "qty": 1.0,  # scaled by contracts below
+                    "fill_price": leg_price * 100.0,
+                    "strike": strike,
+                    "type": opt_type,
+                    "expiration": leg_exp,
+                    "unit_price": leg_price,
+                })
+
+            net_market_price = sum(signed_prices)
+            is_net_debit = net_market_price >= 0
+            abs_net_price = abs(net_market_price)
+
+            # Limit order marketability check
+            if order_type == "limit" and limit_price is not None and limit_price > 0:
+                if is_net_debit and net_market_price > limit_price:
+                    return {
+                        "ok": False,
+                        "order_id": client_order_id,
+                        "message": (
+                            f"Limit price ${limit_price:.2f} not marketable at current net debit "
+                            f"${net_market_price:.2f} (Paper broker instant fills marketable orders only)."
+                        ),
+                    }
+                elif not is_net_debit and abs_net_price < limit_price:
+                    return {
+                        "ok": False,
+                        "order_id": client_order_id,
+                        "message": (
+                            f"Limit price ${limit_price:.2f} not marketable at current net credit "
+                            f"${abs_net_price:.2f} (Paper broker instant fills marketable orders only)."
+                        ),
+                    }
+                effective_net_price = limit_price if is_net_debit else -limit_price
+            else:
+                effective_net_price = net_market_price
+
+            # Detect strategy name and strike width for sizing
+            strike_width = None
+            if len(strikes) >= 2:
+                strike_width = abs(max(strikes) - min(strikes))
+
+            if len(legs_list) == 2:
+                if len(expirations_set) > 1:
+                    strategy_name = "Calendar Spread"
+                elif len(types) == 1:
+                    strategy_name = "Vertical Spread"
+                else:
+                    strategy_name = "Straddle/Strangle"
+            elif len(legs_list) == 4:
+                strategy_name = "Iron Condor"
+            else:
+                strategy_name = f"{len(legs_list)}-Leg Strategy"
+
+            from pilots.order_sizing import calculate_multi_leg_option_sizing
+            if dollar_amount and dollar_amount > 0:
+                contracts = calculate_multi_leg_option_sizing(
+                    dollar_amount, effective_net_price, strike_width=strike_width, multiplier=100
+                )
+                if contracts < 1:
+                    return {
+                        "ok": False,
+                        "order_id": client_order_id,
+                        "message": f"Dollar amount ${dollar_amount:.2f} is insufficient for 1 strategy contract.",
+                    }
+            else:
+                contracts = int(quantity or 1)
+
+            if contracts <= 0:
+                return {"ok": False, "order_id": client_order_id, "message": "Quantity must be at least 1 contract."}
+
+            commission = 0.65 * contracts * len(legs_list)
+
+            # Update quantities in parsed_legs
+            for pl in parsed_legs:
+                pl["qty"] = float(contracts)
+
+            if effective_net_price >= 0:
+                # Net Debit: cash paid out
+                total_cost = (contracts * effective_net_price * 100.0) + commission
+                net_cash_impact = -total_cost
+                collateral_required = total_cost
+                summary_type = f"Debit ${abs(effective_net_price):.2f}/sh"
+            else:
+                # Net Credit: cash received, margin/collateral reserved
+                total_proceeds = (contracts * abs_net_price * 100.0) - commission
+                net_cash_impact = total_proceeds
+                max_risk_per_sh = (strike_width - abs_net_price) if (strike_width and strike_width > abs_net_price) else abs_net_price
+                collateral_required = max_risk_per_sh * 100.0 * contracts
+                summary_type = f"Credit ${abs_net_price:.2f}/sh"
+
+            success = store.apply_multi_leg_fill(
+                client_order_id=client_order_id,
+                symbol=symbol,
+                strategy_name=strategy_name,
+                contracts=contracts,
+                legs=parsed_legs,
+                net_cash_impact=net_cash_impact,
+                commission_and_fees=commission,
+                collateral_required=collateral_required,
+            )
+
+            if not success:
+                return {
+                    "ok": False,
+                    "order_id": client_order_id,
+                    "message": f"Order rejected: Insufficient funds or collateral for {strategy_name} on {symbol}.",
+                }
+
             return {
-                "ok": False,
+                "ok": True,
                 "order_id": client_order_id,
                 "message": (
-                    "Multi-leg option orders are not yet supported by the paper broker "
-                    "(a single-symbol quote cannot honestly price a spread/condor); "
-                    "please submit each leg individually."
+                    f"Paper {strategy_name} filled: {contracts} contract(s) on {symbol} at {summary_type} "
+                    f"(Net Cash Impact: ${net_cash_impact:.2f}, Commission: ${commission:.2f})."
                 ),
             }
 
-        primary_leg = legs_list[0] if legs_list else None
-
-        if primary_leg:
-            contract_data = primary_leg.get("contract", {})
-            strike = contract_data.get("strike", 0.0)
-            opt_type = primary_leg.get("type", "call").upper()
-            action = primary_leg.get("action", side).lower()
-            if not expiration:
-                return {
-                    "ok": False,
-                    "order_id": client_order_id,
-                    "message": "Option expiration is required to identify the contract; order rejected.",
-                }
-            order_symbol = f"{symbol} {expiration} ${strike:.2f} {opt_type}"
-
-            ask = contract_data.get("ask", 0.0)
-            bid = contract_data.get("bid", 0.0)
-            last = contract_data.get("lastPrice", 0.0)
-            mark = last if last > 0 else (ask + bid) / 2 if (ask + bid) > 0 else (ask or bid or 0.0)
-            leg_price = limit_price if (order_type == "limit" and limit_price and limit_price > 0) else (ask if action == "buy" else (bid if bid > 0 else mark))
-            if leg_price <= 0:
-                return {
-                    "ok": False,
-                    "order_id": client_order_id,
-                    "message": f"No live quote available for {order_symbol}; order rejected rather than filled at a fabricated price.",
-                }
         else:
-            order_symbol = f"{symbol}-OPTION"
-            if order_type == "limit" and limit_price and limit_price > 0:
-                leg_price = limit_price
+            # Single-leg option execution
+            primary_leg = legs_list[0] if legs_list else None
+
+            if primary_leg:
+                contract_data = primary_leg.get("contract", {})
+                strike = float(contract_data.get("strike", 0.0))
+                opt_type = str(primary_leg.get("type", contract_data.get("type", "call"))).upper()
+                action = str(primary_leg.get("action", side)).lower()
+                leg_exp = primary_leg.get("expiration") or contract_data.get("expiration") or expiration
+                if not leg_exp:
+                    return {
+                        "ok": False,
+                        "order_id": client_order_id,
+                        "message": "Option expiration is required to identify the contract; order rejected.",
+                    }
+                order_symbol = f"{symbol} {leg_exp} ${strike:.2f} {opt_type}"
+
+                ask = float(contract_data.get("ask", 0.0) or 0.0)
+                bid = float(contract_data.get("bid", 0.0) or 0.0)
+                last = float(contract_data.get("lastPrice", 0.0) or 0.0)
+                mark = last if last > 0 else (ask + bid) / 2 if (ask + bid) > 0 else (ask or bid or 0.0)
+                leg_price = limit_price if (order_type == "limit" and limit_price and limit_price > 0) else (ask if action == "buy" else (bid if bid > 0 else mark))
+                if leg_price <= 0:
+                    return {
+                        "ok": False,
+                        "order_id": client_order_id,
+                        "message": f"No live quote available for {order_symbol}; order rejected rather than filled at a fabricated price.",
+                    }
             else:
+                order_symbol = f"{symbol}-OPTION"
+                if order_type == "limit" and limit_price and limit_price > 0:
+                    leg_price = limit_price
+                else:
+                    return {
+                        "ok": False,
+                        "order_id": client_order_id,
+                        "message": "No option contract or limit price provided; cannot honestly price this order.",
+                    }
+                action = side
+
+            if dollar_amount and dollar_amount > 0:
+                contracts = calculate_option_sizing(dollar_amount, leg_price, multiplier=100)
+                if contracts < 1:
+                    return {
+                        "ok": False,
+                        "order_id": client_order_id,
+                        "message": f"Dollar amount ${dollar_amount:.2f} is insufficient for 1 contract (Cost per contract: ${leg_price * 100:.2f}).",
+                    }
+            else:
+                contracts = int(quantity or 1)
+
+            if contracts <= 0:
+                return {"ok": False, "order_id": client_order_id, "message": "Quantity must be at least 1 contract."}
+
+            commission = 0.65 * contracts
+            fill_price_unit = leg_price * 100.0
+            total_cost = (contracts * fill_price_unit) + commission if action == "buy" else (contracts * fill_price_unit) - commission
+
+            # Naked single-leg short (a sell with no covering long inventory) is
+            # otherwise uncollateralized -- require the full notional (strike *
+            # 100 * contracts) as a conservative margin proxy, same order of
+            # magnitude as a cash-secured put, so opening one is bounded by
+            # available cash rather than unconditionally accepted.
+            collateral_required = strike * 100.0 * contracts if action == "sell" else None
+
+            success = store.apply_fill(
+                client_order_id=client_order_id,
+                symbol=order_symbol,
+                side=action,
+                qty=float(contracts),
+                fill_price=fill_price_unit,
+                commission_and_fees=commission,
+                allow_short=True,
+                collateral_required=collateral_required,
+            )
+
+            if not success:
                 return {
                     "ok": False,
                     "order_id": client_order_id,
-                    "message": "No option contract or limit price provided; cannot honestly price this order.",
+                    "message": f"Order rejected: Insufficient funds or inventory for {action.upper()} {contracts} contract(s) of {order_symbol}.",
                 }
-            action = side
 
-        if dollar_amount and dollar_amount > 0:
-            contracts = calculate_option_sizing(dollar_amount, leg_price, multiplier=100)
-            if contracts < 1:
-                return {
-                    "ok": False,
-                    "order_id": client_order_id,
-                    "message": f"Dollar amount ${dollar_amount:.2f} is insufficient for 1 contract (Cost per contract: ${leg_price * 100:.2f})."
-                }
-        else:
-            contracts = int(quantity or 1)
-
-        if contracts <= 0:
-            return {"ok": False, "order_id": client_order_id, "message": "Quantity must be at least 1 contract."}
-
-        # Commission: $0.65 per contract per leg
-        commission = 0.65 * contracts * max(1, len(legs_list))
-        fill_price_unit = leg_price * 100.0
-        total_cost = (contracts * fill_price_unit) + commission if action == "buy" else (contracts * fill_price_unit) - commission
-
-        success = store.apply_fill(
-            client_order_id=client_order_id,
-            symbol=order_symbol,
-            side=action,
-            qty=float(contracts),
-            fill_price=fill_price_unit,
-            commission_and_fees=commission,
-        )
-
-        if not success:
             return {
-                "ok": False,
+                "ok": True,
                 "order_id": client_order_id,
-                "message": f"Order rejected: Insufficient funds or inventory for {action.upper()} {contracts} contract(s) of {order_symbol}."
+                "message": f"Paper option order filled: {action.upper()} {contracts} contract(s) of {order_symbol} at ${leg_price:.2f}/sh (Total: ${total_cost:.2f}).",
             }
 
-        return {
-            "ok": True,
-            "order_id": client_order_id,
-            "message": f"Paper option order filled: {action.upper()} {contracts} contract(s) of {order_symbol} at ${leg_price:.2f}/sh (Total: ${total_cost:.2f})."
-        }

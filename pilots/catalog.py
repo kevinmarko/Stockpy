@@ -537,6 +537,18 @@ PILOTS: List[Pilot] = [
         # for the full honesty contract and measured numbers.
         validation_strategy_id="vrp_premium_selling",
     ),
+    Pilot(
+        id="options-flow-sentiment",
+        name="Options Flow Sentiment",
+        category="Factor",
+        description=(
+            "Tracks aggressive institutional options order flow (sweeps and blocks) "
+            "to capture directional alpha and smart-money positioning."
+        ),
+        weights={"options_flow_sentiment": 1.0},
+        long_only=False,
+        validation_strategy_id=None,
+    ),
 ]
 
 

@@ -112,17 +112,31 @@ def test_submit_order_missing_market_cap_uses_none_not_zero():
     assert broker.cost_model.get_liquidity_tier(captured["market_cap"]) == "large_cap"
 
 
-def test_submit_order_rejects_multi_leg_options_orders():
-    # A single-symbol FMP quote cannot honestly price a spread/condor --
-    # V1 rejects rather than silently mis-filling it.
+def test_submit_order_fills_multi_leg_options_order():
+    # Multi-leg options orders with leg pricing execute atomically via FMPPaperBroker
     broker = FMPPaperBroker(db_url="sqlite:///:memory:")
-    intent = _intent(legs=[{"symbol": "AAPL240119C00150000", "ratio_qty": 1.0, "side": OrderSide.BUY}])
-    with patch("data.fmp_client.quote") as mock_quote:
-        result = asyncio.run(broker.submit_order(intent))
-        mock_quote.assert_not_called()
+    intent = _intent(
+        strategy_id="bull_call_spread",
+        symbol="AAPL",
+        qty=2.0,
+        legs=[
+            {"symbol": "AAPL 2026-09-18 $150.00 CALL", "ratio_qty": 1.0, "side": OrderSide.BUY, "price": 2.50},
+            {"symbol": "AAPL 2026-09-18 $155.00 CALL", "ratio_qty": 1.0, "side": OrderSide.SELL, "price": 1.00},
+        ]
+    )
+    result = asyncio.run(broker.submit_order(intent))
 
-    assert result.status == OrderStatus.REJECTED
-    assert "multi-leg" in result.error_message.lower()
+    assert result.status == OrderStatus.FILLED
+    assert result.filled_qty == 2.0
+    assert result.filled_avg_price == 1.50
+
+    positions = broker.store.get_open_positions()
+    assert len(positions) == 2
+    long_leg = next(p for p in positions if "$150.00" in p.symbol)
+    short_leg = next(p for p in positions if "$155.00" in p.symbol)
+    assert long_leg.qty == 2.0
+    assert short_leg.qty == -2.0
+
 
 
 def test_submit_order_rejects_non_positive_quantity():

@@ -9,9 +9,21 @@ import { OptionsChain as OptionsChainGrid } from "../components/options/OptionsC
 import { OptionsOrderTicket } from "../components/options/OptionsOrderTicket";
 import { OptionsMetricSelector, MetricColumn } from "../components/options/OptionsMetricSelector";
 import { OptionsStrategyBuilder } from "../components/options/OptionsStrategyBuilder";
+import { EarningsCrushScanner } from "../components/options/EarningsCrushScanner";
+import { UnusualFlowFeed } from "../components/options/UnusualFlowFeed";
+import { VolForecastScanner } from "../components/options/VolForecastScanner";
+import { GammaScalperView } from "../components/options/GammaScalperView";
+import { DispersionScanner } from "../components/options/DispersionScanner";
+import { ZeroDteDesk } from "../components/options/ZeroDteDesk";
+import { VpinGauge } from "../components/options/VpinGauge";
+import { SmartOrderRouterView } from "../components/options/SmartOrderRouterView";
+import { GexProfileView } from "../components/options/GexProfileView";
+import { LobDepthView } from "../components/options/LobDepthView";
+import { CopulaSpreadView } from "../components/options/CopulaSpreadView";
+import { MarketMakerAgentView } from "../components/options/MarketMakerAgentView";
 import { TabGuide } from "../components/TabGuide";
 
-type ChainTab = "calls" | "puts";
+type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte" | "vpin" | "sor" | "gex" | "lob" | "copula" | "mm";
 
 export function OptionsChain() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -182,7 +194,7 @@ export function OptionsChain() {
         })}
       </div>
 
-      {/* Calls / Puts Toggle */}
+      {/* Calls / Puts / Unusual Flow / Earnings Crush Tabs */}
       <div style={{
         display: "flex",
         padding: "8px 16px",
@@ -190,12 +202,27 @@ export function OptionsChain() {
         borderBottom: `1px solid ${theme.border}`,
         flexShrink: 0
       }}>
-        {(["calls", "puts"] as ChainTab[]).map(tab => {
-          const isActive = tab === activeTab;
+        {[
+          { key: "calls", label: "Calls" },
+          { key: "puts", label: "Puts" },
+          { key: "gex", label: "📊 GEX Profile" },
+          { key: "lob", label: "🪜 LOB Depth" },
+          { key: "copula", label: "🔗 Copula" },
+          { key: "mm", label: "🤖 MM Agent" },
+          { key: "forecast", label: "🎯 Vol Scanner" },
+          { key: "gamma", label: "⚡ Gamma Scalp" },
+          { key: "dispersion", label: "🌐 Dispersion" },
+          { key: "zerodte", label: "⚡ 0DTE" },
+          { key: "vpin", label: "⏱ VPIN" },
+          { key: "sor", label: "🔀 Smart Router" },
+          { key: "flow", label: "🌊 Flow" },
+          { key: "crush", label: "⚡ Crush" },
+        ].map(tab => {
+          const isActive = tab.key === activeTab;
           return (
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key as ChainTab)}
               style={{
                 flex: 1,
                 padding: "8px 0",
@@ -204,23 +231,47 @@ export function OptionsChain() {
                 border: "none",
                 borderRadius: 8,
                 fontWeight: isActive ? 600 : 400,
-                fontSize: "0.9rem",
+                fontSize: "0.85rem",
                 cursor: "pointer",
-                textTransform: "capitalize",
-                transition: "all 0.15s ease"
+                transition: "all 0.15s ease",
+                whiteSpace: "nowrap",
               }}
             >
-              {tab}
+              {tab.label}
             </button>
           );
         })}
       </div>
 
-      {/* Chain Grid or Builder */}
+      {/* Main Content Area */}
       <div style={{ flex: 1, overflowY: "auto", padding: 16, paddingBottom: (selectedLegs.length > 0 || isStockTradeOpen) ? 350 : 16 }}>
         <TabGuide tabKey="options-chain" />
         
-        {isBuilderMode ? (
+        {activeTab === "copula" ? (
+          <CopulaSpreadView initialPair={`${ticker || "SPY"}/QQQ`} />
+        ) : activeTab === "mm" ? (
+          <MarketMakerAgentView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />
+        ) : activeTab === "gex" ? (
+          <GexProfileView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />
+        ) : activeTab === "lob" ? (
+          <LobDepthView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />
+        ) : activeTab === "forecast" ? (
+          <VolForecastScanner initialSymbol={ticker} />
+        ) : activeTab === "gamma" ? (
+          <GammaScalperView initialSymbol={ticker} spotPrice={spotPrice} />
+        ) : activeTab === "dispersion" ? (
+          <DispersionScanner initialIndex={ticker} />
+        ) : activeTab === "zerodte" ? (
+          <ZeroDteDesk initialSymbol={ticker} />
+        ) : activeTab === "vpin" ? (
+          <VpinGauge initialSymbol={ticker || "SPY"} />
+        ) : activeTab === "sor" ? (
+          <SmartOrderRouterView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />
+        ) : activeTab === "flow" ? (
+          <UnusualFlowFeed initialSymbol={ticker} />
+        ) : activeTab === "crush" ? (
+          <EarningsCrushScanner initialSymbols={ticker ? [ticker] : undefined} />
+        ) : isBuilderMode ? (
           <OptionsStrategyBuilder
             symbol={ticker!}
             chain={chainData || null}
@@ -235,7 +286,7 @@ export function OptionsChain() {
           chainData && (
             <OptionsChainGrid
               data={chainData}
-              activeTab={activeTab}
+              activeTab={activeTab as "calls" | "puts"}
               selectedMetrics={selectedMetrics}
               onSelectContract={(contract, type) => {
                 setSelectedLegs([{ contract, type, action: 'Buy' }]);
