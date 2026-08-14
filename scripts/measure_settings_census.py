@@ -1221,7 +1221,13 @@ def print_summary(data: Dict[str, Any]) -> None:
     # flags these heuristically on the "secret"-shaped variable/label names alone;
     # the codeql suppressions below are a deliberate, reviewed false-positive
     # dismissal, not a statement that real secrets are safe to log.
-    p(f"  SECRET_KEYS ....................... {el['secret_keys_len']} "  # codeql[py/clear-text-logging-sensitive-data]
+    #
+    # NOTE: a `codeql[rule-id]` suppression comment applies to the line
+    # BELOW it (unlike the legacy `lgtm[rule-id]`, which applied to its own
+    # line) -- each one here sits on its own line immediately above the
+    # statement it suppresses, not trailing the code itself.
+    # codeql[py/clear-text-logging-sensitive-data]
+    p(f"  SECRET_KEYS ....................... {el['secret_keys_len']} "
       f"(unique {el['secret_keys_unique_len']})")
     p(f"  _JSON_KEYS ........................ {el['json_keys_len']}")
     p(f"  EXCLUDED_FROM_GUI ................. {el['excluded_from_gui_len']}")
@@ -1238,18 +1244,24 @@ def print_summary(data: Dict[str, Any]) -> None:
         p(f"      ! {n}")
 
     p("\n[4] SECRET_KEYS SANITY")
-    p(f"  phantom SECRET_KEYS entries ....... {ss['phantom_count']}")  # codeql[py/clear-text-logging-sensitive-data]
+    # codeql[py/clear-text-logging-sensitive-data]
+    p(f"  phantom SECRET_KEYS entries ....... {ss['phantom_count']}")
     for n in ss["phantom_secret_keys"]:
-        p(f"      ! {n}")  # codeql[py/clear-text-logging-sensitive-data] -- field NAME, not its value
+        # codeql[py/clear-text-logging-sensitive-data] -- field NAME, not its value
+        p(f"      ! {n}")
     p(f"  credential-pattern matches ........ "
       f"{len(ss['pattern_matches_protected'])} protected / "
       f"{len(ss['pattern_matches_unprotected'])} not in SECRET_KEYS")
-    p(f"  REAL GAPS (str-shaped, unprotected) {ss['pattern_real_gap_count']}")  # codeql[py/clear-text-logging-sensitive-data]
+    # codeql[py/clear-text-logging-sensitive-data]
+    p(f"  REAL GAPS (str-shaped, unprotected) {ss['pattern_real_gap_count']}")
     for r in ss["pattern_real_gaps"]:
-        p(f"      !! {r['field']} :: {r['type']} (in ALLOWED_KEYS={r['in_allowed_keys']})")  # codeql[py/clear-text-logging-sensitive-data]
-    p(f"  wide-pattern extra gaps ........... {ss['wide_pattern_extra_gap_count']}")  # codeql[py/clear-text-logging-sensitive-data]
+        # codeql[py/clear-text-logging-sensitive-data]
+        p(f"      !! {r['field']} :: {r['type']} (in ALLOWED_KEYS={r['in_allowed_keys']})")
+    # codeql[py/clear-text-logging-sensitive-data]
+    p(f"  wide-pattern extra gaps ........... {ss['wide_pattern_extra_gap_count']}")
     for r in ss["wide_pattern_extra_gaps"]:
-        p(f"      ? {r['field']} :: {r['type']} (in ALLOWED_KEYS={r['in_allowed_keys']})")  # codeql[py/clear-text-logging-sensitive-data]
+        # codeql[py/clear-text-logging-sensitive-data]
+        p(f"      ? {r['field']} :: {r['type']} (in ALLOWED_KEYS={r['in_allowed_keys']})")
 
     p("\n[5] HAND-SET-ONLY MARKERS IN settings.py")
     p(f"  fields carrying a marker .......... {hs['marked_field_count']}")
@@ -1714,10 +1726,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not args.quiet and not args.json:
         print_summary(data)
     if args.json:
-        print(json.dumps(data, indent=2, sort_keys=False))  # codeql[py/clear-text-logging-sensitive-data]
+        # codeql[py/clear-text-logging-sensitive-data]
+        print(json.dumps(data, indent=2, sort_keys=False))
     if args.write:
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
-        JSON_OUT.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")  # codeql[py/clear-text-storage-sensitive-data]
+        # codeql[py/clear-text-storage-sensitive-data]
+        JSON_OUT.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
         MD_OUT.write_text(render_markdown(data), encoding="utf-8")
         if not args.quiet:
             print(f"wrote {JSON_OUT.relative_to(_REPO_ROOT)}")

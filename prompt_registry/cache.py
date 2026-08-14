@@ -180,6 +180,14 @@ class CacheManager:
 
     def _prompt_dir(self, prompt_id: str) -> Path:
         safe_name = _sanitize_id(prompt_id)
+        # `safe_name` is already stripped of every character outside
+        # [a-zA-Z0-9_-] by _sanitize_id (no `/`/`\` can survive), and the
+        # result is immediately containment-checked via is_confined() below
+        # before ever being returned or used for I/O -- CodeQL's
+        # py/path-injection query does not model that guard as a sanitizer
+        # for its own Path.is_relative_to()-based check, so it still flags
+        # the tainted-looking construction here. Reviewed false positive.
+        # codeql[py/path-injection]
         target = (self._dir / safe_name).resolve()
         if not is_confined(target, self._resolved_dir):
             logger.warning("CacheManager._prompt_dir: directory escape attempt for %r", prompt_id)
@@ -189,6 +197,10 @@ class CacheManager:
     def _record_path(self, prompt_id: str, version: str) -> Path:
         safe_version = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(version).strip()) or "default"
         prompt_dir = self._prompt_dir(prompt_id)
+        # Same reviewed false positive as _prompt_dir above: safe_version is
+        # separator-free and the result is containment-checked by
+        # is_confined() immediately below before use.
+        # codeql[py/path-injection]
         target = (prompt_dir / f"{safe_version}.json").resolve()
         if not is_confined(target, self._resolved_dir):
             logger.warning(
