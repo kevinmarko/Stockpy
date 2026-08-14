@@ -17,6 +17,8 @@ import { VpinGauge } from "../components/options/VpinGauge";
 import { SmartOrderRouterView } from "../components/options/SmartOrderRouterView";
 import { GexProfileView } from "../components/options/GexProfileView";
 import { LobDepthView } from "../components/options/LobDepthView";
+import { CopulaSpreadView } from "../components/options/CopulaSpreadView";
+import { MarketMakerAgentView } from "../components/options/MarketMakerAgentView";
 import type { RollOrderRequest } from "../api/types";
 
 export function PaperBroker() {
@@ -42,6 +44,8 @@ export function PaperBroker() {
   const [showSor, setShowSor] = useState(false);
   const [showGex, setShowGex] = useState(false);
   const [showLob, setShowLob] = useState(false);
+  const [showCopula, setShowCopula] = useState(false);
+  const [showMarketMaker, setShowMarketMaker] = useState(false);
 
   // Position Roll state
   const [rollingPosition, setRollingPosition] = useState<{ symbol: string; qty: number } | null>(null);
@@ -339,6 +343,36 @@ export function PaperBroker() {
             🪜 LOB Depth
           </button>
           <button
+            onClick={() => setShowCopula(!showCopula)}
+            style={{
+              padding: "8px 14px",
+              background: showCopula ? theme.accent : theme.surface,
+              border: `1px solid ${showCopula ? theme.accent : theme.border}`,
+              color: showCopula ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🔗 Copula Stat Arb
+          </button>
+          <button
+            onClick={() => setShowMarketMaker(!showMarketMaker)}
+            style={{
+              padding: "8px 14px",
+              background: showMarketMaker ? theme.growth : theme.surface,
+              border: `1px solid ${showMarketMaker ? theme.growth : theme.border}`,
+              color: showMarketMaker ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🤖 MM Agent Sim
+          </button>
+          <button
             onClick={() => setShowGammaScalper(!showGammaScalper)}
             style={{
               padding: "8px 14px",
@@ -470,6 +504,23 @@ export function PaperBroker() {
             initialSymbol="SPY"
             spotPrice={account.data?.equity ? 546.50 : 546.50}
             onClose={() => setShowLob(false)}
+          />
+        )}
+
+        {/* Copula Statistical Arbitrage & Dynamic Kalman Beta Desk */}
+        {showCopula && (
+          <CopulaSpreadView
+            initialPair="SPY/QQQ"
+            onClose={() => setShowCopula(false)}
+          />
+        )}
+
+        {/* Avellaneda-Stoikov DRL Market Maker Agent Desk */}
+        {showMarketMaker && (
+          <MarketMakerAgentView
+            initialSymbol="SPY"
+            spotPrice={account.data?.equity ? 546.50 : 546.50}
+            onClose={() => setShowMarketMaker(false)}
           />
         )}
 

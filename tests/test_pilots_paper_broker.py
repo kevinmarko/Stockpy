@@ -1764,3 +1764,183 @@ class TestLobSimulateQueueEndpoint:
         assert resp.status_code == 422
 
 
+# ---------------------------------------------------------------------------
+# 12. GET /pilots/options/copula/pairs
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsCopulaPairsEndpoint:
+    def test_get_copula_pairs_success_query_params(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/copula/pairs?symbol_y=GLD&symbol_x=GDX",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pair"] == "GLD/GDX"
+        assert body["asset_x"] == "GDX"
+        assert body["asset_y"] == "GLD"
+        assert body["copula_family"] in ("Clayton", "Gumbel", "Frank", "Gaussian")
+        assert "tail_dependence" in body
+        tail = body["tail_dependence"]
+        assert "lower_tail_dependence" in tail
+        assert "upper_tail_dependence" in tail
+        assert "theta" in tail
+        assert "kendall_tau" in tail
+        assert isinstance(body["kalman_beta"], float)
+        assert isinstance(body["kalman_alpha"], float)
+        assert isinstance(body["ou_half_life_days"], float)
+        assert body["ou_half_life_days"] > 0.0
+        assert isinstance(body["spread_z_score"], float)
+        assert body["signal_action"] in ("LONG_SPREAD", "SHORT_SPREAD", "EXIT", "HOLD")
+        assert len(body["historical_series"]) > 0
+        point = body["historical_series"][-1]
+        assert "date" in point
+        assert "asset_x_price" in point
+        assert "asset_y_price" in point
+        assert "kalman_beta" in point
+        assert "spread" in point
+        assert "spread_z_score" in point
+        assert "upper_band_2sigma" in point
+        assert "lower_band_2sigma" in point
+
+    def test_get_copula_pairs_success_pair_param(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/copula/pairs?pair=EWA/EWC",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pair"] == "EWA/EWC"
+        assert body["asset_x"] == "EWC"
+        assert body["asset_y"] == "EWA"
+
+    def test_get_copula_pairs_default_fallback(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/copula/pairs",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pair"] == "GLD/GDX"
+
+    def test_get_copula_pairs_no_token_fail_open(self):
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.get("/pilots/options/copula/pairs?symbol_y=AAPL&symbol_x=MSFT")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["asset_y"] == "AAPL"
+        assert body["asset_x"] == "MSFT"
+
+    def test_get_copula_pairs_fails_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/copula/pairs?symbol_y=GLD&symbol_x=GDX",
+                headers={"Authorization": "Bearer WRONG_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# 13. POST /pilots/options/market-maker/simulate
+# ---------------------------------------------------------------------------
+
+
+class TestMarketMakerSimulateEndpoint:
+    def test_post_market_maker_simulate_success(self):
+        payload = {
+            "symbol": "SPY",
+            "spot_price": 500.0,
+            "volatility": 0.20,
+            "gamma": 0.1,
+            "kappa": 1.5,
+            "num_steps": 50,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/market-maker/simulate",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert body["risk_aversion_gamma"] == 0.1
+        assert body["order_flow_intensity_kappa"] == 1.5
+        assert body["volatility_sigma"] == 0.20
+        assert body["max_inventory"] == 10
+        assert "final_pnl" in body
+        assert "sharpe_ratio" in body
+        assert "max_drawdown" in body
+        assert "total_trades" in body
+        assert 0.0 <= body["fill_rate"] <= 1.0
+        assert "final_inventory" in body
+        assert body["avg_spread"] > 0.0
+        assert len(body["steps"]) == 50
+        step0 = body["steps"][0]
+        assert step0["step"] == 0
+        assert "mid_price" in step0
+        assert "reservation_price" in step0
+        assert "bid_price" in step0
+        assert "ask_price" in step0
+        assert step0["ask_price"] >= step0["bid_price"]
+        assert "inventory" in step0
+        assert "pnl" in step0
+
+    def test_post_market_maker_simulate_alias_fields(self):
+        payload = {
+            "symbol": "QQQ",
+            "spot_price": 450.0,
+            "volatility_sigma": 0.25,
+            "risk_aversion_gamma": 0.2,
+            "order_flow_intensity_kappa": 2.0,
+            "time_steps": 30,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/market-maker/simulate",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "QQQ"
+        assert body["risk_aversion_gamma"] == 0.2
+        assert body["order_flow_intensity_kappa"] == 2.0
+        assert body["volatility_sigma"] == 0.25
+        assert len(body["steps"]) == 30
+
+    def test_post_market_maker_simulate_no_token_fail_open(self):
+        payload = {
+            "symbol": "IWM",
+            "spot_price": 200.0,
+            "num_steps": 20,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=None):
+            resp = _client.post(
+                "/pilots/options/market-maker/simulate",
+                json=payload,
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "IWM"
+        assert len(body["steps"]) == 20
+
+    def test_post_market_maker_simulate_fails_with_wrong_token(self):
+        payload = {
+            "symbol": "SPY",
+            "spot_price": 500.0,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/market-maker/simulate",
+                json=payload,
+                headers={"Authorization": "Bearer INVALID_TOKEN"},
+            )
+        assert resp.status_code == 401
+
+
+

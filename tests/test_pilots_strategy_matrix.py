@@ -393,7 +393,7 @@ def _import_roots(source: str) -> set:
 
 @pytest.mark.parametrize(
     "module_name",
-    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst", "paper_broker", "live_trade_proposals", "unusual_options_flow", "options_gex", "lob_simulator"],
+    ["strategy_matrix", "options", "strategy_health", "commands", "agentic", "discovery", "scan_config_store", "watchlist_writer", "validation_trend", "gravity_audit", "sector_selection", "reports", "dead_letter", "prompt_registry", "news_catalyst", "paper_broker", "live_trade_proposals", "unusual_options_flow", "options_gex", "lob_simulator", "copula_stat_arb"],
 )
 def test_pilots_read_helpers_stay_dependency_light(module_name):
     """api/pilots_api.py imports pilots.strategy_matrix, pilots.options, and
@@ -506,6 +506,8 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "scipy", "pandas", "data"}
     if module_name == "lob_simulator":
         allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "scipy"}
+    if module_name == "copula_stat_arb":
+        allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "pandas", "scipy", "data", "uuid"}
     assert roots <= allowed, f"pilots/{module_name}.py imports outside the allowlist: {roots - allowed}"
 
 

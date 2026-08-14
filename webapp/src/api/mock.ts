@@ -244,6 +244,12 @@ import type {
   LobLevel,
   LobQueueSimulationRequest,
   LobQueueSimulationResponse,
+  CopulaPairsResponse,
+  CopulaTailData,
+  CopulaSeriesPoint,
+  MarketMakerSimRequest,
+  MarketMakerSimResponse,
+  MarketMakerStepPoint,
 } from "./types";
 
 const SECTORS = [
@@ -13254,6 +13260,227 @@ export const mockApi = {
       spread,
       mid_price: mid,
       market_depth_summary: `Queue Priority #${queuePos} at $${limitPrice.toFixed(2)} (${ordersAhead} orders / ${sizeAhead} contracts ahead). Expected fill latency: ~${estFillTime}s (30s P(Fill) = ${(fillProb30s * 100).toFixed(1)}%).`,
+      as_of: new Date().toISOString(),
+    });
+  },
+
+  async getCopulaPairsAnalysis(pair?: string) {
+    const p = (pair || "SPY/QQQ").toUpperCase();
+    const parts = p.includes("/") ? p.split("/") : [p, "QQQ"];
+    const assetX = parts[0] || "SPY";
+    const assetY = parts[1] || "QQQ";
+
+    let family: "Clayton" | "Gumbel" | "Frank" = "Clayton";
+    let theta = 2.15;
+    let lambdaL = 0.725;
+    let lambdaU = 0.0;
+    let tau = 0.518;
+    let ouHalfLife = 14.2;
+    let kalmanBeta = 1.23;
+    let kalmanAlpha = -12.4;
+    let spreadZ = 2.18;
+    let currentSpread = 8.45;
+    let action: "LONG_SPREAD" | "SHORT_SPREAD" | "HOLD" | "EXIT" = "SHORT_SPREAD";
+
+    if (p.includes("AMD") || p.includes("NVDA")) {
+      family = "Gumbel";
+      theta = 1.92;
+      lambdaL = 0.0;
+      lambdaU = 0.564;
+      tau = 0.479;
+      ouHalfLife = 8.6;
+      kalmanBeta = 1.45;
+      kalmanAlpha = 4.2;
+      spreadZ = -2.31;
+      currentSpread = -14.2;
+      action = "LONG_SPREAD";
+    } else if (p.includes("GOOGL") || p.includes("META") || p.includes("MSFT") || p.includes("AAPL")) {
+      family = "Frank";
+      theta = 4.65;
+      lambdaL = 0.0;
+      lambdaU = 0.0;
+      tau = 0.442;
+      ouHalfLife = 18.5;
+      kalmanBeta = 0.92;
+      kalmanAlpha = 3.1;
+      spreadZ = 0.42;
+      currentSpread = 1.85;
+      action = "HOLD";
+    }
+
+    const tailData: CopulaTailData = {
+      lower_tail_dependence: Number(lambdaL.toFixed(3)),
+      upper_tail_dependence: Number(lambdaU.toFixed(3)),
+      copula_family: family,
+      theta: Number(theta.toFixed(2)),
+      log_likelihood: 178.4,
+      aic: -352.8,
+      kendall_tau: Number(tau.toFixed(3)),
+    };
+
+    const historical_series: CopulaSeriesPoint[] = [];
+    const baseDate = new Date("2026-06-01");
+    let basePx = 540;
+    let basePy = basePx * kalmanBeta + kalmanAlpha;
+    let curSpread = 0;
+
+    for (let i = 0; i < 60; i++) {
+      const d = new Date(baseDate);
+      d.setDate(d.getDate() + i);
+      const dateStr = d.toISOString().split("T")[0];
+
+      const retX = Math.sin(i * 0.2) * 1.5 + (i % 3 === 0 ? 2 : -1.5) * 0.8;
+      const retY = retX * kalmanBeta + Math.cos(i * 0.3) * 2.2;
+      basePx += retX;
+      basePy += retY;
+
+      const dynamicBeta = Number((kalmanBeta + Math.sin(i * 0.1) * 0.08).toFixed(3));
+      curSpread = Number((basePy - dynamicBeta * basePx - kalmanAlpha).toFixed(2));
+      const zScore = Number((curSpread / 4.2).toFixed(2));
+
+      historical_series.push({
+        date: dateStr,
+        asset_x_price: Number(basePx.toFixed(2)),
+        asset_y_price: Number(basePy.toFixed(2)),
+        kalman_beta: dynamicBeta,
+        spread: curSpread,
+        spread_z_score: zScore,
+        upper_band_2sigma: 2.0,
+        lower_band_2sigma: -2.0,
+      });
+    }
+
+    // Ensure last point aligns with summary
+    const last = historical_series[historical_series.length - 1];
+    last.spread_z_score = spreadZ;
+    last.spread = currentSpread;
+    last.kalman_beta = kalmanBeta;
+
+    return delay<CopulaPairsResponse>({
+      pair: `${assetX}/${assetY}`,
+      asset_x: assetX,
+      asset_y: assetY,
+      copula_family: family,
+      tail_dependence: tailData,
+      kalman_beta: kalmanBeta,
+      kalman_alpha: kalmanAlpha,
+      ou_half_life_days: ouHalfLife,
+      spread_z_score: spreadZ,
+      current_spread: currentSpread,
+      signal_action: action,
+      historical_series,
+      as_of: new Date().toISOString(),
+      status_note: `Fitted ${family} Copula on ${assetX}/${assetY} with dynamic Kalman beta $\\beta_t = ${kalmanBeta}$. Spread Z-Score is ${spreadZ > 0 ? "+" : ""}${spreadZ}σ (OU $\\tau_{1/2} = ${ouHalfLife}d$).`,
+    });
+  },
+
+  async simulateMarketMakerAgent(request: MarketMakerSimRequest) {
+    const sym = (request.symbol || "SPY").toUpperCase();
+    const spot = request.spot_price || 546.50;
+    const gamma = request.risk_aversion_gamma ?? 0.1;
+    const kappa = request.order_flow_intensity_kappa ?? 1.5;
+    const sigma = request.volatility_sigma ?? 0.20;
+    const horizonT = request.time_horizon_t ?? 1.0;
+    const totalSteps = request.time_steps ?? 100;
+    const maxInv = request.max_inventory ?? 10;
+    const orderSize = request.order_size ?? 1;
+
+    const dt = horizonT / totalSteps;
+    const steps: MarketMakerStepPoint[] = [];
+
+    let currentMid = spot;
+    let inventory = 0;
+    let cash = 0;
+    let totalTrades = 0;
+    let buyFills = 0;
+    let sellFills = 0;
+    let sumSpread = 0;
+
+    let pnlHigh = 0;
+    let maxDdDollars = 0;
+
+    for (let step = 0; step < totalSteps; step++) {
+      const timeSec = Math.round(step * (390 * 60 / totalSteps));
+      const tau = Math.max(0.01, horizonT - step * dt);
+
+      // Price drift + shock
+      const shock = (Math.sin(step * 0.35) * 0.15 + (step % 4 === 0 ? 0.25 : -0.2)) * Math.sqrt(dt) * sigma * spot * 0.4;
+      currentMid = Number((currentMid + shock).toFixed(2));
+
+      // Avellaneda-Stoikov Reservation Price: R(s, q, t) = s - q * gamma * sigma^2 * tau
+      const reservation = Number((currentMid - inventory * gamma * (sigma ** 2) * tau * 10).toFixed(2));
+
+      // Optimal half-spreads
+      const halfSpreadBase = Math.max(0.02, (1 / (gamma || 0.01)) * Math.log(1 + (gamma / kappa)) + 0.5 * gamma * (sigma ** 2) * tau * 5);
+      const bidPrice = Number((reservation - halfSpreadBase).toFixed(2));
+      const askPrice = Number((reservation + halfSpreadBase).toFixed(2));
+      const bidSpread = Number((currentMid - bidPrice).toFixed(2));
+      const askSpread = Number((askPrice - currentMid).toFixed(2));
+      sumSpread += (askPrice - bidPrice);
+
+      // Probabilities of fill
+      const probBuy = inventory < maxInv ? Math.min(0.85, 0.45 * Math.exp(-kappa * Math.max(0.01, bidSpread) * 2)) : 0;
+      const probSell = inventory > -maxInv ? Math.min(0.85, 0.45 * Math.exp(-kappa * Math.max(0.01, askSpread) * 2)) : 0;
+
+      let event: "BUY" | "SELL" | null = null;
+      // Deterministic pseudo-random fill based on step pattern for smooth visualization
+      if ((step % 7 === 1 || step % 11 === 0) && probBuy > 0.15 && inventory < maxInv) {
+        event = "BUY";
+        inventory += orderSize;
+        cash -= bidPrice * orderSize;
+        totalTrades++;
+        buyFills++;
+      } else if ((step % 6 === 2 || step % 9 === 0) && probSell > 0.15 && inventory > -maxInv) {
+        event = "SELL";
+        inventory -= orderSize;
+        cash += askPrice * orderSize;
+        totalTrades++;
+        sellFills++;
+      }
+
+      const pnl = Number((cash + inventory * currentMid).toFixed(2));
+      if (pnl > pnlHigh) pnlHigh = pnl;
+      const dd = pnlHigh - pnl;
+      if (dd > maxDdDollars) maxDdDollars = dd;
+
+      steps.push({
+        step,
+        time_sec: timeSec,
+        mid_price: currentMid,
+        reservation_price: reservation,
+        bid_price: bidPrice,
+        ask_price: askPrice,
+        bid_spread: bidSpread,
+        ask_spread: askSpread,
+        inventory,
+        cash: Number(cash.toFixed(2)),
+        pnl,
+        trade_event: event,
+      });
+    }
+
+    const finalPnl = steps[steps.length - 1].pnl;
+    const pnlDeltas = steps.slice(1).map((s, i) => s.pnl - steps[i].pnl);
+    const meanDelta = pnlDeltas.reduce((a, b) => a + b, 0) / (pnlDeltas.length || 1);
+    const stdDelta = Math.sqrt(pnlDeltas.map(d => (d - meanDelta) ** 2).reduce((a, b) => a + b, 0) / (pnlDeltas.length || 1)) || 0.01;
+    const annualizedSharpe = Number(((meanDelta / stdDelta) * Math.sqrt(252 * 390)).toFixed(2));
+    const avgSpread = Number((sumSpread / totalSteps).toFixed(3));
+    const fillRate = Number(((totalTrades / (totalSteps * 2)) * 100).toFixed(1));
+
+    return delay<MarketMakerSimResponse>({
+      symbol: sym,
+      risk_aversion_gamma: gamma,
+      order_flow_intensity_kappa: kappa,
+      volatility_sigma: sigma,
+      max_inventory: maxInv,
+      final_pnl: finalPnl,
+      sharpe_ratio: annualizedSharpe,
+      max_drawdown: Number(maxDdDollars.toFixed(2)),
+      total_trades: totalTrades,
+      fill_rate: fillRate,
+      final_inventory: inventory,
+      avg_spread: avgSpread,
+      steps,
       as_of: new Date().toISOString(),
     });
   },

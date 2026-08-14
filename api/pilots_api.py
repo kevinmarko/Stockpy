@@ -6269,6 +6269,71 @@ def post_lob_simulate_queue(body: LobSimulateQueueRequest) -> Dict[str, Any]:
     )
 
 
+@app.get("/pilots/options/copula/pairs", dependencies=[Depends(require_read_token)])
+def get_options_copula_pairs(
+    symbol_y: Optional[str] = None,
+    symbol_x: Optional[str] = None,
+    pair: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Returns fitted copula family, tail dependence, Kalman beta, OU half-life, and spread Z-score."""
+    from pilots.copula_stat_arb import compute_copula_spread_analysis
+
+    sy = symbol_y
+    sx = symbol_x
+    if (not sy or not sx) and pair:
+        parts = pair.replace("_", "/").replace("-", "/").split("/")
+        if len(parts) == 2:
+            sy, sx = parts[0].strip(), parts[1].strip()
+
+    if not sy:
+        sy = "GLD"
+    if not sx:
+        sx = "GDX"
+
+    res = compute_copula_spread_analysis(symbol_y=sy, symbol_x=sx)
+    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
+
+
+class MarketMakerSimulateRequest(BaseModel):
+    symbol: Optional[str] = "SPY"
+    spot_price: Optional[float] = 500.0
+    volatility: Optional[float] = None
+    volatility_sigma: Optional[float] = None
+    gamma: Optional[float] = None
+    risk_aversion_gamma: Optional[float] = None
+    kappa: Optional[float] = None
+    order_flow_intensity_kappa: Optional[float] = None
+    num_steps: Optional[int] = None
+    time_steps: Optional[int] = None
+    time_horizon_t: Optional[float] = 1.0
+    max_inventory: Optional[int] = 10
+    order_size: Optional[int] = 1
+
+
+@app.post("/pilots/options/market-maker/simulate", dependencies=[Depends(require_read_token)])
+def post_market_maker_simulate(body: MarketMakerSimulateRequest) -> Dict[str, Any]:
+    """Simulates Avellaneda-Stoikov market making session, quoting trajectories, inventory path, and PnL metrics."""
+    from ml.drl_market_maker import simulate_market_maker_session
+
+    vol = body.volatility if body.volatility is not None else (body.volatility_sigma if body.volatility_sigma is not None else 0.20)
+    gam = body.gamma if body.gamma is not None else (body.risk_aversion_gamma if body.risk_aversion_gamma is not None else 0.1)
+    kap = body.kappa if body.kappa is not None else (body.order_flow_intensity_kappa if body.order_flow_intensity_kappa is not None else 1.5)
+    steps = body.num_steps if body.num_steps is not None else (body.time_steps if body.time_steps is not None else 100)
+
+    res = simulate_market_maker_session(
+        symbol=body.symbol or "SPY",
+        spot_price=body.spot_price or 500.0,
+        volatility=vol,
+        gamma=gam,
+        kappa=kap,
+        num_steps=steps,
+        time_horizon_t=body.time_horizon_t or 1.0,
+        max_inventory=body.max_inventory or 10,
+        order_size=body.order_size or 1,
+    )
+    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
+
+
 
 
 @app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])

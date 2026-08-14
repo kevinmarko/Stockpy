@@ -19,9 +19,11 @@ import { VpinGauge } from "../components/options/VpinGauge";
 import { SmartOrderRouterView } from "../components/options/SmartOrderRouterView";
 import { GexProfileView } from "../components/options/GexProfileView";
 import { LobDepthView } from "../components/options/LobDepthView";
+import { CopulaSpreadView } from "../components/options/CopulaSpreadView";
+import { MarketMakerAgentView } from "../components/options/MarketMakerAgentView";
 import { TabGuide } from "../components/TabGuide";
 
-type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte" | "vpin" | "sor" | "gex" | "lob";
+type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte" | "vpin" | "sor" | "gex" | "lob" | "copula" | "mm";
 
 export function OptionsChain() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -205,6 +207,8 @@ export function OptionsChain() {
           { key: "puts", label: "Puts" },
           { key: "gex", label: "📊 GEX Profile" },
           { key: "lob", label: "🪜 LOB Depth" },
+          { key: "copula", label: "🔗 Copula" },
+          { key: "mm", label: "🤖 MM Agent" },
           { key: "forecast", label: "🎯 Vol Scanner" },
           { key: "gamma", label: "⚡ Gamma Scalp" },
           { key: "dispersion", label: "🌐 Dispersion" },
@@ -243,7 +247,11 @@ export function OptionsChain() {
       <div style={{ flex: 1, overflowY: "auto", padding: 16, paddingBottom: (selectedLegs.length > 0 || isStockTradeOpen) ? 350 : 16 }}>
         <TabGuide tabKey="options-chain" />
         
-        {activeTab === "gex" ? (
+        {activeTab === "copula" ? (
+          <CopulaSpreadView initialPair={`${ticker || "SPY"}/QQQ`} />
+        ) : activeTab === "mm" ? (
+          <MarketMakerAgentView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />
+        ) : activeTab === "gex" ? (
           <GexProfileView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />
         ) : activeTab === "lob" ? (
           <LobDepthView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />

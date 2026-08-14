@@ -4738,3 +4738,87 @@ export interface LobQueueSimulationResponse {
   market_depth_summary: string;
   as_of?: string;
 }
+
+export type CopulaFamily = "Clayton" | "Gumbel" | "Frank" | "Gaussian" | "Student-t";
+
+export interface CopulaTailData {
+  lower_tail_dependence: number;
+  upper_tail_dependence: number;
+  copula_family: CopulaFamily;
+  theta: number;
+  log_likelihood: number;
+  aic: number;
+  kendall_tau: number;
+}
+
+export interface CopulaSeriesPoint {
+  date: string;
+  asset_x_price: number;
+  asset_y_price: number;
+  kalman_beta: number;
+  spread: number;
+  spread_z_score: number;
+  upper_band_2sigma: number;
+  lower_band_2sigma: number;
+}
+
+export interface CopulaPairsResponse {
+  pair: string;
+  asset_x: string;
+  asset_y: string;
+  copula_family: CopulaFamily;
+  tail_dependence: CopulaTailData;
+  kalman_beta: number;
+  kalman_alpha: number;
+  ou_half_life_days: number;
+  spread_z_score: number;
+  current_spread: number;
+  signal_action: "LONG_SPREAD" | "SHORT_SPREAD" | "HOLD" | "EXIT";
+  historical_series: CopulaSeriesPoint[];
+  as_of?: string;
+  status_note?: string;
+}
+
+export interface MarketMakerStepPoint {
+  step: number;
+  time_sec: number;
+  mid_price: number;
+  reservation_price: number;
+  bid_price: number;
+  ask_price: number;
+  bid_spread: number;
+  ask_spread: number;
+  inventory: number;
+  cash: number;
+  pnl: number;
+  trade_event?: "BUY" | "SELL" | null;
+}
+
+export interface MarketMakerSimRequest {
+  symbol: string;
+  spot_price?: number;
+  risk_aversion_gamma?: number;
+  order_flow_intensity_kappa?: number;
+  volatility_sigma?: number;
+  time_horizon_t?: number;
+  time_steps?: number;
+  max_inventory?: number;
+  order_size?: number;
+}
+
+export interface MarketMakerSimResponse {
+  symbol: string;
+  risk_aversion_gamma: number;
+  order_flow_intensity_kappa: number;
+  volatility_sigma: number;
+  max_inventory: number;
+  final_pnl: number;
+  sharpe_ratio: number;
+  max_drawdown: number;
+  total_trades: number;
+  fill_rate: number;
+  final_inventory: number;
+  avg_spread: number;
+  steps: MarketMakerStepPoint[];
+  as_of?: string;
+}

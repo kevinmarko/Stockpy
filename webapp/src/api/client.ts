@@ -182,6 +182,9 @@ import type {
   GexProfileResponse,
   LobQueueSimulationRequest,
   LobQueueSimulationResponse,
+  CopulaPairsResponse,
+  MarketMakerSimRequest,
+  MarketMakerSimResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -1113,6 +1116,15 @@ const liveApi = {
     http<GexProfileResponse>(`/pilots/options/gex/profile?symbol=${encodeURIComponent(symbol)}`),
   simulateLobQueue: (request: LobQueueSimulationRequest) =>
     http<LobQueueSimulationResponse>("/pilots/options/lob/simulate-queue", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getCopulaPairsAnalysis: (pair?: string) => {
+    const q = pair ? `?pair=${encodeURIComponent(pair)}` : "";
+    return http<CopulaPairsResponse>(`/pilots/options/copula/pairs${q}`);
+  },
+  simulateMarketMakerAgent: (request: MarketMakerSimRequest) =>
+    http<MarketMakerSimResponse>("/pilots/options/market-maker/simulate", {
       method: "POST",
       body: JSON.stringify(request),
     }),
