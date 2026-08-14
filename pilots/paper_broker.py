@@ -38,3 +38,34 @@ def get_positions() -> List[Dict[str, Any]]:
 def get_orders(status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
     store = PaperAccountStore(readonly=True)
     return store.get_full_orders(status=status, limit=limit)
+
+def execute_paper_order(
+    symbol: str,
+    *,
+    asset_type: str = "option",
+    side: str = "buy",
+    quantity: Optional[float] = None,
+    dollar_amount: Optional[float] = None,
+    order_type: str = "market",
+    limit_price: Optional[float] = None,
+    expiration: Optional[str] = None,
+    legs: Optional[List[Dict[str, Any]]] = None,
+    is_live: bool = False
+) -> Dict[str, Any]:
+    """
+    Executes a paper order for stock or options, updating PaperAccountStore.
+    Delegates directly to pilots.paper_broker_options_order.execute_paper_order.
+    """
+    from pilots.paper_broker_options_order import execute_paper_order as _exec_order
+    return _exec_order(
+        symbol=symbol,
+        asset_type=asset_type,
+        side=side,
+        quantity=quantity,
+        dollar_amount=dollar_amount,
+        order_type=order_type,
+        limit_price=limit_price,
+        expiration=expiration,
+        legs=legs,
+        is_live=is_live,
+    )

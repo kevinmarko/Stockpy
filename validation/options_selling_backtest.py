@@ -70,12 +70,46 @@ Nothing here reimplements options pricing or strike selection — every
 leg's strike and price comes from the REAL, already-existing
 ``technical_options_engine.OptionsPricingRecommender`` (the exact class the
 live pipeline uses), reused as-is.
+
+IMPLEMENTATION NOTE (2026-08) -- shared MTM helper + process-local cycle-plan
+cache
+--------------------------------------------------------------------------
+Two internal refactors, both behavior-preserving (verified via a
+byte-for-byte regression test in ``tests/test_options_selling_backtest_stress.py``),
+neither changing any public function signature:
+
+1. **Shared per-day mark-to-market/stop-loss loop** (``_simulate_leg_mtm_pnl``):
+   every one of the 6 strategy branches in ``simulate_options_strategy_returns``
+   used to repeat its own ~25-40 line copy of the same Black-Scholes
+   mark-to-market + stop-loss skeleton. All 6 daily P&L formulas reduce to one
+   expression -- ``cost_to_close = sum(short-leg prices) - sum(long-leg
+   prices)``; ``pnl = stock_pnl + (net_premium_raw - cost_to_close) * 100`` --
+   so each branch now only computes its own leg-count/premium guard and its
+   own ``max_risk``/stop-loss-threshold formula (those three genuinely differ
+   per strategy) before delegating to the shared helper.
+2. **Process-local cycle-plan cache** (``_get_cycle_plan`` /
+   ``_CYCLE_PLAN_CACHE``): the expensive, strategy-INDEPENDENT part of the
+   simulation -- the GJR-GARCH fit, IVR/VRP proxies, real macro DTO
+   reconstruction, and the ONE ``generate_strategy_pricing_matrix()`` call
+   made per ~21-trading-day cycle -- is identical regardless of which of the
+   6 strategies is ultimately being asked about. ``scripts/refresh_validations.py``'s
+   6 options-selling ``STRATEGY_REGISTRY`` adapters each independently walk
+   the SAME ``(ticker, start, end)`` window, so without this cache a full
+   registry sweep repeated that work up to 6x. ``_compute_cycle_plan`` is
+   memoized on ``(ticker, start_date, end_date, sha256(closes content))`` --
+   content-based, not identity-based, so it can never silently reuse the
+   wrong plan for two calls that share a nominal window but different
+   underlying price data. The cache is process-local and never evicted
+   mid-run, matching ``scripts/refresh_validations.py``'s short-lived-CLI-
+   process lifetime.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
-from typing import Dict, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -286,6 +320,326 @@ def _download_spy_closes(start: str, end: str, ticker: str) -> pd.Series:
         return pd.Series(dtype=float)
 
 
+# =============================================================================
+# Finding A: shared per-day mark-to-market + stop-loss loop
+# =============================================================================
+
+@dataclass(frozen=True)
+class _OptionLeg:
+    """One option leg's static per-cycle identity, consumed by
+    ``_simulate_leg_mtm_pnl``'s shared mark-to-market loop.
+    """
+
+    side: str          # "long" | "short"
+    option_type: str   # "call" | "put"
+    strike: float
+
+
+def _simulate_leg_mtm_pnl(
+    ohlcv: pd.DataFrame,
+    cycle_dates: pd.DatetimeIndex,
+    legs: Sequence[_OptionLeg],
+    sigma: float,
+    net_premium: float,
+    max_risk: float,
+    stop_loss_threshold: float,
+    *,
+    entry_spot: Optional[float] = None,
+) -> Dict[pd.Timestamp, float]:
+    """Shared per-day Black-Scholes mark-to-market + stop-loss loop, factored
+    out of what used to be 6 near-identical ~25-40 line branches in
+    ``simulate_options_strategy_returns`` (one per options-selling strategy).
+
+    Every one of the 6 strategies' bespoke daily P&L formula reduces
+    algebraically to the SAME expression here::
+
+        cost_to_close  = sum(price for SHORT legs) - sum(price for LONG legs)
+        stock_pnl      = (spot_t - entry_spot) * 100.0   [only when entry_spot is given]
+        cumulative_pnl = stock_pnl + (net_premium - cost_to_close) * 100.0
+
+    See ``tests/test_options_selling_backtest_stress.py::TestSharedMtmHelperByteIdentical``
+    for the byte-for-byte proof against the pre-refactor per-branch
+    implementations, and each call site below for the per-strategy
+    derivation:
+
+      * Credit spreads (Put/Call Credit Spread, Iron Condor): ``net_premium``
+        is the raw credit received (positive); ``cost_to_close`` is exactly
+        the mtm-short-minus-mtm-long formula each of those branches computed
+        directly before this refactor.
+      * Debit spreads (Call/Put Debit Spread): ``net_premium`` here is the
+        RAW (negative) ``Net_Premium`` straight from the directive -- i.e.
+        ``-net_debit``, NOT ``abs(net_premium)`` (callers still compute
+        ``net_debit = abs(net_premium)`` separately, but only for their
+        ``max_risk``/validity guard). ``position_value = mtm_long - mtm_short
+        == -cost_to_close``, so ``(position_value - net_debit) ==
+        (net_premium - cost_to_close)`` -- the identical expression.
+      * Covered Call: ``entry_spot`` is supplied (the only strategy with a
+        stock leg) and ``legs`` holds a single short call, collapsing
+        ``stock_pnl + short_pnl`` into this same formula.
+
+    ``max_risk``/``stop_loss_threshold`` are computed by the caller (they
+    differ by strategy -- see ``STOP_LOSS_CREDIT_MULTIPLE`` /
+    ``STOP_LOSS_DEBIT_RATIO`` / ``STOP_LOSS_COVERED_CALL_RATIO`` at module
+    top) and passed in as an absolute-dollar loss threshold; this helper only
+    ever compares ``-cumulative_pnl`` against it.
+    """
+    daily_returns: Dict[pd.Timestamp, float] = {}
+    cumulative_pnl = 0.0
+    stop_triggered = False
+
+    for i, d in enumerate(cycle_dates):
+        if stop_triggered:
+            daily_returns[d] = 0.0
+            continue
+
+        spot_t = float(ohlcv.loc[d, "Close"])
+        days_remaining = max(TARGET_DTE - i, 1)
+        T = days_remaining / 365.0
+        leg_pricer = OptionsPricingRecommender(stock_price=spot_t)
+
+        short_sum = 0.0
+        long_sum = 0.0
+        for leg in legs:
+            price = leg_pricer.black_scholes_pricing_and_greeks(
+                leg.strike, T, sigma, leg.option_type
+            )["Price"]
+            if leg.side == "short":
+                short_sum += price
+            else:
+                long_sum += price
+        cost_to_close = short_sum - long_sum
+
+        stock_pnl = (spot_t - entry_spot) * 100.0 if entry_spot is not None else 0.0
+        new_cumulative_pnl = stock_pnl + (net_premium - cost_to_close) * 100.0
+        daily_pnl = new_cumulative_pnl - cumulative_pnl
+        daily_returns[d] = daily_pnl / max_risk
+        cumulative_pnl = new_cumulative_pnl
+
+        if -cumulative_pnl > stop_loss_threshold:
+            stop_triggered = True
+
+    return daily_returns
+
+
+# =============================================================================
+# Finding B: process-local cycle-plan cache
+# =============================================================================
+
+@dataclass(frozen=True, eq=False)
+class _CycleEntry:
+    """One cycle's worth of the strategy-INDEPENDENT computation:
+    ``kind="warmup"`` (a single pre-``WARMUP_TRADING_DAYS`` calendar day),
+    ``kind="flat"`` (a full cycle where GARCH/IVR/VRP computation failed --
+    NaN sentinel, CONSTRAINT #4), or ``kind="priced"`` (a real cycle carrying
+    the computed ``rec_strategy``/``directive``/``sigma``/``entry_spot``).
+    ``eq=False`` because the default dataclass ``__eq__`` would attempt
+    elementwise ``==`` on the ``pd.DatetimeIndex``/dict fields, which is
+    ambiguous -- nothing in this module ever compares two entries.
+    """
+
+    entry_date: pd.Timestamp
+    cycle_dates: pd.DatetimeIndex
+    kind: str
+    rec_strategy: Optional[str] = None
+    directive: Optional[dict] = None
+    sigma: float = float("nan")
+    entry_spot: float = float("nan")
+
+
+@dataclass(frozen=True, eq=False)
+class _CyclePlan:
+    """The cached, strategy-independent output of ``_compute_cycle_plan``:
+    the proxy OHLCV panel plus the ordered list of per-cycle entries spanning
+    ``[start, end]``. ``eq=False`` for the same reason as ``_CycleEntry``
+    (contains a ``pd.DataFrame`` field).
+    """
+
+    ohlcv: pd.DataFrame
+    entries: List[_CycleEntry] = field(default_factory=list)
+
+
+_CYCLE_PLAN_CACHE: Dict[Tuple[str, str, str, str], _CyclePlan] = {}
+
+
+def _closes_fingerprint(closes: pd.Series) -> str:
+    """Deterministic content fingerprint of a Close-price Series, used only
+    for cache-keying ``_compute_cycle_plan``'s result. Content-based (not
+    identity-based, and not merely ``(ticker, start, end)``) so the cache can
+    never silently reuse a stale/wrong cycle plan for two calls that share a
+    nominal date range but carry different underlying price data (e.g. two
+    independent yfinance downloads of the same window, or a live download vs.
+    a test's synthetic fixture) -- the worst case of a fingerprint mismatch is
+    one extra (correct) recomputation, never a wrong answer.
+    """
+    idx_bytes = np.asarray(closes.index.values).tobytes()
+    val_bytes = np.asarray(closes.to_numpy(), dtype=np.float64).tobytes()
+    return hashlib.sha256(idx_bytes + val_bytes).hexdigest()
+
+
+def _cycle_plan_cache_key(
+    ticker: str, start: str, end: str, closes: pd.Series
+) -> Tuple[str, str, str, str]:
+    return (
+        ticker,
+        str(pd.Timestamp(start).date()),
+        str(pd.Timestamp(end).date()),
+        _closes_fingerprint(closes),
+    )
+
+
+def _compute_cycle_plan(ticker: str, start: str, end: str, closes: pd.Series) -> _CyclePlan:
+    """The expensive, strategy-independent per-cycle computation shared by
+    all 6 ``simulate_*_returns`` wrappers -- the GJR-GARCH fit, IVR/VRP
+    proxies, real macro DTO reconstruction, and ONE
+    ``generate_strategy_pricing_matrix()`` call per ~21-trading-day cycle.
+    This is exactly ``simulate_options_strategy_returns``'s original
+    ``while pos < n`` loop body, stopping right before the per-strategy
+    dispatch (which stays in ``simulate_options_strategy_returns`` itself,
+    since matching/guard/max_risk logic IS strategy-specific). Cached by
+    ``_get_cycle_plan`` -- see this module's own docstring's "IMPLEMENTATION
+    NOTE" section for why.
+    """
+    from data.historical_store import HistoricalStore
+
+    ohlcv = _proxy_ohlcv(closes)
+    if ohlcv.empty:
+        return _CyclePlan(ohlcv=ohlcv, entries=[])
+
+    requested_start = pd.Timestamp(start)
+    requested_end = pd.Timestamp(end)
+    in_window = ohlcv.index[(ohlcv.index >= requested_start) & (ohlcv.index <= requested_end)]
+    if in_window.empty:
+        return _CyclePlan(ohlcv=ohlcv, entries=[])
+
+    store = HistoricalStore()
+    vix = store.get_macro("VIXCLS")
+    t10y2y = store.get_macro("T10Y2Y")
+    credit_spread = store.get_macro("BAMLH0A0HYM2")
+    unrate = store.get_macro("UNRATE")
+
+    toe = TechnicalOptionsEngine()
+
+    first_pos = ohlcv.index.get_loc(in_window[0])
+    n = len(ohlcv)
+    entries: List[_CycleEntry] = []
+
+    pos = first_pos
+    while pos < n and ohlcv.index[pos] <= requested_end:
+        if pos < WARMUP_TRADING_DAYS:
+            entries.append(_CycleEntry(
+                entry_date=ohlcv.index[pos],
+                cycle_dates=ohlcv.index[pos:pos + 1],
+                kind="warmup",
+            ))
+            pos += 1
+            continue
+
+        cycle_end_pos = min(pos + CYCLE_TRADING_DAYS, n)
+        cycle_dates = ohlcv.index[pos:cycle_end_pos]
+
+        trailing = ohlcv.iloc[: pos + 1]
+        entry_spot = float(trailing["Close"].iloc[-1])
+        entry_date = trailing.index[-1]
+
+        try:
+            garch_vol = toe.estimate_gjr_garch_volatility(trailing)
+            ivr_proxy = toe.calculate_realized_vol_rank(trailing, garch_vol)
+            long_term_returns = trailing["Close"].pct_change().dropna().tail(LONG_TERM_VOL_WINDOW)
+            iv_proxy = (
+                float(long_term_returns.std() * np.sqrt(252))
+                if len(long_term_returns) >= LONG_TERM_VOL_WINDOW
+                else float("nan")
+            )
+            vrp_proxy = get_vrp(ticker, current_iv=iv_proxy, garch_vol=garch_vol)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("options_selling_backtest: vol estimate failed at %s: %s", entry_date, exc)
+            garch_vol, ivr_proxy, vrp_proxy = float("nan"), float("nan"), float("nan")
+
+        macro_dto = _reconstruct_macro_for_dates(
+            [entry_date], vix, t10y2y, credit_spread, unrate
+        ).get(entry_date)
+
+        # A genuine data/computation failure (NaN garch_vol/ivr_proxy/vrp_proxy,
+        # e.g. from the except-branch above) must keep the cycle flat rather
+        # than fabricate a default input into the pricing engine (CONSTRAINT
+        # #4) -- a fabricated true_ivr/current_iv can otherwise open a real
+        # position, and vrp=None SKIPS generate_strategy_pricing_matrix's own
+        # VRP gate entirely instead of blocking premium selling.
+        if pd.isna(garch_vol) or pd.isna(ivr_proxy) or pd.isna(vrp_proxy):
+            entries.append(_CycleEntry(
+                entry_date=entry_date,
+                cycle_dates=cycle_dates,
+                kind="flat",
+                entry_spot=entry_spot,
+            ))
+            pos = cycle_end_pos
+            continue
+
+        # Determine trend bias from trailing SMA50
+        if len(trailing) >= 50:
+            sma50 = float(trailing["Close"].tail(50).mean())
+        else:
+            sma50 = float(trailing["Close"].mean())
+
+        if entry_spot > sma50 * 1.01:
+            trend_bias = "Bullish"
+        elif entry_spot < sma50 * 0.99:
+            trend_bias = "Bearish"
+        else:
+            trend_bias = "Neutral"
+
+        recommender = OptionsPricingRecommender(stock_price=entry_spot)
+        directive = recommender.generate_strategy_pricing_matrix(
+            true_ivr=float(ivr_proxy),
+            current_iv=float(garch_vol),
+            trend_bias=trend_bias,
+            target_dte=TARGET_DTE,
+            vrp=float(vrp_proxy),
+            macro_dto=macro_dto,
+        )
+        rec_strategy = directive.get("Strategy", "Cash")
+        sigma = float(garch_vol) if not pd.isna(garch_vol) and garch_vol > 0 else 0.20
+
+        entries.append(_CycleEntry(
+            entry_date=entry_date,
+            cycle_dates=cycle_dates,
+            kind="priced",
+            rec_strategy=rec_strategy,
+            directive=directive,
+            sigma=sigma,
+            entry_spot=entry_spot,
+        ))
+        pos = cycle_end_pos
+
+    return _CyclePlan(ohlcv=ohlcv, entries=entries)
+
+
+def _get_cycle_plan(ticker: str, start: str, end: str, closes: pd.Series) -> _CyclePlan:
+    """Cache-wrapped ``_compute_cycle_plan`` -- the single choke point every
+    ``simulate_*_returns`` wrapper reaches, so a ``refresh_validations.py``
+    sweep across all 6 options-selling ``STRATEGY_REGISTRY`` adapters (or a
+    repeated call within one process, e.g. a stress-window pass revisiting a
+    window an earlier pass already computed) pays this module's expensive
+    per-cycle computation once, not once per adapter.
+    """
+    key = _cycle_plan_cache_key(ticker, start, end, closes)
+    cached = _CYCLE_PLAN_CACHE.get(key)
+    if cached is not None:
+        return cached
+    plan = _compute_cycle_plan(ticker, start, end, closes)
+    _CYCLE_PLAN_CACHE[key] = plan
+    return plan
+
+
+def _reset_cycle_plan_cache() -> None:
+    """Test-only utility: clears the process-local cycle-plan cache. Never
+    called by production code -- ``refresh_validations.py`` is a short-lived
+    CLI invocation where the cache's lifetime is naturally bounded by the
+    process, so nothing in this module needs to invalidate it mid-run.
+    """
+    _CYCLE_PLAN_CACHE.clear()
+
+
 def simulate_options_strategy_returns(
     strategy_name: str,
     start: str,
@@ -324,8 +678,6 @@ def simulate_options_strategy_returns(
     pd.Series
         Daily returns series indexed by date.
     """
-    from data.historical_store import HistoricalStore
-
     target_strategy = None
     if strategy_name:
         clean_name = strategy_name.lower().strip()
@@ -338,111 +690,40 @@ def simulate_options_strategy_returns(
     if closes is None or closes.empty:
         return pd.Series(dtype=float)
 
-    ohlcv = _proxy_ohlcv(closes)
-    if ohlcv.empty:
+    plan = _get_cycle_plan(ticker, start, end, closes)
+    if not plan.entries:
         return pd.Series(dtype=float)
 
-    requested_start = pd.Timestamp(start)
-    requested_end = pd.Timestamp(end)
-    in_window = ohlcv.index[(ohlcv.index >= requested_start) & (ohlcv.index <= requested_end)]
-    if in_window.empty:
-        return pd.Series(dtype=float)
-
-    store = HistoricalStore()
-    vix = store.get_macro("VIXCLS")
-    t10y2y = store.get_macro("T10Y2Y")
-    credit_spread = store.get_macro("BAMLH0A0HYM2")
-    unrate = store.get_macro("UNRATE")
-
-    toe = TechnicalOptionsEngine()
-
-    first_pos = ohlcv.index.get_loc(in_window[0])
-    n = len(ohlcv)
+    ohlcv = plan.ohlcv
     daily_returns: Dict[pd.Timestamp, float] = {}
 
-    pos = first_pos
-    while pos < n and ohlcv.index[pos] <= requested_end:
-        if pos < WARMUP_TRADING_DAYS:
-            daily_returns[ohlcv.index[pos]] = 0.0
-            pos += 1
-            continue
+    for entry in plan.entries:
+        cycle_dates = entry.cycle_dates
 
-        cycle_end_pos = min(pos + CYCLE_TRADING_DAYS, n)
-        cycle_dates = ohlcv.index[pos:cycle_end_pos]
-
-        trailing = ohlcv.iloc[: pos + 1]
-        entry_spot = float(trailing["Close"].iloc[-1])
-        entry_date = trailing.index[-1]
-
-        try:
-            garch_vol = toe.estimate_gjr_garch_volatility(trailing)
-            ivr_proxy = toe.calculate_realized_vol_rank(trailing, garch_vol)
-            long_term_returns = trailing["Close"].pct_change().dropna().tail(LONG_TERM_VOL_WINDOW)
-            iv_proxy = (
-                float(long_term_returns.std() * np.sqrt(252))
-                if len(long_term_returns) >= LONG_TERM_VOL_WINDOW
-                else float("nan")
-            )
-            vrp_proxy = get_vrp(ticker, current_iv=iv_proxy, garch_vol=garch_vol)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("options_selling_backtest: vol estimate failed at %s: %s", entry_date, exc)
-            garch_vol, ivr_proxy, vrp_proxy = float("nan"), float("nan"), float("nan")
-
-        macro_dto = _reconstruct_macro_for_dates(
-            [entry_date], vix, t10y2y, credit_spread, unrate
-        ).get(entry_date)
-
-        # A genuine data/computation failure (NaN garch_vol/ivr_proxy/vrp_proxy,
-        # e.g. from the except-branch above) must keep the cycle flat rather
-        # than fabricate a default input into the pricing engine (CONSTRAINT
-        # #4) -- a fabricated true_ivr/current_iv can otherwise open a real
-        # position, and vrp=None SKIPS generate_strategy_pricing_matrix's own
-        # VRP gate entirely instead of blocking premium selling.
-        if pd.isna(garch_vol) or pd.isna(ivr_proxy) or pd.isna(vrp_proxy):
+        if entry.kind != "priced":
+            # "warmup" (pre-WARMUP_TRADING_DAYS) or "flat" (a genuine GARCH/
+            # IVR/VRP computation failure -- CONSTRAINT #4, never fabricate a
+            # default input into the pricing engine).
             for d in cycle_dates:
                 daily_returns[d] = 0.0
-            pos = cycle_end_pos
             continue
 
-        # Determine trend bias from trailing SMA50
-        if len(trailing) >= 50:
-            sma50 = float(trailing["Close"].tail(50).mean())
-        else:
-            sma50 = float(trailing["Close"].mean())
-
-        if entry_spot > sma50 * 1.01:
-            trend_bias = "Bullish"
-        elif entry_spot < sma50 * 0.99:
-            trend_bias = "Bearish"
-        else:
-            trend_bias = "Neutral"
-
-        recommender = OptionsPricingRecommender(stock_price=entry_spot)
-        directive = recommender.generate_strategy_pricing_matrix(
-            true_ivr=float(ivr_proxy),
-            current_iv=float(garch_vol),
-            trend_bias=trend_bias,
-            target_dte=TARGET_DTE,
-            vrp=float(vrp_proxy),
-            macro_dto=macro_dto,
-        )
-
-        rec_strategy = directive.get("Strategy", "Cash")
+        rec_strategy = entry.rec_strategy
         if (target_strategy is not None and rec_strategy != target_strategy) or rec_strategy == "Cash":
             for d in cycle_dates:
                 daily_returns[d] = 0.0
-            pos = cycle_end_pos
             continue
 
+        directive = entry.directive
         legs = directive.get("Legs", [])
         net_premium = float(directive.get("Net_Premium", 0.0))
-        sigma = float(garch_vol) if not pd.isna(garch_vol) and garch_vol > 0 else 0.20
+        sigma = entry.sigma
+        entry_spot = entry.entry_spot
 
         if rec_strategy == "Put Credit Spread":
             if len(legs) != 2 or net_premium <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
             k_short_put = float(legs[0]["Strike"])
             k_long_put = float(legs[1]["Strike"])
@@ -451,34 +732,20 @@ def simulate_options_strategy_returns(
             if max_risk <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
-
-            cumulative_pnl = 0.0
-            stop_triggered = False
-            for i, d in enumerate(cycle_dates):
-                if stop_triggered:
-                    daily_returns[d] = 0.0
-                    continue
-                spot_t = float(ohlcv.loc[d, "Close"])
-                days_remaining = max(TARGET_DTE - i, 1)
-                T = days_remaining / 365.0
-                leg_pricer = OptionsPricingRecommender(stock_price=spot_t)
-                mtm_short = leg_pricer.black_scholes_pricing_and_greeks(k_short_put, T, sigma, "put")["Price"]
-                mtm_long = leg_pricer.black_scholes_pricing_and_greeks(k_long_put, T, sigma, "put")["Price"]
-                cost_to_close = mtm_short - mtm_long
-                new_cumulative_pnl = (net_premium - cost_to_close) * 100.0
-                daily_pnl = new_cumulative_pnl - cumulative_pnl
-                daily_returns[d] = daily_pnl / max_risk
-                cumulative_pnl = new_cumulative_pnl
-                if -cumulative_pnl > STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0:
-                    stop_triggered = True
+            leg_list = [
+                _OptionLeg("short", "put", k_short_put),
+                _OptionLeg("long", "put", k_long_put),
+            ]
+            stop_loss_threshold = STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0
+            daily_returns.update(_simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+            ))
 
         elif rec_strategy == "Call Credit Spread":
             if len(legs) != 2 or net_premium <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
             k_short_call = float(legs[0]["Strike"])
             k_long_call = float(legs[1]["Strike"])
@@ -487,34 +754,20 @@ def simulate_options_strategy_returns(
             if max_risk <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
-
-            cumulative_pnl = 0.0
-            stop_triggered = False
-            for i, d in enumerate(cycle_dates):
-                if stop_triggered:
-                    daily_returns[d] = 0.0
-                    continue
-                spot_t = float(ohlcv.loc[d, "Close"])
-                days_remaining = max(TARGET_DTE - i, 1)
-                T = days_remaining / 365.0
-                leg_pricer = OptionsPricingRecommender(stock_price=spot_t)
-                mtm_short = leg_pricer.black_scholes_pricing_and_greeks(k_short_call, T, sigma, "call")["Price"]
-                mtm_long = leg_pricer.black_scholes_pricing_and_greeks(k_long_call, T, sigma, "call")["Price"]
-                cost_to_close = mtm_short - mtm_long
-                new_cumulative_pnl = (net_premium - cost_to_close) * 100.0
-                daily_pnl = new_cumulative_pnl - cumulative_pnl
-                daily_returns[d] = daily_pnl / max_risk
-                cumulative_pnl = new_cumulative_pnl
-                if -cumulative_pnl > STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0:
-                    stop_triggered = True
+            leg_list = [
+                _OptionLeg("short", "call", k_short_call),
+                _OptionLeg("long", "call", k_long_call),
+            ]
+            stop_loss_threshold = STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0
+            daily_returns.update(_simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+            ))
 
         elif rec_strategy == "Iron Condor":
             if len(legs) != 4 or net_premium <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
             k_short_put = float(legs[0]["Strike"])
             k_long_put = float(legs[1]["Strike"])
@@ -526,38 +779,23 @@ def simulate_options_strategy_returns(
             if max_risk <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
-
-            cumulative_pnl = 0.0
-            stop_triggered = False
-            for i, d in enumerate(cycle_dates):
-                if stop_triggered:
-                    daily_returns[d] = 0.0
-                    continue
-                spot_t = float(ohlcv.loc[d, "Close"])
-                days_remaining = max(TARGET_DTE - i, 1)
-                T = days_remaining / 365.0
-                leg_pricer = OptionsPricingRecommender(stock_price=spot_t)
-                mtm_short_put = leg_pricer.black_scholes_pricing_and_greeks(k_short_put, T, sigma, "put")["Price"]
-                mtm_long_put = leg_pricer.black_scholes_pricing_and_greeks(k_long_put, T, sigma, "put")["Price"]
-                mtm_short_call = leg_pricer.black_scholes_pricing_and_greeks(k_short_call, T, sigma, "call")["Price"]
-                mtm_long_call = leg_pricer.black_scholes_pricing_and_greeks(k_long_call, T, sigma, "call")["Price"]
-
-                cost_to_close = (mtm_short_put - mtm_long_put) + (mtm_short_call - mtm_long_call)
-                new_cumulative_pnl = (net_premium - cost_to_close) * 100.0
-                daily_pnl = new_cumulative_pnl - cumulative_pnl
-                daily_returns[d] = daily_pnl / max_risk
-                cumulative_pnl = new_cumulative_pnl
-                if -cumulative_pnl > STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0:
-                    stop_triggered = True
+            leg_list = [
+                _OptionLeg("short", "put", k_short_put),
+                _OptionLeg("long", "put", k_long_put),
+                _OptionLeg("short", "call", k_short_call),
+                _OptionLeg("long", "call", k_long_call),
+            ]
+            stop_loss_threshold = STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0
+            daily_returns.update(_simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+            ))
 
         elif rec_strategy == "Call Debit Spread":
             net_debit = abs(net_premium)
             if len(legs) != 2 or net_debit <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
             k_long_call = float(legs[0]["Strike"])
             k_short_call = float(legs[1]["Strike"])
@@ -565,35 +803,21 @@ def simulate_options_strategy_returns(
             if max_risk <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
-
-            cumulative_pnl = 0.0
-            stop_triggered = False
-            for i, d in enumerate(cycle_dates):
-                if stop_triggered:
-                    daily_returns[d] = 0.0
-                    continue
-                spot_t = float(ohlcv.loc[d, "Close"])
-                days_remaining = max(TARGET_DTE - i, 1)
-                T = days_remaining / 365.0
-                leg_pricer = OptionsPricingRecommender(stock_price=spot_t)
-                mtm_long = leg_pricer.black_scholes_pricing_and_greeks(k_long_call, T, sigma, "call")["Price"]
-                mtm_short = leg_pricer.black_scholes_pricing_and_greeks(k_short_call, T, sigma, "call")["Price"]
-                position_value = mtm_long - mtm_short
-                new_cumulative_pnl = (position_value - net_debit) * 100.0
-                daily_pnl = new_cumulative_pnl - cumulative_pnl
-                daily_returns[d] = daily_pnl / max_risk
-                cumulative_pnl = new_cumulative_pnl
-                if -cumulative_pnl > STOP_LOSS_DEBIT_RATIO * max_risk:
-                    stop_triggered = True
+            leg_list = [
+                _OptionLeg("long", "call", k_long_call),
+                _OptionLeg("short", "call", k_short_call),
+            ]
+            stop_loss_threshold = STOP_LOSS_DEBIT_RATIO * max_risk
+            daily_returns.update(_simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+            ))
 
         elif rec_strategy == "Put Debit Spread":
             net_debit = abs(net_premium)
             if len(legs) != 2 or net_debit <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
             k_long_put = float(legs[0]["Strike"])
             k_short_put = float(legs[1]["Strike"])
@@ -601,68 +825,37 @@ def simulate_options_strategy_returns(
             if max_risk <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
-
-            cumulative_pnl = 0.0
-            stop_triggered = False
-            for i, d in enumerate(cycle_dates):
-                if stop_triggered:
-                    daily_returns[d] = 0.0
-                    continue
-                spot_t = float(ohlcv.loc[d, "Close"])
-                days_remaining = max(TARGET_DTE - i, 1)
-                T = days_remaining / 365.0
-                leg_pricer = OptionsPricingRecommender(stock_price=spot_t)
-                mtm_long = leg_pricer.black_scholes_pricing_and_greeks(k_long_put, T, sigma, "put")["Price"]
-                mtm_short = leg_pricer.black_scholes_pricing_and_greeks(k_short_put, T, sigma, "put")["Price"]
-                position_value = mtm_long - mtm_short
-                new_cumulative_pnl = (position_value - net_debit) * 100.0
-                daily_pnl = new_cumulative_pnl - cumulative_pnl
-                daily_returns[d] = daily_pnl / max_risk
-                cumulative_pnl = new_cumulative_pnl
-                if -cumulative_pnl > STOP_LOSS_DEBIT_RATIO * max_risk:
-                    stop_triggered = True
+            leg_list = [
+                _OptionLeg("long", "put", k_long_put),
+                _OptionLeg("short", "put", k_short_put),
+            ]
+            stop_loss_threshold = STOP_LOSS_DEBIT_RATIO * max_risk
+            daily_returns.update(_simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+            ))
 
         elif rec_strategy == "Covered Call":
             if len(legs) != 1 or net_premium <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
             k_short_call = float(legs[0]["Strike"])
             max_risk = max((entry_spot - net_premium) * 100.0, entry_spot * 10.0)
             if max_risk <= 0.0:
                 for d in cycle_dates:
                     daily_returns[d] = 0.0
-                pos = cycle_end_pos
                 continue
-
-            cumulative_pnl = 0.0
-            stop_triggered = False
-            for i, d in enumerate(cycle_dates):
-                if stop_triggered:
-                    daily_returns[d] = 0.0
-                    continue
-                spot_t = float(ohlcv.loc[d, "Close"])
-                days_remaining = max(TARGET_DTE - i, 1)
-                T = days_remaining / 365.0
-                leg_pricer = OptionsPricingRecommender(stock_price=spot_t)
-                mtm_short = leg_pricer.black_scholes_pricing_and_greeks(k_short_call, T, sigma, "call")["Price"]
-                stock_pnl = (spot_t - entry_spot) * 100.0
-                short_pnl = (net_premium - mtm_short) * 100.0
-                new_cumulative_pnl = stock_pnl + short_pnl
-                daily_pnl = new_cumulative_pnl - cumulative_pnl
-                daily_returns[d] = daily_pnl / max_risk
-                cumulative_pnl = new_cumulative_pnl
-                if -cumulative_pnl > STOP_LOSS_COVERED_CALL_RATIO * max_risk:
-                    stop_triggered = True
+            leg_list = [_OptionLeg("short", "call", k_short_call)]
+            stop_loss_threshold = STOP_LOSS_COVERED_CALL_RATIO * max_risk
+            daily_returns.update(_simulate_leg_mtm_pnl(
+                ohlcv, cycle_dates, leg_list, sigma, net_premium, max_risk, stop_loss_threshold,
+                entry_spot=entry_spot,
+            ))
 
         else:
             for d in cycle_dates:
                 daily_returns[d] = 0.0
-
-        pos = cycle_end_pos
 
     idx = pd.DatetimeIndex(sorted(daily_returns.keys()))
     return pd.Series([daily_returns[d] for d in idx], index=idx, dtype=float)

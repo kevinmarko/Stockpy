@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `d8a37af7098849039980302bb065e1746fbed38b`
+- Measured at commit: `0304a3a1a2256027a61a36af2761b20e351e76de`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -142,7 +142,7 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
-- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **49**
+- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **50**
 - routes that mutate a setting: **22**
 
 Three *distinct* mutation mechanisms exist — a liveness model that only considers
@@ -217,7 +217,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **376** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **379** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 

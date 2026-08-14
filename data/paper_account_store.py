@@ -36,7 +36,7 @@ class PaperAccount(Base):
 class PaperPosition(Base):
     __tablename__ = 'paper_positions'
     
-    symbol = Column(String(10), primary_key=True)
+    symbol = Column(String(64), primary_key=True)
     qty = Column(Float, nullable=False)
     avg_entry_price = Column(Float, nullable=False)
 
@@ -46,7 +46,7 @@ class PaperOrder(Base):
     
     client_order_id = Column(String(100), primary_key=True)
     broker_order_id = Column(String(100), nullable=True)
-    symbol = Column(String(10), nullable=False)
+    symbol = Column(String(64), nullable=False)
     side = Column(String(10), nullable=False)
     qty = Column(Float, nullable=False)
     target_qty = Column(Float, nullable=True)
