@@ -1,23 +1,16 @@
-# Task Tracker: Phased Stock & Options Order Input & Execution System
+# Task: Accelerate Backtest Execution Performance
 
-- [x] **Phase 1: Core Sizing & Pricing Modules** <!-- id: p1 -->
-  - [x] Implement `pilots/price_provider.py` (real FMP fields: price, previousClose, dayLow, dayHigh) <!-- id: p1_1 -->
-  - [x] Implement `pilots/order_sizing.py` (dollar to contracts/shares, 75% cash cap calculation) <!-- id: p1_2 -->
-  - [x] Write unit tests: `tests/test_price_provider.py` and `tests/test_order_sizing.py` <!-- id: p1_3 -->
-  - [x] Verify Phase 1 tests pass (`8 passed`) <!-- id: p1_4 -->
-- [x] **Phase 2: Paper Broker Execution Engine** <!-- id: p2 -->
-  - [x] Implement `pilots/paper_broker_options_order.py` (stock and option order execution against PaperAccountStore) <!-- id: p2_1 -->
-  - [x] Update `pilots/paper_broker.py` to expose `execute_paper_order` <!-- id: p2_2 -->
-  - [x] Write unit tests in `tests/test_paper_broker_options_order.py` <!-- id: p2_3 -->
-  - [x] Verify Phase 2 tests pass (`24 passed across test suite`) <!-- id: p2_4 -->
-- [x] **Phase 3: REST API & Parity Layer** <!-- id: p3 -->
-  - [x] Add `OptionsOrderRequestModel` and route `POST /brokerage/options/order` in `api/pilots_api.py` <!-- id: p3_1 -->
-  - [x] Update `webapp/src/api/types.ts` with `OptionsOrderRequest` and `OptionsOrderResult` <!-- id: p3_2 -->
-  - [x] Update `webapp/src/api/mock.ts` with mock paper account mutation <!-- id: p3_3 -->
-  - [x] Run backend api tests `pytest tests/test_pilots_api.py` (`377 passed`) <!-- id: p3_4 -->
-- [x] **Phase 4: Frontend UI & Verification** <!-- id: p4 -->
-  - [x] Overhaul `webapp/src/components/options/OptionsOrderTicket.tsx` (sizing modes, 75% preset chip, limit/market, stock trading, cash validation, watchlist) <!-- id: p4_1 -->
-  - [x] Update `webapp/src/screens/OptionsChain.tsx` (Trade Stock action in banner) <!-- id: p4_2 -->
-  - [x] Run webapp typecheck (`npm run --prefix webapp typecheck` - `0 errors`) <!-- id: p4_3 -->
-  - [x] Run webapp unit tests (`npm test --prefix webapp` - `137 test files, 1547 passed`) <!-- id: p4_4 -->
-  - [x] Sync PR artifacts to `.claude/` <!-- id: p4_5 -->
+- [x] **Phase 1: Vectorize CombinatorialPurgedCV Splitting** <!-- id: p1 -->
+  - [x] Implement vectorized boolean mask splitting in `validation/purged_cv.py` <!-- id: p1_1 -->
+  - [x] Create `tests/test_purged_cv_vectorization.py` verifying exact split parity across index types <!-- id: p1_2 -->
+  - [x] Verify CPCV and MultiIndex test suite (`tests/test_cpcv_paths.py`, `tests/test_harness_multiindex_t1.py`) <!-- id: p1_3 -->
+- [x] **Phase 2: Optimize Strategy Slicing & Parallel Validation Runner** <!-- id: p2 -->
+  - [x] Optimize slice indexing in `_make_strategy_fn` in `scripts/refresh_validations.py` <!-- id: p2_1 -->
+  - [x] Implement `_validate_single_strategy` and `max_workers` concurrent execution in `run_validations` <!-- id: p2_2 -->
+  - [x] Add `--workers` flag to `scripts/refresh_validations.py` CLI <!-- id: p2_3 -->
+  - [x] Add unit tests for parallel worker execution in `tests/test_refresh_validations.py` <!-- id: p2_4 -->
+- [x] **Phase 3: Documentation & Verification** <!-- id: p3 -->
+  - [x] Update `docs/architecture/validation-and-signals.md` <!-- id: p3_1 -->
+  - [x] Update `CLAUDE.md` and `AGENTS.md` <!-- id: p3_2 -->
+  - [x] Run full test suite to ensure zero regressions <!-- id: p3_3 -->
+  - [x] Copy artifacts to `.claude/` <!-- id: p3_4 -->

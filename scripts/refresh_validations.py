@@ -118,6 +118,7 @@ Design constraints
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import logging
 import math
@@ -3035,6 +3036,14 @@ def _make_strategy_fn(
     ``params`` / ``train_returns`` / ``test_returns`` / ``turnover``.
     """
 
+    def _slice_returns(full_rets: pd.Series, target_idx: pd.Index) -> pd.Series:
+        if full_rets.index.equals(target_idx):
+            return full_rets
+        try:
+            return full_rets.loc[target_idx]
+        except KeyError:
+            return full_rets.loc[full_rets.index.intersection(target_idx)]
+
     def strategy_fn(
         X_train: pd.DataFrame,
         y_train: pd.Series,
@@ -3045,8 +3054,8 @@ def _make_strategy_fn(
         for name, full_rets in precomputed.items():
             configs.append({
                 "params": name,
-                "train_returns": full_rets.loc[full_rets.index.intersection(y_train.index)],
-                "test_returns": full_rets.loc[full_rets.index.intersection(y_test.index)],
+                "train_returns": _slice_returns(full_rets, y_train.index),
+                "test_returns": _slice_returns(full_rets, y_test.index),
                 "turnover": turnover,
             })
         return configs
@@ -3535,6 +3544,141 @@ def _load_ticker_sectors() -> Dict[str, str]:
 # Validation runner
 # =============================================================================
 
+def _validate_single_strategy(
+    name: str,
+    closes_df: pd.DataFrame,
+    shares: Dict[str, float],
+    output_dir: Path,
+    n_cpcv_splits: int,
+    n_test_splits: int,
+    cost_model: Any,
+) -> Tuple[str, dict]:
+    """Execute walk-forward validation for a single strategy.
+
+    Returns ``(strategy_id, summary_dict)``. Never raises (CONSTRAINT #6).
+    """
+    if name not in STRATEGY_REGISTRY:
+        logger.warning(
+            "Unknown strategy '%s' — skipping. Known strategies: %s",
+            name, sorted(STRATEGY_REGISTRY),
+        )
+        return name, {
+            "strategy_id": name,
+            "deployable": False,
+            "error": f"Not in STRATEGY_REGISTRY. Known: {sorted(STRATEGY_REGISTRY)}",
+            "report_date": date.today().isoformat(),
+        }
+
+    logger.info("Validating: %s", name)
+    try:
+        from validation.harness import StrategyValidationHarness
+
+        adapter_fn, turnover, universe = STRATEGY_REGISTRY[name]
+        available = [t for t in universe if t in closes_df.columns]
+        if not available:
+            raise RuntimeError(
+                f"No price data downloaded for universe {universe} — "
+                "cannot validate this strategy."
+            )
+
+        if len(universe) == 1:
+            # SPY-style single-name adapter: invoked with a pd.Series.
+            X, y, precomputed = adapter_fn(closes_df[universe[0]])
+        else:
+            # Cross-sectional adapter: invoked with (closes_df, shares).
+            X, y, precomputed = adapter_fn(closes_df[available], shares)
+
+        if X.empty or y.empty or not precomputed:
+            raise RuntimeError(
+                "Adapter returned an empty feature/return frame — "
+                "insufficient history for this start/end range."
+            )
+
+        # Structural (not name-based) adapter-shape dispatch — see the
+        # "Format: strategy_id → (adapter_fn, turnover, universe)"
+        # comment above for the full three-shape contract.
+        #
+        # 1. X's index is a genuine (Date, Ticker) pd.MultiIndex
+        #    (currently only _build_sector_quality_rank_adapter): the
+        #    third tuple element is (strategy_fn, t1) instead of the flat
+        #    Dict[str, pd.Series] every other adapter returns — see that
+        #    adapter's own docstring. start_date/end_date must be derived
+        #    from the MultiIndex's Date level (X.index[0] is a tuple for
+        #    a MultiIndex, so `.date()` would raise AttributeError).
+        #    Checked FIRST since this shape is also callable.
+        # 2. precomputed is itself a ready-made strategy_fn callable
+        #    (currently only _build_lgbm_ranker_adapter — see its own
+        #    docstring for why a static precomputed dict can't honestly
+        #    validate a trained model). X stays flat-indexed for this
+        #    adapter, so the plain X.index[0].date() derivation applies;
+        #    no t1 override (CombinatorialPurgedCV synthesizes its own
+        #    default for a flat index).
+        # 3. Otherwise, the pre-existing Dict[str, pd.Series] convention
+        #    every other adapter uses, wrapped via _make_strategy_fn.
+        is_multiindex = isinstance(X.index, pd.MultiIndex)
+        if is_multiindex:
+            strategy_fn, t1 = precomputed
+            date_level = X.index.get_level_values(0)
+            start_date_str = str(pd.Timestamp(date_level.min()).date())
+            end_date_str = str(pd.Timestamp(date_level.max()).date())
+        elif callable(precomputed):
+            strategy_fn = precomputed
+            t1 = None
+            start_date_str = str(X.index[0].date())
+            end_date_str = str(X.index[-1].date())
+        else:
+            strategy_fn = _make_strategy_fn(precomputed, turnover=turnover)
+            t1 = None
+            start_date_str = str(X.index[0].date())
+            end_date_str = str(X.index[-1].date())
+
+        stress_fn = _resolve_options_selling_stress_fn(name)
+        harness = StrategyValidationHarness(
+            strategy_fn=strategy_fn,
+            universe_fn=lambda _, u=available: u,
+            cost_model=cost_model,
+            n_cpcv_splits=n_cpcv_splits,
+            n_test_splits=n_test_splits,
+            reports_dir=str(output_dir),
+            is_options_selling=stress_fn is not None,
+            stress_returns_fn=stress_fn,
+        )
+
+        report = harness.run(
+            start_date=start_date_str,
+            end_date=end_date_str,
+            X=X,
+            y=y,
+            strategy_name=name,
+            t1=t1,
+        )
+
+        summary = report.to_summary_dict()
+        logger.info(
+            "  %-32s deployable=%-5s  Sharpe=%s  PBO=%s  DSR=%s  MaxDD=%s",
+            name,
+            summary.get("deployable"),
+            f"{summary.get('sharpe', float('nan')):.3f}"
+            if summary.get("sharpe") is not None else "  —  ",
+            f"{summary.get('pbo', float('nan')):.3f}",
+            f"{summary.get('dsr', float('nan')):.3f}",
+            f"{summary.get('max_drawdown'):.3f}"
+            if summary.get("max_drawdown") is not None else "  —  ",
+        )
+        return name, summary
+
+    except Exception as exc:  # CONSTRAINT #6 — per-strategy dead-letter
+        logger.error(
+            "Strategy '%s' validation failed: %s", name, exc, exc_info=True
+        )
+        return name, {
+            "strategy_id": name,
+            "deployable": False,
+            "error": str(exc),
+            "report_date": date.today().isoformat(),
+        }
+
+
 def run_validations(
     strategies: Optional[List[str]] = None,
     start_date: str = "2005-01-01",
@@ -3542,6 +3686,7 @@ def run_validations(
     output_dir: Path = Path("reports"),
     n_cpcv_splits: int = 10,
     n_test_splits: int = 2,
+    max_workers: Optional[int] = 1,
 ) -> Dict[str, dict]:
     """Run walk-forward validation for each registered strategy.
 
@@ -3555,6 +3700,10 @@ def run_validations(
         Where to write JSON summaries.  Created automatically.
     n_cpcv_splits, n_test_splits:
         Passed to ``StrategyValidationHarness``.
+    max_workers:
+        Number of concurrent workers for executing validation across strategies.
+        Defaults to ``1`` (sequential execution). When ``> 1``, uses a thread pool
+        to validate independent strategies in parallel.
 
     Returns
     -------
@@ -3563,7 +3712,6 @@ def run_validations(
     ``"error"`` key and ``"deployable": false``).
     """
     from execution.cost_model import TieredCostModel
-    from validation.harness import StrategyValidationHarness
 
     if end_date is None:
         end_date = date.today().isoformat()
@@ -3616,126 +3764,36 @@ def run_validations(
     cost_model = TieredCostModel()
     results: Dict[str, dict] = {}
 
-    for name in strategies:
-        if name not in STRATEGY_REGISTRY:
-            logger.warning(
-                "Unknown strategy '%s' — skipping. Known strategies: %s",
-                name, sorted(STRATEGY_REGISTRY),
-            )
-            results[name] = {
-                "strategy_id": name,
-                "deployable": False,
-                "error": f"Not in STRATEGY_REGISTRY. Known: {sorted(STRATEGY_REGISTRY)}",
-                "report_date": date.today().isoformat(),
+    workers = int(max_workers) if max_workers is not None else 1
+    if workers > 1 and len(strategies) > 1:
+        pool_size = min(workers, len(strategies))
+        logger.info("Running parallel validation for %d strategies across %d workers …", len(strategies), pool_size)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
+            future_to_name = {
+                executor.submit(
+                    _validate_single_strategy,
+                    name,
+                    closes_df,
+                    shares,
+                    output_dir,
+                    n_cpcv_splits,
+                    n_test_splits,
+                    cost_model,
+                ): name
+                for name in strategies
             }
-            continue
-
-        logger.info("Validating: %s", name)
-        try:
-            adapter_fn, turnover, universe = STRATEGY_REGISTRY[name]
-            available = [t for t in universe if t in closes_df.columns]
-            if not available:
-                raise RuntimeError(
-                    f"No price data downloaded for universe {universe} — "
-                    "cannot validate this strategy."
-                )
-
-            if len(universe) == 1:
-                # SPY-style single-name adapter: invoked with a pd.Series.
-                X, y, precomputed = adapter_fn(closes_df[universe[0]])
-            else:
-                # Cross-sectional adapter: invoked with (closes_df, shares).
-                X, y, precomputed = adapter_fn(closes_df[available], shares)
-
-            if X.empty or y.empty or not precomputed:
-                raise RuntimeError(
-                    "Adapter returned an empty feature/return frame — "
-                    "insufficient history for this start/end range."
-                )
-
-            # Structural (not name-based) adapter-shape dispatch — see the
-            # "Format: strategy_id → (adapter_fn, turnover, universe)"
-            # comment above for the full three-shape contract.
-            #
-            # 1. X's index is a genuine (Date, Ticker) pd.MultiIndex
-            #    (currently only _build_sector_quality_rank_adapter): the
-            #    third tuple element is (strategy_fn, t1) instead of the flat
-            #    Dict[str, pd.Series] every other adapter returns — see that
-            #    adapter's own docstring. start_date/end_date must be derived
-            #    from the MultiIndex's Date level (X.index[0] is a tuple for
-            #    a MultiIndex, so `.date()` would raise AttributeError).
-            #    Checked FIRST since this shape is also callable.
-            # 2. precomputed is itself a ready-made strategy_fn callable
-            #    (currently only _build_lgbm_ranker_adapter — see its own
-            #    docstring for why a static precomputed dict can't honestly
-            #    validate a trained model). X stays flat-indexed for this
-            #    adapter, so the plain X.index[0].date() derivation applies;
-            #    no t1 override (CombinatorialPurgedCV synthesizes its own
-            #    default for a flat index).
-            # 3. Otherwise, the pre-existing Dict[str, pd.Series] convention
-            #    every other adapter uses, wrapped via _make_strategy_fn.
-            is_multiindex = isinstance(X.index, pd.MultiIndex)
-            if is_multiindex:
-                strategy_fn, t1 = precomputed
-                date_level = X.index.get_level_values(0)
-                start_date_str = str(pd.Timestamp(date_level.min()).date())
-                end_date_str = str(pd.Timestamp(date_level.max()).date())
-            elif callable(precomputed):
-                strategy_fn = precomputed
-                t1 = None
-                start_date_str = str(X.index[0].date())
-                end_date_str = str(X.index[-1].date())
-            else:
-                strategy_fn = _make_strategy_fn(precomputed, turnover=turnover)
-                t1 = None
-                start_date_str = str(X.index[0].date())
-                end_date_str = str(X.index[-1].date())
-
-            stress_fn = _resolve_options_selling_stress_fn(name)
-            harness = StrategyValidationHarness(
-                strategy_fn=strategy_fn,
-                universe_fn=lambda _, u=available: u,
-                cost_model=cost_model,
-                n_cpcv_splits=n_cpcv_splits,
-                n_test_splits=n_test_splits,
-                reports_dir=str(output_dir),
-                is_options_selling=stress_fn is not None,
-                stress_returns_fn=stress_fn,
+            temp_results: Dict[str, dict] = {}
+            for future in concurrent.futures.as_completed(future_to_name):
+                st_name, summary = future.result()
+                temp_results[st_name] = summary
+            # Preserve original requested strategy order
+            results = {name: temp_results[name] for name in strategies if name in temp_results}
+    else:
+        for name in strategies:
+            st_name, summary = _validate_single_strategy(
+                name, closes_df, shares, output_dir, n_cpcv_splits, n_test_splits, cost_model
             )
-
-            report = harness.run(
-                start_date=start_date_str,
-                end_date=end_date_str,
-                X=X,
-                y=y,
-                strategy_name=name,
-                t1=t1,
-            )
-
-            summary = report.to_summary_dict()
-            results[name] = summary
-            logger.info(
-                "  %-32s deployable=%-5s  Sharpe=%s  PBO=%s  DSR=%s  MaxDD=%s",
-                name,
-                summary.get("deployable"),
-                f"{summary.get('sharpe', float('nan')):.3f}"
-                if summary.get("sharpe") is not None else "  —  ",
-                f"{summary.get('pbo', float('nan')):.3f}",
-                f"{summary.get('dsr', float('nan')):.3f}",
-                f"{summary.get('max_drawdown'):.3f}"
-                if summary.get("max_drawdown") is not None else "  —  ",
-            )
-
-        except Exception as exc:  # CONSTRAINT #6 — per-strategy dead-letter
-            logger.error(
-                "Strategy '%s' validation failed: %s", name, exc, exc_info=True
-            )
-            results[name] = {
-                "strategy_id": name,
-                "deployable": False,
-                "error": str(exc),
-                "report_date": date.today().isoformat(),
-            }
+            results[st_name] = summary
 
     return results
 
@@ -3870,6 +3928,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Walk-forward test splits (default: 2).",
     )
     parser.add_argument(
+        "--workers", "-w", dest="max_workers", type=int, default=1,
+        help="Number of concurrent workers for strategy validation (default: 1 for sequential).",
+    )
+    parser.add_argument(
         "--json", dest="as_json", action="store_true",
         help=(
             "Also print ONE machine-readable JSON line (the LAST line of stdout) "
@@ -3897,6 +3959,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         output_dir=Path(args.output_dir),
         n_cpcv_splits=args.n_cpcv_splits,
         n_test_splits=args.n_test_splits,
+        max_workers=args.max_workers,
     )
 
     _print_summary_table(results)
