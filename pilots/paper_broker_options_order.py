@@ -49,9 +49,9 @@ def execute_paper_order(
 
     try:
         store = PaperAccountStore()
-    except Exception as e:
-        logger.error(f"Failed to initialize PaperAccountStore: {e}")
-        return {"ok": False, "order_id": client_order_id, "message": f"Storage initialization failed: {e}"}
+    except Exception:
+        logger.exception("Failed to initialize PaperAccountStore")
+        return {"ok": False, "order_id": client_order_id, "message": "Paper account storage is unavailable. Please try again shortly."}
 
     if asset_type == "stock":
         fill_price = float(limit_price) if (limit_price and limit_price > 0) else get_current_price(symbol)
