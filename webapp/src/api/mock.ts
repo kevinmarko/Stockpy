@@ -9370,13 +9370,107 @@ export const mockApi = {
 
   async postOptionsOrder(req: OptionsOrderRequest): Promise<OptionsOrderResult> {
     console.log(`[mockApi] postOptionsOrder (${req.isLive ? 'LIVE' : 'PAPER'}):`, req);
+    if (req.isLive) {
+      return delay({
+        ok: false,
+        message: "Live order execution is currently in Advisory-Only mode. Order staged for review."
+      }, 500);
+    }
+
+    if (paperAccount.cash === 0 && paperAccount.equity === 0) {
+      paperAccount = { equity: 100000, cash: 100000, buying_power: 100000 };
+    }
+
+    const isStock = req.asset_type === "stock";
+    let orderSymbol = req.symbol.toUpperCase();
+    let qty = req.quantity || 1;
+    let fillPrice = req.limit_price || 10.0;
+    let totalCost = 0;
+
+    if (isStock) {
+      if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
+        qty = Math.max(1, +(req.dollar_amount / fillPrice).toFixed(4));
+      }
+      totalCost = qty * fillPrice;
+    } else {
+      let netPrice = req.limit_price || 0.0;
+      if (!netPrice && req.legs && req.legs.length > 0) {
+        netPrice = req.legs.reduce((acc, leg) => {
+          const mult = leg.action === 'Buy' ? 1 : -1;
+          const p = leg.contract.lastPrice || leg.contract.ask || 0.05;
+          return acc + (mult * p);
+        }, 0);
+      }
+      if (Math.abs(netPrice) < 0.01) netPrice = 0.05;
+      fillPrice = Math.abs(netPrice);
+      const costPerContract = fillPrice * 100;
+      if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
+        qty = Math.max(1, Math.floor(req.dollar_amount / costPerContract));
+      }
+      const commission = 0.65 * qty * Math.max(1, req.legs?.length || 1);
+      totalCost = qty * costPerContract + commission;
+
+      if (req.legs && req.legs.length === 1) {
+        const leg = req.legs[0];
+        orderSymbol = `${req.symbol.toUpperCase()} ${req.expiration || ''} $${leg.contract.strike} ${(leg.type || 'CALL').toUpperCase()}`.trim();
+      } else if (req.legs && req.legs.length > 1) {
+        orderSymbol = `${req.symbol.toUpperCase()}-${req.legs.length}LEG-${req.expiration || 'OPT'}`;
+      } else {
+        orderSymbol = `${req.symbol.toUpperCase()} OPTION`;
+      }
+    }
+
+    if (paperAccount.cash < totalCost) {
+      return delay({
+        ok: false,
+        message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
+      }, 500);
+    }
+
+    // Deduct cash
+    paperAccount.cash -= totalCost;
+    paperAccount.buying_power = paperAccount.cash;
+
+    // Update positions
+    const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
+    if (existingPos) {
+      const prevTotal = existingPos.qty * existingPos.avg_cost;
+      existingPos.qty += qty;
+      existingPos.avg_cost = (prevTotal + totalCost) / existingPos.qty;
+      existingPos.market_value = (existingPos.market_value || 0) + totalCost;
+    } else {
+      paperPositions.push({
+        symbol: orderSymbol,
+        qty: qty,
+        avg_cost: isStock ? fillPrice : fillPrice * 100,
+        current_price: isStock ? fillPrice : fillPrice * 100,
+        market_value: totalCost,
+        unrealized_pl: 0,
+        unrealized_pl_pct: 0
+      });
+    }
+
+    const orderId = `mock_ord_${Date.now()}`;
+    const orderSide: 'BUY' | 'SELL' = (req.side?.toUpperCase() === 'SELL' || req.legs?.[0]?.action === 'Sell') ? 'SELL' : 'BUY';
+    paperOrders.unshift({
+      order_id: orderId,
+      symbol: orderSymbol,
+      side: orderSide,
+      qty: qty,
+      price: fillPrice,
+      status: 'filled',
+      filled_qty: qty,
+      filled_avg_price: fillPrice,
+      created_at: new Date().toISOString()
+    });
+
     return delay(
       {
         ok: true,
-        order_id: `mock_opt_${Date.now()}`,
-        message: `Options order for ${req.symbol} received successfully.`
+        order_id: orderId,
+        message: `Paper ${isStock ? 'stock' : 'option'} order for ${qty} ${isStock ? 'shares' : 'contract(s)'} of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${totalCost.toFixed(2)}).`
       },
-      800
+      600
     );
   },
 

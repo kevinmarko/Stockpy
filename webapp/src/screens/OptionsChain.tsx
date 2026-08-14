@@ -23,6 +23,7 @@ export function OptionsChain() {
   const [isMetricSelectorOpen, setIsMetricSelectorOpen] = useState(false);
   const [selectedLegs, setSelectedLegs] = useState<{ contract: any, type: 'call' | 'put', action: 'Buy' | 'Sell' }[]>([]);
   const [isBuilderMode, setIsBuilderMode] = useState(false);
+  const [isStockTradeOpen, setIsStockTradeOpen] = useState(false);
 
   // Fetch the full expirations list once per symbol, independent of whichever
   // expiration is currently selected. The per-expiration chain fetch below
@@ -92,8 +93,32 @@ export function OptionsChain() {
         alignItems: "center",
         justifyContent: "space-between"
       }}>
-        <span style={{ fontSize: "0.85rem", color: theme.textSecondary }}>Share price</span>
-        <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>${spotPrice.toFixed(2)}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: "0.85rem", color: theme.textSecondary }}>Share price</span>
+          <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>${spotPrice.toFixed(2)}</span>
+        </div>
+        <button
+          onClick={() => {
+            setIsStockTradeOpen(true);
+            setSelectedLegs([]);
+          }}
+          style={{
+            background: `${theme.accent}20`,
+            border: `1px solid ${theme.accent}`,
+            color: theme.accent,
+            borderRadius: 14,
+            padding: "4px 12px",
+            fontSize: "0.8rem",
+            fontWeight: 600,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            transition: "all 0.15s ease"
+          }}
+        >
+          📈 Trade {ticker} Stock
+        </button>
       </div>
 
       {/* Expirations Scroller */}
@@ -192,7 +217,7 @@ export function OptionsChain() {
       </div>
 
       {/* Chain Grid or Builder */}
-      <div style={{ flex: 1, overflowY: "auto", padding: 16, paddingBottom: selectedLegs.length > 0 ? 300 : 16 }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: 16, paddingBottom: (selectedLegs.length > 0 || isStockTradeOpen) ? 350 : 16 }}>
         <TabGuide tabKey="options-chain" />
         
         {isBuilderMode ? (
@@ -201,7 +226,10 @@ export function OptionsChain() {
             chain={chainData || null}
             expirations={expirations}
             selectedLegs={selectedLegs}
-            onUpdateLegs={setSelectedLegs}
+            onUpdateLegs={(legs) => {
+              setSelectedLegs(legs);
+              setIsStockTradeOpen(false);
+            }}
           />
         ) : (
           chainData && (
@@ -211,6 +239,7 @@ export function OptionsChain() {
               selectedMetrics={selectedMetrics}
               onSelectContract={(contract, type) => {
                 setSelectedLegs([{ contract, type, action: 'Buy' }]);
+                setIsStockTradeOpen(false);
               }}
             />
           )
@@ -218,7 +247,7 @@ export function OptionsChain() {
       </div>
 
       {/* Floating Order Ticket */}
-      {selectedLegs.length > 0 && selectedExp && (
+      {(selectedLegs.length > 0 || isStockTradeOpen) && (
         <div style={{
           position: 'absolute',
           bottom: 16,
@@ -228,12 +257,17 @@ export function OptionsChain() {
           display: 'flex',
           justifyContent: 'center'
         }}>
-          <div style={{ width: '100%', maxWidth: 500, boxShadow: '0 8px 32px rgba(0,0,0,0.4)', borderRadius: 16, overflow: 'hidden' }}>
+          <div style={{ width: '100%', maxWidth: 520, boxShadow: '0 8px 32px rgba(0,0,0,0.5)', borderRadius: 16, overflow: 'hidden' }}>
             <OptionsOrderTicket
               symbol={ticker!}
-              expiration={selectedExp}
+              expiration={selectedExp || undefined}
               legs={selectedLegs}
-              onClear={() => setSelectedLegs([])}
+              assetType={isStockTradeOpen ? "stock" : "option"}
+              spotPrice={spotPrice}
+              onClear={() => {
+                setSelectedLegs([]);
+                setIsStockTradeOpen(false);
+              }}
             />
           </div>
         </div>
