@@ -1810,10 +1810,15 @@ class CompositeProvider(MarketDataProvider):
         if src == "fmp":
             fmp_key = (getattr(settings, "FMP_API_KEY", None) or "").strip()
             if not fmp_key:
-                raise RuntimeError(
-                    "FUNDAMENTALS_SOURCE=fmp but FMP_API_KEY is not set. Add it to .env."
+                logger.warning(
+                    "MarketData: FUNDAMENTALS_SOURCE=fmp but FMP_API_KEY is not "
+                    "set -- falling back to the default fundamentals provider "
+                    "(Yahoo-derived statement engine) for this entire process. "
+                    "Add FMP_API_KEY to .env to restore FMP as primary."
                 )
-            self._fundamentals_provider = FMPProvider(api_key=fmp_key)
+                self._fundamentals_provider = self._select_default_fundamentals_provider()
+            else:
+                self._fundamentals_provider = FMPProvider(api_key=fmp_key)
         else:
             self._fundamentals_provider = self._select_default_fundamentals_provider(src)
         # Same pre-resolution as _default_quote_provider above, for the
@@ -1842,9 +1847,13 @@ class CompositeProvider(MarketDataProvider):
         if explicit == "fmp":
             fmp_key = (getattr(settings, "FMP_API_KEY", None) or "").strip()
             if not fmp_key:
-                raise RuntimeError(
-                    "MARKET_DATA_PROVIDER=fmp but FMP_API_KEY is not set. Add it to .env."
+                logger.warning(
+                    "MarketData: MARKET_DATA_PROVIDER=fmp but FMP_API_KEY is not "
+                    "set -- falling back to the default quote/bars provider "
+                    "(Alpaca if keyed, else yfinance) for this entire process. "
+                    "Add FMP_API_KEY to .env to restore FMP as primary."
                 )
+                return self._select_default_quote_provider()
             provider = FMPProvider(api_key=fmp_key)
             variant = str(
                 getattr(settings, "FMP_BARS_ADJUSTMENT", "dividend-adjusted")

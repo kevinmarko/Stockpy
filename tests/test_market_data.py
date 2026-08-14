@@ -652,6 +652,7 @@ class TestCompositeProviderSelection:
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
             MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+            FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)
@@ -751,6 +752,7 @@ class TestProviderProvenanceAttributes:
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
             MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+            FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)
@@ -1026,7 +1028,7 @@ class TestSingleton:
     def test_singleton_returns_same_instance(self):
         from data.market_data import get_provider, reset_provider
         reset_provider()
-        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None):
+        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
             p1 = get_provider()
             p2 = get_provider()
         assert p1 is p2
@@ -1034,10 +1036,10 @@ class TestSingleton:
     def test_reset_forces_new_instance(self):
         from data.market_data import get_provider, reset_provider
         reset_provider()
-        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None):
+        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
             p1 = get_provider()
         reset_provider()
-        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None):
+        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
             p2 = get_provider()
         assert p1 is not p2
 
@@ -1186,6 +1188,7 @@ class TestCompositeProviderFundamentalsCache:
         with patch.multiple(
             "settings.settings",
             FINNHUB_API_KEY=None, ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+            MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo",
         ):
             cp = CompositeProvider()
             call_count = {"n": 0}
@@ -1258,6 +1261,7 @@ class TestCompositeProviderSettingsWiring:
     def _patched(self, **overrides):
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)
@@ -1395,18 +1399,24 @@ class TestFMPFundamentalsChain:
                 cp.get_fundamentals("AAPL")
             mock_get.assert_not_called()
 
-    # -- 2. FUNDAMENTALS_SOURCE=fmp without a key -> RuntimeError -------
-    def test_fmp_source_without_api_key_raises_at_construction(self):
-        from data.market_data import CompositeProvider
+    # -- 2. FUNDAMENTALS_SOURCE=fmp without a key -> graceful fallback ---
+    def test_fmp_source_without_api_key_falls_back_to_yahoo(self, caplog):
+        import logging
+        from data.market_data import CompositeProvider, FMPProvider
         with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY=None):
-            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
-                CompositeProvider()
+            with caplog.at_level(logging.WARNING, logger="data.market_data"):
+                cp = CompositeProvider()
+        assert not isinstance(cp._fundamentals_provider, FMPProvider)
+        assert "falling back to the default fundamentals provider" in caplog.text
 
-    def test_fmp_source_with_blank_api_key_also_raises(self):
-        from data.market_data import CompositeProvider
+    def test_fmp_source_with_blank_api_key_also_falls_back(self, caplog):
+        import logging
+        from data.market_data import CompositeProvider, FMPProvider
         with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="   "):
-            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
-                CompositeProvider()
+            with caplog.at_level(logging.WARNING, logger="data.market_data"):
+                cp = CompositeProvider()
+        assert not isinstance(cp._fundamentals_provider, FMPProvider)
+        assert "FMP_API_KEY is not set" in caplog.text
 
     def test_fmp_source_with_key_selects_fmp_provider(self):
         from data.market_data import CompositeProvider, FMPProvider
@@ -1604,18 +1614,24 @@ class TestFMPQuoteBarsChain:
                 cp.get_intraday_bars("AAPL")
             mock_get.assert_not_called()
 
-    # -- 2. MARKET_DATA_PROVIDER=fmp without a key -> RuntimeError -------
-    def test_fmp_provider_without_api_key_raises_at_construction(self):
-        from data.market_data import CompositeProvider
+    # -- 2. MARKET_DATA_PROVIDER=fmp without a key -> graceful fallback --
+    def test_fmp_provider_without_api_key_falls_back_to_default(self, caplog):
+        import logging
+        from data.market_data import CompositeProvider, FMPProvider
         with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY=None):
-            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
-                CompositeProvider()
+            with caplog.at_level(logging.WARNING, logger="data.market_data"):
+                cp = CompositeProvider()
+        assert not isinstance(cp._quote_provider, FMPProvider)
+        assert "falling back to the default quote/bars provider" in caplog.text
 
-    def test_fmp_provider_with_blank_api_key_also_raises(self):
-        from data.market_data import CompositeProvider
+    def test_fmp_provider_with_blank_api_key_also_falls_back(self, caplog):
+        import logging
+        from data.market_data import CompositeProvider, FMPProvider
         with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="   "):
-            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
-                CompositeProvider()
+            with caplog.at_level(logging.WARNING, logger="data.market_data"):
+                cp = CompositeProvider()
+        assert not isinstance(cp._quote_provider, FMPProvider)
+        assert "FMP_API_KEY is not set" in caplog.text
 
     def test_fmp_provider_with_key_selects_fmp_provider(self):
         from data.market_data import CompositeProvider, FMPProvider

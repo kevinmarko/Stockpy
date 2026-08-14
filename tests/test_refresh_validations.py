@@ -1106,6 +1106,33 @@ class TestMakeStrategyFn:
         result = fn(X[:100], y[:100], X[100:], y[100:])
         assert len(result) == 2
 
+    def test_slice_returns_matching_and_mismatched_index(self) -> None:
+        from scripts.refresh_validations import _make_strategy_fn
+
+        idx_full = pd.bdate_range("2020-01-01", periods=10)
+        pre = {"StratA": pd.Series(np.arange(10, dtype=float), index=idx_full)}
+        fn = _make_strategy_fn(pre)
+
+        idx_train = idx_full[:5]
+        idx_test = idx_full[5:]
+        res = fn(
+            pd.DataFrame(index=idx_train),
+            pd.Series(index=idx_train),
+            pd.DataFrame(index=idx_test),
+            pd.Series(index=idx_test),
+        )
+        assert len(res[0]["train_returns"]) == 5
+        assert len(res[0]["test_returns"]) == 5
+
+        idx_extra = pd.bdate_range("2020-01-10", periods=5)
+        res2 = fn(
+            pd.DataFrame(index=idx_train),
+            pd.Series(index=idx_train),
+            pd.DataFrame(index=idx_extra),
+            pd.Series(index=idx_extra),
+        )
+        assert isinstance(res2[0]["test_returns"], pd.Series)
+
 
 # ---------------------------------------------------------------------------
 # TestRunValidations
@@ -1316,6 +1343,32 @@ class TestRunValidations:
         assert "multifactor_lowvol_size" in results
         assert "error" not in results["multifactor_lowvol_size"]
 
+    def test_max_workers_concurrency(self, tmp_path: Path) -> None:
+        """Verify run_validations works identically with max_workers > 1."""
+        from scripts.refresh_validations import run_validations
+
+        with self._patch_closes(), self._patch_shares(), self._patch_harness(), self._patch_cost():
+            results_seq = run_validations(
+                strategies=["rsi2_mean_reversion", "timeseries_momentum"],
+                output_dir=tmp_path / "seq",
+                max_workers=1,
+            )
+            results_par = run_validations(
+                strategies=["rsi2_mean_reversion", "timeseries_momentum"],
+                output_dir=tmp_path / "par",
+                max_workers=2,
+            )
+
+        assert set(results_seq.keys()) == set(results_par.keys())
+        assert (
+            results_seq["rsi2_mean_reversion"]["deployable"]
+            == results_par["rsi2_mean_reversion"]["deployable"]
+        )
+        assert (
+            results_seq["timeseries_momentum"]["deployable"]
+            == results_par["timeseries_momentum"]["deployable"]
+        )
+
 
 # ---------------------------------------------------------------------------
 # TestMainCLI
@@ -1404,3 +1457,17 @@ class TestMainCLI:
             main(["--n-cpcv-splits", "5", "--output-dir", str(tmp_path)])
 
         assert captured["n_cpcv_splits"] == 5
+
+    def test_workers_flag_forwarded(self, tmp_path: Path) -> None:
+        from scripts.refresh_validations import main
+
+        captured: Dict[str, Any] = {}
+
+        def fake_run(**kwargs: Any) -> Dict[str, dict]:
+            captured.update(kwargs)
+            return {"rsi2_mean_reversion": {"deployable": True}}
+
+        with patch("scripts.refresh_validations.run_validations", fake_run):
+            main(["--workers", "4", "--output-dir", str(tmp_path)])
+
+        assert captured["max_workers"] == 4

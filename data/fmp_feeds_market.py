@@ -324,6 +324,10 @@ def fetch_sector_snapshot(
         return []
 
 
+# NOTE: Intentionally unwired from production pipeline cycles (available for
+# on-demand / API lookup only). Wiring this into the automated cycle would
+# introduce a second, unreconciled VIX source against the macro kill switch's
+# authoritative FRED VIXCLS feed.
 def fetch_volatility_benchmarks() -> Dict[str, Optional[float]]:
     """Fetch quotes for major volatility benchmarks: ^VIX, ^VVIX, ^VXN, ^SKEW (``/batch-index-quotes``).
 
@@ -368,11 +372,23 @@ def fetch_realized_volatility(symbol: str) -> Dict[str, Optional[float]]:
         return {"hv_10": None, "hv_30": None, "hv_90": None}
 
 
+_ECON_CALENDAR_CACHE: Dict[str, Any] = {}
+
+
+def reset_econ_calendar_cache() -> None:
+    """Clear the in-memory economics calendar cache (used by tests and daily resets)."""
+    global _ECON_CALENDAR_CACHE
+    _ECON_CALENDAR_CACHE.clear()
+
+
 def fetch_economics_calendar(from_date: Optional[str] = None, to_date: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch macroeconomic events (CPI, PPI, NFP, FOMC rate decisions) (``/economics-calendar``).
 
     CONSTRAINT #6: Never raises.
     """
+    cache_key = f"{from_date}:{to_date}"
+    if cache_key in _ECON_CALENDAR_CACHE:
+        return _ECON_CALENDAR_CACHE[cache_key]
     try:
         from data.fmp_client import FMPUnavailable, economics_calendar
         payload = economics_calendar(from_date=from_date, to_date=to_date)
@@ -390,6 +406,8 @@ def fetch_economics_calendar(from_date: Optional[str] = None, to_date: Optional[
                     "estimate": _safe_float(row.get("estimate")),
                     "impact": str(row.get("impact") or "High"),
                 })
+        if events:
+            _ECON_CALENDAR_CACHE[cache_key] = events
         return events
     except Exception as exc:
         logger.warning("fetch_economics_calendar failed: %s", exc)

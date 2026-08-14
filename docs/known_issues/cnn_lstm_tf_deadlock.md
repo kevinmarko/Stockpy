@@ -566,7 +566,7 @@ that "tidies up" the module layout.
 CNN-LSTM calls out across the whole symbol universe via a `ThreadPoolExecutor`
 (see "Why this matters" above); spawning a fresh interpreter and re-importing
 TensorFlow (multi-second cost) for every ticker would be prohibitively slow. The
-pool (`CNN_LSTM_PROCESS_POOL_WORKERS`, default 1) is created once and reused
+pool (`CNN_LSTM_PROCESS_POOL_WORKERS`, default 1; recommended 3 for multi-core systems with sufficient RAM) is created once and reused
 across tickers and cycles, with an explicit `initializer` that imports
 `cnn_lstm_worker` (and, transitively, TensorFlow) the moment each worker process
 starts — before any task is ever unpickled — rather than relying on pickle's

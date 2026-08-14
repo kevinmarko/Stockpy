@@ -266,6 +266,9 @@ COLUMN_SCHEMA = [
     # --- Sector snapshot (FMP_SECTOR_SNAPSHOT_ENABLED) ---
     {"header": "Sector PE", "key": "Sector_PE", "format": "number"},
     {"header": "Sector 1D Change", "key": "Sector_1D_Change", "format": "percent"},
+    # --- Economics calendar (FMP_ECON_CALENDAR_ENABLED) ---
+    {"header": "Next Macro Event", "key": "Next_Macro_Event", "format": "string"},
+    {"header": "Macro Event Date", "key": "Next_Macro_Event_Date", "format": "string"},
 
     # ==========================================================
     # --- CORRELATION CLUSTER (Tier 2.5, research_engine.py) ---

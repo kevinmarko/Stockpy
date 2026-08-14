@@ -1143,10 +1143,17 @@ accuracy changes.
 When a data source (Alpaca market data, Finnhub, FRED, Robinhood) is reporting errors:
 
 > **Note:** Finnhub now feeds only the `news_catalyst` signal (company news / earnings
-> headlines). Fundamentals are Yahoo statement-derived (`data/yahoo_fundamentals.py`, free)
+> headlines). Fundamentals are FMP-primary (`data/fmp_fundamentals.py`) with a Yahoo statement-derived fallback (`data/yahoo_fundamentals.py`, free)
 > with a raw yfinance `.info` fallback, so a Finnhub outage no longer degrades any
 > fundamentals-dependent consumer (`processing_engine`, `multifactor`, Graham/Gordon,
 > dividend quality) — only news-catalyst sentiment is lost.
+
+### Financial Modeling Prep (FMP) Troubleshooting
+
+- **Rate Limits**: The Starter tier is ~300 req/min (governed by `FMP_MIN_REQUEST_INTERVAL_SECONDS` / `FMP_MAX_RETRIES` / `FMP_COOLDOWN_THRESHOLD` in `settings.py`).
+- **Cooldown Behavior**: Consecutive errors trigger a circuit breaker for `FMP_COOLDOWN_SECONDS` once `FMP_COOLDOWN_THRESHOLD` is hit, skipping FMP calls to avoid timeouts.
+- **Fallback Behavior**: When FMP is unavailable, `CompositeProvider` transparently falls back to Alpaca/yfinance for quotes and Yahoo for fundamentals (if `FMP_FALLBACK_ENABLED=true`).
+- **What to Check**: If data is stale or missing, check `$LOCAL_DATA_ROOT/logs/investyo.log` for warnings naming FMP fallbacks. Confirm `FMP_API_KEY` is set and valid.
 
 1. Open Safety tab → Dependency Map (`gui/dependency_map.py`).
 2. Multi-select the degraded sources.

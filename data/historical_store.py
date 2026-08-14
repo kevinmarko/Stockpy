@@ -2758,7 +2758,10 @@ class HistoricalStore:
             from db_config import session_scope, get_dbapi_connection
 
             params: List[Any] = [sym]
-            clauses = ""
+            # '1900-01-01' is the only no-data sentinel this store ever
+            # writes (see mark_earnings_fetched below) -- filtered out here
+            # so it never leaks into a real earnings-date/surprise read.
+            clauses = " AND event_date != '1900-01-01'"
             if on_or_before:
                 clauses += " AND event_date <= ?"
                 params.append(str(on_or_before))
@@ -2814,6 +2817,30 @@ class HistoricalStore:
             (symbol or "").strip().upper(),
             label="latest_earnings_fetched_at",
         )
+
+    def mark_earnings_fetched(self, symbol: str) -> None:
+        """Record that *symbol* was fetched but FMP returned no earnings data.
+
+        Inserts a sentinel row with ``event_date='1900-01-01'`` so
+        ``latest_earnings_fetched_at`` returns a fresh timestamp and the
+        cadence gate skips this symbol for ``FMP_EARNINGS_REFRESH_HOURS``.
+        The sentinel date is filtered out of all query methods.
+        """
+        try:
+            now_ts = self._now_utc_iso()
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.execute(
+                        """INSERT OR REPLACE INTO earnings_events
+                            (symbol, event_date, fetched_at, source)
+                        VALUES (?, '1900-01-01', ?, 'fmp-no-data')""",
+                        ((symbol or "").strip().upper(), now_ts),
+                    )
+        except Exception as exc:
+            logger.warning("HistoricalStore.mark_earnings_fetched(%s) failed: %s", symbol, exc)
 
     def upsert_insider_stats(self, rows: List[Dict[str, Any]]) -> int:
         """Persist a batch of quarterly insider-transaction aggregates.
@@ -2956,6 +2983,32 @@ class HistoricalStore:
             (symbol or "").strip().upper(),
             label="latest_insider_fetched_at",
         )
+
+    def mark_insider_fetched(self, symbol: str) -> None:
+        """Record that *symbol* was fetched but FMP returned no insider data.
+
+        Inserts a sentinel row with ``year=0, quarter=0`` so
+        ``latest_insider_fetched_at`` returns a fresh timestamp and the
+        cadence gate skips this symbol for ``FMP_INSIDER_REFRESH_DAYS``.
+        The sentinel ``(symbol, 0, 0)`` PK never collides with real
+        year/quarter combos, and the minimum-lag filter in production_steps
+        will naturally skip it (quarter_end has no entry for quarter=0).
+        """
+        try:
+            now_ts = self._now_utc_iso()
+            from db_config import session_scope, get_dbapi_connection
+            with self._lock:
+                with session_scope(self.Session) as session:
+                    raw_conn = session.connection().connection
+                    conn = get_dbapi_connection(raw_conn)
+                    conn.execute(
+                        """INSERT OR REPLACE INTO insider_stats
+                            (symbol, year, quarter, fetched_at, source)
+                        VALUES (?, 0, 0, ?, 'fmp-no-data')""",
+                        ((symbol or "").strip().upper(), now_ts),
+                    )
+        except Exception as exc:
+            logger.warning("HistoricalStore.mark_insider_fetched(%s) failed: %s", symbol, exc)
 
     def upsert_sector_snapshots(self, rows: List[Dict[str, Any]]) -> int:
         """Persist a batch of dated per-sector PE / 1-day-change snapshots.

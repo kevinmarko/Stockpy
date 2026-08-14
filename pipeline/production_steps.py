@@ -1022,8 +1022,70 @@ _FMP_SECTOR_COLUMNS = (
     'Sector_1D_Change',
 )
 
+_FMP_ECON_CALENDAR_COLUMNS = (
+    'Next_Macro_Event',
+    'Next_Macro_Event_Date',
+)
 
-def _apply_fmp_analyst(dashboard_df: pd.DataFrame) -> None:
+# Minimum per-feed reservation (seconds) the shared FMP budget tries to
+# guarantee each per-symbol diagnostic feed (analyst/earnings/insider) --
+# see _fmp_next_feed_deadline's docstring for the full contract.
+FMP_FEED_MIN_RESERVATION_SECONDS = 15.0
+
+
+def _fmp_next_feed_deadline(
+    total_deadline: float, min_reservation: float, feeds_left: int
+) -> float:
+    """Compute ONE FMP per-symbol diagnostic feed's own sub-deadline out of
+    the shared per-cycle wall-clock budget (``settings.FMP_MAX_SECONDS_PER_CYCLE``).
+
+    Call this fresh, immediately before each feed runs, with ``feeds_left``
+    counting the feed about to run plus every feed still queued behind it
+    (3 before analyst, 2 before earnings, 1 before insider). This is the
+    single choke point every feed's sub-deadline goes through, so the
+    guarantee below applies uniformly -- no feed is special-cased to reuse
+    the raw total deadline unprotected, which is what silently starved the
+    LAST-queued feed to zero before this fix (an earlier feed's floor claim
+    could exhaust the whole remaining budget, and the last feed had no
+    floor of its own to fall back on).
+
+    Two regimes, chosen based on whether the remaining budget can actually
+    support every still-queued feed getting its floor:
+
+    - **Plenty left** (``remaining >= min_reservation * feeds_left``): this
+      feed may take up to its even fair share (``remaining / feeds_left``)
+      or the floor, whichever is larger -- but is capped so it can never
+      eat into the floor reserved for the feeds still queued behind it
+      (``remaining - min_reservation * (feeds_left - 1)``). This is what
+      guarantees every later feed still gets at least its own floor.
+    - **Budget too small for everyone's floor**: degrades to a plain even
+      split (``remaining / feeds_left``) so no single feed can monopolize
+      what's left. Both regimes reduce to giving the LAST feed
+      (``feeds_left == 1``) 100% of whatever genuinely remains, by
+      construction -- there is nothing left to reserve for after it.
+
+    If the shared budget is already fully exhausted by the time this is
+    called (``remaining <= 0``), every feed correctly gets a deadline of
+    "now" (0 share) -- an honest wall-clock-ceiling-reached degradation
+    (CONSTRAINT #6 style), not the unfair zero-while-budget-remains
+    starvation this function replaces.
+    """
+    import time as _time
+
+    remaining = max(0.0, total_deadline - _time.monotonic())
+    if feeds_left <= 0:
+        return total_deadline
+    if remaining >= min_reservation * feeds_left:
+        share = min(
+            max(remaining / feeds_left, min_reservation),
+            remaining - min_reservation * (feeds_left - 1),
+        )
+    else:
+        share = remaining / feeds_left
+    return min(_time.monotonic() + share, total_deadline)
+
+
+def _apply_fmp_analyst(dashboard_df: pd.DataFrame, deadline: Optional[float] = None) -> None:
     """Populate the three FMP analyst-consensus columns.
 
     ``Analyst_Target_Consensus`` (currency), ``Analyst_Target_Upside``
@@ -1062,7 +1124,8 @@ def _apply_fmp_analyst(dashboard_df: pd.DataFrame) -> None:
         refresh_hours = float(getattr(settings, "FMP_ANALYST_REFRESH_HOURS", 24) or 24)
         raw_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", None)
         max_seconds = max(0.0, float(120.0 if raw_budget is None else raw_budget))
-        deadline = _time.monotonic() + max_seconds
+        if deadline is None:
+            deadline = _time.monotonic() + max_seconds
 
         symbols = sorted({
             str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
@@ -1111,6 +1174,13 @@ def _apply_fmp_analyst(dashboard_df: pd.DataFrame) -> None:
                         grade_score=fetched.get("grade_score"),
                         source=fetched.get("source", "fmp"),
                     )
+                else:
+                    # Persist a no-data sentinel so fresh_enough evaluates
+                    # True on subsequent cycles — prevents endlessly
+                    # re-fetching symbols with no analyst coverage.
+                    store.upsert_analyst_snapshot(
+                        sym, today_str, source="fmp-no-data",
+                    )
 
             snapshot = store.get_analyst_snapshot(sym)
             if not snapshot:
@@ -1149,7 +1219,7 @@ def _apply_fmp_analyst(dashboard_df: pd.DataFrame) -> None:
             dashboard_df[col] = float('nan')
 
 
-def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
+def _apply_fmp_earnings(dashboard_df: pd.DataFrame, deadline: Optional[float] = None) -> None:
     """Populate the FMP earnings columns.
 
     ``Days_To_Earnings`` (number) and ``Last_EPS_Surprise_Pct`` (percent) are
@@ -1196,7 +1266,8 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
         refresh_hours = float(getattr(settings, "FMP_EARNINGS_REFRESH_HOURS", 12) or 12)
         raw_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", None)
         max_seconds = max(0.0, float(120.0 if raw_budget is None else raw_budget))
-        deadline = _time.monotonic() + max_seconds
+        if deadline is None:
+            deadline = _time.monotonic() + max_seconds
 
         symbols = sorted({
             str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
@@ -1242,6 +1313,11 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
                 rows = fetch_earnings_rows(sym)
                 if rows:
                     store.upsert_earnings_events(rows)
+                else:
+                    # Persist a no-data sentinel so fresh_enough evaluates
+                    # True on subsequent cycles — prevents endlessly
+                    # re-fetching symbols with no earnings data.
+                    store.mark_earnings_fetched(sym)
 
             # Trailing surprise: rules 1 + 2 -- event_date <= as_of AND a
             # non-null actual, BOTH filters, so a vendor bug populating an
@@ -1269,7 +1345,7 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
             if future_rows:
                 row = future_rows[0]
                 event_date = row.get("event_date")
-                if event_date:
+                if event_date and not str(event_date).startswith("1900"):
                     next_date_map[sym] = str(event_date)
                     try:
                         d_next = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").date()
@@ -1299,7 +1375,7 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
             dashboard_df[col] = float('nan')
 
 
-def _apply_fmp_insider(dashboard_df: pd.DataFrame) -> None:
+def _apply_fmp_insider(dashboard_df: pd.DataFrame, deadline: Optional[float] = None) -> None:
     """Populate ``Insider_Buy_Sell_Ratio`` from FMP insider-trading statistics.
 
     Source: ``/insider-trading/statistics``, quarterly aggregates keyed
@@ -1366,7 +1442,8 @@ def _apply_fmp_insider(dashboard_df: pd.DataFrame) -> None:
                 return None
 
         as_of = _date.today()
-        deadline = _time.monotonic() + max_seconds
+        if deadline is None:
+            deadline = _time.monotonic() + max_seconds
         ratio_map: dict = {}
 
         for sym in symbols:
@@ -1401,6 +1478,11 @@ def _apply_fmp_insider(dashboard_df: pd.DataFrame) -> None:
                 fetched_rows = fetch_insider_stats(sym)
                 if fetched_rows:
                     store.upsert_insider_stats(fetched_rows)
+                else:
+                    # Persist a no-data sentinel so the cadence gate
+                    # evaluates as fresh on subsequent cycles — prevents
+                    # endlessly re-fetching symbols with no insider data.
+                    store.mark_insider_fetched(sym)
 
             # ── Read back the FULL archive and apply the minimum-lag filter
             # ourselves -- get_insider_stats() deliberately does not, so the
@@ -1523,6 +1605,76 @@ def _apply_fmp_sector(dashboard_df: pd.DataFrame) -> None:
     except Exception as exc:
         logger.warning("FMP sector snapshot feed failed (non-fatal): %s", exc)
         for col in _FMP_SECTOR_COLUMNS:
+            dashboard_df[col] = float('nan')
+
+
+def _apply_fmp_econ_calendar(dashboard_df: pd.DataFrame) -> None:
+    """Populate ``Next_Macro_Event`` and ``Next_Macro_Event_Date`` from FMP economics calendar.
+
+    Source: ``/economics-calendar`` via :func:`data.fmp_feeds_market.fetch_economics_calendar`.
+    1 request per CYCLE total (broadcast to all tickers). Diagnostic only,
+    never a SignalModule.
+
+    CONSTRAINT #6: Never raises.
+    """
+    for col in _FMP_ECON_CALENDAR_COLUMNS:
+        dashboard_df[col] = float('nan')
+
+    if not getattr(settings, "FMP_ECON_CALENDAR_ENABLED", False):
+        return
+    if dashboard_df.empty:
+        return
+
+    try:
+        from datetime import datetime, timedelta, timezone
+        from zoneinfo import ZoneInfo
+        from data.fmp_feeds_market import fetch_economics_calendar
+
+        # Use US Eastern — FMP economic calendar dates are in ET, not UTC.
+        # Using UTC would roll over to "tomorrow" during US evening hours,
+        # incorrectly filtering out same-day events.
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        today_str = today.isoformat()
+        # Bound the request to a 60-day lookahead window. Only the earliest
+        # sorted event is ever consumed below, so this is defense-in-depth,
+        # not a correctness fix -- FMP's own behavior for an unbounded `to`
+        # was never confirmed, and this feed defaults ON, so an explicit cap
+        # avoids depending on an unverified vendor default.
+        to_date_str = (today + timedelta(days=60)).isoformat()
+        events = fetch_economics_calendar(from_date=today_str, to_date=to_date_str)
+        if not events:
+            return
+
+        # Filter for upcoming events (date >= today)
+        valid_events = []
+        for ev in events:
+            ev_date = str(ev.get("date") or "")[:10]
+            if ev_date >= today_str:
+                valid_events.append(ev)
+
+        if not valid_events:
+            return
+
+        # Sort ascending by date
+        valid_events.sort(key=lambda x: str(x.get("date") or ""))
+
+        # Look for US / High impact events first, falling back to first upcoming event
+        us_high = [
+            e for e in valid_events
+            if str(e.get("country", "")).upper() == "US" and str(e.get("impact", "")).lower() == "high"
+        ]
+        high_impact = [e for e in valid_events if str(e.get("impact", "")).lower() == "high"]
+        selected = us_high[0] if us_high else (high_impact[0] if high_impact else valid_events[0])
+
+        event_name = selected.get("event")
+        event_date = selected.get("date")
+
+        if event_name and event_date:
+            dashboard_df['Next_Macro_Event'] = str(event_name)
+            dashboard_df['Next_Macro_Event_Date'] = str(event_date)[:10]
+    except Exception as exc:
+        logger.warning("FMP economics calendar feed failed (non-fatal): %s", exc)
+        for col in _FMP_ECON_CALENDAR_COLUMNS:
             dashboard_df[col] = float('nan')
 
 
@@ -1893,10 +2045,37 @@ class StrategyEvalStep(PipelineStep):
         # scoring, sizing, or execution -- see config.COLUMN_SCHEMA's "FMP
         # DIAGNOSTIC FEEDS" section for why that is also the no-lookahead
         # guarantee for this series.
-        _apply_fmp_analyst(ctx.dashboard_df)
-        _apply_fmp_earnings(ctx.dashboard_df)
-        _apply_fmp_insider(ctx.dashboard_df)
+        # Shared monotonic wall-clock budget for per-symbol FMP diagnostic
+        # feeds, split via _fmp_next_feed_deadline (see its docstring) so
+        # EVERY feed -- including the last-queued one -- is guaranteed at
+        # least FMP_FEED_MIN_RESERVATION_SECONDS whenever the total budget
+        # can support it, degrading to a fair even split otherwise. Fixed
+        # 2026-08 (PR #737 follow-up): the prior version special-cased
+        # insider to reuse the raw total deadline with no floor of its own,
+        # which let analyst+earnings jointly exhaust the whole budget and
+        # silently starve insider to zero symbols every cycle whenever
+        # FMP_MAX_SECONDS_PER_CYCLE was configured below ~45s (the webapp
+        # settings slider permits values as low as 1.0, with no warning).
+        import time as _time
+        _raw_fmp_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", 120.0)
+        _fmp_max_seconds = max(0.0, float(120.0 if _raw_fmp_budget is None else _raw_fmp_budget))
+        _fmp_total_deadline = _time.monotonic() + _fmp_max_seconds
+        _fmp_min_reservation = min(FMP_FEED_MIN_RESERVATION_SECONDS, _fmp_max_seconds)
+
+        _apply_fmp_analyst(
+            ctx.dashboard_df,
+            deadline=_fmp_next_feed_deadline(_fmp_total_deadline, _fmp_min_reservation, 3),
+        )
+        _apply_fmp_earnings(
+            ctx.dashboard_df,
+            deadline=_fmp_next_feed_deadline(_fmp_total_deadline, _fmp_min_reservation, 2),
+        )
+        _apply_fmp_insider(
+            ctx.dashboard_df,
+            deadline=_fmp_next_feed_deadline(_fmp_total_deadline, _fmp_min_reservation, 1),
+        )
         _apply_fmp_sector(ctx.dashboard_df)
+        _apply_fmp_econ_calendar(ctx.dashboard_df)
 
         # Wikipedia-pageviews investor-attention feature (follow-on branch
         # to PR #416/#417) -- data/attention_sources.py
