@@ -57,9 +57,15 @@ def _http_get(url: str) -> bytes:
         logger.warning("HTTP %d for %s", exc.code, url)
         raise
 
+_CIK_OVERRIDES = {
+    "XOM": "0000034088",  # Exxon Mobil Corp parent (not recent 2024 merger entity 0002115436)
+}
+
 def get_cik(symbol: str) -> Optional[str]:
     """Resolve a symbol to its 10-digit CIK string. Caches in memory (thread-safe)."""
     symbol = symbol.upper()
+    if symbol in _CIK_OVERRIDES:
+        return _CIK_OVERRIDES[symbol]
     if not _cik_cache:
         # Double-checked lock: only the first thread to find an empty cache
         # fetches company_tickers.json; the rest block, then read the populated
@@ -70,7 +76,10 @@ def get_cik(symbol: str) -> Optional[str]:
                 try:
                     data = json.loads(_http_get(SEC_TICKERS_URL).decode("utf-8"))
                     for entry in data.values():
-                        _cik_cache[entry["ticker"].upper()] = str(entry["cik_str"]).zfill(10)
+                        ticker = entry["ticker"].upper()
+                        # Do not overwrite if already populated unless it's a known parent
+                        if ticker not in _cik_cache:
+                            _cik_cache[ticker] = str(entry["cik_str"]).zfill(10)
                 except Exception as exc:
                     logger.warning("Failed to fetch SEC tickers: %s", exc)
                     return None
