@@ -1369,6 +1369,43 @@ class TestRunValidations:
             == results_par["timeseries_momentum"]["deployable"]
         )
 
+    def test_only_one_cpu_bound_adapter_in_registry(self) -> None:
+        """Regression guard for the PR #740 thread-oversubscription profiling
+        conclusion (see ``run_validations()``'s docstring and
+        ``docs/architecture/validation-and-signals.md``).
+
+        That conclusion — ``--workers N > 1`` alongside ``lgbm_ranker`` does
+        NOT meaningfully oversubscribe CPU cores — was measured, not proven
+        in general; it rests specifically on ``lgbm_ranker`` being the ONLY
+        ``STRATEGY_REGISTRY`` adapter that genuinely retrains a real model
+        per CPCV fold (every other adapter replays a precomputed, cheap,
+        I/O-bound return series). If a second adapter built from
+        ``_build_lgbm_ranker_adapter`` (or an equivalent real-training
+        builder) is ever registered, two worker threads could run genuine
+        concurrent LightGBM training at once — a scenario this profiling
+        pass never measured (only up to 10-way concurrency of the SAME
+        adapter was tested) — and the docstring caveat must be re-profiled
+        before it can still be trusted.
+        """
+        from scripts.refresh_validations import (
+            STRATEGY_REGISTRY,
+            _build_lgbm_ranker_adapter,
+        )
+
+        cpu_bound = [
+            name
+            for name, (adapter_fn, _turnover, _universe) in STRATEGY_REGISTRY.items()
+            if adapter_fn is _build_lgbm_ranker_adapter
+        ]
+        assert cpu_bound == ["lgbm_ranker"], (
+            "A new STRATEGY_REGISTRY entry now reuses "
+            "_build_lgbm_ranker_adapter (real per-fold model retraining) — "
+            "re-profile the --workers thread-oversubscription question "
+            "(see run_validations()'s docstring) before trusting the "
+            "existing 'negligible impact' conclusion, which assumed only "
+            "one CPU-bound adapter could ever run concurrently."
+        )
+
 
 # ---------------------------------------------------------------------------
 # TestMainCLI

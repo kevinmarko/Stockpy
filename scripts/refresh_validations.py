@@ -3714,6 +3714,36 @@ def run_validations(
         Defaults to ``1`` (sequential execution). When ``> 1``, uses a thread pool
         to validate independent strategies in parallel.
 
+        CPU-oversubscription caveat (PR #740 code-review follow-up, profiled
+        2026-08-14 — see ``docs/architecture/validation-and-signals.md`` for
+        the full methodology/numbers): ``lgbm_ranker`` is the one adapter in
+        ``STRATEGY_REGISTRY`` that GENUINELY RETRAINS a real LightGBM model
+        per CPCV fold (~45 real ``.fit()`` calls at the CLI defaults); every
+        other adapter just replays a precomputed return series — cheap,
+        mostly I/O-bound pandas slicing. LightGBM's own ``n_jobs``/
+        ``num_threads`` is left at its library default (auto = all physical
+        cores) here, so a naive worry is that ``--workers N > 1`` alongside
+        ``lgbm_ranker`` oversubscribes the machine — N worker threads each
+        trying to claim every core. Measured, not assumed: a synthetic-panel
+        micro-benchmark ran up to 10 concurrent
+        ``LGBMCrossSectionalRanker.train()`` calls (far more concurrency than
+        this function can ever actually create, since only ONE strategy in
+        the registry is CPU-bound) and wall-clock time was *always* faster
+        than running them sequentially — never worse — on the profiling
+        machine (10 physical cores; e.g. 10x concurrent ≈2.3x a single call's
+        time vs. a ≈10x sequential ceiling). A real end-to-end
+        ``lgbm_ranker`` + two cheap-adapter CLI run showed ``--workers 1``
+        vs. ``--workers 3`` wall-clock within measurement noise of each
+        other. **No code fix was applied** — capping LightGBM's thread count
+        or excluding ``lgbm_ranker`` from the pool would trade away real,
+        measured concurrency benefit to guard against a regression that
+        doesn't reproduce here. Re-profile before trusting this on a
+        materially smaller machine (few cores), or if a SECOND CPU-bound
+        (real-model-training) adapter is ever added to ``STRATEGY_REGISTRY``
+        — the "only one CPU-bound strategy" precondition this conclusion
+        rests on would no longer hold, and concurrent training calls have
+        not been profiled beyond 10-way synthetic concurrency.
+
     Returns
     -------
     dict mapping strategy_id → summary dict (same schema as
@@ -3937,7 +3967,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument(
         "--workers", "-w", dest="max_workers", type=int, default=1,
-        help="Number of concurrent workers for strategy validation (default: 1 for sequential).",
+        help=(
+            "Number of concurrent workers for strategy validation (default: 1 "
+            "for sequential). See run_validations()'s docstring for the "
+            "profiled lgbm_ranker/LightGBM thread-oversubscription caveat "
+            "(measured negligible on a 10-core machine as of 2026-08-14)."
+        ),
     )
     parser.add_argument(
         "--json", dest="as_json", action="store_true",
