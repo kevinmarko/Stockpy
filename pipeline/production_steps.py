@@ -1117,6 +1117,13 @@ def _apply_fmp_analyst(dashboard_df: pd.DataFrame, deadline: Optional[float] = N
                         grade_score=fetched.get("grade_score"),
                         source=fetched.get("source", "fmp"),
                     )
+                else:
+                    # Persist a no-data sentinel so fresh_enough evaluates
+                    # True on subsequent cycles — prevents endlessly
+                    # re-fetching symbols with no analyst coverage.
+                    store.upsert_analyst_snapshot(
+                        sym, today_str, source="fmp-no-data",
+                    )
 
             snapshot = store.get_analyst_snapshot(sym)
             if not snapshot:
@@ -1249,6 +1256,11 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame, deadline: Optional[float] = 
                 rows = fetch_earnings_rows(sym)
                 if rows:
                     store.upsert_earnings_events(rows)
+                else:
+                    # Persist a no-data sentinel so fresh_enough evaluates
+                    # True on subsequent cycles — prevents endlessly
+                    # re-fetching symbols with no earnings data.
+                    store.mark_earnings_fetched(sym)
 
             # Trailing surprise: rules 1 + 2 -- event_date <= as_of AND a
             # non-null actual, BOTH filters, so a vendor bug populating an
@@ -1276,7 +1288,7 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame, deadline: Optional[float] = 
             if future_rows:
                 row = future_rows[0]
                 event_date = row.get("event_date")
-                if event_date:
+                if event_date and not str(event_date).startswith("1900") and not str(event_date).startswith("__"):
                     next_date_map[sym] = str(event_date)
                     try:
                         d_next = datetime.strptime(str(event_date)[:10], "%Y-%m-%d").date()
@@ -1409,6 +1421,11 @@ def _apply_fmp_insider(dashboard_df: pd.DataFrame, deadline: Optional[float] = N
                 fetched_rows = fetch_insider_stats(sym)
                 if fetched_rows:
                     store.upsert_insider_stats(fetched_rows)
+                else:
+                    # Persist a no-data sentinel so the cadence gate
+                    # evaluates as fresh on subsequent cycles — prevents
+                    # endlessly re-fetching symbols with no insider data.
+                    store.mark_insider_fetched(sym)
 
             # ── Read back the FULL archive and apply the minimum-lag filter
             # ourselves -- get_insider_stats() deliberately does not, so the
@@ -1553,9 +1570,13 @@ def _apply_fmp_econ_calendar(dashboard_df: pd.DataFrame) -> None:
 
     try:
         from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
         from data.fmp_feeds_market import fetch_economics_calendar
 
-        today_str = datetime.now(timezone.utc).date().isoformat()
+        # Use US Eastern — FMP economic calendar dates are in ET, not UTC.
+        # Using UTC would roll over to "tomorrow" during US evening hours,
+        # incorrectly filtering out same-day events.
+        today_str = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
         events = fetch_economics_calendar(from_date=today_str)
         if not events:
             return
@@ -1960,15 +1981,27 @@ class StrategyEvalStep(PipelineStep):
         # scoring, sizing, or execution -- see config.COLUMN_SCHEMA's "FMP
         # DIAGNOSTIC FEEDS" section for why that is also the no-lookahead
         # guarantee for this series.
-        # Shared monotonic wall-clock budget for per-symbol FMP diagnostic feeds
+        # Shared monotonic wall-clock budget for per-symbol FMP diagnostic feeds.
+        # Split into per-feed sub-deadlines with a minimum reservation to prevent
+        # starvation — if analyst exhausts its share, earnings and insider still
+        # get at least their reserved minimum.
         import time as _time
         _raw_fmp_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", 120.0)
         _fmp_max_seconds = max(0.0, float(120.0 if _raw_fmp_budget is None else _raw_fmp_budget))
-        _fmp_deadline = _time.monotonic() + _fmp_max_seconds
+        _fmp_total_deadline = _time.monotonic() + _fmp_max_seconds
+        _num_feeds = 3  # analyst, earnings, insider
+        _per_feed_budget = _fmp_max_seconds / _num_feeds if _num_feeds else _fmp_max_seconds
+        _min_reservation = max(_per_feed_budget, 15.0)  # at least 15s per feed
 
-        _apply_fmp_analyst(ctx.dashboard_df, deadline=_fmp_deadline)
-        _apply_fmp_earnings(ctx.dashboard_df, deadline=_fmp_deadline)
-        _apply_fmp_insider(ctx.dashboard_df, deadline=_fmp_deadline)
+        _analyst_deadline = _time.monotonic() + _min_reservation
+        # Earnings and insider deadlines computed after analyst finishes,
+        # splitting remaining time equally.
+        _apply_fmp_analyst(ctx.dashboard_df, deadline=min(_analyst_deadline, _fmp_total_deadline))
+        _remaining = max(0.0, _fmp_total_deadline - _time.monotonic())
+        _earnings_deadline = _time.monotonic() + max(_remaining / 2, min(_min_reservation, _remaining))
+        _apply_fmp_earnings(ctx.dashboard_df, deadline=min(_earnings_deadline, _fmp_total_deadline))
+        _remaining = max(0.0, _fmp_total_deadline - _time.monotonic())
+        _apply_fmp_insider(ctx.dashboard_df, deadline=_fmp_total_deadline)
         _apply_fmp_sector(ctx.dashboard_df)
         _apply_fmp_econ_calendar(ctx.dashboard_df)
 

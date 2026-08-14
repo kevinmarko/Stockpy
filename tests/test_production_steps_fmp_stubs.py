@@ -254,3 +254,40 @@ class TestSharedDeadline:
             for col in _FMP_ANALYST_COLUMNS:
                 assert df[col].isna().all()
 
+    def test_time_consumed_by_analyst_reduces_budget_for_subsequent_feeds(self):
+        """Dynamic deadline check: advancing monotonic time past the deadline
+        during earlier feed causes subsequent feeds to hit budget_exhausted."""
+        import time
+        import uuid
+        from settings import settings
+
+        sym = f"DYN_SYM_{uuid.uuid4().hex[:8]}"
+        df = _df([
+            {"Symbol": sym, "sector": "Technology", "Price": 100.0},
+        ])
+        start_time = 1000.0
+        shared_deadline = 1010.0  # 10 second total budget
+
+        current_time = [start_time]
+
+        def fake_monotonic():
+            return current_time[0]
+
+        with patch.object(settings, "FMP_ANALYST_ENABLED", True), \
+             patch.object(settings, "FMP_EARNINGS_ENABLED", True), \
+             patch.object(settings, "FMP_INSIDER_ENABLED", True), \
+             patch("time.monotonic", side_effect=fake_monotonic), \
+             patch("data.fmp_feeds_company.fetch_analyst_snapshot", return_value={"target_consensus": 150.0}) as mock_analyst, \
+             patch("data.fmp_feeds_company.fetch_earnings_rows") as mock_earnings:
+
+            # First feed runs at t=1000, succeeds
+            _apply_fmp_analyst(df, deadline=shared_deadline)
+            assert mock_analyst.call_count >= 1
+
+            # Time advances past shared deadline (e.g. analyst took 15 seconds)
+            current_time[0] = 1015.0
+
+            # Subsequent feed immediately skips network because deadline passed
+            _apply_fmp_earnings(df, deadline=shared_deadline)
+            mock_earnings.assert_not_called()
+

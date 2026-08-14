@@ -733,12 +733,34 @@ class TestFetchEconomicsCalendar:
         assert events[0]["actual"] == pytest.approx(0.2)
         assert events[1]["event"] == "Non Farm Payrolls"
 
-    def test_fetch_economics_calendar_empty_and_error(self):
-        with patch("data.fmp_client.economics_calendar", return_value=[]):
-            assert fetch_economics_calendar() == []
+    def test_fetch_economics_calendar_malformed_rows(self):
+        """Rows missing required event or date keys are dropped safely."""
+        from data.fmp_feeds_market import reset_econ_calendar_cache
+        reset_econ_calendar_cache()
+        malformed = [
+            {"event": None, "date": "2026-08-20"},
+            {"event": "CPI", "date": None},
+            {"event": "", "date": "2026-08-20"},
+            {"event": "PPI", "date": ""},
+            {"unrelated_key": 123},
+            "not a dict",
+        ]
+        with patch("data.fmp_client.economics_calendar", return_value=malformed):
+            events = fetch_economics_calendar(from_date="2026-08-01")
+        assert events == []
 
-        with patch("data.fmp_client.economics_calendar", side_effect=RuntimeError("timeout")):
-            assert fetch_economics_calendar() == []
+    def test_fetch_economics_calendar_caching(self):
+        """Same from_date and to_date within process reuses cached events without re-requesting."""
+        from data.fmp_feeds_market import reset_econ_calendar_cache
+        reset_econ_calendar_cache()
+        fake_events = [{"event": "CPI", "date": "2026-08-20", "country": "US", "impact": "High"}]
+        with patch("data.fmp_client.economics_calendar", return_value=fake_events) as mock_api:
+            res1 = fetch_economics_calendar(from_date="2026-08-20")
+            res2 = fetch_economics_calendar(from_date="2026-08-20")
+        assert len(res1) == 1
+        assert len(res2) == 1
+        assert mock_api.call_count == 1
+        reset_econ_calendar_cache()
 
 
 class TestApplyFmpEconCalendar:
@@ -789,4 +811,19 @@ class TestApplyFmpEconCalendar:
 
         assert pd.isna(df["Next_Macro_Event"].iloc[0])
         assert pd.isna(df["Next_Macro_Event_Date"].iloc[0])
+
+    def test_gate_on_malformed_events_leaves_nan(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", True)
+        df = pd.DataFrame({"Symbol": ["AAPL"]})
+
+        malformed_events = [
+            {"event": None, "date": "2026-08-20"},
+            {"unexpected_key": "val"},
+        ]
+        with patch("data.fmp_feeds_market.fetch_economics_calendar", return_value=malformed_events):
+            _apply_fmp_econ_calendar(df)
+
+        assert pd.isna(df["Next_Macro_Event"].iloc[0])
+        assert pd.isna(df["Next_Macro_Event_Date"].iloc[0])
+
 

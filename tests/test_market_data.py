@@ -1399,18 +1399,24 @@ class TestFMPFundamentalsChain:
                 cp.get_fundamentals("AAPL")
             mock_get.assert_not_called()
 
-    # -- 2. FUNDAMENTALS_SOURCE=fmp without a key -> RuntimeError -------
-    def test_fmp_source_without_api_key_raises_at_construction(self):
-        from data.market_data import CompositeProvider
+    # -- 2. FUNDAMENTALS_SOURCE=fmp without a key -> graceful fallback ---
+    def test_fmp_source_without_api_key_falls_back_to_yahoo(self, caplog):
+        import logging
+        from data.market_data import CompositeProvider, FMPProvider
         with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY=None):
-            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
-                CompositeProvider()
+            with caplog.at_level(logging.WARNING, logger="data.market_data"):
+                cp = CompositeProvider()
+        assert not isinstance(cp._fundamentals_provider, FMPProvider)
+        assert "falling back to Yahoo" in caplog.text
 
-    def test_fmp_source_with_blank_api_key_also_raises(self):
-        from data.market_data import CompositeProvider
+    def test_fmp_source_with_blank_api_key_also_falls_back(self, caplog):
+        import logging
+        from data.market_data import CompositeProvider, FMPProvider
         with self._patched(FUNDAMENTALS_SOURCE="fmp", FMP_API_KEY="   "):
-            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
-                CompositeProvider()
+            with caplog.at_level(logging.WARNING, logger="data.market_data"):
+                cp = CompositeProvider()
+        assert not isinstance(cp._fundamentals_provider, FMPProvider)
+        assert "FMP_API_KEY is not set" in caplog.text
 
     def test_fmp_source_with_key_selects_fmp_provider(self):
         from data.market_data import CompositeProvider, FMPProvider
@@ -1608,18 +1614,24 @@ class TestFMPQuoteBarsChain:
                 cp.get_intraday_bars("AAPL")
             mock_get.assert_not_called()
 
-    # -- 2. MARKET_DATA_PROVIDER=fmp without a key -> RuntimeError -------
-    def test_fmp_provider_without_api_key_raises_at_construction(self):
-        from data.market_data import CompositeProvider
+    # -- 2. MARKET_DATA_PROVIDER=fmp without a key -> graceful fallback --
+    def test_fmp_provider_without_api_key_falls_back_to_default(self, caplog):
+        import logging
+        from data.market_data import CompositeProvider, FMPProvider
         with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY=None):
-            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
-                CompositeProvider()
+            with caplog.at_level(logging.WARNING, logger="data.market_data"):
+                cp = CompositeProvider()
+        assert not isinstance(cp._quote_provider, FMPProvider)
+        assert "falling back to default provider" in caplog.text
 
-    def test_fmp_provider_with_blank_api_key_also_raises(self):
-        from data.market_data import CompositeProvider
+    def test_fmp_provider_with_blank_api_key_also_falls_back(self, caplog):
+        import logging
+        from data.market_data import CompositeProvider, FMPProvider
         with self._patched(MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="   "):
-            with pytest.raises(RuntimeError, match="FMP_API_KEY is not set"):
-                CompositeProvider()
+            with caplog.at_level(logging.WARNING, logger="data.market_data"):
+                cp = CompositeProvider()
+        assert not isinstance(cp._quote_provider, FMPProvider)
+        assert "FMP_API_KEY is not set" in caplog.text
 
     def test_fmp_provider_with_key_selects_fmp_provider(self):
         from data.market_data import CompositeProvider, FMPProvider

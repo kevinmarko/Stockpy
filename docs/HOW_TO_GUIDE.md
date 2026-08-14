@@ -33,7 +33,7 @@ A practical reference for running, configuring, and interpreting every part of t
 
 InvestYo is an **automated quantitative analysis pipeline**. Every time you run it, it:
 
-1. **Fetches live data** — price history *and* company fundamentals from Yahoo Finance (fundamentals are computed from Yahoo's free financial statements — no paid data vendor required), macroeconomic indicators from FRED (Federal Reserve Economic Data)
+1. **Fetches live data** — price history *and* company fundamentals (using Financial Modeling Prep as the primary provider, with Yahoo's free financial statements as fallback), macroeconomic indicators from FRED (Federal Reserve Economic Data)
 2. **Computes indicators** — RSI, MACD, Aroon, ATR, GARCH volatility, Graham Number, implied volatility rank, and more
 3. **Runs forecasts** — ARIMA, Monte Carlo simulation, Holt-Winters exponential smoothing, and a CNN-LSTM deep learning model, all multi-horizon
 4. **Detects the macro regime** — classifies the current environment as RISK ON / NEUTRAL / RECESSION / CREDIT EVENT using yield curve, credit spreads, VIX, and a Hidden Markov Model (HMM) second opinion
@@ -125,9 +125,9 @@ If you omit `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`, the pipeline still runs full
 | `OUTPUT_DIR` | `./output` | Where HTML reports, heartbeat, and state snapshots are written |
 | `LOG_LEVEL` | `INFO` | Python logging level |
 | `PAPER_TRADING_START_DATE` | _(none)_ | Set this to today's date (YYYY-MM-DD format) when you start paper trading — the preflight check uses it to verify 90 days of history |
-| `FMP_NEWS_ENABLED` | `false` | When `true` (and `FMP_API_KEY` is set), Financial Modeling Prep becomes the PRIMARY company-news/earnings-date provider for the `news_catalyst` signal, Opal research briefs, and the Antigravity sentiment agent — recommended, since FMP covers ≥6 months of real news history vs. Finnhub's ~3-month free-tier cap. Finnhub is used automatically as a fallback either way |
-| `FINNHUB_API_KEY` | _(none)_ | Used by the `news_catalyst` signal (company news / earnings headlines) as the fallback provider when `FMP_NEWS_ENABLED` is off, or when FMP has nothing for a symbol. **Not** a fundamentals source — fundamentals are Yahoo statement-derived (free). Leave unset (with `FMP_NEWS_ENABLED=false`) to run without any news-catalyst headline source |
-| `FUNDAMENTALS_SOURCE` | `yahoo` | Fundamentals backend: `yahoo` (statement-derived, default) or `yfinance_info` (raw `.info` fallback) |
+| `FMP_NEWS_ENABLED` | `true` | When `true` (and `FMP_API_KEY` is set), Financial Modeling Prep becomes the PRIMARY company-news/earnings-date provider for the `news_catalyst` signal, Opal research briefs, and the Antigravity sentiment agent — recommended, since FMP covers ≥6 months of real news history vs. Finnhub's ~3-month free-tier cap. Finnhub is used automatically as a fallback either way |
+| `FINNHUB_API_KEY` | _(none)_ | Used by the `news_catalyst` signal (company news / earnings headlines) as the fallback provider when `FMP_NEWS_ENABLED` is off, or when FMP has nothing for a symbol. **Not** a fundamentals source — fundamentals are FMP-primary with Yahoo statement-derived fallback. Leave unset (with `FMP_NEWS_ENABLED=false`) to run without any news-catalyst headline source |
+| `FUNDAMENTALS_SOURCE` | `fmp` | Fundamentals backend: `fmp` (default), `yahoo` (statement-derived), or `yfinance_info` (raw `.info` fallback) |
 | `FORECAST_USE_GARCH_SIGMA` | `true` | Use the GJR-GARCH(1,1) volatility (annualized, converted to daily via ÷√252) as the Monte Carlo sigma, so the MC confidence band widens in turbulent regimes and tightens in calm ones. `false` restores the naive historical-stdev sigma |
 | `FORECAST_PROPHET_WEIGHT` | `0.25` | Weight `w` given to the Prophet 30-day forecast when blending it into the 30-day ensemble: `final = base*(1-w) + prophet*w`. `0.0` disables Prophet's influence on the blend (Prophet must also be installed to have any effect) |
 

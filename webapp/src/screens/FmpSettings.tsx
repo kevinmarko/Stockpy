@@ -34,6 +34,7 @@ const FMP_LABEL_MAP: Record<string, string> = {
   FMP_OPTIONS_HEALTH_ENABLED: "Enable Options Fundamental Health Overlay",
   FMP_OPTIONS_CONTEXT_ENABLED: "Enable Options Market Context Overlay",
   FMP_PEERS_ENABLED: "Enable On-Demand Peer Suggestion Feed",
+  FMP_PAPER_STARTING_CASH: "Paper Account Starting Cash ($)",
 };
 
 export function FmpSettings() {
