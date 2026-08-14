@@ -37,14 +37,49 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["model_registry_rows"]
 
-# pilots/ sits at the repo root, so parent.parent is the repo root.
-_REGISTRY_PATH = Path(__file__).resolve().parent.parent / "ml" / "registry.yaml"
+
+def _discover_latest_artifact_date(model_name: str) -> Optional[Tuple[str, str]]:
+    """Check ``settings.LOCAL_DATA_ROOT / 'ml_models'`` for newer dated .pkl artifacts.
+
+    Returns ``(iso_date_str, filename)`` or ``None``. Never raises (CONSTRAINT #6).
+    """
+    try:
+        from settings import settings  # noqa: PLC0415
+        models_dir = settings.LOCAL_DATA_ROOT / "ml_models"
+        if not models_dir.exists():
+            return None
+
+        prefix: Optional[str] = None
+        if model_name == "lgbm_ranker":
+            prefix = "lgbm_"
+        elif model_name.startswith("meta_labeler_"):
+            sig = model_name.replace("meta_labeler_", "")
+            prefix = f"meta_{sig}_"
+
+        if not prefix:
+            return None
+
+        # Match files like lgbm_YYYYMMDD.pkl or meta_<signal>_YYYYMMDD.pkl
+        pattern = f"{prefix}[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].pkl"
+        files = sorted(models_dir.glob(pattern))
+        if not files:
+            return None
+
+        latest_file = files[-1]
+        stem = latest_file.stem
+        date_part = stem.rsplit("_", 1)[-1]
+        if len(date_part) == 8 and date_part.isdigit():
+            iso_date = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:]}"
+            return iso_date, latest_file.name
+    except Exception as exc:  # noqa: BLE001 — dead-letter
+        logger.debug("artifact discovery failed for %s: %s", model_name, exc)
+    return None
 
 
 def _parse_trained_date(value: Any) -> Optional[date]:
@@ -107,6 +142,15 @@ def _parse_registry_rows(text: str) -> List[Dict[str, Any]]:
             continue  # skip malformed entry rather than fabricating fields
 
         trained = _parse_trained_date(meta.get("trained_date"))
+
+        # Self-healing discovery: if a newer dated binary artifact exists on disk, surface it
+        discovered = _discover_latest_artifact_date(str(name))
+        if discovered is not None:
+            disc_date_str, _disc_filename = discovered
+            disc_date = _parse_trained_date(disc_date_str)
+            if disc_date is not None and (trained is None or disc_date > trained):
+                trained = disc_date
+
         age_days: Optional[int] = None
         needs_retrain: Optional[bool] = None
         if trained is not None and MODEL_RETRAIN_WINDOW_DAYS is not None:
@@ -117,7 +161,7 @@ def _parse_registry_rows(text: str) -> List[Dict[str, Any]]:
             {
                 "name": str(name),
                 "role": meta.get("role"),
-                "trained_date": _as_str_or_none(meta.get("trained_date")),
+                "trained_date": _as_str_or_none(trained) if trained is not None else _as_str_or_none(meta.get("trained_date")),
                 "cpcv_dsr": meta.get("cpcv_dsr"),
                 "pbo": meta.get("pbo"),
                 "cpcv_mean_oos_sharpe": meta.get("cpcv_mean_oos_sharpe"),
@@ -146,9 +190,11 @@ def model_registry_rows() -> List[Dict[str, Any]]:
     empty list so the API returns an honest empty registry rather than a 500.
     """
     try:
-        if not _REGISTRY_PATH.exists():
+        from ml.registry_io import resolve_registry_path  # noqa: PLC0415
+        reg_path = resolve_registry_path()
+        if not reg_path.exists():
             return []
-        text = _REGISTRY_PATH.read_text(encoding="utf-8")
+        text = reg_path.read_text(encoding="utf-8")
     except Exception as exc:  # noqa: BLE001 — dead-letter
         logger.debug("registry file read failed: %s", exc)
         return []

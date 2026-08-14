@@ -172,3 +172,69 @@ def test_meta_labeler_registry_register_has():
 
     assert registry.has("ts_momentum")
     assert not registry.has("cross_sectional_momentum")
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Registry path resolution & LOCAL_DATA_ROOT priorities
+# ---------------------------------------------------------------------------
+
+def test_resolve_registry_path_priorities(tmp_path, monkeypatch):
+    from settings import settings
+    from ml.registry_io import resolve_registry_path, _DEFAULT_REGISTRY_PATH
+
+    # Priority 1: Explicit path
+    custom = tmp_path / "custom.yaml"
+    assert resolve_registry_path(custom) == custom
+
+    # Priority 2: LOCAL_DATA_ROOT / ml_models / registry.yaml if it exists
+    fake_local = tmp_path / "stockpy_local"
+    local_reg = fake_local / "ml_models" / "registry.yaml"
+    local_reg.parent.mkdir(parents=True)
+    local_reg.write_text("models: {}\n", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+    assert resolve_registry_path() == local_reg
+
+    # Priority 3: Fallback to _DEFAULT_REGISTRY_PATH if local doesn't exist
+    local_reg.unlink()
+    assert resolve_registry_path() == _DEFAULT_REGISTRY_PATH
+
+
+def test_model_registry_rows_self_healing(tmp_path, monkeypatch):
+    """Self-healing discovery: if a newer dated .pkl exists in LOCAL_DATA_ROOT/ml_models,
+    model_registry_rows surfaces the real artifact date and calculates freshness."""
+    from settings import settings
+    from pilots.models import model_registry_rows
+
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
+
+    # Write a registry with an older date
+    reg_file = models_dir / "registry.yaml"
+    reg_file.write_text("""
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: '2026-08-01'
+    cpcv_dsr: 0.99
+    pbo: 0.2
+    n_train: 400
+    deployable: true
+    notes: Test note
+    artifact_file: lgbm_20260801.pkl
+""", encoding="utf-8")
+
+    # Create a newer physical artifact on disk
+    (models_dir / "lgbm_20260814.pkl").write_text("binary", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    rows = model_registry_rows()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["name"] == "lgbm_ranker"
+    # Self-healed to the newer physical artifact date
+    assert row["trained_date"] == "2026-08-14"
+

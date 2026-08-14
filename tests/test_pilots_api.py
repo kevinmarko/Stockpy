@@ -1454,7 +1454,8 @@ class TestRollingBeta:
 
 class TestModelsRegistry:
     def test_reads_registry_rows(self):
-        resp = client.get("/models")
+        with mock.patch.object(settings, "STATE_API_TOKEN", ""):
+            resp = client.get("/models")
         assert resp.status_code == 200
         rows = resp.json()
         assert isinstance(rows, list) and rows  # ml/registry.yaml is checked in
@@ -1475,7 +1476,8 @@ class TestModelsRegistry:
         from datetime import date, datetime
         from gui.help_content import MODEL_RETRAIN_WINDOW_DAYS
 
-        resp = client.get("/models")
+        with mock.patch.object(settings, "STATE_API_TOKEN", ""):
+            resp = client.get("/models")
         rows = resp.json()
         checked_any = False
         for row in rows:

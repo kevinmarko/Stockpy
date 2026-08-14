@@ -82,13 +82,34 @@ def compute_deployable(cpcv_dsr: Optional[float], pbo: Optional[float]) -> bool:
     )
 
 
+def resolve_registry_path(path: Optional[Path] = None) -> Path:
+    """Resolve the registry YAML path.
+
+    Priority:
+    1. Explicit caller-provided ``path``.
+    2. Machine-global runtime registry: ``settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"``
+       if it exists.
+    3. Repo-root fallback: ``_DEFAULT_REGISTRY_PATH`` (``ml/registry.yaml``).
+    """
+    if path is not None:
+        return Path(path)
+    try:
+        from settings import settings  # noqa: PLC0415
+        local_path = settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"
+        if local_path.exists():
+            return local_path
+    except Exception:
+        pass
+    return _DEFAULT_REGISTRY_PATH
+
+
 def load_registry(path: Optional[Path] = None) -> dict:
     """Load the registry YAML into a plain dict (empty dict on missing file)."""
-    path = Path(path) if path is not None else _DEFAULT_REGISTRY_PATH
-    if not path.exists():
-        logger.warning("Registry file not found at %s — starting empty.", path)
+    resolved = resolve_registry_path(path)
+    if not resolved.exists():
+        logger.warning("Registry file not found at %s — starting empty.", resolved)
         return {}
-    with open(path, "r") as f:
+    with open(resolved, "r") as f:
         data = yaml.safe_load(f) or {}
     return data
 
@@ -114,29 +135,35 @@ def update_model_metrics(
     :func:`compute_deployable` — callers do NOT pass it directly, so the gate
     can never be spoofed.
 
-    Provenance (all optional, backward-compatible, and independent of the gate):
-    ``artifact_file`` (the exact dated pickle filename written this run),
-    ``hyperparameters`` (the model's training params dict), ``train_window``
-    (the data-split window ``{start, end, n_dates}``), ``features`` (the
-    ordered feature-column list), ``cpcv_mean_oos_sharpe``/``cpcv_mean_oos_max_dd``
-    (the mean out-of-sample Sharpe / max drawdown across CPCV held-out paths for
-    the SAME DSR-selected strategy that produced ``cpcv_dsr``/``pbo`` — see
-    ``validation.metrics.run_cpcv_evaluation``). Each is written into the entry
-    verbatim; a ``None`` value is stored as-is and never influences ``deployable``.
-    These two fields are NEVER read by :func:`compute_deployable` or any other
-    deployability decision — that gate is DSR/PBO only, exactly as before.
+    Dual-persistence:
+    When ``path`` is ``None``, writes to both ``settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"``
+    (machine-global runtime state, immune to git branch/worktree switches) AND mirrors
+    to the repo-root ``ml/registry.yaml`` (for git tracking/commits).
+    When ``path`` is explicitly passed (e.g. unit tests), only writes to that target path.
 
     Returns the resulting model sub-dict.  Raises ``KeyError`` if the model key
     does not already exist in the registry (we update in place, never invent
     new roles).
     """
-    reg_path = Path(path) if path is not None else _DEFAULT_REGISTRY_PATH
-    data = load_registry(reg_path)
+    if path is not None:
+        target_paths = [Path(path)]
+    else:
+        target_paths = []
+        try:
+            from settings import settings  # noqa: PLC0415
+            local_path = settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"
+            target_paths.append(local_path)
+        except Exception:
+            pass
+        if _DEFAULT_REGISTRY_PATH not in target_paths:
+            target_paths.append(_DEFAULT_REGISTRY_PATH)
+
+    data = load_registry(path)
 
     models = data.setdefault("models", {})
     if model_key not in models:
         raise KeyError(
-            f"Model key '{model_key}' not found in registry {reg_path}. "
+            f"Model key '{model_key}' not found in registry. "
             f"Known keys: {sorted(models.keys())}"
         )
 
@@ -152,13 +179,15 @@ def update_model_metrics(
     entry["hyperparameters"] = dict(hyperparameters) if hyperparameters is not None else None
     entry["train_window"] = dict(train_window) if train_window is not None else None
     entry["features"] = list(features) if features is not None else None
-    # CPCV out-of-sample Sharpe / max drawdown for the DSR-selected strategy —
-    # written verbatim (never derived/rounded/clamped) and NEVER consulted by
-    # compute_deployable() or any other deployability decision (DSR/PBO only).
     entry["cpcv_mean_oos_sharpe"] = cpcv_mean_oos_sharpe
     entry["cpcv_mean_oos_max_dd"] = cpcv_mean_oos_max_dd
 
-    _dump_registry(data, reg_path)
+    for target in target_paths:
+        try:
+            _dump_registry(data, target)
+        except Exception as exc:
+            logger.warning("Failed to dump registry to %s: %s", target, exc)
+
     logger.info(
         "Registry updated: %s trained_date=%s dsr=%s pbo=%s n_train=%s deployable=%s",
         model_key, trained_date, cpcv_dsr, pbo, n_train, entry["deployable"],
