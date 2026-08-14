@@ -138,6 +138,12 @@ describe("AIChatInterface Gemini Live Mode UI", () => {
 
     // Input placeholder updates for live voice/text
     expect(screen.getByPlaceholderText("Type or speak to Gemini Live...")).toBeInTheDocument();
+
+    // Toggle off
+    fireEvent.click(goLiveBtn);
+    expect(goLiveBtn).toHaveTextContent("Go Live");
+    expect(screen.getByPlaceholderText("Ask a question about your portfolio...")).toBeInTheDocument();
   });
 });
+
 

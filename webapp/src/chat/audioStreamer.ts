@@ -171,7 +171,11 @@ export class AudioPlayer {
   private getAudioContext(): AudioContext {
     if (!this.audioContext || this.audioContext.state === "closed") {
       const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.audioContext = new AudioCtxClass({ sampleRate: 24000 });
+      try {
+        this.audioContext = new AudioCtxClass({ sampleRate: 24000 });
+      } catch {
+        this.audioContext = new AudioCtxClass();
+      }
     }
     if (this.audioContext.state === "suspended") {
       this.audioContext.resume();

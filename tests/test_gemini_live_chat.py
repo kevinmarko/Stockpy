@@ -203,3 +203,87 @@ class TestLiveChatSession:
                 assert "text" in received_types
                 assert "output_transcription" in received_types
                 assert "turn_complete" in received_types
+
+    def test_live_tool_call_execution(self, monkeypatch):
+        monkeypatch.setattr(settings, "GEMINI_API_KEY", "real-key-mocked")
+
+        class _FakeFunctionCall:
+            def __init__(self, name, call_id, args):
+                self.name = name
+                self.id = call_id
+                self.args = args
+
+        class _FakeToolCall:
+            def __init__(self, calls):
+                self.function_calls = calls
+
+        class _FakeToolResponseMsg:
+            def __init__(self, calls):
+                self.tool_call = _FakeToolCall(calls)
+                self.server_content = None
+
+        sent_tool_responses = []
+
+        class _FakeAsyncGen:
+            def __init__(self, items):
+                self._items = list(items)
+                self._idx = 0
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self._idx < len(self._items):
+                    item = self._items[self._idx]
+                    self._idx += 1
+                    return item
+                while True:
+                    await asyncio.sleep(0.1)
+
+        class _FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+            async def send_realtime_input(self, **kwargs):
+                pass
+
+            async def send_tool_response(self, function_responses):
+                sent_tool_responses.append(function_responses)
+
+            def receive(self):
+                return _FakeAsyncGen([
+                    _FakeToolResponseMsg([
+                        _FakeFunctionCall("get_platform_status", "call_abc123", {})
+                    ])
+                ])
+
+        class _FakeLive:
+            @staticmethod
+            def connect(model, config):
+                return _FakeSession()
+
+        class _FakeAio:
+            live = _FakeLive()
+
+        class _FakeClient:
+            aio = _FakeAio()
+
+        from google import genai
+        with patch.object(genai, "Client", return_value=_FakeClient()):
+            with client.websocket_connect("/ws/chat/live") as ws:
+                connected = ws.receive_json()
+                assert connected["type"] == "connected"
+
+                # Wait for thought event sent to client when querying tool
+                msg = ws.receive_json()
+                assert msg["type"] == "thought"
+                assert "get_platform_status" in msg["content"]
+
+                # Ensure send_tool_response was called on the session
+                assert len(sent_tool_responses) == 1
+                assert sent_tool_responses[0][0].name == "get_platform_status"
+                assert sent_tool_responses[0][0].id == "call_abc123"
+

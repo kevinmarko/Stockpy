@@ -132,6 +132,14 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
     }
   }, [input]);
 
+  // Clean up live connection and mic when chat panel is closed
+  useEffect(() => {
+    if (!isOpen && isLiveMode) {
+      disconnectLive();
+      setIsLiveMode(false);
+    }
+  }, [isOpen, isLiveMode, disconnectLive]);
+
   const toggleThought = (idx: number) => {
     setExpandedThoughts(prev => ({ ...prev, [idx]: !prev[idx] }));
   };

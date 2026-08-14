@@ -360,6 +360,8 @@ async def ws_live_chat_endpoint(
             output_audio_transcription=types.AudioTranscriptionConfig(),
         )
 
+        tool_map = {getattr(fn, "__name__", str(fn)): fn for fn in _CHAT_TOOLS}
+
         await websocket.send_json({
             "type": "connected",
             "model": model_name,
@@ -408,6 +410,33 @@ async def ws_live_chat_endpoint(
             async def gemini_to_client():
                 try:
                     async for response in session.receive():
+                        # Handle live tool calls from Gemini
+                        if getattr(response, "tool_call", None) and response.tool_call.function_calls:
+                            function_responses = []
+                            for call in response.tool_call.function_calls:
+                                fn = tool_map.get(call.name)
+                                await websocket.send_json({
+                                    "type": "thought",
+                                    "content": f"Querying {call.name}..."
+                                })
+                                if fn:
+                                    try:
+                                        result = fn(**(call.args or {}))
+                                    except Exception as err:
+                                        result = {"error": f"Tool execution error: {err}"}
+                                else:
+                                    result = {"error": f"Unknown tool: {call.name}"}
+
+                                function_responses.append(
+                                    types.FunctionResponse(
+                                        name=call.name,
+                                        id=call.id,
+                                        response={"result": result}
+                                    )
+                                )
+                            if function_responses:
+                                await session.send_tool_response(function_responses=function_responses)
+
                         server_content = response.server_content
                         if server_content:
                             if server_content.model_turn:
