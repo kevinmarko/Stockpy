@@ -384,3 +384,34 @@ class TestDaemonShutdownTimeoutBounds:
 
         with pytest.raises(Exception):
             Settings(DAEMON_SHUTDOWN_TIMEOUT_SECONDS=0.0)
+
+
+class TestFMPSettingsDefaults:
+    """Verifies that all FMP capability flags, provider selectors, and realtime
+    quote labels default to ON / FMP per explicit operator decision."""
+
+    def test_all_fmp_defaults_are_on(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+        s = Settings(_env_file=None)
+
+        # Provider defaults
+        assert s.MARKET_DATA_PROVIDER == "fmp"
+        assert s.FUNDAMENTALS_SOURCE == "fmp"
+
+        # 14 capability flags + quotes realtime
+        assert s.FMP_QUOTES_ENABLED is True
+        assert s.FMP_QUOTES_REALTIME is True
+        assert s.FMP_BARS_ENABLED is True
+        assert s.FMP_FUNDAMENTALS_ENABLED is True
+        assert s.FMP_ANALYST_ENABLED is True
+        assert s.FMP_EARNINGS_ENABLED is True
+        assert s.FMP_NEWS_ENABLED is True
+        assert s.FMP_MACRO_ENABLED is True
+        assert s.FMP_ECON_CALENDAR_ENABLED is True
+        assert s.FMP_INSIDER_ENABLED is True
+        assert s.FMP_SECTOR_SNAPSHOT_ENABLED is True
+        assert s.FMP_OPTIONS_HEALTH_ENABLED is True
+        assert s.FMP_OPTIONS_CONTEXT_ENABLED is True
+        assert s.FMP_PEERS_ENABLED is True
+        assert s.FMP_UNIVERSE_ENABLED is True
+

@@ -652,6 +652,7 @@ class TestCompositeProviderSelection:
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
             MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+            FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)
@@ -751,6 +752,7 @@ class TestProviderProvenanceAttributes:
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
             MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+            FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)
@@ -1026,7 +1028,7 @@ class TestSingleton:
     def test_singleton_returns_same_instance(self):
         from data.market_data import get_provider, reset_provider
         reset_provider()
-        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None):
+        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
             p1 = get_provider()
             p2 = get_provider()
         assert p1 is p2
@@ -1034,10 +1036,10 @@ class TestSingleton:
     def test_reset_forces_new_instance(self):
         from data.market_data import get_provider, reset_provider
         reset_provider()
-        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None):
+        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
             p1 = get_provider()
         reset_provider()
-        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None):
+        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
             p2 = get_provider()
         assert p1 is not p2
 
@@ -1186,6 +1188,7 @@ class TestCompositeProviderFundamentalsCache:
         with patch.multiple(
             "settings.settings",
             FINNHUB_API_KEY=None, ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+            MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo",
         ):
             cp = CompositeProvider()
             call_count = {"n": 0}
@@ -1258,6 +1261,7 @@ class TestCompositeProviderSettingsWiring:
     def _patched(self, **overrides):
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)

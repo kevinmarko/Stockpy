@@ -22,11 +22,18 @@ const FMP_LABEL_MAP: Record<string, string> = {
   FMP_EARNINGS_REFRESH_HOURS: "Earnings Refresh Interval (hrs)",
   FMP_MACRO_ENABLED: "Enable Macroeconomic Feed",
   FMP_ECON_INDICATORS: "Macro Indicators (Comma-separated)",
+  FMP_ECON_CALENDAR_ENABLED: "Enable Economics Calendar Feed",
   FMP_INSIDER_ENABLED: "Enable Insider Trading Feed",
   FMP_INSIDER_REFRESH_DAYS: "Insider Trading Refresh Interval (days)",
   FMP_INSIDER_MIN_LAG_DAYS: "Insider Trading Min Lag (days)",
   FMP_SECTOR_SNAPSHOT_ENABLED: "Enable Sector Snapshot",
   FMP_UNIVERSE_ENABLED: "Enable S&P 500 Constituent-Changes Feed",
+  FMP_NEWS_ENABLED: "Enable News Feed",
+  FMP_NEWS_PAGE_LIMIT: "News Page Limit",
+  FMP_NEWS_MAX_PAGES: "News Max Pages",
+  FMP_OPTIONS_HEALTH_ENABLED: "Enable Options Fundamental Health Overlay",
+  FMP_OPTIONS_CONTEXT_ENABLED: "Enable Options Market Context Overlay",
+  FMP_PEERS_ENABLED: "Enable On-Demand Peer Suggestion Feed",
 };
 
 export function FmpSettings() {

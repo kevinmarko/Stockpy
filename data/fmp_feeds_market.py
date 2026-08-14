@@ -324,6 +324,10 @@ def fetch_sector_snapshot(
         return []
 
 
+# NOTE: Intentionally unwired from production pipeline cycles (available for
+# on-demand / API lookup only). Wiring this into the automated cycle would
+# introduce a second, unreconciled VIX source against the macro kill switch's
+# authoritative FRED VIXCLS feed.
 def fetch_volatility_benchmarks() -> Dict[str, Optional[float]]:
     """Fetch quotes for major volatility benchmarks: ^VIX, ^VVIX, ^VXN, ^SKEW (``/batch-index-quotes``).
 

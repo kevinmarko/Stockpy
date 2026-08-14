@@ -1022,8 +1022,13 @@ _FMP_SECTOR_COLUMNS = (
     'Sector_1D_Change',
 )
 
+_FMP_ECON_CALENDAR_COLUMNS = (
+    'Next_Macro_Event',
+    'Next_Macro_Event_Date',
+)
 
-def _apply_fmp_analyst(dashboard_df: pd.DataFrame) -> None:
+
+def _apply_fmp_analyst(dashboard_df: pd.DataFrame, deadline: Optional[float] = None) -> None:
     """Populate the three FMP analyst-consensus columns.
 
     ``Analyst_Target_Consensus`` (currency), ``Analyst_Target_Upside``
@@ -1062,7 +1067,8 @@ def _apply_fmp_analyst(dashboard_df: pd.DataFrame) -> None:
         refresh_hours = float(getattr(settings, "FMP_ANALYST_REFRESH_HOURS", 24) or 24)
         raw_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", None)
         max_seconds = max(0.0, float(120.0 if raw_budget is None else raw_budget))
-        deadline = _time.monotonic() + max_seconds
+        if deadline is None:
+            deadline = _time.monotonic() + max_seconds
 
         symbols = sorted({
             str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
@@ -1149,7 +1155,7 @@ def _apply_fmp_analyst(dashboard_df: pd.DataFrame) -> None:
             dashboard_df[col] = float('nan')
 
 
-def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
+def _apply_fmp_earnings(dashboard_df: pd.DataFrame, deadline: Optional[float] = None) -> None:
     """Populate the FMP earnings columns.
 
     ``Days_To_Earnings`` (number) and ``Last_EPS_Surprise_Pct`` (percent) are
@@ -1196,7 +1202,8 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
         refresh_hours = float(getattr(settings, "FMP_EARNINGS_REFRESH_HOURS", 12) or 12)
         raw_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", None)
         max_seconds = max(0.0, float(120.0 if raw_budget is None else raw_budget))
-        deadline = _time.monotonic() + max_seconds
+        if deadline is None:
+            deadline = _time.monotonic() + max_seconds
 
         symbols = sorted({
             str(s).strip().upper() for s in dashboard_df['Symbol'].dropna()
@@ -1299,7 +1306,7 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame) -> None:
             dashboard_df[col] = float('nan')
 
 
-def _apply_fmp_insider(dashboard_df: pd.DataFrame) -> None:
+def _apply_fmp_insider(dashboard_df: pd.DataFrame, deadline: Optional[float] = None) -> None:
     """Populate ``Insider_Buy_Sell_Ratio`` from FMP insider-trading statistics.
 
     Source: ``/insider-trading/statistics``, quarterly aggregates keyed
@@ -1366,7 +1373,8 @@ def _apply_fmp_insider(dashboard_df: pd.DataFrame) -> None:
                 return None
 
         as_of = _date.today()
-        deadline = _time.monotonic() + max_seconds
+        if deadline is None:
+            deadline = _time.monotonic() + max_seconds
         ratio_map: dict = {}
 
         for sym in symbols:
@@ -1523,6 +1531,65 @@ def _apply_fmp_sector(dashboard_df: pd.DataFrame) -> None:
     except Exception as exc:
         logger.warning("FMP sector snapshot feed failed (non-fatal): %s", exc)
         for col in _FMP_SECTOR_COLUMNS:
+            dashboard_df[col] = float('nan')
+
+
+def _apply_fmp_econ_calendar(dashboard_df: pd.DataFrame) -> None:
+    """Populate ``Next_Macro_Event`` and ``Next_Macro_Event_Date`` from FMP economics calendar.
+
+    Source: ``/economics-calendar`` via :func:`data.fmp_feeds_market.fetch_economics_calendar`.
+    1 request per CYCLE total (broadcast to all tickers). Diagnostic only,
+    never a SignalModule.
+
+    CONSTRAINT #6: Never raises.
+    """
+    for col in _FMP_ECON_CALENDAR_COLUMNS:
+        dashboard_df[col] = float('nan')
+
+    if not getattr(settings, "FMP_ECON_CALENDAR_ENABLED", False):
+        return
+    if dashboard_df.empty:
+        return
+
+    try:
+        from datetime import datetime, timezone
+        from data.fmp_feeds_market import fetch_economics_calendar
+
+        today_str = datetime.now(timezone.utc).date().isoformat()
+        events = fetch_economics_calendar(from_date=today_str)
+        if not events:
+            return
+
+        # Filter for upcoming events (date >= today)
+        valid_events = []
+        for ev in events:
+            ev_date = str(ev.get("date") or "")[:10]
+            if ev_date >= today_str:
+                valid_events.append(ev)
+
+        if not valid_events:
+            return
+
+        # Sort ascending by date
+        valid_events.sort(key=lambda x: str(x.get("date") or ""))
+
+        # Look for US / High impact events first, falling back to first upcoming event
+        us_high = [
+            e for e in valid_events
+            if str(e.get("country", "")).upper() == "US" and str(e.get("impact", "")).lower() == "high"
+        ]
+        high_impact = [e for e in valid_events if str(e.get("impact", "")).lower() == "high"]
+        selected = us_high[0] if us_high else (high_impact[0] if high_impact else valid_events[0])
+
+        event_name = selected.get("event")
+        event_date = selected.get("date")
+
+        if event_name and event_date:
+            dashboard_df['Next_Macro_Event'] = str(event_name)
+            dashboard_df['Next_Macro_Event_Date'] = str(event_date)[:10]
+    except Exception as exc:
+        logger.warning("FMP economics calendar feed failed (non-fatal): %s", exc)
+        for col in _FMP_ECON_CALENDAR_COLUMNS:
             dashboard_df[col] = float('nan')
 
 
@@ -1893,10 +1960,17 @@ class StrategyEvalStep(PipelineStep):
         # scoring, sizing, or execution -- see config.COLUMN_SCHEMA's "FMP
         # DIAGNOSTIC FEEDS" section for why that is also the no-lookahead
         # guarantee for this series.
-        _apply_fmp_analyst(ctx.dashboard_df)
-        _apply_fmp_earnings(ctx.dashboard_df)
-        _apply_fmp_insider(ctx.dashboard_df)
+        # Shared monotonic wall-clock budget for per-symbol FMP diagnostic feeds
+        import time as _time
+        _raw_fmp_budget = getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", 120.0)
+        _fmp_max_seconds = max(0.0, float(120.0 if _raw_fmp_budget is None else _raw_fmp_budget))
+        _fmp_deadline = _time.monotonic() + _fmp_max_seconds
+
+        _apply_fmp_analyst(ctx.dashboard_df, deadline=_fmp_deadline)
+        _apply_fmp_earnings(ctx.dashboard_df, deadline=_fmp_deadline)
+        _apply_fmp_insider(ctx.dashboard_df, deadline=_fmp_deadline)
         _apply_fmp_sector(ctx.dashboard_df)
+        _apply_fmp_econ_calendar(ctx.dashboard_df)
 
         # Wikipedia-pageviews investor-attention feature (follow-on branch
         # to PR #416/#417) -- data/attention_sources.py

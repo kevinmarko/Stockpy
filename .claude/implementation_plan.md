@@ -1,148 +1,193 @@
-# Strategy Backtesting & Validation Suite Expansion (Phases 1–3)
+# FMP Pipeline Optimization — Phased Execution Plan (6 Specialized Agents)
 
-This plan details the architecture, multi-agent task distribution, implementation steps, and verification gates for backtesting the unbacktested and non-deployable strategies across three distinct phases.
+This implementation plan orchestrates the full execution of the FMP Pipeline Optimization across 5 workstreams (A–E) using a **6-agent phased execution strategy**.
+
+All capability flags default to `True`, FMP becomes the primary provider (`MARKET_DATA_PROVIDER="fmp"`, `FUNDAMENTALS_SOURCE="fmp"`), all ~31 flags are UI-exposed in the Pilots PWA, the shared deadline budget is implemented, dead code is removed, the economics calendar feed is wired, and comprehensive test suite / documentation updates are delivered.
 
 ---
 
-## Architecture & Multi-Agent Delegation Model
+## User Review & Recorded Risk Decision
 
-To efficiently construct, test, and document all strategies without cluttering the primary agent context, we utilize a 3-agent delegation model:
+> [!CAUTION]
+> **Operator Decision Recorded (Risk Accepted):**
+> Enabling `FMP_BARS_ENABLED`, `FMP_QUOTES_ENABLED`, `FMP_FUNDAMENTALS_ENABLED`, and `FMP_UNIVERSE_ENABLED` by default switches the platform's primary market data, fundamentals, and universe change feeds to FMP.
+> In this sandbox environment (which lacks live network access and configured `FMP_API_KEY`), `scripts/verify_fmp_bars.py` cannot be run against a live account.
+> Per explicit operator instruction, this risk has been evaluated and accepted. All docstrings and documentation will explicitly record this decision and recommend running the live verification gate prior to capital deployment.
+
+---
+
+## 6-Agent Team Structure & Phased Execution
 
 ```mermaid
 graph TD
-    Parent[Parent Orchestrator Agent] --> Agent1[Agent 1: Options Simulation Engineer]
-    Parent --> Agent2[Agent 2: Signal & Analytics Adapter Engineer]
-    Parent --> Agent3[Agent 3: Quant Auditor & Test Writer]
+    subgraph "Phase 1: Foundation & Hygiene"
+        A1["Agent 1: Cleanup & Hygiene Specialist<br/>(Workstreams C & D)"]
+    end
 
-    Agent1 -->|Simulate P&L & Stress Tests| Phase1[Phase 1: 5 Options Strategies]
-    Agent2 -->|Panel Construction & Signal Adapters| Phase2[Phase 2: Missing Signals & Analytics]
-    Agent3 -->|PBO/DSR/Sharpe/MaxDD Gate & Docs| Phase3[Phase 3: Strategy Optimization & Audit]
+    subgraph "Phase 2 & 3: Runtime Optimization & Feeds"
+        A2["Agent 2: Pipeline Runtime Engine Specialist<br/>(Workstream A: Shared Deadline)"]
+        A3["Agent 3: Macro & Economics Feed Specialist<br/>(Workstream B: Economics Calendar)"]
+    end
+
+    subgraph "Phase 4: Provider Selection & UI"
+        A4["Agent 4: Settings, Provider & UI Specialist<br/>(Workstream E: Defaults & UI Exposure)"]
+    end
+
+    subgraph "Phase 5 & 6: Verification & Release"
+        A5["Agent 5: Test Suite & Regression Auditor<br/>(Global Test Parity & Fallback Coverage)"]
+        A6["Agent 6: QA, Docs & Gatekeeper Agent<br/>(Docs, Pre-flight CI & PR Artifacts)"]
+    end
+
+    A1 --> A2
+    A1 --> A3
+    A2 --> A4
+    A3 --> A4
+    A4 --> A5
+    A5 --> A6
 ```
 
-- **Agent 1 (Options Simulation Engineer)**: Specializes in Black-Scholes Greeks, dynamic leg tracking, option cycle mark-to-market (`validation/options_selling_backtest.py`), and tail shock windows (`OCT_2008`, `FEB_2018`, `MAR_2020`, `AUG_2024`).
-- **Agent 2 (Signal & Analytics Adapter Engineer)**: Specializes in `STRATEGY_REGISTRY` adapter creation (`scripts/refresh_validations.py`), cointegration/Kalman pairs trading simulation, and cross-sectional panel data generation.
-- **Agent 3 (Quant Auditor & Test Writer)**: Specializes in running `validation/harness.py`, verifying PBO/DSR/Sharpe/MaxDD gates, writing targeted pytest suites in `tests/`, and updating `docs/signals/` + `docs/VALIDATION_STRATEGY_FIX_LOG.md`.
+### Agent Roles & Workstream Allocations
+
+| Agent | Specialized Role | Primary Focus / Workstream | Target Deliverables |
+|---|---|---|---|
+| **Agent 1** | **Cleanup & Hygiene Specialist** | Workstreams C & D | Delete dead `earnings_calendar` in `data/fmp_client.py`, fix `FMP_ECON_INDICATORS` docstring in `settings.py`, document `CNN_LSTM_PROCESS_POOL_WORKERS=3`, annotate `docs/FMP_INTEGRATION.md`, annotate `data/fmp_feeds_market.py`. |
+| **Agent 2** | **Pipeline Runtime Engine Specialist** | Workstream A | Refactor `StrategyEvalStep.run` in `pipeline/production_steps.py` to calculate one shared monotonic cycle deadline and thread it into analyst, earnings, and insider feeds. Add `TestSharedDeadline` tests. |
+| **Agent 3** | **Macro & Economics Feed Specialist** | Workstream B | Wire FMP `/economics-calendar` via `_apply_fmp_econ_calendar` in `pipeline/production_steps.py`, update `config.py` `COLUMN_SCHEMA` (`Next_Macro_Event`, `Next_Macro_Event_Date`), add `FMP_ECON_CALENDAR_ENABLED`, expose in API & UI. |
+| **Agent 4** | **Settings, Provider & UI Specialist** | Workstream E | Flip 14 `FMP_*` flags to `default=True`, flip `MARKET_DATA_PROVIDER` & `FUNDAMENTALS_SOURCE` defaults to `"fmp"` in `settings.py`. Add risk notices in docstrings. Complete `_FMP_GROUPS` and `FMP_LABEL_MAP` in webapp. |
+| **Agent 5** | **Test Suite & Regression Auditor** | Workstream E & Regressions | Grep and update assertions in `tests/` across `test_market_data.py`, `test_settings.py`, `test_production_steps_fmp_stubs.py`, `test_fmp_client.py`. Add `TestFMPSettingsDefaults`. Maintain explicit flag-off coverage. |
+| **Agent 6** | **QA, Docs & Gatekeeper Agent** | Verification & Release | Update `docs/FMP_INTEGRATION.md`, `CLAUDE.md`/`AGENTS.md`, `docs/architecture/data-layer.md`, `.env.example`. Run full `pytest` and `npm run typecheck`. Commit `.claude/` PR artifacts. |
 
 ---
 
-## User Review Required
+## Detailed Proposed Changes by Component
 
-> [!IMPORTANT]
-> **Options Backtest Historical Data Proxy**: Historical options chains do not exist in the repository; following the precedent established for `vrp_premium_selling`, all options strategies will use real historical underlying prices (SPY/large-caps) with GJR-GARCH forecasted volatility and Black-Scholes Greeks pricing.
->
-> **Gate Standards**: In strict adherence to repository policy, deployability thresholds (`PBO < 0.50`, `DSR > 0.95`, `Sharpe > 0.50`, `MaxDD < 0.30`, plus tail stress survival for option sellers) are **never loosened**. Strategies with genuine data or edge limitations will be documented with honest `deployable=False` verdicts.
+### 1. Data Layer & Settings (`settings.py`, `data/`)
 
----
+#### [MODIFY] [settings.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/settings.py)
+- **Workstream E (Agent 4)**: Change default from `None` -> `"fmp"` for `MARKET_DATA_PROVIDER` (:396).
+- **Workstream E (Agent 4)**: Change default from `"yahoo"` -> `"fmp"` for `FUNDAMENTALS_SOURCE` (:600).
+- **Workstream E (Agent 4)**: Flip `default=False` -> `default=True` for all capability booleans:
+  - `FMP_QUOTES_ENABLED` (:729)
+  - `FMP_BARS_ENABLED` (:746)
+  - `FMP_FUNDAMENTALS_ENABLED` (:760)
+  - `FMP_ANALYST_ENABLED` (:773)
+  - `FMP_EARNINGS_ENABLED` (:786)
+  - `FMP_NEWS_ENABLED` (:798)
+  - `FMP_MACRO_ENABLED` (:821)
+  - `FMP_INSIDER_ENABLED` (:834)
+  - `FMP_SECTOR_SNAPSHOT_ENABLED` (:846)
+  - `FMP_OPTIONS_HEALTH_ENABLED` (:857)
+  - `FMP_OPTIONS_CONTEXT_ENABLED` (:880)
+  - `FMP_PEERS_ENABLED` (:902)
+  - `FMP_UNIVERSE_ENABLED` (:925)
+  - `FMP_QUOTES_REALTIME` (:961)
+- **Workstream B (Agent 3)**: Add new setting `FMP_ECON_CALENDAR_ENABLED: bool = Field(default=True, ...)` with Starter-tier unverified entitlement notice.
+- **Workstream C (Agent 1)**: Correct `FMP_ECON_INDICATORS` docstring (:1056) to remove false multi-series claim.
+- **Workstream D (Agent 1)**: Update `CNN_LSTM_PROCESS_POOL_WORKERS` docstring (:1955) documenting `3` as the recommended operator-tuned setting.
+- **Workstream A (Agent 2)**: Clarify `FMP_MAX_SECONDS_PER_CYCLE` docstring (:1070) regarding the shared monotonic budget.
 
-## Phase 1: The 5 Options Strategies Backtesting
+#### [MODIFY] [data/fmp_client.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/data/fmp_client.py)
+- **Workstream C (Agent 1)**: Delete the dead, uncalled, colliding `earnings_calendar(from_date, to_date)` function (:816-824).
 
-Backtest all 5 deterministic options strategies defined in [`technical_options_engine.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/technical_options_engine.py#L209) (`OptionsPricingRecommender`):
-
-1. **`put_credit_spread`** (Bullish + High IVR regime: Short ~0.30Δ Put, Long ~0.15Δ Put)
-2. **`call_credit_spread`** (Bearish + High IVR regime: Short ~0.30Δ Call, Long ~0.15Δ Call)
-3. **`iron_condor` / `vrp_premium_selling`** (Neutral + High IVR regime: Short Strangle + Long Wings)
-4. **`call_debit_spread`** (Bullish + Low IVR regime: Long ~0.50Δ Call, Short ~0.30Δ Call)
-5. **`put_debit_spread`** (Bearish + Low/Neutral IVR regime: Long ~0.50Δ Put, Short ~0.30Δ Put)
-*(Bonus: `covered_call` for Bullish + Neutral IVR regime).*
-
-### Proposed Changes
-
-#### [MODIFY] [`validation/options_selling_backtest.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/validation/options_selling_backtest.py)
-- Refactor and generalize `simulate_vrp_iron_condor_returns` into a unified modular simulator `simulate_options_strategy_returns(strategy_type, start, end, ticker, ...)` supporting:
-  - `put_credit_spread`
-  - `call_credit_spread`
-  - `iron_condor`
-  - `call_debit_spread`
-  - `put_debit_spread`
-  - `covered_call`
-- Track daily mark-to-market P&L across each leg, applying appropriate stop-loss and profit-target exits.
-- Export dedicated entry points (`simulate_put_credit_spread_returns`, `simulate_call_credit_spread_returns`, etc.).
-
-#### [MODIFY] [`scripts/refresh_validations.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/scripts/refresh_validations.py)
-- Add adapter builder functions:
-  - `_build_put_credit_spread_adapter`
-  - `_build_call_credit_spread_adapter`
-  - `_build_call_debit_spread_adapter`
-  - `_build_put_debit_spread_adapter`
-  - `_build_covered_call_adapter`
-- Register all 5 in `STRATEGY_REGISTRY`.
-- Wire options-selling stress test routing in `_resolve_options_selling_stress_fn` for `put_credit_spread`, `call_credit_spread`, and `covered_call`.
-
-#### [MODIFY] [`pilots/catalog.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/pilots/catalog.py)
-- Link relevant Pilot entries or add new options pilot records joined to their `validation_strategy_id`.
+#### [MODIFY] [data/fmp_feeds_market.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/data/fmp_feeds_market.py)
+- **Workstream D (Agent 1)**: Add a comment above `fetch_volatility_benchmarks()` (:327) noting that it is intentionally unwired in production to prevent conflicting VIX sources against the macro kill switch.
 
 ---
 
-## Phase 2: Missing Standalone Signal & Analytic Engines Backtesting
+### 2. Pipeline Execution & Schema (`pipeline/`, `config.py`)
 
-Backtest the standalone signals and analytic components currently lacking `STRATEGY_REGISTRY` entries:
+#### [MODIFY] [pipeline/production_steps.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/pipeline/production_steps.py)
+- **Workstream A (Agent 2)**: In `_apply_fmp_analyst`, `_apply_fmp_earnings`, and `_apply_fmp_insider`, add `deadline: Optional[float] = None` keyword argument. If `deadline` is None, compute `time.monotonic() + max_seconds` as local fallback; otherwise use the shared deadline.
+- **Workstream A (Agent 2)**: In `StrategyEvalStep.run` (:1890), compute `fmp_deadline = time.monotonic() + max_seconds` once and pass `deadline=fmp_deadline` into `_apply_fmp_analyst`, `_apply_fmp_earnings`, and `_apply_fmp_insider`.
+- **Workstream B (Agent 3)**: Implement `_apply_fmp_econ_calendar(dashboard_df: pd.DataFrame) -> None` which:
+  - Initializes `Next_Macro_Event` and `Next_Macro_Event_Date` to `""` / `NaN` or string representations.
+  - Checks `if not getattr(settings, "FMP_ECON_CALENDAR_ENABLED", False): return`.
+  - Calls `data.fmp_feeds_market.fetch_economics_calendar()`, filters for earliest upcoming US/High impact event, and broadcasts the event name and date to all rows in `dashboard_df`.
+  - Never raises (CONSTRAINT #6).
+- **Workstream B (Agent 3)**: Call `_apply_fmp_econ_calendar(ctx.dashboard_df)` in `StrategyEvalStep.run`.
 
-1. **`pairs_trading`** ([`signals/pairs_trading.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/signals/pairs_trading.py))
-   - Cointegration + Kalman dynamic hedge ratio + rolling spread $Z$-score entry/exit/stop logic.
-   - Test over liquid cointegrated pairs (e.g. `XOM`/`CVX`, `KO`/`PEP`).
-2. **`aroon_trend`** ([`signals/aroon_trend.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/signals/aroon_trend.py))
-   - Standalone Aroon oscillator (25-day lookback) breakout strategy with SMA-200 market regime filter.
-3. **`news_catalyst` / Sentiment Index** ([`signals/news_catalyst.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/signals/news_catalyst.py), [`signals/sentiment_index.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/signals/sentiment_index.py))
-   - Build a documented, honest point-in-time sentiment backtest proxy or forward-archive evaluation.
-
-### Proposed Changes
-
-#### [MODIFY] [`scripts/refresh_validations.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/scripts/refresh_validations.py)
-- Implement `_build_pairs_trading_adapter`: downloads pair series, runs `generate_pairs_signals`, computes net portfolio returns with dynamic beta weighting.
-- Implement `_build_aroon_trend_adapter`: computes Aroon Up/Down/Oscillator, applies trend-following positions with Faber SMA-200 market gate.
-- Register `"pairs_trading"` and `"aroon_trend"` in `STRATEGY_REGISTRY`.
-
-#### [NEW] [`docs/signals/pairs_trading.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/signals/pairs_trading.md)
-- Author complete strategy documentation for Pairs Trading with `## Backtest Validation` section.
-
-#### [MODIFY] [`docs/signals/aroon_trend.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/signals/aroon_trend.md)
-- Add standalone `## Backtest Validation` section.
+#### [MODIFY] [config.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/config.py)
+- **Workstream B (Agent 3)**: Add `Next_Macro_Event` (`"format": "string"`, header `"Next Macro Event"`) and `Next_Macro_Event_Date` (`"format": "string"`, header `"Macro Event Date"`) to `COLUMN_SCHEMA` under the FMP Diagnostic section.
 
 ---
 
-## Phase 3: Optimizing the 4 Non-Deployable Strategies
+### 3. API & Webapp UI (`api/`, `webapp/`)
 
-Investigate and fix failure mechanisms in the 4 non-fundamental failing strategies:
+#### [MODIFY] [api/pilots_api.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/api/pilots_api.py)
+- **Workstream B & E (Agents 3 & 4)**: Ensure `_FMP_GROUPS` has complete coverage for all ~31 settings, specifically ensuring `FMP_ECON_CALENDAR_ENABLED`, `FMP_NEWS_ENABLED`, `FMP_NEWS_PAGE_LIMIT`, `FMP_NEWS_MAX_PAGES`, `FMP_OPTIONS_HEALTH_ENABLED`, `FMP_OPTIONS_CONTEXT_ENABLED`, `FMP_PEERS_ENABLED` are fully grouped and indexed.
 
-1. **`vrp_premium_selling`** (Current: MaxDD 47.1%):
-   - **Mechanism**: The single April 2022 stop-loss hit caused a -60.4% loss.
-   - **Fix Lever**: Introduce dynamic max loss clamping (1.0x credit), delta narrowing during elevated vol, and Faber SMA-200 macro trend filter.
-2. **`rsi2_mean_reversion`** (Current: Sharpe 0.415, MaxDD 8.3%):
-   - **Mechanism**: Extreme low activity (~10 trades/year) burdened by continuous calendar turnover cost.
-   - **Fix Lever**: Empirical turnover alignment and multi-name liquid ETF/equity pool.
-3. **`rsi14_extremes`** (Current: Sharpe 0.219, MaxDD 29.1%):
-   - **Mechanism**: Unfiltered counter-trend entries in strong bull/bear trends.
-   - **Fix Lever**: Trend-aligned filtering (only long oversold when price > SMA-200; only short overbought when price < SMA-200).
-4. **`forecast_direction_arima_hw`** (Current: Sharpe 0.002, MaxDD 27.4%):
-   - **Mechanism**: Linear forecast extrapolation suffers severe whipsaw in regime transitions (2021–2023).
-   - **Fix Lever**: Directional conviction thresholding ($|\hat{r}| > k \cdot \sigma$) and volatility-inverse sizing.
+#### [MODIFY] [webapp/src/screens/FmpSettings.tsx](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/webapp/src/screens/FmpSettings.tsx)
+- **Workstream B & E (Agents 3 & 4)**: Add labels in `FMP_LABEL_MAP` for:
+  - `FMP_ECON_CALENDAR_ENABLED`: `"Enable Economics Calendar Feed"`
+  - `FMP_NEWS_ENABLED`: `"Enable News Feed"`
+  - `FMP_NEWS_PAGE_LIMIT`: `"News Page Limit"`
+  - `FMP_NEWS_MAX_PAGES`: `"News Max Pages"`
+  - `FMP_OPTIONS_HEALTH_ENABLED`: `"Enable Options Fundamental Health Overlay"`
+  - `FMP_OPTIONS_CONTEXT_ENABLED`: `"Enable Options Market Context Overlay"`
+  - `FMP_PEERS_ENABLED`: `"Enable On-Demand Peer Suggestion Feed"`
 
-### Proposed Changes
+---
 
-#### [MODIFY] [`scripts/refresh_validations.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/scripts/refresh_validations.py)
-- Update adapter implementations with validated causal fix levers.
-- Re-run validation harness across all modified strategies.
+### 4. Documentation Updates (`docs/`, `CLAUDE.md`, `AGENTS.md`, `.env.example`)
 
-#### [MODIFY] [`docs/signals/<name>.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/signals/) & [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/VALIDATION_STRATEGY_FIX_LOG.md)
-- Update `## Backtest Validation` sections with before/after metrics and causal mechanism explanations.
-- Append entries to `docs/VALIDATION_STRATEGY_FIX_LOG.md`.
+#### [MODIFY] [docs/FMP_INTEGRATION.md](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/docs/FMP_INTEGRATION.md)
+- **Workstream D (Agent 1)**: Correct line 24 to reflect that `/income-statement-ttm` is Ultimate/Enterprise only and `trailingEps` falls back to `ratios_ttm.netIncomePerShareTTM`.
+- **Workstream E (Agent 6)**: Record the explicit operator decision to default FMP flags to `True` without prior live account eyeball verification. Update settings reference table.
+- **Workstream B (Agent 6)**: Document `FMP_ECON_CALENDAR_ENABLED` and the economics calendar feed columns.
+
+#### [MODIFY] [CLAUDE.md](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/CLAUDE.md) / [AGENTS.md](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/AGENTS.md)
+- **Workstream E & B (Agent 6)**: Record dated entry for FMP default flips, provider selections, economics calendar addition, and shared-deadline optimization. (Auto-synced by hooks).
+
+#### [MODIFY] [docs/architecture/data-layer.md](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/docs/architecture/data-layer.md)
+- **Workstream A, B, E (Agent 6)**: Update FMP data layer section with shared deadline semantics, economics calendar feed, and default provider selection.
+
+#### [MODIFY] [docs/known_issues/cnn_lstm_tf_deadlock.md](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/docs/known_issues/cnn_lstm_tf_deadlock.md) & [docs/architecture/signal-engines.md](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/docs/architecture/signal-engines.md)
+- **Workstream D (Agent 1)**: Document `CNN_LSTM_PROCESS_POOL_WORKERS=3` tuning guidance.
+
+#### [MODIFY] [.env.example](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/.env.example)
+- **Workstream B & E (Agent 6)**: Mirror new `FMP_ECON_CALENDAR_ENABLED` and update default comments.
+
+---
+
+### 5. Test Suite Updates (`tests/`)
+
+#### [MODIFY] [tests/test_production_steps_fmp_stubs.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/tests/test_production_steps_fmp_stubs.py)
+- **Workstream A (Agent 2)**: Add `TestSharedDeadline` asserting that when an expired deadline is passed, subsequent feeds skip network requests and populate NaN.
+- **Workstream B (Agent 3)**: Add `_apply_fmp_econ_calendar` to `_WRITERS` test parametrization.
+- **Workstream E (Agent 5)**: Explicitly patch `FMP_*_ENABLED=False` in `TestGatesOffIsANoOp` to ensure the disabled fallback mechanism retains full test coverage despite the flipped code defaults.
+
+#### [MODIFY] [tests/test_fmp_feeds_market.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/tests/test_fmp_feeds_market.py)
+- **Workstream B (Agent 3)**: Add test cases for `fetch_economics_calendar`: happy-path parsing, date sorting, US/High impact filtering, empty response, and exception degradation.
+
+#### [MODIFY] [tests/test_settings.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/tests/test_settings.py)
+- **Workstream E (Agent 5)**: Add `TestFMPSettingsDefaults` verifying that an unconfigured `Settings(_env_file=None)` yields `MARKET_DATA_PROVIDER == "fmp"`, `FUNDAMENTALS_SOURCE == "fmp"`, and all `FMP_*_ENABLED` flags `True`.
+
+#### [MODIFY] [tests/test_market_data.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/multi_agent_phased_build/tests/test_market_data.py)
+- **Workstream E (Agent 5)**: Update tests in `TestCompositeProviderSelection`, `TestFMPCapabilityGates`, and `TestFMPQuotesBarsWiring` to account for new defaults while ensuring explicit `MARKET_DATA_PROVIDER=None` / `FUNDAMENTALS_SOURCE="yahoo"` / `FMP_*_ENABLED=False` tests continue to test fallback paths.
 
 ---
 
 ## Verification Plan
 
 ### Automated Tests
-1. **Unit & Stress Tests**:
-   - `pytest tests/test_options_selling_backtest_stress.py`
-   - `pytest tests/test_pairs_simulation.py tests/test_pairs_lookahead.py`
-   - `pytest tests/test_refresh_validations.py`
-2. **Validation Suite Sweep**:
-   - `python3 -m scripts.refresh_validations --strategies put_credit_spread,call_credit_spread,call_debit_spread,put_debit_spread,covered_call --json`
-   - `python3 -m scripts.refresh_validations --strategies pairs_trading,aroon_trend --json`
-   - `python3 -m scripts.refresh_validations --strategies vrp_premium_selling,rsi2_mean_reversion,rsi14_extremes,forecast_direction_arima_hw --json`
-3. **Full Registry Regression**:
-   - `python3 -m scripts.refresh_validations --json`
+1. **Targeted FMP & Pipeline Suite**:
+   ```bash
+   pytest tests/test_production_steps_fmp_stubs.py tests/test_fmp_feeds_market.py tests/test_market_data.py tests/test_fmp_client.py tests/test_settings.py -v
+   ```
+2. **Full Test Suite & Anti-Drift Check**:
+   ```bash
+   pytest tests/ -q
+   ```
+3. **Webapp TypeScript & Parity Checks**:
+   ```bash
+   npm run --prefix webapp -s typecheck
+   ```
+4. **Settings Default Assertion Scan**:
+   ```bash
+   grep -rn "FMP_" tests/ | grep -i "is False\|== False\|assert not"
+   ```
 
-### Documentation Integrity Audit
-- Verify all modified/added signals have valid `## Backtest Validation` sections.
-- Verify `docs/VALIDATION_STRATEGY_FIX_LOG.md` is updated with before/after tables.
+### Manual / Browser Verification
+1. Launch `api/pilots_api.py` and verify `GET /settings/fmp` returns all 31 settings with active values.
+2. In `webapp/`, verify `/settings/fmp` renders all toggles and inputs with correct label mappings.
+3. Validate fresh `Settings(_env_file=None)` in interactive Python session.

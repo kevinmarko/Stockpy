@@ -334,6 +334,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_EARNINGS_ENABLED",               # bool — Earnings_Date second source + surprises
     "FMP_NEWS_ENABLED",                   # bool — company-news primary source (news_catalyst + sentiment_sources)
     "FMP_MACRO_ENABLED",                  # bool — treasury/econ into macro_history
+    "FMP_ECON_CALENDAR_ENABLED",           # bool — economics calendar diagnostic feed
     "FMP_INSIDER_ENABLED",                # bool — per-symbol insider statistics
     "FMP_SECTOR_SNAPSHOT_ENABLED",        # bool — 2 dated sector snapshots per cycle
     "FMP_OPTIONS_HEALTH_ENABLED",         # bool — Altman Z/Piotroski F/ratios/realized-vol for options matrix

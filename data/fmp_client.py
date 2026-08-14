@@ -813,15 +813,6 @@ def economics_calendar(from_date: Optional[str] = None, to_date: Optional[str] =
     return _fmp_get("economics-calendar", params)
 
 
-def earnings_calendar(from_date: Optional[str] = None, to_date: Optional[str] = None) -> Any:
-    """Upcoming earnings release calendar (``/earnings-calendar``)."""
-    params: Dict[str, Any] = {}
-    if from_date:
-        params["from"] = from_date
-    if to_date:
-        params["to"] = to_date
-    return _fmp_get("earnings-calendar", params)
-
 
 def batch_index_quotes() -> Any:
     """Quotes for major market volatility indices (``/batch-index-quotes``)."""

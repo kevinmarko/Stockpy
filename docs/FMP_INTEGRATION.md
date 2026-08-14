@@ -21,7 +21,7 @@ The platform's entire fundamentals and price stack ran, until this integration, 
 
 The integration was planned and probed against a **Starter** plan.
 
-**Confirmed working on Starter:** `/quote` + `batch-quote`; EOD charts (confirmed back to 2008) + intraday; full statements, `key-metrics-ttm`, `ratios-ttm`, `financial-scores`; `/profile`, `/market-cap`, `/shares-float`, `/peers`; analyst `price-target-consensus`, `analyst-estimates`, `grades-summary`, `ratings-snapshot`; calendars (earnings/dividends/splits, including future-dated rows); `treasury-rates` (full curve, daily), `economic-indicators`, `economics-calendar`; `insider-trading/statistics`; `sector-pe-snapshot` + `sector-performance-snapshot` (date-parameterized); news; technical indicators.
+**Confirmed working on Starter:** `/quote` + `batch-quote`; EOD charts (confirmed back to 2008) + intraday; `key-metrics-ttm`, `ratios-ttm`, `financial-scores` (note: `/income-statement-ttm` is Ultimate/Enterprise-only; `trailingEps` falls back to `ratios_ttm.netIncomePerShareTTM`); `/profile`, `/market-cap`, `/shares-float`, `/peers`; analyst `price-target-consensus`, `analyst-estimates`, `grades-summary`, `ratings-snapshot`; calendars (earnings/dividends/splits, including future-dated rows); `treasury-rates` (full curve, daily), `economic-indicators`, `economics-calendar`; `insider-trading/statistics`; `sector-pe-snapshot` + `sector-performance-snapshot` (date-parameterized); news; technical indicators.
 
 **Confirmed blocked — verified `ACCESS DENIED`, requires Ultimate/Enterprise:** ETF & mutual-fund holdings, and **Form 13F / institutional ownership**.
 
@@ -56,30 +56,31 @@ All 31 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 
 `FMP_MIN_REQUEST_INTERVAL_SECONDS=0` with `FMP_MAX_RETRIES=0` and `FMP_COOLDOWN_THRESHOLD=0` reproduces un-throttled behavior exactly (the `GDELT_*` comment convention).
 
-### Master feed gates (10) — all default `False` = complete no-op
+### Master feed gates (14) — default `True` by operator decision
 
 | Setting | Type | Default | Purpose |
 |---|---|---|---|
-| `FMP_QUOTES_ENABLED` | `bool` | `False` | Master switch for FMP-sourced quotes. Also requires `MARKET_DATA_PROVIDER=fmp`. |
-| `FMP_BARS_ENABLED` | `bool` | `False` | Master switch for FMP-sourced OHLCV bars. Also requires `MARKET_DATA_PROVIDER=fmp`. Read `FMP_BARS_ADJUSTMENT` and run `scripts/verify_fmp_bars.py` before enabling — see §4. |
-| `FMP_FUNDAMENTALS_ENABLED` | `bool` | `False` | Master switch for FMP-sourced fundamentals. Also requires `FUNDAMENTALS_SOURCE=fmp`. |
-| `FMP_ANALYST_ENABLED` | `bool` | `False` | Master switch for the analyst feed (price-target consensus + grades summary) as diagnostic columns. Single gate. |
-| `FMP_EARNINGS_ENABLED` | `bool` | `False` | Master switch for the earnings calendar/surprise feed. Single gate. |
-| `FMP_NEWS_ENABLED` | `bool` | `False` | Master switch for FMP as the PRIMARY company-news/earnings-date provider (also requires `FMP_API_KEY`). See §7. |
-| `FMP_MACRO_ENABLED` | `bool` | `False` | Master switch for the macro feed (treasury rates + `FMP_ECON_INDICATORS`). Single gate. |
-| `FMP_INSIDER_ENABLED` | `bool` | `False` | Master switch for the insider-trading statistics feed (per-symbol cost). Single gate, separate from sector snapshots on purpose. |
-| `FMP_SECTOR_SNAPSHOT_ENABLED` | `bool` | `False` | Master switch for the dated sector P/E + sector performance snapshots (2 requests/cycle total). Single gate. |
-| `FMP_OPTIONS_HEALTH_ENABLED` | `bool` | `False` | Master switch for the fundamental-health overlay bundled into the options premium-directive matrix (Altman Z / Piotroski F / Net Debt-EBITDA / FCF Yield / 30-day realized vol). Single gate bundling three endpoints. See §3a below. |
-| `FMP_OPTIONS_CONTEXT_ENABLED` | `bool` | `False` | Master switch for the market/qualitative-context overlay on the options premium-directive matrix (news headlines, capped at 3/symbol, + peer-comparison tickers). Single gate bundling two endpoints, deliberately separate from `FMP_OPTIONS_HEALTH_ENABLED`. See §3b below. |
-| `FMP_PEERS_ENABLED` | `bool` | `False` | Master switch for the on-demand `GET /data/peers/{symbol}` peer-group lookup (webapp's Symbol Comparison "suggest peers" affordance). Single gate, deliberately separate from `FMP_OPTIONS_CONTEXT_ENABLED` despite both calling the same `fetch_peer_group` — different cadence/rate-limit shape (per-click vs. per-cycle batch). See §3b below. |
-| `FMP_UNIVERSE_ENABLED` | `bool` | `False` | Master switch for using FMP's historical S&P 500 constituent-changes feed as the PRIMARY source for `universe_engine.py`'s point-in-time survivorship-bias reconstruction, with the Wikipedia "Selected changes" table scrape (removed from the live page entirely as of 2026-08) demoted to a fallback. Single gate. See §8 below. |
+| `FMP_QUOTES_ENABLED` | `bool` | `True` | Master switch for FMP-sourced quotes. Also requires `MARKET_DATA_PROVIDER=fmp`. |
+| `FMP_BARS_ENABLED` | `bool` | `True` | Master switch for FMP-sourced OHLCV bars. Also requires `MARKET_DATA_PROVIDER=fmp`. Read `FMP_BARS_ADJUSTMENT` and run `scripts/verify_fmp_bars.py` before enabling — see §4. |
+| `FMP_FUNDAMENTALS_ENABLED` | `bool` | `True` | Master switch for FMP-sourced fundamentals. Also requires `FUNDAMENTALS_SOURCE=fmp`. |
+| `FMP_ANALYST_ENABLED` | `bool` | `True` | Master switch for the analyst feed (price-target consensus + grades summary) as diagnostic columns. Single gate. |
+| `FMP_EARNINGS_ENABLED` | `bool` | `True` | Master switch for the earnings calendar/surprise feed. Single gate. |
+| `FMP_NEWS_ENABLED` | `bool` | `True` | Master switch for FMP as the PRIMARY company-news/earnings-date provider (also requires `FMP_API_KEY`). See §7. |
+| `FMP_MACRO_ENABLED` | `bool` | `True` | Master switch for the macro feed (treasury rates + `FMP_ECON_INDICATORS`). Single gate. |
+| `FMP_ECON_CALENDAR_ENABLED` | `bool` | `True` | Master switch for economics calendar diagnostic feed (`Next_Macro_Event`, `Next_Macro_Event_Date`). Single gate. |
+| `FMP_INSIDER_ENABLED` | `bool` | `True` | Master switch for the insider-trading statistics feed (per-symbol cost). Single gate, separate from sector snapshots on purpose. |
+| `FMP_SECTOR_SNAPSHOT_ENABLED` | `bool` | `True` | Master switch for the dated sector P/E + sector performance snapshots (2 requests/cycle total). Single gate. |
+| `FMP_OPTIONS_HEALTH_ENABLED` | `bool` | `True` | Master switch for the fundamental-health overlay bundled into the options premium-directive matrix (Altman Z / Piotroski F / Net Debt-EBITDA / FCF Yield / 30-day realized vol). Single gate bundling three endpoints. See §3a below. |
+| `FMP_OPTIONS_CONTEXT_ENABLED` | `bool` | `True` | Master switch for the market/qualitative-context overlay on the options premium-directive matrix (news headlines, capped at 3/symbol, + peer-comparison tickers). Single gate bundling two endpoints, deliberately separate from `FMP_OPTIONS_HEALTH_ENABLED`. See §3b below. |
+| `FMP_PEERS_ENABLED` | `bool` | `True` | Master switch for the on-demand `GET /data/peers/{symbol}` peer-group lookup (webapp's Symbol Comparison "suggest peers" affordance). Single gate, deliberately separate from `FMP_OPTIONS_CONTEXT_ENABLED` despite both calling the same `fetch_peer_group` — different cadence/rate-limit shape (per-click vs. per-cycle batch). See §3b below. |
+| `FMP_UNIVERSE_ENABLED` | `bool` | `True` | Master switch for using FMP's historical S&P 500 constituent-changes feed as the PRIMARY source for `universe_engine.py`'s point-in-time survivorship-bias reconstruction, with the Wikipedia "Selected changes" table scrape (removed from the live page entirely as of 2026-08) demoted to a fallback. Single gate. See §8 below. |
 
 ### Behavior knobs (9)
 
 | Setting | Type | Default | Purpose |
 |---|---|---|---|
 | `FMP_FALLBACK_ENABLED` | `bool` | `True` | When `True`, an FMP failure falls through to the existing provider chain (quotes/bars: FMP → Alpaca if keyed → yfinance; fundamentals: FMP → Yahoo statement-derived → yfinance `.info`), logging a `WARNING`. `False` makes the chain `[primary]` only. |
-| `FMP_QUOTES_REALTIME` | `bool` | `False` | Whether FMP quotes may be labelled real-time (`is_stale=False`). Stays `False` because whether `/quote` is genuinely real-time on Starter could not be verified from the sandbox this integration was built in. |
+| `FMP_QUOTES_REALTIME` | `bool` | `True` | Whether FMP quotes may be labelled real-time (`is_stale=False`). Defaults `True` by explicit operator decision. |
 | `FMP_BARS_ADJUSTMENT` | `str` | `"dividend-adjusted"` | Which `/historical-price-eod` variant bars are pulled from: `"dividend-adjusted"`, `"light"`, `"full"`, or `"non-split-adjusted"`. **Not cosmetic — see §4, the single highest-risk setting in this integration.** |
 | `FMP_ANALYST_REFRESH_HOURS` | `int` | `24` | Hours before a symbol's cached analyst consensus is re-fetched. |
 | `FMP_EARNINGS_REFRESH_HOURS` | `int` | `12` | Hours before a symbol's cached earnings rows are re-fetched. |
@@ -90,9 +91,9 @@ All 31 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 | `FMP_NEWS_MAX_PAGES` | `int` | `10` | Hard ceiling on pages fetched per symbol per call — bounds a wide backfill window. Older articles past the ceiling are an honest, logged gap, not a fabricated substitute. Only consulted when `FMP_NEWS_ENABLED=True`. See §7. |
 | `FMP_MAX_SECONDS_PER_CYCLE` | `float` | `120.0` | Wall-clock budget for all FMP requests in one pipeline cycle. Once spent, remaining symbols degrade to `NaN` for that cycle rather than overrunning it. |
 
-### Related, pre-existing settings whose descriptions changed (no default changed)
+### Primary provider settings
 
-`MARKET_DATA_PROVIDER` and `FUNDAMENTALS_SOURCE` both gained `'fmp'` as an accepted value, and both descriptions now state explicitly that setting `FMP_API_KEY` alone never elects it.
+`MARKET_DATA_PROVIDER` defaults to `'fmp'` and `FUNDAMENTALS_SOURCE` defaults to `'fmp'` by explicit operator override. Setting `FMP_API_KEY` remains mandatory for live requests.
 
 ---
 

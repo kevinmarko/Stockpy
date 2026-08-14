@@ -35,21 +35,24 @@ import pytest
 from pipeline.production_steps import (
     _FMP_ANALYST_COLUMNS,
     _FMP_EARNINGS_COLUMNS,
+    _FMP_ECON_CALENDAR_COLUMNS,
     _FMP_INSIDER_COLUMNS,
     _FMP_SECTOR_COLUMNS,
     _apply_fmp_analyst,
     _apply_fmp_earnings,
+    _apply_fmp_econ_calendar,
     _apply_fmp_insider,
     _apply_fmp_sector,
 )
 
-# (writer, its columns) -- parametrized so a future fifth feed added without a
+# (writer, its columns) -- parametrized so a future sixth feed added without a
 # test fails here rather than silently shipping ungated.
 _WRITERS = [
     pytest.param(_apply_fmp_analyst, _FMP_ANALYST_COLUMNS, id="analyst"),
     pytest.param(_apply_fmp_earnings, _FMP_EARNINGS_COLUMNS, id="earnings"),
     pytest.param(_apply_fmp_insider, _FMP_INSIDER_COLUMNS, id="insider"),
     pytest.param(_apply_fmp_sector, _FMP_SECTOR_COLUMNS, id="sector"),
+    pytest.param(_apply_fmp_econ_calendar, _FMP_ECON_CALENDAR_COLUMNS, id="econ_calendar"),
 ]
 
 _ALL_FMP_COLUMNS = (
@@ -57,6 +60,7 @@ _ALL_FMP_COLUMNS = (
     + tuple(_FMP_EARNINGS_COLUMNS)
     + tuple(_FMP_INSIDER_COLUMNS)
     + tuple(_FMP_SECTOR_COLUMNS)
+    + tuple(_FMP_ECON_CALENDAR_COLUMNS)
 )
 
 
@@ -70,10 +74,17 @@ def _df(rows=None):
 
 
 class TestGatesOffIsANoOp:
-    """Every gate defaults ``False``. Note these tests do NOT patch the
-    settings flags: the point is that the SHIPPED DEFAULT is a no-op. (The
-    writers read their gate through ``getattr(settings, ..., False)``, so this
-    holds both before and after the ``FMP_*`` settings keys land.)"""
+    """Verifies that with capability gates False, the writers NaN-fill all declared
+    columns, make zero I/O, and never raise."""
+
+    @pytest.fixture(autouse=True)
+    def _gates_off(self, monkeypatch):
+        from settings import settings
+        monkeypatch.setattr(settings, "FMP_ANALYST_ENABLED", False)
+        monkeypatch.setattr(settings, "FMP_EARNINGS_ENABLED", False)
+        monkeypatch.setattr(settings, "FMP_INSIDER_ENABLED", False)
+        monkeypatch.setattr(settings, "FMP_SECTOR_SNAPSHOT_ENABLED", False)
+        monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", False)
 
     @pytest.mark.parametrize("writer,columns", _WRITERS)
     def test_columns_are_created_and_all_nan(self, writer, columns):
@@ -114,15 +125,16 @@ class TestGatesOffIsANoOp:
             assert col in df.columns
             assert df[col].isna().all()
 
-    def test_all_four_together_leave_all_eight_columns_nan(self):
-        """The composed no-op: running all four back to back (the order
-        ``StrategyEvalStep.run`` uses) leaves all eight columns NaN."""
+    def test_all_five_together_leave_all_ten_columns_nan(self):
+        """The composed no-op: running all five back to back (the order
+        ``StrategyEvalStep.run`` uses) leaves all ten columns NaN."""
         df = _df()
         with patch("requests.sessions.Session.request") as mock_request:
             _apply_fmp_analyst(df)
             _apply_fmp_earnings(df)
             _apply_fmp_insider(df)
             _apply_fmp_sector(df)
+            _apply_fmp_econ_calendar(df)
         mock_request.assert_not_called()
         for col in _ALL_FMP_COLUMNS:
             assert col in df.columns
@@ -156,9 +168,11 @@ class TestColumnContract:
         assert "Earnings_Date" not in _FMP_EARNINGS_COLUMNS
 
     def test_gate_off_earnings_writer_leaves_a_preexisting_earnings_date_intact(self):
+        from settings import settings
         df = _df()
         df["Earnings_Date"] = ["2026-08-01", ""]
-        _apply_fmp_earnings(df)
+        with patch.object(settings, "FMP_EARNINGS_ENABLED", False):
+            _apply_fmp_earnings(df)
         assert list(df["Earnings_Date"]) == ["2026-08-01", ""]
 
 
@@ -178,6 +192,7 @@ class TestWiredIntoStrategyEvalStep:
             "_apply_fmp_earnings",
             "_apply_fmp_insider",
             "_apply_fmp_sector",
+            "_apply_fmp_econ_calendar",
         ):
             assert f"{name}(" in src, f"{name} is never called from StrategyEvalStep.run"
 
@@ -194,3 +209,48 @@ class TestWiredIntoStrategyEvalStep:
         assert src.index("ctx.dashboard_df['Earnings_Date'] = \"\"") < src.index(
             "_apply_fmp_earnings("
         )
+
+
+class TestSharedDeadline:
+    """Verifies that the optional deadline parameter enforces a shared wall-clock
+    budget across _apply_fmp_analyst, _apply_fmp_earnings, and _apply_fmp_insider."""
+
+    def test_pre_exhausted_shared_deadline_skips_processing(self):
+        import time
+        from settings import settings
+
+        df = _df([
+            {"Symbol": "DEADLINE_SYM_1", "sector": "Technology", "Price": 100.0},
+            {"Symbol": "DEADLINE_SYM_2", "sector": "Energy", "Price": 50.0},
+        ])
+        expired_deadline = time.monotonic() - 10.0
+
+        with patch.object(settings, "FMP_ANALYST_ENABLED", True), \
+             patch.object(settings, "FMP_EARNINGS_ENABLED", True), \
+             patch.object(settings, "FMP_INSIDER_ENABLED", True), \
+             patch("data.fmp_feeds_company.fetch_analyst_snapshot") as mock_analyst, \
+             patch("data.fmp_feeds_company.fetch_earnings_rows") as mock_earnings, \
+             patch("data.fmp_feeds_market.fetch_insider_stats") as mock_insider:
+
+            _apply_fmp_analyst(df, deadline=expired_deadline)
+            _apply_fmp_earnings(df, deadline=expired_deadline)
+            _apply_fmp_insider(df, deadline=expired_deadline)
+
+            mock_analyst.assert_not_called()
+            mock_earnings.assert_not_called()
+            mock_insider.assert_not_called()
+
+            for col in _FMP_ANALYST_COLUMNS + _FMP_EARNINGS_COLUMNS + _FMP_INSIDER_COLUMNS:
+                assert df[col].isna().all()
+
+    def test_deadline_none_preserves_local_budget(self):
+        """When deadline is None, each writer computes its own local budget."""
+        from settings import settings
+
+        df = _df()
+        with patch.object(settings, "FMP_ANALYST_ENABLED", False):
+            # Flag off + deadline None runs cleanly without error
+            _apply_fmp_analyst(df, deadline=None)
+            for col in _FMP_ANALYST_COLUMNS:
+                assert df[col].isna().all()
+

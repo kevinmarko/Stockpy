@@ -4892,6 +4892,7 @@ _FMP_GROUPS = [
             ("FMP_EARNINGS_REFRESH_HOURS", "int", {"min": 1, "max": 168, "step": 1}),
             ("FMP_MACRO_ENABLED", "bool", {}),
             ("FMP_ECON_INDICATORS", "str", {}),
+            ("FMP_ECON_CALENDAR_ENABLED", "bool", {}),
             ("FMP_INSIDER_ENABLED", "bool", {}),
             ("FMP_INSIDER_REFRESH_DAYS", "int", {"min": 1, "max": 30, "step": 1}),
             ("FMP_INSIDER_MIN_LAG_DAYS", "int", {"min": 0, "max": 90, "step": 1}),
