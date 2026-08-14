@@ -11,9 +11,11 @@ import { OptionsMetricSelector, MetricColumn } from "../components/options/Optio
 import { OptionsStrategyBuilder } from "../components/options/OptionsStrategyBuilder";
 import { EarningsCrushScanner } from "../components/options/EarningsCrushScanner";
 import { UnusualFlowFeed } from "../components/options/UnusualFlowFeed";
+import { VolForecastScanner } from "../components/options/VolForecastScanner";
+import { GammaScalperView } from "../components/options/GammaScalperView";
 import { TabGuide } from "../components/TabGuide";
 
-type ChainTab = "calls" | "puts" | "flow" | "crush";
+type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma";
 
 export function OptionsChain() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -195,8 +197,10 @@ export function OptionsChain() {
         {[
           { key: "calls", label: "Calls" },
           { key: "puts", label: "Puts" },
-          { key: "flow", label: "🌊 Unusual Flow" },
-          { key: "crush", label: "⚡ Earnings Crush" },
+          { key: "forecast", label: "🎯 Vol Scanner" },
+          { key: "gamma", label: "⚡ Gamma Scalp" },
+          { key: "flow", label: "🌊 Flow" },
+          { key: "crush", label: "⚡ Crush" },
         ].map(tab => {
           const isActive = tab.key === activeTab;
           return (
@@ -226,7 +230,11 @@ export function OptionsChain() {
       <div style={{ flex: 1, overflowY: "auto", padding: 16, paddingBottom: (selectedLegs.length > 0 || isStockTradeOpen) ? 350 : 16 }}>
         <TabGuide tabKey="options-chain" />
         
-        {activeTab === "flow" ? (
+        {activeTab === "forecast" ? (
+          <VolForecastScanner initialSymbol={ticker} />
+        ) : activeTab === "gamma" ? (
+          <GammaScalperView initialSymbol={ticker} spotPrice={spotPrice} />
+        ) : activeTab === "flow" ? (
           <UnusualFlowFeed initialSymbol={ticker} />
         ) : activeTab === "crush" ? (
           <EarningsCrushScanner initialSymbols={ticker ? [ticker] : undefined} />

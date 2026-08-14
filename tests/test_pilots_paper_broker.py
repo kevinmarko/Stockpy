@@ -858,6 +858,276 @@ class TestUnusualFlowEndpoints:
         assert resp.status_code == 401
 
 
+# ---------------------------------------------------------------------------
+# 1. GET /pilots/options/forecast/har-rv
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsForecastHarRvEndpoint:
+    def test_get_forecast_har_rv_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/forecast/har-rv?symbol=SPY",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert "forecast_annualized_vol" in body
+        assert body["forecast_annualized_vol"] is not None and body["forecast_annualized_vol"] > 0
+        assert "forecast_rv_1d" in body
+        assert "forecast_rv_5d" in body
+        assert "forecast_rv_22d" in body
+        assert "model_fit" in body
+        fit = body["model_fit"]
+        assert "beta_0" in fit and "beta_d" in fit and "beta_w" in fit and "beta_m" in fit
+        assert fit["beta_d"] >= 0 and fit["beta_w"] >= 0 and fit["beta_m"] >= 0
+
+    def test_get_forecast_har_rv_requires_symbol(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/forecast/har-rv",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_get_forecast_har_rv_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/forecast/har-rv?symbol=SPY",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_get_forecast_har_rv_no_token_fail_open(self):
+        with mock_patch_settings(STATE_API_TOKEN=""):
+            resp = _client.get("/pilots/options/forecast/har-rv?symbol=SPY")
+        assert resp.status_code == 200
+        assert resp.json()["symbol"] == "SPY"
+
+
+# ---------------------------------------------------------------------------
+# 2. GET /pilots/options/forecast/mispricing
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsForecastMispricingEndpoint:
+    def test_get_forecast_mispricing_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/forecast/mispricing?symbol=SPY",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert "spot_price" in body
+        assert "fair_atm_iv" in body
+        assert "market_atm_iv" in body
+        assert "iv_mispricing_spread" in body
+        assert "regime_bias" in body
+        assert "rich_candidates" in body
+        assert "cheap_candidates" in body
+        assert "strike_mispricings" in body
+        assert len(body["strike_mispricings"]) > 0
+
+    def test_get_forecast_mispricing_requires_symbol(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/forecast/mispricing",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_get_forecast_mispricing_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/forecast/mispricing?symbol=SPY",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_get_forecast_mispricing_no_token_fail_open(self):
+        with mock_patch_settings(STATE_API_TOKEN=""):
+            resp = _client.get("/pilots/options/forecast/mispricing?symbol=SPY")
+        assert resp.status_code == 200
+        assert resp.json()["symbol"] == "SPY"
+
+
+# ---------------------------------------------------------------------------
+# 3. POST /pilots/options/gamma-scalp/simulate
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsGammaScalpSimulateEndpoint:
+    def test_post_gamma_scalp_simulate_default(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/gamma-scalp/simulate",
+                json={},
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert "rebalance_count" in body
+        assert "stock_pnl" in body
+        assert "option_pnl" in body
+        assert "total_pnl" in body
+        assert "attribution" in body
+        attr = body["attribution"]
+        assert "gamma_rent" in attr
+        assert "theta_decay" in attr
+        assert "transaction_costs" in attr
+        assert "trades" in body
+        assert "path_history" in body
+
+    def test_post_gamma_scalp_simulate_custom_path(self):
+        custom_payload = {
+            "position": {
+                "symbol": "SPY",
+                "strategy": "Long Straddle",
+                "spot_price": 100.0,
+                "strike": 100.0,
+                "dte": 30,
+                "implied_vol": 0.25,
+                "contracts": 1,
+            },
+            "price_path": [100.0, 104.0, 96.0, 104.0, 96.0, 100.0],
+            "delta_threshold": 0.08,
+            "dt_days": 0.1,
+            "transaction_cost_per_share": 0.005,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/gamma-scalp/simulate",
+                json=custom_payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["success"] is True
+        assert body["symbol"] == "SPY"
+        assert body["rebalance_count"] >= 1
+        assert len(body["trades"]) >= 1
+        assert len(body["path_history"]) == 6
+
+    def test_post_gamma_scalp_simulate_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/gamma-scalp/simulate",
+                json={},
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_gamma_scalp_simulate_no_token_fail_open(self):
+        with mock_patch_settings(STATE_API_TOKEN=""):
+            resp = _client.post(
+                "/pilots/options/gamma-scalp/simulate",
+                json={},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# 4. POST /pilots/options/alerts/test
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsAlertsTestEndpoint:
+    def test_post_options_alerts_test_whale_uoa(self):
+        payload = {
+            "alert_type": "whale_uoa",
+            "payload": {
+                "symbol": "NVDA",
+                "strike": 130.0,
+                "option_type": "CALL",
+                "expiration": "2026-08-21",
+                "vol_oi_ratio": 7.5,
+                "notional": 650000.0,
+                "trade_type": "SWEEP",
+            },
+            "channels": ["console"],
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/options/alerts/test",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["success"] is True
+        assert body["alert_type"] == "whale_uoa"
+        assert "Whale" in body["title"]
+        assert body["level"] == "WARNING"
+        assert "NVDA" in body["message"]
+
+    def test_post_options_alerts_test_earnings_crush(self):
+        payload = {
+            "alert_type": "earnings_crush",
+            "payload": {
+                "symbol": "AMD",
+                "edge_ratio": 1.45,
+                "implied_move_pct": 8.0,
+                "historical_move_pct": 5.2,
+            },
+            "channels": ["console"],
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/options/alerts/test",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert "Earnings" in body["title"]
+        assert "AMD" in body["message"]
+
+    def test_post_options_alerts_test_delta_hedge(self):
+        payload = {
+            "alert_type": "delta_hedge",
+            "payload": {
+                "symbol": "SPY",
+                "beta_weighted_delta_spy": 65.0,
+                "shares_needed": -65,
+            },
+            "channels": ["console"],
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/options/alerts/test",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert "Delta Hedge" in body["title"]
+
+    def test_post_options_alerts_test_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/options/alerts/test",
+                json={"alert_type": "custom"},
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_options_alerts_test_fails_closed_without_token(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
+            resp = _client.post(
+                "/pilots/options/alerts/test",
+                json={"alert_type": "custom"},
+            )
+        assert resp.status_code == 401
+
+
 
 
 

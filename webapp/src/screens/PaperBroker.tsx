@@ -9,6 +9,8 @@ import { ScenarioHeatmap } from "../components/options/ScenarioHeatmap";
 import { VolSurfaceView } from "../components/options/VolSurfaceView";
 import { EarningsCrushScanner } from "../components/options/EarningsCrushScanner";
 import { UnusualFlowFeed } from "../components/options/UnusualFlowFeed";
+import { VolForecastScanner } from "../components/options/VolForecastScanner";
+import { GammaScalperView } from "../components/options/GammaScalperView";
 import type { RollOrderRequest } from "../api/types";
 
 export function PaperBroker() {
@@ -26,6 +28,8 @@ export function PaperBroker() {
   const [showVolSurface, setShowVolSurface] = useState(false);
   const [showEarningsCrush, setShowEarningsCrush] = useState(false);
   const [showUnusualFlow, setShowUnusualFlow] = useState(false);
+  const [showVolScanner, setShowVolScanner] = useState(false);
+  const [showGammaScalper, setShowGammaScalper] = useState(false);
 
   // Position Roll state
   const [rollingPosition, setRollingPosition] = useState<{ symbol: string; qty: number } | null>(null);
@@ -218,6 +222,36 @@ export function PaperBroker() {
             🌊 Unusual Flow
           </button>
           <button
+            onClick={() => setShowVolScanner(!showVolScanner)}
+            style={{
+              padding: "8px 14px",
+              background: showVolScanner ? "#f59e0b" : theme.surface,
+              border: `1px solid ${showVolScanner ? "#f59e0b" : theme.border}`,
+              color: showVolScanner ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🎯 Vol Scanner
+          </button>
+          <button
+            onClick={() => setShowGammaScalper(!showGammaScalper)}
+            style={{
+              padding: "8px 14px",
+              background: showGammaScalper ? theme.growth : theme.surface,
+              border: `1px solid ${showGammaScalper ? theme.growth : theme.border}`,
+              color: showGammaScalper ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            ⚡ Gamma Scalper
+          </button>
+          <button
             onClick={() => setShowVolSurface(!showVolSurface)}
             style={{
               padding: "8px 14px",
@@ -269,6 +303,16 @@ export function PaperBroker() {
 
       <div style={{ flex: 1, overflowY: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 24 }}>
         <TabGuide tabKey="paper-broker" />
+
+        {/* Volatility Forecast & Strike Mispricing Scanner */}
+        {showVolScanner && (
+          <VolForecastScanner initialSymbol="SPY" onClose={() => setShowVolScanner(false)} />
+        )}
+
+        {/* Gamma Scalping Simulator */}
+        {showGammaScalper && (
+          <GammaScalperView initialSymbol="SPY" spotPrice={account.data?.equity ? 505.20 : 505.20} onClose={() => setShowGammaScalper(false)} />
+        )}
 
         {/* Volatility Surface Drawer/Section */}
         {showVolSurface && (

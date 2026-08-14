@@ -163,6 +163,11 @@ import type {
   EarningsCrushExecutionResult,
   UnusualOptionsFlowResponse,
   FlowSentimentResponse,
+  HarRvForecastResponse,
+  VolMispricingResponse,
+  GammaScalpRequest,
+  GammaScalpResponse,
+  OptionsAlertTestResult,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -1044,6 +1049,22 @@ const liveApi = {
   },
   getOptionsFlowSentiment: (symbol: string) =>
     http<FlowSentimentResponse>(`/pilots/options/flow/sentiment?symbol=${encodeURIComponent(symbol)}`),
+  getHarRvForecast: (symbol: string) =>
+    http<HarRvForecastResponse>(`/pilots/options/forecast/har-rv?symbol=${encodeURIComponent(symbol)}`),
+  getVolMispricing: (symbol: string, expiration?: string) =>
+    http<VolMispricingResponse>(
+      `/pilots/options/forecast/mispricing?symbol=${encodeURIComponent(symbol)}${expiration ? `&expiration=${encodeURIComponent(expiration)}` : ""}`
+    ),
+  simulateGammaScalping: (request: GammaScalpRequest) =>
+    http<GammaScalpResponse>("/pilots/options/gamma-scalp/simulate", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  testOptionsAlert: (params?: { alert_type?: string; symbol?: string; dry_run?: boolean }) =>
+    http<OptionsAlertTestResult>("/pilots/options/alerts/test", {
+      method: "POST",
+      body: params ? JSON.stringify(params) : undefined,
+    }),
 
   // ---- Live Trade Approvals ----
 

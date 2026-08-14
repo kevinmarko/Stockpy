@@ -254,6 +254,10 @@ class Settings(BaseSettings):
         default=1.20,
         description="Multiplier on expected move to set outer wings for earnings crush Iron Condors.",
     )
+    OPTIONS_ALERT_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="Dedicated webhook URL for real-time options alerts (UOA whale sweeps, earnings crush, delta hedging).",
+    )
 
 
 

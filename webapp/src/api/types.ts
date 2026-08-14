@@ -4283,4 +4283,144 @@ export interface FlowSentimentResponse {
   as_of?: string;
 }
 
+export interface HarRvForecastResponse {
+  symbol: string;
+  spot_price: number;
+  as_of: string;
+  rv_daily: number;
+  rv_weekly: number;
+  rv_monthly: number;
+  forecast_vol_1d: number;
+  forecast_vol_5d: number;
+  forecast_vol_22d: number;
+  forecast_vol_30d: number;
+  gjr_garch_vol?: number;
+  fair_iv_blend: number;
+  coefficients: {
+    beta_0: number;
+    beta_d: number;
+    beta_w: number;
+    beta_m: number;
+  };
+  r_squared?: number;
+  annualized_rv_1d?: number;
+  annualized_rv_5d?: number;
+  annualized_rv_22d?: number;
+}
+
+export interface VolMispricingStrike {
+  strike: number;
+  option_type: "CALL" | "PUT";
+  market_iv: number;
+  fair_iv: number;
+  iv_spread: number;
+  spread_zscore: number;
+  classification: "RICH" | "CHEAP" | "FAIR";
+  suggested_action: "SELL_PREMIUM" | "BUY_GAMMA" | "HOLD" | "NEUTRAL";
+  bid?: number;
+  ask?: number;
+  mid?: number;
+  delta?: number;
+  gamma?: number;
+  vega?: number;
+  theta?: number;
+  suggested_trade?: string;
+}
+
+export interface VolMispricingResponse {
+  symbol: string;
+  spot_price: number;
+  expiration: string;
+  expirations: string[];
+  dte: number;
+  fair_iv_baseline: number;
+  market_atm_iv: number;
+  rich_strikes_count: number;
+  cheap_strikes_count: number;
+  strikes: VolMispricingStrike[];
+  trade_recommendations: {
+    strategy: string;
+    direction: "SELL_VOL" | "BUY_VOL";
+    strikes: number[];
+    reason: string;
+    estimated_edge_pct: number;
+  }[];
+  as_of: string;
+}
+
+export interface GammaScalpRequest {
+  symbol: string;
+  spot_price: number;
+  option_type: "CALL" | "PUT" | "STRADDLE";
+  strike: number;
+  expiration?: string;
+  dte?: number;
+  iv?: number;
+  contracts: number;
+  delta_threshold: number;
+  simulation_steps?: number;
+  drift?: number;
+  realized_vol?: number;
+  underlying_price_path?: number[];
+}
+
+export interface GammaScalpHedgeTrade {
+  step: number;
+  timestamp: string;
+  spot_price: number;
+  pre_delta: number;
+  post_delta: number;
+  shares_traded: number;
+  side: "BUY" | "SELL" | "HOLD";
+  trade_price: number;
+  cash_flow: number;
+  stock_position: number;
+  option_mtm: number;
+  total_pnl: number;
+  gamma_rent_cumulative: number;
+  theta_decay_cumulative: number;
+}
+
+export interface GammaScalpResponse {
+  symbol: string;
+  spot_price: number;
+  initial_delta: number;
+  initial_gamma: number;
+  initial_theta: number;
+  total_trades: number;
+  rebalance_count: number;
+  delta_threshold: number;
+  total_pnl: number;
+  gamma_rent_total: number;
+  theta_burn_total: number;
+  stock_pnl: number;
+  option_pnl: number;
+  transaction_costs: number;
+  net_edge: number;
+  trades: GammaScalpHedgeTrade[];
+  price_path: number[];
+  pnl_path: {
+    step: number;
+    spot: number;
+    total_pnl: number;
+    gamma_rent: number;
+    theta_decay: number;
+    option_mtm: number;
+    stock_pnl: number;
+  }[];
+}
+
+export interface OptionsAlertTestResult {
+  ok: boolean;
+  dispatched_count: number;
+  channels: string[];
+  results: {
+    channel: string;
+    status: "SENT" | "SIMULATED" | "FAILED";
+    message?: string;
+  }[];
+  as_of?: string;
+}
+
+
 

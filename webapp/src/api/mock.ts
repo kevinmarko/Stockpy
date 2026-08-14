@@ -216,6 +216,13 @@ import type {
   UnusualOptionsFlowResponse,
   FlowSentimentData,
   FlowSentimentResponse,
+  HarRvForecastResponse,
+  VolMispricingResponse,
+  VolMispricingStrike,
+  GammaScalpRequest,
+  GammaScalpResponse,
+  GammaScalpHedgeTrade,
+  OptionsAlertTestResult,
 } from "./types";
 
 const SECTORS = [
@@ -12101,6 +12108,308 @@ export const mockApi = {
 
     return delay<FlowSentimentResponse>({
       sentiment: data,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async getHarRvForecast(symbol: string) {
+    const sym = (symbol || "SPY").toUpperCase();
+    const spot = sym === "SPY" ? 505.20 : sym === "QQQ" ? 440.50 : sym === "NVDA" ? 128.50 : sym === "TSLA" ? 218.00 : 180.00;
+    const baseRv = sym === "NVDA" ? 0.48 : sym === "TSLA" ? 0.54 : sym === "QQQ" ? 0.22 : 0.165;
+
+    const rv_daily = Number((baseRv * 0.96).toFixed(4));
+    const rv_weekly = Number((baseRv * 1.02).toFixed(4));
+    const rv_monthly = Number((baseRv * 1.08).toFixed(4));
+
+    const b0 = 0.015;
+    const bd = 0.38;
+    const bw = 0.34;
+    const bm = 0.22;
+
+    const forecast_vol_1d = Number((b0 + bd * rv_daily + bw * rv_weekly + bm * rv_monthly).toFixed(4));
+    const forecast_vol_5d = Number((forecast_vol_1d * 1.02).toFixed(4));
+    const forecast_vol_22d = Number((forecast_vol_1d * 1.05).toFixed(4));
+    const forecast_vol_30d = Number((forecast_vol_1d * 1.06).toFixed(4));
+    const gjr_garch_vol = Number((forecast_vol_30d * 1.03).toFixed(4));
+    const fair_iv_blend = Number(((forecast_vol_30d * 0.65) + (gjr_garch_vol * 0.35)).toFixed(4));
+
+    return delay<HarRvForecastResponse>({
+      symbol: sym,
+      spot_price: spot,
+      as_of: new Date().toISOString(),
+      rv_daily,
+      rv_weekly,
+      rv_monthly,
+      forecast_vol_1d,
+      forecast_vol_5d,
+      forecast_vol_22d,
+      forecast_vol_30d,
+      gjr_garch_vol,
+      fair_iv_blend,
+      coefficients: {
+        beta_0: b0,
+        beta_d: bd,
+        beta_w: bw,
+        beta_m: bm,
+      },
+      r_squared: 0.685,
+      annualized_rv_1d: rv_daily,
+      annualized_rv_5d: rv_weekly,
+      annualized_rv_22d: rv_monthly,
+    });
+  },
+  async getVolMispricing(symbol: string, expiration?: string) {
+    const sym = (symbol || "SPY").toUpperCase();
+    const spot = sym === "SPY" ? 505.20 : sym === "QQQ" ? 440.50 : sym === "NVDA" ? 128.50 : sym === "TSLA" ? 218.00 : 180.00;
+    const fairBase = sym === "NVDA" ? 0.52 : sym === "TSLA" ? 0.58 : sym === "QQQ" ? 0.23 : 0.175;
+    const mktAtmIv = sym === "NVDA" ? 0.68 : sym === "TSLA" ? 0.72 : sym === "QQQ" ? 0.25 : 0.215;
+    const exp = expiration || "2026-09-18";
+    const dte = 35;
+
+    const step = spot > 300 ? 5 : spot > 100 ? 2.5 : 1;
+    const atmStrike = Math.round(spot / step) * step;
+    const strikesList: number[] = [];
+    for (let i = -6; i <= 6; i++) {
+      strikesList.push(Number((atmStrike + i * step).toFixed(2)));
+    }
+
+    const strikes: VolMispricingStrike[] = strikesList.map(k => {
+      const moneyness = k / spot;
+      const skew = moneyness < 1.0 ? (1.0 - moneyness) * 0.45 : (moneyness - 1.0) * 0.20;
+      const market_iv = Number((mktAtmIv + skew + (Math.sin(k * 10) * 0.015)).toFixed(4));
+      const fair_iv = Number((fairBase + (moneyness < 1.0 ? (1.0 - moneyness) * 0.25 : (moneyness - 1.0) * 0.10)).toFixed(4));
+      const iv_spread = Number((market_iv - fair_iv).toFixed(4));
+      const spread_zscore = Number((iv_spread / 0.025).toFixed(2));
+
+      let classification: "RICH" | "CHEAP" | "FAIR" = "FAIR";
+      let suggested_action: "SELL_PREMIUM" | "BUY_GAMMA" | "HOLD" | "NEUTRAL" = "NEUTRAL";
+      let suggested_trade: string | undefined = undefined;
+
+      if (iv_spread >= 0.035 || spread_zscore >= 1.5) {
+        classification = "RICH";
+        suggested_action = "SELL_PREMIUM";
+        suggested_trade = k < spot ? "Sell Put Credit Spread" : "Sell Call Credit Spread";
+      } else if (iv_spread <= -0.015 || spread_zscore <= -1.0) {
+        classification = "CHEAP";
+        suggested_action = "BUY_GAMMA";
+        suggested_trade = "Buy Debit Spread / Long Straddle";
+      } else {
+        classification = "FAIR";
+        suggested_action = "HOLD";
+      }
+
+      const delta = Number((0.50 + (spot - k) / (spot * 0.2)).toFixed(2));
+      const clampedDelta = Math.max(0.02, Math.min(0.98, delta));
+
+      return {
+        strike: k,
+        option_type: k >= spot ? "CALL" : "PUT",
+        market_iv,
+        fair_iv,
+        iv_spread,
+        spread_zscore,
+        classification,
+        suggested_action,
+        bid: Number(Math.max(0.20, Math.abs(spot - k) * 0.8 + 2.5).toFixed(2)),
+        ask: Number(Math.max(0.30, Math.abs(spot - k) * 0.8 + 2.8).toFixed(2)),
+        mid: Number(Math.max(0.25, Math.abs(spot - k) * 0.8 + 2.65).toFixed(2)),
+        delta: clampedDelta,
+        gamma: 0.025,
+        vega: 0.18,
+        theta: -0.08,
+        suggested_trade,
+      };
+    });
+
+    const richCount = strikes.filter(s => s.classification === "RICH").length;
+    const cheapCount = strikes.filter(s => s.classification === "CHEAP").length;
+
+    const trade_recommendations = [
+      {
+        strategy: "Put Credit Spread (Rich Skew Capture)",
+        direction: "SELL_VOL" as const,
+        strikes: [strikesList[2], strikesList[0]],
+        reason: `OTM Puts trade at +${((mktAtmIv - fairBase) * 100).toFixed(1)}% IV premium over HAR-RV fair value. High VRP edge.`,
+        estimated_edge_pct: 18.5,
+      },
+      {
+        strategy: "Iron Condor (Symmetric Overpricing)",
+        direction: "SELL_VOL" as const,
+        strikes: [strikesList[1], strikesList[3], strikesList[9], strikesList[11]],
+        reason: "Wings are elevated +2.1σ vs GJR-GARCH+HAR-RV forecast. Rich IV harvest.",
+        estimated_edge_pct: 22.4,
+      },
+      {
+        strategy: "Long Straddle (Cheap Convexity)",
+        direction: "BUY_VOL" as const,
+        strikes: [atmStrike],
+        reason: "ATM IV compressed relative to short-term RV clustering. Positive Gamma edge.",
+        estimated_edge_pct: 12.0,
+      },
+    ];
+
+    return delay<VolMispricingResponse>({
+      symbol: sym,
+      spot_price: spot,
+      expiration: exp,
+      expirations: ["2026-08-21", "2026-08-28", "2026-09-18", "2026-10-16", "2026-11-20"],
+      dte,
+      fair_iv_baseline: fairBase,
+      market_atm_iv: mktAtmIv,
+      rich_strikes_count: richCount,
+      cheap_strikes_count: cheapCount,
+      strikes,
+      trade_recommendations,
+      as_of: new Date().toISOString(),
+    });
+  },
+  async simulateGammaScalping(request: GammaScalpRequest) {
+    const sym = request.symbol || "SPY";
+    const spot = request.spot_price || 505.20;
+    const contracts = request.contracts || 10;
+    const deltaThresh = request.delta_threshold || 0.15;
+    const steps = request.simulation_steps || 40;
+    const realizedVol = request.realized_vol || 0.25;
+
+    let price_path: number[] = request.underlying_price_path ? [...request.underlying_price_path] : [];
+    if (price_path.length === 0) {
+      price_path = [spot];
+      let currentSpot = spot;
+      const dt = 1 / 252 / 6.5;
+      for (let i = 1; i < steps; i++) {
+        const shock = (Math.sin(i * 0.4) * 0.8 + (Math.random() - 0.48)) * realizedVol * Math.sqrt(dt) * currentSpot * 8;
+        currentSpot = Math.max(10, currentSpot + shock);
+        price_path.push(Number(currentSpot.toFixed(2)));
+      }
+    }
+
+    const initDelta = request.option_type === "PUT" ? -0.50 : request.option_type === "STRADDLE" ? 0.0 : 0.50;
+    const initGamma = 0.035 * contracts;
+    const initTheta = -18.5 * contracts;
+
+    let currentStockPosition = request.option_type === "CALL" ? -Math.round(initDelta * contracts * 100) : request.option_type === "PUT" ? Math.round(Math.abs(initDelta) * contracts * 100) : 0;
+    let currentStockCash = -currentStockPosition * spot;
+    let prevSpot = spot;
+    let cumulativeGammaRent = 0;
+    let cumulativeThetaDecay = 0;
+    let totalStockPnl = 0;
+    let transactionCosts = 0;
+
+    const trades: GammaScalpHedgeTrade[] = [];
+    const pnl_path: GammaScalpResponse["pnl_path"] = [];
+
+    for (let step = 0; step < price_path.length; step++) {
+      const currentPrice = price_path[step];
+      const dS = currentPrice - prevSpot;
+      const stepDt = 1 / 30;
+
+      const rawDelta = initDelta + (initGamma / Math.max(1, contracts)) * (currentPrice - spot);
+      const optionDeltaShares = rawDelta * contracts * 100;
+      const netPortfolioDeltaShares = optionDeltaShares + currentStockPosition;
+      const netDeltaFraction = netPortfolioDeltaShares / (contracts * 100);
+
+      const stepGammaRent = 0.5 * initGamma * 100 * Math.pow(dS, 2);
+      cumulativeGammaRent += stepGammaRent;
+
+      const stepThetaBurn = Math.abs(initTheta) * stepDt;
+      cumulativeThetaDecay += stepThetaBurn;
+
+      let side: "BUY" | "SELL" | "HOLD" = "HOLD";
+      let sharesTraded = 0;
+      let cashFlow = 0;
+
+      if (Math.abs(netDeltaFraction) >= deltaThresh) {
+        sharesTraded = Math.round(-netPortfolioDeltaShares);
+        side = sharesTraded > 0 ? "BUY" : "SELL";
+        cashFlow = -sharesTraded * currentPrice;
+        currentStockPosition += sharesTraded;
+        currentStockCash += cashFlow;
+        transactionCosts += Math.abs(sharesTraded) * 0.005;
+
+        trades.push({
+          step,
+          timestamp: `T+${step}h`,
+          spot_price: currentPrice,
+          pre_delta: Number(netDeltaFraction.toFixed(3)),
+          post_delta: Number(((optionDeltaShares + currentStockPosition) / (contracts * 100)).toFixed(3)),
+          shares_traded: Math.abs(sharesTraded),
+          side,
+          trade_price: currentPrice,
+          cash_flow: Number(cashFlow.toFixed(2)),
+          stock_position: currentStockPosition,
+          option_mtm: Number(((contracts * 100) * Math.max(0.5, 5.0 + (currentPrice - spot) * initDelta + 0.5 * initGamma * Math.pow(currentPrice - spot, 2) - cumulativeThetaDecay / (contracts * 100))).toFixed(2)),
+          total_pnl: Number((cumulativeGammaRent - cumulativeThetaDecay - transactionCosts).toFixed(2)),
+          gamma_rent_cumulative: Number(cumulativeGammaRent.toFixed(2)),
+          theta_decay_cumulative: Number(cumulativeThetaDecay.toFixed(2)),
+        });
+      }
+
+      const stockMtm = currentStockPosition * currentPrice + currentStockCash;
+      totalStockPnl = stockMtm;
+      const optionPnl = (currentPrice - spot) * (initDelta * contracts * 100) + cumulativeGammaRent - cumulativeThetaDecay;
+      const totalPnl = cumulativeGammaRent - cumulativeThetaDecay - transactionCosts;
+
+      pnl_path.push({
+        step,
+        spot: currentPrice,
+        total_pnl: Number(totalPnl.toFixed(2)),
+        gamma_rent: Number(cumulativeGammaRent.toFixed(2)),
+        theta_decay: Number(cumulativeThetaDecay.toFixed(2)),
+        option_mtm: Number(optionPnl.toFixed(2)),
+        stock_pnl: Number(stockMtm.toFixed(2)),
+      });
+
+      prevSpot = currentPrice;
+    }
+
+    const total_pnl = Number((cumulativeGammaRent - cumulativeThetaDecay - transactionCosts).toFixed(2));
+
+    return delay<GammaScalpResponse>({
+      symbol: sym,
+      spot_price: spot,
+      initial_delta: initDelta,
+      initial_gamma: initGamma,
+      initial_theta: initTheta,
+      total_trades: trades.length,
+      rebalance_count: trades.length,
+      delta_threshold: deltaThresh,
+      total_pnl,
+      gamma_rent_total: Number(cumulativeGammaRent.toFixed(2)),
+      theta_burn_total: Number(cumulativeThetaDecay.toFixed(2)),
+      stock_pnl: Number(totalStockPnl.toFixed(2)),
+      option_pnl: Number((total_pnl - totalStockPnl).toFixed(2)),
+      transaction_costs: Number(transactionCosts.toFixed(2)),
+      net_edge: Number((cumulativeGammaRent - cumulativeThetaDecay).toFixed(2)),
+      trades,
+      price_path,
+      pnl_path,
+    });
+  },
+  async testOptionsAlert(params?: { alert_type?: string; symbol?: string; dry_run?: boolean }) {
+    const alertType = params?.alert_type || "UOA";
+    const symbol = params?.symbol || "NVDA";
+    const isDry = params?.dry_run ?? false;
+
+    return delay<OptionsAlertTestResult>({
+      ok: true,
+      dispatched_count: 3,
+      channels: ["Discord Webhook (#options-flow)", "Slack Webhook (#trading-desk)", "System Alert Logger"],
+      results: [
+        {
+          channel: "Discord Webhook (#options-flow)",
+          status: isDry ? "SIMULATED" : "SENT",
+          message: `Dispatched test ${alertType} notification for ${symbol} with rich embed format.`,
+        },
+        {
+          channel: "Slack Webhook (#trading-desk)",
+          status: isDry ? "SIMULATED" : "SENT",
+          message: `Dispatched test ${alertType} block kit message for ${symbol}.`,
+        },
+        {
+          channel: "System Alert Logger",
+          status: "SENT",
+          message: "Event recorded in quant_platform.db alerts table.",
+        },
+      ],
       as_of: new Date().toISOString(),
     });
   },

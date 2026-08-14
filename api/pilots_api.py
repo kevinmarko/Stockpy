@@ -6033,6 +6033,63 @@ def get_options_flow_sentiment(symbol: str = Query(..., min_length=1)) -> Dict[s
     return get_flow_sentiment(symbol=symbol)
 
 
+@app.get("/pilots/options/forecast/har-rv", dependencies=[Depends(require_read_token)])
+def get_options_forecast_har_rv(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """Returns Corsi (2009) HAR-RV model fit, components (RV_d, RV_w, RV_m), and forward volatility forecast."""
+    from pilots.har_volatility import get_har_volatility_forecast
+    return get_har_volatility_forecast(symbol=symbol)
+
+
+@app.get("/pilots/options/forecast/mispricing", dependencies=[Depends(require_read_token)])
+def get_options_forecast_mispricing(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """Returns strike-by-strike market IV vs fair IV spread and Rich/Cheap candidate recommendations."""
+    from pilots.vol_mispricing import get_volatility_mispricing_data
+    return get_volatility_mispricing_data(symbol=symbol)
+
+
+class GammaScalpSimulateRequest(BaseModel):
+    position: Optional[Dict[str, Any]] = None
+    price_path: Optional[List[float]] = None
+    delta_threshold: float = 0.15
+    dt_days: Optional[float] = 0.1
+    transaction_cost_per_share: Optional[float] = 0.005
+
+
+@app.post("/pilots/options/gamma-scalp/simulate", dependencies=[Depends(require_read_token)])
+def post_options_gamma_scalp_simulate(body: Optional[GammaScalpSimulateRequest] = None) -> Dict[str, Any]:
+    """Simulates intraday dynamic delta hedging and returns gamma rent vs theta decay breakdown."""
+    from pilots.gamma_scalper import simulate_gamma_scalping
+    pos = body.position if body else None
+    path = body.price_path if body else None
+    thresh = body.delta_threshold if body else 0.15
+    dt = body.dt_days if body and body.dt_days is not None else 0.1
+    cost = body.transaction_cost_per_share if body and body.transaction_cost_per_share is not None else 0.005
+    return simulate_gamma_scalping(
+        position=pos,
+        price_path=path,
+        delta_threshold=thresh,
+        dt_days=dt,
+        transaction_cost_per_share=cost,
+    )
+
+
+class OptionsAlertTestRequest(BaseModel):
+    alert_type: str = "custom"
+    payload: Optional[Dict[str, Any]] = None
+    channels: Optional[List[str]] = None
+
+
+@app.post("/pilots/options/alerts/test", dependencies=[Depends(require_command_token)])
+def post_options_alerts_test(body: OptionsAlertTestRequest) -> Dict[str, Any]:
+    """Dispatches a test options alert to configured notification channels (Discord, Slack, Email, File, Console)."""
+    from pilots.options_alerts import dispatch_options_alert
+    return dispatch_options_alert(
+        alert_type=body.alert_type,
+        payload=body.payload,
+        channels=body.channels,
+    )
+
+
 
 
 
