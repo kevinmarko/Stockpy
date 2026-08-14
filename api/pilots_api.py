@@ -6289,8 +6289,55 @@ def get_options_copula_pairs(
         sy = "GLD"
     if not sx:
         sx = "GDX"
+    sy = sy.upper().strip()
+    sx = sx.upper().strip()
 
-    res = compute_copula_spread_analysis(symbol_y=sy, symbol_x=sx)
+    # Fetch REAL historical Close series for both legs via the shared
+    # CompositeProvider (same pattern as pairs_ondemand._fetch_close /
+    # POST /data/pairs/analyze's analyze_pair) so a live copula request is
+    # scored against actual market history instead of always falling into
+    # compute_copula_spread_analysis's synthetic fallback. Never raises —
+    # dead-lettered per symbol; any fetch/alignment shortfall leaves the
+    # *_arg values None, and compute_copula_spread_analysis's own honest
+    # synthetic fallback (flagged via the response's is_synthetic field)
+    # takes over exactly as before.
+    prices_y_arg = None
+    prices_x_arg = None
+    dates_arg = None
+    try:
+        import pandas as pd
+
+        provider = get_provider()
+        closes: Dict[str, Any] = {}
+        for sym in (sy, sx):
+            try:
+                bars = provider.get_intraday_bars(sym, lookback_days=252)
+                if bars is not None and not bars.empty and "Close" in bars.columns:
+                    closes[sym] = bars["Close"]
+            except Exception as exc:  # noqa: BLE001 - dead-letter per symbol
+                logger.debug("copula/pairs: bars fetch failed for %s: %s", sym, exc)
+        if sy in closes and sx in closes:
+            aligned = pd.DataFrame({sy: closes[sy], sx: closes[sx]}).dropna(how="any")
+            if len(aligned) >= 15:
+                prices_y_arg = aligned[sy].to_numpy()
+                prices_x_arg = aligned[sx].to_numpy()
+                dates_arg = [
+                    d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
+                    for d in aligned.index
+                ]
+    except Exception as exc:  # noqa: BLE001 - never blocks the endpoint (CONSTRAINT #6)
+        logger.debug(
+            "copula/pairs: real-data fetch unavailable for %s/%s, will use synthetic fallback: %s",
+            sy, sx, exc,
+        )
+
+    res = compute_copula_spread_analysis(
+        symbol_y=sy,
+        symbol_x=sx,
+        prices_y=prices_y_arg,
+        prices_x=prices_x_arg,
+        dates=dates_arg,
+    )
     return res.to_dict() if hasattr(res, "to_dict") else dict(res)
 
 

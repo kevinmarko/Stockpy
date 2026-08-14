@@ -78,12 +78,14 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 # Numerical thresholds & sentinels
 EPSILON = 1e-12
 MAX_EXPONENT = 85.0  # Guard against overflow in exp()
-DEFAULT_GAMMA = 0.10
+DEFAULT_GAMMA = settings.OPTIONS_DRL_RISK_AVERSION_GAMMA  # Avellaneda-Stoikov risk-aversion gamma (operator-configurable)
 DEFAULT_SIGMA = 0.25
 DEFAULT_KAPPA = 1.50
 DEFAULT_A = 140.0
@@ -1177,7 +1179,7 @@ def simulate_market_maker_execution(
         pnl_arr = np.array(step_pnls, dtype=np.float64)
         std_pnl = float(np.std(pnl_arr))
         mean_pnl = float(np.mean(pnl_arr))
-        if std_pnl > 1e-8:
+        if std_pnl > EPSILON:
             sharpe = (mean_pnl / std_pnl) * math.sqrt(ANNUAL_TRADING_MINUTES)
         else:
             sharpe = 0.0
@@ -1286,7 +1288,7 @@ def train_market_maker_policy(
         pnl_arr = np.array(ep_pnls, dtype=np.float64)
         std_pnl = float(np.std(pnl_arr))
         mean_pnl = float(np.mean(pnl_arr))
-        if std_pnl > 1e-8:
+        if std_pnl > EPSILON:
             ep_sharpe = (mean_pnl / std_pnl) * math.sqrt(ANNUAL_TRADING_MINUTES)
         else:
             ep_sharpe = 0.0
@@ -1578,7 +1580,7 @@ def simulate_market_maker_session(
     diffs = np.diff(pnl_arr) if len(pnl_arr) > 1 else np.array([0.0])
     std_diff = float(np.std(diffs))
     mean_diff = float(np.mean(diffs))
-    sharpe = float(math.sqrt(n_steps) * (mean_diff / (std_diff + 1e-8))) if std_diff > 1e-8 else 0.0
+    sharpe = float(math.sqrt(n_steps) * (mean_diff / std_diff)) if std_diff > EPSILON else 0.0
 
     running_max = np.maximum.accumulate(pnl_arr)
     drawdowns = running_max - pnl_arr

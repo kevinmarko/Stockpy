@@ -77,8 +77,13 @@ class OptionsFlowSentimentSignal(SignalModule):
                     # Calculate per symbol
                     for sym in symbols:
                         res = calculate_net_flow_sentiment(sym, records)
-                        if res and res.get("total_records", 0) > 0:
-                            self._sentiment_scores[sym] = float(res.get("net_sentiment", 0.0))
+                        # NOTE: calculate_net_flow_sentiment() returns "record_count"/
+                        # "sentiment_score" (see pilots/unusual_options_flow.py) — this
+                        # previously read the wrong keys ("total_records"/"net_sentiment"),
+                        # which silently defaulted to 0/0.0 via .get()'s fallback and meant
+                        # this branch NEVER populated a real score from persisted UOA data.
+                        if res and res.get("record_count", 0) > 0:
+                            self._sentiment_scores[sym] = float(res.get("sentiment_score", 0.0))
 
             except Exception as exc:
                 logger.debug("OptionsFlowSentimentSignal.pre_compute error: %s", exc)

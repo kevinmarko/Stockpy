@@ -81,6 +81,11 @@ DEFAULT_WEIGHTS = {
 OPTION_FEE_PER_CONTRACT_LEG = 0.65  # $0.65 per contract leg
 
 
+def _round_or_none(value: Optional[float], ndigits: int = 4) -> Optional[float]:
+    """`round()` that passes an honest None through unchanged instead of raising."""
+    return round(value, ndigits) if value is not None else None
+
+
 def calculate_default_expiration(target_dte: int = 30) -> str:
     """Calculates target expiration date string (YYYY-MM-DD) target_dte days in future on a Friday."""
     target = datetime.now(timezone.utc).date() + timedelta(days=target_dte)
@@ -160,14 +165,19 @@ def compute_implied_correlation(
     index_iv: float,
     constituent_ivs: Dict[str, float],
     weights: Dict[str, float],
-) -> float:
+) -> Optional[float]:
     """
     Calculates implied correlation (rho_implied) using the Driessen, Maenhout, Vilkov (2009) model:
         rho_implied = (sigma_index^2 - sum(w_i^2 * sigma_i^2)) / (sum_{i!=j} w_i * w_j * sigma_i * sigma_j)
                     = (sigma_index^2 - sum(w_i^2 * sigma_i^2)) / ((sum(w_i * sigma_i))^2 - sum(w_i^2 * sigma_i^2))
+
+    Returns None (never a fabricated "typical" correlation guess -- CONSTRAINT #4) when the
+    inputs are missing/insufficient or the math is degenerate (near-zero denominator). A caller
+    must treat `None` as "cannot be computed from real data" and refuse the actionable
+    recommendation rather than silently substituting a plausible-looking number.
     """
     if index_iv <= 0 or not constituent_ivs or not weights:
-        return 0.50
+        return None
 
     # Match constituents present in both ivs and weights with positive values
     common_symbols = [
@@ -175,11 +185,11 @@ def compute_implied_correlation(
         if s in weights and constituent_ivs[s] > 0 and weights[s] > 0
     ]
     if not common_symbols:
-        return 0.50
+        return None
 
     total_weight = sum(weights[s] for s in common_symbols)
     if total_weight <= 0:
-        return 0.50
+        return None
 
     # Normalize weights
     w_norm = {s: weights[s] / total_weight for s in common_symbols}
@@ -193,7 +203,7 @@ def compute_implied_correlation(
     denominator = weighted_vol_sum_sq - weighted_var_sum
 
     if abs(denominator) <= 1e-12:
-        return 0.50
+        return None
 
     implied_corr = numerator / denominator
     return max(0.0, min(1.0, float(implied_corr)))
@@ -202,12 +212,15 @@ def compute_implied_correlation(
 def compute_realized_correlation_matrix(
     returns_df: pd.DataFrame,
     weights: Optional[Dict[str, float]] = None,
-) -> Tuple[pd.DataFrame, float]:
+) -> Tuple[pd.DataFrame, Optional[float]]:
     """
     Computes pairwise realized correlation matrix and weighted average realized correlation.
+
+    Returns `(pd.DataFrame(), None)` (never a fabricated "typical" correlation guess --
+    CONSTRAINT #4) when there isn't enough real return history to compute a correlation.
     """
     if returns_df is None or returns_df.empty or len(returns_df.columns) < 2:
-        return pd.DataFrame(), 0.50
+        return pd.DataFrame(), None
 
     corr_matrix = returns_df.corr().fillna(0.0)
     cols = list(corr_matrix.columns)
@@ -229,13 +242,13 @@ def compute_realized_correlation_matrix(
         avg_corr = float(np.mean(corr_matrix.values[triu_indices]))
         return corr_matrix, float(max(-1.0, min(1.0, avg_corr)))
 
-    return corr_matrix, 0.50
+    return corr_matrix, None
 
 
 def evaluate_dispersion_opportunity(
     index_symbol: str = "SPY",
     constituent_symbols: Optional[List[str]] = None,
-    index_iv: float = 0.18,
+    index_iv: Optional[float] = None,
     constituent_ivs: Optional[Dict[str, float]] = None,
     weights: Optional[Dict[str, float]] = None,
     realized_correlation: Optional[float] = None,
@@ -246,13 +259,51 @@ def evaluate_dispersion_opportunity(
         Spread = rho_implied - rho_realized
     If Spread >= threshold (default 0.15): Long Dispersion (Sell Index Straddle, Buy Basket Straddles).
     If Spread <= -threshold: Short Dispersion (Buy Index Straddle, Sell Basket Straddles).
+
+    `index_iv`, `constituent_ivs`, and `realized_correlation` must all be real, caller-supplied
+    market data. When any is missing (or `compute_implied_correlation` cannot compute a real
+    number from what was supplied), this refuses to fabricate a recommendation (CONSTRAINT #4)
+    and instead returns `regime="Insufficient Data"` / `is_actionable=False` with a `reason`.
     """
     constituents = [s.upper().strip() for s in (constituent_symbols or DEFAULT_DISPERSION_CONSTITUENTS)]
-    ivs = constituent_ivs or {s: 0.25 for s in constituents}
     w = weights or {s: DEFAULT_WEIGHTS.get(s, 1.0 / len(constituents)) for s in constituents}
 
-    implied_corr = compute_implied_correlation(index_iv=index_iv, constituent_ivs=ivs, weights=w)
-    real_corr = realized_correlation if realized_correlation is not None else 0.45
+    insufficient_reason: Optional[str] = None
+    implied_corr: Optional[float] = None
+
+    if index_iv is None or index_iv <= 0:
+        insufficient_reason = "No real index ATM implied volatility supplied."
+    elif not constituent_ivs:
+        insufficient_reason = "No real constituent implied volatility data supplied."
+    elif realized_correlation is None:
+        insufficient_reason = "No real realized-correlation estimate supplied."
+    else:
+        implied_corr = compute_implied_correlation(index_iv=index_iv, constituent_ivs=constituent_ivs, weights=w)
+        if implied_corr is None:
+            insufficient_reason = (
+                "Implied correlation could not be computed from the supplied IV/weights "
+                "(degenerate or incomplete inputs)."
+            )
+
+    if insufficient_reason is not None:
+        return {
+            "index_symbol": index_symbol.upper().strip(),
+            "constituent_symbols": constituents,
+            "implied_correlation": None,
+            "realized_correlation": (round(realized_correlation, 4) if realized_correlation is not None else None),
+            "correlation_spread": None,
+            "threshold": threshold,
+            "regime": "Insufficient Data",
+            "direction": "unknown",
+            "is_actionable": False,
+            "description": (
+                "Real market data required to evaluate a dispersion opportunity is unavailable; "
+                "refusing to fabricate a recommendation."
+            ),
+            "reason": insufficient_reason,
+        }
+
+    real_corr = float(realized_correlation)
     spread = implied_corr - real_corr
 
     if spread >= threshold:
@@ -288,6 +339,7 @@ def evaluate_dispersion_opportunity(
         "direction": direction,
         "is_actionable": is_actionable,
         "description": description,
+        "reason": None,
     }
 
 
@@ -332,7 +384,7 @@ def build_dispersion_basket(
     is_long_dispersion: bool = True,
     realized_correlation: Optional[float] = None,
     r: Optional[float] = None,
-) -> DispersionBasket:
+) -> Optional[DispersionBasket]:
     """
     Constructs a calibrated vega-neutral dispersion trade basket.
 
@@ -340,24 +392,43 @@ def build_dispersion_basket(
     2. For each constituent stock, computes stock straddle vega and allocates contracts
        such that sum(constituent_vegas) == index_vega (Vega Neutrality).
     3. Formats multi-leg order requests for index and all constituents with Black-Scholes pricing.
+
+    Returns None (never a basket priced off a fabricated spot/IV -- CONSTRAINT #4; matches
+    `pilots/options_hedging.py::execute_delta_hedge`'s "refuse rather than fabricate"
+    convention) when `spot_map`/`iv_map` is missing a real value for the index or any
+    constituent. A caller must not treat a missing quote as license to price (and potentially
+    execute) a trade off an invented number. `realized_correlation` is diagnostic only (it feeds
+    `correlation_spread`, not the leg pricing/vega-neutrality math below) -- when it isn't
+    supplied, the basket still prices normally off real spot/IV and `realized_correlation`/
+    `correlation_spread` are honestly `None` rather than computed off a fabricated 0.45.
     """
     idx_sym = (index_symbol or DEFAULT_DISPERSION_INDEX).upper().strip()
     constituents = [
         s.upper().strip() for s in (constituent_symbols or DEFAULT_DISPERSION_CONSTITUENTS)
     ]
+    if not constituents:
+        return None
     target_exp = expiration or calculate_default_expiration(target_dte)
 
-    # Resolve spot prices with robust fallbacks
+    # Resolve spot prices -- real data only, no fabricated defaults.
     spots = spot_map or {}
-    idx_spot = float(spots.get(idx_sym, 500.0))
+    idx_spot = float(spots.get(idx_sym, 0.0) or 0.0)
     if idx_spot <= 0:
-        idx_spot = 500.0
+        logger.info(
+            "build_dispersion_basket: no real spot price for index %s; refusing to price a "
+            "basket off a fabricated spot.", idx_sym,
+        )
+        return None
 
-    # Resolve IVs with robust fallbacks
+    # Resolve IVs -- real data only, no fabricated defaults.
     ivs = iv_map or {}
-    idx_iv = float(ivs.get(idx_sym, 0.18))
+    idx_iv = float(ivs.get(idx_sym, 0.0) or 0.0)
     if idx_iv <= 0:
-        idx_iv = 0.18
+        logger.info(
+            "build_dispersion_basket: no real ATM IV for index %s; refusing to price a basket "
+            "off a fabricated IV.", idx_sym,
+        )
+        return None
 
     # Normalize weights across active constituents
     raw_weights = weights or DEFAULT_WEIGHTS
@@ -373,14 +444,35 @@ def build_dispersion_basket(
         for s in valid_constituents
     }
 
-    # Constituent IVs map
-    const_ivs = {
-        s: float(ivs.get(s, 0.25)) if float(ivs.get(s, 0.25)) > 0 else 0.25
-        for s in valid_constituents
-    }
+    # Constituent spots/IVs -- real data only; any missing/non-positive value means the basket
+    # cannot be honestly priced (CONSTRAINT #4).
+    const_ivs: Dict[str, float] = {}
+    const_spots: Dict[str, float] = {}
+    for s in valid_constituents:
+        s_spot_check = float(spots.get(s, 0.0) or 0.0)
+        if s_spot_check <= 0:
+            logger.info(
+                "build_dispersion_basket: no real spot price for constituent %s; refusing to "
+                "price a basket off a fabricated spot.", s,
+            )
+            return None
+        const_spots[s] = s_spot_check
+
+        s_iv = float(ivs.get(s, 0.0) or 0.0)
+        if s_iv <= 0:
+            logger.info(
+                "build_dispersion_basket: no real ATM IV for constituent %s; refusing to price "
+                "a basket off a fabricated IV.", s,
+            )
+            return None
+        const_ivs[s] = s_iv
+
+    # Correlation fields are diagnostic only (they do not feed the leg pricing/vega-neutrality
+    # math below), so a missing/non-computable value degrades to an honest None rather than a
+    # fabricated 0.45/blocking the basket entirely (CONSTRAINT #4).
     implied_corr = compute_implied_correlation(index_iv=idx_iv, constituent_ivs=const_ivs, weights=normalized_weights)
-    real_corr = realized_correlation if realized_correlation is not None else 0.45
-    corr_spread = implied_corr - real_corr
+    real_corr = float(realized_correlation) if realized_correlation is not None else None
+    corr_spread = (implied_corr - real_corr) if (implied_corr is not None and real_corr is not None) else None
 
     # 1. Index Straddle Vega & Legs
     idx_strike = round(idx_spot, 2)
@@ -436,9 +528,7 @@ def build_dispersion_basket(
     total_const_commission = 0.0
 
     for s in valid_constituents:
-        s_spot = float(spots.get(s, 150.0))
-        if s_spot <= 0:
-            s_spot = 150.0
+        s_spot = const_spots[s]
         s_strike = round(s_spot, 2)
         s_iv = const_ivs[s]
         s_weight = normalized_weights[s]
@@ -534,9 +624,9 @@ def build_dispersion_basket(
         "basket_vega": round(total_basket_vega, 2),
         "vega_neutrality_ratio": round(vega_neutrality_ratio, 4),
         "vega_imbalance_pct": round(vega_imbalance_pct, 2),
-        "implied_correlation": round(implied_corr, 4),
-        "realized_correlation": round(real_corr, 4),
-        "correlation_spread": round(corr_spread, 4),
+        "implied_correlation": _round_or_none(implied_corr),
+        "realized_correlation": _round_or_none(real_corr),
+        "correlation_spread": _round_or_none(corr_spread),
         "total_commission": round(total_commission, 2),
         "total_net_cash_impact": round(total_net_cash_impact, 2),
     }
@@ -552,9 +642,9 @@ def build_dispersion_basket(
         basket_vega=round(total_basket_vega, 2),
         vega_neutrality_ratio=round(vega_neutrality_ratio, 4),
         vega_imbalance_pct=round(vega_imbalance_pct, 2),
-        implied_correlation=round(implied_corr, 4),
-        realized_correlation=round(real_corr, 4),
-        correlation_spread=round(corr_spread, 4),
+        implied_correlation=_round_or_none(implied_corr),
+        realized_correlation=_round_or_none(real_corr),
+        correlation_spread=_round_or_none(corr_spread),
         index_leg_requests=idx_legs,
         constituent_leg_requests=constituent_leg_requests,
         index_net_cash_impact=round(idx_net_cash_impact, 2),
@@ -566,21 +656,183 @@ def build_dispersion_basket(
     )
 
 
+def _closest_atm_iv_from_df(df: Any, spot: float) -> Optional[float]:
+    """Returns the implied vol of the strike closest to `spot` in a calls/puts chain DataFrame.
+    None (never a fabricated vol -- CONSTRAINT #4) on any missing/degenerate data."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+    if "strike" not in df.columns or "impliedVolatility" not in df.columns:
+        return None
+    try:
+        work = df[["strike", "impliedVolatility"]].apply(pd.to_numeric, errors="coerce").dropna()
+        work = work[(work["strike"] > 0) & (work["impliedVolatility"] > 0)]
+        if work.empty:
+            return None
+        idx = (work["strike"] - spot).abs().idxmin()
+        return float(work.loc[idx, "impliedVolatility"])
+    except Exception:
+        return None
+
+
+def _resolve_atm_iv(options_provider: Any, symbol: str, spot: float) -> Optional[float]:
+    """
+    Fetches the nearest available options chain for `symbol` and returns the ATM implied
+    volatility (average of nearest-strike call + put IV, or whichever side is available).
+    Returns None (never a fabricated vol guess -- CONSTRAINT #4) when the chain, spot, or a
+    usable IV quote is unavailable.
+    """
+    if options_provider is None or spot is None or spot <= 0:
+        return None
+    try:
+        exp_list = options_provider.fetch_options_chain(symbol)
+    except Exception as exc:
+        logger.debug("fetch_options_chain(%s) failed: %s", symbol, exc)
+        return None
+    if not isinstance(exp_list, (list, tuple)) or not exp_list:
+        return None
+    try:
+        chain = options_provider.fetch_options_chain(symbol, str(exp_list[0]))
+    except Exception as exc:
+        logger.debug("fetch_options_chain(%s, %s) failed: %s", symbol, exp_list[0], exc)
+        return None
+    if chain is None:
+        return None
+
+    calls_df = getattr(chain, "calls", None)
+    puts_df = getattr(chain, "puts", None)
+    if calls_df is None and isinstance(chain, dict):
+        calls_df = chain.get("calls")
+        puts_df = chain.get("puts")
+
+    call_iv = _closest_atm_iv_from_df(calls_df, spot)
+    put_iv = _closest_atm_iv_from_df(puts_df, spot)
+    if call_iv is not None and put_iv is not None:
+        return (call_iv + put_iv) / 2.0
+    return call_iv if call_iv is not None else put_iv
+
+
+def _source_real_dispersion_inputs(
+    idx_sym: str,
+    constituents: List[str],
+    weights: Dict[str, float],
+) -> Tuple[Dict[str, float], Dict[str, float], Optional[float]]:
+    """
+    Best-effort sources real spot prices (`pilots.price_provider.get_current_price`), real ATM
+    implied vol from the options chain (`data.market_data.get_options_provider`), and a real
+    trailing realized-correlation estimate (`data.historical_store.HistoricalStore` daily bars
+    via `compute_realized_correlation_matrix`) for one index + its constituent universe.
+
+    Returns `(spot_map, iv_map, realized_correlation)` -- any symbol/value that couldn't be
+    resolved from real data is simply absent/None (CONSTRAINT #4: never a fabricated stand-in).
+    Never raises (CONSTRAINT #6): any provider failure degrades that piece to empty/None.
+    """
+    spot_map: Dict[str, float] = {}
+    iv_map: Dict[str, float] = {}
+    realized_corr: Optional[float] = None
+
+    try:
+        from pilots.price_provider import get_current_price
+    except Exception:
+        get_current_price = None  # type: ignore[assignment]
+
+    try:
+        from data.market_data import get_options_provider
+        options_provider = get_options_provider()
+    except Exception as exc:
+        logger.debug("OptionsProvider unavailable for dispersion inputs: %s", exc)
+        options_provider = None
+
+    try:
+        from data.historical_store import HistoricalStore
+        store = HistoricalStore()
+    except Exception as exc:
+        logger.debug("HistoricalStore unavailable for dispersion inputs: %s", exc)
+        store = None
+
+    if get_current_price is not None:
+        idx_spot = get_current_price(idx_sym)
+        if idx_spot and idx_spot > 0:
+            spot_map[idx_sym] = idx_spot
+        for s in constituents:
+            s_spot = get_current_price(s)
+            if s_spot and s_spot > 0:
+                spot_map[s] = s_spot
+
+    if idx_sym in spot_map:
+        idx_iv = _resolve_atm_iv(options_provider, idx_sym, spot_map[idx_sym])
+        if idx_iv is not None:
+            iv_map[idx_sym] = idx_iv
+    for s in constituents:
+        if s in spot_map:
+            s_iv = _resolve_atm_iv(options_provider, s, spot_map[s])
+            if s_iv is not None:
+                iv_map[s] = s_iv
+
+    if store is not None:
+        try:
+            returns: Dict[str, pd.Series] = {}
+            for s in constituents:
+                bars = store.get_bars(s, lookback_days=90)
+                if bars is not None and len(bars) > 10 and "Close" in bars.columns:
+                    returns[s] = bars["Close"].astype(float).pct_change().dropna()
+            if len(returns) >= 2:
+                returns_df = pd.DataFrame(returns).dropna(how="any")
+                if len(returns_df) >= 5:
+                    _, realized_corr = compute_realized_correlation_matrix(returns_df, weights=weights)
+        except Exception as exc:
+            logger.debug("Realized correlation computation failed for %s basket: %s", idx_sym, exc)
+
+    return spot_map, iv_map, realized_corr
+
+
 def get_dispersion_opportunities(
     indices: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Returns dispersion arbitrage analysis and opportunities across index baskets."""
+    """
+    Returns dispersion arbitrage analysis and opportunities across index baskets.
+
+    Sources real market data per index via `_source_real_dispersion_inputs`. When it is
+    unavailable for an index, that index's entry honestly reports `is_actionable=False` /
+    `regime="Insufficient Data"` (CONSTRAINT #4) rather than falling back to a fabricated
+    IV/correlation guess.
+    """
     idx_list = indices or ["QQQ", "SPY"]
+
     opportunities = []
     for idx in idx_list:
         try:
-            opp = evaluate_dispersion_opportunity(index_symbol=idx)
-            basket_obj = build_dispersion_basket(
-                index_symbol=idx,
-                is_long_dispersion=(opp.get("direction") != "short_dispersion"),
-                realized_correlation=opp.get("realized_correlation"),
+            idx_sym = str(idx).upper().strip()
+            constituents = list(DEFAULT_DISPERSION_CONSTITUENTS)
+            weights = dict(DEFAULT_WEIGHTS)
+
+            spot_map, iv_map, realized_corr = _source_real_dispersion_inputs(idx_sym, constituents, weights)
+            const_ivs = {s: iv_map[s] for s in constituents if s in iv_map}
+
+            opp = evaluate_dispersion_opportunity(
+                index_symbol=idx_sym,
+                constituent_symbols=constituents,
+                index_iv=iv_map.get(idx_sym),
+                constituent_ivs=const_ivs or None,
+                weights=weights,
+                realized_correlation=realized_corr,
             )
-            opp["basket"] = basket_obj.to_dict()
+
+            if opp.get("regime") != "Insufficient Data":
+                # build_dispersion_basket is a second, independent honesty gate: it will
+                # itself refuse (return None) if per-symbol spot/IV coverage is incomplete.
+                basket_obj = build_dispersion_basket(
+                    index_symbol=idx_sym,
+                    constituent_symbols=constituents,
+                    spot_map=spot_map,
+                    iv_map=iv_map,
+                    weights=weights,
+                    is_long_dispersion=(opp.get("direction") != "short_dispersion"),
+                    realized_correlation=realized_corr,
+                )
+                opp["basket"] = basket_obj.to_dict() if basket_obj is not None else None
+            else:
+                opp["basket"] = None
+
             opportunities.append(opp)
         except Exception as exc:
             logger.warning("Error evaluating dispersion opportunity for %s: %s", idx, exc)
@@ -618,13 +870,41 @@ def execute_dispersion_trade(
 
     idx_sym = index_symbol or "SPY"
     if basket is None:
-        basket = build_dispersion_basket(index_symbol=idx_sym)
+        # No basket supplied -- source real market data (same path get_dispersion_opportunities
+        # uses) rather than calling build_dispersion_basket with empty spot/iv maps, which would
+        # always refuse (CONSTRAINT #4: no fabricated fallback spot/IV exists to fall through to).
+        constituents = list(DEFAULT_DISPERSION_CONSTITUENTS)
+        weights = dict(DEFAULT_WEIGHTS)
+        spot_map, iv_map, realized_corr = _source_real_dispersion_inputs(idx_sym, constituents, weights)
+        basket = build_dispersion_basket(
+            index_symbol=idx_sym,
+            constituent_symbols=constituents,
+            spot_map=spot_map,
+            iv_map=iv_map,
+            weights=weights,
+            realized_correlation=realized_corr,
+        )
     elif isinstance(basket, dict):
         try:
             idx_sym = basket.get("index_symbol", idx_sym)
             basket = DispersionBasket(**basket)
         except Exception:
             basket = build_dispersion_basket(index_symbol=idx_sym)
+
+    if basket is None:
+        # build_dispersion_basket refused (no real spot/IV data for the index or a
+        # constituent) -- refuse to execute rather than fill a trade priced off fabricated
+        # inputs (CONSTRAINT #4; matches
+        # `pilots/options_hedging.py::execute_delta_hedge`'s "refuse rather than fabricate").
+        return {
+            "ok": False,
+            "index_symbol": idx_sym,
+            "message": (
+                f"Cannot build a dispersion basket for {idx_sym}: no real spot price or "
+                "implied volatility was supplied for the index or one or more constituents. "
+                "Refusing to execute a trade priced off fabricated inputs."
+            ),
+        }
 
     basket_id = f"disp_{uuid.uuid4().hex[:8]}"
 

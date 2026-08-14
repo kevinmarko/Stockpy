@@ -312,7 +312,15 @@ def dispatch_uoa_whale_alert(
     }
 
     channels_dispatched: List[str] = []
-    dedup_key = f"uoa_whale_{symbol}_{contract_symbol or f'{strike}_{option_type}_{expiration}'}"
+    # Dedup key includes `sentiment` deliberately: without it, a bullish sweep followed
+    # by a genuinely NEW, opposite-direction (bearish) sweep on the SAME contract within
+    # settings.ALERT_DEDUP_WINDOW_SECONDS would be wrongly treated as a duplicate of the
+    # earlier alert and silently suppressed — direction reversal on institutional flow is
+    # exactly the kind of new information this alert exists to surface, not noise to
+    # dedupe away. Same-direction repeats on the same contract still correctly dedupe.
+    dedup_key = (
+        f"uoa_whale_{symbol}_{contract_symbol or f'{strike}_{option_type}_{expiration}'}_{sentiment}"
+    )
 
     # 1. Multi-channel dispatch via observability/alerts.py
     try:
@@ -329,6 +337,11 @@ def dispatch_uoa_whale_alert(
         webhook_res = post_webhook(target_webhook, message, level=level, extra=extra)
         if webhook_res.get("ok"):
             channels_dispatched.append("custom_webhook")
+        else:
+            logger.warning(
+                "UOA whale alert webhook delivery failed for %s: %s",
+                symbol, webhook_res.get("error"),
+            )
 
     return {
         "dispatched": True,
@@ -336,6 +349,7 @@ def dispatch_uoa_whale_alert(
         "message": message,
         "channels": channels_dispatched,
         "webhook_status": webhook_res.get("status") if webhook_res else None,
+        "webhook_error": webhook_res.get("error") if webhook_res else None,
         "extra": extra,
         "reason": None,
     }
@@ -477,6 +491,11 @@ def dispatch_earnings_crush_alert(
         webhook_res = post_webhook(target_webhook, message, level=level, extra=extra)
         if webhook_res.get("ok"):
             channels_dispatched.append("custom_webhook")
+        else:
+            logger.warning(
+                "Earnings crush alert webhook delivery failed for %s: %s",
+                symbol, webhook_res.get("error"),
+            )
 
     return {
         "dispatched": True,
@@ -484,6 +503,7 @@ def dispatch_earnings_crush_alert(
         "message": message,
         "channels": channels_dispatched,
         "webhook_status": webhook_res.get("status") if webhook_res else None,
+        "webhook_error": webhook_res.get("error") if webhook_res else None,
         "extra": extra,
         "reason": None,
     }
@@ -591,6 +611,11 @@ def dispatch_delta_hedge_alert(
         webhook_res = post_webhook(target_webhook, message, level=level, extra=extra)
         if webhook_res.get("ok"):
             channels_dispatched.append("custom_webhook")
+        else:
+            logger.warning(
+                "Delta hedge alert webhook delivery failed for %s: %s",
+                symbol, webhook_res.get("error"),
+            )
 
     return {
         "dispatched": True,
@@ -598,6 +623,7 @@ def dispatch_delta_hedge_alert(
         "message": message,
         "channels": channels_dispatched,
         "webhook_status": webhook_res.get("status") if webhook_res else None,
+        "webhook_error": webhook_res.get("error") if webhook_res else None,
         "extra": extra,
         "reason": None,
     }

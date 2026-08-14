@@ -52,10 +52,17 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 # Default Constants
 DEFAULT_NUM_BUCKETS = 50
+# Operator-configurable via settings.OPTIONS_VPIN_TOXICITY_THRESHOLD (default 0.35,
+# matching the Easley/Lopez de Prado/O'Hara literature's toxic-flow threshold). This
+# module-level constant is kept as the hardcoded fallback/default value only; call
+# sites read the live settings value (see evaluate_toxicity_regime/is_toxic_flow/
+# apply_defensive_spread_concession) so an operator override actually takes effect.
 DEFAULT_TOXICITY_THRESHOLD = 0.35
 MODERATE_TOXICITY_THRESHOLD = 0.20
 EPSILON = 1e-12
@@ -256,8 +263,12 @@ def compute_vpin_buckets(
     if total_vol <= 0.0:
         return []
 
-    # Determine volume per bucket V
-    if bucket_size is None or bucket_size <= 0.0:
+    # Determine volume per bucket V. Guard against a degenerate near-zero (but not
+    # exactly 0.0) explicit bucket_size using the repo's <1e-12 convention -- a
+    # tiny positive value would otherwise make the fill loop below iterate roughly
+    # total_vol / bucket_size times per trade (effectively hanging) and would also
+    # blow up the imbalance/denom division in the rolling VPIN computation.
+    if bucket_size is None or bucket_size <= EPSILON:
         v_target = max(1.0, total_vol / float(max(1, num_buckets)))
     else:
         v_target = float(bucket_size)
@@ -419,7 +430,7 @@ def calculate_vpin(
     total_trade_count = len(df)
     total_volume = float(df["volume"].sum())
 
-    if bucket_size is None or bucket_size <= 0.0:
+    if bucket_size is None or bucket_size <= EPSILON:
         v_target = max(1.0, total_volume / float(max(1, num_buckets)))
     else:
         v_target = float(bucket_size)
@@ -460,7 +471,8 @@ def calculate_vpin(
             denom = num_buckets * v_target
 
         sum_imbalance = sum(window)
-        val = sum_imbalance / denom if denom > 0 else 0.0
+        # Degenerate-denominator guard per repo convention: < 1e-12, never ==0/>0.
+        val = sum_imbalance / denom if denom >= EPSILON else 0.0
         rolling_vpin.append(float(np.clip(val, 0.0, 1.0)))
 
     current_vpin = rolling_vpin[-1] if rolling_vpin else 0.0
@@ -487,26 +499,37 @@ def evaluate_toxicity_regime(vpin: float) -> str:
     """Classifies VPIN metric into discrete operational toxicity regimes.
 
     - LOW: VPIN < 0.20
-    - MODERATE: 0.20 <= VPIN <= 0.35
-    - HIGH_TOXICITY: VPIN > 0.35
+    - MODERATE: 0.20 <= VPIN <= settings.OPTIONS_VPIN_TOXICITY_THRESHOLD (default 0.35)
+    - HIGH_TOXICITY: VPIN > settings.OPTIONS_VPIN_TOXICITY_THRESHOLD (default 0.35)
     """
+    toxicity_threshold = float(
+        getattr(settings, "OPTIONS_VPIN_TOXICITY_THRESHOLD", DEFAULT_TOXICITY_THRESHOLD)
+    )
     if vpin < MODERATE_TOXICITY_THRESHOLD:
         return "LOW"
-    elif vpin <= DEFAULT_TOXICITY_THRESHOLD:
+    elif vpin <= toxicity_threshold:
         return "MODERATE"
     else:
         return "HIGH_TOXICITY"
 
 
-def is_toxic_flow(vpin: float, threshold: float = DEFAULT_TOXICITY_THRESHOLD) -> bool:
-    """Returns True if VPIN exceeds the toxicity gating threshold."""
+def is_toxic_flow(vpin: float, threshold: Optional[float] = None) -> bool:
+    """Returns True if VPIN exceeds the toxicity gating threshold.
+
+    `threshold` defaults to `settings.OPTIONS_VPIN_TOXICITY_THRESHOLD` (0.35) when
+    not explicitly provided by the caller, so an operator override actually applies.
+    """
+    if threshold is None:
+        threshold = float(
+            getattr(settings, "OPTIONS_VPIN_TOXICITY_THRESHOLD", DEFAULT_TOXICITY_THRESHOLD)
+        )
     return float(vpin) > float(threshold)
 
 
 def apply_defensive_spread_concession(
     base_spread: float,
     vpin: float,
-    toxicity_threshold: float = DEFAULT_TOXICITY_THRESHOLD,
+    toxicity_threshold: Optional[float] = None,
     max_widening_mult: float = 2.0,
 ) -> float:
     """Applies defensive spread concession / widening when order flow is toxic ($VPIN > 0.35$).
@@ -528,6 +551,11 @@ def apply_defensive_spread_concession(
     """
     if base_spread <= 0.0:
         return 0.0
+
+    if toxicity_threshold is None:
+        toxicity_threshold = float(
+            getattr(settings, "OPTIONS_VPIN_TOXICITY_THRESHOLD", DEFAULT_TOXICITY_THRESHOLD)
+        )
 
     if vpin <= toxicity_threshold:
         return base_spread

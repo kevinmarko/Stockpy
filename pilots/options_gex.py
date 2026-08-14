@@ -74,6 +74,12 @@ REGIME_DESCRIPTIONS: Dict[str, str] = {
     REGIME_PIN_RISK_HIGH: "Spot within 0.5% of major gamma wall with high concentration",
 }
 
+# Operator-configurable via settings.OPTIONS_GEX_SEARCH_RANGE_PCT (default 0.20,
+# i.e. +/- 20% of spot) -- DEFAULT_SEARCH_RANGE_PCT below is the fallback literal
+# used only when the settings attribute is unavailable. Read dynamically at call
+# time (not baked into the function-signature default) so a runtime settings
+# change takes effect without re-importing this module, matching
+# pilots/options_vpin.py's DEFAULT_TOXICITY_THRESHOLD convention.
 DEFAULT_SEARCH_RANGE_PCT = 0.20
 DEFAULT_PIN_RISK_THRESHOLD_PCT = 0.005  # 0.5%
 DEFAULT_CONCENTRATION_THRESHOLD_PCT = 15.0  # 15% of total absolute GEX
@@ -539,7 +545,7 @@ def _bisection_root(
 def calculate_zero_gamma_flip(
     chain_data: Union[pd.DataFrame, Sequence[Dict[str, Any]], Sequence[Any]],
     spot_price: float,
-    search_range_pct: float = DEFAULT_SEARCH_RANGE_PCT,
+    search_range_pct: Optional[float] = None,
     r: Optional[float] = None,
     now: Optional[datetime] = None,
 ) -> Tuple[Optional[float], Optional[float]]:
@@ -551,7 +557,9 @@ def calculate_zero_gamma_flip(
     -----------
     chain_data: Option chain contracts.
     spot_price: Current underlying spot price $S$.
-    search_range_pct: Relative search radius (default 0.20 for $\\pm 20\\%$).
+    search_range_pct: Relative search radius. Defaults to
+        `settings.OPTIONS_GEX_SEARCH_RANGE_PCT` (0.20 for $\\pm 20\\%$) when
+        not explicitly provided.
     r: Risk-free rate.
     now: Reference timestamp.
 
@@ -584,7 +592,12 @@ def calculate_zero_gamma_flip(
         return round(spot_price, 4), 0.0
 
     # 2. Bracket search over configured search range [S * (1 - pct), S * (1 + pct)]
-    search_pct = max(0.05, float(search_range_pct))
+    resolved_search_range_pct = (
+        float(search_range_pct)
+        if search_range_pct is not None
+        else float(getattr(settings, "OPTIONS_GEX_SEARCH_RANGE_PCT", DEFAULT_SEARCH_RANGE_PCT))
+    )
+    search_pct = max(0.05, resolved_search_range_pct)
     low_bound = max(0.01, spot_price * (1.0 - search_pct))
     high_bound = spot_price * (1.0 + search_pct)
 
@@ -868,7 +881,7 @@ def calculate_gex_profile(
     chain_data: Union[pd.DataFrame, Sequence[Dict[str, Any]], Sequence[Any]],
     spot_price: float,
     ticker: str = "UNKNOWN",
-    search_range_pct: float = DEFAULT_SEARCH_RANGE_PCT,
+    search_range_pct: Optional[float] = None,
     r: Optional[float] = None,
     now: Optional[datetime] = None,
 ) -> GexAnalysisResult:
@@ -994,7 +1007,7 @@ def analyze_options_gex(
     chain_data: Union[pd.DataFrame, Sequence[Dict[str, Any]], Sequence[Any]],
     spot_price: float,
     ticker: str = "UNKNOWN",
-    search_range_pct: float = DEFAULT_SEARCH_RANGE_PCT,
+    search_range_pct: Optional[float] = None,
     r: Optional[float] = None,
     now: Optional[datetime] = None,
 ) -> GexAnalysisResult:
@@ -1079,6 +1092,17 @@ def get_options_gex_profile(
     clean_sym = str(symbol or "SPY").strip().upper()
 
     # 1. Resolve spot price
+    # CONSTRAINT #4 (honesty): a live quote failure must degrade to an honest
+    # "no price available" state, never a fabricated per-symbol literal --
+    # matching pilots/options_hedging.py's refuse-rather-than-fabricate fix for
+    # its own hardcoded $500 SPY fallback. A hardcoded table here (previously
+    # SPY=500.0, NVDA=125.0, AAPL=150.0, QQQ=450.0, IWM=200.0, TSLA=220.0,
+    # else 100.0) would silently drift further from reality every day and
+    # produce a Net GEX / Zero-Gamma-Flip / Gamma Wall profile presented as if
+    # it were real market structure for that symbol. `calculate_gex_profile`
+    # already has a tested, honest degenerate-spot-price path (spot_price <=
+    # 0 -> net_gex=0.0, zero_gamma_flip=None, diagnostics.error set) that this
+    # now falls through to instead.
     if spot_price is None or spot_price <= 0:
         try:
             from data.market_data import get_provider
@@ -1087,46 +1111,49 @@ def get_options_gex_profile(
                 quote = market_provider.get_latest_quote(clean_sym)
                 if quote and getattr(quote, "price", 0) and float(quote.price) > 0:
                     spot_price = float(quote.price)
+                else:
+                    spot_price = None
         except Exception:
             spot_price = None
 
-    if spot_price is None or spot_price <= 0:
-        if clean_sym == "SPY":
-            spot_price = 500.0
-        elif clean_sym == "NVDA":
-            spot_price = 125.0
-        elif clean_sym == "AAPL":
-            spot_price = 150.0
-        elif clean_sym == "QQQ":
-            spot_price = 450.0
-        elif clean_sym == "IWM":
-            spot_price = 200.0
-        elif clean_sym == "TSLA":
-            spot_price = 220.0
-        else:
-            spot_price = 100.0
+    spot_price_unavailable = spot_price is None or spot_price <= 0
+    if spot_price_unavailable:
+        spot_price = 0.0
 
     # 2. Resolve options chain
     chain_data = None
-    try:
-        from data.market_data import get_options_provider
-        options_provider = get_options_provider()
-        if options_provider is not None:
-            expirations = options_provider.fetch_options_chain(clean_sym)
-            if expirations and isinstance(expirations, list):
-                chain_map = {}
-                for exp in expirations[:5]:
-                    c = options_provider.fetch_options_chain(clean_sym, exp)
-                    if c:
-                        chain_map[str(exp)] = c
-                if chain_map:
-                    chain_data = chain_map
-    except Exception:
-        chain_data = None
+    chain_source = "live"
+    if not spot_price_unavailable:
+        try:
+            from data.market_data import get_options_provider
+            options_provider = get_options_provider()
+            if options_provider is not None:
+                expirations = options_provider.fetch_options_chain(clean_sym)
+                if expirations and isinstance(expirations, list):
+                    chain_map = {}
+                    for exp in expirations[:5]:
+                        c = options_provider.fetch_options_chain(clean_sym, exp)
+                        if c:
+                            chain_map[str(exp)] = c
+                    if chain_map:
+                        chain_data = chain_map
+        except Exception:
+            chain_data = None
 
     if not chain_data:
+        # No real chain resolvable (no live spot, provider failure, or empty
+        # chain) -- fall back to an illustrative synthetic chain rather than
+        # raising (CONSTRAINT #6), but flag it via the response's `chain_source`
+        # key (below) so callers never mistake this for a genuine
+        # market-structure read (CONSTRAINT #4). Uses spot_price=0 only when
+        # no real price is available either; generate_synthetic_options_chain
+        # requires a positive spot to build a strike ladder around, so use its
+        # own documented default (500.0) purely as a strike-grid anchor for the
+        # illustrative chain -- never presented as the resolved `spot_price`
+        # in the response, which stays honestly 0.0 below.
+        chain_source = "synthetic"
         chain_data = generate_synthetic_options_chain(
-            spot_price=spot_price,
+            spot_price=spot_price if spot_price > 0 else 500.0,
             call_oi_bias=1.1,
             put_oi_bias=0.9,
         )
@@ -1155,5 +1182,7 @@ def get_options_gex_profile(
     res_dict["dealer_hedging_shares_per_1pct_move"] = dealer_shares
     res_dict["strikes"] = res.strikes_profile
     res_dict["as_of"] = res.timestamp or datetime.now(timezone.utc).isoformat()
+    res_dict["spot_price_source"] = "unavailable" if spot_price_unavailable else "live"
+    res_dict["chain_source"] = chain_source
     return res_dict
 
