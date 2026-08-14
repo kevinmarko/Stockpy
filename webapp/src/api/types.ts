@@ -3852,6 +3852,85 @@ export interface PaperBrokerResetResult {
   cash: number;
 }
 
+export interface StrategyOptionCandidate {
+  symbol: string;
+  strategy: string;
+  action: string;
+  net_premium: number | null;
+  ivr: number | null;
+  trend_bias: string;
+  target_dte: number;
+  legs: any[];
+}
+
+export interface StrategyOptionsCandidatesResponse {
+  count: number;
+  candidates: StrategyOptionCandidate[];
+}
+
+export interface StrategyOptionsExecutionResult {
+  executed_count: number;
+  skipped_count: number;
+  failed_count: number;
+  executed: Array<{
+    order_id?: string;
+    symbol: string;
+    strategy: string;
+    contracts: number;
+    net_price: number;
+    net_cash_impact: number;
+    legs?: string[];
+  }>;
+  skipped: Array<{
+    symbol: string;
+    reason: string;
+  }>;
+  failed: Array<{
+    symbol: string;
+    reason: string;
+  }>;
+}
+
+export interface PositionGreekBreakdown {
+  symbol: string;
+  asset_type: "stock" | "option";
+  base_ticker: string;
+  expiration?: string;
+  strike?: number;
+  option_type?: "call" | "put";
+  dte?: number;
+  qty: number;
+  spot_price: number;
+  delta_per_unit: number;
+  gamma_per_unit: number;
+  theta_daily_per_unit: number;
+  vega_1pct_per_unit: number;
+  position_delta: number;
+  position_dollar_delta: number;
+  position_gamma: number;
+  position_theta_daily: number;
+  position_vega_1pct: number;
+  market_value: number;
+}
+
+export interface PortfolioGreeks {
+  total_positions: number;
+  stock_positions_count: number;
+  option_positions_count: number;
+  net_delta_shares: number;
+  net_dollar_delta: number;
+  net_gamma: number;
+  net_theta_daily: number;
+  net_vega_1pct: number;
+  beta_weighted_delta_spy: number;
+  positions_with_missing_data?: string[];
+  beta_excluded_symbols?: string[];
+  positions: PositionGreekBreakdown[];
+}
+
+
+
+
 /**
  * A real live-trade order an MCP tool proposed for human approval. This
  * webapp screen (LiveTradeApprovals.tsx) IS the enforcement surface -- there
@@ -3928,3 +4007,195 @@ export interface OptionsOrderResult {
   order_id?: string;
   message: string;
 }
+
+export interface OptionsBacktestParams {
+  strategy: string;
+  ticker: string;
+  start_date: string;
+  end_date: string;
+  initial_capital?: number;
+}
+
+export interface OptionsTradeLogItem {
+  entry_date: string;
+  exit_date: string;
+  strategy: string;
+  underlying_entry_price: number;
+  underlying_exit_price: number;
+  entry_net_premium: number;
+  exit_net_cost: number;
+  pnl_dollar: number;
+  pnl_pct: number;
+  exit_reason: string;
+  holding_days: number;
+  contracts: number;
+}
+
+export interface OptionsBacktestResponse {
+  strategy_name: string;
+  ticker: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  final_capital: number;
+  total_return_pct: number;
+  annualized_return_pct: number;
+  sharpe_ratio: number;
+  sortino_ratio: number;
+  max_drawdown_pct: number;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate_pct: number;
+  profit_factor: number;
+  avg_win: number;
+  avg_loss: number;
+  pbo: number;
+  dsr: number;
+  passes_stress: boolean;
+  deployable: boolean;
+  equity_curve: { date: string; value: number }[];
+  trades: OptionsTradeLogItem[];
+}
+
+export interface OptionsMetaModelStatus {
+  n_samples: number;
+  train_accuracy: number;
+  train_roc_auc: number;
+  trained_at: string | null;
+  enabled: boolean;
+}
+
+export interface OptionsMetaModelRetrainResult {
+  status: string;
+  trained_samples: number;
+  accuracy: number;
+  roc_auc: number;
+  trained_at: string;
+}
+
+export interface PaperBrokerSettleExpiredResult {
+  settled_count: number;
+  settled: any[];
+}
+
+export interface ScenarioMatrixCell {
+  spot_shift_pct: number;
+  iv_shift_pct: number;
+  days_forward: number;
+  spot_price: number;
+  portfolio_value: number;
+  pnl_dollar: number;
+  pnl_pct: number;
+  net_delta: number;
+  net_gamma: number;
+  net_theta: number;
+  net_vega: number;
+}
+
+export interface HistoricalScenarioPreset {
+  id: string;
+  name: string;
+  description: string;
+  spot_shift_pct: number;
+  iv_shift_pct: number;
+  projected_pnl_dollar: number;
+  projected_pnl_pct: number;
+}
+
+export interface ScenarioMatrixResponse {
+  spot_shifts: number[];
+  iv_shifts: number[];
+  time_slices: number[];
+  matrix: ScenarioMatrixCell[];
+  historical_scenarios?: HistoricalScenarioPreset[];
+  current_portfolio_value: number;
+}
+
+export interface VolSmilePoint {
+  strike: number;
+  iv: number;
+  moneyness: number;
+  call_bid?: number;
+  call_ask?: number;
+  put_bid?: number;
+  put_ask?: number;
+}
+
+export interface VolTermStructurePoint {
+  expiration: string;
+  dte: number;
+  atm_iv: number;
+  historical_realized_vol_30d?: number;
+}
+
+export interface SkewData {
+  skew_25delta: number;
+  put_25delta_iv: number;
+  call_25delta_iv: number;
+  atm_iv: number;
+  vrp_spread?: number;
+  realized_vol_10d?: number;
+  realized_vol_20d?: number;
+  realized_vol_30d?: number;
+  realized_vol_60d?: number;
+}
+
+export interface VolSurfaceResponse {
+  symbol: string;
+  spot_price: number;
+  as_of: string;
+  expirations: string[];
+  selected_expiration?: string;
+  smile_points: VolSmilePoint[];
+  term_structure: VolTermStructurePoint[];
+  skew: SkewData;
+}
+
+export interface DeltaHedgePreview {
+  net_delta_shares: number;
+  net_dollar_delta: number;
+  beta_weighted_delta_spy: number;
+  spy_spot_price: number;
+  required_hedge_shares: number;
+  action: "BUY" | "SELL" | "NONE";
+  hedge_symbol: string;
+  estimated_cost: number;
+  tolerance_band_shares: number;
+  is_within_tolerance: boolean;
+}
+
+export interface DeltaHedgeResult {
+  ok: boolean;
+  order_id?: string;
+  shares: number;
+  symbol: string;
+  side: "BUY" | "SELL";
+  price: number;
+  message: string;
+}
+
+export interface RollOrderRequest {
+  current_symbol: string;
+  target_expiration: string;
+  target_strike?: number;
+  qty?: number;
+  net_credit_or_debit?: number;
+}
+
+export interface ClosedExitPosition {
+  symbol: string;
+  qty: number;
+  reason: "PROFIT_TARGET_50" | "STOP_LOSS_200" | "DTE_EXPIRY_21" | "MANUAL";
+  pnl_dollar: number;
+  pnl_pct: number;
+  closed_at_price: number;
+}
+
+export interface ManageExitsResult {
+  evaluated_count: number;
+  closed_count: number;
+  closed_positions: ClosedExitPosition[];
+  message: string;
+}
+

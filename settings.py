@@ -198,6 +198,53 @@ class Settings(BaseSettings):
         default=True,
         description="Gates POST /pilots/paper-broker/reset endpoint. If False, resets are blocked."
     )
+    PAPER_OPTIONS_AUTO_EXECUTE_ENABLED: bool = Field(
+        default=False,
+        description="Automatically execute valid options strategy directives into the paper broker every cycle.",
+    )
+    MAX_OPTION_NOTIONAL_PER_TRADE: float = Field(
+        default=2500.0,
+        description="Max risk notional collateral per automated options paper trade.",
+    )
+    MAX_CONCURRENT_OPTION_POSITIONS: int = Field(
+        default=10,
+        description="Max total concurrent open option positions in the paper broker.",
+    )
+    OPTIONS_META_LABELER_ENABLED: bool = Field(
+        default=True,
+        description="Enable Stage 4 ML meta-labeling for automated options trade gating and sizing.",
+    )
+    OPTIONS_RISK_FREE_RATE: float = Field(
+        default=0.045,
+        description="Annualized risk-free interest rate for options pricing and Greeks calculation.",
+    )
+    OPTIONS_AUTO_EXIT_ENABLED: bool = Field(
+        default=False,
+        description="Automatically manage and exit option positions on profit target, stop loss, or DTE threshold.",
+    )
+    OPTIONS_PROFIT_TARGET_PCT: float = Field(
+        default=0.50,
+        description="Profit target percentage threshold to trigger automated exit (e.g. 0.50 for 50% max profit).",
+    )
+    OPTIONS_STOP_LOSS_MULTIPLE: float = Field(
+        default=2.0,
+        description="Stop loss multiple of max credit/debit to trigger automated exit (e.g. 2.0 for 200% loss).",
+    )
+    OPTIONS_MANAGE_DTE_THRESHOLD: int = Field(
+        default=21,
+        description="DTE threshold at or below which options positions are proactively closed/rolled (e.g. 21 days).",
+    )
+    OPTIONS_DELTA_HEDGE_ENABLED: bool = Field(
+        default=False,
+        description="Enable automatic dynamic SPY delta hedging for options paper portfolio.",
+    )
+    OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES: float = Field(
+        default=25.0,
+        description="Deadband threshold in SPY delta shares before triggering a dynamic delta hedge order.",
+    )
+
+
+
     LIVE_TRADE_EXECUTION_ENABLED: bool = Field(
         default=False,
         description=(

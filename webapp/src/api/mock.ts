@@ -198,6 +198,17 @@ import type {
   LiveTradeProposal,
   OptionsOrderRequest,
   OptionsOrderResult,
+  ScenarioMatrixResponse,
+  ScenarioMatrixCell,
+  VolSurfaceResponse,
+  VolSmilePoint,
+  VolTermStructurePoint,
+  SkewData,
+  DeltaHedgePreview,
+  DeltaHedgeResult,
+  RollOrderRequest,
+  ManageExitsResult,
+  HistoricalScenarioPreset,
 } from "./types";
 
 const SECTORS = [
@@ -9393,107 +9404,218 @@ export const mockApi = {
         qty = Math.max(1, +(req.dollar_amount / fillPrice).toFixed(4));
       }
       totalCost = qty * fillPrice;
-    } else {
+
+      const orderSide: 'BUY' | 'SELL' = req.side?.toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+      const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
+
+      if (orderSide === 'SELL' && (!existingPos || existingPos.qty < qty)) {
+        return delay({
+          ok: false,
+          message: `Order rejected: Insufficient funds or inventory for SELL ${qty} ${orderSymbol}.`
+        }, 500);
+      } else if (orderSide === 'BUY' && paperAccount.cash < totalCost) {
+        return delay({
+          ok: false,
+          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
+        }, 500);
+      }
+
+      if (orderSide === 'SELL') {
+        paperAccount.cash += totalCost;
+        existingPos!.qty -= qty;
+        existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - totalCost);
+        if (existingPos!.qty <= 0) {
+          paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
+        }
+      } else {
+        paperAccount.cash -= totalCost;
+        if (existingPos) {
+          const prevTotal = existingPos.qty * existingPos.avg_cost;
+          existingPos.qty += qty;
+          existingPos.avg_cost = (prevTotal + totalCost) / existingPos.qty;
+          existingPos.market_value = (existingPos.market_value || 0) + totalCost;
+        } else {
+          paperPositions.push({
+            symbol: orderSymbol,
+            qty: qty,
+            avg_cost: fillPrice,
+            current_price: fillPrice,
+            market_value: totalCost,
+            unrealized_pl: 0,
+            unrealized_pl_pct: 0
+          });
+        }
+      }
+      paperAccount.buying_power = paperAccount.cash;
+
+      const orderId = `mock_ord_${Date.now()}`;
+      paperOrders.unshift({
+        order_id: orderId,
+        symbol: orderSymbol,
+        side: orderSide,
+        qty: qty,
+        price: fillPrice,
+        status: 'filled',
+        filled_qty: qty,
+        filled_avg_price: fillPrice,
+        created_at: new Date().toISOString()
+      });
+
+      return delay({
+        ok: true,
+        order_id: orderId,
+        message: `Paper stock order for ${qty} shares of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${totalCost.toFixed(2)}).`
+      }, 600);
+
+    } else if (req.legs && req.legs.length > 1) {
+      // Multi-leg option order execution
       let netPrice = req.limit_price || 0.0;
-      if (!netPrice && req.legs && req.legs.length > 0) {
+      if (!netPrice) {
         netPrice = req.legs.reduce((acc, leg) => {
           const mult = leg.action === 'Buy' ? 1 : -1;
           const p = leg.contract.lastPrice || leg.contract.ask || 0.05;
           return acc + (mult * p);
         }, 0);
       }
-      if (Math.abs(netPrice) < 0.01) netPrice = 0.05;
-      fillPrice = Math.abs(netPrice);
+      fillPrice = Math.abs(netPrice) || 0.05;
+      const isDebit = netPrice >= 0;
       const costPerContract = fillPrice * 100;
+
       if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
         qty = Math.max(1, Math.floor(req.dollar_amount / costPerContract));
       }
-      const commission = 0.65 * qty * Math.max(1, req.legs?.length || 1);
-      totalCost = qty * costPerContract + commission;
+      const commission = 0.65 * qty * req.legs.length;
+      totalCost = (qty * costPerContract) + (isDebit ? commission : -commission);
 
-      if (req.legs && req.legs.length === 1) {
-        const leg = req.legs[0];
+      if (isDebit && paperAccount.cash < totalCost) {
+        return delay({
+          ok: false,
+          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
+        }, 500);
+      }
+
+      paperAccount.cash += (isDebit ? -totalCost : totalCost);
+      paperAccount.buying_power = paperAccount.cash;
+
+      const orderId = `mock_ord_${Date.now()}`;
+      const strategyName = `${req.legs.length}-Leg Strategy`;
+
+      // Apply each leg position
+      req.legs.forEach(leg => {
+        const legSymbol = `${req.symbol.toUpperCase()} ${req.expiration || ''} $${leg.contract.strike} ${(leg.type || 'CALL').toUpperCase()}`.trim();
+        const legMult = leg.action === 'Buy' ? 1 : -1;
+        const legQty = qty * legMult;
+        const legPrice = (leg.contract.lastPrice || leg.contract.ask || 0.05) * 100;
+
+        const existingPos = paperPositions.find(p => p.symbol === legSymbol);
+        if (existingPos) {
+          existingPos.qty += legQty;
+          if (Math.abs(existingPos.qty) < 1e-6) {
+            paperPositions = paperPositions.filter(p => p.symbol !== legSymbol);
+          }
+        } else {
+          paperPositions.push({
+            symbol: legSymbol,
+            qty: legQty,
+            avg_cost: legPrice,
+            current_price: legPrice,
+            market_value: Math.abs(legQty) * legPrice,
+            unrealized_pl: 0,
+            unrealized_pl_pct: 0
+          });
+        }
+      });
+
+      paperOrders.unshift({
+        order_id: orderId,
+        symbol: `${strategyName} ${req.symbol.toUpperCase()}`,
+        side: isDebit ? 'BUY' : 'SELL',
+        qty: qty,
+        price: fillPrice,
+        status: 'filled',
+        filled_qty: qty,
+        filled_avg_price: fillPrice,
+        created_at: new Date().toISOString()
+      });
+
+      return delay({
+        ok: true,
+        order_id: orderId,
+        message: `Paper ${strategyName} for ${qty} contract(s) on ${req.symbol.toUpperCase()} filled at ${isDebit ? 'Debit' : 'Credit'} $${fillPrice.toFixed(2)}/sh (Total: $${Math.abs(totalCost).toFixed(2)}).`
+      }, 600);
+
+    } else {
+      // Single leg option order
+      const leg = req.legs?.[0];
+      const legAction = leg?.action || req.side || 'Buy';
+      const isBuy = legAction.toLowerCase() === 'buy';
+
+      let legPrice = req.limit_price || (leg ? (leg.contract.lastPrice || (isBuy ? leg.contract.ask : leg.contract.bid) || 0.05) : 0.05);
+      if (legPrice <= 0) legPrice = 0.05;
+      fillPrice = legPrice;
+      const costPerContract = fillPrice * 100;
+
+      if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
+        qty = Math.max(1, Math.floor(req.dollar_amount / costPerContract));
+      }
+      const commission = 0.65 * qty;
+      totalCost = (qty * costPerContract) + (isBuy ? commission : -commission);
+
+      if (leg) {
         orderSymbol = `${req.symbol.toUpperCase()} ${req.expiration || ''} $${leg.contract.strike} ${(leg.type || 'CALL').toUpperCase()}`.trim();
-      } else if (req.legs && req.legs.length > 1) {
-        orderSymbol = `${req.symbol.toUpperCase()}-${req.legs.length}LEG-${req.expiration || 'OPT'}`;
       } else {
         orderSymbol = `${req.symbol.toUpperCase()} OPTION`;
       }
-    }
 
-    // A sell credits cash and reduces inventory; a buy debits cash and
-    // grows it. Mirrors the real backend (data/paper_account_store.py's
-    // apply_fill), which does the same and rejects a sell with no matching
-    // inventory rather than silently accepting it.
-    const orderSide: 'BUY' | 'SELL' = (req.side?.toUpperCase() === 'SELL' || req.legs?.[0]?.action === 'Sell') ? 'SELL' : 'BUY';
-    const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
-
-    if (orderSide === 'SELL') {
-      if (!existingPos || existingPos.qty < qty) {
+      if (isBuy && paperAccount.cash < totalCost) {
         return delay({
           ok: false,
-          message: `Order rejected: Insufficient funds or inventory for SELL ${qty} ${orderSymbol}.`
+          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
         }, 500);
       }
-    } else if (paperAccount.cash < totalCost) {
-      return delay({
-        ok: false,
-        message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
-      }, 500);
-    }
 
-    if (orderSide === 'SELL') {
-      paperAccount.cash += totalCost;
-    } else {
-      paperAccount.cash -= totalCost;
-    }
-    paperAccount.buying_power = paperAccount.cash;
+      paperAccount.cash += (isBuy ? -totalCost : totalCost);
+      paperAccount.buying_power = paperAccount.cash;
 
-    // Update positions
-    if (orderSide === 'SELL') {
-      existingPos!.qty -= qty;
-      existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - totalCost);
-      if (existingPos!.qty <= 0) {
-        paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
+      const legQty = isBuy ? qty : -qty;
+      const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
+      if (existingPos) {
+        existingPos.qty += legQty;
+        if (Math.abs(existingPos.qty) < 1e-6) {
+          paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
+        }
+      } else {
+        paperPositions.push({
+          symbol: orderSymbol,
+          qty: legQty,
+          avg_cost: fillPrice * 100,
+          current_price: fillPrice * 100,
+          market_value: Math.abs(legQty) * fillPrice * 100,
+          unrealized_pl: 0,
+          unrealized_pl_pct: 0
+        });
       }
-    } else if (existingPos) {
-      const prevTotal = existingPos.qty * existingPos.avg_cost;
-      existingPos.qty += qty;
-      existingPos.avg_cost = (prevTotal + totalCost) / existingPos.qty;
-      existingPos.market_value = (existingPos.market_value || 0) + totalCost;
-    } else {
-      paperPositions.push({
+
+      const orderId = `mock_ord_${Date.now()}`;
+      paperOrders.unshift({
+        order_id: orderId,
         symbol: orderSymbol,
+        side: isBuy ? 'BUY' : 'SELL',
         qty: qty,
-        avg_cost: isStock ? fillPrice : fillPrice * 100,
-        current_price: isStock ? fillPrice : fillPrice * 100,
-        market_value: totalCost,
-        unrealized_pl: 0,
-        unrealized_pl_pct: 0
+        price: fillPrice,
+        status: 'filled',
+        filled_qty: qty,
+        filled_avg_price: fillPrice,
+        created_at: new Date().toISOString()
       });
-    }
 
-    const orderId = `mock_ord_${Date.now()}`;
-    paperOrders.unshift({
-      order_id: orderId,
-      symbol: orderSymbol,
-      side: orderSide,
-      qty: qty,
-      price: fillPrice,
-      status: 'filled',
-      filled_qty: qty,
-      filled_avg_price: fillPrice,
-      created_at: new Date().toISOString()
-    });
-
-    return delay(
-      {
+      return delay({
         ok: true,
         order_id: orderId,
-        message: `Paper ${isStock ? 'stock' : 'option'} order for ${qty} ${isStock ? 'shares' : 'contract(s)'} of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${totalCost.toFixed(2)}).`
-      },
-      600
-    );
+        message: `Paper option order for ${qty} contract(s) of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${Math.abs(totalCost).toFixed(2)}).`
+      }, 600);
+    }
+
   },
 
   async getObservabilitySummary(
@@ -11219,7 +11341,395 @@ export const mockApi = {
       confirm,
     );
   },
+  async getStrategyOptionsCandidates(_symbols?: string[]) {
+    return delay({
+      count: 2,
+      candidates: [
+        {
+          symbol: "AAPL",
+          strategy: "Put Credit Spread",
+          action: "Open",
+          net_premium: 1.45,
+          ivr: 62.4,
+          trend_bias: "Bullish",
+          target_dte: 30,
+          legs: [
+            { Strike: 150.0, Side: "Short", Type: "PUT", Ratio: 1.0, Price: 2.20 },
+            { Strike: 145.0, Side: "Long", Type: "PUT", Ratio: 1.0, Price: 0.75 },
+          ]
+        },
+        {
+          symbol: "MSFT",
+          strategy: "Iron Condor",
+          action: "Open",
+          net_premium: 2.10,
+          ivr: 58.0,
+          trend_bias: "Neutral",
+          target_dte: 30,
+          legs: [
+            { Strike: 400.0, Side: "Short", Type: "PUT", Ratio: 1.0, Price: 1.80 },
+            { Strike: 395.0, Side: "Long", Type: "PUT", Ratio: 1.0, Price: 0.70 },
+            { Strike: 430.0, Side: "Short", Type: "CALL", Ratio: 1.0, Price: 1.70 },
+            { Strike: 435.0, Side: "Long", Type: "CALL", Ratio: 1.0, Price: 0.70 },
+          ]
+        }
+      ]
+    });
+  },
+  async executeStrategyOptions(_symbols?: string[], dryRun = false, _maxNotional = 2500) {
+    if (dryRun) {
+      return delay({
+        executed_count: 2,
+        skipped_count: 0,
+        failed_count: 0,
+        executed: [
+          { symbol: "AAPL", strategy: "Put Credit Spread", contracts: 2, net_price: 1.45, net_cash_impact: 287.40 },
+          { symbol: "MSFT", strategy: "Iron Condor", contracts: 1, net_price: 2.10, net_cash_impact: 207.40 }
+        ],
+        skipped: [],
+        failed: []
+      });
+    }
+
+    const aaplReq: OptionsOrderRequest = {
+      symbol: "AAPL",
+      asset_type: "option",
+      quantity: 2,
+      limit_price: 1.45,
+      expiration: "2026-09-18",
+      legs: [
+        { action: "Sell", type: "put", contract: { strike: 150, lastPrice: 2.20 } as any },
+        { action: "Buy", type: "put", contract: { strike: 145, lastPrice: 0.75 } as any },
+      ],
+      isLive: false,
+    };
+    await this.postOptionsOrder(aaplReq);
+
+
+    return delay({
+      executed_count: 1,
+      skipped_count: 0,
+      failed_count: 0,
+      executed: [
+        { order_id: `AUTO_OPT_AAPL_${Date.now()}`, symbol: "AAPL", strategy: "Put Credit Spread", contracts: 2, net_price: 1.45, net_cash_impact: 287.40 }
+      ],
+      skipped: [],
+      failed: []
+    });
+  },
+  async getPaperBrokerGreeks() {
+    return delay({
+      total_positions: paperPositions.length,
+      stock_positions_count: paperPositions.filter(p => !p.symbol.includes("$")).length,
+      option_positions_count: paperPositions.filter(p => p.symbol.includes("$")).length,
+      net_delta_shares: 45.2,
+      net_dollar_delta: 6780.0,
+      net_gamma: 0.1245,
+      net_theta_daily: 34.50,
+      net_vega_1pct: -52.80,
+      beta_weighted_delta_spy: 13.56,
+      positions: paperPositions.map(p => {
+        const isOpt = p.symbol.includes("$");
+        return {
+          symbol: p.symbol,
+          asset_type: isOpt ? ("option" as const) : ("stock" as const),
+          base_ticker: p.symbol.split(" ")[0],
+          expiration: isOpt ? "2026-09-18" : undefined,
+          strike: isOpt ? 150 : undefined,
+          option_type: isOpt ? (p.symbol.includes("PUT") ? ("put" as const) : ("call" as const)) : undefined,
+          dte: isOpt ? 35 : undefined,
+          qty: p.qty,
+          spot_price: p.current_price ?? 150,
+          delta_per_unit: isOpt ? 0.35 : 1.0,
+          gamma_per_unit: isOpt ? 0.02 : 0.0,
+          theta_daily_per_unit: isOpt ? -0.15 : 0.0,
+          vega_1pct_per_unit: isOpt ? 0.25 : 0.0,
+          position_delta: isOpt ? p.qty * 100 * 0.35 : p.qty,
+          position_dollar_delta: (isOpt ? p.qty * 100 * 0.35 : p.qty) * (p.current_price ?? 150),
+          position_gamma: isOpt ? p.qty * 100 * 0.02 : 0,
+          position_theta_daily: isOpt ? p.qty * 100 * -0.15 : 0,
+          position_vega_1pct: isOpt ? p.qty * 100 * 0.25 : 0,
+          market_value: p.market_value ?? 0,
+        };
+      }),
+    });
+  },
+  async runOptionsBacktest(params: import("./types").OptionsBacktestParams) {
+    return delay({
+      strategy_name: params.strategy,
+      ticker: params.ticker,
+      start_date: params.start_date,
+      end_date: params.end_date,
+      initial_capital: params.initial_capital || 100000,
+      final_capital: 118450.0,
+      total_return_pct: 18.45,
+      annualized_return_pct: 8.92,
+      sharpe_ratio: 1.42,
+      sortino_ratio: 1.85,
+      max_drawdown_pct: 6.40,
+      total_trades: 48,
+      winning_trades: 39,
+      losing_trades: 9,
+      win_rate_pct: 81.3,
+      profit_factor: 2.35,
+      avg_win: 620.0,
+      avg_loss: 580.0,
+      pbo: 0.12,
+      dsr: 0.98,
+      passes_stress: true,
+      deployable: true,
+      equity_curve: [
+        { date: "2020-01-01", value: 100.0 },
+        { date: "2021-01-01", value: 106.5 },
+        { date: "2022-01-01", value: 111.2 },
+        { date: "2023-01-01", value: 115.8 },
+        { date: "2024-01-01", value: 118.45 },
+      ],
+      trades: [
+        {
+          entry_date: "2023-11-01",
+          exit_date: "2023-11-20",
+          strategy: params.strategy,
+          underlying_entry_price: 435.0,
+          underlying_exit_price: 448.0,
+          entry_net_premium: 150.0,
+          exit_net_cost: 0.0,
+          pnl_dollar: 150.0,
+          pnl_pct: 50.0,
+          exit_reason: "profit_target",
+          holding_days: 19,
+          contracts: 2,
+        },
+      ],
+    });
+  },
+  async getOptionsMetaModelStatus() {
+    return delay({
+      n_samples: 1240,
+      train_accuracy: 78.5,
+      train_roc_auc: 0.812,
+      trained_at: "2026-08-14T12:00:00Z",
+      enabled: true,
+    });
+  },
+  async retrainOptionsMetaModel() {
+    return delay({
+      status: "success",
+      trained_samples: 1240,
+      accuracy: 78.5,
+      roc_auc: 0.812,
+      trained_at: new Date().toISOString(),
+    });
+  },
+  async settleExpiredPaperOptions() {
+    return delay({
+      settled_count: 0,
+      settled: [],
+    });
+  },
+  async getVolSurface(symbol: string, expiration?: string) {
+    const sym = (symbol || "SPY").toUpperCase();
+    const spot = sym === "SPY" ? 505.20 : sym === "QQQ" ? 440.50 : 180.00;
+    const baseIv = sym === "SPY" ? 0.215 : sym === "QQQ" ? 0.245 : 0.285;
+    const strikes = [
+      Math.round(spot * 0.90),
+      Math.round(spot * 0.93),
+      Math.round(spot * 0.95),
+      Math.round(spot * 0.98),
+      Math.round(spot),
+      Math.round(spot * 1.02),
+      Math.round(spot * 1.05),
+      Math.round(spot * 1.08),
+      Math.round(spot * 1.10),
+    ];
+    const smile_points: VolSmilePoint[] = strikes.map((k) => {
+      const moneyness = k / spot;
+      // Parabolic smile with put skew
+      const skewEffect = moneyness < 1.0 ? (1.0 - moneyness) * 0.45 : (moneyness - 1.0) * 0.18;
+      const iv = Number((baseIv + skewEffect).toFixed(4));
+      return {
+        strike: k,
+        iv,
+        moneyness: Number(moneyness.toFixed(4)),
+        call_bid: Number(Math.max(0.05, (spot - k) + 3.5).toFixed(2)),
+        call_ask: Number(Math.max(0.10, (spot - k) + 3.8).toFixed(2)),
+        put_bid: Number(Math.max(0.05, (k - spot) + 3.2).toFixed(2)),
+        put_ask: Number(Math.max(0.10, (k - spot) + 3.5).toFixed(2)),
+      };
+    });
+
+    const term_structure: VolTermStructurePoint[] = [
+      { expiration: "2026-08-21", dte: 7, atm_iv: Number((baseIv - 0.030).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-08-28", dte: 14, atm_iv: Number((baseIv - 0.018).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-09-18", dte: 35, atm_iv: baseIv, historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-10-16", dte: 63, atm_iv: Number((baseIv + 0.012).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-11-20", dte: 98, atm_iv: Number((baseIv + 0.020).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2026-12-18", dte: 126, atm_iv: Number((baseIv + 0.028).toFixed(4)), historical_realized_vol_30d: 0.165 },
+      { expiration: "2027-01-15", dte: 154, atm_iv: Number((baseIv + 0.034).toFixed(4)), historical_realized_vol_30d: 0.165 },
+    ];
+
+    const skew: SkewData = {
+      skew_25delta: 0.035,
+      put_25delta_iv: Number((baseIv + 0.037).toFixed(4)),
+      call_25delta_iv: Number((baseIv + 0.002).toFixed(4)),
+      atm_iv: baseIv,
+      vrp_spread: 0.050,
+      realized_vol_10d: 0.152,
+      realized_vol_20d: 0.160,
+      realized_vol_30d: 0.165,
+      realized_vol_60d: 0.172,
+    };
+
+    return delay<VolSurfaceResponse>({
+      symbol: sym,
+      spot_price: spot,
+      as_of: new Date().toISOString(),
+      expirations: term_structure.map((t) => t.expiration),
+      selected_expiration: expiration || term_structure[2].expiration,
+      smile_points,
+      term_structure,
+      skew,
+    });
+  },
+  async getScenarioMatrix(params?: { spot_shifts?: number[]; iv_shifts?: number[]; days_forward?: number }) {
+    const spot_shifts = params?.spot_shifts || [-0.10, -0.05, -0.03, -0.01, 0, 0.01, 0.03, 0.05, 0.10];
+    const iv_shifts = params?.iv_shifts || [-0.20, -0.10, -0.05, 0, 0.05, 0.10, 0.20];
+    const time_slices = [0, 7, 14, 21];
+    const current_portfolio_value = 100000;
+    const baseSpot = 505.20;
+
+    const matrix: ScenarioMatrixCell[] = [];
+    for (const t of time_slices) {
+      for (const iv of iv_shifts) {
+        for (const s of spot_shifts) {
+          const spot_price = baseSpot * (1 + s);
+          // Nonlinear delta/gamma/vega/theta PnL simulation
+          const deltaPnl = s * 48.5 * baseSpot;
+          const gammaPnl = 0.5 * 0.015 * Math.pow(s * baseSpot, 2);
+          const vegaPnl = (iv * 100) * 12.5;
+          const thetaPnl = t * 18.5; // positive income for net seller
+          const pnl_dollar = Number((deltaPnl + gammaPnl + vegaPnl + thetaPnl).toFixed(2));
+          const pnl_pct = Number((pnl_dollar / current_portfolio_value).toFixed(4));
+          const portfolio_value = Number((current_portfolio_value + pnl_dollar).toFixed(2));
+
+          matrix.push({
+            spot_shift_pct: s,
+            iv_shift_pct: iv,
+            days_forward: t,
+            spot_price: Number(spot_price.toFixed(2)),
+            portfolio_value,
+            pnl_dollar,
+            pnl_pct,
+            net_delta: Number((48.5 + (s * 15.0)).toFixed(2)),
+            net_gamma: Number((0.015 - (t * 0.0003)).toFixed(4)),
+            net_theta: Number((18.5 + (iv * 5.0)).toFixed(2)),
+            net_vega: Number((12.5 - (t * 0.3)).toFixed(2)),
+          });
+        }
+      }
+    }
+
+    const historical_scenarios: HistoricalScenarioPreset[] = [
+      {
+        id: "lehman-2008",
+        name: "Lehman Collapse (2008)",
+        description: "-15% Spot Plunge, +50% Vol Spike",
+        spot_shift_pct: -0.15,
+        iv_shift_pct: 0.50,
+        projected_pnl_dollar: -3820,
+        projected_pnl_pct: -0.0382,
+      },
+      {
+        id: "volmageddon-2018",
+        name: "Volmageddon (Feb 2018)",
+        description: "-4% Spot Gap, +100% Vol Explosion",
+        spot_shift_pct: -0.04,
+        iv_shift_pct: 1.00,
+        projected_pnl_dollar: -2150,
+        projected_pnl_pct: -0.0215,
+      },
+      {
+        id: "covid-2020",
+        name: "COVID Liquidity Shock (Mar 2020)",
+        description: "-12% Spot Drop, +40% Vol Spike",
+        spot_shift_pct: -0.12,
+        iv_shift_pct: 0.40,
+        projected_pnl_dollar: -3120,
+        projected_pnl_pct: -0.0312,
+      },
+      {
+        id: "yen-unwind-2024",
+        name: "Yen Carry Unwind (Aug 2024)",
+        description: "-6% Spot Gap, +30% Vol Expansion",
+        spot_shift_pct: -0.06,
+        iv_shift_pct: 0.30,
+        projected_pnl_dollar: -1480,
+        projected_pnl_pct: -0.0148,
+      },
+    ];
+
+    return delay<ScenarioMatrixResponse>({
+      spot_shifts,
+      iv_shifts,
+      time_slices,
+      matrix,
+      historical_scenarios,
+      current_portfolio_value,
+    });
+  },
+  async getDeltaHedgePreview() {
+    return delay<DeltaHedgePreview>({
+      net_delta_shares: 48.5,
+      net_dollar_delta: 24502.20,
+      beta_weighted_delta_spy: 48.5,
+      spy_spot_price: 505.20,
+      required_hedge_shares: -48,
+      action: "SELL",
+      hedge_symbol: "SPY",
+      estimated_cost: 24249.60,
+      tolerance_band_shares: 25.0,
+      is_within_tolerance: false,
+    });
+  },
+  async executeDeltaHedge(_params?: { target_delta?: number; confirm?: boolean }) {
+    return delay<DeltaHedgeResult>({
+      ok: true,
+      order_id: `ord_hedge_${Date.now()}`,
+      shares: 48,
+      symbol: "SPY",
+      side: "SELL",
+      price: 505.20,
+      message: "Executed delta hedge order: SOLD 48 SPY shares @ $505.20 (Portfolio Delta neutralized to 0.5 shares).",
+    });
+  },
+  async managePaperOptionsExits(_params?: { force?: boolean }) {
+    return delay<ManageExitsResult>({
+      evaluated_count: 3,
+      closed_count: 1,
+      closed_positions: [
+        {
+          symbol: "SPY 2026-09-18 $500.00 PUT",
+          qty: -2,
+          reason: "PROFIT_TARGET_50",
+          pnl_dollar: 340.0,
+          pnl_pct: 0.52,
+          closed_at_price: 1.20,
+        },
+      ],
+      message: "Evaluated 3 option positions: automatically closed 1 position reaching 50% profit target.",
+    });
+  },
+  async rollPaperOptionPosition(request: RollOrderRequest) {
+    return delay<OptionsOrderResult>({
+      ok: true,
+      order_id: `ord_roll_${Date.now()}`,
+      message: `Successfully rolled ${request.current_symbol} to ${request.target_expiration}${request.target_strike ? ` @ strike $${request.target_strike}` : ""}. Net credit/debit applied.`,
+    });
+  },
+
   // ---- Live Trade Approvals ----
+
+
   async getPendingLiveTrades() {
     return delay({
       proposals: mockLiveTradeProposals.filter(

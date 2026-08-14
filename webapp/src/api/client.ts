@@ -139,11 +139,27 @@ import type {
   PaperBrokerPosition,
   PaperBrokerOrder,
   PaperBrokerResetResult,
+  StrategyOptionsCandidatesResponse,
+  StrategyOptionsExecutionResult,
+  PortfolioGreeks,
   CacheLongShortApproveBulkResult,
+
   OptionChainResponse,
   OptionsOrderRequest,
   OptionsOrderResult,
+  OptionsBacktestParams,
+  OptionsBacktestResponse,
+  OptionsMetaModelStatus,
+  OptionsMetaModelRetrainResult,
+  PaperBrokerSettleExpiredResult,
+  ScenarioMatrixResponse,
+  VolSurfaceResponse,
+  DeltaHedgePreview,
+  DeltaHedgeResult,
+  RollOrderRequest,
+  ManageExitsResult,
 } from "./types";
+
 import { getEffectiveToken } from "../auth/apiToken";
 import { config } from "../config/env";
 
@@ -954,7 +970,60 @@ const liveApi = {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
     }),
+  getStrategyOptionsCandidates: (symbols?: string[]) => {
+    const q = symbols && symbols.length > 0 ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
+    return http<StrategyOptionsCandidatesResponse>(`/pilots/paper-broker/strategy-options/candidates${q}`);
+  },
+  executeStrategyOptions: (symbols?: string[], dryRun = false, maxNotional?: number) =>
+    http<StrategyOptionsExecutionResult>("/pilots/paper-broker/strategy-options/execute", {
+      method: "POST",
+      body: JSON.stringify({ symbols, dry_run: dryRun, max_notional: maxNotional }),
+    }),
+  getPaperBrokerGreeks: () => http<PortfolioGreeks>("/pilots/paper-broker/greeks"),
+  runOptionsBacktest: (params: OptionsBacktestParams) =>
+    http<OptionsBacktestResponse>("/pilots/options/backtest", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+  getOptionsMetaModelStatus: () => http<OptionsMetaModelStatus>("/pilots/options/meta-model/status"),
+  retrainOptionsMetaModel: () =>
+    http<OptionsMetaModelRetrainResult>("/pilots/options/meta-model/retrain", {
+      method: "POST",
+    }),
+  settleExpiredPaperOptions: () =>
+    http<PaperBrokerSettleExpiredResult>("/pilots/paper-broker/settle-expired", {
+      method: "POST",
+    }),
+  getVolSurface: (symbol: string, expiration?: string) =>
+    http<VolSurfaceResponse>(
+      `/pilots/options/vol-surface?symbol=${encodeURIComponent(symbol)}${expiration ? `&expiration=${encodeURIComponent(expiration)}` : ""}`
+    ),
+  getScenarioMatrix: (params?: { spot_shifts?: number[]; iv_shifts?: number[]; days_forward?: number }) =>
+    http<ScenarioMatrixResponse>("/pilots/paper-broker/scenario-matrix", {
+      method: "POST",
+      body: params ? JSON.stringify(params) : undefined,
+    }),
+  getDeltaHedgePreview: () =>
+    http<DeltaHedgePreview>("/pilots/paper-broker/delta-hedge/preview"),
+  executeDeltaHedge: (params?: { target_delta?: number; confirm?: boolean }) =>
+    http<DeltaHedgeResult>("/pilots/paper-broker/delta-hedge/execute", {
+      method: "POST",
+      body: params ? JSON.stringify(params) : undefined,
+    }),
+  managePaperOptionsExits: (params?: { force?: boolean }) =>
+    http<ManageExitsResult>("/pilots/paper-broker/manage-exits", {
+      method: "POST",
+      body: params ? JSON.stringify(params) : undefined,
+    }),
+  rollPaperOptionPosition: (request: RollOrderRequest) =>
+    http<OptionsOrderResult>("/pilots/paper-broker/roll", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+
   // ---- Live Trade Approvals ----
+
+
   getPendingLiveTrades: () => http<{ proposals: LiveTradeProposal[] }>("/pilots/execution/pending"),
   approveLiveTrade: (token: string) =>
     http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/approve`, { method: "POST" }),

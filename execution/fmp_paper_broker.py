@@ -82,22 +82,131 @@ class FMPPaperBroker(BrokerBase):
                 submitted_at=datetime.now(timezone.utc),
             )
 
-        # 2. Reject what this broker cannot honestly simulate (see module
-        # docstring) instead of silently mis-filling it.
-        if intent.legs:
-            return self._error_result(
-                client_order_id,
-                "FMPPaperBroker does not support multi-leg options orders in V1 "
-                "(a single-symbol quote cannot honestly price a spread/condor)",
-                OrderStatus.REJECTED,
-            )
+        # 2. Check quantity
         if intent.qty <= 0:
             return self._error_result(
                 client_order_id, f"Invalid order quantity {intent.qty}", OrderStatus.REJECTED
             )
 
-        # 3. Fetch live quote
+        # 3. Multi-leg options execution branch
+        if intent.legs:
+            try:
+                parsed_legs = []
+                signed_prices = []
+                for idx, leg in enumerate(intent.legs):
+                    leg_symbol = str(leg.get("symbol", f"{intent.symbol}-LEG-{idx+1}")).upper().strip()
+                    raw_side = leg.get("side")
+                    if raw_side is None:
+                        raw_side = intent.side
+                    if hasattr(raw_side, "value"):
+                        raw_side = raw_side.value
+                    leg_side = str(raw_side).lower().replace("orderside.", "").strip()
+
+
+                    leg_ratio = float(leg.get("ratio_qty", 1.0))
+                    leg_qty = float(intent.qty) * leg_ratio
+                    leg_price = float(leg.get("price", leg.get("ask" if leg_side == "buy" else "bid", 0.0)) or 0.0)
+
+                    # If leg price not explicitly given, check for contract data or default limit price
+                    if leg_price <= 0 and intent.limit_price and intent.limit_price > 0:
+                        leg_price = float(intent.limit_price) / max(1, len(intent.legs))
+
+                    if leg_price <= 0:
+                        return self._error_result(
+                            client_order_id,
+                            f"Missing price for option leg {leg_symbol}; cannot honestly execute.",
+                            OrderStatus.REJECTED,
+                        )
+
+                    signed_price = (leg_price * leg_ratio) if leg_side == "buy" else (-leg_price * leg_ratio)
+                    signed_prices.append(signed_price)
+
+                    parsed_legs.append({
+                        "symbol": leg_symbol,
+                        "side": leg_side,
+                        "qty": leg_qty,
+                        "fill_price": leg_price * 100.0,
+                    })
+
+                net_price = sum(signed_prices)
+                is_debit = net_price >= 0
+
+                # Limit marketability check
+                if intent.order_type == OrderType.LIMIT and intent.limit_price is not None:
+                    if is_debit and net_price > intent.limit_price:
+                        return self._error_result(
+                            client_order_id,
+                            f"Limit price {intent.limit_price} not marketable at current net debit {net_price}",
+                            OrderStatus.REJECTED,
+                        )
+                    elif not is_debit and abs(net_price) < intent.limit_price:
+                        return self._error_result(
+                            client_order_id,
+                            f"Limit price {intent.limit_price} not marketable at current net credit {abs(net_price)}",
+                            OrderStatus.REJECTED,
+                        )
+                    exec_net_price = intent.limit_price if is_debit else -intent.limit_price
+                else:
+                    exec_net_price = net_price
+
+                commission = 0.65 * intent.qty * len(intent.legs)
+                if exec_net_price >= 0:
+                    net_cash_impact = -((intent.qty * exec_net_price * 100.0) + commission)
+                    collateral = abs(net_cash_impact)
+                else:
+                    net_cash_impact = (intent.qty * abs(exec_net_price) * 100.0) - commission
+                    collateral = abs(exec_net_price) * 100.0 * intent.qty
+
+                success = self.store.apply_multi_leg_fill(
+                    client_order_id=client_order_id,
+                    symbol=intent.symbol,
+                    strategy_name=intent.strategy_id or "Multi-Leg Option",
+                    contracts=int(intent.qty),
+                    legs=parsed_legs,
+                    net_cash_impact=net_cash_impact,
+                    commission_and_fees=commission,
+                    collateral_required=collateral,
+                )
+
+                if not success:
+                    return self._error_result(
+                        client_order_id, "Insufficient funds or collateral for multi-leg order", OrderStatus.REJECTED
+                    )
+
+                broker_order_id = f"FMP-{client_order_id}"
+                now = datetime.now(timezone.utc)
+                res = OrderResult(
+                    client_order_id=client_order_id,
+                    broker_order_id=broker_order_id,
+                    status=OrderStatus.FILLED,
+                    filled_qty=intent.qty,
+                    filled_avg_price=abs(exec_net_price),
+                    submitted_at=now,
+                    filled_at=now,
+                )
+                event = TradeUpdateEvent(
+                    event_type="fill",
+                    broker_order_id=broker_order_id,
+                    client_order_id=client_order_id,
+                    symbol=intent.symbol,
+                    side=intent.side,
+                    filled_qty=intent.qty,
+                    filled_avg_price=abs(exec_net_price),
+                    timestamp=now,
+                )
+                try:
+                    self.stream_queue.put_nowait(event)
+                except Exception as e:
+                    logger.error(f"FMPPaperBroker: Failed to enqueue stream event: {e}")
+                return res
+
+            except Exception as exc:
+                logger.error(f"FMPPaperBroker multi-leg execution error: {exc}")
+                return self._error_result(client_order_id, f"Multi-leg execution failed: {exc}")
+
+        # 4. Single equity order: Fetch live quote
         try:
+
             # quote() returns a list of dicts, e.g. [{"symbol": "AAPL", "price": 150.0, "marketCap": 2e9}]
             resp = fmp_client.quote(intent.symbol)
             if not resp or not isinstance(resp, list):

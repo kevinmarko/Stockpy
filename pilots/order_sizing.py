@@ -49,6 +49,43 @@ def calculate_option_sizing(
     return int(math.floor(dollar_amount / cost_per_contract))
 
 
+def calculate_multi_leg_option_sizing(
+    dollar_amount: float,
+    net_price_per_share: float,
+    *,
+    strike_width: Optional[float] = None,
+    multiplier: int = 100,
+) -> int:
+    """
+    Computes integer contract count for a multi-leg option strategy based on dollar budget.
+    - For Net Debit spreads / long structures (net_price_per_share > 0):
+      Cost per contract = net_price_per_share * multiplier.
+    - For Net Credit spreads (net_price_per_share < 0):
+      Max risk per share = (strike_width - abs(net_price_per_share)) if strike_width else abs(net_price_per_share).
+      Max risk per contract = max_risk_per_share * multiplier.
+    """
+    if dollar_amount <= 0:
+        return 0
+    
+    if net_price_per_share > 0:
+        cost_per_contract = net_price_per_share * multiplier
+        if cost_per_contract <= 0:
+            return 0
+        return int(math.floor(dollar_amount / cost_per_contract))
+    elif net_price_per_share < 0:
+        credit = abs(net_price_per_share)
+        if strike_width and strike_width > credit:
+            max_risk = (strike_width - credit) * multiplier
+        else:
+            max_risk = credit * multiplier
+        if max_risk <= 0:
+            return 0
+        return int(math.floor(dollar_amount / max_risk))
+    else:
+        # Zero cost spread, default to minimum 1 contract if budget allows nominal commission
+        return 1 if dollar_amount >= 5.0 else 0
+
+
 def calculate_safe_cash_preset(
     available_cash: float, 
     percentage: float = 0.75
@@ -81,3 +118,4 @@ def validate_order_sizing(
     if estimated_total > max_allowed:
         return False, f"Order exceeds maximum position sizing limit (${max_allowed:.2f})."
     return True, None
+

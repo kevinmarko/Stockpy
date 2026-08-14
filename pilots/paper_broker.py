@@ -69,3 +69,97 @@ def execute_paper_order(
         legs=legs,
         is_live=is_live,
     )
+
+def get_strategy_options_candidates(symbols: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """Fetches current gate-passing strategy option directives ready for automated paper execution."""
+    from execution.options_paper_executor import OptionsPaperExecutor
+    executor = OptionsPaperExecutor()
+    return executor.get_actionable_directives(symbols=symbols)
+
+def execute_strategy_options(
+    symbols: Optional[List[str]] = None,
+    dry_run: bool = False,
+    max_notional: Optional[float] = None
+) -> Dict[str, Any]:
+    """Executes automated strategy option trades into the paper broker."""
+    from execution.options_paper_executor import OptionsPaperExecutor
+    executor = OptionsPaperExecutor()
+    directives = executor.get_actionable_directives(symbols=symbols)
+    return executor.execute_strategy_directives(
+        directives=directives,
+        dry_run=dry_run,
+        max_notional_per_order=max_notional
+    )
+
+def get_portfolio_greeks() -> Dict[str, Any]:
+    """Computes aggregate net portfolio Greeks across all open paper positions."""
+    from pilots.options_risk import calculate_portfolio_greeks
+    store = PaperAccountStore(readonly=True)
+    return calculate_portfolio_greeks(store=store)
+
+
+def manage_position_exits(
+    dry_run: bool = False,
+    profit_target_pct: Optional[float] = None,
+    stop_loss_multiple: Optional[float] = None,
+    manage_dte_threshold: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Evaluates open positions against profit/stop/DTE rules and executes auto-exits."""
+    from execution.options_paper_executor import OptionsPaperExecutor
+    executor = OptionsPaperExecutor()
+    candidates = executor.evaluate_position_exits(
+        profit_target_pct=profit_target_pct,
+        stop_loss_multiple=stop_loss_multiple,
+        manage_dte_threshold=manage_dte_threshold,
+    )
+    return executor.execute_auto_exits(exit_candidates=candidates, dry_run=dry_run)
+
+
+def execute_roll(
+    symbol: str,
+    close_legs: List[Dict[str, Any]],
+    open_legs: List[Dict[str, Any]],
+    limit_price: Optional[float] = None,
+    contracts: int = 1,
+    is_live: bool = False,
+) -> Dict[str, Any]:
+    """Executes an atomic multi-leg roll in the paper broker."""
+    if is_live:
+        return {
+            "ok": False,
+            "message": "Advisory-Only Mode: Live roll order execution is disabled. "
+                       "Multi-leg roll proposals must be reviewed and executed via Robinhood directly."
+        }
+
+    from datetime import datetime, timezone
+    store = PaperAccountStore()
+    client_order_id = f"ROLL-{symbol}-{int(datetime.now(timezone.utc).timestamp())}"
+
+    success = store.apply_roll_fill(
+        client_order_id=client_order_id,
+        symbol=symbol,
+        close_legs=close_legs,
+        open_legs=open_legs,
+        contracts=contracts,
+        limit_price=limit_price,
+    )
+
+    if success:
+        return {
+            "ok": True,
+            "order_id": client_order_id,
+            "symbol": symbol,
+            "contracts": contracts,
+            "message": f"Successfully rolled {contracts} contract(s) for {symbol}",
+        }
+    else:
+        return {
+            "ok": False,
+            "order_id": client_order_id,
+            "symbol": symbol,
+            "contracts": contracts,
+            "message": f"Roll fill failed for {symbol}: insufficient cash or database lock",
+        }
+
+
+

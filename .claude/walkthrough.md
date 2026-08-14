@@ -1,64 +1,71 @@
-# Phased Walkthrough: Stock & Options Order Input & Execution System
+# Walkthrough: Multi-Leg Option Paper Trading & Automated Strategy Paper Execution
 
-We built and verified the complete Stock & Options Order Input & Paper Execution system across 4 modular phases.
-
----
-
-## 1. Phase 1: Core Sizing & Pricing Modules
-
-- **[`pilots/price_provider.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/pilots/price_provider.py)**:
-  - Connects to Financial Modeling Prep via `data.fmp_client`.
-  - Extracts real quote fields (`price`, `previousClose`, `dayLow`, `dayHigh`, `volume`) without assuming absent real-time bid/ask.
-  - Implements `get_current_price(symbol, fallback_price)` with fallback hierarchy.
-- **[`pilots/order_sizing.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/pilots/order_sizing.py)**:
-  - Sizing conversion: Dollar budget $\rightarrow$ shares / options contracts.
-  - Enforces 100x multiplier and integer contract rounding.
-  - **75% Cash Preset**: Replaced the 100% "Max Cash" preset with `calculate_safe_cash_preset(available_cash, 0.75)` to prevent single-tap 100% cash commitments.
-- **Unit Tests**:
-  - `tests/test_price_provider.py` (4 tests passed)
-  - `tests/test_order_sizing.py` (4 tests passed)
+We have built out and verified both **Phase 1: Multi-Leg Option Paper Trading Primitives** and **Phase 2: Automated Strategy Paper Execution** across backend engines, the SQLite account store, FastAPI endpoints, PWA interface, and unit/integration test suites.
 
 ---
 
-## 2. Phase 2: Paper Broker Execution Engine
+## What Was Built
 
-- **[`pilots/paper_broker_options_order.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/pilots/paper_broker_options_order.py)**:
-  - Executes stock and option paper orders against `data.paper_account_store.py::PaperAccountStore`.
-  - Computes fill prices, contract multipliers, and commissions ($0.65/contract for options; $0.005/share for stock).
-  - Handles position creation and cash balance adjustments via `apply_fill(...)`.
-  - Live execution safely rejected in Advisory-Only mode.
-- **[`pilots/paper_broker.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/pilots/paper_broker.py)**:
-  - Delegated `execute_paper_order` to `paper_broker_options_order`.
-- **Unit Tests**:
-  - `tests/test_paper_broker_options_order.py` (4 tests passed)
-  - `tests/test_pilots_paper_broker.py` (12 tests passed)
-
----
-
-## 3. Phase 3: REST API & Parity Layer
-
-- **[`api/pilots_api.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/api/pilots_api.py)**:
-  - Added Pydantic model `OptionsOrderRequestModel` and endpoint `POST /brokerage/options/order`.
-- **[`webapp/src/api/types.ts`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/webapp/src/api/types.ts)**:
-  - Updated `OptionsOrderRequest` and `OptionsOrderResult` interfaces.
-- **[`webapp/src/api/mock.ts`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/webapp/src/api/mock.ts)**:
-  - Implemented `mockApi.postOptionsOrder` with realistic paper account updates for full mock/live parity.
-- **Tests**:
-  - `tests/test_pilots_api.py` (377 tests passed)
+### 1. Multi-Leg Paper Trading Primitives (Phase 1)
+- **Math & Sizing Core (`pilots/order_sizing.py`)**:
+  - Implemented `calculate_multi_leg_option_sizing` handling both debit spreads (budget / contract cost) and defined-risk credit spreads (budget / max risk where `max_risk = (width - credit) * 100`).
+- **Atomic SQLite Multi-Leg Ledger (`data/paper_account_store.py`)**:
+  - Implemented `apply_multi_leg_fill` executing atomic transactions across cash balance and all leg positions simultaneously.
+  - Added support for short positions (`qty < 0`), properly tracking short inventory reductions on buy-to-close orders.
+  - Added Black-Scholes mark-to-market dynamic position pricing and P&L tracking in `_resolve_position_prices()`.
+- **Brokers (`execution/fmp_paper_broker.py`, `pilots/paper_broker_options_order.py`)**:
+  - Removed multi-leg order rejection.
+  - Enabled full multi-leg order fills (Bull Call Spreads, Bear Put Spreads, Iron Condors, Straddles, Strangles) with net pricing checks, limit order marketability validation, and $0.65/contract/leg fee accounting.
+- **PWA UI & Mock Parity (`webapp/src/api/mock.ts`, `webapp/src/screens/PaperBroker.tsx`)**:
+  - Added `OPTION` and `SHORT` status badges to open positions.
+  - Mirrored multi-leg execution and position handling in `mockApi.postOptionsOrder`.
 
 ---
 
-## 4. Phase 4: Frontend UI & Verification
+### 2. Automated Strategy Paper Execution (Phase 2)
+- **Configuration (`settings.py`)**:
+  - `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED: bool = False` (opt-in daemon execution).
+  - `MAX_OPTION_NOTIONAL_PER_TRADE: float = 2500.0` (per-strategy risk budget).
+  - `MAX_CONCURRENT_OPTION_POSITIONS: int = 10` (portfolio option position cap).
+- **Executor Engine (`execution/options_paper_executor.py`)**:
+  - Implemented `OptionsPaperExecutor`:
+    - Scans quantitative options strategy directives from `technical_options_engine.py`.
+    - Filters by `passes_premium_gate` (VRP > 0.02, True IVR > 50%, VIX < 30, No Credit Event) and `Integrity_OK`.
+    - Enforces 1-spread-per-ticker deduplication against open paper positions.
+    - Resolves target expiration date (e.g. ~30 DTE Friday).
+    - Computes contract sizing via `calculate_multi_leg_option_sizing` capped by `MAX_OPTION_NOTIONAL_PER_TRADE`.
+    - Executes atomic multi-leg fills directly into `PaperAccountStore`.
+- **Orchestrator Wiring (`main.py`)**:
+  - Wired `OptionsPaperExecutor().execute_strategy_directives()` into `main.py` cycle when `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED=True`.
+- **Pilots API & Webapp (`pilots/paper_broker.py`, `api/pilots_api.py`, `webapp/`)**:
+  - `GET /pilots/paper-broker/strategy-options/candidates` (previews actionable directives).
+  - `POST /pilots/paper-broker/strategy-options/execute` (triggers automated paper execution).
+  - Webapp: Added **⚡ Automated Strategy Options Execution** panel in `PaperBroker.tsx` with candidate preview table, live status notifications, and one-click execution trigger.
+  - Mirrored in `client.ts`, `mock.ts`, `types.ts`.
 
-- **[`webapp/src/components/options/OptionsOrderTicket.tsx`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/webapp/src/components/options/OptionsOrderTicket.tsx)**:
-  - Sizing Mode selector: **By Dollar ($)** vs **By Quantity (Contracts/Shares)**.
-  - Preset chips: `$100`, `$250`, `$500`, `$1,000`, `$2,500`, and **`75% Cash`**.
-  - Order Type selector: **Market** vs **Limit** with price input.
-  - Live available cash display with insufficient funds protection.
-  - Direct underlying stock trading mode.
-  - Working `+ Add to Watchlist` integration.
-- **[`webapp/src/screens/OptionsChain.tsx`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/webapp/src/screens/OptionsChain.tsx)**:
-  - `📈 Trade {ticker} Stock` action button in the Share Price banner.
-- **Verification**:
-  - TypeScript Typecheck: `npm run --prefix webapp typecheck` (`0 errors`)
-  - Webapp Tests: `npm test --prefix webapp` (`137 test suites, 1,547 tests passed`)
+---
+
+## Verification Results
+
+### Automated Tests Passed
+1. **Pytest Backend Suite (64/64 Passed)**:
+   ```bash
+   pytest tests/test_options_paper_executor.py tests/test_pilots_paper_broker.py tests/test_paper_broker_options_order.py tests/test_paper_account_store.py tests/test_fmp_paper_broker.py -v
+   # 64 passed in 3.83s
+   ```
+2. **Frontend Typecheck (0 Errors)**:
+   ```bash
+   npm run --prefix webapp typecheck
+   # tsc --noEmit: clean
+   ```
+3. **Frontend Vitest Suite (10/10 Passed)**:
+   ```bash
+   npx vitest run src/screens/PaperBroker.test.tsx src/screens/OptionsChain.test.tsx src/components/options/OptionsOrderTicket.test.tsx
+   # 3 test files passed, 10 tests passed
+   ```
+
+---
+
+## Next Steps Queued
+- **Phase 3: Options Portfolio Risk & Aggregate Greeks**: Compute portfolio-level net Greeks (Delta, Gamma, Theta, Vega) across paper option positions and display in PWA / reports.
+- **Phase 4: Options Backtest Harness Integration**: Feed multi-leg paper trading history into `validation/harness.py` and ML Stage 4 meta-labeling.
