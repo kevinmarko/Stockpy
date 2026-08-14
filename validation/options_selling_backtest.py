@@ -80,11 +80,6 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 
-from signals.vrp_premium_selling import (
-    IVR_SELL_THRESHOLD,
-    VIX_MAX_THRESHOLD,
-    VRP_MIN_THRESHOLD,
-)
 from technical_options_engine import OptionsPricingRecommender, TechnicalOptionsEngine
 from volatility.iv_engine import get_vrp
 
@@ -101,7 +96,16 @@ LONG_TERM_VOL_WINDOW = 60        # trailing window for the proxy-VRP "IV" leg
 # the credit received — a real, if simplified, risk control; matches the
 # stop-loss framing in tests/test_stress_gate.py's own reference fixtures.
 STOP_LOSS_CREDIT_MULTIPLE = 2.0
+# Debit spreads (Call/Put Debit Spread): close a cycle early once the
+# mark-to-market loss exceeds this fraction of the max risk (the net debit
+# paid) -- a simplified risk control sized well inside the position's own
+# capped max loss, so it never fires later than the position's own defined-risk
+# ceiling would anyway.
 STOP_LOSS_DEBIT_RATIO = 0.50
+# Covered Call: close a cycle early once the mark-to-market loss exceeds this
+# fraction of max risk (the stock's own notional net of the call premium) --
+# set tight relative to the debit-spread ratio above since the long-stock leg
+# here carries unbounded downside, not a defined-risk spread.
 STOP_LOSS_COVERED_CALL_RATIO = 0.10
 
 _STRATEGY_MAP: Dict[str, str] = {
@@ -388,6 +392,18 @@ def simulate_options_strategy_returns(
             [entry_date], vix, t10y2y, credit_spread, unrate
         ).get(entry_date)
 
+        # A genuine data/computation failure (NaN garch_vol/ivr_proxy/vrp_proxy,
+        # e.g. from the except-branch above) must keep the cycle flat rather
+        # than fabricate a default input into the pricing engine (CONSTRAINT
+        # #4) -- a fabricated true_ivr/current_iv can otherwise open a real
+        # position, and vrp=None SKIPS generate_strategy_pricing_matrix's own
+        # VRP gate entirely instead of blocking premium selling.
+        if pd.isna(garch_vol) or pd.isna(ivr_proxy) or pd.isna(vrp_proxy):
+            for d in cycle_dates:
+                daily_returns[d] = 0.0
+            pos = cycle_end_pos
+            continue
+
         # Determine trend bias from trailing SMA50
         if len(trailing) >= 50:
             sma50 = float(trailing["Close"].tail(50).mean())
@@ -403,11 +419,11 @@ def simulate_options_strategy_returns(
 
         recommender = OptionsPricingRecommender(stock_price=entry_spot)
         directive = recommender.generate_strategy_pricing_matrix(
-            true_ivr=float(ivr_proxy) if not pd.isna(ivr_proxy) else 0.0,
-            current_iv=float(garch_vol) if not pd.isna(garch_vol) else 0.20,
+            true_ivr=float(ivr_proxy),
+            current_iv=float(garch_vol),
             trend_bias=trend_bias,
             target_dte=TARGET_DTE,
-            vrp=float(vrp_proxy) if not pd.isna(vrp_proxy) else None,
+            vrp=float(vrp_proxy),
             macro_dto=macro_dto,
         )
 

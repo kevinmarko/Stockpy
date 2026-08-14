@@ -199,10 +199,13 @@ def _build_rsi2_adapter(
     # Connors RSI(2) state machine:
     # Entry: RSI(2) < 10 AND Close > SMA(200) (Faber trend gate)
     # Exit: Close > SMA(5) (reverted) OR Close <= SMA(200) (trend lost)
+    # Entry is assigned FIRST so the two exit masks (applied after) take
+    # priority on any bar where entry and exit conditions coincide -- an exit
+    # signal must never be silently overridden by a same-day entry signal.
     pos_raw = pd.Series(np.nan, index=spy_close.index)
+    pos_raw[uptrend & (rsi < 10.0)] = 1.0
     pos_raw[spy_close > sma_5] = 0.0
     pos_raw[~uptrend] = 0.0
-    pos_raw[uptrend & (rsi < 10.0)] = 1.0
     pos = pos_raw.ffill().fillna(0.0)
 
     # Price-derived RISK-OFF proxy (see test_validation_rsi2.py for rationale)
@@ -1658,9 +1661,13 @@ def _build_forecast_direction_adapter(
             expected_gain_pct = (forecast_price - current_price) / current_price * 100.0
 
             # Trend overlay & Conviction thresholding:
-            # Only take long allocation when SPY > SMA-200 (uptrend) AND forecast conviction >= 1.5%
+            # Only take an allocation when SPY > SMA-200 (uptrend) AND forecast
+            # conviction is strong enough in EITHER direction (|expected gain|
+            # >= 1.5%) -- a one-sided `expected_gain_pct >= 1.5` check would
+            # zero out every bearish forecast regardless of magnitude, silently
+            # discarding the short half of this score-weighted long/short book.
             is_market_uptrend = bool(spy_uptrend.loc[rebalance_date]) if rebalance_date in spy_uptrend.index else True
-            if is_market_uptrend and expected_gain_pct >= 1.5:
+            if is_market_uptrend and abs(expected_gain_pct) >= 1.5:
                 row = pd.Series({"current_price": current_price, "forecast_price": forecast_price})
                 output = signal.compute(row, context=None)
                 scores.loc[rebalance_date] = output.score
@@ -3125,22 +3132,22 @@ def _build_vrp_premium_selling_adapter(
     return X, y, precomputed
 
 
-def _build_put_credit_spread_adapter(
+def _build_options_spread_adapter(
     spy_close: pd.Series,
+    sim_fn: Callable[..., pd.Series],
+    precomputed_label: str,
 ) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Put Credit Spread options-selling proxy on SPY (Bullish trend, High IVR).
-
-    Short Put ~0.30 Delta, Long Put ~0.15 Delta, marked-to-market daily with
-    stop-loss risk control.
+    """Shared body for the five options-spread adapters below -- they differ
+    only in which ``simulate_*_returns`` wrapper they call and the label their
+    single precomputed return series is keyed under; everything else
+    (download-empty check, index intersection, X/y construction) is identical.
     """
-    from validation.options_selling_backtest import simulate_put_credit_spread_returns
-
     daily_ret = spy_close.pct_change()
     valid_idx = spy_close.dropna().index
     if len(valid_idx) == 0:
         return pd.DataFrame(), pd.Series(dtype=float), {}
 
-    strategy_returns = simulate_put_credit_spread_returns(
+    strategy_returns = sim_fn(
         str(valid_idx[0].date()), str(valid_idx[-1].date()),
         ticker="SPY", closes=spy_close,
     )
@@ -3154,9 +3161,22 @@ def _build_put_credit_spread_adapter(
     y = daily_ret.loc[common_idx].fillna(0.0)
     X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
     precomputed = {
-        "PutCreditSpread": strategy_returns.loc[common_idx].fillna(0.0),
+        precomputed_label: strategy_returns.loc[common_idx].fillna(0.0),
     }
     return X, y, precomputed
+
+
+def _build_put_credit_spread_adapter(
+    spy_close: pd.Series,
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
+    """Put Credit Spread options-selling proxy on SPY (Bullish trend, High IVR).
+
+    Short Put ~0.30 Delta, Long Put ~0.15 Delta, marked-to-market daily with
+    stop-loss risk control.
+    """
+    from validation.options_selling_backtest import simulate_put_credit_spread_returns
+
+    return _build_options_spread_adapter(spy_close, simulate_put_credit_spread_returns, "PutCreditSpread")
 
 
 def _build_call_credit_spread_adapter(
@@ -3169,28 +3189,7 @@ def _build_call_credit_spread_adapter(
     """
     from validation.options_selling_backtest import simulate_call_credit_spread_returns
 
-    daily_ret = spy_close.pct_change()
-    valid_idx = spy_close.dropna().index
-    if len(valid_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    strategy_returns = simulate_call_credit_spread_returns(
-        str(valid_idx[0].date()), str(valid_idx[-1].date()),
-        ticker="SPY", closes=spy_close,
-    )
-    if strategy_returns.empty:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    common_idx = valid_idx.intersection(strategy_returns.index)
-    if len(common_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    y = daily_ret.loc[common_idx].fillna(0.0)
-    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
-    precomputed = {
-        "CallCreditSpread": strategy_returns.loc[common_idx].fillna(0.0),
-    }
-    return X, y, precomputed
+    return _build_options_spread_adapter(spy_close, simulate_call_credit_spread_returns, "CallCreditSpread")
 
 
 def _build_call_debit_spread_adapter(
@@ -3203,28 +3202,7 @@ def _build_call_debit_spread_adapter(
     """
     from validation.options_selling_backtest import simulate_call_debit_spread_returns
 
-    daily_ret = spy_close.pct_change()
-    valid_idx = spy_close.dropna().index
-    if len(valid_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    strategy_returns = simulate_call_debit_spread_returns(
-        str(valid_idx[0].date()), str(valid_idx[-1].date()),
-        ticker="SPY", closes=spy_close,
-    )
-    if strategy_returns.empty:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    common_idx = valid_idx.intersection(strategy_returns.index)
-    if len(common_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    y = daily_ret.loc[common_idx].fillna(0.0)
-    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
-    precomputed = {
-        "CallDebitSpread": strategy_returns.loc[common_idx].fillna(0.0),
-    }
-    return X, y, precomputed
+    return _build_options_spread_adapter(spy_close, simulate_call_debit_spread_returns, "CallDebitSpread")
 
 
 def _build_put_debit_spread_adapter(
@@ -3237,28 +3215,7 @@ def _build_put_debit_spread_adapter(
     """
     from validation.options_selling_backtest import simulate_put_debit_spread_returns
 
-    daily_ret = spy_close.pct_change()
-    valid_idx = spy_close.dropna().index
-    if len(valid_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    strategy_returns = simulate_put_debit_spread_returns(
-        str(valid_idx[0].date()), str(valid_idx[-1].date()),
-        ticker="SPY", closes=spy_close,
-    )
-    if strategy_returns.empty:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    common_idx = valid_idx.intersection(strategy_returns.index)
-    if len(common_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    y = daily_ret.loc[common_idx].fillna(0.0)
-    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
-    precomputed = {
-        "PutDebitSpread": strategy_returns.loc[common_idx].fillna(0.0),
-    }
-    return X, y, precomputed
+    return _build_options_spread_adapter(spy_close, simulate_put_debit_spread_returns, "PutDebitSpread")
 
 
 def _build_covered_call_adapter(
@@ -3271,28 +3228,7 @@ def _build_covered_call_adapter(
     """
     from validation.options_selling_backtest import simulate_covered_call_returns
 
-    daily_ret = spy_close.pct_change()
-    valid_idx = spy_close.dropna().index
-    if len(valid_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    strategy_returns = simulate_covered_call_returns(
-        str(valid_idx[0].date()), str(valid_idx[-1].date()),
-        ticker="SPY", closes=spy_close,
-    )
-    if strategy_returns.empty:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    common_idx = valid_idx.intersection(strategy_returns.index)
-    if len(common_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    y = daily_ret.loc[common_idx].fillna(0.0)
-    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
-    precomputed = {
-        "CoveredCall": strategy_returns.loc[common_idx].fillna(0.0),
-    }
-    return X, y, precomputed
+    return _build_options_spread_adapter(spy_close, simulate_covered_call_returns, "CoveredCall")
 
 
 # 30 liquid, large-cap tickers with full pre-2005 trading history under their

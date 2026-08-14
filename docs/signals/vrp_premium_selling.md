@@ -120,9 +120,11 @@ The `vrp_premium_selling` adapter (`scripts/refresh_validations.py::_build_vrp_p
 with Black-Scholes daily mark-to-market and real macro gating.
 
 **Phase 3 Optimizations (2026-08):**
-1. **Faber (2007) SMA-200 Market Trend Filter:** Added SPY > SMA-200 trend gating so Iron Condors and Put Credit
-   Spreads are never sold into sustained bear markets or structural downtrends (eliminating the catastrophic
-   April 2022 entry where SPY was trading below its 200-day moving average).
+1. **Trend-Aware Strike-Side Reclassification (SMA-50):** The recommender's `trend_bias` (previously hardcoded
+   `'Neutral'`) is now derived each cycle from the underlying's own trailing 50-day SMA (a +/-1% band around
+   `SMA(50)` → Bullish/Bearish/Neutral), not a fixed `SPY > SMA-200` gate. This changes WHICH side is sold in a
+   bearish regime (a Call Credit Spread instead of a Put Credit Spread) — it does not block premium selling
+   during a downtrend the way an earlier draft of this entry described.
 2. **Tightened Stop-Loss Multiple (1.0x Credit):** Reduced `STOP_LOSS_CREDIT_MULTIPLE` from 2.0x to 1.0x,
    ensuring any adverse intraday or trending move is halted before accumulating large drawdowns.
 3. **Stress Gate Verification:** Evaluated across all four dated shock windows (`OCT_2008`, `FEB_2018`,
