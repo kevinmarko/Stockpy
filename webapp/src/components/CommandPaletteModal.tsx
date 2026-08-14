@@ -69,7 +69,7 @@ export function CommandPaletteModal({
     if (!isOpen) return;
     setInput("");
     setActiveIndex(0);
-    setTimeout(() => inputRef.current?.focus(), 50);
+    const focusTimer = setTimeout(() => inputRef.current?.focus(), 50);
 
     let alive = true;
     // Both real, already-cached-elsewhere reads -- never fabricated ticker/
@@ -88,6 +88,10 @@ export function CommandPaletteModal({
       });
     return () => {
       alive = false;
+      clearTimeout(focusTimer);
+      if (inputRef.current && document.activeElement === inputRef.current) {
+        inputRef.current.blur();
+      }
     };
   }, [isOpen]);
 

@@ -104,6 +104,9 @@ export function Modal({
   useEffect(() => {
     previouslyFocused.current = document.activeElement as HTMLElement | null;
     return () => {
+      if (document.activeElement && sheetRef.current?.contains(document.activeElement)) {
+        (document.activeElement as HTMLElement).blur?.();
+      }
       const el = previouslyFocused.current;
       if (el && el.isConnected) el.focus();
     };

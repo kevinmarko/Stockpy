@@ -9,6 +9,8 @@ interface LogStreamProps {
   isStreaming?: boolean;
 }
 
+export const MAX_LOG_LINES = 2000;
+
 export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
   const [logs, setLogs] = useState<string[]>([]);
   const [filter, setFilter] = useState("");
@@ -26,7 +28,10 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
 
     eventSource.onmessage = (event) => {
       if (event.data) {
-        setLogs((prev) => [...prev, event.data]);
+        setLogs((prev) => {
+          const next = [...prev, event.data];
+          return next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next;
+        });
       }
     };
 

@@ -37,9 +37,10 @@ export function useLiveTick(symbol: string): LiveTick {
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryDelay = useRef(1000);
+  const aliveRef = useRef(true);
 
   const connect = useCallback(() => {
-    if (!symbol) return;
+    if (!symbol || !aliveRef.current) return;
 
     // Clean up any existing connection
     if (wsRef.current) {
@@ -54,11 +55,13 @@ export function useLiveTick(symbol: string): LiveTick {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (!aliveRef.current) return;
       retryDelay.current = 1000; // reset backoff on success
       setTick(prev => ({ ...prev, isConnected: true, error: null }));
     };
 
     ws.onmessage = (event) => {
+      if (!aliveRef.current) return;
       try {
         const data = JSON.parse(event.data);
         if (data.error) {
@@ -81,14 +84,18 @@ export function useLiveTick(symbol: string): LiveTick {
     };
 
     ws.onerror = () => {
+      if (!aliveRef.current) return;
       setTick(prev => ({ ...prev, error: 'WebSocket error', isConnected: false }));
     };
 
     ws.onclose = () => {
+      wsRef.current = null;
+      if (!aliveRef.current) return;
       setTick(prev => ({ ...prev, isConnected: false }));
       // Exponential backoff reconnect (max 30 s)
       if (retryRef.current) clearTimeout(retryRef.current);
       retryRef.current = setTimeout(() => {
+        if (!aliveRef.current) return;
         retryDelay.current = Math.min(retryDelay.current * 2, 30_000);
         connect();
       }, retryDelay.current);
@@ -96,12 +103,15 @@ export function useLiveTick(symbol: string): LiveTick {
   }, [symbol]);
 
   useEffect(() => {
+    aliveRef.current = true;
     connect();
     return () => {
+      aliveRef.current = false;
       if (retryRef.current) clearTimeout(retryRef.current);
       if (wsRef.current) {
         wsRef.current.onclose = null; // prevent reconnect on intentional unmount
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
   }, [connect]);
