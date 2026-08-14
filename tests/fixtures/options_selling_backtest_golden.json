@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "description": "Frozen (machine-captured, NOT hand-authored) pre-refactor golden output of validation.options_selling_backtest.simulate_*_returns for a fixed deterministic synthetic SPY close series. Captured before the shared-MTM-helper + cycle-plan-cache refactor (see docs/architecture/validation-and-signals.md) landed, from the exact pre-refactor per-strategy if/elif branches. Used by tests/test_options_selling_backtest_stress.py::TestSharedMtmHelperByteIdentical to prove the refactor is behavior-preserving to within 1e-12. Regenerate ONLY if the underlying P&L math is intentionally changed (never to make a failing test pass).",
+    "description": "Frozen (machine-captured, NOT hand-authored) pre-refactor golden output of validation.options_selling_backtest.simulate_*_returns for a fixed deterministic synthetic SPY close series. Captured before the shared-MTM-helper + cycle-plan-cache refactor (see docs/architecture/validation-and-signals.md) landed, from the exact pre-refactor per-strategy if/elif branches. Used by tests/test_options_selling_backtest_stress.py::TestSharedMtmHelperByteIdentical to prove the refactor is behavior-preserving to within 1e-12. cycle_plan_replay records, in call order, the REAL (arch-library GJR-GARCH MLE fit) garch_vol/ivr_proxy/vrp_proxy triple this platform computed for each of the 9 post-warmup cycles in this window -- the corresponding test replays these EXACT frozen values (rather than re-running the real MLE fit) via monkeypatching TechnicalOptionsEngine.estimate_gjr_garch_volatility / .calculate_realized_vol_rank / validation.options_selling_backtest.get_vrp, because the real arch_model(...).fit() optimizer is not bit-reproducible across platforms/BLAS backends (observed ~1e-4 divergence between a macOS capture machine and GitHub Actions' Linux runner -- CI's own arch fit legitimately converges to a slightly different local optimum given identical input data, which is a pre-existing property of this codebase's GJR-GARCH pipeline, not a bug in the MTM-loop refactor this test is verifying). Freezing these three upstream values decouples \"is the shared MTM helper behavior-preserving\" (this test's actual claim) from \"is the real GARCH fit deterministic across platforms\" (a separate, orthogonal, and much harder property this test was never meant to prove). All 6 strategies walk the identical cycle/date sequence and call these 3 functions identically per cycle before any per-strategy filtering happens, so one capture run covers all 6 replays. Regenerate ONLY if the underlying P&L math (or the cycle-plan computation feeding it) is intentionally changed -- never to make a failing test pass.",
     "synthetic_spy_params": {
       "n": 450,
       "seed": 22,
@@ -11,7 +11,179 @@
     },
     "start": "2023-06-21",
     "end": "2024-12-31",
-    "ticker": "SPY"
+    "ticker": "SPY",
+    "cycle_plan_replay": [
+      {
+        "entry_date": "2024-05-08",
+        "garch_vol": 0.22624921761458233,
+        "ivr_proxy": 48.59896731932147,
+        "vrp_proxy": 0.016602466413796507,
+        "directive": {
+          "Strategy": "Put Debit Spread",
+          "Action": "Buy to Open",
+          "Legs": [
+            {
+              "Side": "Long",
+              "Type": "Put",
+              "Strike": 372.0,
+              "Price": 8.35,
+              "Delta": -0.5
+            },
+            {
+              "Side": "Short",
+              "Type": "Put",
+              "Strike": 361.5,
+              "Price": 3.95,
+              "Delta": -0.3
+            }
+          ],
+          "Net_Premium": -4.4,
+          "Realizable_Daily_Theta": NaN
+        }
+      },
+      {
+        "entry_date": "2024-06-06",
+        "garch_vol": 0.23250816955136908,
+        "ivr_proxy": 52.005576957562184,
+        "vrp_proxy": 0.01751998151103687,
+        "directive": {
+          "Strategy": "Cash",
+          "Action": "Wait",
+          "Legs": [],
+          "Net_Premium": 0.0,
+          "Realizable_Daily_Theta": NaN
+        }
+      },
+      {
+        "entry_date": "2024-07-05",
+        "garch_vol": 0.23090361118711264,
+        "ivr_proxy": 53.906807836090756,
+        "vrp_proxy": 0.034513598487537184,
+        "directive": {
+          "Strategy": "Call Credit Spread",
+          "Action": "Sell to Open",
+          "Legs": [
+            {
+              "Side": "Short",
+              "Type": "Call",
+              "Strike": 329.5,
+              "Price": 3.24,
+              "Delta": 0.3
+            },
+            {
+              "Side": "Long",
+              "Type": "Call",
+              "Strike": 339.0,
+              "Price": 1.32,
+              "Delta": 0.15
+            }
+          ],
+          "Net_Premium": 1.92,
+          "Realizable_Daily_Theta": -0.0688
+        }
+      },
+      {
+        "entry_date": "2024-08-05",
+        "garch_vol": 0.2334039029838784,
+        "ivr_proxy": 55.341504709122006,
+        "vrp_proxy": 0.005030041360091747,
+        "directive": {
+          "Strategy": "Cash",
+          "Action": "Wait",
+          "Legs": [],
+          "Net_Premium": 0.0,
+          "Realizable_Daily_Theta": NaN
+        }
+      },
+      {
+        "entry_date": "2024-09-03",
+        "garch_vol": 0.29305458116728095,
+        "ivr_proxy": 67.54790502398109,
+        "vrp_proxy": -0.016664552015561107,
+        "directive": {
+          "Strategy": "Cash",
+          "Action": "Wait",
+          "Legs": [],
+          "Net_Premium": 0.0,
+          "Realizable_Daily_Theta": NaN
+        }
+      },
+      {
+        "entry_date": "2024-10-02",
+        "garch_vol": 0.25075948982028495,
+        "ivr_proxy": 48.738003284832324,
+        "vrp_proxy": 0.032994276514280274,
+        "directive": {
+          "Strategy": "Covered Call",
+          "Action": "Sell to Open",
+          "Legs": [
+            {
+              "Side": "Short",
+              "Type": "Call",
+              "Strike": 413.5,
+              "Price": 4.37,
+              "Delta": 0.3
+            }
+          ],
+          "Net_Premium": 4.37,
+          "Realizable_Daily_Theta": NaN
+        }
+      },
+      {
+        "entry_date": "2024-10-31",
+        "garch_vol": 0.2647763531477892,
+        "ivr_proxy": 54.74106147227113,
+        "vrp_proxy": 0.029755769058973314,
+        "directive": {
+          "Strategy": "Put Credit Spread",
+          "Action": "Sell to Open",
+          "Legs": [
+            {
+              "Side": "Short",
+              "Type": "Put",
+              "Strike": 419.5,
+              "Price": 5.45,
+              "Delta": -0.3
+            },
+            {
+              "Side": "Long",
+              "Type": "Put",
+              "Strike": 406.0,
+              "Price": 2.2,
+              "Delta": -0.15
+            }
+          ],
+          "Net_Premium": 3.24,
+          "Realizable_Daily_Theta": -0.0848
+        }
+      },
+      {
+        "entry_date": "2024-11-29",
+        "garch_vol": 0.2681944786230293,
+        "ivr_proxy": 56.20495575734773,
+        "vrp_proxy": -0.026368725036595597,
+        "directive": {
+          "Strategy": "Cash",
+          "Action": "Wait",
+          "Legs": [],
+          "Net_Premium": 0.0,
+          "Realizable_Daily_Theta": NaN
+        }
+      },
+      {
+        "entry_date": "2024-12-30",
+        "garch_vol": 0.24739826207627796,
+        "ivr_proxy": 47.29847681895642,
+        "vrp_proxy": -0.008625046887910659,
+        "directive": {
+          "Strategy": "Cash",
+          "Action": "Wait",
+          "Legs": [],
+          "Net_Premium": 0.0,
+          "Realizable_Daily_Theta": NaN
+        }
+      }
+    ]
   },
   "index": [
     "2023-06-21",

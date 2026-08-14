@@ -190,6 +190,26 @@ class TestSharedMtmHelperByteIdentical:
     for the frozen synthetic-SPY parameters and the capture methodology), and
     this test re-runs the SAME 6 public functions against the SAME
     deterministic input and diffs to a tight tolerance.
+
+    The fixture's ``cycle_plan_replay`` freezes, per cycle, the exact
+    ``garch_vol``/``ivr_proxy``/``vrp_proxy`` triple AND the exact
+    ``directive`` dict (Strategy/Legs/Net_Premium) the capture machine's REAL
+    ``arch``-library GJR-GARCH MLE fit and ``find_strike_for_delta`` root
+    solve produced for that cycle. This test replays those frozen values
+    (rather than re-running the real fit/solve) via
+    ``_patched_cycle_plan_replay`` below, because neither
+    ``arch_model(...).fit()`` (MLE optimizer) nor a root-finder's exact
+    converged value is guaranteed bit-reproducible across platforms/BLAS/
+    scipy versions -- a real, pre-existing property of this codebase's
+    GJR-GARCH/strike-selection pipeline (unrelated to the MTM-loop refactor
+    this test verifies) that was observed to diverge ~1e-4 between a macOS
+    capture machine and GitHub Actions' Linux runner on IDENTICAL input
+    data. Freezing every upstream input decouples "is the shared MTM helper
+    behavior-preserving" (this test's actual claim, and ALL that remains
+    once these are frozen -- pure closed-form Black-Scholes pricing plus
+    arithmetic, no iterative optimizer) from "are the real GARCH fit and
+    strike solver deterministic across platforms" (a separate, much harder
+    property no test here claims).
     """
 
     @classmethod
@@ -203,13 +223,59 @@ class TestSharedMtmHelperByteIdentical:
     def golden_spy(cls, golden: dict) -> pd.Series:
         return _synthetic_spy_from_params(golden["_meta"]["synthetic_spy_params"])
 
+    @staticmethod
+    def _patched_cycle_plan_replay(replay: List[dict]):
+        """Monkeypatch ``TechnicalOptionsEngine.estimate_gjr_garch_volatility``
+        / ``.calculate_realized_vol_rank`` / ``osb.get_vrp`` /
+        ``OptionsPricingRecommender.generate_strategy_pricing_matrix`` to pop
+        the next frozen ``(garch_vol, ivr_proxy, vrp_proxy, directive)``
+        quadruple from ``replay`` in call order instead of computing it for
+        real. Valid because ALL 6 strategies walk the identical cycle/date
+        sequence and call these 4 functions identically per cycle, in the
+        same order, before any per-strategy filtering happens (verified
+        against ``_compute_cycle_plan``/the pre-refactor loop body) -- so one
+        capture run's call-order sequence replays correctly for every
+        strategy.
+        """
+        state = {"i": 0}
+
+        def fake_garch(self, trailing) -> float:
+            entry = replay[state["i"]]
+            assert entry["entry_date"] == str(trailing.index[-1].date()), (
+                f"cycle_plan_replay call-order drift at index {state['i']}: "
+                f"expected entry_date {entry['entry_date']}, got {trailing.index[-1].date()}"
+            )
+            return float(entry["garch_vol"])
+
+        def fake_ivr(self, trailing, current_vol) -> float:
+            return float(replay[state["i"]]["ivr_proxy"])
+
+        def fake_vrp(ticker: str, current_iv: float, garch_vol: float):
+            return float(replay[state["i"]]["vrp_proxy"])
+
+        def fake_matrix(self, true_ivr, current_iv, trend_bias, target_dte=30, vrp=None, macro_dto=None, **kw):
+            d = replay[state["i"]]["directive"]
+            state["i"] += 1  # advance once per cycle, after the 4th (last) call
+            return d
+
+        return (
+            patch.object(TechnicalOptionsEngine, "estimate_gjr_garch_volatility", fake_garch),
+            patch.object(TechnicalOptionsEngine, "calculate_realized_vol_rank", fake_ivr),
+            patch.object(osb, "get_vrp", fake_vrp),
+            patch.object(OptionsPricingRecommender, "generate_strategy_pricing_matrix", fake_matrix),
+        )
+
     @pytest.mark.parametrize("strat_name,strat_fn", list(OPTIONS_STRATEGY_FNS.items()))
     def test_matches_pre_refactor_golden_output(
         self, golden: dict, golden_spy: pd.Series, strat_name: str, strat_fn: Callable[..., pd.Series]
     ) -> None:
         meta = golden["_meta"]
+        replay = [dict(entry) for entry in meta["cycle_plan_replay"]]  # fresh per-test copy
         _reset_cycle_plan_cache()
-        actual = strat_fn(meta["start"], meta["end"], ticker=meta["ticker"], closes=golden_spy)
+
+        p_garch, p_ivr, p_vrp, p_matrix = self._patched_cycle_plan_replay(replay)
+        with p_garch, p_ivr, p_vrp, p_matrix:
+            actual = strat_fn(meta["start"], meta["end"], ticker=meta["ticker"], closes=golden_spy)
 
         expected_index = golden["index"]
         expected_values = np.array(golden[strat_name], dtype=float)
