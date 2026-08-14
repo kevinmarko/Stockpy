@@ -1407,7 +1407,7 @@ class TestFMPFundamentalsChain:
             with caplog.at_level(logging.WARNING, logger="data.market_data"):
                 cp = CompositeProvider()
         assert not isinstance(cp._fundamentals_provider, FMPProvider)
-        assert "falling back to Yahoo" in caplog.text
+        assert "falling back to the default fundamentals provider" in caplog.text
 
     def test_fmp_source_with_blank_api_key_also_falls_back(self, caplog):
         import logging
@@ -1622,7 +1622,7 @@ class TestFMPQuoteBarsChain:
             with caplog.at_level(logging.WARNING, logger="data.market_data"):
                 cp = CompositeProvider()
         assert not isinstance(cp._quote_provider, FMPProvider)
-        assert "falling back to default provider" in caplog.text
+        assert "falling back to the default quote/bars provider" in caplog.text
 
     def test_fmp_provider_with_blank_api_key_also_falls_back(self, caplog):
         import logging

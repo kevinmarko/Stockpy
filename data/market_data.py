@@ -1811,9 +1811,10 @@ class CompositeProvider(MarketDataProvider):
             fmp_key = (getattr(settings, "FMP_API_KEY", None) or "").strip()
             if not fmp_key:
                 logger.warning(
-                    "FUNDAMENTALS_SOURCE=fmp but FMP_API_KEY is not set — "
-                    "falling back to Yahoo fundamentals. "
-                    "Set FMP_API_KEY in .env to enable FMP fundamentals."
+                    "MarketData: FUNDAMENTALS_SOURCE=fmp but FMP_API_KEY is not "
+                    "set -- falling back to the default fundamentals provider "
+                    "(Yahoo-derived statement engine) for this entire process. "
+                    "Add FMP_API_KEY to .env to restore FMP as primary."
                 )
                 self._fundamentals_provider = self._select_default_fundamentals_provider()
             else:
@@ -1847,9 +1848,10 @@ class CompositeProvider(MarketDataProvider):
             fmp_key = (getattr(settings, "FMP_API_KEY", None) or "").strip()
             if not fmp_key:
                 logger.warning(
-                    "MARKET_DATA_PROVIDER=fmp but FMP_API_KEY is not set — "
-                    "falling back to default provider (yfinance/Alpaca). "
-                    "Set FMP_API_KEY in .env to enable FMP quotes/bars."
+                    "MarketData: MARKET_DATA_PROVIDER=fmp but FMP_API_KEY is not "
+                    "set -- falling back to the default quote/bars provider "
+                    "(Alpaca if keyed, else yfinance) for this entire process. "
+                    "Add FMP_API_KEY to .env to restore FMP as primary."
                 )
                 return self._select_default_quote_provider()
             provider = FMPProvider(api_key=fmp_key)
