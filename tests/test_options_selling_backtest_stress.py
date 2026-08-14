@@ -16,11 +16,16 @@ FEB_2018, MAR_2020, AUG_2024), and offline deterministic synthetic price
 series.
 """
 
+import json
+from pathlib import Path
 from typing import Callable, Dict, List
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import validation.options_selling_backtest as osb
 from validation.options_selling_backtest import (
     simulate_options_strategy_returns,
     simulate_put_credit_spread_returns,
@@ -29,7 +34,14 @@ from validation.options_selling_backtest import (
     simulate_call_debit_spread_returns,
     simulate_put_debit_spread_returns,
     simulate_covered_call_returns,
+    _OptionLeg,
+    _simulate_leg_mtm_pnl,
+    _reset_cycle_plan_cache,
+    STOP_LOSS_CREDIT_MULTIPLE,
+    STOP_LOSS_DEBIT_RATIO,
+    TARGET_DTE,
 )
+from technical_options_engine import OptionsPricingRecommender, TechnicalOptionsEngine
 from validation.stress_scenarios import (
     STRESS_SCENARIOS,
     run_stress_tests,
@@ -147,4 +159,289 @@ def test_full_stress_gate_runs_end_to_end_for_all_options_selling_strategies(str
 
     gate_result = passes_stress_gate(results)
     assert isinstance(gate_result, bool)
+
+
+# =============================================================================
+# Finding A regression: shared MTM helper is behavior-preserving
+# =============================================================================
+
+_GOLDEN_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "options_selling_backtest_golden.json"
+
+
+def _synthetic_spy_from_params(params: dict) -> pd.Series:
+    """Reconstruct a deterministic synthetic SPY close series from the exact
+    parameters recorded in the golden fixture's ``_meta.synthetic_spy_params``
+    -- must match ``capture_golden_final.py``'s generation exactly (same
+    ``np.random.default_rng`` recipe as this file's own ``_synthetic_spy``,
+    with the fixture's own seed/scale/loc substituted in).
+    """
+    rng = np.random.default_rng(seed=params["seed"])
+    rets = rng.normal(loc=params["loc"], scale=params["scale"], size=params["n"])
+    prices = params["base_price"] * np.cumprod(1 + rets)
+    idx = pd.bdate_range(end=params["index_end"], periods=params["n"])
+    return pd.Series(prices, index=idx)
+
+
+class TestSharedMtmHelperByteIdentical:
+    """Proves the Finding-A refactor (6 near-duplicate per-day mark-to-market
+    loops -> one shared ``_simulate_leg_mtm_pnl`` helper) is behavior-
+    preserving: the golden fixture was captured from the exact pre-refactor
+    per-branch ``if/elif`` implementations (see the fixture's own ``_meta``
+    for the frozen synthetic-SPY parameters and the capture methodology), and
+    this test re-runs the SAME 6 public functions against the SAME
+    deterministic input and diffs to a tight tolerance.
+    """
+
+    @classmethod
+    @pytest.fixture(scope="class")
+    def golden(cls) -> dict:
+        with open(_GOLDEN_FIXTURE_PATH) as f:
+            return json.load(f)
+
+    @classmethod
+    @pytest.fixture(scope="class")
+    def golden_spy(cls, golden: dict) -> pd.Series:
+        return _synthetic_spy_from_params(golden["_meta"]["synthetic_spy_params"])
+
+    @pytest.mark.parametrize("strat_name,strat_fn", list(OPTIONS_STRATEGY_FNS.items()))
+    def test_matches_pre_refactor_golden_output(
+        self, golden: dict, golden_spy: pd.Series, strat_name: str, strat_fn: Callable[..., pd.Series]
+    ) -> None:
+        meta = golden["_meta"]
+        _reset_cycle_plan_cache()
+        actual = strat_fn(meta["start"], meta["end"], ticker=meta["ticker"], closes=golden_spy)
+
+        expected_index = golden["index"]
+        expected_values = np.array(golden[strat_name], dtype=float)
+        actual_index = [str(d.date()) for d in actual.index]
+
+        assert actual_index == expected_index, f"{strat_name}: index drifted from golden fixture"
+        assert len(actual.values) == len(expected_values)
+        assert np.allclose(actual.values.astype(float), expected_values, atol=1e-12, rtol=1e-12), (
+            f"{strat_name}: post-refactor output diverged from the pre-refactor golden fixture "
+            f"beyond 1e-12 tolerance -- max abs diff = "
+            f"{np.max(np.abs(actual.values.astype(float) - expected_values))}"
+        )
+
+    def test_golden_fixture_actually_exercises_nonzero_trades(self, golden: dict) -> None:
+        """Guards against the golden fixture silently degenerating into an
+        all-zero/never-traded series (which would make the byte-identical
+        comparison above vacuous for the MTM math itself, not just the guard
+        branches). At least the credit-spread and covered-call formulas must
+        have real, nonzero mark-to-market activity in this fixture.
+        """
+        active = {
+            name: int(np.count_nonzero(np.array(golden[name], dtype=float)))
+            for name in OPTIONS_STRATEGY_FNS
+        }
+        assert active["put_credit_spread"] > 0
+        assert active["call_credit_spread"] > 0
+        assert active["put_debit_spread"] > 0
+        assert active["covered_call"] > 0
+
+
+class TestSharedMtmHelperDirectFormulaEquivalence:
+    """Direct, hand-computed proof that ``_simulate_leg_mtm_pnl`` reproduces
+    each strategy's ORIGINAL per-day formula exactly, independently
+    reimplemented here (not copy-pasted from production) -- covers Iron
+    Condor and Call Debit Spread specifically, since the golden fixture in
+    ``TestSharedMtmHelperByteIdentical`` above happens not to activate those
+    two strategies for its chosen synthetic window (real macro gating +
+    trend/IVR conditions did not select them that cycle -- see the fixture's
+    own nonzero-count guard test).
+    """
+
+    @staticmethod
+    def _ohlcv(prices: List[float]) -> pd.DataFrame:
+        idx = pd.bdate_range("2024-01-02", periods=len(prices))
+        return pd.DataFrame({"Close": prices}, index=idx), idx
+
+    def test_iron_condor_formula(self) -> None:
+        ohlcv, dates = self._ohlcv([100.0, 101.5, 98.0, 103.0, 96.0, 100.5])
+        legs = [
+            _OptionLeg("short", "put", 95.0),
+            _OptionLeg("long", "put", 90.0),
+            _OptionLeg("short", "call", 105.0),
+            _OptionLeg("long", "call", 110.0),
+        ]
+        sigma = 0.22
+        net_premium = 2.75
+        max_risk = 5.0 * 100.0 - net_premium * 100.0
+        stop_loss_threshold = STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100.0
+
+        actual = _simulate_leg_mtm_pnl(
+            ohlcv, dates, legs, sigma, net_premium, max_risk, stop_loss_threshold,
+        )
+
+        # Independent reimplementation of the ORIGINAL (pre-refactor) Iron
+        # Condor per-day loop body.
+        expected: Dict[pd.Timestamp, float] = {}
+        cumulative_pnl = 0.0
+        stop_triggered = False
+        for i, d in enumerate(dates):
+            if stop_triggered:
+                expected[d] = 0.0
+                continue
+            spot_t = float(ohlcv.loc[d, "Close"])
+            days_remaining = max(TARGET_DTE - i, 1)
+            T = days_remaining / 365.0
+            pricer = OptionsPricingRecommender(stock_price=spot_t)
+            mtm_short_put = pricer.black_scholes_pricing_and_greeks(95.0, T, sigma, "put")["Price"]
+            mtm_long_put = pricer.black_scholes_pricing_and_greeks(90.0, T, sigma, "put")["Price"]
+            mtm_short_call = pricer.black_scholes_pricing_and_greeks(105.0, T, sigma, "call")["Price"]
+            mtm_long_call = pricer.black_scholes_pricing_and_greeks(110.0, T, sigma, "call")["Price"]
+            cost_to_close = (mtm_short_put - mtm_long_put) + (mtm_short_call - mtm_long_call)
+            new_cumulative_pnl = (net_premium - cost_to_close) * 100.0
+            daily_pnl = new_cumulative_pnl - cumulative_pnl
+            expected[d] = daily_pnl / max_risk
+            cumulative_pnl = new_cumulative_pnl
+            if -cumulative_pnl > stop_loss_threshold:
+                stop_triggered = True
+
+        assert set(actual.keys()) == set(expected.keys())
+        for d in dates:
+            assert actual[d] == pytest.approx(expected[d], abs=1e-12)
+
+    def test_call_debit_spread_formula(self) -> None:
+        ohlcv, dates = self._ohlcv([100.0, 102.0, 104.5, 103.0, 106.0, 108.0])
+        k_long_call, k_short_call = 100.0, 110.0
+        legs = [
+            _OptionLeg("long", "call", k_long_call),
+            _OptionLeg("short", "call", k_short_call),
+        ]
+        sigma = 0.18
+        net_debit = 3.20
+        net_premium = -net_debit  # raw signed Net_Premium from the directive
+        max_risk = net_debit * 100.0
+        stop_loss_threshold = STOP_LOSS_DEBIT_RATIO * max_risk
+
+        actual = _simulate_leg_mtm_pnl(
+            ohlcv, dates, legs, sigma, net_premium, max_risk, stop_loss_threshold,
+        )
+
+        # Independent reimplementation of the ORIGINAL (pre-refactor) Call
+        # Debit Spread per-day loop body.
+        expected: Dict[pd.Timestamp, float] = {}
+        cumulative_pnl = 0.0
+        stop_triggered = False
+        for i, d in enumerate(dates):
+            if stop_triggered:
+                expected[d] = 0.0
+                continue
+            spot_t = float(ohlcv.loc[d, "Close"])
+            days_remaining = max(TARGET_DTE - i, 1)
+            T = days_remaining / 365.0
+            pricer = OptionsPricingRecommender(stock_price=spot_t)
+            mtm_long = pricer.black_scholes_pricing_and_greeks(k_long_call, T, sigma, "call")["Price"]
+            mtm_short = pricer.black_scholes_pricing_and_greeks(k_short_call, T, sigma, "call")["Price"]
+            position_value = mtm_long - mtm_short
+            new_cumulative_pnl = (position_value - net_debit) * 100.0
+            daily_pnl = new_cumulative_pnl - cumulative_pnl
+            expected[d] = daily_pnl / max_risk
+            cumulative_pnl = new_cumulative_pnl
+            if -cumulative_pnl > stop_loss_threshold:
+                stop_triggered = True
+
+        assert set(actual.keys()) == set(expected.keys())
+        for d in dates:
+            assert actual[d] == pytest.approx(expected[d], abs=1e-12)
+
+
+# =============================================================================
+# Finding B regression: process-local cycle-plan cache eliminates redundant
+# per-cycle recomputation across the 6 STRATEGY_REGISTRY options adapters
+# =============================================================================
+
+class TestCyclePlanCacheAvoidsRedundantRecompute:
+    def test_six_strategies_over_same_window_cost_the_same_as_one(self) -> None:
+        """The real regression this cache exists to fix: without it, sweeping
+        all 6 options-selling ``STRATEGY_REGISTRY`` adapters over the SAME
+        window re-runs the GARCH fit once per adapter (6x). Instrumented via
+        a call-counting wrapper around
+        ``TechnicalOptionsEngine.estimate_gjr_garch_volatility`` (one call per
+        priced cycle) rather than wall-clock timing, to avoid flakiness.
+        """
+        spy = _synthetic_spy(n=350, seed=42)
+        start = str(spy.index[60].date())
+        end = str(spy.index[-1].date())
+
+        call_count = {"n": 0}
+        original = TechnicalOptionsEngine.estimate_gjr_garch_volatility
+
+        def _counting_wrapper(self_, df):
+            call_count["n"] += 1
+            return original(self_, df)
+
+        with patch.object(
+            osb.TechnicalOptionsEngine, "estimate_gjr_garch_volatility", _counting_wrapper
+        ):
+            _reset_cycle_plan_cache()
+            simulate_put_credit_spread_returns(start, end, ticker="SPY", closes=spy)
+            single_strategy_calls = call_count["n"]
+
+            _reset_cycle_plan_cache()
+            call_count["n"] = 0
+            for fn in (
+                simulate_put_credit_spread_returns,
+                simulate_call_credit_spread_returns,
+                simulate_vrp_iron_condor_returns,
+                simulate_call_debit_spread_returns,
+                simulate_put_debit_spread_returns,
+                simulate_covered_call_returns,
+            ):
+                fn(start, end, ticker="SPY", closes=spy)
+            six_strategy_calls = call_count["n"]
+
+        assert single_strategy_calls > 0, "fixture window produced zero priced cycles -- test is vacuous"
+        assert six_strategy_calls == single_strategy_calls, (
+            f"expected the 6-strategy sweep to cost exactly the same as one strategy "
+            f"({single_strategy_calls} GARCH fits) via the cycle-plan cache, but cost "
+            f"{six_strategy_calls} -- caching did not eliminate the redundant recompute"
+        )
+
+    def test_cache_key_distinguishes_different_price_data_over_same_nominal_window(self) -> None:
+        """Explicit proof the cache cannot silently reuse the wrong plan: two
+        Series sharing an identical (ticker, start, end) window but different
+        underlying price content must produce two distinct cache entries, not
+        one incorrectly-shared entry.
+        """
+        _reset_cycle_plan_cache()
+        spy_a = _synthetic_spy(n=350, seed=42)
+        spy_b = _synthetic_spy(n=350, seed=99)
+        assert spy_a.index.equals(spy_b.index)
+        assert not spy_a.equals(spy_b)
+
+        start = str(spy_a.index[60].date())
+        end = str(spy_a.index[-1].date())
+
+        simulate_put_credit_spread_returns(start, end, ticker="SPY", closes=spy_a)
+        assert len(osb._CYCLE_PLAN_CACHE) == 1
+
+        simulate_put_credit_spread_returns(start, end, ticker="SPY", closes=spy_b)
+        assert len(osb._CYCLE_PLAN_CACHE) == 2
+
+    def test_closes_none_vs_explicit_key_correctly(self) -> None:
+        """``stress_scenarios.py``'s ``ReturnsFn`` contract calls with
+        ``closes=None`` (triggering an internal download); the cache must key
+        off the RESOLVED Series either way, not merely the caller's intent.
+        Verified here by pre-populating the cache via an explicit ``closes=``
+        call and confirming a second call with the IDENTICAL resolved data
+        (simulated by passing the same Series explicitly, standing in for
+        what an internal download would resolve to) hits the same entry
+        rather than growing the cache.
+        """
+        _reset_cycle_plan_cache()
+        spy = _synthetic_spy(n=350, seed=7)
+        start = str(spy.index[60].date())
+        end = str(spy.index[-1].date())
+
+        simulate_put_credit_spread_returns(start, end, ticker="SPY", closes=spy)
+        assert len(osb._CYCLE_PLAN_CACHE) == 1
+
+        # A second call with an equal-content (but distinct object) Series
+        # must hit the SAME cache entry -- content, not identity, is the key.
+        spy_copy = spy.copy(deep=True)
+        assert spy_copy is not spy
+        simulate_call_credit_spread_returns(start, end, ticker="SPY", closes=spy_copy)
+        assert len(osb._CYCLE_PLAN_CACHE) == 1
 
