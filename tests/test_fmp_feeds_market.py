@@ -41,12 +41,17 @@ import pytest
 
 from data.fmp_feeds_market import (
     _pct_to_fraction,
+    fetch_economics_calendar,
     fetch_insider_stats,
     fetch_peer_group,
     fetch_realized_volatility,
     fetch_sector_snapshot,
 )
-from pipeline.production_steps import _apply_fmp_insider, _apply_fmp_sector
+from pipeline.production_steps import (
+    _apply_fmp_econ_calendar,
+    _apply_fmp_insider,
+    _apply_fmp_sector,
+)
 from settings import settings
 
 
@@ -472,7 +477,8 @@ class TestFetchPeerGroup:
 # ─────────────────────────────────────────────────────────────────────────
 
 class TestApplyFmpInsiderGateOff:
-    def test_gate_off_never_constructs_a_historical_store(self):
+    def test_gate_off_never_constructs_a_historical_store(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_INSIDER_ENABLED", False)
         df = pd.DataFrame({"Symbol": ["AAPL"]})
         with patch("data.historical_store.HistoricalStore") as MockStore:
             _apply_fmp_insider(df)
@@ -608,7 +614,8 @@ class TestApplyFmpInsiderWallClockBudget:
 # ─────────────────────────────────────────────────────────────────────────
 
 class TestApplyFmpSectorGateOff:
-    def test_gate_off_never_constructs_a_historical_store(self):
+    def test_gate_off_never_constructs_a_historical_store(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_SECTOR_SNAPSHOT_ENABLED", False)
         df = pd.DataFrame({"Symbol": ["AAPL"], "sector": ["Technology"]})
         with patch("data.historical_store.HistoricalStore") as MockStore:
             _apply_fmp_sector(df)
@@ -695,3 +702,128 @@ class TestApplyFmpSectorUnknownSector:
         get.assert_not_called()
         assert pd.isna(df["Sector_PE"].iloc[0])
         assert pd.isna(df["Sector_1D_Change"].iloc[0])
+
+
+class TestFetchEconomicsCalendar:
+    def test_fetch_economics_calendar_happy_path(self):
+        raw_payload = [
+            {
+                "event": "CPI MoM",
+                "date": "2026-08-20 08:30:00",
+                "country": "US",
+                "actual": 0.2,
+                "estimate": 0.2,
+                "impact": "High",
+            },
+            {
+                "event": "Non Farm Payrolls",
+                "date": "2026-09-04 08:30:00",
+                "country": "US",
+                "actual": None,
+                "estimate": 180000.0,
+                "impact": "High",
+            },
+        ]
+        with patch("data.fmp_client.economics_calendar", return_value=raw_payload):
+            events = fetch_economics_calendar(from_date="2026-08-01")
+
+        assert len(events) == 2
+        assert events[0]["event"] == "CPI MoM"
+        assert events[0]["country"] == "US"
+        assert events[0]["actual"] == pytest.approx(0.2)
+        assert events[1]["event"] == "Non Farm Payrolls"
+
+    def test_fetch_economics_calendar_malformed_rows(self):
+        """Rows missing required event or date keys are dropped safely."""
+        from data.fmp_feeds_market import reset_econ_calendar_cache
+        reset_econ_calendar_cache()
+        malformed = [
+            {"event": None, "date": "2026-08-20"},
+            {"event": "CPI", "date": None},
+            {"event": "", "date": "2026-08-20"},
+            {"event": "PPI", "date": ""},
+            {"unrelated_key": 123},
+            "not a dict",
+        ]
+        with patch("data.fmp_client.economics_calendar", return_value=malformed):
+            events = fetch_economics_calendar(from_date="2026-08-01")
+        assert events == []
+
+    def test_fetch_economics_calendar_caching(self):
+        """Same from_date and to_date within process reuses cached events without re-requesting."""
+        from data.fmp_feeds_market import reset_econ_calendar_cache
+        reset_econ_calendar_cache()
+        fake_events = [{"event": "CPI", "date": "2026-08-20", "country": "US", "impact": "High"}]
+        with patch("data.fmp_client.economics_calendar", return_value=fake_events) as mock_api:
+            res1 = fetch_economics_calendar(from_date="2026-08-20")
+            res2 = fetch_economics_calendar(from_date="2026-08-20")
+        assert len(res1) == 1
+        assert len(res2) == 1
+        assert mock_api.call_count == 1
+        reset_econ_calendar_cache()
+
+
+class TestApplyFmpEconCalendar:
+    def test_gate_off_is_noop(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", False)
+        df = pd.DataFrame({"Symbol": ["AAPL", "MSFT"]})
+
+        with patch("data.fmp_feeds_market.fetch_economics_calendar") as mock_fetch:
+            _apply_fmp_econ_calendar(df)
+
+        mock_fetch.assert_not_called()
+        assert pd.isna(df["Next_Macro_Event"].iloc[0])
+        assert pd.isna(df["Next_Macro_Event_Date"].iloc[0])
+
+    def test_gate_on_broadcasts_upcoming_event(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", True)
+        df = pd.DataFrame({"Symbol": ["AAPL", "MSFT"]})
+
+        fake_events = [
+            {
+                "event": "FOMC Rate Decision",
+                "date": "2026-09-16 14:00:00",
+                "country": "US",
+                "impact": "High",
+            },
+            {
+                "event": "Initial Jobless Claims",
+                "date": "2026-08-20 08:30:00",
+                "country": "US",
+                "impact": "High",
+            },
+        ]
+        with patch("data.fmp_feeds_market.fetch_economics_calendar", return_value=fake_events):
+            _apply_fmp_econ_calendar(df)
+
+        # Earliest US/High impact event is Initial Jobless Claims on 2026-08-20
+        assert df["Next_Macro_Event"].iloc[0] == "Initial Jobless Claims"
+        assert df["Next_Macro_Event_Date"].iloc[0] == "2026-08-20"
+        assert df["Next_Macro_Event"].iloc[1] == "Initial Jobless Claims"
+        assert df["Next_Macro_Event_Date"].iloc[1] == "2026-08-20"
+
+    def test_gate_on_empty_events_leaves_nan(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", True)
+        df = pd.DataFrame({"Symbol": ["AAPL"]})
+
+        with patch("data.fmp_feeds_market.fetch_economics_calendar", return_value=[]):
+            _apply_fmp_econ_calendar(df)
+
+        assert pd.isna(df["Next_Macro_Event"].iloc[0])
+        assert pd.isna(df["Next_Macro_Event_Date"].iloc[0])
+
+    def test_gate_on_malformed_events_leaves_nan(self, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_ECON_CALENDAR_ENABLED", True)
+        df = pd.DataFrame({"Symbol": ["AAPL"]})
+
+        malformed_events = [
+            {"event": None, "date": "2026-08-20"},
+            {"unexpected_key": "val"},
+        ]
+        with patch("data.fmp_feeds_market.fetch_economics_calendar", return_value=malformed_events):
+            _apply_fmp_econ_calendar(df)
+
+        assert pd.isna(df["Next_Macro_Event"].iloc[0])
+        assert pd.isna(df["Next_Macro_Event_Date"].iloc[0])
+
+

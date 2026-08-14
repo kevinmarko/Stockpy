@@ -61,7 +61,7 @@ class TestColumnSchemaIntegrity:
     COLUMN_SCHEMA, that's exactly the drift this test exists to catch."""
 
     # Update deliberately, in the same commit as any COLUMN_SCHEMA change.
-    EXPECTED_COLUMN_COUNT = 112
+    EXPECTED_COLUMN_COUNT = 114
 
     def test_exact_column_count(self) -> None:
         assert len(config.COLUMN_SCHEMA) == self.EXPECTED_COLUMN_COUNT, (
@@ -291,6 +291,7 @@ class TestAdvisoryColumnCoverage:
         "Days_To_Earnings", "Last_EPS_Surprise_Pct",
         "Insider_Buy_Sell_Ratio",
         "Sector_PE", "Sector_1D_Change",
+        "Next_Macro_Event", "Next_Macro_Event_Date",
         # Symbol-rating subsystem diagnostics (rating/symbol_rating_store.py)
         # -- orchestrator-only by construction: no dashboard_df write path
         # for these two exists on the advisory side, and rec_to_sheet_row
@@ -314,8 +315,8 @@ class TestAdvisoryColumnCoverage:
             f"keys in one of the sets but no longer in COLUMN_SCHEMA: {(mapped | unmapped) - all_keys}"
         )
         assert len(mapped) == 35
-        assert len(unmapped) == 77
-        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 112
+        assert len(unmapped) == 79
+        assert len(mapped) + len(unmapped) == len(config.COLUMN_SCHEMA) == 114
 
     def test_rec_to_sheet_row_emits_exactly_the_known_mapped_keys(self) -> None:
         """AST/behavioral cross-check: call rec_to_sheet_row() for real and
@@ -413,11 +414,11 @@ class TestAdvisoryColumnCoverage:
 # ---------------------------------------------------------------------------
 
 class TestFMPDiagnosticColumns:
-    """The eight FMP diagnostic-feed COLUMN_SCHEMA entries (analyst, earnings,
-    insider, sector snapshot). Wave-0 scaffolding: the columns exist and are
-    schema-valid, but nothing populates them until the corresponding
-    ``FMP_*_ENABLED`` gate is on AND a wave-1 agent fills in the matching
-    ``pipeline/production_steps.py::_apply_fmp_*`` body."""
+    """The ten FMP diagnostic-feed COLUMN_SCHEMA entries (analyst, earnings,
+    insider, sector snapshot, economics calendar). All ten are populated by
+    ``pipeline/production_steps.py::_apply_fmp_*`` behind their own
+    ``FMP_*_ENABLED`` gate -- see ``config.COLUMN_SCHEMA``'s "FMP DIAGNOSTIC
+    FEEDS" section."""
 
     EXPECTED: Dict[str, str] = {
         "Analyst_Target_Consensus": "currency",
@@ -428,9 +429,11 @@ class TestFMPDiagnosticColumns:
         "Insider_Buy_Sell_Ratio": "number",
         "Sector_PE": "number",
         "Sector_1D_Change": "percent",
+        "Next_Macro_Event": "string",
+        "Next_Macro_Event_Date": "string",
     }
 
-    def test_all_eight_keys_present_with_expected_format(self) -> None:
+    def test_all_ten_keys_present_with_expected_format(self) -> None:
         by_key = {c["key"]: c for c in config.COLUMN_SCHEMA}
         for key, fmt in self.EXPECTED.items():
             assert key in by_key, f"Expected FMP diagnostic key {key!r} missing from COLUMN_SCHEMA"
@@ -453,9 +456,11 @@ class TestFMPDiagnosticColumns:
         assert keys.count("Earnings_Date") == 1
 
     def test_each_new_column_gets_a_dashboard_schema_column_of_the_right_dtype(self) -> None:
-        """DashboardSchema is built dynamically from COLUMN_SCHEMA, so all
-        eight must be present; the seven numeric formats must map to a
-        nullable float column so a NaN-filled (gate-off) cycle validates."""
+        """DashboardSchema is built dynamically from COLUMN_SCHEMA, so all ten
+        must be present; the eight numeric-format columns (currency/percent/
+        number) must map to a nullable float column, and the two string-
+        format columns (the economics-calendar event name/date) must map to
+        a nullable str column -- either way, gate-off must validate."""
         schema_cols = config.DashboardSchema.columns
         for key, fmt in self.EXPECTED.items():
             assert key in schema_cols, f"{key!r} missing from config.DashboardSchema"
@@ -463,7 +468,11 @@ class TestFMPDiagnosticColumns:
                 f"{key!r} must be nullable -- every FMP diagnostic column is "
                 "NaN whenever its gate is off (CONSTRAINT #4)."
             )
-            assert fmt in ("currency", "percent", "number")
+            assert fmt in ("currency", "percent", "number", "string")
+            if fmt == "string":
+                assert str(schema_cols[key].dtype) == "str"
+            else:
+                assert str(schema_cols[key].dtype) == "float64"
 
     def test_nan_filled_frame_validates_against_dashboard_schema(self) -> None:
         """A gate-off cycle emits NaN for all eight; that must be a VALID

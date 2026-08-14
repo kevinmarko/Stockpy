@@ -394,17 +394,14 @@ class Settings(BaseSettings):
     # NOTE: FMP is deliberately NOT part of that auto-select ladder — see the
     # description below and section 25.
     MARKET_DATA_PROVIDER: Optional[str] = Field(
-        default=None,
+        default="fmp",
         description=(
             "Force a specific market-data backend: 'fmp', 'alpaca' or "
-            "'yfinance'. When unset the platform auto-selects based on key "
-            "availability (Alpaca if its keys are present, else yfinance). "
-            "Setting FMP_API_KEY alone NEVER auto-elects FMP: unlike the "
-            "Alpaca ladder, FMP is chosen only by explicitly setting this to "
-            "'fmp', so an operator who adds the key to enable the analyst or "
-            "earnings feed does not silently have their quote/bars source "
-            "change underneath them. FMP quotes/bars additionally require "
-            "FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention)."
+            "'yfinance'. Defaults to 'fmp' by explicit operator decision. "
+            "When set to 'fmp', quotes and bars are routed to FMP if "
+            "FMP_QUOTES_ENABLED / FMP_BARS_ENABLED are True (the two-gate convention). "
+            "Note: operator accepted risk of switching primary price provider to FMP "
+            "before full live eyeball verification against market open."
         ),
     )
     FINNHUB_API_KEY: Optional[str] = Field(
@@ -598,26 +595,23 @@ class Settings(BaseSettings):
         ),
     )
     FUNDAMENTALS_SOURCE: str = Field(
-        default="yahoo",
+        default="fmp",
         description=(
-            "Primary fundamentals backend: 'yahoo' (statement-derived, default), "
-            "'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling "
-            "Prep — see section 25). Finnhub is no longer a fundamentals source. "
-            "Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen "
-            "explicitly here, so adding the key for one feed cannot silently "
-            "change what every valuation metric is computed from. 'fmp' "
-            "additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate "
-            "convention); with either half missing the Yahoo path is used, "
-            "exactly as today."
+            "Primary fundamentals backend: 'fmp' (Financial Modeling Prep, default by "
+            "explicit operator decision), 'yahoo' (statement-derived), or 'yfinance_info' "
+            "(raw .info fallback). Finnhub is no longer a fundamentals source. "
+            "'fmp' requires FMP_FUNDAMENTALS_ENABLED=true; with either half missing "
+            "the Yahoo path is used as fallback when FMP_FALLBACK_ENABLED is True. "
+            "Note: operator accepted risk of switching primary fundamentals provider to FMP "
+            "before full live eyeball verification."
         ),
     )
 
     # --- 25. Financial Modeling Prep (data/fmp_client.py) ---
     # One HTTP seam (data/fmp_client.py) shared by every FMP consumer, because
     # the rate limit is per-ACCOUNT: per-concern limiters would blow the budget
-    # by construction. Every gate below defaults to False / today's exact
-    # behavior — nothing here is active until an operator explicitly enables it
-    # in .env after eyeballing a side-by-side run.
+    # by construction. Every capability gate below defaults to True by explicit
+    # operator decision for the full FMP rollout.
     FMP_API_KEY: Optional[str] = Field(
         default=None,
         description=(
@@ -725,223 +719,167 @@ class Settings(BaseSettings):
             "multi-hour daemon on the fallback after a single bad minute)."
         ),
     )
-    # ── FMP feed master gates (all default False = complete no-op) ───────
+    # ── FMP feed master gates (all default True by explicit operator decision) ───
     FMP_QUOTES_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Two-gate capability switch for FMP-sourced quotes, independent "
-            "of FMP_BARS_ENABLED (an operator may want one live without the "
-            "other). False (the default) is a complete no-op reproducing "
-            "today's exact behavior. Requires MARKET_DATA_PROVIDER='fmp' to "
-            "have any effect at all -- with that set but this flag False, "
-            "get_latest_quote() falls through UNCONDITIONALLY to the same "
-            "Alpaca-if-keyed-else-yfinance default an unset "
-            "MARKET_DATA_PROVIDER would produce (not governed by "
-            "FMP_FALLBACK_ENABLED, since FMP is never attempted -- there is "
-            "nothing to fall back FROM). quote_source/is_realtime always "
-            "report the provider actually serving, never 'fmp' while this "
-            "is False."
+            "of FMP_BARS_ENABLED. Defaults True by explicit operator decision. "
+            "Requires MARKET_DATA_PROVIDER='fmp' to route get_latest_quote() to FMP. "
+            "Note: operator accepted risk of switching primary quote provider to FMP."
         ),
     )
     FMP_BARS_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Two-gate capability switch for FMP-sourced OHLCV bars, "
-            "independent of FMP_QUOTES_ENABLED -- see that field's "
-            "description for the shared mechanics (requires "
-            "MARKET_DATA_PROVIDER='fmp'; False falls through unconditionally "
-            "to the non-FMP default, not governed by FMP_FALLBACK_ENABLED). "
-            "Read FMP_BARS_ADJUSTMENT before enabling: an adjustment-"
-            "convention mismatch corrupts every return series, indicator, "
-            "GARCH fit and backtest, and does so PLAUSIBLY (nothing fails "
-            "loudly)."
+            "independent of FMP_QUOTES_ENABLED. Defaults True by explicit operator decision, "
+            "accepting that scripts/verify_fmp_bars.py has not been run against a live "
+            "account in this sandbox (no live-market network access). Requires "
+            "MARKET_DATA_PROVIDER='fmp'. Read FMP_BARS_ADJUSTMENT before changing it: "
+            "'dividend-adjusted' matches incumbent yfinance split+dividend adjustment, and an "
+            "adjustment-convention mismatch corrupts every return series, indicator, GARCH fit "
+            "and backtest -- and does so PLAUSIBLY (nothing fails loudly)."
         ),
     )
     FMP_FUNDAMENTALS_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Two-gate capability switch for FMP-sourced fundamentals -- same "
-            "mechanics as FMP_QUOTES_ENABLED, one layer down. Requires "
-            "FUNDAMENTALS_SOURCE='fmp' to have any effect; with that set but "
-            "this flag False, get_fundamentals() falls through "
-            "unconditionally to the Yahoo statement-derived path (the "
-            "existing FUNDAMENTALS_SOURCE='yahoo' default), not governed by "
-            "FMP_FALLBACK_ENABLED. source_name always reports the provider "
-            "actually serving, never 'fmp' while this is False."
+            "Two-gate capability switch for FMP-sourced fundamentals. "
+            "Defaults True by explicit operator decision. Requires "
+            "FUNDAMENTALS_SOURCE='fmp' to route get_fundamentals() to FMP."
         ),
     )
     FMP_ANALYST_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the FMP analyst feed (price-target consensus + "
-            "grades summary) as DIAGNOSTIC dashboard columns. False (the "
-            "default) is a complete no-op reproducing today's exact behavior: "
-            "the columns stay NaN and no request is attempted. Single gate — "
-            "no provider selector applies, since this feed replaces nothing. "
+            "grades summary) as DIAGNOSTIC dashboard columns. Defaults True by "
+            "explicit operator decision. Single gate — diagnostic only. "
             "Deliberately never a SignalModule and never in SIGNAL_WEIGHTS: "
             "FMP serves only the CURRENT consensus and targets get revised, so "
             "there is no point-in-time history to backtest against."
         ),
     )
     FMP_EARNINGS_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Master switch for the FMP earnings calendar/surprise feed. False "
-            "(the default) is a complete no-op reproducing today's exact "
-            "behavior — Earnings_Date keeps its existing Finnhub-only source "
-            "(blank without a Finnhub key). When on, FMP becomes a SECOND "
+            "Master switch for the FMP earnings calendar/surprise feed. Defaults "
+            "True by explicit operator decision. When on, FMP becomes a SECOND "
             "source for the existing Earnings_Date column and, unlike Finnhub, "
-            "is not limited to a 30-day forward window. Single gate — no "
-            "provider selector applies."
+            "is not limited to a 30-day forward window. Single gate."
         ),
     )
     FMP_NEWS_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the FMP company-news feed (data.fmp_client."
-            "stock_news, wrapping /news/stock). False (the default) is a "
-            "complete no-op reproducing today's exact behavior — "
-            "signals/news_catalyst.py's headline fetch stays on its existing "
-            "Finnhub-only path, and data/sentiment_sources.py's 'fmp_news' "
-            "SentimentSource returns [] without any network call. When True "
-            "AND FMP_API_KEY is set, FMP becomes the PRIMARY provider for "
-            "company headlines (signals/news_catalyst.py::"
+            "stock_news, wrapping /news/stock). Defaults True by explicit "
+            "operator decision. When True AND FMP_API_KEY is set, FMP becomes "
+            "the PRIMARY provider for company headlines (signals/news_catalyst.py::"
             "fetch_company_headlines dispatches FMP-first, falling back to "
             "Finnhub only on an FMP failure) and 'fmp_news' becomes eligible "
             "for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP "
             "key: /news/stock returns >=6 months of real history (vs. "
             "Finnhub's free-tier ~3-month cap) with working from/to date-"
-            "window + page/limit pagination. Deliberately does NOT touch "
-            "/news/press-releases — that endpoint returned a plan-"
-            "entitlement rejection ('Restricted Endpoint') against the "
-            "account this integration was verified with; see "
-            "docs/FMP_INTEGRATION.md."
+            "window + page/limit pagination -- the one FMP data-fetch flag "
+            "with genuine live verification behind it, not just a probe. "
+            "Deliberately does NOT touch /news/press-releases -- that "
+            "endpoint returned a plan-entitlement rejection ('Restricted "
+            "Endpoint') against the account this integration was verified "
+            "with; see docs/FMP_INTEGRATION.md."
         ),
     )
     FMP_MACRO_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the FMP macro feed (treasury rates + the named "
             "series in FMP_ECON_INDICATORS), written into the EXISTING "
-            "macro_history table under FRED-compatible series IDs. False (the "
-            "default) is a complete no-op reproducing today's exact behavior. "
-            "FMP SUPPLEMENTS FRED, it cannot replace it: VIXCLS and "
-            "BAMLH0A0HYM2 (HY OAS) have no Starter equivalent and "
-            "compute_hmm_risk_on_probability needs VIXCLS. Single gate — no "
-            "provider selector applies."
+            "macro_history table under FRED-compatible series IDs. Defaults True "
+            "by explicit operator decision. FMP SUPPLEMENTS FRED, it cannot replace it: "
+            "VIXCLS and BAMLH0A0HYM2 (HY OAS) have no Starter equivalent and "
+            "compute_hmm_risk_on_probability needs VIXCLS. Single gate."
+        ),
+    )
+    FMP_ECON_CALENDAR_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master switch for the FMP economics calendar feed (/economics-calendar) "
+            "as DIAGNOSTIC dashboard columns (Next_Macro_Event, Next_Macro_Event_Date). "
+            "Defaults True by explicit operator decision. Broadcasts market-wide upcoming "
+            "macro events (CPI, FOMC, NFP) to all rows. Single gate, one request per cycle. "
+            "Deliberately never a SignalModule and never in SIGNAL_WEIGHTS: diagnostic only. "
+            "Note: this endpoint's Starter-tier entitlement status has not been confirmed "
+            "against a live account -- degrades gracefully to empty/NaN on entitlement rejection."
         ),
     )
     FMP_INSIDER_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the FMP insider-trading statistics feed "
-            "(diagnostic Insider_Buy_Sell_Ratio column). False (the default) "
-            "is a complete no-op reproducing today's exact behavior. Separate "
-            "from FMP_SECTOR_SNAPSHOT_ENABLED on purpose: insider stats are "
-            "one request PER SYMBOL while sector snapshots are two requests "
-            "per cycle total, so they carry very different rate-limit costs "
-            "and deserve independent switches. Single gate."
+            "(diagnostic Insider_Buy_Sell_Ratio column). Defaults True by "
+            "explicit operator decision. Gated by FMP_INSIDER_MIN_LAG_DAYS "
+            "to avoid lookahead revisions. Single gate."
         ),
     )
     FMP_SECTOR_SNAPSHOT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the dated FMP sector P/E + sector performance "
             "snapshots (diagnostic Sector_PE / Sector_1D_Change columns). "
-            "False (the default) is a complete no-op reproducing today's exact "
-            "behavior. Two requests per cycle total regardless of universe "
-            "size — hence its own switch, separate from the per-symbol "
-            "FMP_INSIDER_ENABLED. Single gate."
+            "Defaults True by explicit operator decision. Two requests per "
+            "cycle total regardless of universe size. Single gate."
         ),
     )
     FMP_OPTIONS_HEALTH_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the FMP fundamental-health overlay bundled into "
             "the options premium-directive matrix (reporting/options_snapshot.py"
-            "::write_options_matrix → technical_options_engine.build_premium_"
-            "directive). False (the default) is a complete no-op reproducing "
-            "today's exact behavior: Altman_Z_Score, Piotroski_F_Score, "
-            "Net_Debt_EBITDA, FCF_Yield, and Realized_Vol_30D all stay None and "
-            "zero additional FMP requests are attempted. When True, gates three "
-            "endpoints for every symbol in the options matrix: Altman Z-Score + "
-            "Piotroski F-Score (`/financial-scores`), Net Debt/EBITDA + FCF "
-            "Yield (`/ratios-ttm`), and 30-day realized volatility "
-            "(`/standard-deviation`). Single gate bundling all three — they are "
-            "always fetched together for one overlay concept ('is this credit-"
-            "spread candidate financially healthy'), matching the "
-            "FMP_SECTOR_SNAPSHOT_ENABLED / FMP_INSIDER_ENABLED precedent of one "
-            "flag per logically-bundled feature. Does NOT gate "
-            "Days_To_Earnings/Earnings_Risk — those reuse the EXISTING "
-            "FMP_EARNINGS_ENABLED earnings-calendar gate via the durable "
-            "earnings-events store, not a fresh fetch of their own."
+            "::write_options_matrix -> technical_options_engine.build_premium_"
+            "directive). Defaults True by explicit operator decision. When True, "
+            "gates Altman Z-Score + Piotroski F-Score, Net Debt/EBITDA + FCF Yield, "
+            "and 30-day realized volatility."
         ),
     )
     FMP_OPTIONS_CONTEXT_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the FMP market/qualitative-context overlay "
             "bundled into the options premium-directive matrix (reporting/"
-            "options_snapshot.py::write_options_matrix → technical_options_"
-            "engine.build_premium_directive). False (the default) is a "
-            "complete no-op reproducing today's exact behavior: News_Snippets "
-            "stays [], Peers stays [], and zero additional FMP requests are "
-            "attempted. When True, gates two endpoints for every symbol in "
-            "the options matrix: recent news headlines, capped at 3 per "
-            "symbol (`/news/stock` via data.fmp_feeds_company.fetch_stock_"
-            "news), and the peer-comparison ticker group (`/peers` via "
-            "data.fmp_feeds_market.fetch_peer_group). Kept separate from "
-            "FMP_OPTIONS_HEALTH_ENABLED even though the call-site pattern is "
-            "identical (a bundled gate checked before the per-symbol loop, "
-            "independent try/except per sub-fetch inside it) because it is a "
-            "different overlay concept — market/qualitative context (what is "
-            "being said about this name, and what else trades like it) "
-            "rather than balance-sheet health."
+            "options_snapshot.py::write_options_matrix -> technical_options_"
+            "engine.build_premium_directive). Defaults True by explicit operator "
+            "decision. Gates recent news headlines and peer-comparison ticker group."
         ),
     )
     FMP_PEERS_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for the on-demand GET /data/peers/{symbol} "
-            "endpoint (api/data_api.py) — a single, per-click, operator-"
-            "triggered FMP peer-group lookup (`/peers` via "
-            "data.fmp_feeds_market.fetch_peer_group) for the webapp's "
-            "'Suggest peers for this ticker' affordance on SymbolComparison. "
-            "False (the default) is a complete no-op: the endpoint returns "
-            "an empty peer list + an honest reason, with ZERO network calls "
-            "— fetch_peer_group is never even imported. Deliberately kept "
-            "SEPARATE from FMP_OPTIONS_CONTEXT_ENABLED, which already gates "
-            "a DIFFERENT call site of the same fetch_peer_group function: a "
-            "per-cycle BATCH fetch across the whole options-matrix universe "
-            "(reporting/options_snapshot.py). Same rate-limit-cadence "
-            "reasoning as the FMP_INSIDER_ENABLED / FMP_SECTOR_SNAPSHOT_"
-            "ENABLED precedent above — one flag per call-site SHAPE, not "
-            "per underlying vendor function: a single user-triggered click "
-            "and a per-cycle loop over an entire universe have completely "
-            "different cost/cadence profiles and must be independently "
-            "controllable."
+            "endpoint (api/data_api.py) for the webapp's 'Suggest peers for "
+            "this ticker' affordance on SymbolComparison. Defaults True by "
+            "explicit operator decision."
         ),
     )
     FMP_UNIVERSE_ENABLED: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Master switch for using FMP's historical S&P 500 constituent-"
             "changes endpoint (data/fmp_client.py::historical_sp500_changes) "
             "as the PRIMARY source for universe_engine.py's point-in-time "
             "survivorship-bias reconstruction, with the legacy Wikipedia "
-            "'Selected changes' table scrape demoted to a fallback — that "
+            "'Selected changes' table scrape demoted to a fallback -- that "
             "table was removed from the live Wikipedia page entirely as of "
-            "2026-08, which is what necessitated this feed. Mirrors "
-            "fetch_company_headlines's FMP-first/Finnhub-fallback dispatcher "
-            "pattern in signals/news_catalyst.py. False (the default) is a "
-            "complete no-op reproducing today's exact Wikipedia-only "
-            "behavior — zero FMP requests attempted, "
+            "2026-08, which is what necessitated this feed. Defaults True by "
+            "explicit operator decision, accepting that this endpoint has NOT "
+            "been verified against a live FMP account (endpoint path/field "
+            "names are best-effort from public docs only). "
             "data/fmp_universe.py::fetch_sp500_changes_via_fmp short-circuits "
-            "to []. Single gate — key presence is enforced by _fmp_get "
-            "itself. Wikipedia's current-constituents table (unaffected by "
-            "the removal above) always stays the source of truth for the "
-            "CURRENT roster regardless of this flag; only the historical "
-            "changes half is FMP-eligible."
+            "to [] on any failure, falling through to the Wikipedia path. "
+            "Wikipedia's current-constituents table (unaffected by the "
+            "removal above) always stays the source of truth for the CURRENT "
+            "roster regardless of this flag; only the historical changes "
+            "half is FMP-eligible."
         ),
     )
     # ── FMP behavior knobs ───────────────────────────────────────────────
@@ -949,24 +887,25 @@ class Settings(BaseSettings):
         default=True,
         description=(
             "When True (default), an FMP failure falls through to the existing "
-            "provider chain for that kind (quotes/bars: FMP → Alpaca if keyed "
-            "→ yfinance; fundamentals: FMP → Yahoo statement-derived → raw "
+            "provider chain for that kind (quotes/bars: FMP -> Alpaca if keyed "
+            "-> yfinance; fundamentals: FMP -> Yahoo statement-derived -> raw "
             "yfinance .info), logging a WARNING naming the provider, symbol "
             "and exception so a silent fallback can never masquerade as "
             "success. When False the chain is [primary] only and a failure "
-            "propagates exactly as it does today — use it to prove FMP is "
+            "propagates exactly as it does today -- use it to prove FMP is "
             "actually serving, rather than being quietly rescued."
         ),
     )
     FMP_QUOTES_REALTIME: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Whether FMP-served quotes may be labelled real-time (is_stale=False). "
-            "Defaults False because whether /quote is genuinely real-time on "
-            "the Starter tier could NOT be verified from this sandbox — and "
-            "claiming freshness we have not measured is exactly the kind of "
-            "quiet fabrication CONSTRAINT #4 exists to prevent. Set True only "
-            "after confirming it against a live market open."
+            "Defaults True by explicit operator decision, NOT because this was "
+            "confirmed: whether /quote is genuinely real-time on the Starter tier "
+            "could not be verified from this sandbox, and claiming freshness that "
+            "was not measured is exactly the kind of quiet fabrication CONSTRAINT "
+            "#4 exists to prevent. Confirm against a live market open before "
+            "trusting is_stale=False on this path in a live-capital deployment."
         ),
     )
     FMP_BARS_ADJUSTMENT: str = Field(
@@ -1056,15 +995,12 @@ class Settings(BaseSettings):
     FMP_ECON_INDICATORS: str = Field(
         default="unemploymentRate",
         description=(
-            "Comma-separated FMP /economic-indicators series names fetched "
-            "when FMP_MACRO_ENABLED is True (e.g. "
-            "'unemploymentRate,GDP,CPI'). A comma-separated STRING parsed by "
-            "the consumer, matching the SENTIMENT_SOURCES / "
-            "EDGAR_FULLTEXT_FORMS convention — deliberately not a JSON list, "
-            "so it is not a gui/env_io.py _JSON_KEY. Note these series ARE "
-            "revised and FMP serves the latest vintage, so they are not "
-            "point-in-time safe (the same limitation FRED already has here) "
-            "and must stay out of the PIT audit."
+            "FMP /economic-indicators series name fetched when "
+            "FMP_MACRO_ENABLED is True (currently 'unemploymentRate' alone is "
+            "supported by data/fmp_macro.py::fetch_unemployment_rate). "
+            "Note these series ARE revised and FMP serves the latest vintage, "
+            "so they are not point-in-time safe (the same limitation FRED "
+            "already has here) and must stay out of the PIT audit."
         ),
     )
     FMP_MAX_SECONDS_PER_CYCLE: float = Field(
@@ -1960,8 +1896,10 @@ class Settings(BaseSettings):
             "(survive across tickers/cycles, each pays the TensorFlow import cost "
             "only once) so CNN-LSTM fits queued from pipeline/production_steps.py's "
             "per-ticker ThreadPoolExecutor fan-out share this fixed-size pool rather "
-            "than spawning a fresh interpreter per ticker. Keep small -- each worker "
-            "holds a full TensorFlow process in memory."
+            "than spawning a fresh interpreter per ticker. Shipped default is 1; "
+            "an operator tuning for higher pipeline concurrency on multi-core "
+            "systems can increase this (recommended: 3 workers) while monitoring "
+            "per-worker TensorFlow process memory."
         ),
     )
     CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS: int = Field(

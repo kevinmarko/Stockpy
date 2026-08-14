@@ -93,9 +93,10 @@ class TestHistoricalSp500Changes:
 # ---------------------------------------------------------------------------
 
 class TestFetchSp500ChangesViaFmp:
-    def test_disabled_by_default_returns_empty_no_network(self, api_key):
-        """FMP_UNIVERSE_ENABLED defaults False -- a complete no-op reproducing
-        today's exact Wikipedia-only behavior."""
+    def test_disabled_returns_empty_no_network(self, api_key, monkeypatch):
+        """FMP_UNIVERSE_ENABLED=False is a complete no-op reproducing
+        the Wikipedia-only behavior."""
+        monkeypatch.setattr(settings, "FMP_UNIVERSE_ENABLED", False)
         with patch("data.fmp_client.historical_sp500_changes") as mock_fetch:
             result = fetch_sp500_changes_via_fmp()
         assert result == []
