@@ -222,6 +222,8 @@ class JobManager:
                 "process to cancel (daemon-hosted run — it will run to completion)"
             )
         with rec._lock:
+            if not rec.handle.is_running():
+                return False
             stopped = stop_run(rec.handle)
             if stopped:
                 rec.cancelled = True
