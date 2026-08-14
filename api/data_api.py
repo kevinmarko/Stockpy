@@ -138,10 +138,11 @@ install_redacting_exception_handler(app)
 # stream_job_logs call sites, so a /ws/training/status route mounted here
 # could never broadcast anything; see api/ws_api.py's module docstring.
 try:
-    from api.ws_api import tick_router
+    from api.ws_api import tick_router, live_chat_router
     app.include_router(tick_router)
+    app.include_router(live_chat_router)
 except Exception as _ws_e:
-    logger.warning("tick_router mount skipped: %s", _ws_e)
+    logger.warning("ws routers mount skipped: %s", _ws_e)
 
 
 def require_ai_capability_enabled(flag_name: str, capability_label: str):
@@ -1815,7 +1816,7 @@ async def chat_endpoint(req: ChatMessageRequest):
                 # invokes it automatically mid-turn -- see _CHAT_TOOLS'
                 # definition above for the hard read-only constraint).
                 response_stream = client.models.generate_content_stream(
-                    model='gemini-2.5-flash',
+                    model=getattr(settings, "GEMINI_CHAT_MODEL", "gemini-2.5-flash"),
                     contents=contents,
                     config=types.GenerateContentConfig(tools=_CHAT_TOOLS),
                 )

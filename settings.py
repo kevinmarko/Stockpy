@@ -3811,8 +3811,36 @@ class Settings(BaseSettings):
             "Google AI Studio key for the Gemini provider.  Required whenever "
             "either LLM_COMMENTARY_RATIONALE_PROVIDER or "
             "LLM_COMMENTARY_ALERT_PROVIDER is set to 'gemini' (also used for "
-            "chart-pattern vision).  Unset → that job's LLM disabled, "
+            "chart-pattern vision and Gemini Live chat).  Unset → that job's LLM disabled, "
             "template fallback kicks in."
+        ),
+    )
+    GEMINI_LIVE_CHAT_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Master switch for the Gemini Live bidirectional WebSocket voice/audio "
+            "streaming endpoint (/ws/chat/live). Active by default when GEMINI_API_KEY is present."
+        ),
+    )
+    GEMINI_LIVE_CHAT_MODEL: str = Field(
+        default="gemini-3.1-flash-live-preview",
+        description=(
+            "Gemini model for real-time bidirectional WebSocket live streaming "
+            "conversations over the Live API."
+        ),
+    )
+    GEMINI_LIVE_VOICE_NAME: str = Field(
+        default="Aoede",
+        description=(
+            "Voice preset name for Gemini Live audio output (e.g. Aoede, Puck, "
+            "Charon, Fenrir, Kore)."
+        ),
+    )
+    GEMINI_CHAT_MODEL: str = Field(
+        default="gemini-2.5-flash",
+        description=(
+            "Default Gemini model name for the REST Server-Sent Events (SSE) "
+            "text chat endpoint (POST /api/chat)."
         ),
     )
 

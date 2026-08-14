@@ -115,3 +115,29 @@ describe("AIChatInterface context wiring", () => {
     expect(body.context).toBe(contextText);
   });
 });
+
+describe("AIChatInterface Gemini Live Mode UI", () => {
+  it("renders the Go Live button in header", () => {
+    render(<AIChatInterface isOpen={true} onClose={() => {}} />);
+    const goLiveBtn = screen.getByRole("button", { name: /Switch to Gemini Live Voice Mode/i });
+    expect(goLiveBtn).toBeInTheDocument();
+    expect(goLiveBtn).toHaveTextContent("Go Live");
+  });
+
+  it("toggles Live Mode on click and displays mic button and status", async () => {
+    render(<AIChatInterface isOpen={true} onClose={() => {}} />);
+    const goLiveBtn = screen.getByRole("button", { name: /Switch to Gemini Live Voice Mode/i });
+    fireEvent.click(goLiveBtn);
+
+    // Button updates to Live Mode
+    expect(goLiveBtn).toHaveTextContent("Live Mode");
+
+    // Microphone toggle button appears
+    const micBtn = screen.getByRole("button", { name: /Unmute Microphone|Speak to Gemini Live/i });
+    expect(micBtn).toBeInTheDocument();
+
+    // Input placeholder updates for live voice/text
+    expect(screen.getByPlaceholderText("Type or speak to Gemini Live...")).toBeInTheDocument();
+  });
+});
+

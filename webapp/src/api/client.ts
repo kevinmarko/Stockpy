@@ -194,9 +194,9 @@ function baseFor(path: string): string {
   }
   // AI chat streaming and live-tick WS both live on the Data API (:8603)
   // alongside the other "/data/*" Phase-6 endpoints, but keep their own
-  // top-level paths ("/api/chat", "/ws/ticks/*") rather than a "/data/"
+  // top-level paths ("/api/chat", "/ws/ticks/*", "/ws/chat/*") rather than a "/data/"
   // prefix, so they need an explicit match here.
-  if (path === "/api/chat" || path.startsWith("/ws/ticks/")) {
+  if (path === "/api/chat" || path.startsWith("/ws/ticks/") || path.startsWith("/ws/chat/")) {
     return DATA_BASE_URL;
   }
   return BASE_URL;
@@ -210,6 +210,21 @@ function baseFor(path: string): string {
  */
 export function chatUrl(): string {
   return `${baseFor("/api/chat")}/api/chat`;
+}
+
+/**
+ * Full ws:// (or wss:// on an https origin) URL for the Gemini Live chat endpoint.
+ * The browser WebSocket API cannot set an Authorization header, so the token
+ * travels as a `?token=` query param.
+ */
+export function liveChatWsUrl(tokenOverride?: string): string {
+  const httpBase = baseFor("/ws/chat/live");
+  const wsBase = httpBase.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+  const params = new URLSearchParams();
+  const token = tokenOverride || TOKEN;
+  if (token) params.set("token", token);
+  const qs = params.toString();
+  return `${wsBase}/ws/chat/live${qs ? `?${qs}` : ""}`;
 }
 
 /**

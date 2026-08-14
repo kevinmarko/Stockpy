@@ -1,95 +1,99 @@
-# Phased Implementation Plan: Stock & Options Order Input & Execution System
+# Gemini Live API & Real-Time AI Chat System
 
-Build and organize the stock & options order input, sizing, pricing, and execution capabilities into 4 modular phases with complete unit test verification.
+Build out the **Gemini Live API** system in the Stockpy platform, enabling real-time, low-latency, bidirectional voice and text streaming over WebSockets between the Pilots PWA frontend and Google Gemini (`gemini-3.1-flash-live-preview`), fully grounded in platform portfolio and strategy state.
 
----
+## User Review Required
 
-## Phase Breakdown
+> [!IMPORTANT]
+> - **SDK & Model**: Uses the official `google-genai` Python SDK (`client.aio.live.connect`) targeting `gemini-3.1-flash-live-preview`.
+> - **Audio Streaming Standards**: 
+>   - Frontend input: Microphone captured via Web Audio API, downsampled/converted to 16 kHz 16-bit linear PCM mono.
+>   - Gemini output: 24 kHz 16-bit linear PCM mono streamed over WebSocket to browser and played via Web Audio `AudioContext`.
+> - **Safety & Capability Gating**: Gated by `settings.AI_GENERATION_API_ENABLED` and `settings.GEMINI_LIVE_CHAT_ENABLED` with token verification via `STATE_API_TOKEN`.
+> - **Grounding Tools**: The Live session is equipped with the same 5 read-only platform tools (`list_all_pilots`, `get_pilot_holdings`, `get_pilot_recent_trades`, `get_current_portfolio`, `get_platform_status`).
 
-```mermaid
-flowchart TD
-    subgraph Phase 1: Core Sizing & Pricing Modules
-        PP[pilots/price_provider.py<br/>Real FMP quote fields] --> OS[pilots/order_sizing.py<br/>Dollar/qty sizing & 75% cap]
-    end
+## Open Questions
 
-    subgraph Phase 2: Paper Broker Execution Engine
-        OS --> PBO[pilots/paper_broker_options_order.py<br/>Option & Stock Paper Execution]
-        PBO --> PAS[(data/paper_account_store.py<br/>SQLite Storage)]
-    end
-
-    subgraph Phase 3: REST API & Parity Layer
-        PBO --> API[api/pilots_api.py<br/>POST /brokerage/options/order]
-        API --> MOCK[webapp/src/api/mock.ts<br/>Mock/Live Parity]
-    end
-
-    subgraph Phase 4: Frontend UI & Verification
-        API --> OOT[webapp/src/components/options/OptionsOrderTicket.tsx]
-        OOT --> OC[webapp/src/screens/OptionsChain.tsx]
-    end
-```
+- None blocking. Sensible defaults are chosen (`gemini-3.1-flash-live-preview`, voice preset `Aoede`, automatic VAD interruption handling).
 
 ---
 
-### Phase 1: Core Sizing & Pricing Modules (`pilots/`)
-- **`pilots/price_provider.py`**:
-  - Encapsulates quote retrieval using Financial Modeling Prep (FMP) live quote fields (`price`, `previousClose`, `dayLow`, `dayHigh`, without assuming nonexistent bid/ask).
-  - Gracefully falls back to previous close or explicit fallback price when market is closed or quote is unavailable.
-- **`pilots/order_sizing.py`**:
-  - Sizing calculation engine for Stocks (shares from dollar amount, fractional rounding) and Options (contracts from premium, 100x multiplier, integer contract rounding).
-  - **75% Cash Preset Cap**: Calculates a safe max preset (`Math.floor(cash * 0.75)`) ensuring no single order commits 100% of available cash.
-  - Sizing validation: checks order feasibility against available cash, min contract limits, and max position sizing limits.
-- **Tests**: `tests/test_order_sizing.py`, `tests/test_price_provider.py`.
+## Proposed Changes
+
+### Configuration & Settings
+
+#### [MODIFY] [settings.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/build_gemini_chat_system/settings.py)
+- Add `GEMINI_LIVE_CHAT_ENABLED: bool = Field(default=True, description="Enable Gemini Live bidirectional WebSocket voice/audio streaming")`
+- Add `GEMINI_LIVE_CHAT_MODEL: str = Field(default="gemini-3.1-flash-live-preview", description="Gemini model for real-time live streaming")`
+- Add `GEMINI_LIVE_VOICE_NAME: str = Field(default="Aoede", description="Voice preset for Gemini Live audio output (Aoede, Puck, Charon, Fenrir, Kore)")`
+- Add `GEMINI_CHAT_MODEL: str = Field(default="gemini-2.5-flash", description="Default model for REST SSE text chat")`
 
 ---
 
-### Phase 2: Paper Broker Execution Engine (`pilots/` & `data/`)
-- **`pilots/paper_broker_options_order.py`**:
-  - Bridges `order_sizing.py` and `data/paper_account_store.py::PaperAccountStore`.
-  - Computes commissions ($0.65/contract for options, tiered equity commissions for stocks).
-  - Applies atomic fills via `PaperAccountStore.apply_fill(...)`.
-  - Rejects live execution in advisory-only mode.
-- **`data/paper_account_store.py`**:
-  - Supports 64-character symbol descriptors for options (e.g. `AGNC 2026-08-14 $10.50 PUT`).
-- **Tests**: `tests/test_paper_broker_options_order.py`, `tests/test_paper_account_store.py`.
+### Backend WebSocket Live Streaming
+
+#### [MODIFY] [api/ws_api.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/build_gemini_chat_system/api/ws_api.py)
+- Create `live_chat_router = APIRouter()` and add `@live_chat_router.websocket("/ws/chat/live")`.
+- Implement `ws_live_chat_endpoint(websocket: WebSocket, token: Optional[str] = Query(None))`
+  - Authenticate via `_check_ws_token(token, auth_header)` and ensure `settings.AI_GENERATION_API_ENABLED` is `True`.
+  - Connect to Gemini Live session using `client.aio.live.connect(model=settings.GEMINI_LIVE_CHAT_MODEL, config=...)` with modalities `[types.Modality.AUDIO]`, system instruction for Stockpy Quant Assistant, and `_CHAT_TOOLS` function declarations.
+  - Run concurrent receive/send loops:
+    - **Client → Gemini**: Handle client JSON packets containing `realtime_input` (base64 PCM audio chunk, text, or context) and forward via `session.send_realtime_input(...)`.
+    - **Gemini → Client**: Stream `server_content` (audio chunks base64, `input_transcription`, `output_transcription`, `interrupted` signals) to the client WebSocket.
+    - **Tool Calling**: Handle tool calls requested by Gemini, execute read-only handlers safely (never raising), and send tool responses back to Gemini Live session.
+  - Safe error handling & connection teardown.
+
+#### [MODIFY] [api/data_api.py](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/build_gemini_chat_system/api/data_api.py)
+- Mount `live_chat_router` in `api/data_api.py` alongside `tick_router`.
+- Update `chat_endpoint` to use `settings.GEMINI_CHAT_MODEL` instead of hardcoded string.
 
 ---
 
-### Phase 3: REST API & Mock/Live Parity Layer (`api/` & `webapp/src/api/`)
-- **`api/pilots_api.py`**:
-  - Pydantic model `OptionsOrderRequestModel`.
-  - Route `@app.post("/brokerage/options/order")` delegating to `pilots.paper_broker_options_order.execute_paper_order`.
-- **`webapp/src/api/types.ts`**:
-  - `OptionsOrderRequest` and `OptionsOrderResult` interfaces.
-- **`webapp/src/api/mock.ts`**:
-  - Comprehensive `mockApi.postOptionsOrder` that mutates `paperAccount`, `paperPositions`, and `paperOrders` arrays.
-- **Tests**: `tests/test_pilots_api.py`.
+### Frontend PWA (Pilots Webapp)
+
+#### [NEW] [webapp/src/chat/audioStreamer.ts](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/build_gemini_chat_system/webapp/src/chat/audioStreamer.ts)
+- Web Audio capture & downsampling utility (resampling to 16 kHz 16-bit PCM).
+- 24 kHz PCM audio playback queue with smooth scheduling on `AudioContext` and instantaneous interruption flushing (`stop()`).
+
+#### [NEW] [webapp/src/chat/useGeminiLive.ts](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/build_gemini_chat_system/webapp/src/chat/useGeminiLive.ts)
+- React hook managing WebSocket connection to `/ws/chat/live`.
+- Handles mic toggle, streaming audio, receiving transcripts, audio playback, connection state (`disconnected`, `connecting`, `connected`, `speaking`, `listening`), and error recovery.
+
+#### [MODIFY] [webapp/src/components/AIChatInterface.tsx](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/build_gemini_chat_system/webapp/src/components/AIChatInterface.tsx)
+- Add Voice / Live Mode controls (microphone toggle, live visualizer pulse / audio waves).
+- Support live audio transcript display in real-time alongside text chat.
+- Seamless fallback between Live Audio Mode and standard REST SSE Chat.
+
+#### [MODIFY] [webapp/src/api/client.ts](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/build_gemini_chat_system/webapp/src/api/client.ts)
+- Add `liveChatWsUrl(token?: string): string` helper constructing `ws://` / `wss://` URL to `/ws/chat/live`.
 
 ---
 
-### Phase 4: Frontend UI Components & Full Verification (`webapp/src/`)
-- **`webapp/src/components/options/OptionsOrderTicket.tsx`**:
-  - Dual Sizing Modes: **By Dollar ($)** vs **By Quantity (Contracts/Shares)**.
-  - Preset Chips: `$100`, `$250`, `$500`, `$1,000`, `$2,500`, and **`75% Cash`**.
-  - Order Type selector: **Market** vs **Limit** with limit price input and steppers.
-  - Dynamic sizing calculation readout (e.g. "Calculated Sizing: 33 contracts | Est. Total: $516.45").
-  - Live available paper cash display with insufficient funds protection.
-  - Direct Underlying Stock Trading mode.
-  - Active `+ Add to Watchlist` integration calling `api.watchCandidate(symbol)`.
-- **`webapp/src/screens/OptionsChain.tsx`**:
-  - `📈 Trade {ticker} Stock` action button in the Share Price banner.
-- **Tests**: `webapp/src/components/options/OptionsOrderTicket.test.tsx`, `webapp/src/screens/OptionsChain.test.tsx`.
+### Documentation Updates
+
+#### [MODIFY] [CLAUDE.md](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/build_gemini_chat_system/CLAUDE.md)
+- Document the Gemini Live API WebSocket endpoint (`/ws/chat/live`), voice capabilities, audio protocols, and settings flags.
+
+#### [MODIFY] [docs/architecture/webapp-and-gui.md](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/build_gemini_chat_system/docs/architecture/webapp-and-gui.md)
+- Document the Live AI Chat drawer architecture and Web Audio streaming pipeline.
 
 ---
 
 ## Verification Plan
 
-1. **Phase 1 & 2 Verification**:
-   ```bash
-   pytest tests/test_price_provider.py tests/test_order_sizing.py tests/test_paper_broker_options_order.py -v
-   ```
-2. **Phase 3 & 4 Verification**:
-   ```bash
-   npm run --prefix webapp typecheck
-   npm test --prefix webapp -- --run src/components/options/OptionsOrderTicket.test.tsx src/screens/OptionsChain.test.tsx
-   pytest tests/test_pilots_api.py -v
-   ```
+### Automated Tests
+1. **Python Unit Tests**:
+   - Create `tests/test_gemini_live_chat.py` covering:
+     - WebSocket auth & gating (`4003` close when unauthorized or `AI_GENERATION_API_ENABLED=False`).
+     - Gemini Live session connection, audio & text forwarding.
+     - Live tool execution and response routing.
+     - Interruption and error handling.
+   - Run `pytest tests/test_gemini_live_chat.py tests/test_data_api_chat.py`.
+2. **Frontend Typecheck & Tests**:
+   - `npm run --prefix webapp typecheck`
+   - `npm run --prefix webapp test`
+
+### Manual Verification
+- Launch webapp dev server and Data API.
+- Verify text chat continues functioning seamlessly.
+- Connect to `/ws/chat/live` and test audio / microphone streaming and voice response.

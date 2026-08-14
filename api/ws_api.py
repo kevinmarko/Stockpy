@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 tick_router = APIRouter()
 training_router = APIRouter()
+live_chat_router = APIRouter()
 
 _TOKEN: Optional[str] = getattr(settings, "STATE_API_TOKEN", None)
 
@@ -276,3 +277,205 @@ def broadcast_training_status_threadsafe(message: str) -> None:
         )  # do not .result() -- fire-and-forget from a sync caller
     except Exception as exc:  # noqa: BLE001 - a broadcast must never crash the caller
         logger.warning("broadcast_training_status_threadsafe failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Gemini Live WebSocket Endpoint (/ws/chat/live)
+# Real-time bidirectional voice and text streaming over WebSockets.
+# ---------------------------------------------------------------------------
+
+LIVE_SYSTEM_INSTRUCTION = """You are Stockpy AI, the real-time voice and quant assistant for the Stockpy platform.
+You are directly grounded in the user's trading pilots, current portfolio holdings, risk metrics, and macro regime state via read-only tools.
+Answer questions directly, concisely, and conversationally."""
+
+
+@live_chat_router.websocket("/ws/chat/live")
+async def ws_live_chat_endpoint(
+    websocket: WebSocket,
+    token: Optional[str] = Query(default=None),
+):
+    """Bidirectional WebSocket streaming endpoint for Gemini Live API.
+
+    Enables low-latency real-time voice and text interaction with Gemini
+    (gemini-3.1-flash-live-preview) grounded in platform tools and portfolio data.
+
+    Auth & Gating:
+    - Checked via _check_ws_token against STATE_API_TOKEN.
+    - Gated by settings.AI_GENERATION_API_ENABLED and settings.GEMINI_LIVE_CHAT_ENABLED.
+    - Requires settings.GEMINI_API_KEY.
+    """
+    auth_header = websocket.headers.get("authorization")
+    if not _check_ws_token(token, auth_header):
+        await websocket.close(code=4003)
+        logger.warning("ws_live_chat_endpoint: rejected unauthenticated connection")
+        return
+
+    if not getattr(settings, "AI_GENERATION_API_ENABLED", True) or not getattr(
+        settings, "GEMINI_LIVE_CHAT_ENABLED", True
+    ):
+        await websocket.close(code=4003)
+        logger.warning("ws_live_chat_endpoint: rejected because AI generation or Live Chat is disabled")
+        return
+
+    gemini_key = getattr(settings, "GEMINI_API_KEY", None)
+    if not gemini_key:
+        await websocket.accept()
+        await websocket.send_json({
+            "type": "error",
+            "message": "GEMINI_API_KEY is not configured in settings."
+        })
+        await websocket.close(code=4003)
+        return
+
+    await websocket.accept()
+
+    try:
+        from google import genai
+        from google.genai import types
+        import base64
+
+        # Lazy import grounding tools from data_api
+        from api.data_api import _CHAT_TOOLS
+
+        client = genai.Client(api_key=gemini_key)
+        model_name = getattr(settings, "GEMINI_LIVE_CHAT_MODEL", "gemini-3.1-flash-live-preview")
+        voice_name = getattr(settings, "GEMINI_LIVE_VOICE_NAME", "Aoede")
+
+        speech_config = types.SpeechConfig(
+            voice_config=types.VoiceConfig(
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                    voice_name=voice_name
+                )
+            )
+        )
+
+        config = types.LiveConnectConfig(
+            response_modalities=[types.Modality.AUDIO],
+            system_instruction=types.Content(
+                parts=[types.Part.from_text(text=LIVE_SYSTEM_INSTRUCTION)]
+            ),
+            tools=_CHAT_TOOLS,
+            speech_config=speech_config,
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+        )
+
+        await websocket.send_json({
+            "type": "connected",
+            "model": model_name,
+            "voice": voice_name,
+        })
+
+        async with client.aio.live.connect(model=model_name, config=config) as session:
+            async def client_to_gemini():
+                try:
+                    while True:
+                        msg_text = await websocket.receive_text()
+                        try:
+                            data = json.loads(msg_text)
+                        except Exception:
+                            continue
+
+                        msg_type = data.get("type")
+                        if msg_type == "ping":
+                            await websocket.send_json({"type": "pong"})
+                        elif msg_type == "realtime_input":
+                            audio_b64 = data.get("audio")
+                            text_input = data.get("text")
+                            if audio_b64:
+                                audio_bytes = base64.b64decode(audio_b64)
+                                await session.send_realtime_input(
+                                    audio=types.Blob(
+                                        data=audio_bytes,
+                                        mime_type="audio/pcm;rate=16000"
+                                    )
+                                )
+                            elif text_input:
+                                await session.send_realtime_input(text=str(text_input))
+                        elif msg_type == "context":
+                            ctx_text = data.get("text", "")
+                            if ctx_text:
+                                await session.send_realtime_input(
+                                    text=f"Background Context:\n{ctx_text}"
+                                )
+                except WebSocketDisconnect:
+                    pass
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.warning("client_to_gemini exception: %s", e)
+
+            async def gemini_to_client():
+                try:
+                    async for response in session.receive():
+                        server_content = response.server_content
+                        if server_content:
+                            if server_content.model_turn:
+                                for part in server_content.model_turn.parts:
+                                    if part.inline_data:
+                                        raw_audio = part.inline_data.data
+                                        if isinstance(raw_audio, (bytes, bytearray)):
+                                            audio_b64 = base64.b64encode(raw_audio).decode("ascii")
+                                        else:
+                                            audio_b64 = str(raw_audio)
+                                        await websocket.send_json({
+                                            "type": "audio",
+                                            "data": audio_b64,
+                                            "mimeType": "audio/pcm;rate=24000"
+                                        })
+                                    if part.text:
+                                        await websocket.send_json({
+                                            "type": "text",
+                                            "content": part.text
+                                        })
+                            if server_content.input_transcription:
+                                await websocket.send_json({
+                                    "type": "input_transcription",
+                                    "text": server_content.input_transcription.text
+                                })
+                            if server_content.output_transcription:
+                                await websocket.send_json({
+                                    "type": "output_transcription",
+                                    "text": server_content.output_transcription.text
+                                })
+                            if getattr(server_content, "interrupted", False):
+                                await websocket.send_json({"type": "interrupted"})
+                            if getattr(server_content, "turn_complete", False):
+                                await websocket.send_json({"type": "turn_complete"})
+                except WebSocketDisconnect:
+                    pass
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.warning("gemini_to_client exception: %s", e)
+                    try:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Live connection encountered an issue."
+                        })
+                    except Exception:
+                        pass
+
+            t1 = asyncio.create_task(client_to_gemini())
+            t2 = asyncio.create_task(gemini_to_client())
+
+            done, pending = await asyncio.wait(
+                [t1, t2],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            for p in pending:
+                p.cancel()
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.error("ws_live_chat_endpoint unexpected error: %s", exc, exc_info=True)
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Error connecting to Live API service."
+            })
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+
