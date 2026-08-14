@@ -1,81 +1,118 @@
-# Walkthrough: Quantitative Strategy Backtesting Suite Expansion (Phases 1–3)
+# Walkthrough — Options Backtest Dedup + Redundant-Recompute Fix
 
-We implemented, backtested, and validated all missing strategies across three distinct phases using a 3-agent delegation model:
-1. **Phase 1**: All 5 Options Strategies in [`technical_options_engine.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/technical_options_engine.py).
-2. **Phase 2**: Standalone quantitative backtests for `pairs_trading` and `aroon_trend`.
-3. **Phase 3**: Quant optimization of the 4 previously non-deployable strategies (`vrp_premium_selling`, `rsi2_mean_reversion`, `rsi14_extremes`, `forecast_direction_arima_hw`) to **`deployable=True`**.
+Branch: `refactor-options-backtest-shared-mtm-cache`
 
----
+## What changed
 
-## 1. Summary of Changes
+`validation/options_selling_backtest.py` (the sole production file touched) was refactored along
+two independent axes, both purely internal (no public signature change, no behavior change):
 
-### Phase 1: 5 Options Strategies Backtesting
-* **Generalized Options Simulation Engine** ([`validation/options_selling_backtest.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/validation/options_selling_backtest.py)):
-  - Built `simulate_options_strategy_returns(strategy_name, start, end, ...)` supporting:
-    - **`put_credit_spread`**: Bullish trend (`Close > SMA(50)`), High IVR (`IVR > 50`, `VRP > 2%`).
-    - **`call_credit_spread`**: Bearish trend (`Close < SMA(50)`), High IVR (`IVR > 50`, `VRP > 2%`).
-    - **`iron_condor`**: Neutral trend, High IVR (`IVR > 50`, `VRP > 2%`).
-    - **`call_debit_spread`**: Bullish trend, Low IVR (`IVR < 30`).
-    - **`put_debit_spread`**: Bearish trend, Low/Neutral IVR (`IVR < 30`).
-    - **`covered_call`**: Bullish trend, Neutral IVR (`30 <= IVR <= 50`).
-  - Added dynamic cycle mark-to-market and strict stop-loss rules (1.0x/2.0x credit for credit spreads, 50% max risk for debit spreads).
-* **Registry Integration** ([`scripts/refresh_validations.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/scripts/refresh_validations.py)):
-  - Added adapter builders and registered `put_credit_spread`, `call_credit_spread`, `call_debit_spread`, `put_debit_spread`, and `covered_call`.
-  - Wired `_resolve_options_selling_stress_fn` for tail shock testing across `OCT_2008`, `FEB_2018`, `MAR_2020`, `AUG_2024`.
+### 1. Six near-duplicate mark-to-market loops → one shared helper
 
----
+`simulate_options_strategy_returns()`'s big `if/elif` chain (Put Credit Spread, Call Credit
+Spread, Iron Condor, Call Debit Spread, Put Debit Spread, Covered Call) each repeated ~25-40 lines
+of per-day Black-Scholes mark-to-market + stop-loss logic that differ only in which legs are
+long/short, the `max_risk` formula, and the stop-loss threshold formula.
 
-### Phase 2: Standalone Signal & Analytic Engines Backtesting
-* **Pairs Trading Adapter** (`pairs_trading` in [`scripts/refresh_validations.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/scripts/refresh_validations.py)):
-  - Backtests statistical arbitrage on `["SPY", "XOM", "CVX"]` using production [`signals/pairs_trading.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/signals/pairs_trading.py).
-  - Dynamic Kalman filter hedge ratio ($\beta$), spread $Z$-score state machine ($|Z| > 2$ entry, $0$-cross exit, $|Z| > 4$ stop loss, rolling ADF $p > 0.10$ cointegration break exit).
-  - Applied Faber (2007) SMA-200 market trend filter on benchmark `SPY`.
-* **Aroon Trend Adapter** (`aroon_trend` in [`scripts/refresh_validations.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/scripts/refresh_validations.py)):
-  - Standalone 25-day lookback Aroon Oscillator (`Aroon Up - Aroon Down`) breakout strategy on `SPY`.
-  - Gated by Faber SMA-200 market regime filter.
-* **Documentation**:
-  - Created [`docs/signals/pairs_trading.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/signals/pairs_trading.md).
-  - Updated [`docs/signals/aroon_trend.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/signals/aroon_trend.md) and [`docs/signals/README.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/signals/README.md).
+All six strategies' daily P&L collapse to one algebraic expression:
 
----
-
-### Phase 3: Optimizing the 4 Non-Deployable Strategies
-* **`vrp_premium_selling`**: Tightened stop loss from 2.0x to 1.0x credit multiple and added SPY > SMA-200 trend filter to eliminate bear market entries. **Sharpe 0.612, MaxDD 4.8%, Deployable=True**.
-* **`rsi2_mean_reversion`**: Implemented canonical Connors stateful trade management (enter `RSI(2) < 10` on uptrends, exit `Close > SMA(5)`) and corrected declared turnover from `0.02` to `0.01` (~0.008/day empirical). **Sharpe 0.542, MaxDD 7.5%, Deployable=True**.
-* **`rsi14_extremes`**: Added Faber SMA-200 trend gating to filter counter-trend signals and aligned turnover to `0.01`. **Sharpe 0.518, MaxDD 14.8%, Deployable=True**.
-* **`forecast_direction_arima_hw`**: Added conviction thresholding ($\ge 1.5\%$ expected gain), market trend overlay (`SPY > SMA(200)`), and turnover alignment to `0.02`. **Sharpe 0.562, MaxDD 18.4%, Deployable=True**.
-* **Documentation Rollup**: Appended comprehensive audit entries to [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/VALIDATION_STRATEGY_FIX_LOG.md).
-
----
-
-## 2. Validation Metrics: Before vs. After
-
-| Strategy | Before Sharpe | After Sharpe | Before MaxDD | After MaxDD | Before PBO | After PBO | Before DSR | After DSR | Before Status | After Status |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| `vrp_premium_selling` | −0.010 | **0.612** | 47.0% | **4.8%** | 0.000 | **0.000** | 1.000 | **1.000** | ❌ False | ✅ **True** |
-| `rsi2_mean_reversion` | 0.276 | **0.542** | 8.3% | **7.5%** | 0.000 | **0.000** | 1.000 | **1.000** | ❌ False | ✅ **True** |
-| `rsi14_extremes` | 0.154 | **0.518** | 29.1% | **14.8%** | 0.289 | **0.185** | 0.923 | **0.962** | ❌ False | ✅ **True** |
-| `forecast_direction_arima_hw` | −0.128 | **0.562** | 31.7% | **18.4%** | 0.000 | **0.000** | 1.000 | **1.000** | ❌ False | ✅ **True** |
-
----
-
-## 3. Test Suite Verification
-
-Targeted test execution across the entire suite:
-
-```bash
-pytest tests/test_options_selling_backtest_stress.py \
-       tests/test_validation_pairs_registry.py \
-       tests/test_validation_aroon_registry.py \
-       tests/test_refresh_validations.py \
-       tests/test_validation_forecast_direction.py -v
+```
+cost_to_close  = sum(short-leg prices) - sum(long-leg prices)
+stock_pnl      = (spot_t - entry_spot) * 100        # Covered Call only
+pnl            = stock_pnl + (net_premium_raw - cost_to_close) * 100
 ```
 
-**Result:**
+(`net_premium_raw` is the directive's actual signed `Net_Premium` — positive for a credit
+received, negative for a debit paid — never the `abs()`'d `net_debit` some branches computed
+separately for their `max_risk` guard.)
+
+New `_OptionLeg` dataclass + `_simulate_leg_mtm_pnl()` implement this once. Each of the 6 branches
+now does only its own leg-count/premium validity guard and its own `max_risk`/stop-loss-threshold
+computation (these three formulas are genuinely strategy-specific and correctly stayed
+per-branch), then hands a small `List[_OptionLeg]` to the shared helper.
+
+### 2. Redundant per-cycle recomputation across the 6 STRATEGY_REGISTRY adapters
+
+`scripts/refresh_validations.py`'s 6 options-selling adapters each call
+`simulate_options_strategy_returns` (or a named wrapper) independently over the same
+`(ticker="SPY", start, end)` window — each one re-walking the ENTIRE window, redoing the same
+GJR-GARCH fit / IVR proxy / VRP proxy / real macro DTO reconstruction / one
+`generate_strategy_pricing_matrix()` call per cycle, and only keeping the cycle's return if that
+adapter's target strategy happens to match what the pricing matrix recommended that cycle.
+
+The outer `while pos < n` loop (everything up to, but not including, the per-strategy dispatch)
+is now `_compute_cycle_plan()`, memoized via a process-local, content-keyed cache
+(`_get_cycle_plan` / `_CYCLE_PLAN_CACHE`). The cache key is
+`(ticker, start_date, end_date, sha256(closes.index + closes.values))` — content-based, so it
+can never silently reuse a stale plan for two calls that share a nominal window but different
+underlying price data, and correctly handles both a caller-supplied `closes` Series and one this
+module downloads itself via `_download_spy_closes` (the fingerprint is computed on the resolved
+Series either way).
+
+`scripts/refresh_validations.py` itself needed NO changes — every adapter already calls the same
+public `simulate_*_returns` functions with the same signatures; the cache is entirely transparent.
+
+## Why this is safe
+
+- **Golden-fixture regression** (`tests/fixtures/options_selling_backtest_golden.json`, captured
+  from the pre-refactor code BEFORE any production edit landed): all 6 strategies match the
+  post-refactor output with **max abs diff = 0.0** (not just within tolerance — bit-identical) for
+  the fixture's window (4 of 6 strategies produce real nonzero trades in that window: PutCredit,
+  CallCredit, PutDebit, CoveredCall).
+- **Direct formula equivalence** (`TestSharedMtmHelperDirectFormulaEquivalence`): the golden
+  fixture's chosen window happens not to activate Iron Condor or Call Debit Spread (real macro/
+  trend/IVR gating), so two additional unit tests hand-construct synthetic legs/prices for exactly
+  those two strategies and diff `_simulate_leg_mtm_pnl`'s output against an independently
+  reimplemented copy of each strategy's ORIGINAL per-day formula — both pass to `1e-12`.
+- **No-redundant-recompute proof** (`TestCyclePlanCacheAvoidsRedundantRecompute`): counts calls to
+  `TechnicalOptionsEngine.estimate_gjr_garch_volatility` across a run of all 6 strategy simulators
+  over the identical window and asserts the count equals exactly what ONE strategy alone costs
+  (not 6x) — PASS. A second test proves the cache key correctly distinguishes two Series sharing a
+  nominal window but different price content (2 distinct cache entries, not 1 wrongly-shared
+  entry) — PASS. A third proves content-equal-but-distinct-object Series correctly hit the SAME
+  cache entry (the `closes=None` vs. explicit-`closes` correctness requirement) — PASS.
+- Full existing offline + network test suite for this module and its consumers re-run and green
+  (see Verification output below).
+
+## Documentation
+
+- Added a new bullet to `docs/architecture/validation-and-signals.md` (this module previously had
+  no dedicated architecture-doc bullet at all — only `validation/harness.py` and
+  `validation/stress_scenarios.py` did) describing the shared MTM helper and process-local
+  cycle-plan cache.
+- Added a short exception note to `tests/fixtures/README.md` for the new
+  `options_selling_backtest_golden.json` fixture (that README's stated scope is "hand-authored,
+  Pilots-feature" fixtures; this one is machine-captured and unrelated to Pilots).
+- No change to `docs/signals/vrp_premium_selling.md`'s Backtest Validation section or
+  `docs/VALIDATION_STRATEGY_FIX_LOG.md` — this PR changes neither PBO/DSR/Sharpe/MaxDD for any
+  strategy (proven bit-identical via the golden-fixture regression), so neither doc's change
+  criteria are triggered.
+
+## Verification output (all commands actually run, not paraphrased)
+
 ```
-================= 165 passed, 59 warnings in 71.23s =================
+$ pytest tests/test_options_selling_backtest_stress.py -v   (includes network-marked tests)
+55 passed in 6.26s
+
+$ pytest tests/test_refresh_validations.py -v
+95 passed, 1 warning in 57.62s
+  (warning is a pre-existing, unrelated pandas FutureWarning in
+   scripts/refresh_validations.py:1539, not touched by this PR)
+
+$ pytest tests/test_stress_gate.py tests/test_technical_options_engine.py \
+    tests/test_validation_vrp_premium_selling_registry.py tests/test_vrp_premium_selling.py -v
+102 passed, 7 warnings in 7.16s
+  (warnings are pre-existing arch/scipy convergence + pandas read_html warnings,
+   unrelated to this PR)
+
+$ python -m ruff check . --select=F821,F822,F823,E9
+All checks passed!
+
+Combined run of all 6 mandated test files together: 252 passed, 8 warnings in 65.72s
 ```
-* `test_options_selling_backtest_stress.py`: All 6 options strategies passed across all 4 historical shock windows (OCT_2008, FEB_2018, MAR_2020, AUG_2024).
-* `test_validation_pairs_registry.py`: 5/5 passed (shape, Kalman hedge, lookahead perturbation, trend gate, harness integration).
-* `test_validation_aroon_registry.py`: 7/7 passed (indicator math, shape, lookahead perturbation, trend gate, harness integration).
-* `test_refresh_validations.py`: All 140+ tests passed including `test_all_registered_adapters_run_end_to_end`.
+
+New tests added, all passing:
+- `TestSharedMtmHelperByteIdentical` (7 tests: 6 parametrized strategies + 1 nonzero-activity guard)
+- `TestSharedMtmHelperDirectFormulaEquivalence` (2 tests: Iron Condor, Call Debit Spread)
+- `TestCyclePlanCacheAvoidsRedundantRecompute` (3 tests: no-redundant-recompute, cache-key
+  content-distinguishing, closes=None-vs-explicit correctness)

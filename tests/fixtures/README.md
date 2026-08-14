@@ -8,6 +8,17 @@ run offline and reproducibly, **without** depending on a real `main.py` /
 
 Nothing here is generated — edit the JSON directly. Keep values small and realistic.
 
+**One deliberate exception**: `options_selling_backtest_golden.json` is
+**machine-captured, NOT hand-authored** and has nothing to do with the Pilots feature —
+it is a frozen pre-refactor golden output of
+`validation.options_selling_backtest.simulate_*_returns` (all 6 options-selling
+strategies) against a fixed deterministic synthetic SPY series, used by
+`tests/test_options_selling_backtest_stress.py::TestSharedMtmHelperByteIdentical` to
+prove a 2026-08 internal refactor (6 near-duplicate mark-to-market loops → one shared
+helper) is behavior-preserving to within `1e-12`. Its own `_meta` key documents the
+exact synthetic-input parameters and capture methodology. Regenerate only if the
+underlying P&L math is intentionally changed — never to make a failing test pass.
+
 ## Files
 
 ### `state_snapshot.json`

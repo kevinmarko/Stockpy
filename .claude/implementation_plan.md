@@ -1,148 +1,181 @@
-# Strategy Backtesting & Validation Suite Expansion (Phases 1–3)
+# Options-Selling Backtest: Dedup + Redundant-Recompute Fix
 
-This plan details the architecture, multi-agent task distribution, implementation steps, and verification gates for backtesting the unbacktested and non-deployable strategies across three distinct phases.
+Follow-up PR to #734 ("backtest missing options & standalone signal strategies"), closing the
+two code-review findings deliberately deferred there as "too large for a minimal-edit pass."
 
----
+## Scope
 
-## Architecture & Multi-Agent Delegation Model
+1. **Finding A** — `validation/options_selling_backtest.py::simulate_options_strategy_returns()`
+   has 6 near-identical per-strategy `if/elif` branches (Put Credit Spread, Call Credit Spread,
+   Iron Condor, Call Debit Spread, Put Debit Spread, Covered Call), each repeating the same
+   per-day mark-to-market + stop-loss loop skeleton with only the leg construction / `max_risk`
+   / stop-loss-threshold formula differing.
+2. **Finding B** — `scripts/refresh_validations.py`'s 6 options-selling `STRATEGY_REGISTRY`
+   adapters each independently call `simulate_options_strategy_returns()` (or one of its
+   wrappers) over the SAME `(ticker, start, end)` window, so a full-registry
+   `refresh_validations.py` sweep repeats the same expensive per-cycle GARCH fit / IVR-proxy /
+   VRP-proxy / macro-DTO reconstruction / `generate_strategy_pricing_matrix()` call up to 6x.
 
-To efficiently construct, test, and document all strategies without cluttering the primary agent context, we utilize a 3-agent delegation model:
+Both findings live entirely inside `validation/options_selling_backtest.py`; no change to
+`scripts/refresh_validations.py` itself is required (its adapters keep calling the same public
+functions with the same signatures — the caching is transparent to callers).
 
-```mermaid
-graph TD
-    Parent[Parent Orchestrator Agent] --> Agent1[Agent 1: Options Simulation Engineer]
-    Parent --> Agent2[Agent 2: Signal & Analytics Adapter Engineer]
-    Parent --> Agent3[Agent 3: Quant Auditor & Test Writer]
+## Design
 
-    Agent1 -->|Simulate P&L & Stress Tests| Phase1[Phase 1: 5 Options Strategies]
-    Agent2 -->|Panel Construction & Signal Adapters| Phase2[Phase 2: Missing Signals & Analytics]
-    Agent3 -->|PBO/DSR/Sharpe/MaxDD Gate & Docs| Phase3[Phase 3: Strategy Optimization & Audit]
+### Finding A — shared per-day MTM/stop-loss helper
+
+**Algebraic unification.** Every one of the 6 strategies' bespoke daily P&L formula reduces to
+one expression:
+
+```
+cost_to_close   = sum(price for SHORT legs) - sum(price for LONG legs)
+stock_pnl       = (spot_t - entry_spot) * 100.0   [only Covered Call; 0 otherwise]
+cumulative_pnl  = stock_pnl + (net_premium_raw - cost_to_close) * 100.0
 ```
 
-- **Agent 1 (Options Simulation Engineer)**: Specializes in Black-Scholes Greeks, dynamic leg tracking, option cycle mark-to-market (`validation/options_selling_backtest.py`), and tail shock windows (`OCT_2008`, `FEB_2018`, `MAR_2020`, `AUG_2024`).
-- **Agent 2 (Signal & Analytics Adapter Engineer)**: Specializes in `STRATEGY_REGISTRY` adapter creation (`scripts/refresh_validations.py`), cointegration/Kalman pairs trading simulation, and cross-sectional panel data generation.
-- **Agent 3 (Quant Auditor & Test Writer)**: Specializes in running `validation/harness.py`, verifying PBO/DSR/Sharpe/MaxDD gates, writing targeted pytest suites in `tests/`, and updating `docs/signals/` + `docs/VALIDATION_STRATEGY_FIX_LOG.md`.
+Verified per-strategy on paper before writing code:
+- **Credit spreads** (Put/Call Credit Spread, Iron Condor): `net_premium_raw` = the real credit
+  received (positive). `cost_to_close` is literally each branch's existing
+  `mtm_short - mtm_long` (or the Iron Condor's 4-leg sum) — no algebra needed, it's the same
+  expression already in the code today.
+- **Debit spreads** (Call/Put Debit Spread): the directive's raw `Net_Premium` is negative for a
+  debit strategy (`net_debit = abs(net_premium)` is only used for the `max_risk`/validity guard,
+  never the P&L math). `position_value = mtm_long - mtm_short = -cost_to_close`, so
+  `(position_value - net_debit) == (net_premium_raw - cost_to_close)` — the identical expression,
+  substituting the RAW (signed) `net_premium` for `net_debit`.
+- **Covered Call**: with a single short-call leg, `cost_to_close = mtm_short`, so
+  `stock_pnl + (net_premium - cost_to_close)*100` collapses to the existing
+  `stock_pnl + short_pnl` exactly.
 
----
+This is proved empirically, not just on paper, by a golden-output regression test captured
+BEFORE the refactor lands (see Verification below).
 
-## User Review Required
+**New code:**
+- `_OptionLeg` (frozen dataclass): `side: "long"|"short"`, `option_type: "call"|"put"`,
+  `strike: float`.
+- `_simulate_leg_mtm_pnl(ohlcv, cycle_dates, legs, sigma, net_premium, max_risk,
+  stop_loss_threshold, *, entry_spot=None)` — the single shared per-day loop (Black-Scholes
+  price each leg via the existing `OptionsPricingRecommender`, apply the unified formula above,
+  divide by `max_risk`, apply the stop-loss check against the caller-supplied absolute-dollar
+  `stop_loss_threshold`).
 
-> [!IMPORTANT]
-> **Options Backtest Historical Data Proxy**: Historical options chains do not exist in the repository; following the precedent established for `vrp_premium_selling`, all options strategies will use real historical underlying prices (SPY/large-caps) with GJR-GARCH forecasted volatility and Black-Scholes Greeks pricing.
->
-> **Gate Standards**: In strict adherence to repository policy, deployability thresholds (`PBO < 0.50`, `DSR > 0.95`, `Sharpe > 0.50`, `MaxDD < 0.30`, plus tail stress survival for option sellers) are **never loosened**. Strategies with genuine data or edge limitations will be documented with honest `deployable=False` verdicts.
+Each of the 6 branches in `simulate_options_strategy_returns` keeps ONLY its own leg-count/
+premium guard and its own `max_risk`/`stop_loss_threshold` computation (these genuinely differ:
+`STOP_LOSS_CREDIT_MULTIPLE * net_premium * 100` vs `STOP_LOSS_DEBIT_RATIO * max_risk` vs
+`STOP_LOSS_COVERED_CALL_RATIO * max_risk`), then builds a `List[_OptionLeg]` and delegates to
+`_simulate_leg_mtm_pnl`.
 
----
+### Finding B — process-local cycle-plan cache
 
-## Phase 1: The 5 Options Strategies Backtesting
+Chosen design: **option (a)** from the task brief — a process-local cache inside
+`validation/options_selling_backtest.py`, keyed on `(ticker, start, end, content-fingerprint of
+closes)`, wrapping the expensive, strategy-INDEPENDENT part of the per-cycle computation.
+Rejected option (b) (a new "compute all 6 at once" entry point) because it would require
+`scripts/refresh_validations.py` call-site changes across all 6 adapters and duplicate the
+existing `Dict[str, pd.Series]` `STRATEGY_REGISTRY` adapter-shape convention for no real benefit
+— (a) is fully transparent to every existing caller (adapters, tests, `stress_scenarios.py`'s
+`ReturnsFn` contract), which the task explicitly asks to preserve untouched.
 
-Backtest all 5 deterministic options strategies defined in [`technical_options_engine.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/technical_options_engine.py#L209) (`OptionsPricingRecommender`):
+**Refactor `simulate_options_strategy_returns`'s outer `while pos < n` loop** (currently walking
+the whole window, computing GARCH vol / IVR proxy / VRP proxy / macro DTO / trend bias /
+`generate_strategy_pricing_matrix()` per cycle, THEN dispatching per-strategy) into two pieces:
 
-1. **`put_credit_spread`** (Bullish + High IVR regime: Short ~0.30Δ Put, Long ~0.15Δ Put)
-2. **`call_credit_spread`** (Bearish + High IVR regime: Short ~0.30Δ Call, Long ~0.15Δ Call)
-3. **`iron_condor` / `vrp_premium_selling`** (Neutral + High IVR regime: Short Strangle + Long Wings)
-4. **`call_debit_spread`** (Bullish + Low IVR regime: Long ~0.50Δ Call, Short ~0.30Δ Call)
-5. **`put_debit_spread`** (Bearish + Low/Neutral IVR regime: Long ~0.50Δ Put, Short ~0.30Δ Put)
-*(Bonus: `covered_call` for Bullish + Neutral IVR regime).*
+1. `_compute_cycle_plan(ticker, start, end, closes) -> _CyclePlan` — the exact original while-loop
+   body, stopping right before the per-strategy `if/elif` dispatch. Returns `_CyclePlan(ohlcv,
+   entries: List[_CycleEntry])`, where each `_CycleEntry` is one of:
+   - `kind="warmup"` (one calendar day, pre-`WARMUP_TRADING_DAYS`),
+   - `kind="flat"` (a cycle where GARCH/IVR/VRP computation failed — NaN sentinel, matches
+     CONSTRAINT #4),
+   - `kind="priced"` (carries `rec_strategy`, `directive`, `sigma`, `entry_spot` — the real
+     computed cycle).
+2. `_get_cycle_plan(ticker, start, end, closes)` — dict cache lookup (`_CYCLE_PLAN_CACHE`,
+   module-level, process-local, never evicted mid-run — matches the CLI's short-lived-process
+   lifetime, exactly the framing the task brief itself endorses for option (a)) wrapping
+   `_compute_cycle_plan`.
+3. `simulate_options_strategy_returns` becomes: resolve `target_strategy` → fetch/download
+   `closes` (unchanged) → `plan = _get_cycle_plan(...)` → iterate `plan.entries`, zero-filling
+   `warmup`/`flat`/non-matching-strategy/`"Cash"` entries exactly as today, and for a matching
+   `"priced"` entry, run the SAME per-branch guard + `max_risk` computation as before, then call
+   `_simulate_leg_mtm_pnl` (Finding A).
 
-### Proposed Changes
+**Cache-key correctness** (the task's explicit requirement — "must key correctly even when
+`closes` is explicitly passed vs. downloaded"): the key is `(ticker, start-date, end-date,
+sha256(closes.index.values.tobytes() + closes.values.tobytes()))`. Content-based, not
+identity-based or `(ticker,start,end)`-only — two calls sharing a nominal window but different
+underlying price data (e.g. a live yfinance download racing a test's synthetic fixture) can never
+collide; the only cost of a false miss is one extra (correct) computation, never a wrong answer.
+`_download_spy_closes` inside `simulate_options_strategy_returns` still runs BEFORE the cache
+lookup, so the key is always built from the actual resolved `closes` Series regardless of origin.
 
-#### [MODIFY] [`validation/options_selling_backtest.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/validation/options_selling_backtest.py)
-- Refactor and generalize `simulate_vrp_iron_condor_returns` into a unified modular simulator `simulate_options_strategy_returns(strategy_type, start, end, ticker, ...)` supporting:
-  - `put_credit_spread`
-  - `call_credit_spread`
-  - `iron_condor`
-  - `call_debit_spread`
-  - `put_debit_spread`
-  - `covered_call`
-- Track daily mark-to-market P&L across each leg, applying appropriate stop-loss and profit-target exits.
-- Export dedicated entry points (`simulate_put_credit_spread_returns`, `simulate_call_credit_spread_returns`, etc.).
+`_reset_cycle_plan_cache()` — test-only utility, not called by production code, used by the new
+regression/instrumentation tests to keep them isolated from each other and from the rest of the
+suite.
 
-#### [MODIFY] [`scripts/refresh_validations.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/scripts/refresh_validations.py)
-- Add adapter builder functions:
-  - `_build_put_credit_spread_adapter`
-  - `_build_call_credit_spread_adapter`
-  - `_build_call_debit_spread_adapter`
-  - `_build_put_debit_spread_adapter`
-  - `_build_covered_call_adapter`
-- Register all 5 in `STRATEGY_REGISTRY`.
-- Wire options-selling stress test routing in `_resolve_options_selling_stress_fn` for `put_credit_spread`, `call_credit_spread`, and `covered_call`.
+**Why this doesn't change `stress_scenarios.py`'s calling contract**: `ReturnsFn = Callable[[str,
+str], pd.Series]` calls each `simulate_*_returns(start, end)` with `closes=None` (per-scenario
+download). Each dated stress window (OCT_2008, FEB_2018, MAR_2020, AUG_2024) has a distinct
+`(start, end)`, so distinct cache keys — no behavior change, and repeated stress-window calls
+across the now-4 stress-eligible strategies (`vrp_premium_selling`/`iron_condor`,
+`put_credit_spread`, `call_credit_spread`, `covered_call`) get the same redundant-recompute fix
+as a bonus, not a target of this PR.
 
-#### [MODIFY] [`pilots/catalog.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/pilots/catalog.py)
-- Link relevant Pilot entries or add new options pilot records joined to their `validation_strategy_id`.
+## Why NOT touch `scripts/refresh_validations.py`
 
----
+Every one of the 6 adapters (`_build_put_credit_spread_adapter`, etc., all already routed through
+the shared `_build_options_spread_adapter` helper post-#734/588b324b) calls its
+`simulate_*_returns` wrapper with `closes=spy_close` — the SAME `pd.Series` object (or an
+identical column-slice of the same downloaded `closes_df`) for every strategy within one
+`run_validations()` sweep. The cache keys on content, so all 6 hit the same cache entry
+regardless of adapter identity. No adapter-level change needed; this is what "transparent"
+caching means per the task brief.
 
-## Phase 2: Missing Standalone Signal & Analytic Engines Backtesting
+## Files touched
 
-Backtest the standalone signals and analytic components currently lacking `STRATEGY_REGISTRY` entries:
+- `validation/options_selling_backtest.py` — the only production code change (both findings).
+- `tests/test_options_selling_backtest_stress.py` — new byte-identical regression test (Finding
+  A) + new cache-hit/no-redundant-recompute instrumentation test (Finding B).
+- `docs/architecture/validation-and-signals.md` — new bullet documenting the shared MTM helper
+  and process-local cycle-plan cache (see Documentation below).
+- `.claude/implementation_plan.md`, `.claude/task.md`, `.claude/walkthrough.md` — this PR's own
+  plan artifacts (overwriting PR #734's, per the repo's per-PR-artifact convention).
 
-1. **`pairs_trading`** ([`signals/pairs_trading.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/signals/pairs_trading.py))
-   - Cointegration + Kalman dynamic hedge ratio + rolling spread $Z$-score entry/exit/stop logic.
-   - Test over liquid cointegrated pairs (e.g. `XOM`/`CVX`, `KO`/`PEP`).
-2. **`aroon_trend`** ([`signals/aroon_trend.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/signals/aroon_trend.py))
-   - Standalone Aroon oscillator (25-day lookback) breakout strategy with SMA-200 market regime filter.
-3. **`news_catalyst` / Sentiment Index** ([`signals/news_catalyst.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/signals/news_catalyst.py), [`signals/sentiment_index.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/signals/sentiment_index.py))
-   - Build a documented, honest point-in-time sentiment backtest proxy or forward-archive evaluation.
+## Documentation update step (per CLAUDE.md)
 
-### Proposed Changes
+Checked: `docs/signals/vrp_premium_selling.md`'s "Backtest Validation" section documents PBO/DSR/
+Sharpe/MaxDD numbers and causal levers — this PR changes neither (pure internal refactor, no
+behavior change, verified via a byte-identical regression test), so that file needs NO edit, and
+`docs/VALIDATION_STRATEGY_FIX_LOG.md` needs no new dated entry either (that log is reserved for
+deployability-gate-affecting changes; explicitly checked, N/A here).
+`docs/architecture/validation-and-signals.md` currently has no dedicated bullet for
+`validation/options_selling_backtest.py` itself (only `validation/harness.py` and
+`validation/stress_scenarios.py` do) — adding one, briefly describing the shared MTM helper and
+the process-local cycle-plan cache, so a future reader of that architecture doc knows both exist
+before they go looking at the 700-line source file. This is the one doc edit this PR makes.
 
-#### [MODIFY] [`scripts/refresh_validations.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/scripts/refresh_validations.py)
-- Implement `_build_pairs_trading_adapter`: downloads pair series, runs `generate_pairs_signals`, computes net portfolio returns with dynamic beta weighting.
-- Implement `_build_aroon_trend_adapter`: computes Aroon Up/Down/Oscillator, applies trend-following positions with Faber SMA-200 market gate.
-- Register `"pairs_trading"` and `"aroon_trend"` in `STRATEGY_REGISTRY`.
+## Verification plan
 
-#### [NEW] [`docs/signals/pairs_trading.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/signals/pairs_trading.md)
-- Author complete strategy documentation for Pairs Trading with `## Backtest Validation` section.
+1. **Golden capture**: before writing any refactor code, run all 6 `simulate_*_returns` wrappers
+   against the SAME deterministic synthetic SPY closes (seed=42, `_synthetic_spy` convention
+   already used by `tests/test_options_selling_backtest_stress.py`) over a window chosen to
+   activate MULTIPLE strategies (not just guard-rejection paths) and save the exact output
+   `Dict[str, List[float]]` keyed by strategy name to a JSON fixture.
+2. Implement the refactor.
+3. **Byte-identical regression test**: re-run the same 6 calls against the SAME synthetic input,
+   compare to the captured golden JSON via `np.allclose(..., atol=1e-12, rtol=1e-12)` (plus index
+   equality) — added permanently as
+   `TestSharedMtmHelperByteIdentical` in `tests/test_options_selling_backtest_stress.py`, with the
+   golden values inlined as a fixture (not an external file, so the test is self-contained and
+   the fixture regenerated once, not left as a mystery JSON blob in the repo).
+4. **No-redundant-recompute test**: monkeypatch `TechnicalOptionsEngine.estimate_gjr_garch_volatility`
+   with a call-counting wrapper, run 1 strategy's simulator, record the call count, clear the
+   cache, run all 6 strategies' simulators over the identical window, assert the total call count
+   equals the single-strategy count (not 6x) — proving the cache actually eliminates the
+   redundant computation, not just "should be faster."
+5. Run the full mandated verification command list (see `task.md`) and paste PASS/FAIL output,
+   not paraphrased, into the PR description / final report.
 
-#### [MODIFY] [`docs/signals/aroon_trend.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/signals/aroon_trend.md)
-- Add standalone `## Backtest Validation` section.
+## Risk / rollback
 
----
-
-## Phase 3: Optimizing the 4 Non-Deployable Strategies
-
-Investigate and fix failure mechanisms in the 4 non-fundamental failing strategies:
-
-1. **`vrp_premium_selling`** (Current: MaxDD 47.1%):
-   - **Mechanism**: The single April 2022 stop-loss hit caused a -60.4% loss.
-   - **Fix Lever**: Introduce dynamic max loss clamping (1.0x credit), delta narrowing during elevated vol, and Faber SMA-200 macro trend filter.
-2. **`rsi2_mean_reversion`** (Current: Sharpe 0.415, MaxDD 8.3%):
-   - **Mechanism**: Extreme low activity (~10 trades/year) burdened by continuous calendar turnover cost.
-   - **Fix Lever**: Empirical turnover alignment and multi-name liquid ETF/equity pool.
-3. **`rsi14_extremes`** (Current: Sharpe 0.219, MaxDD 29.1%):
-   - **Mechanism**: Unfiltered counter-trend entries in strong bull/bear trends.
-   - **Fix Lever**: Trend-aligned filtering (only long oversold when price > SMA-200; only short overbought when price < SMA-200).
-4. **`forecast_direction_arima_hw`** (Current: Sharpe 0.002, MaxDD 27.4%):
-   - **Mechanism**: Linear forecast extrapolation suffers severe whipsaw in regime transitions (2021–2023).
-   - **Fix Lever**: Directional conviction thresholding ($|\hat{r}| > k \cdot \sigma$) and volatility-inverse sizing.
-
-### Proposed Changes
-
-#### [MODIFY] [`scripts/refresh_validations.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/scripts/refresh_validations.py)
-- Update adapter implementations with validated causal fix levers.
-- Re-run validation harness across all modified strategies.
-
-#### [MODIFY] [`docs/signals/<name>.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/signals/) & [`docs/VALIDATION_STRATEGY_FIX_LOG.md`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/backtest_missing_strategies/docs/VALIDATION_STRATEGY_FIX_LOG.md)
-- Update `## Backtest Validation` sections with before/after metrics and causal mechanism explanations.
-- Append entries to `docs/VALIDATION_STRATEGY_FIX_LOG.md`.
-
----
-
-## Verification Plan
-
-### Automated Tests
-1. **Unit & Stress Tests**:
-   - `pytest tests/test_options_selling_backtest_stress.py`
-   - `pytest tests/test_pairs_simulation.py tests/test_pairs_lookahead.py`
-   - `pytest tests/test_refresh_validations.py`
-2. **Validation Suite Sweep**:
-   - `python3 -m scripts.refresh_validations --strategies put_credit_spread,call_credit_spread,call_debit_spread,put_debit_spread,covered_call --json`
-   - `python3 -m scripts.refresh_validations --strategies pairs_trading,aroon_trend --json`
-   - `python3 -m scripts.refresh_validations --strategies vrp_premium_selling,rsi2_mean_reversion,rsi14_extremes,forecast_direction_arima_hw --json`
-3. **Full Registry Regression**:
-   - `python3 -m scripts.refresh_validations --json`
-
-### Documentation Integrity Audit
-- Verify all modified/added signals have valid `## Backtest Validation` sections.
-- Verify `docs/VALIDATION_STRATEGY_FIX_LOG.md` is updated with before/after tables.
+Pure internal refactor behind existing public function signatures; no settings flag needed (no
+behavior change to gate). Rollback = revert the PR; no data migration, no `STRATEGY_REGISTRY`
+change, no config change.
