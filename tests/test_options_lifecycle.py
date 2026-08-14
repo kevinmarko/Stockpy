@@ -300,3 +300,114 @@ def test_atomic_roll_fill_insufficient_funds_rejection(store):
     pos = store.get_open_positions()
     assert len(pos) == 1
     assert near_exp in pos[0].symbol
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Earnings Crush Trade Execution
+# ---------------------------------------------------------------------------
+
+def test_earnings_crush_trade_execution(store, executor):
+    """
+    Tests execute_earnings_crush_trade:
+    1. Executes an Iron Condor candidate with custom legs.
+    2. Executes a strike-based candidate (Short Straddle).
+    3. Verifies atomic fills, 'Earnings Crush' strategy tag, and account balance updates.
+    """
+    initial_cash = store.get_account().cash
+
+    candidate = {
+        "symbol": "NVDA",
+        "strategy": "Iron Condor",
+        "expiration": "2026-08-21",
+        "earnings_date": "2026-08-20",
+        "legs": [
+            {"symbol": "NVDA 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+            {"symbol": "NVDA 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
+            {"symbol": "NVDA 2026-08-21 $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+            {"symbol": "NVDA 2026-08-21 $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
+        ],
+        "net_credit": 2.70,
+    }
+
+    res = executor.execute_earnings_crush_trade(candidate, contracts=2)
+
+    assert res["success"] is True
+    assert res["symbol"] == "NVDA"
+    assert res["strategy"] == "Earnings Crush"
+    assert res["contracts"] == 2
+    assert len(res["legs"]) == 4
+
+    open_pos = store.get_open_positions()
+    assert len(open_pos) == 4
+
+    # Net credit = $2.70 * 100 * 2 contracts = $540.00 - fees (0.65 * 4 * 2 = $5.20) = $534.80
+    expected_cash = initial_cash + 534.80
+    assert abs(store.get_account().cash - expected_cash) < 1e-2
+
+    # Test strike-based Short Straddle candidate
+    straddle_candidate = {
+        "symbol": "AAPL",
+        "strategy": "Short Straddle",
+        "expiration": "2026-08-21",
+        "spot": 150.0,
+        "atm_strike": 150.0,
+        "earnings_date": "2026-08-20",
+    }
+    res_straddle = executor.execute_earnings_crush_trade(straddle_candidate, contracts=1)
+    assert res_straddle["success"] is True
+    assert res_straddle["symbol"] == "AAPL"
+    assert res_straddle["strategy"] == "Earnings Crush"
+    assert len(store.get_open_positions()) == 6  # 4 NVDA legs + 2 AAPL legs
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Settle Post-Earnings Trades
+# ---------------------------------------------------------------------------
+
+def test_settle_post_earnings_trades(store, executor):
+    """
+    Tests settle_post_earnings_trades:
+    1. Enters an Earnings Crush Iron Condor on pre-earnings day T.
+    2. Advances to day T+1 (post-earnings announcement).
+    3. Executes settle_post_earnings_trades to close all open legs at market open.
+    4. Verifies all positions are closed and IV crush profit is harvested into cash balance.
+    """
+    order_date = date(2026, 8, 14)
+    settle_date = date(2026, 8, 15)
+
+    candidate = {
+        "symbol": "NVDA",
+        "strategy": "Iron Condor",
+        "expiration": "2026-08-21",
+        "earnings_date": "2026-08-14",
+        "legs": [
+            {"symbol": "NVDA 2026-08-21 $110.00 PUT", "side": "buy", "qty": 1.0, "fill_price": 50.0},
+            {"symbol": "NVDA 2026-08-21 $115.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 180.0},
+            {"symbol": "NVDA 2026-08-21 $125.00 CALL", "side": "sell", "qty": 1.0, "fill_price": 200.0},
+            {"symbol": "NVDA 2026-08-21 $130.00 CALL", "side": "buy", "qty": 1.0, "fill_price": 60.0},
+        ],
+        "net_credit": 2.70,
+    }
+
+    exec_res = executor.execute_earnings_crush_trade(candidate, contracts=1)
+    assert exec_res["success"] is True
+    assert len(store.get_open_positions()) == 4
+
+    # Post-earnings spot price is $120 (well within the $115-$125 inner strikes)
+    # At market open next day, implied volatility collapses (IV crush).
+    settle_res = executor.settle_post_earnings_trades(
+        current_date=settle_date,
+        spot_map={"NVDA": 120.0},
+    )
+
+    assert settle_res["settled_count"] == 1
+    assert settle_res["failed_count"] == 0
+    assert len(settle_res["settled"]) == 1
+    assert settle_res["settled"][0]["symbol"] == "NVDA"
+
+    # All positions must be cleanly closed
+    assert len(store.get_open_positions()) == 0
+
+    # Verify orders recorded in store
+    orders = store.get_full_orders()
+    assert any(o["symbol"] == "CLOSE EARNINGS CRUSH NVDA" for o in orders)

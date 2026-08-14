@@ -9,9 +9,11 @@ import { OptionsChain as OptionsChainGrid } from "../components/options/OptionsC
 import { OptionsOrderTicket } from "../components/options/OptionsOrderTicket";
 import { OptionsMetricSelector, MetricColumn } from "../components/options/OptionsMetricSelector";
 import { OptionsStrategyBuilder } from "../components/options/OptionsStrategyBuilder";
+import { EarningsCrushScanner } from "../components/options/EarningsCrushScanner";
+import { UnusualFlowFeed } from "../components/options/UnusualFlowFeed";
 import { TabGuide } from "../components/TabGuide";
 
-type ChainTab = "calls" | "puts";
+type ChainTab = "calls" | "puts" | "flow" | "crush";
 
 export function OptionsChain() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -182,7 +184,7 @@ export function OptionsChain() {
         })}
       </div>
 
-      {/* Calls / Puts Toggle */}
+      {/* Calls / Puts / Unusual Flow / Earnings Crush Tabs */}
       <div style={{
         display: "flex",
         padding: "8px 16px",
@@ -190,12 +192,17 @@ export function OptionsChain() {
         borderBottom: `1px solid ${theme.border}`,
         flexShrink: 0
       }}>
-        {(["calls", "puts"] as ChainTab[]).map(tab => {
-          const isActive = tab === activeTab;
+        {[
+          { key: "calls", label: "Calls" },
+          { key: "puts", label: "Puts" },
+          { key: "flow", label: "🌊 Unusual Flow" },
+          { key: "crush", label: "⚡ Earnings Crush" },
+        ].map(tab => {
+          const isActive = tab.key === activeTab;
           return (
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key as ChainTab)}
               style={{
                 flex: 1,
                 padding: "8px 0",
@@ -204,23 +211,26 @@ export function OptionsChain() {
                 border: "none",
                 borderRadius: 8,
                 fontWeight: isActive ? 600 : 400,
-                fontSize: "0.9rem",
+                fontSize: "0.85rem",
                 cursor: "pointer",
-                textTransform: "capitalize",
                 transition: "all 0.15s ease"
               }}
             >
-              {tab}
+              {tab.label}
             </button>
           );
         })}
       </div>
 
-      {/* Chain Grid or Builder */}
+      {/* Main Content Area */}
       <div style={{ flex: 1, overflowY: "auto", padding: 16, paddingBottom: (selectedLegs.length > 0 || isStockTradeOpen) ? 350 : 16 }}>
         <TabGuide tabKey="options-chain" />
         
-        {isBuilderMode ? (
+        {activeTab === "flow" ? (
+          <UnusualFlowFeed initialSymbol={ticker} />
+        ) : activeTab === "crush" ? (
+          <EarningsCrushScanner initialSymbols={ticker ? [ticker] : undefined} />
+        ) : isBuilderMode ? (
           <OptionsStrategyBuilder
             symbol={ticker!}
             chain={chainData || null}
@@ -235,7 +245,7 @@ export function OptionsChain() {
           chainData && (
             <OptionsChainGrid
               data={chainData}
-              activeTab={activeTab}
+              activeTab={activeTab as "calls" | "puts"}
               selectedMetrics={selectedMetrics}
               onSelectContract={(contract, type) => {
                 setSelectedLegs([{ contract, type, action: 'Buy' }]);

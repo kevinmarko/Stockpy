@@ -158,6 +158,11 @@ import type {
   DeltaHedgeResult,
   RollOrderRequest,
   ManageExitsResult,
+  EarningsCrushCandidate,
+  EarningsCrushCandidatesResponse,
+  EarningsCrushExecutionResult,
+  UnusualOptionsFlowResponse,
+  FlowSentimentResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -1020,6 +1025,25 @@ const liveApi = {
       method: "POST",
       body: JSON.stringify(request),
     }),
+  getEarningsCrushCandidates: (symbols?: string[]) => {
+    const q = symbols && symbols.length > 0 ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
+    return http<EarningsCrushCandidatesResponse>(`/pilots/options/earnings-crush/candidates${q}`);
+  },
+  executeEarningsCrushTrade: (candidate: EarningsCrushCandidate | { symbol: string; strategy?: string; wing_multiplier?: number }) =>
+    http<EarningsCrushExecutionResult>("/pilots/options/earnings-crush/execute", {
+      method: "POST",
+      body: JSON.stringify(candidate),
+    }),
+  getUnusualOptionsFlow: (params?: { symbol?: string; min_vol_oi?: number; min_notional?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.symbol) q.set("symbol", params.symbol);
+    if (params?.min_vol_oi != null) q.set("min_vol_oi", String(params.min_vol_oi));
+    if (params?.min_notional != null) q.set("min_notional", String(params.min_notional));
+    const qs = q.toString() ? `?${q.toString()}` : "";
+    return http<UnusualOptionsFlowResponse>(`/pilots/options/flow/unusual${qs}`);
+  },
+  getOptionsFlowSentiment: (symbol: string) =>
+    http<FlowSentimentResponse>(`/pilots/options/flow/sentiment?symbol=${encodeURIComponent(symbol)}`),
 
   // ---- Live Trade Approvals ----
 

@@ -53,6 +53,7 @@ for the before/after metrics and reasoning.
 | [`rsi2_mean_reversion`](rsi2_mean_reversion.md) | 10.0 | `signals/rsi2_mean_reversion.py` | Connors RSI(2) long-only mean reversion (regime-gated) | Dip Buyer (`dip-buyer`) | `rsi2_mean_reversion` (`deployable=False` — genuinely weak net-of-cost edge, see doc) |
 | [`news_catalyst`](news_catalyst.md) | 10.0 | `signals/news_catalyst.py` | FinBERT / lexicon headline sentiment (earnings-proximity + regime-gated) | News Catalyst (`news-catalyst`) | — (point-in-time news, not price-only) |
 | [`vrp_premium_selling`](vrp_premium_selling.md) | 10.0 | `signals/vrp_premium_selling.py` | Volatility Risk Premium options-selling regime gate (True_IVR > 50, VRP > 2%, VIX < 30, no CREDIT EVENT) | Volatility Premium Seller (`vrp-premium-selling`) | `vrp_premium_selling` (real Iron Condor Black-Scholes sim; `deployable=False` — only 2 trade episodes in 21yr, one lost ~60%, see doc) |
+| [`options_flow_sentiment`](options_flow_sentiment.md) | 10.0 | `signals/options_flow_sentiment.py` | Unusual options order flow (sweeps vs blocks) net directional sentiment overlay | Options Flow Sentiment (`options-flow-sentiment`) | — (point-in-time options flow, not price-only) |
 | [`lgbm_ranker`](lgbm_ranker.md) | 0.10 | `signals/lgbm_ranker.py` | LightGBM cross-sectional rank (dormant — contributes 0.0 until a model is trained) | — (dormant; no Pilot until it passes the model DSR gate) | — |
 | [`regime_multiplier`](regime_multiplier.md) | **0.0** | `signals/regime_multiplier.py` | HMM risk-on probability carried as Kelly-size scalar only | — (a sizing multiplier, not alpha — structurally can't back a Pilot) | — |
 
@@ -79,7 +80,7 @@ contributions.
 | Dominant | macro_regime, edge_garch | ±45, ±35 pts |
 | Strong | dividend_quality, rsi_extremes | ±25, ±20 pts |
 | Supporting | graham_value, macd_momentum, aroon_trend, timeseries_momentum, cross_sectional_momentum, multifactor | ±15 pts each |
-| Tiebreaker | forecast_alignment, relative_strength, sortino_drawdown, rsi2_mean_reversion, news_catalyst | ±10 pts each |
+| Tiebreaker | forecast_alignment, relative_strength, sortino_drawdown, rsi2_mean_reversion, news_catalyst, vrp_premium_selling, options_flow_sentiment | ±10 pts each |
 | Sizing-only | regime_multiplier | 0 pts (Kelly scalar) |
 
 ---

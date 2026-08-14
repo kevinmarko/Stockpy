@@ -23,6 +23,10 @@ vi.mock("../api/client", () => ({
     executeDeltaHedge: vi.fn(),
     managePaperOptionsExits: vi.fn(),
     rollPaperOptionPosition: vi.fn(),
+    getEarningsCrushCandidates: vi.fn(),
+    executeEarningsCrushTrade: vi.fn(),
+    getUnusualOptionsFlow: vi.fn(),
+    getOptionsFlowSentiment: vi.fn(),
     getThresholds: vi.fn(() => Promise.resolve({ VRP: 0, MAX_KELLY: 0, VIX_HIGH: 0, OPTION_MIN_IVR: 0, REGIME_LOOKAHEAD_DAYS: 0 })),
   },
 }));
@@ -483,4 +487,63 @@ describe("PaperBroker", () => {
 
     expect(await screen.findByText(/Volatility Surface & Skew Analytics/i)).toBeInTheDocument();
   });
+
+  it("toggles earnings crush scanner drawer", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 100000,
+      cash: 100000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    vi.mocked(api.getEarningsCrushCandidates).mockResolvedValue({ count: 0, candidates: [] });
+
+    render(
+      <MemoryRouter>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    const crushBtn = await screen.findByText("⚡ Earnings Crush");
+    expect(crushBtn).toBeInTheDocument();
+    fireEvent.click(crushBtn);
+
+    expect(await screen.findByText(/Earnings Volatility Crush Scanner/i)).toBeInTheDocument();
+  });
+
+  it("toggles unusual options flow feed drawer", async () => {
+    vi.mocked(api.getPaperBrokerAccount).mockResolvedValue({
+      equity: 100000,
+      cash: 100000,
+      buying_power: 100000,
+    });
+    vi.mocked(api.getPaperBrokerPositions).mockResolvedValue([]);
+    vi.mocked(api.getPaperBrokerOrders).mockResolvedValue([]);
+    vi.mocked(api.getUnusualOptionsFlow).mockResolvedValue({ count: 0, trades: [] });
+    vi.mocked(api.getOptionsFlowSentiment).mockResolvedValue({
+      sentiment: {
+        symbol: "NVDA",
+        sentiment_score: 0.5,
+        bullish_notional: 1000000,
+        bearish_notional: 500000,
+        total_notional: 1500000,
+        call_volume: 5000,
+        put_volume: 2500,
+        put_call_ratio: 0.5,
+      },
+    });
+
+    render(
+      <MemoryRouter>
+        <PaperBroker />
+      </MemoryRouter>
+    );
+
+    const flowBtn = await screen.findByText("🌊 Unusual Flow");
+    expect(flowBtn).toBeInTheDocument();
+    fireEvent.click(flowBtn);
+
+    expect(await screen.findByText(/Unusual Options Activity & Order Flow Feed/i)).toBeInTheDocument();
+  });
 });
+

@@ -659,6 +659,206 @@ class TestScenarioMatrixEndpoint:
         assert resp.status_code == 401
 
 
+class TestEarningsCrushEndpoints:
+    @patch("pilots.earnings_crush.get_earnings_crush_candidates")
+    def test_get_earnings_crush_candidates_success(self, mock_get_candidates):
+        mock_get_candidates.return_value = [
+            {
+                "symbol": "NVDA",
+                "earnings_date": "2026-08-20",
+                "earnings_timing": "AMC",
+                "days_to_earnings": 2,
+                "spot_price": 125.0,
+                "atm_iv": 0.65,
+                "expected_move_dollar": 11.20,
+                "expected_move_pct": 0.0896,
+                "historical_median_move_pct": 0.055,
+                "crush_edge_ratio": 1.63,
+                "qualifies_edge": True,
+                "recommended_strategy": "Iron Condor",
+                "strikes": {
+                    "long_put": 110.0,
+                    "short_put": 114.0,
+                    "short_call": 136.0,
+                    "long_call": 140.0,
+                },
+                "estimated_credit": 1.40,
+                "max_loss": 2.60,
+                "estimated_roi_pct": 53.8,
+                "historical_moves": [],
+            }
+        ]
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/earnings-crush/candidates?symbols=NVDA&min_edge=1.25",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["count"] == 1
+        assert body["candidates"][0]["symbol"] == "NVDA"
+        assert body["candidates"][0]["crush_edge_ratio"] == 1.63
+        assert body["candidates"][0]["qualifies_edge"] is True
+
+    def test_get_earnings_crush_candidates_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/earnings-crush/candidates?symbols=NVDA",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    @patch("pilots.earnings_crush.execute_earnings_crush_trade")
+    def test_post_earnings_crush_execute_success(self, mock_exec):
+        mock_exec.return_value = {
+            "ok": True,
+            "order_id": "ec_12345678",
+            "symbol": "NVDA",
+            "strategy": "Iron Condor",
+            "contracts": 1,
+            "message": "Successfully executed Iron Condor earnings crush trade for NVDA.",
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/earnings-crush/execute",
+                json={
+                    "symbol": "NVDA",
+                    "strategy": "Iron Condor",
+                    "contracts": 1,
+                    "dry_run": False,
+                },
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["order_id"] == "ec_12345678"
+        assert body["symbol"] == "NVDA"
+        assert body["strategy"] == "Iron Condor"
+
+    def test_post_earnings_crush_execute_fails_closed_when_writes_disabled(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=False):
+            resp = _client.post(
+                "/pilots/options/earnings-crush/execute",
+                json={"symbol": "NVDA"},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_post_earnings_crush_execute_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/earnings-crush/execute",
+                json={"symbol": "NVDA"},
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_earnings_crush_execute_live_mode_advisory_rejection(self):
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/earnings-crush/execute",
+                json={"symbol": "NVDA", "is_live": True},
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert "Advisory-Only" in body["message"]
+
+
+class TestUnusualFlowEndpoints:
+    @patch("pilots.unusual_options_flow.get_unusual_options_activity")
+    def test_get_unusual_flow_success(self, mock_get_uoa):
+        mock_get_uoa.return_value = [
+            {
+                "id": "uoa_12345",
+                "timestamp": "2026-08-14T15:00:00Z",
+                "symbol": "NVDA",
+                "expiration": "2026-08-21",
+                "strike": 130.0,
+                "option_type": "CALL",
+                "trade_type": "SWEEP",
+                "sentiment": "BULLISH",
+                "volume": 15000,
+                "open_interest": 2500,
+                "vol_oi_ratio": 6.0,
+                "price": 4.50,
+                "bid": 4.40,
+                "ask": 4.50,
+                "notional": 6750000.0,
+                "iv": 0.62,
+                "iv_anomaly": True,
+            }
+        ]
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/flow/unusual?symbols=NVDA&min_vol_oi=3.0",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["count"] == 1
+        assert body["records"][0]["symbol"] == "NVDA"
+        assert body["records"][0]["vol_oi_ratio"] == 6.0
+        assert body["records"][0]["trade_type"] == "SWEEP"
+        assert body["records"][0]["sentiment"] == "BULLISH"
+
+    def test_get_unusual_flow_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/flow/unusual",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    @patch("pilots.unusual_options_flow.get_flow_sentiment")
+    def test_get_flow_sentiment_success(self, mock_sentiment):
+        mock_sentiment.return_value = {
+            "symbol": "NVDA",
+            "sentiment_score": 0.72,
+            "sentiment_label": "VERY BULLISH",
+            "call_volume": 45000,
+            "put_volume": 12000,
+            "call_put_ratio": 3.75,
+            "total_bullish_notional": 18500000.0,
+            "total_bearish_notional": 3000000.0,
+            "total_notional": 21500000.0,
+            "top_active_strikes": [{"strike": 130.0, "volume": 15000}],
+            "record_count": 8,
+            "as_of": "2026-08-14T15:00:00Z",
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/flow/sentiment?symbol=NVDA",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "NVDA"
+        assert body["sentiment_score"] == 0.72
+        assert body["sentiment_label"] == "VERY BULLISH"
+        assert body["call_put_ratio"] == 3.75
+        assert len(body["top_active_strikes"]) == 1
+
+    def test_get_flow_sentiment_requires_symbol(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/flow/sentiment",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_get_flow_sentiment_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/flow/sentiment?symbol=NVDA",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+
+
 
 
 

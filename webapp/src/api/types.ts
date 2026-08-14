@@ -4199,3 +4199,88 @@ export interface ManageExitsResult {
   message: string;
 }
 
+export interface EarningsCrushCandidate {
+  symbol: string;
+  company_name?: string;
+  report_date: string;
+  report_timing?: "AMC" | "BMO" | "DURING_HOURS";
+  spot_price: number;
+  atm_iv: number;
+  dte: number;
+  expected_move_dollar: number;
+  expected_move_pct: number;
+  median_realized_move_pct: number;
+  crush_edge_ratio: number;
+  suggested_strategy: string;
+  call_wing_strike?: number;
+  put_wing_strike?: number;
+  short_call_strike?: number;
+  short_put_strike?: number;
+  expiration?: string;
+  estimated_credit?: number;
+  edge_passed?: boolean;
+  historical_moves?: number[];
+}
+
+export interface EarningsCrushCandidatesResponse {
+  candidates: EarningsCrushCandidate[];
+  count: number;
+  as_of?: string;
+}
+
+export interface EarningsCrushExecutionResult {
+  ok: boolean;
+  order_id?: string;
+  symbol: string;
+  strategy: string;
+  net_credit: number;
+  message: string;
+  placed_at?: string;
+}
+
+export interface UnusualOptionTrade {
+  id: string;
+  symbol: string;
+  timestamp: string;
+  option_type: "CALL" | "PUT";
+  strike: number;
+  expiration: string;
+  dte: number;
+  trade_type: "SWEEP" | "BLOCK" | "SPLIT";
+  sentiment: "BULLISH" | "BEARISH" | "NEUTRAL";
+  aggressor_side: "ASK" | "BID" | "MID";
+  volume: number;
+  open_interest: number;
+  vol_oi_ratio: number;
+  price: number;
+  spot_price?: number;
+  notional: number;
+  iv?: number;
+  historical_vol_30d?: number;
+  iv_expansion_flag?: boolean;
+}
+
+export interface UnusualOptionsFlowResponse {
+  trades: UnusualOptionTrade[];
+  count: number;
+  as_of?: string;
+}
+
+export interface FlowSentimentData {
+  symbol: string;
+  sentiment_score: number;
+  bullish_notional: number;
+  bearish_notional: number;
+  total_notional: number;
+  call_volume: number;
+  put_volume: number;
+  put_call_ratio: number;
+  top_active_strikes?: { strike: number; option_type: "CALL" | "PUT"; notional: number }[];
+}
+
+export interface FlowSentimentResponse {
+  sentiment: FlowSentimentData;
+  as_of?: string;
+}
+
+

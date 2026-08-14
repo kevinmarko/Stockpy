@@ -41,5 +41,6 @@ def _register_all():
     import signals.news_catalyst
     import signals.sector_quality_rank
     import signals.vrp_premium_selling
+    import signals.options_flow_sentiment
 
 _register_all()

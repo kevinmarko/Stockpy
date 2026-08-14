@@ -5613,6 +5613,17 @@ class ScenarioMatrixRequest(BaseModel):
     time_shifts: Optional[List[int]] = None
     time_days_forward: Optional[int] = 0
 
+class EarningsCrushExecuteRequest(BaseModel):
+    symbol: str
+    strategy: Optional[str] = "Iron Condor"
+    expiration: Optional[str] = None
+    contracts: Optional[int] = 1
+    legs: Optional[List[Dict[str, Any]]] = None
+    limit_price: Optional[float] = None
+    dry_run: bool = False
+    is_live: bool = False
+
+
 
 
 @app.get("/pilots/cache-long-short/concentrated-positions", dependencies=[Depends(require_read_token)])
@@ -5960,6 +5971,67 @@ def post_paper_broker_settle_expired() -> Dict[str, Any]:
         "settled_count": len(settled),
         "settled": settled,
     }
+
+
+@app.get("/pilots/options/earnings-crush/candidates", dependencies=[Depends(require_read_token)])
+def get_options_earnings_crush_candidates(
+    symbols: Optional[str] = None,
+    min_edge: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Returns upcoming earnings crush candidates with expected vs realized moves and edge ratios."""
+    from pilots.earnings_crush import get_earnings_crush_candidates
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else None
+    candidates = get_earnings_crush_candidates(symbols=sym_list, min_edge=min_edge)
+    return {"count": len(candidates), "candidates": candidates}
+
+
+@app.post(
+    "/pilots/options/earnings-crush/execute",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Dict[str, Any]:
+    """Executes an earnings crush multi-leg trade in the paper broker."""
+    from pilots.earnings_crush import execute_earnings_crush_trade
+    return execute_earnings_crush_trade(
+        symbol=body.symbol,
+        strategy=body.strategy or "Iron Condor",
+        expiration=body.expiration,
+        contracts=body.contracts or 1,
+        legs=body.legs,
+        limit_price=body.limit_price,
+        dry_run=body.dry_run,
+        is_live=body.is_live,
+    )
+
+
+@app.get("/pilots/options/flow/unusual", dependencies=[Depends(require_read_token)])
+def get_options_flow_unusual(
+    symbols: Optional[str] = None,
+    min_vol_oi: Optional[float] = None,
+    min_notional: Optional[float] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """Returns live unusual options activity records with V/OI ratios, notional sizing, and sweep tags."""
+    from pilots.unusual_options_flow import get_unusual_options_activity
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else None
+    records = get_unusual_options_activity(
+        symbols=sym_list,
+        min_vol_oi=min_vol_oi,
+        min_notional=min_notional,
+        limit=limit,
+    )
+    return {"count": len(records), "records": records}
+
+
+@app.get("/pilots/options/flow/sentiment", dependencies=[Depends(require_read_token)])
+def get_options_flow_sentiment(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """Returns net institutional options flow sentiment score, call/put ratio, and active strikes for a symbol."""
+    from pilots.unusual_options_flow import get_flow_sentiment
+    return get_flow_sentiment(symbol=symbol)
+
 
 
 

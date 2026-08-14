@@ -7,6 +7,8 @@ import { Modal } from "../components/Modal";
 import { theme } from "../theme";
 import { ScenarioHeatmap } from "../components/options/ScenarioHeatmap";
 import { VolSurfaceView } from "../components/options/VolSurfaceView";
+import { EarningsCrushScanner } from "../components/options/EarningsCrushScanner";
+import { UnusualFlowFeed } from "../components/options/UnusualFlowFeed";
 import type { RollOrderRequest } from "../api/types";
 
 export function PaperBroker() {
@@ -22,6 +24,8 @@ export function PaperBroker() {
   const [resetCash, setResetCash] = useState(100000);
   const [execStatus, setExecStatus] = useState<string | null>(null);
   const [showVolSurface, setShowVolSurface] = useState(false);
+  const [showEarningsCrush, setShowEarningsCrush] = useState(false);
+  const [showUnusualFlow, setShowUnusualFlow] = useState(false);
 
   // Position Roll state
   const [rollingPosition, setRollingPosition] = useState<{ symbol: string; qty: number } | null>(null);
@@ -184,6 +188,36 @@ export function PaperBroker() {
             {manageExitsMutation.pending ? "Evaluating Exits..." : "⚡ Manage Exits"}
           </button>
           <button
+            onClick={() => setShowEarningsCrush(!showEarningsCrush)}
+            style={{
+              padding: "8px 14px",
+              background: showEarningsCrush ? theme.growth : theme.surface,
+              border: `1px solid ${showEarningsCrush ? theme.growth : theme.border}`,
+              color: showEarningsCrush ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            ⚡ Earnings Crush
+          </button>
+          <button
+            onClick={() => setShowUnusualFlow(!showUnusualFlow)}
+            style={{
+              padding: "8px 14px",
+              background: showUnusualFlow ? "#818cf8" : theme.surface,
+              border: `1px solid ${showUnusualFlow ? "#818cf8" : theme.border}`,
+              color: showUnusualFlow ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🌊 Unusual Flow
+          </button>
+          <button
             onClick={() => setShowVolSurface(!showVolSurface)}
             style={{
               padding: "8px 14px",
@@ -239,6 +273,26 @@ export function PaperBroker() {
         {/* Volatility Surface Drawer/Section */}
         {showVolSurface && (
           <VolSurfaceView initialSymbol="SPY" onClose={() => setShowVolSurface(false)} />
+        )}
+
+        {/* Earnings Crush Scanner Drawer/Section */}
+        {showEarningsCrush && (
+          <EarningsCrushScanner
+            onTradeExecuted={() => {
+              account.reload();
+              positions.reload();
+              orders.reload();
+              candidates.reload();
+              greeks.reload();
+              deltaHedge.reload();
+            }}
+            onClose={() => setShowEarningsCrush(false)}
+          />
+        )}
+
+        {/* Unusual Options Flow Feed Drawer/Section */}
+        {showUnusualFlow && (
+          <UnusualFlowFeed onClose={() => setShowUnusualFlow(false)} />
         )}
         
         {account.data && (

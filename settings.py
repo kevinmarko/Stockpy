@@ -242,6 +242,18 @@ class Settings(BaseSettings):
         default=25.0,
         description="Deadband threshold in SPY delta shares before triggering a dynamic delta hedge order.",
     )
+    OPTIONS_EARNINGS_CRUSH_ENABLED: bool = Field(
+        default=False,
+        description="Enable automated pre-earnings volatility crush option trading.",
+    )
+    OPTIONS_EARNINGS_MIN_EDGE: float = Field(
+        default=1.25,
+        description="Minimum ratio of implied move over historical median realized move to qualify for earnings crush trade.",
+    )
+    OPTIONS_EARNINGS_WING_MULTIPLIER: float = Field(
+        default=1.20,
+        description="Multiplier on expected move to set outer wings for earnings crush Iron Condors.",
+    )
 
 
 
@@ -2200,6 +2212,9 @@ class Settings(BaseSettings):
             # WHETHER the regime favors selling premium; does not price or
             # select strikes itself.
             "vrp_premium_selling": 10.0,
+            # Institutional options order flow net sentiment score in [-1.0, 1.0]
+            # based on aggressive sweeps vs bids from Unusual Options Activity.
+            "options_flow_sentiment": 10.0,
         },
         description="Weights for individual quantitative signal modules."
     )

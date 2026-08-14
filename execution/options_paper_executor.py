@@ -12,7 +12,8 @@ import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from data.paper_account_store import PaperAccountStore
+from data.paper_account_store import PaperAccountStore, PaperOrder, PaperPosition
+from db_config import session_scope
 from execution.options_queue_builder import (
     CONFIG as OQB_CONFIG,
     _directive_for_symbol,
@@ -20,6 +21,7 @@ from execution.options_queue_builder import (
     _resolve_symbols,
     passes_premium_gate,
 )
+from pilots.options_risk import parse_option_symbol
 from pilots.order_sizing import calculate_multi_leg_option_sizing
 from settings import settings
 
@@ -621,3 +623,343 @@ class OptionsPaperExecutor:
             "executed": executed,
             "failed": failed,
         }
+
+    def execute_earnings_crush_trade(
+        self,
+        candidate: Dict[str, Any],
+        contracts: int = 1,
+    ) -> Dict[str, Any]:
+        """
+        Executes a multi-leg Earnings Crush options strategy (Iron Condor, Short Straddle,
+        Short Strangle) into PaperAccountStore with strategy_name="Earnings Crush".
+
+        Candidate format:
+        {
+            "symbol" / "ticker": "NVDA",
+            "strategy": "Iron Condor" / "Short Straddle" / "Earnings Crush",
+            "expiration": "2026-08-21",
+            "legs": [
+                {"symbol": "NVDA 2026-08-21 $120.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 250.0},
+                ...
+            ]
+            or individual strikes / wing definitions:
+            "spot": 120.0,
+            "short_put": 110.0, "long_put": 105.0,
+            "short_call": 130.0, "long_call": 135.0,
+            "net_credit": 3.50,
+            "earnings_date": "2026-08-20",
+        }
+        """
+        sym = str(candidate.get("symbol") or candidate.get("ticker", "")).upper().strip()
+        if not sym:
+            return {"success": False, "reason": "Missing symbol in earnings crush candidate"}
+
+        strategy = str(candidate.get("strategy") or "Earnings Crush")
+        earnings_date = candidate.get("earnings_date")
+        target_dte = candidate.get("target_dte", 7)
+        expiration = candidate.get("expiration") or candidate.get("exp_date") or _calculate_default_expiration(target_dte)
+
+        # Parse / build legs
+        raw_legs = candidate.get("legs", [])
+        parsed_legs = []
+        strikes = []
+        signed_prices = []
+
+        if raw_legs:
+            for idx, leg in enumerate(raw_legs):
+                leg_sym = leg.get("symbol")
+                side = str(leg.get("side", leg.get("Side", "BUY"))).lower()
+                ratio = float(leg.get("ratio_qty", leg.get("Ratio", leg.get("qty", 1.0))))
+                
+                strike = float(leg.get("strike", 0.0) or leg.get("Strike", 0.0))
+                opt_type = str(leg.get("type", leg.get("Type", "CALL"))).upper()
+                
+                if leg_sym:
+                    opt_info = parse_option_symbol(leg_sym)
+                    if opt_info:
+                        strike = opt_info["strike"]
+                        opt_type = opt_info["option_type"].upper()
+                else:
+                    leg_sym = f"{sym} {expiration} ${strike:.2f} {opt_type}"
+
+                if strike > 0:
+                    strikes.append(strike)
+
+                # Price in $/contract (fill_price) or $/share (raw_price)
+                fill_price = float(leg.get("fill_price", 0.0) or 0.0)
+                raw_price = float(leg.get("price", leg.get("Price", 0.0) or leg.get("raw_price", 0.0)) or 0.0)
+                
+                if fill_price <= 0 and raw_price > 0:
+                    fill_price = raw_price * 100.0 if raw_price < 50.0 else raw_price
+                elif fill_price > 0 and raw_price <= 0:
+                    raw_price = fill_price / 100.0
+                elif fill_price <= 0 and raw_price <= 0:
+                    raw_price = 1.50
+                    fill_price = 150.0
+
+                signed_price = (raw_price * ratio) if side == "buy" else (-raw_price * ratio)
+                signed_prices.append(signed_price)
+
+                parsed_legs.append({
+                    "symbol": leg_sym,
+                    "side": side,
+                    "qty": contracts * ratio,
+                    "ratio_qty": ratio,
+                    "fill_price": fill_price,
+                    "raw_price": raw_price,
+                })
+        else:
+            # Construct from strikes in candidate dict
+            # Support Iron Condor (short_put, long_put, short_call, long_call)
+            # or Straddle (put_strike, call_strike or atm_strike)
+            spot = float(candidate.get("spot", candidate.get("spot_price", 100.0)))
+            
+            if "short_put" in candidate or "short_put_strike" in candidate:
+                sp = float(candidate.get("short_put", candidate.get("short_put_strike", 0.0)))
+                lp = float(candidate.get("long_put", candidate.get("long_put_strike", 0.0)))
+                sc = float(candidate.get("short_call", candidate.get("short_call_strike", 0.0)))
+                lc = float(candidate.get("long_call", candidate.get("long_call_strike", 0.0)))
+
+                if sp > 0:
+                    strikes.extend([sp, lp, sc, lc])
+                    parsed_legs = [
+                        {"symbol": f"{sym} {expiration} ${lp:.2f} PUT", "side": "buy", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, lp, target_dte, "put"), "raw_price": _price_option_contract(spot, lp, target_dte, "put") / 100.0},
+                        {"symbol": f"{sym} {expiration} ${sp:.2f} PUT", "side": "sell", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, sp, target_dte, "put"), "raw_price": _price_option_contract(spot, sp, target_dte, "put") / 100.0},
+                        {"symbol": f"{sym} {expiration} ${sc:.2f} CALL", "side": "sell", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, sc, target_dte, "call"), "raw_price": _price_option_contract(spot, sc, target_dte, "call") / 100.0},
+                        {"symbol": f"{sym} {expiration} ${lc:.2f} CALL", "side": "buy", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, lc, target_dte, "call"), "raw_price": _price_option_contract(spot, lc, target_dte, "call") / 100.0},
+                    ]
+            elif "atm_strike" in candidate or "strike" in candidate:
+                atm = float(candidate.get("atm_strike", candidate.get("strike", spot)))
+                parsed_legs = [
+                    {"symbol": f"{sym} {expiration} ${atm:.2f} PUT", "side": "sell", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, atm, target_dte, "put"), "raw_price": _price_option_contract(spot, atm, target_dte, "put") / 100.0},
+                    {"symbol": f"{sym} {expiration} ${atm:.2f} CALL", "side": "sell", "qty": float(contracts), "ratio_qty": 1.0, "fill_price": _price_option_contract(spot, atm, target_dte, "call"), "raw_price": _price_option_contract(spot, atm, target_dte, "call") / 100.0},
+                ]
+                strikes.append(atm)
+
+        if not parsed_legs:
+            return {"success": False, "reason": f"No valid legs constructed for {sym} Earnings Crush"}
+
+        # Calculate net cash impact & collateral
+        commission = 0.65 * contracts * len(parsed_legs)
+        net_credit_arg = candidate.get("net_credit", candidate.get("net_premium"))
+
+        if net_credit_arg is not None:
+            net_cash_impact = (float(net_credit_arg) * 100.0 * contracts) - commission
+        else:
+            # Sum leg fill prices
+            sell_proceeds = sum(l["qty"] * l["fill_price"] for l in parsed_legs if l["side"] == "sell")
+            buy_costs = sum(l["qty"] * l["fill_price"] for l in parsed_legs if l["side"] == "buy")
+            net_cash_impact = (sell_proceeds - buy_costs) - commission
+
+        # Collateral
+        strike_width = None
+        if len(strikes) >= 2:
+            sorted_strikes = sorted(strikes)
+            strike_width = abs(sorted_strikes[-1] - sorted_strikes[0])
+        collateral = (strike_width * 100.0 * contracts) if strike_width else abs(net_cash_impact)
+
+        client_order_id = f"EC-{sym}-{int(datetime.now(timezone.utc).timestamp())}"
+        fill_legs = [{
+            "symbol": l["symbol"],
+            "side": l["side"],
+            "qty": l["qty"],
+            "fill_price": l["fill_price"],
+        } for l in parsed_legs]
+
+        success = self.store.apply_multi_leg_fill(
+            client_order_id=client_order_id,
+            symbol=sym,
+            strategy_name="Earnings Crush",
+            contracts=contracts,
+            legs=fill_legs,
+            net_cash_impact=net_cash_impact,
+            commission_and_fees=commission,
+            collateral_required=collateral,
+        )
+
+        return {
+            "success": bool(success),
+            "order_id": client_order_id,
+            "symbol": sym,
+            "strategy": "Earnings Crush",
+            "contracts": contracts,
+            "net_cash_impact": net_cash_impact,
+            "commission": commission,
+            "legs": fill_legs,
+            "earnings_date": earnings_date,
+            "reason": None if success else "apply_multi_leg_fill returned False",
+        }
+
+    def settle_post_earnings_trades(
+        self,
+        current_date: Optional[date] = None,
+        spot_map: Optional[Dict[str, float]] = None,
+        iv_crush_factor: float = 0.40,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Scans open positions for trades opened under the 'Earnings Crush' strategy where the
+        earnings announcement has completed (as of current_date), and closes all constituent legs
+        at market open to harvest pure IV crush.
+        """
+        today = current_date or datetime.now(timezone.utc).date()
+        settled = []
+        failed = []
+
+        with session_scope(self.store.Session) as session:
+            # Query parent orders placed with strategy_name="Earnings Crush" or client_order_id like 'EC-%'
+            ec_orders = (
+                session.query(PaperOrder)
+                .filter(
+                    (PaperOrder.symbol.like("%EARNINGS CRUSH%"))
+                    | ((PaperOrder.client_order_id.like("EC-%")) & (~PaperOrder.client_order_id.like("%_L%")))
+                )
+                .filter(
+                    (PaperOrder.status == "filled")
+                    | (PaperOrder.status == "FILLED")
+                )
+                .all()
+            )
+
+            # Map order ID -> list of leg symbols and target ticker
+            ec_order_legs: Dict[str, Dict[str, Any]] = {}
+            for eco in ec_orders:
+                # Find child leg orders
+                child_legs = (
+                    session.query(PaperOrder)
+                    .filter(PaperOrder.client_order_id.like(f"{eco.client_order_id}_L%"))
+                    .all()
+                )
+                leg_symbols = [cl.symbol.upper() for cl in child_legs]
+                parts = eco.symbol.split()
+                ticker = parts[-1].upper() if len(parts) > 1 else (leg_symbols[0].split()[0] if leg_symbols else "UNKNOWN")
+
+                if not leg_symbols:
+                    continue
+
+                order_date = eco.timestamp.date()
+                ec_order_legs[eco.client_order_id] = {
+                    "order_id": eco.client_order_id,
+                    "ticker": ticker,
+                    "order_date": order_date,
+                    "leg_symbols": leg_symbols,
+                }
+
+            # Query current open positions
+            open_pos_rows = session.query(PaperPosition).filter(PaperPosition.qty != 0).all()
+            open_pos_map = {
+                p.symbol.upper(): {
+                    "symbol": p.symbol,
+                    "qty": float(p.qty),
+                    "avg_entry_price": float(p.avg_entry_price),
+                }
+                for p in open_pos_rows
+            }
+
+            # Check each EC order
+            active_ec_trades = []
+            for coid, info in ec_order_legs.items():
+                open_legs_for_order = []
+                for lsym in info["leg_symbols"]:
+                    if lsym in open_pos_map:
+                        open_legs_for_order.append(open_pos_map[lsym])
+
+                if open_legs_for_order:
+                    # Earnings announcement is completed if:
+                    # 1. force is True, OR
+                    # 2. current_date was explicitly passed and current_date >= info["order_date"], OR
+                    # 3. today > info["order_date"]
+                    earnings_completed = force or (current_date is not None and current_date >= info["order_date"]) or (today > info["order_date"])
+                    if earnings_completed:
+                        active_ec_trades.append({
+                            "parent_order_id": coid,
+                            "ticker": info["ticker"],
+                            "positions": open_legs_for_order,
+                        })
+
+        for trade in active_ec_trades:
+            ticker = trade["ticker"]
+            closing_legs = []
+            spot = spot_map.get(ticker.upper()) if spot_map else None
+
+            for pos in trade["positions"]:
+                qty = float(pos["qty"])
+                abs_qty = abs(qty)
+                entry_price = float(pos["avg_entry_price"])
+                opt_info = parse_option_symbol(pos["symbol"])
+
+                # Option pricing post IV crush
+                if spot is not None and spot > 0 and opt_info:
+                    strike = float(opt_info["strike"])
+                    opt_type = str(opt_info["option_type"]).lower()
+                    exp_str = opt_info["expiration"]
+                    try:
+                        exp_d = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                        dte = max(0, (exp_d - today).days)
+                    except Exception:
+                        dte = 1
+                    mark_price = _price_option_contract(spot, strike, dte, opt_type, sigma=0.20)
+                else:
+                    mark_price = entry_price * iv_crush_factor
+
+                closing_side = "sell" if qty > 0 else "buy"
+                closing_legs.append({
+                    "symbol": pos["symbol"],
+                    "side": closing_side,
+                    "qty": abs_qty,
+                    "fill_price": mark_price,
+                })
+
+            if not closing_legs:
+                continue
+
+            contracts = max(int(l["qty"]) for l in closing_legs)
+            sell_proceeds = sum(l["qty"] * l["fill_price"] for l in closing_legs if l["side"] == "sell")
+            buy_costs = sum(l["qty"] * l["fill_price"] for l in closing_legs if l["side"] == "buy")
+            commission = 0.65 * len(closing_legs) * contracts
+            net_cash_impact = (sell_proceeds - buy_costs) - commission
+
+            close_order_id = f"CLOSE-EC-{ticker}-{int(datetime.now(timezone.utc).timestamp())}"
+            try:
+                success = self.store.apply_multi_leg_fill(
+                    client_order_id=close_order_id,
+                    symbol=ticker,
+                    strategy_name="Close Earnings Crush",
+                    contracts=contracts,
+                    legs=closing_legs,
+                    net_cash_impact=net_cash_impact,
+                    commission_and_fees=commission,
+                )
+
+                if success:
+                    settled.append({
+                        "order_id": close_order_id,
+                        "symbol": ticker,
+                        "parent_order_id": trade["parent_order_id"],
+                        "strategy": "Earnings Crush (Post-Earnings Close)",
+                        "contracts": contracts,
+                        "net_cash_impact": net_cash_impact,
+                        "commission": commission,
+                        "closing_legs": closing_legs,
+                    })
+                else:
+                    failed.append({
+                        "symbol": ticker,
+                        "parent_order_id": trade["parent_order_id"],
+                        "reason": "apply_multi_leg_fill returned False",
+                    })
+            except Exception as exc:
+                logger.error("OptionsPaperExecutor: failed to settle EC trade for %s: %s", ticker, exc)
+                failed.append({
+                    "symbol": ticker,
+                    "parent_order_id": trade["parent_order_id"],
+                    "reason": str(exc),
+                })
+
+        return {
+            "settled_count": len(settled),
+            "failed_count": len(failed),
+            "settled": settled,
+            "failed": failed,
+        }
+
