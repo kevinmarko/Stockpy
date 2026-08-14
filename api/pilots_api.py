@@ -5623,6 +5623,25 @@ class EarningsCrushExecuteRequest(BaseModel):
     dry_run: bool = False
     is_live: bool = False
 
+class DispersionExecuteRequest(BaseModel):
+    index_symbol: str = "QQQ"
+    basket: Optional[Dict[str, Any]] = None
+    dry_run: bool = False
+    is_live: bool = False
+
+class ZeroDteExecuteRequest(BaseModel):
+    symbol: str
+    option_type: Optional[str] = "CALL"
+    strike: float
+    expiration: Optional[str] = None
+    contracts: Optional[int] = 1
+    limit_price: Optional[float] = None
+    stop_loss_pct: Optional[float] = 0.30
+    profit_target_pct: Optional[float] = 0.75
+    dry_run: bool = False
+    is_live: bool = False
+
+
 
 
 
@@ -6088,10 +6107,68 @@ def post_options_alerts_test(body: OptionsAlertTestRequest) -> Dict[str, Any]:
         payload=body.payload,
         channels=body.channels,
     )
+@app.get("/pilots/options/dispersion/opportunities", dependencies=[Depends(require_read_token)])
+def get_options_dispersion_opportunities(
+    indices: Optional[str] = None,
+    index: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Returns implied correlation, realized correlation, spread, and dispersion opportunities across index baskets."""
+    from pilots.dispersion_trading import get_dispersion_opportunities
+    idx_target = index or indices
+    idx_list = [s.strip().upper() for s in idx_target.split(",") if s.strip()] if idx_target else ["QQQ", "SPY"]
+    return get_dispersion_opportunities(indices=idx_list)
 
 
+@app.post(
+    "/pilots/options/dispersion/execute",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str, Any]:
+    """Executes a vega-neutral dispersion basket into the paper broker."""
+    from pilots.dispersion_trading import execute_dispersion_trade
+    return execute_dispersion_trade(
+        index_symbol=body.index_symbol,
+        basket=body.basket,
+        dry_run=body.dry_run,
+        is_live=body.is_live,
+    )
 
 
+@app.get("/pilots/options/zero-dte/signals", dependencies=[Depends(require_read_token)])
+def get_options_zero_dte_signals(
+    symbol: str = Query(..., min_length=1),
+    range_minutes: Optional[int] = 15,
+) -> Dict[str, Any]:
+    """Returns 0DTE opening range breakout status, squeeze state, and candidate contract."""
+    from pilots.zero_dte_engine import get_0dte_signals
+    return get_0dte_signals(symbol=symbol, range_minutes=range_minutes or 15)
+
+
+@app.post(
+    "/pilots/options/zero-dte/execute",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]:
+    """Executes 0DTE momentum option trade into the paper broker."""
+    from pilots.zero_dte_engine import execute_0dte_trade
+    return execute_0dte_trade(
+        symbol=body.symbol,
+        option_type=body.option_type or "CALL",
+        strike=body.strike,
+        expiration=body.expiration,
+        contracts=body.contracts or 1,
+        limit_price=body.limit_price,
+        stop_loss_pct=body.stop_loss_pct or 0.30,
+        profit_target_pct=body.profit_target_pct or 0.75,
+        dry_run=body.dry_run,
+        is_live=body.is_live,
+    )
 
 
 @app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])

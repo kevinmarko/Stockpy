@@ -963,3 +963,12 @@ class OptionsPaperExecutor:
             "failed": failed,
         }
 
+    def execute_dispersion_trade(
+        self,
+        basket: Any,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Executes a calibrated DispersionBasket into PaperAccountStore."""
+        from pilots.dispersion_trading import execute_dispersion_trade
+        return execute_dispersion_trade(basket=basket, store=self.store, dry_run=dry_run)
+

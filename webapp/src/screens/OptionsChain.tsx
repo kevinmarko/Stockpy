@@ -13,9 +13,11 @@ import { EarningsCrushScanner } from "../components/options/EarningsCrushScanner
 import { UnusualFlowFeed } from "../components/options/UnusualFlowFeed";
 import { VolForecastScanner } from "../components/options/VolForecastScanner";
 import { GammaScalperView } from "../components/options/GammaScalperView";
+import { DispersionScanner } from "../components/options/DispersionScanner";
+import { ZeroDteDesk } from "../components/options/ZeroDteDesk";
 import { TabGuide } from "../components/TabGuide";
 
-type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma";
+type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte";
 
 export function OptionsChain() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -199,6 +201,8 @@ export function OptionsChain() {
           { key: "puts", label: "Puts" },
           { key: "forecast", label: "🎯 Vol Scanner" },
           { key: "gamma", label: "⚡ Gamma Scalp" },
+          { key: "dispersion", label: "🌐 Dispersion" },
+          { key: "zerodte", label: "⚡ 0DTE" },
           { key: "flow", label: "🌊 Flow" },
           { key: "crush", label: "⚡ Crush" },
         ].map(tab => {
@@ -217,7 +221,8 @@ export function OptionsChain() {
                 fontWeight: isActive ? 600 : 400,
                 fontSize: "0.85rem",
                 cursor: "pointer",
-                transition: "all 0.15s ease"
+                transition: "all 0.15s ease",
+                whiteSpace: "nowrap",
               }}
             >
               {tab.label}
@@ -234,6 +239,10 @@ export function OptionsChain() {
           <VolForecastScanner initialSymbol={ticker} />
         ) : activeTab === "gamma" ? (
           <GammaScalperView initialSymbol={ticker} spotPrice={spotPrice} />
+        ) : activeTab === "dispersion" ? (
+          <DispersionScanner initialIndex={ticker} />
+        ) : activeTab === "zerodte" ? (
+          <ZeroDteDesk initialSymbol={ticker} />
         ) : activeTab === "flow" ? (
           <UnusualFlowFeed initialSymbol={ticker} />
         ) : activeTab === "crush" ? (

@@ -1128,6 +1128,292 @@ class TestOptionsAlertsTestEndpoint:
         assert resp.status_code == 401
 
 
+# ---------------------------------------------------------------------------
+# 5. GET /pilots/options/dispersion/opportunities & POST /pilots/options/dispersion/execute
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsDispersionEndpoints:
+    def test_get_dispersion_opportunities_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/dispersion/opportunities",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "count" in body
+        assert body["count"] >= 1
+        assert "opportunities" in body
+        opp = body["opportunities"][0]
+        assert "index_symbol" in opp
+        assert "implied_correlation" in opp
+        assert "realized_correlation" in opp
+        assert "correlation_spread" in opp
+        assert "regime" in opp
+        assert "basket" in opp
+        basket = opp["basket"]
+        assert "index_symbol" in basket
+        assert "constituent_symbols" in basket
+        assert "basket_vega" in basket
+        assert "vega_neutrality_ratio" in basket
+
+    def test_get_dispersion_opportunities_with_index_filter(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/dispersion/opportunities?index=SPY",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["count"] == 1
+        assert body["opportunities"][0]["index_symbol"] == "SPY"
+
+    def test_get_dispersion_opportunities_fail_open_without_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=""):
+            resp = _client.get("/pilots/options/dispersion/opportunities")
+        assert resp.status_code == 200
+        assert "opportunities" in resp.json()
+
+    def test_get_dispersion_opportunities_fails_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/dispersion/opportunities",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_dispersion_execute_fails_closed_when_writes_disabled(self):
+        payload = {
+            "index_symbol": "QQQ",
+            "dry_run": True,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=False):
+            resp = _client.post(
+                "/pilots/options/dispersion/execute",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_post_dispersion_execute_fails_closed_with_wrong_token(self):
+        payload = {"index_symbol": "QQQ", "dry_run": True}
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/dispersion/execute",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_dispersion_execute_dry_run(self):
+        payload = {
+            "index_symbol": "QQQ",
+            "dry_run": True,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/dispersion/execute",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["dry_run"] is True
+        assert body["index_symbol"] == "QQQ"
+        assert "Dry run" in body["message"]
+
+    def test_post_dispersion_execute_live_advisory_rejection(self):
+        payload = {
+            "index_symbol": "QQQ",
+            "is_live": True,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/dispersion/execute",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert "Advisory-Only" in body["message"]
+    @patch("pilots.dispersion_trading.PaperAccountStore")
+    def test_post_dispersion_execute_real_paper_execution(self, mock_store_cls):
+        mock_store = mock_store_cls.return_value
+        mock_store.apply_multi_leg_fill.return_value = True
+
+        payload = {
+            "index_symbol": "QQQ",
+            "dry_run": False,
+            "is_live": False,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/dispersion/execute",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert "execution_id" in body
+        assert body["executed_orders_count"] >= 2
+        assert mock_store.apply_multi_leg_fill.called
+
+
+# ---------------------------------------------------------------------------
+# 6. GET /pilots/options/zero-dte/signals & POST /pilots/options/zero-dte/execute
+# ---------------------------------------------------------------------------
+
+
+class TestOptionsZeroDteEndpoints:
+    def test_get_zero_dte_signals_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/zero-dte/signals?symbol=SPY",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "SPY"
+        assert "spot" in body
+        assert "signal" in body
+        assert "opening_range" in body
+        assert "high" in body["opening_range"]
+        assert "low" in body["opening_range"]
+        assert "squeeze" in body
+        assert "risk_parameters" in body
+        assert body["risk_parameters"]["profit_target_pct"] == 0.75
+        assert body["risk_parameters"]["stop_loss_pct"] == 0.30
+
+    def test_get_zero_dte_signals_missing_symbol_422(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/zero-dte/signals",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 422
+
+    def test_get_zero_dte_signals_fail_open_without_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=""):
+            resp = _client.get("/pilots/options/zero-dte/signals?symbol=QQQ")
+        assert resp.status_code == 200
+        assert resp.json()["symbol"] == "QQQ"
+
+    def test_get_zero_dte_signals_fails_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/zero-dte/signals?symbol=SPY",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_zero_dte_execute_fails_closed_when_writes_disabled(self):
+        payload = {
+            "symbol": "SPY",
+            "option_type": "CALL",
+            "strike": 560.0,
+            "contracts": 2,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=False):
+            resp = _client.post(
+                "/pilots/options/zero-dte/execute",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_post_zero_dte_execute_fails_closed_with_wrong_token(self):
+        payload = {
+            "symbol": "SPY",
+            "option_type": "CALL",
+            "strike": 560.0,
+            "contracts": 2,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/zero-dte/execute",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_zero_dte_execute_dry_run(self):
+        payload = {
+            "symbol": "SPY",
+            "option_type": "CALL",
+            "strike": 560.0,
+            "contracts": 2,
+            "dry_run": True,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/zero-dte/execute",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["dry_run"] is True
+        assert body["symbol"] == "SPY"
+        assert body["strike"] == 560.0
+        assert body["contracts"] == 2
+        assert "Dry run" in body["message"]
+
+    def test_post_zero_dte_execute_live_advisory_rejection(self):
+        payload = {
+            "symbol": "SPY",
+            "option_type": "PUT",
+            "strike": 555.0,
+            "is_live": True,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/zero-dte/execute",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert "Advisory-Only" in body["message"]
+
+    @patch("pilots.zero_dte_engine.PaperAccountStore")
+    def test_post_zero_dte_execute_real_paper_execution(self, mock_store_cls):
+        mock_store = mock_store_cls.return_value
+        mock_store.apply_multi_leg_fill.return_value = True
+
+        payload = {
+
+            "symbol": "SPY",
+            "option_type": "CALL",
+            "strike": 560.0,
+            "contracts": 3,
+            "limit_price": 2.25,
+            "dry_run": False,
+            "is_live": False,
+        }
+        with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN, PAPER_BROKER_WRITES_ENABLED=True):
+            resp = _client.post(
+                "/pilots/options/zero-dte/execute",
+                json=payload,
+                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert "order_id" in body
+        assert body["symbol"] == "SPY"
+        assert body["contracts"] == 3
+        assert body["fill_price"] == 225.0
+        mock_store.apply_multi_leg_fill.assert_called_once()
+
+
+
+
 
 
 

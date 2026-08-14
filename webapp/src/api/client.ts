@@ -168,6 +168,12 @@ import type {
   GammaScalpRequest,
   GammaScalpResponse,
   OptionsAlertTestResult,
+  DispersionBasketResponse,
+  DispersionBasketOrderRequest,
+  DispersionExecutionResult,
+  ZeroDteSignalResponse,
+  ZeroDteTradeRequest,
+  ZeroDteExecutionResult,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -1064,6 +1070,24 @@ const liveApi = {
     http<OptionsAlertTestResult>("/pilots/options/alerts/test", {
       method: "POST",
       body: params ? JSON.stringify(params) : undefined,
+    }),
+  getDispersionOpportunities: (index_symbol?: string) => {
+    const q = index_symbol ? `?index_symbol=${encodeURIComponent(index_symbol)}` : "";
+    return http<DispersionBasketResponse>(`/pilots/options/dispersion/opportunities${q}`);
+  },
+  executeDispersionBasket: (request: DispersionBasketOrderRequest | { opportunity_id?: string; index_symbol: string; regime?: string; basket_size_usd?: number }) =>
+    http<DispersionExecutionResult>("/pilots/options/dispersion/execute", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  getZeroDteSignals: (symbol?: string) => {
+    const q = symbol ? `?symbol=${encodeURIComponent(symbol)}` : "";
+    return http<ZeroDteSignalResponse>(`/pilots/options/zero-dte/signals${q}`);
+  },
+  executeZeroDteTrade: (request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number }) =>
+    http<ZeroDteExecutionResult>("/pilots/options/zero-dte/execute", {
+      method: "POST",
+      body: JSON.stringify(request),
     }),
 
   // ---- Live Trade Approvals ----

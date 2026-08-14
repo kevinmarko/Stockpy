@@ -11,6 +11,8 @@ import { EarningsCrushScanner } from "../components/options/EarningsCrushScanner
 import { UnusualFlowFeed } from "../components/options/UnusualFlowFeed";
 import { VolForecastScanner } from "../components/options/VolForecastScanner";
 import { GammaScalperView } from "../components/options/GammaScalperView";
+import { DispersionScanner } from "../components/options/DispersionScanner";
+import { ZeroDteDesk } from "../components/options/ZeroDteDesk";
 import type { RollOrderRequest } from "../api/types";
 
 export function PaperBroker() {
@@ -30,6 +32,8 @@ export function PaperBroker() {
   const [showUnusualFlow, setShowUnusualFlow] = useState(false);
   const [showVolScanner, setShowVolScanner] = useState(false);
   const [showGammaScalper, setShowGammaScalper] = useState(false);
+  const [showDispersion, setShowDispersion] = useState(false);
+  const [showZeroDte, setShowZeroDte] = useState(false);
 
   // Position Roll state
   const [rollingPosition, setRollingPosition] = useState<{ symbol: string; qty: number } | null>(null);
@@ -237,6 +241,51 @@ export function PaperBroker() {
             🎯 Vol Scanner
           </button>
           <button
+            onClick={() => setShowDispersion(!showDispersion)}
+            style={{
+              padding: "8px 14px",
+              background: showDispersion ? theme.accent : theme.surface,
+              border: `1px solid ${showDispersion ? theme.accent : theme.border}`,
+              color: showDispersion ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🌐 Dispersion
+          </button>
+          <button
+            onClick={() => setShowZeroDte(!showZeroDte)}
+            style={{
+              padding: "8px 14px",
+              background: showZeroDte ? theme.growth : theme.surface,
+              border: `1px solid ${showZeroDte ? theme.growth : theme.border}`,
+              color: showZeroDte ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            ⚡ 0DTE Desk
+          </button>
+          <button
+            onClick={() => setShowVolScanner(!showVolScanner)}
+            style={{
+              padding: "8px 14px",
+              background: showVolScanner ? theme.accent : theme.surface,
+              border: `1px solid ${showVolScanner ? theme.accent : theme.border}`,
+              color: showVolScanner ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            🎯 Vol Scanner
+          </button>
+          <button
             onClick={() => setShowGammaScalper(!showGammaScalper)}
             style={{
               padding: "8px 14px",
@@ -303,6 +352,38 @@ export function PaperBroker() {
 
       <div style={{ flex: 1, overflowY: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 24 }}>
         <TabGuide tabKey="paper-broker" />
+
+        {/* Dispersion Arbitrage Desk */}
+        {showDispersion && (
+          <DispersionScanner
+            initialIndex="QQQ"
+            onTradeExecuted={() => {
+              account.reload();
+              positions.reload();
+              orders.reload();
+              candidates.reload();
+              greeks.reload();
+              deltaHedge.reload();
+            }}
+            onClose={() => setShowDispersion(false)}
+          />
+        )}
+
+        {/* 0DTE Momentum Breakout Desk */}
+        {showZeroDte && (
+          <ZeroDteDesk
+            initialSymbol="SPY"
+            onTradeExecuted={() => {
+              account.reload();
+              positions.reload();
+              orders.reload();
+              candidates.reload();
+              greeks.reload();
+              deltaHedge.reload();
+            }}
+            onClose={() => setShowZeroDte(false)}
+          />
+        )}
 
         {/* Volatility Forecast & Strike Mispricing Scanner */}
         {showVolScanner && (

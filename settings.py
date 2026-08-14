@@ -258,6 +258,22 @@ class Settings(BaseSettings):
         default=None,
         description="Dedicated webhook URL for real-time options alerts (UOA whale sweeps, earnings crush, delta hedging).",
     )
+    OPTIONS_0DTE_ENABLED: bool = Field(
+        default=False,
+        description="Enable automated 0DTE options momentum breakout trading and lifecycle management.",
+    )
+    OPTIONS_0DTE_PROFIT_TARGET_PCT: float = Field(
+        default=0.75,
+        description="Profit target percentage threshold to trigger 0DTE exit (e.g. 0.75 for +75% gain in premium).",
+    )
+    OPTIONS_0DTE_STOP_LOSS_PCT: float = Field(
+        default=0.30,
+        description="Stop loss percentage threshold to trigger 0DTE exit (e.g. 0.30 for -30% loss).",
+    )
+    OPTIONS_0DTE_HARD_EXIT_TIME: str = Field(
+        default="15:45",
+        description="Mandatory hard exit time (ET, HH:MM) to close all open 0DTE positions and avoid pin/settlement risk.",
+    )
 
 
 

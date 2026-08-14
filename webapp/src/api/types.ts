@@ -4422,5 +4422,146 @@ export interface OptionsAlertTestResult {
   as_of?: string;
 }
 
+export interface DispersionConstituent {
+  symbol: string;
+  weight: number;
+  spot_price: number;
+  atm_iv: number;
+  realized_vol_30d: number;
+  straddle_strike: number;
+  straddle_bid: number;
+  straddle_ask: number;
+  straddle_mid: number;
+  vega_per_straddle: number;
+  contracts_allocated: number;
+  leg_action: "BUY" | "SELL";
+  implied_rv_spread?: number;
+}
+
+export interface DispersionOpportunity {
+  id: string;
+  index_symbol: string;
+  index_name?: string;
+  index_spot: number;
+  index_iv: number;
+  index_rv_30d: number;
+  index_straddle_strike: number;
+  index_straddle_price: number;
+  index_straddle_contracts: number;
+  index_action: "SELL" | "BUY";
+  implied_correlation: number;
+  realized_correlation: number;
+  correlation_spread: number;
+  regime: "LONG_DISPERSION" | "SHORT_DISPERSION" | "NEUTRAL";
+  trade_recommendation: string;
+  index_vega_total: number;
+  constituents_vega_total: number;
+  net_vega: number;
+  vega_neutrality_ratio: number;
+  net_premium_estimate: number;
+  expiration: string;
+  dte: number;
+  constituents: DispersionConstituent[];
+  as_of?: string;
+}
+
+export interface DispersionBasketResponse {
+  opportunities: DispersionOpportunity[];
+  count: number;
+  as_of?: string;
+}
+
+export interface DispersionBasketOrderRequest {
+  opportunity_id?: string;
+  index_symbol: string;
+  regime?: string;
+  basket_size_usd?: number;
+  constituents?: string[];
+  notes?: string;
+}
+
+export interface DispersionExecutionResult {
+  ok: boolean;
+  basket_id?: string;
+  index_symbol: string;
+  index_order_id?: string;
+  constituent_order_ids?: string[];
+  strategy: string;
+  net_credit_debit: number;
+  legs_count: number;
+  message: string;
+  placed_at?: string;
+}
+
+export interface ZeroDteContract {
+  option_type: "CALL" | "PUT";
+  strike: number;
+  expiration: string;
+  dte: number;
+  delta: number;
+  gamma?: number;
+  theta?: number;
+  vega?: number;
+  bid: number;
+  ask: number;
+  mid: number;
+  implied_vol: number;
+  target_price: number;
+  stop_loss_price: number;
+  hard_exit_time: string;
+}
+
+export interface ZeroDteSignal {
+  symbol: string;
+  spot_price: number;
+  timestamp: string;
+  opening_range_high: number;
+  opening_range_low: number;
+  opening_range_width_pct: number;
+  ttm_squeeze_active: boolean;
+  ttm_squeeze_bars: number;
+  momentum_direction: "BULLISH_BREAKOUT" | "BEARISH_BREAKDOWN" | "IN_RANGE";
+  momentum_score: number;
+  relative_volume_15m: number;
+  suggested_action: "BUY_CALL" | "BUY_PUT" | "WAIT";
+  recommended_contract?: ZeroDteContract;
+  trigger_reason?: string;
+}
+
+export interface ZeroDteSignalResponse {
+  signals: ZeroDteSignal[];
+  symbol?: string;
+  as_of?: string;
+}
+
+export interface ZeroDteTradeRequest {
+  symbol: string;
+  signal_id?: string;
+  option_type: "CALL" | "PUT";
+  strike: number;
+  contracts: number;
+  entry_price?: number;
+  profit_target_pct?: number;
+  stop_loss_pct?: number;
+  hard_exit_time?: string;
+}
+
+export interface ZeroDteExecutionResult {
+  ok: boolean;
+  order_id?: string;
+  symbol: string;
+  option_type: "CALL" | "PUT";
+  strike: number;
+  contracts: number;
+  fill_price: number;
+  profit_target_price: number;
+  stop_loss_price: number;
+  hard_exit_time: string;
+  strategy: string;
+  message: string;
+  placed_at?: string;
+}
+
+
 
 
