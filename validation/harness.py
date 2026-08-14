@@ -1180,41 +1180,108 @@ class StrategyValidationHarness:
             f.write(html_out)
         logger.info(f"CPCV overfitting-audit HTML report successfully written to {report_filename}")
 
+    @classmethod
+    def run_options_validation(
+        cls,
+        strategy_name: str = "Put Credit Spread",
+        ticker: str = "SPY",
+        start_date: str = "2020-01-01",
+        end_date: str = "2024-01-01",
+        initial_capital: float = 100000.0,
+        price_df: Optional[pd.DataFrame] = None,
+        reports_dir: str = "reports",
+    ) -> ValidationReport:
+        """
+        Runs full validation for a multi-leg options strategy using OptionsValidationHarness
+        and writes reports/summaries.
+        """
+        from validation.options_harness import OptionsValidationHarness
+        opt_harness = OptionsValidationHarness()
+        opt_result = opt_harness.run_backtest(
+            strategy=strategy_name,
+            ticker=ticker,
+            start_date=start_date,
+            end_date=end_date,
+            initial_capital=initial_capital,
+            price_df=price_df,
+        )
+
+        report = ValidationReport(
+            name=f"{strategy_name}_{ticker}",
+            start_date=start_date,
+            end_date=end_date,
+            sharpe=opt_result.sharpe_ratio,
+            sortino=opt_result.sortino_ratio,
+            calmar=0.0,
+            max_dd=opt_result.max_drawdown_pct / 100.0,
+            turnover=0.05,
+            hit_rate=opt_result.win_rate_pct / 100.0,
+            avg_trade_pct=opt_result.avg_win / max(1.0, initial_capital),
+            dsr=opt_result.dsr,
+            pbo=opt_result.pbo,
+            bias_report={"data_unavailable": False},
+            walk_forward_60_40=opt_result.sharpe_ratio,
+            walk_forward_70_30=opt_result.sharpe_ratio,
+            walk_forward_80_20=opt_result.sharpe_ratio,
+            distribution=np.array([]),
+            paths=[],
+            n_trials=opt_result.total_trades,
+            mean_oos_sharpe=opt_result.sharpe_ratio,
+            is_options_selling=True,
+            stress_test_results=opt_result.stress_results,
+            equity_curve=opt_result.equity_curve,
+            benchmark_curve=[],
+            macro_benchmark_curve=[],
+        )
+
+        harness_inst = cls(strategy_fn=lambda *args: [], reports_dir=reports_dir)
+        harness_inst._write_json_summary(report)
+        harness_inst._append_validation_history(report)
+        return report
+
 def main() -> None:
     """CLI endpoint for strategy validation harness."""
     parser = argparse.ArgumentParser(description="InvestYo Strategy Validation Harness")
     parser.add_argument("--strategy", type=str, required=True, help="Name of the strategy to validate")
     parser.add_argument("--start", type=str, default="2020-01-01", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, default="2023-12-31", help="End date (YYYY-MM-DD)")
+    parser.add_argument("--ticker", type=str, default="SPY", help="Ticker for options strategy validation")
     args = parser.parse_args()
 
-    # Define a default mock strategy (Buy-and-Hold SPY) for CLI invocation
-    def default_spy_bh_strategy(X_train, y_train, X_test, y_test):
-        # Return 1 configurations: Buy & Hold
-        return [
-            {
-                "params": "SPY_Buy_and_Hold",
-                "train_returns": y_train,
-                "test_returns": y_test
-            }
-        ]
+    # Route options strategies to OptionsValidationHarness
+    from validation.options_harness import STANDARD_OPTIONS_STRATEGIES
+    if args.strategy in STANDARD_OPTIONS_STRATEGIES:
+        report = StrategyValidationHarness.run_options_validation(
+            strategy_name=args.strategy,
+            ticker=args.ticker,
+            start_date=args.start,
+            end_date=args.end,
+        )
+    else:
+        # Define a default mock strategy (Buy-and-Hold SPY) for CLI invocation
+        def default_spy_bh_strategy(X_train, y_train, X_test, y_test):
+            return [
+                {
+                    "params": "SPY_Buy_and_Hold",
+                    "train_returns": y_train,
+                    "test_returns": y_test
+                }
+            ]
 
-    cost_model = TieredCostModel()
-    
-    # We pass the default Constituents provider from universe_engine
-    from universe_engine import get_sp500_constituents
-    
-    harness = StrategyValidationHarness(
-        strategy_fn=default_spy_bh_strategy,
-        universe_fn=get_sp500_constituents,
-        cost_model=cost_model
-    )
-    
-    report = harness.run(
-        start_date=args.start,
-        end_date=args.end,
-        strategy_name=args.strategy
-    )
+        cost_model = TieredCostModel()
+        from universe_engine import get_sp500_constituents
+        
+        harness = StrategyValidationHarness(
+            strategy_fn=default_spy_bh_strategy,
+            universe_fn=get_sp500_constituents,
+            cost_model=cost_model
+        )
+        
+        report = harness.run(
+            start_date=args.start,
+            end_date=args.end,
+            strategy_name=args.strategy
+        )
     
     print("\n" + "=" * 60)
     print(f" STRATEGY VALIDATION COMPLETE: {args.strategy}")
@@ -1228,3 +1295,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

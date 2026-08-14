@@ -74,6 +74,10 @@ class SignalContext:
     # missing, or when the accrual/gross-profitability raw inputs aren't yet
     # present in universe_df (see signals/sector_quality_rank.py).
     sector_quality_ranks: Dict[str, float] = field(default_factory=dict)
+    # Institutional options order flow net sentiment score in [-1.0, 1.0],
+    # keyed by symbol. Populated by OptionsFlowSentimentSignal.pre_compute()
+    # or pilots/unusual_options_flow.py.
+    options_flow_sentiment: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

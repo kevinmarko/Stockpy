@@ -5583,6 +5583,68 @@ class OptionsOrderRequestModel(BaseModel):
     legs: Optional[List[Dict[str, Any]]] = None
     isLive: bool = False
 
+class StrategyOptionsExecutionRequest(BaseModel):
+    symbols: Optional[List[str]] = None
+    dry_run: bool = False
+    max_notional: Optional[float] = None
+
+class ManageExitsRequest(BaseModel):
+    dry_run: bool = False
+    profit_target_pct: Optional[float] = None
+    stop_loss_multiple: Optional[float] = None
+    manage_dte_threshold: Optional[int] = None
+
+class RollOrderRequest(BaseModel):
+    symbol: str
+    close_legs: List[Dict[str, Any]]
+    open_legs: List[Dict[str, Any]]
+    limit_price: Optional[float] = None
+    contracts: Optional[int] = 1
+    order_type: Optional[str] = "market"
+    is_live: Optional[bool] = False
+
+class DeltaHedgeExecuteRequest(BaseModel):
+    dry_run: bool = False
+    shares: Optional[float] = None
+
+class ScenarioMatrixRequest(BaseModel):
+    spot_shifts: Optional[List[float]] = None
+    iv_shifts: Optional[List[float]] = None
+    time_shifts: Optional[List[int]] = None
+    time_days_forward: Optional[int] = 0
+
+class EarningsCrushExecuteRequest(BaseModel):
+    symbol: str
+    strategy: Optional[str] = "Iron Condor"
+    expiration: Optional[str] = None
+    contracts: Optional[int] = 1
+    legs: Optional[List[Dict[str, Any]]] = None
+    limit_price: Optional[float] = None
+    dry_run: bool = False
+    is_live: bool = False
+
+class DispersionExecuteRequest(BaseModel):
+    index_symbol: str = "QQQ"
+    basket: Optional[Dict[str, Any]] = None
+    dry_run: bool = False
+    is_live: bool = False
+
+class ZeroDteExecuteRequest(BaseModel):
+    symbol: str
+    option_type: Optional[str] = "CALL"
+    strike: float
+    expiration: Optional[str] = None
+    contracts: Optional[int] = 1
+    limit_price: Optional[float] = None
+    stop_loss_pct: Optional[float] = 0.30
+    profit_target_pct: Optional[float] = 0.75
+    dry_run: bool = False
+    is_live: bool = False
+
+
+
+
+
 @app.get("/pilots/cache-long-short/concentrated-positions", dependencies=[Depends(require_read_token)])
 def get_cls_concentrated_positions() -> Dict[str, Any]:
     """Real held (long) positions exceeding 20% of account equity, sourced
@@ -5678,6 +5740,664 @@ def post_brokerage_options_order(body: OptionsOrderRequestModel) -> Dict[str, An
         legs=body.legs,
         is_live=body.isLive,
     )
+
+@app.get("/pilots/paper-broker/strategy-options/candidates", dependencies=[Depends(require_read_token)])
+def get_paper_broker_strategy_options_candidates(symbols: Optional[str] = None) -> Dict[str, Any]:
+    """Preview current gate-passing strategy options candidates eligible for automated paper execution."""
+    from pilots.paper_broker import get_strategy_options_candidates
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else None
+    candidates = get_strategy_options_candidates(symbols=sym_list)
+    return {"count": len(candidates), "candidates": candidates}
+
+@app.post("/pilots/paper-broker/strategy-options/execute", dependencies=[Depends(require_command_token), Depends(require_paper_broker_writes_enabled)])
+def post_paper_broker_strategy_options_execute(body: Optional[StrategyOptionsExecutionRequest] = None) -> Dict[str, Any]:
+    """Execute automated paper trades for all eligible strategy option directives."""
+    from pilots.paper_broker import execute_strategy_options
+    symbols = body.symbols if body else None
+    dry_run = body.dry_run if body else False
+    max_notional = body.max_notional if body else None
+    try:
+        return execute_strategy_options(symbols=symbols, dry_run=dry_run, max_notional=max_notional)
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: strategy-options/execute failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while executing strategy options; see server logs for detail."}
+
+@app.get("/pilots/paper-broker/greeks", dependencies=[Depends(require_read_token)])
+def get_paper_broker_portfolio_greeks() -> Dict[str, Any]:
+    """Computes aggregate net Greeks (Delta, Gamma, Theta, Vega) across all open paper positions."""
+    from pilots.paper_broker import get_portfolio_greeks
+    return get_portfolio_greeks()
+
+@app.post(
+    "/pilots/paper-broker/manage-exits",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_paper_broker_manage_exits(body: Optional[ManageExitsRequest] = None) -> Dict[str, Any]:
+    """Evaluates open option positions and executes auto-exits based on profit targets, stop losses, and 21-DTE thresholds."""
+    from pilots.paper_broker import manage_position_exits
+    dry_run = body.dry_run if body else False
+    profit_target_pct = body.profit_target_pct if body else None
+    stop_loss_multiple = body.stop_loss_multiple if body else None
+    manage_dte_threshold = body.manage_dte_threshold if body else None
+    try:
+        return manage_position_exits(
+            dry_run=dry_run,
+            profit_target_pct=profit_target_pct,
+            stop_loss_multiple=stop_loss_multiple,
+            manage_dte_threshold=manage_dte_threshold,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: manage-exits failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while managing position exits; see server logs for detail."}
+
+@app.post(
+    "/pilots/paper-broker/roll",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_paper_broker_roll(body: RollOrderRequest) -> Dict[str, Any]:
+    """Executes an atomic option roll order closing existing contracts and opening new expiration legs."""
+    from pilots.paper_broker import execute_roll
+    return execute_roll(
+        symbol=body.symbol,
+        close_legs=body.close_legs,
+        open_legs=body.open_legs,
+        limit_price=body.limit_price,
+        contracts=body.contracts or 1,
+        is_live=body.is_live or False,
+    )
+
+@app.get("/pilots/paper-broker/delta-hedge/preview", dependencies=[Depends(require_read_token)])
+def get_paper_broker_delta_hedge_preview() -> Dict[str, Any]:
+    """Returns dynamic SPY beta-weighted delta hedge recommendation and deadband threshold status."""
+    from pilots.options_hedging import get_delta_hedge_preview
+    return get_delta_hedge_preview()
+
+@app.post(
+    "/pilots/paper-broker/delta-hedge/execute",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_paper_broker_delta_hedge_execute(body: Optional[DeltaHedgeExecuteRequest] = None) -> Dict[str, Any]:
+    """Executes dynamic delta hedging trade for SPY in the paper broker."""
+    from pilots.options_hedging import execute_delta_hedge
+    dry_run = body.dry_run if body else False
+    shares = body.shares if body else None
+    return execute_delta_hedge(dry_run=dry_run, shares_override=shares)
+
+@app.get("/pilots/options/vol-surface", dependencies=[Depends(require_read_token)])
+def get_options_vol_surface(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """Returns volatility surface, IV smile curve, term structure, 25-delta skew, and VRP volatility cone."""
+    from pilots.volatility_surface import get_volatility_surface_data
+    return get_volatility_surface_data(symbol=symbol)
+
+@app.post("/pilots/paper-broker/scenario-matrix", dependencies=[Depends(require_read_token)])
+def post_paper_broker_scenario_matrix(body: Optional[ScenarioMatrixRequest] = None) -> Dict[str, Any]:
+    """Evaluates 2D stress test grid and historical crisis scenario projections on open paper positions."""
+    from pilots.scenario_matrix import evaluate_portfolio_scenario_matrix
+    return evaluate_portfolio_scenario_matrix(
+        spot_shifts=body.spot_shifts if body else None,
+        iv_shifts=body.iv_shifts if body else None,
+        time_shifts=body.time_shifts if body else None,
+        time_days_forward=body.time_days_forward if body and body.time_days_forward is not None else 0,
+    )
+
+
+class OptionsBacktestRequest(BaseModel):
+    strategy: str
+    ticker: str = "SPY"
+    start_date: str = "2020-01-01"
+    end_date: str = "2024-01-01"
+    initial_capital: float = 100000.0
+
+@app.post("/pilots/options/backtest", dependencies=[Depends(require_read_token)])
+def post_options_backtest(body: OptionsBacktestRequest) -> Dict[str, Any]:
+    """Runs an options strategy backtest through OptionsValidationHarness and returns metrics, equity curves, and trade logs."""
+    from validation.options_harness import OptionsValidationHarness
+    harness = OptionsValidationHarness()
+    try:
+        res = harness.run_backtest(
+            strategy=body.strategy,
+            ticker=body.ticker,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            initial_capital=body.initial_capital,
+        )
+        return {
+            "strategy_name": res.strategy_name,
+            "ticker": res.ticker,
+            "start_date": res.start_date,
+            "end_date": res.end_date,
+            "initial_capital": res.initial_capital,
+            "final_capital": res.final_capital,
+            "total_return_pct": res.total_return_pct,
+            "annualized_return_pct": res.annualized_return_pct,
+            "sharpe_ratio": res.sharpe_ratio,
+            "sortino_ratio": res.sortino_ratio,
+            "max_drawdown_pct": res.max_drawdown_pct,
+            "total_trades": res.total_trades,
+            "winning_trades": res.winning_trades,
+            "losing_trades": res.losing_trades,
+            "win_rate_pct": res.win_rate_pct,
+            "profit_factor": res.profit_factor,
+            "avg_win": res.avg_win,
+            "avg_loss": res.avg_loss,
+            "pbo": res.pbo,
+            "dsr": res.dsr,
+            "passes_stress": res.passes_stress,
+            "deployable": res.deployable,
+            "equity_curve": res.equity_curve,
+            "trades": [
+                {
+                    "entry_date": t.entry_date,
+                    "exit_date": t.exit_date,
+                    "strategy": t.strategy,
+                    "underlying_entry_price": t.underlying_entry_price,
+                    "underlying_exit_price": t.underlying_exit_price,
+                    "entry_net_premium": t.entry_net_premium,
+                    "exit_net_cost": t.exit_net_cost,
+                    "pnl_dollar": t.pnl_dollar,
+                    "pnl_pct": round(t.pnl_pct * 100.0, 2),
+                    "exit_reason": t.exit_reason,
+                    "holding_days": t.holding_days,
+                    "contracts": t.contracts,
+                }
+                for t in res.trades
+            ],
+        }
+    except Exception as exc:
+        logger.error("Options backtest failed: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+@app.get("/pilots/options/meta-model/status", dependencies=[Depends(require_read_token)])
+def get_options_meta_model_status() -> Dict[str, Any]:
+    """Returns training health, sample size, accuracy, and ROC-AUC of the Stage 4 Options ML Meta-Labeler."""
+    from ml.options_meta_labeler import global_options_meta_labeler
+    global_options_meta_labeler.load_model()
+    return {
+        "n_samples": global_options_meta_labeler.n_samples,
+        "train_accuracy": round(global_options_meta_labeler.train_accuracy * 100.0, 2),
+        "train_roc_auc": round(global_options_meta_labeler.train_roc_auc, 3),
+        "trained_at": global_options_meta_labeler.trained_at.isoformat() if global_options_meta_labeler.trained_at else None,
+        "enabled": getattr(settings, "OPTIONS_META_LABELER_ENABLED", True),
+    }
+
+@app.post(
+    "/pilots/options/meta-model/retrain",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_meta_model_retrain() -> Dict[str, Any]:
+    """Triggers retraining of the Stage 4 ML Options Meta-Labeler on simulated/paper trades."""
+    from ml.options_meta_labeler import global_options_meta_labeler, OptionsTradeFeatureRow
+    from validation.options_harness import OptionsValidationHarness
+    
+    # Generate multi-strategy training samples using historical backtests
+    harness = OptionsValidationHarness()
+    samples = []
+    for strat in ["Put Credit Spread", "Call Credit Spread", "Iron Condor"]:
+        try:
+            res = harness.run_backtest(strategy=strat, ticker="SPY", start_date="2020-01-01", end_date="2024-01-01")
+            for t in res.trades:
+                samples.append(
+                    OptionsTradeFeatureRow(
+                        strategy=t.strategy,
+                        ivr=50.0,
+                        vrp=0.02,
+                        vix=20.0,
+                        trend_bias=1.0 if "put" in t.strategy.lower() else -1.0,
+                        target_dte=35,
+                        credit_to_width_ratio=0.30,
+                        short_delta=0.30,
+                        outcome_win=1 if t.pnl_dollar > 0 else 0,
+                    )
+                )
+        except Exception as exc:
+            logger.warning("Failed to extract training trades for %s: %s", strat, exc)
+
+    if not samples:
+        raise HTTPException(status_code=500, detail="Failed to generate training data for Meta-Labeler.")
+
+    train_res = global_options_meta_labeler.train(samples)
+    return {
+        "status": "success",
+        "trained_samples": train_res["samples"],
+        "accuracy": round(train_res["accuracy"] * 100.0, 2),
+        "roc_auc": round(train_res["roc_auc"], 3),
+        "trained_at": global_options_meta_labeler.trained_at.isoformat() if global_options_meta_labeler.trained_at else None,
+    }
+
+@app.post(
+    "/pilots/paper-broker/settle-expired",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_paper_broker_settle_expired() -> Dict[str, Any]:
+    """Scans and settles all expired option contracts in the paper broker account."""
+    from data.paper_account_store import PaperAccountStore
+    try:
+        from data.market_data import get_provider
+        engine = get_provider()
+    except Exception:
+        engine = None
+
+    store = PaperAccountStore()
+    settled = store.settle_expired_options(market_provider=engine)
+    return {
+        "settled_count": len(settled),
+        "settled": settled,
+    }
+
+
+@app.get("/pilots/options/earnings-crush/candidates", dependencies=[Depends(require_read_token)])
+def get_options_earnings_crush_candidates(
+    symbols: Optional[str] = None,
+    min_edge: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Returns upcoming earnings crush candidates with expected vs realized moves and edge ratios."""
+    from pilots.earnings_crush import get_earnings_crush_candidates
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else None
+    candidates = get_earnings_crush_candidates(symbols=sym_list, min_edge=min_edge)
+    return {"count": len(candidates), "candidates": candidates}
+
+
+@app.post(
+    "/pilots/options/earnings-crush/execute",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_earnings_crush_execute(body: EarningsCrushExecuteRequest) -> Dict[str, Any]:
+    """Executes an earnings crush multi-leg trade in the paper broker."""
+    from pilots.earnings_crush import execute_earnings_crush_trade
+    return execute_earnings_crush_trade(
+        symbol=body.symbol,
+        strategy=body.strategy or "Iron Condor",
+        expiration=body.expiration,
+        contracts=body.contracts or 1,
+        legs=body.legs,
+        limit_price=body.limit_price,
+        dry_run=body.dry_run,
+        is_live=body.is_live,
+    )
+
+
+@app.get("/pilots/options/flow/unusual", dependencies=[Depends(require_read_token)])
+def get_options_flow_unusual(
+    symbols: Optional[str] = None,
+    min_vol_oi: Optional[float] = None,
+    min_notional: Optional[float] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """Returns live unusual options activity records with V/OI ratios, notional sizing, and sweep tags."""
+    from pilots.unusual_options_flow import get_unusual_options_activity
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] if symbols else None
+    records = get_unusual_options_activity(
+        symbols=sym_list,
+        min_vol_oi=min_vol_oi,
+        min_notional=min_notional,
+        limit=limit,
+    )
+    return {"count": len(records), "records": records}
+
+
+@app.get("/pilots/options/flow/sentiment", dependencies=[Depends(require_read_token)])
+def get_options_flow_sentiment(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """Returns net institutional options flow sentiment score, call/put ratio, and active strikes for a symbol."""
+    from pilots.unusual_options_flow import get_flow_sentiment
+    return get_flow_sentiment(symbol=symbol)
+
+
+@app.get("/pilots/options/forecast/har-rv", dependencies=[Depends(require_read_token)])
+def get_options_forecast_har_rv(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """Returns Corsi (2009) HAR-RV model fit, components (RV_d, RV_w, RV_m), and forward volatility forecast."""
+    from pilots.har_volatility import get_har_volatility_forecast
+    return get_har_volatility_forecast(symbol=symbol)
+
+
+@app.get("/pilots/options/forecast/mispricing", dependencies=[Depends(require_read_token)])
+def get_options_forecast_mispricing(symbol: str = Query(..., min_length=1)) -> Dict[str, Any]:
+    """Returns strike-by-strike market IV vs fair IV spread and Rich/Cheap candidate recommendations."""
+    from pilots.vol_mispricing import get_volatility_mispricing_data
+    return get_volatility_mispricing_data(symbol=symbol)
+
+
+class GammaScalpSimulateRequest(BaseModel):
+    position: Optional[Dict[str, Any]] = None
+    price_path: Optional[List[float]] = None
+    delta_threshold: float = 0.15
+    dt_days: Optional[float] = 0.1
+    transaction_cost_per_share: Optional[float] = 0.005
+
+
+@app.post("/pilots/options/gamma-scalp/simulate", dependencies=[Depends(require_read_token)])
+def post_options_gamma_scalp_simulate(body: Optional[GammaScalpSimulateRequest] = None) -> Dict[str, Any]:
+    """Simulates intraday dynamic delta hedging and returns gamma rent vs theta decay breakdown."""
+    from pilots.gamma_scalper import simulate_gamma_scalping
+    pos = body.position if body else None
+    path = body.price_path if body else None
+    thresh = body.delta_threshold if body else 0.15
+    dt = body.dt_days if body and body.dt_days is not None else 0.1
+    cost = body.transaction_cost_per_share if body and body.transaction_cost_per_share is not None else 0.005
+    return simulate_gamma_scalping(
+        position=pos,
+        price_path=path,
+        delta_threshold=thresh,
+        dt_days=dt,
+        transaction_cost_per_share=cost,
+    )
+
+
+class OptionsAlertTestRequest(BaseModel):
+    alert_type: str = "custom"
+    payload: Optional[Dict[str, Any]] = None
+    channels: Optional[List[str]] = None
+
+
+@app.post("/pilots/options/alerts/test", dependencies=[Depends(require_command_token)])
+def post_options_alerts_test(body: OptionsAlertTestRequest) -> Dict[str, Any]:
+    """Dispatches a test options alert to configured notification channels (Discord, Slack, Email, File, Console)."""
+    from pilots.options_alerts import dispatch_options_alert
+    try:
+        return dispatch_options_alert(
+            alert_type=body.alert_type,
+            payload=body.payload,
+            channels=body.channels,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: alerts/test failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while dispatching test alert; see server logs for detail."}
+@app.get("/pilots/options/dispersion/opportunities", dependencies=[Depends(require_read_token)])
+def get_options_dispersion_opportunities(
+    indices: Optional[str] = None,
+    index: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Returns implied correlation, realized correlation, spread, and dispersion opportunities across index baskets."""
+    from pilots.dispersion_trading import get_dispersion_opportunities
+    idx_target = index or indices
+    idx_list = [s.strip().upper() for s in idx_target.split(",") if s.strip()] if idx_target else ["QQQ", "SPY"]
+    return get_dispersion_opportunities(indices=idx_list)
+
+
+@app.post(
+    "/pilots/options/dispersion/execute",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str, Any]:
+    """Executes a vega-neutral dispersion basket into the paper broker."""
+    from pilots.dispersion_trading import execute_dispersion_trade
+    try:
+        return execute_dispersion_trade(
+            index_symbol=body.index_symbol,
+            basket=body.basket,
+            dry_run=body.dry_run,
+            is_live=body.is_live,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: dispersion/execute failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while executing dispersion trade; see server logs for detail."}
+
+
+@app.get("/pilots/options/zero-dte/signals", dependencies=[Depends(require_read_token)])
+def get_options_zero_dte_signals(
+    symbol: str = Query(..., min_length=1),
+    range_minutes: Optional[int] = 15,
+) -> Dict[str, Any]:
+    """Returns 0DTE opening range breakout status, squeeze state, and candidate contract."""
+    from pilots.zero_dte_engine import get_0dte_signals
+    return get_0dte_signals(symbol=symbol, range_minutes=range_minutes or 15)
+
+
+@app.post(
+    "/pilots/options/zero-dte/execute",
+    dependencies=[
+        Depends(require_command_token),
+        Depends(require_paper_broker_writes_enabled),
+    ],
+)
+def post_options_zero_dte_execute(body: ZeroDteExecuteRequest) -> Dict[str, Any]:
+    """Executes 0DTE momentum option trade into the paper broker."""
+    from pilots.zero_dte_engine import execute_0dte_trade
+    return execute_0dte_trade(
+        symbol=body.symbol,
+        option_type=body.option_type or "CALL",
+        strike=body.strike,
+        expiration=body.expiration,
+        contracts=body.contracts or 1,
+        limit_price=body.limit_price,
+        stop_loss_pct=body.stop_loss_pct or 0.30,
+        profit_target_pct=body.profit_target_pct or 0.75,
+        dry_run=body.dry_run,
+        is_live=body.is_live,
+    )
+
+
+@app.get("/pilots/options/vpin/metrics", dependencies=[Depends(require_read_token)])
+def get_options_vpin_metrics_endpoint(
+    symbol: str = Query(..., min_length=1),
+    num_buckets: Optional[int] = 50,
+    bucket_size: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Returns volume-synchronized probability of toxicity (VPIN), regime, and bucket history."""
+    from pilots.options_vpin import get_options_vpin_metrics
+    return get_options_vpin_metrics(
+        symbol=symbol,
+        num_buckets=num_buckets or 50,
+        bucket_size=bucket_size,
+    )
+
+
+class OptionsSorAnalyzeRequest(BaseModel):
+    symbol: Optional[str] = None
+    legs: List[Dict[str, Any]] = []
+    spot_price: Optional[float] = None
+    quotes_map: Optional[Dict[str, Any]] = None
+    vpin: Optional[float] = None
+    urgency: Optional[str] = "NORMAL"
+
+
+@app.post("/pilots/options/sor/analyze", dependencies=[Depends(require_read_token)])
+def post_options_sor_analyze(body: OptionsSorAnalyzeRequest) -> Dict[str, Any]:
+    """Analyzes Complex Order Book (COB) net package routing vs Synthetic Legging execution."""
+    from pilots.options_sor import analyze_routing_options
+    res = analyze_routing_options(
+        legs=body.legs,
+        spot_price=float(body.spot_price or 0.0),
+        quotes_map=body.quotes_map,
+    )
+    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
+
+
+class OptionsSorSimulateLeggingRequest(BaseModel):
+    legs: List[Dict[str, Any]] = []
+    spot_price: Optional[float] = None
+    volatility: Optional[float] = 0.20
+    latency_seconds: Optional[float] = 2.0
+    num_simulations: Optional[int] = 1000
+    drift: Optional[float] = 0.0
+
+
+@app.post("/pilots/options/sor/simulate-legging", dependencies=[Depends(require_read_token)])
+def post_options_sor_simulate_legging(body: OptionsSorSimulateLeggingRequest) -> Dict[str, Any]:
+    """Runs Monte Carlo simulation of inter-leg execution latency and adverse selection hazard."""
+    from pilots.options_sor import simulate_legging_execution
+    res = simulate_legging_execution(
+        legs=body.legs,
+        spot_price=float(body.spot_price or 0.0),
+        volatility=body.volatility if body.volatility is not None else 0.20,
+        latency_seconds=body.latency_seconds if body.latency_seconds is not None else 2.0,
+        num_simulations=body.num_simulations if body.num_simulations is not None else 1000,
+    )
+    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
+
+
+@app.get("/pilots/options/gex/profile", dependencies=[Depends(require_read_token)])
+def get_options_gex_profile_endpoint(
+    symbol: str = Query(..., min_length=1),
+    spot_price: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Returns Options Gamma Exposure (GEX) profile, Call/Put Walls, Zero-Gamma Flip, and dealer hedging flow."""
+    from pilots.options_gex import get_options_gex_profile
+    return get_options_gex_profile(symbol=symbol, spot_price=spot_price)
+
+
+class LobSimulateQueueRequest(BaseModel):
+    symbol: Optional[str] = "SPY"
+    price_level: float
+    order_size: float
+    depth_ahead: float
+    lambda_limit: Optional[float] = 4.0
+    mu_cancel: Optional[float] = 0.05
+    theta_market: Optional[float] = 5.0
+    time_horizon_sec: Optional[float] = 60.0
+    num_simulations: Optional[int] = 500
+
+
+@app.post("/pilots/options/lob/simulate-queue", dependencies=[Depends(require_read_token)])
+def post_lob_simulate_queue(body: LobSimulateQueueRequest) -> Dict[str, Any]:
+    """Simulates Limit Order Book (LOB) queue priority progression, fill probability, and latency percentiles."""
+    from pilots.lob_simulator import simulate_queue_fill
+    return simulate_queue_fill(
+        symbol=body.symbol or "SPY",
+        price_level=body.price_level,
+        order_size=body.order_size,
+        depth_ahead=body.depth_ahead,
+        lambda_limit=body.lambda_limit,
+        mu_cancel=body.mu_cancel,
+        theta_market=body.theta_market,
+        time_horizon_sec=body.time_horizon_sec,
+        num_simulations=body.num_simulations,
+    )
+
+
+@app.get("/pilots/options/copula/pairs", dependencies=[Depends(require_read_token)])
+def get_options_copula_pairs(
+    symbol_y: Optional[str] = None,
+    symbol_x: Optional[str] = None,
+    pair: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Returns fitted copula family, tail dependence, Kalman beta, OU half-life, and spread Z-score."""
+    from pilots.copula_stat_arb import compute_copula_spread_analysis
+
+    sy = symbol_y
+    sx = symbol_x
+    if (not sy or not sx) and pair:
+        parts = pair.replace("_", "/").replace("-", "/").split("/")
+        if len(parts) == 2:
+            sy, sx = parts[0].strip(), parts[1].strip()
+
+    if not sy:
+        sy = "GLD"
+    if not sx:
+        sx = "GDX"
+    sy = sy.upper().strip()
+    sx = sx.upper().strip()
+
+    # Fetch REAL historical Close series for both legs via the shared
+    # CompositeProvider (same pattern as pairs_ondemand._fetch_close /
+    # POST /data/pairs/analyze's analyze_pair) so a live copula request is
+    # scored against actual market history instead of always falling into
+    # compute_copula_spread_analysis's synthetic fallback. Never raises —
+    # dead-lettered per symbol; any fetch/alignment shortfall leaves the
+    # *_arg values None, and compute_copula_spread_analysis's own honest
+    # synthetic fallback (flagged via the response's is_synthetic field)
+    # takes over exactly as before.
+    prices_y_arg = None
+    prices_x_arg = None
+    dates_arg = None
+    try:
+        import pandas as pd
+
+        provider = get_provider()
+        closes: Dict[str, Any] = {}
+        for sym in (sy, sx):
+            try:
+                bars = provider.get_intraday_bars(sym, lookback_days=252)
+                if bars is not None and not bars.empty and "Close" in bars.columns:
+                    closes[sym] = bars["Close"]
+            except Exception as exc:  # noqa: BLE001 - dead-letter per symbol
+                logger.debug("copula/pairs: bars fetch failed for %s: %s", sym, exc)
+        if sy in closes and sx in closes:
+            aligned = pd.DataFrame({sy: closes[sy], sx: closes[sx]}).dropna(how="any")
+            if len(aligned) >= 15:
+                prices_y_arg = aligned[sy].to_numpy()
+                prices_x_arg = aligned[sx].to_numpy()
+                dates_arg = [
+                    d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
+                    for d in aligned.index
+                ]
+    except Exception as exc:  # noqa: BLE001 - never blocks the endpoint (CONSTRAINT #6)
+        logger.debug(
+            "copula/pairs: real-data fetch unavailable for %s/%s, will use synthetic fallback: %s",
+            sy, sx, exc,
+        )
+
+    res = compute_copula_spread_analysis(
+        symbol_y=sy,
+        symbol_x=sx,
+        prices_y=prices_y_arg,
+        prices_x=prices_x_arg,
+        dates=dates_arg,
+    )
+    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
+
+
+class MarketMakerSimulateRequest(BaseModel):
+    symbol: Optional[str] = "SPY"
+    spot_price: Optional[float] = 500.0
+    volatility: Optional[float] = None
+    volatility_sigma: Optional[float] = None
+    gamma: Optional[float] = None
+    risk_aversion_gamma: Optional[float] = None
+    kappa: Optional[float] = None
+    order_flow_intensity_kappa: Optional[float] = None
+    num_steps: Optional[int] = None
+    time_steps: Optional[int] = None
+    time_horizon_t: Optional[float] = 1.0
+    max_inventory: Optional[int] = 10
+    order_size: Optional[int] = 1
+
+
+@app.post("/pilots/options/market-maker/simulate", dependencies=[Depends(require_read_token)])
+def post_market_maker_simulate(body: MarketMakerSimulateRequest) -> Dict[str, Any]:
+    """Simulates Avellaneda-Stoikov market making session, quoting trajectories, inventory path, and PnL metrics."""
+    from ml.drl_market_maker import simulate_market_maker_session
+
+    vol = body.volatility if body.volatility is not None else (body.volatility_sigma if body.volatility_sigma is not None else 0.20)
+    gam = body.gamma if body.gamma is not None else (body.risk_aversion_gamma if body.risk_aversion_gamma is not None else 0.1)
+    kap = body.kappa if body.kappa is not None else (body.order_flow_intensity_kappa if body.order_flow_intensity_kappa is not None else 1.5)
+    steps = body.num_steps if body.num_steps is not None else (body.time_steps if body.time_steps is not None else 100)
+
+    res = simulate_market_maker_session(
+        symbol=body.symbol or "SPY",
+        spot_price=body.spot_price or 500.0,
+        volatility=vol,
+        gamma=gam,
+        kappa=kap,
+        num_steps=steps,
+        time_horizon_t=body.time_horizon_t or 1.0,
+        max_inventory=body.max_inventory or 10,
+        order_size=body.order_size or 1,
+    )
+    return res.to_dict() if hasattr(res, "to_dict") else dict(res)
+
+
+
 
 @app.get("/pilots/execution/pending", dependencies=[Depends(require_read_token)])
 def get_live_trade_pending() -> Dict[str, Any]:

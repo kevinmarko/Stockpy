@@ -584,6 +584,37 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PROMPT_REGISTRY_WRITES_ENABLED",
     "RAG_QUERY_API_ENABLED",
     "STRATEGY_WRITES_ENABLED",
+    # --- Options Desk (PR #744) -- all non-secret thresholds/toggles for the -----
+    # multi-leg options paper-trading engine and its diagnostic desks (auto-exit,
+    # delta hedging, earnings crush, 0DTE, VPIN toxicity, SOR legging, GEX, LOB
+    # queue simulator, copula stat-arb, DRL market maker). None holds credential
+    # material; OPTIONS_ALERT_WEBHOOK_URL is the one exception and lives in
+    # SECRET_KEYS below (it's a webhook URL, treated like DISCORD_WEBHOOK_URL/
+    # SLACK_WEBHOOK_URL/ALERT_WEBHOOK_URL).
+    "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
+    "MAX_OPTION_NOTIONAL_PER_TRADE",
+    "MAX_CONCURRENT_OPTION_POSITIONS",
+    "OPTIONS_META_LABELER_ENABLED",
+    "OPTIONS_RISK_FREE_RATE",
+    "OPTIONS_AUTO_EXIT_ENABLED",
+    "OPTIONS_PROFIT_TARGET_PCT",
+    "OPTIONS_STOP_LOSS_MULTIPLE",
+    "OPTIONS_MANAGE_DTE_THRESHOLD",
+    "OPTIONS_DELTA_HEDGE_ENABLED",
+    "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
+    "OPTIONS_EARNINGS_CRUSH_ENABLED",
+    "OPTIONS_EARNINGS_MIN_EDGE",
+    "OPTIONS_EARNINGS_WING_MULTIPLIER",
+    "OPTIONS_0DTE_ENABLED",
+    "OPTIONS_0DTE_PROFIT_TARGET_PCT",
+    "OPTIONS_0DTE_STOP_LOSS_PCT",
+    "OPTIONS_0DTE_HARD_EXIT_TIME",
+    "OPTIONS_DRL_RISK_AVERSION_GAMMA",
+    "OPTIONS_VPIN_TOXICITY_THRESHOLD",
+    "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
+    "OPTIONS_GEX_SEARCH_RANGE_PCT",
+    "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE",
+    "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD",
 )
 
 # Keys whose VALUES must never be returned in cleartext nor written by the GUI.
@@ -630,6 +661,10 @@ SECRET_KEYS: tuple[str, ...] = (
     "MCP_OAUTH_PASSWORD",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
+    # Dedicated webhook URL for real-time options alerts (UOA whale sweeps,
+    # earnings crush, delta hedging -- pilots/options_alerts.py). Same secret
+    # treatment as DISCORD_WEBHOOK_URL/SLACK_WEBHOOK_URL/ALERT_WEBHOOK_URL.
+    "OPTIONS_ALERT_WEBHOOK_URL",
     # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood
     # execution-queue notifier in execution/queue_builder.py). Functions like a
     # bearer token: anyone who knows the topic name can publish to or read it —
