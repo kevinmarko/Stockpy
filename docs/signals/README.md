@@ -42,7 +42,7 @@ for the before/after metrics and reasoning.
 | [`rsi_extremes`](rsi_extremes.md) | 20.0 | `signals/rsi_extremes.py` | RSI-14 overbought / oversold | RSI Reversal (`rsi-reversal`) | `rsi14_extremes` (`deployable=False` — genuinely weak net-of-cost edge, see doc) |
 | [`graham_value`](graham_value.md) | 15.0 | `signals/graham_value.py` | Graham Number intrinsic value vs current price | Deep Value (`deep-value`) | `deep_value_edgar_pit` (real SEC EDGAR PIT backtest; `deployable=False` — data-coverage ceiling, see doc) |
 | [`macd_momentum`](macd_momentum.md) | 15.0 | `signals/macd_momentum.py` | MACD crossover, gated by Aroon chop filter | MACD Trend (`macd-trend`, shared with `aroon_trend`) | `macd_trend` (`deployable=True`) |
-| [`aroon_trend`](aroon_trend.md) | 15.0 | `signals/aroon_trend.py` | Aroon Oscillator trend direction + chop filter | MACD Trend (`macd-trend`, shared with `macd_momentum`) | `macd_trend` (`deployable=True`) |
+| [`aroon_trend`](aroon_trend.md) | 15.0 | `signals/aroon_trend.py` | Aroon Oscillator trend direction + chop filter | MACD Trend (`macd-trend`, shared with `macd_momentum`) | `aroon_trend` (`deployable=True`) |
 | [`timeseries_momentum`](timeseries_momentum.md) | 15.0 | `signals/timeseries_momentum.py` | Moskowitz/Ooi/Pedersen 12-month TSMOM with vol scaling | Trend Follower (`trend-following`) | `timeseries_momentum` (`deployable=True`, 2026-07 fix) |
 | [`cross_sectional_momentum`](cross_sectional_momentum.md) | 15.0 | `signals/cross_sectional_momentum.py` | Jegadeesh-Titman 12−1M cross-sectional rank | Momentum Leaders (`cross-sectional-momentum`) | `cross_sectional_momentum` (`deployable=True`, 2026-07 fix) |
 | [`multifactor`](multifactor.md) | 15.0 | `signals/multifactor.py` | Fama-French Value + Quality + Low-Vol + Size composite | Multifactor (`multifactor`) | `multifactor_lowvol_size` (Low-Vol + Size sleeve only — see `docs/signals/multifactor.md`; `deployable=True`, 2026-07 fix) |
@@ -86,13 +86,14 @@ contributions.
 
 ## Related non-module docs
 
-These three docs live in this directory because they're closely related to signal
+These docs live in this directory because they're closely related to signal
 scoring, but each is explicitly **not** a registered `SignalModule` — none appears in
 `settings.SIGNAL_WEIGHTS` or the module index table above — so they're listed
 separately rather than mixed into it:
 
 | Doc | What it covers | Why it's not a module |
 |-----|-----------------|------------------------|
+| [`pairs_trading.md`](pairs_trading.md) | Cointegrated pairs trading (Kalman dynamic hedge ratio + half-life + spread z-score) | Standalone advisory analytics & backtestable strategy (`pairs_trading`), not per-ticker `SignalAggregator` scoring |
 | [`etf_transmission.md`](etf_transmission.md) | ETF volatility-transmission — diagnostic columns (`ETF_Ownership_Pct`, `ETF_Comovement_R2`) plus an opt-in sizing derate and portfolio-covariance adjustment | Diagnostic/sizing-only; consumed by `sizing/position_sizer.py`, not `SignalAggregator` |
 | [`sector_heat_factor.md`](sector_heat_factor.md) | GDELT-based per-sector article-volume/attention proxy | Dashboard feature column only, populated by `pipeline/production_steps.py` |
 | [`sector_selection.md`](sector_selection.md) | Semantic related-sector-selection engine (`sector_selection_engine.py`) — a daily ranking pass powering the webapp's Sector Selection screen | A standalone orchestration engine with its own master switch (`settings.SECTOR_SELECTION_ENABLED`), not a per-ticker scoring contributor |

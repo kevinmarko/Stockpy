@@ -184,11 +184,13 @@ class DataEngine(IDataProvider):
     def fetch_macro_history(self) -> pd.DataFrame:
         """
         Fetches full historical daily/monthly series for VIXCLS, T10Y2Y,
-        BAMLH0A0HYM2 (HY OAS credit spread), and UNRATE (unemployment rate,
-        the Sahm Rule input) from FRED. Used by regime/hmm_regime.py to
+        BAMLH0A0HYM2 (HY OAS credit spread), BAA10Y (Moody's Seasoned Baa
+        Corporate Bond Spread -- a continuous-since-1986 fallback for
+        BAMLH0A0HYM2, which only starts 2023-08-08), and UNRATE (unemployment
+        rate, the Sahm Rule input) from FRED. Used by regime/hmm_regime.py to
         fit/refit on an expanding window (VIXCLS/T10Y2Y only) AND by
         scripts/refresh_validations.py's macro_regime_pit adapter, which needs
-        all four series to reconstruct dto_models.MacroEconomicDTO's
+        all five series to reconstruct dto_models.MacroEconomicDTO's
         market_regime/killSwitch classification at any historical date --
         a single current-snapshot value (fetch_macro_raw) cannot do this.
         Returns an empty DataFrame (never fabricated placeholder rows) if
@@ -209,22 +211,23 @@ class DataEngine(IDataProvider):
         """
         if not self.fred:
             logger.warning("FRED API not initialized. Cannot fetch macro history.")
-            return pd.DataFrame(columns=['VIXCLS', 'T10Y2Y', 'BAMLH0A0HYM2', 'UNRATE'])
+            return pd.DataFrame(columns=['VIXCLS', 'T10Y2Y', 'BAMLH0A0HYM2', 'BAA10Y', 'UNRATE'])
 
         try:
             vix_series = self.fred.get_series('VIXCLS').rename('VIXCLS')
             yield_curve_series = self.fred.get_series('T10Y2Y').rename('T10Y2Y')
             credit_spread_series = self.fred.get_series('BAMLH0A0HYM2').rename('BAMLH0A0HYM2')
+            baa_spread_series = self.fred.get_series('BAA10Y').rename('BAA10Y')
             unrate_series = self.fred.get_series('UNRATE').rename('UNRATE')
             history_df = pd.concat(
-                [vix_series, yield_curve_series, credit_spread_series, unrate_series],
+                [vix_series, yield_curve_series, credit_spread_series, baa_spread_series, unrate_series],
                 axis=1,
             )
             history_df.index = pd.to_datetime(history_df.index)
             return history_df.sort_index()
         except Exception as e:
             logger.error(f"Error fetching macro history from FRED: {e}")
-            return pd.DataFrame(columns=['VIXCLS', 'T10Y2Y', 'BAMLH0A0HYM2', 'UNRATE'])
+            return pd.DataFrame(columns=['VIXCLS', 'T10Y2Y', 'BAMLH0A0HYM2', 'BAA10Y', 'UNRATE'])
 
     def fetch_technical_raw(self, tickers: List[str]) -> Dict[str, pd.DataFrame]:
         """

@@ -54,6 +54,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, roc_auc_score
 
+from path_confinement import is_confined
 from settings import settings
 
 logger = logging.getLogger("ML.ForecastBackfill")
@@ -750,7 +751,7 @@ class AgenticForecastBackfiller:
                 # every CPCV fold was skipped/failed, since it is never
                 # assigned outside the loop body.
                 model_path = (_MODELS_DIR / f"meta_{model_key}.pkl").resolve()
-                if not model_path.is_relative_to(_MODELS_DIR.resolve()):
+                if not is_confined(model_path, _MODELS_DIR.resolve()):
                     raise ValueError(f"Refusing to write model artifact outside {_MODELS_DIR}: {model_path}")
                 with open(model_path, "wb") as f:
                     pickle.dump(clf_final, f)

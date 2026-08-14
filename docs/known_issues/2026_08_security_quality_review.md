@@ -183,6 +183,54 @@ string, so the fixture's fresh/stale split can no longer rot. Verified: full
 webapp suite (104 files / 1259 tests) passes; `tsc --noEmit` and `npm run
 build` unaffected.
 
+## 5. GitHub CodeQL, Workflow & Exception Sanitization Audit (2026-08-13)
+
+A comprehensive audit of all 51 historical and open GitHub Security alerts (CodeQL, Secret Scanning, Dependabot) and Actions workflows identified four real remediation areas, two broken workflow files, and modernized false-positive suppressions.
+
+### Full CodeQL Alert Ledger (Alerts #1 through #51 Accounting)
+
+| Alert ID(s) | Rule / Tool | File Location | Status / Resolution |
+| :--- | :--- | :--- | :--- |
+| **#1, #2** | `actions/missing-workflow-permissions` | `.github/workflows/ci.yml` | **Fixed** in prior CI hardening. |
+| **#3, #4** | `py/bind-socket-all-network-interfaces` | `desktop/net_util.py`, `tests/test_net_util.py` | **Fixed** in daemon networking hardening. |
+| **#5** | `py/weak-sensitive-data-hashing` | `settings.py:51` | **False Positive** — Fingerprint check: SHA-256 is used solely to match the known leaked FRED key hash to detect reuse, not password hashing. |
+| **#6, #7, #8** | `actions/missing-workflow-permissions` | `.github/workflows/{neuralegion,python-package-conda,makefile}.yml` | **Fixed** (workflows deleted in PR #721). |
+| **#9** | `py/stack-trace-exposure` | `api/pilots_api.py` | **Fixed** in earlier pilots API error handling pass. |
+| **#10** | — | — | *Non-existent / skipped ID in GitHub sequence.* |
+| **#11** | `py/command-line-injection` (Critical) | `gui/orchestrator_runner.py:772` | **Fixed** — Added calendar date validation via `datetime.date.fromisoformat` and strategy name whitelist validation (`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`) preventing CLI argument/flag injection. Verified `subprocess.Popen` uses argument list (`shell=False`). |
+| **#12, #13, #14** | `py/path-injection` (High) | `prompt_registry/cache.py:168-207` | **Fixed** — Hardened `_sanitize_id` to `[a-zA-Z0-9_-]` and added directory confinement (`path.resolve().is_relative_to(base.resolve())`). |
+| **#15** | `py/stack-trace-exposure` (Medium) | `api/pilots_api.py` via `pilots/prompt_registry.py:276` | **Fixed** — Replaced raw `str(exc)` in returned dict with `"Resolution failed: internal error"`; full error logged to server. |
+| **#16** | — | — | *Non-existent / skipped ID.* |
+| **#17, #18, #19, #20** | `py/overly-large-range` (Medium) | `data/emoji_lexicon.py:57` | **False Positive / Benign** — Intentional sentiment net over broad Unicode emoji blocks across planes. |
+| **#21, #22** | `py/path-injection` (High) | `ml/forecast_backfill.py` | **Dismissed** as false positives in GitHub Security UI. |
+| **#23–#32** | — | — | *Non-existent / skipped IDs.* |
+| **#33–#41** | `py/clear-text-logging/storage-sensitive-data` (High) | `scripts/measure_settings_census.py:1224-1720` | **False Positive / Suppressions Modernized** — Script logs setting field *names*, not values. Updated deprecated `# lgtm[...]` tags to `# codeql[...]`. |
+| **#42–#45** | — | — | *Non-existent / skipped IDs.* |
+| **#46, #47** | `py/stack-trace-exposure` (Medium) | `api/control_api.py:816`, `api/pilots_api.py:3589` via `pilots/run_status.py:372` | **Fixed** — Replaced raw `str(exc)` on OSError with `"Unable to read crontab schedule"`; detailed error logged to server. |
+| **#48** | `py/path-injection` (High) | `ml/forecast_backfill.py` | **Fixed** in earlier backfill hardening. |
+| **#49** | `actions/missing-workflow-permissions` (Medium) | `.github/workflows/deploy_mcp_vm.yml` | **Fixed** — Broken workflow deleted (see below). |
+| **#50** | `actions/missing-workflow-permissions` (Medium) | `.github/workflows/defender-for-devops.yml` | **Fixed** (workflow deleted in PR #721). |
+| **#51** | `actions/missing-workflow-permissions` (Medium) | `.github/workflows/python-package.yml` | **Fixed** (workflow deleted in PR #722). |
+
+### CI Workflow Cleanup & Tooling Trade-off Note
+
+1. **Deleted `.github/workflows/deploy_mcp_vm.yml`**:
+   - Contained placeholder values (`projects/123456789/...`, `my-project.iam.gserviceaccount.com`), lacked `permissions` block, and failed on every push to main.
+2. **Deleted `.github/workflows/codacy.yml`**:
+   - Lacked `CODACY_PROJECT_TOKEN`, ran 45 minutes on every PR/push, and crashed with Scala runtime errors.
+   - **Trade-off Note:** CodeQL is a security/SAST scanner — it does not perform general code-quality or PEP8 style linting. `ruff check` in `.github/workflows/ci.yml` is currently scoped to `--select=F821,F822,F823,E9` (undefined-name and syntax-error checks only, not general style/quality linting), and there is no `.pre-commit-config.yaml` or lint step in `./setup.sh` in this repository. Codacy's general code-quality/style coverage (including the TS/JS webapp code it also scanned) is therefore not currently replaced by an equivalent local or CI gate — this is an accepted, currently-uncovered gap traded for removing the 45m unauthenticated Codacy bottleneck, not a like-for-like replacement.
+
+### Repo-Wide Exception Sweep
+
+A full codebase sweep across `api/` for unredacted `str(exc)` or `f"...{exc}..."` returns confirmed that all `api/` endpoint error handlers route through `api/_redact.py` (`redact_line`), with zero raw exception disclosures remaining in that layer. `pilots/run_status.py` and `pilots/prompt_registry.py` fix the same alert class (#15, #46, #47) independently, with hand-written generic replacement strings rather than by importing `redact_line` — `pilots/` is kept dependency-light of `api/`/FastAPI by design (enforced by `tests/test_pilots_strategy_matrix.py::test_pilots_read_helpers_stay_dependency_light`), so this is an intentionally separate, not-yet-consolidated fix, not a `redact_line` call site. (Note: `api/_redact.py` does not define a `RedactingJSONResponse` class — only `redact_line`, `_get_active_secret_values`, and `install_redacting_exception_handler`.)
+
+### Secret Scanning Status (Alert #1)
+
+- Leaked service account credentials in historical commit `afa761030a9814329492a7cf7e8eb983cdabef8c` (`credentials.json` from 2026-07-17) are removed from HEAD and ignored in `.gitignore`.
+- **Action:** Key rotation on Google Cloud Console renders the key inert, allowing Alert #1 to be marked resolved in the GitHub Security tab. An optional history rewrite (`git filter-repo` / BFG) can be scheduled separately to purge the commit blob without blocking feature PR merges.
+
+Verified with 32 unit regression tests in `tests/test_security_audit_fixes.py`.
+
 ## Related
 
 - [`react_router_dom_ghsa_jjmj_open_redirect.md`](react_router_dom_ghsa_jjmj_open_redirect.md),
