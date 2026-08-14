@@ -1547,11 +1547,14 @@ class Settings(BaseSettings):
     # MAX_POSITION_WEIGHT clamp), on top of -- not instead of -- the per-name
     # ceiling above. Uses apply_portfolio_gross_cap(): the risk-aware
     # portfolio_vol_target path when a covariance matrix is supplied, else a
-    # sum-of-|weight| gross-exposure fallback. Conservative default (3.0 =
-    # 300% gross, i.e. non-binding for a typical <10-name book at
-    # MAX_POSITION_WEIGHT=1.0) until the Phase 2b backtest sweep picks a
-    # deliberately-tuned value.
-    MAX_PORTFOLIO_GROSS: float = 3.0
+    # sum-of-|weight| gross-exposure fallback.
+    # Calibrated to 2.0 (200% gross exposure ceiling, matching standard Reg-T
+    # margin and institutional 130/30 - 2x leverage boundaries). In advisory
+    # mode (5% max per name across 20 symbols = 1.0x), this is non-binding;
+    # in execution mode with high Kelly allocations across >8 concurrent names,
+    # it applies a uniform scalar reducing leverage to 2.0x while preserving
+    # relative cross-sectional signal conviction.
+    MAX_PORTFOLIO_GROSS: float = 2.0
 
     # --- Cap-aware escalation (sizing/position_sizer.py + sizing/cap_audit_store.py) ---
     # Opt-in (default False): a name that binds the same hard sizing ceiling

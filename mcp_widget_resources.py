@@ -40,6 +40,16 @@ _WIDGET_RESOURCES = [
     ("risk-matrix.html", "ui://widgets/risk-matrix.html", "Risk Matrix"),
     ("signal-tree.html", "ui://widgets/signal-tree.html", "Signal Tree"),
     ("execution-queue.html", "ui://widgets/execution-queue.html", "Execution Queue"),
+    ("devtools-inspector.html", "ui://widgets/devtools-inspector.html", "DevTools Inspector"),
+    ("lighthouse-scorecard.html", "ui://widgets/lighthouse-scorecard.html", "Lighthouse Scorecard"),
+    ("backtest-tearsheet.html", "ui://widgets/backtest-tearsheet.html", "Backtest Tear-Sheet"),
+    ("macro-regime-radar.html", "ui://widgets/macro-regime-radar.html", "Macro Regime Radar"),
+    ("order-ticket.html", "ui://widgets/order-ticket.html", "Order Ticket"),
+    ("visual-diff.html", "ui://widgets/visual-diff.html", "Visual Diff"),
+    ("network-trace.html", "ui://widgets/network-trace.html", "Network Trace"),
+    ("pit-audit-matrix.html", "ui://widgets/pit-audit-matrix.html", "PIT Audit Matrix"),
+    ("model-diagnostics.html", "ui://widgets/model-diagnostics.html", "Model Diagnostics"),
+    ("strategy-tuner.html", "ui://widgets/strategy-tuner.html", "Strategy Tuner"),
 ]
 
 _FIX_IT_HINT = "cd mcp_widgets/build && npm install && npm run build"
