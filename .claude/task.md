@@ -1,3 +1,24 @@
+# Task Tracker: Worktree Reconciliation, Gap Closure & Widget Rollout
+
+- [x] **Phase 0 — Reconcile the Worktree (4 Specialized Agents)**
+  - [x] Step 1: Run raw pytest suites to `/tmp/widget_test_output.txt` (350 passed)
+  - [x] Step 2: Categorize assertions in `tests/test_investyo_mcp_widgets.py` (Tier A vs Tier B)
+  - [x] Step 3: Run `git diff HEAD --stat` and audit diff surface against `walkthrough.md`
+  - [x] Step 4: Output the Per-Widget Triage & Decision Table
+- [x] **Phase 1 — Close Functional Gaps**
+  - [x] 1a. Calibrate `MAX_PORTFOLIO_GROSS` (Calibrated to `2.0` in `settings.py` with written Reg-T margin & sizing rationale; documented in `docs/architecture/signal-engines.md`)
+  - [x] 1b. Verify CNN-LSTM Purge & Embargo (`purged_train_val_split` and expanding `fit_scalers_walkforward_windows` verified; created standalone `tests/test_cnn_lstm_leakage_audit.py`)
+- [x] **Phase 2 — Promote Diagnostic Widgets with Known-Bad Testing**
+  - [x] 2a. PIT Coverage & Audit Matrix (`pit-audit-matrix.html`, known-bad empty/lookahead leak tests passing)
+  - [x] 2b. Model Diagnostics & Drift (`model-diagnostics.html`, synthetic injected drift tests passing)
+- [x] **Phase 3 — Promote Quant & Trading Widgets**
+  - [x] 3a. Backtest Tearsheet (`backtest-tearsheet.html` / `run_backtest` & `run_validation_harness` schema tests passing)
+  - [x] 3b. Macro Regime Radar (`macro-regime-radar.html` / `get_regime_status` & `trigger_macro_engine` schema tests passing)
+  - [x] 3c. Order Ticket (`order-ticket.html` / `propose_paper_trade_for_review` RLHF schema tests passing)
+- [x] **Phase 4 — Promote Strategy Tuner, DevTools Integration & Final Release Gate**
+  - [x] 4a. Promote `strategy-tuner.html` (`tune_strategy_parameters`) with parameter sensitivity bounds tests
+  - [x] 4b. Verify WebApp DevTools utilities (`visual-diff.html`, `network-trace.html`, `devtools-inspector.html`, `lighthouse-scorecard.html`)
+  - [x] 4c. Run preflight readiness check and update documentation
 # Task: Accelerate Backtest Execution Performance
 
 - [x] **Phase 1: Vectorize CombinatorialPurgedCV Splitting** <!-- id: p1 -->

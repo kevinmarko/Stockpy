@@ -491,3 +491,475 @@ body {
   font-size: 12px;
   margin: 0 0 8px;
 }
+
+/* ==========================================================================
+   DevTools Inspector Styles
+   ========================================================================== */
+.devtools-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inspector-route {
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cat-momentum);
+  background: var(--surface2);
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.screen-preview-container {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+}
+
+.screen-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--surface3);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.preview-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.preview-dot.red { background: var(--decline); }
+.preview-dot.yellow { background: var(--caution); }
+.preview-dot.green { background: var(--growth); }
+
+.screen-preview-body {
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screen-preview-img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.console-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.console-log-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+
+.console-log-item.error {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--decline);
+}
+
+.console-log-item.warn {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--caution);
+}
+
+.console-log-item.info {
+  background: var(--surface2);
+  color: var(--text-secondary);
+}
+
+/* ==========================================================================
+   Lighthouse Scorecard Styles
+   ========================================================================== */
+.lighthouse-scorecard {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.score-gauges-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 10px;
+}
+
+.score-gauge-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+}
+
+.gauge-circle {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+  border: 4px solid var(--border);
+  position: relative;
+}
+
+.gauge-circle.score-good {
+  border-color: var(--growth);
+  color: var(--growth);
+}
+
+.gauge-circle.score-avg {
+  border-color: var(--caution);
+  color: var(--caution);
+}
+
+.gauge-circle.score-poor {
+  border-color: var(--decline);
+  color: var(--decline);
+}
+
+.gauge-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.vitals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.vital-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.vital-name {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.vital-value {
+  font-size: 15px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.vital-rating {
+  font-size: 10px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.vital-rating.good { color: var(--growth); }
+.vital-rating.needs-improvement { color: var(--caution); }
+.vital-rating.poor { color: var(--decline); }
+
+/* ==========================================================================
+   Backtest Tear-Sheet Styles
+   ========================================================================== */
+.backtest-tearsheet {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.returns-heatmap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.returns-heatmap-table th,
+.returns-heatmap-table td {
+  padding: 4px 6px;
+  text-align: center;
+  border: 1px solid var(--border);
+}
+
+.returns-heatmap-table th {
+  background: var(--surface3);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.heatmap-pos-high { background: rgba(16, 185, 129, 0.4); color: #fff; }
+.heatmap-pos-med { background: rgba(16, 185, 129, 0.25); }
+.heatmap-pos-low { background: rgba(16, 185, 129, 0.12); }
+.heatmap-neg-low { background: rgba(239, 68, 68, 0.12); }
+.heatmap-neg-med { background: rgba(239, 68, 68, 0.25); }
+.heatmap-neg-high { background: rgba(239, 68, 68, 0.4); color: #fff; }
+.heatmap-zero { background: transparent; color: var(--text-muted); }
+
+/* ==========================================================================
+   Macro Regime Radar Styles
+   ========================================================================== */
+.macro-radar-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.radar-chart-container {
+  max-width: 320px;
+  max-height: 280px;
+  margin: 0 auto;
+}
+
+.hmm-probability-bar {
+  background: var(--surface3);
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  display: flex;
+}
+
+.hmm-bar-fill {
+  height: 100%;
+  background: var(--growth);
+  transition: width 0.3s ease;
+}
+
+/* ==========================================================================
+   Order Ticket Styles
+   ========================================================================== */
+.order-ticket {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.risk-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.risk-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: var(--surface2);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.btn-action-primary {
+  background: var(--growth);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn-action-primary:hover {
+  opacity: 0.9;
+}
+
+/* ==========================================================================
+   Visual Diff Styles
+   ========================================================================== */
+.visual-diff-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.diff-views-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.diff-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diff-card-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.diff-img {
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+/* ==========================================================================
+   Network Trace Styles
+   ========================================================================== */
+.network-trace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.network-trace-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: monospace;
+}
+
+.network-trace-table th,
+.network-trace-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.network-trace-table th {
+  background: var(--surface3);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.method-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 10px;
+}
+
+.method-get { background: rgba(16, 185, 129, 0.15); color: var(--growth); }
+.method-post { background: rgba(99, 102, 241, 0.15); color: var(--cat-momentum); }
+.method-put { background: rgba(245, 158, 11, 0.15); color: var(--caution); }
+
+/* ==========================================================================
+   PIT Matrix Styles
+   ========================================================================== */
+.pit-matrix-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pit-matrix-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.pit-matrix-table th,
+.pit-matrix-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.pit-safe-cell {
+  color: var(--growth);
+  font-weight: 600;
+}
+
+.pit-warning-cell {
+  color: var(--caution);
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Model Diagnostics & Strategy Tuner Styles
+   ========================================================================== */
+.model-diagnostics-panel,
+.strategy-tuner-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tuner-slider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border-radius: 6px;
+}
+
+.tuner-slider-row label {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 140px;
+}
+
+.tuner-slider-input {
+  flex: 1;
+  cursor: pointer;
+}
+
+.tuner-val-display {
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 45px;
+  text-align: right;
+}
+
+
