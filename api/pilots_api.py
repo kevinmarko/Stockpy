@@ -5979,11 +5979,11 @@ def post_paper_broker_settle_expired() -> Dict[str, Any]:
     """Scans and settles all expired option contracts in the paper broker account."""
     from data.paper_account_store import PaperAccountStore
     try:
-        from data_engine import DataEngine
-        engine = DataEngine()
+        from data.market_data import get_provider
+        engine = get_provider()
     except Exception:
         engine = None
-    
+
     store = PaperAccountStore()
     settled = store.settle_expired_options(market_provider=engine)
     return {

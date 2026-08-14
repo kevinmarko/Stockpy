@@ -237,7 +237,7 @@ class OptionsMetaLabeler:
 
         # Linear edge scaling: 55% win rate -> 0.60x size, 70% win rate -> 1.20x size, 80%+ -> 1.50x cap
         edge = prob - 0.50
-        multiplier = 1.0 + (edge - 0.15) * 2.5
+        multiplier = 1.0 + (edge - 0.15) * 4.0
         return float(np.clip(multiplier, 0.30, 1.50))
 
     def score_option_directive(

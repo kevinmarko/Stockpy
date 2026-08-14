@@ -178,12 +178,26 @@ def execute_delta_hedge(
         try:
             from pilots.price_provider import get_current_price
             resolved_price = get_current_price("SPY")
-            if resolved_price > 0:
-                spy_spot = resolved_price
-            else:
-                spy_spot = 500.0
+            spy_spot = resolved_price if resolved_price > 0 else None
         except Exception:
-            spy_spot = 500.0
+            spy_spot = None
+
+        if spy_spot is None:
+            # No honest SPY price available -- refuse to execute rather than
+            # fabricate one (CONSTRAINT #4): a fabricated price would be
+            # written into the real paper-account ledger as fill_price below.
+            return {
+                "ok": False,
+                "hedged": False,
+                "action": "HOLD",
+                "shares": 0.0,
+                "symbol": "SPY",
+                "order_id": None,
+                "reason": "SPY spot price unavailable",
+                "message": "Delta hedge not executed: no live SPY quote available (refusing to fill at a fabricated price).",
+                "order": None,
+                "fill": None,
+            }
 
     if portfolio_greeks is None:
         try:
@@ -215,8 +229,14 @@ def execute_delta_hedge(
 
     client_order_id = f"hedge_spy_{uuid.uuid4().hex[:12]}"
     fill_price = float(spy_spot)
-    qty = float(shares_override) if shares_override is not None else float(order["qty"] if order else 0)
-    side = str(order["side"]).lower() if order else ("buy" if qty > 0 else "sell")
+    # shares_override may carry its side as a sign (negative = sell); derive
+    # `side` from that sign BEFORE taking the absolute value -- apply_fill's
+    # cash/position math assumes a non-negative qty, so passing a negative
+    # value through unabs'd inverts both the cash impact and the resulting
+    # position's sign.
+    raw_qty = float(shares_override) if shares_override is not None else float(order["qty"] if order else 0)
+    qty = abs(raw_qty)
+    side = str(order["side"]).lower() if order else ("buy" if raw_qty > 0 else "sell")
 
     if dry_run:
         return {

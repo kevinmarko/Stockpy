@@ -11761,10 +11761,12 @@ export const mockApi = {
     });
   },
   async rollPaperOptionPosition(request: RollOrderRequest) {
+    const closeSymbol = request.close_legs[0]?.symbol ?? request.symbol;
+    const openSymbol = request.open_legs[0]?.symbol ?? request.symbol;
     return delay<OptionsOrderResult>({
       ok: true,
       order_id: `ord_roll_${Date.now()}`,
-      message: `Successfully rolled ${request.current_symbol} to ${request.target_expiration}${request.target_strike ? ` @ strike $${request.target_strike}` : ""}. Net credit/debit applied.`,
+      message: `Successfully rolled ${closeSymbol} to ${openSymbol}. Net credit/debit applied.`,
     });
   },
   async getEarningsCrushCandidates(symbols?: string[]) {

@@ -4175,12 +4175,28 @@ export interface DeltaHedgeResult {
   message: string;
 }
 
+/** One leg of a roll's close/open list -- mirrors api/pilots_api.py's
+ * RollOrderRequest.close_legs/open_legs (List[Dict[str, Any]], read by
+ * PaperAccountStore.apply_roll_fill). `symbol` is the full option-leg
+ * symbol string ("{TICKER} {YYYY-MM-DD} ${STRIKE} {CALL|PUT}"). */
+export interface RollOrderLeg {
+  symbol: string;
+  side: "buy" | "sell";
+  qty: number;
+}
+
+/** Matches api/pilots_api.py's RollOrderRequest exactly -- `symbol` plus the
+ * explicit close/open leg lists PaperAccountStore.apply_roll_fill requires,
+ * not a same-symbol target_expiration/target_strike shorthand the backend
+ * has no field for. */
 export interface RollOrderRequest {
-  current_symbol: string;
-  target_expiration: string;
-  target_strike?: number;
-  qty?: number;
-  net_credit_or_debit?: number;
+  symbol: string;
+  close_legs: RollOrderLeg[];
+  open_legs: RollOrderLeg[];
+  limit_price?: number;
+  contracts?: number;
+  order_type?: string;
+  is_live?: boolean;
 }
 
 export interface ClosedExitPosition {

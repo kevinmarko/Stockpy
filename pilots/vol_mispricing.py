@@ -859,7 +859,7 @@ def build_candidate_strategy_trades(
                 net_delta = round((long_put.get("delta") or 0.0) - (short_put.get("delta") or 0.0), 4)
                 net_gamma = round((long_put.get("gamma") or 0.0) - (short_put.get("gamma") or 0.0), 6)
                 net_vega = round((long_put.get("vega") or 0.0) - (short_put.get("vega") or 0.0), 4)
-                net_theta = round((short_put.get("theta") or 0.0) - (long_put.get("theta") or 0.0), 4)
+                net_theta = round((long_put.get("theta") or 0.0) - (short_put.get("theta") or 0.0), 4)
                 score = round((short_put.get("spread") or 0.03) * 100.0, 1)
 
                 bull_put_trade = CandidateStrategyTrade(
@@ -915,7 +915,7 @@ def build_candidate_strategy_trades(
                 net_delta = round((long_call.get("delta") or 0.0) - (short_call.get("delta") or 0.0), 4)
                 net_gamma = round((long_call.get("gamma") or 0.0) - (short_call.get("gamma") or 0.0), 6)
                 net_vega = round((long_call.get("vega") or 0.0) - (short_call.get("vega") or 0.0), 4)
-                net_theta = round((short_call.get("theta") or 0.0) - (long_call.get("theta") or 0.0), 4)
+                net_theta = round((long_call.get("theta") or 0.0) - (short_call.get("theta") or 0.0), 4)
                 score = round((short_call.get("spread") or 0.03) * 100.0, 1)
 
                 bear_call_trade = CandidateStrategyTrade(

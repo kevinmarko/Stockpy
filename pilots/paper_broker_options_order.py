@@ -321,6 +321,13 @@ def execute_paper_order(
             fill_price_unit = leg_price * 100.0
             total_cost = (contracts * fill_price_unit) + commission if action == "buy" else (contracts * fill_price_unit) - commission
 
+            # Naked single-leg short (a sell with no covering long inventory) is
+            # otherwise uncollateralized -- require the full notional (strike *
+            # 100 * contracts) as a conservative margin proxy, same order of
+            # magnitude as a cash-secured put, so opening one is bounded by
+            # available cash rather than unconditionally accepted.
+            collateral_required = strike * 100.0 * contracts if action == "sell" else None
+
             success = store.apply_fill(
                 client_order_id=client_order_id,
                 symbol=order_symbol,
@@ -329,6 +336,7 @@ def execute_paper_order(
                 fill_price=fill_price_unit,
                 commission_and_fees=commission,
                 allow_short=True,
+                collateral_required=collateral_required,
             )
 
             if not success:

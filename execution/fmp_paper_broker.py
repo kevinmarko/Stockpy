@@ -38,6 +38,7 @@ from execution.broker_base import (
 from execution.cost_model import TieredCostModel
 from data.paper_account_store import PaperAccountStore
 from data import fmp_client
+from pilots.options_risk import parse_option_symbol
 
 logger = logging.getLogger("FMPPaperBroker")
 
@@ -93,8 +94,12 @@ class FMPPaperBroker(BrokerBase):
             try:
                 parsed_legs = []
                 signed_prices = []
+                strikes = []
                 for idx, leg in enumerate(intent.legs):
                     leg_symbol = str(leg.get("symbol", f"{intent.symbol}-LEG-{idx+1}")).upper().strip()
+                    parsed_symbol = parse_option_symbol(leg_symbol)
+                    if parsed_symbol:
+                        strikes.append(parsed_symbol["strike"])
                     raw_side = leg.get("side")
                     if raw_side is None:
                         raw_side = intent.side
@@ -149,13 +154,29 @@ class FMPPaperBroker(BrokerBase):
                 else:
                     exec_net_price = net_price
 
+                strike_width = None
+                if len(strikes) >= 2:
+                    strikes_sorted = sorted(strikes)
+                    strike_width = abs(strikes_sorted[-1] - strikes_sorted[0])
+
                 commission = 0.65 * intent.qty * len(intent.legs)
                 if exec_net_price >= 0:
                     net_cash_impact = -((intent.qty * exec_net_price * 100.0) + commission)
                     collateral = abs(net_cash_impact)
                 else:
                     net_cash_impact = (intent.qty * abs(exec_net_price) * 100.0) - commission
-                    collateral = abs(exec_net_price) * 100.0 * intent.qty
+                    # Defined-risk collateral for a credit spread is the max
+                    # loss (strike width minus credit received), not the
+                    # credit itself -- falls back to the credit-only figure
+                    # when strikes can't be derived (e.g. a naked short leg
+                    # with no offsetting long strike).
+                    abs_net_price = abs(exec_net_price)
+                    max_risk_per_share = (
+                        (strike_width - abs_net_price)
+                        if (strike_width and strike_width > abs_net_price)
+                        else abs_net_price
+                    )
+                    collateral = max_risk_per_share * 100.0 * intent.qty
 
                 success = self.store.apply_multi_leg_fill(
                     client_order_id=client_order_id,

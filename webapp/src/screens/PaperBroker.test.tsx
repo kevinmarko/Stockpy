@@ -458,10 +458,10 @@ describe("PaperBroker", () => {
 
     await waitFor(() => {
       expect(api.rollPaperOptionPosition).toHaveBeenCalledWith({
-        current_symbol: "SPY 2026-09-18 $500.00 PUT",
-        target_expiration: "2026-10-16",
-        target_strike: undefined,
-        qty: 2,
+        symbol: "SPY",
+        close_legs: [{ symbol: "SPY 2026-09-18 $500.00 PUT", side: "buy", qty: 2 }],
+        open_legs: [{ symbol: "SPY 2026-10-16 $500.00 PUT", side: "sell", qty: 2 }],
+        contracts: 2,
       });
     });
   });

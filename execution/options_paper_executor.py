@@ -160,8 +160,17 @@ class OptionsPaperExecutor:
         directives: Optional[List[Dict[str, Any]]] = None,
         dry_run: bool = False,
         max_notional_per_order: Optional[float] = None,
+        macro_dto: Optional[Any] = None,
+        vrp: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Executes a list of actionable strategy directives into PaperAccountStore."""
+        """Executes a list of actionable strategy directives into PaperAccountStore.
+
+        ``macro_dto``/``vrp`` are forwarded to ``get_actionable_directives()`` when
+        ``directives`` is not already supplied, so the VIX/CREDIT-EVENT/VRP
+        premium-selling regime gate (see ``execution/options_queue_builder.py``'s
+        ``passes_premium_gate``) is actually evaluated rather than silently
+        skipped because both were left at their ``None`` default.
+        """
         if max_notional_per_order is None:
             max_notional_per_order = getattr(settings, "MAX_OPTION_NOTIONAL_PER_TRADE", 2500.0)
 
@@ -185,7 +194,7 @@ class OptionsPaperExecutor:
         failed = []
 
         if directives is None:
-            directives = self.get_actionable_directives()
+            directives = self.get_actionable_directives(macro_dto=macro_dto, vrp=vrp)
 
         for item in directives:
             sym = str(item.get("symbol", "")).upper().strip()
@@ -284,7 +293,22 @@ class OptionsPaperExecutor:
                         })
                         continue
                     mult = float(ml_score.get("sizing_multiplier", 1.0))
-                    contracts = max(1, int(round(contracts * mult)))
+                    # No `max(1, ...)` floor here: re-flooring to 1 after a
+                    # low-confidence multiplier (e.g. 0.30x) would silently
+                    # re-inflate a derated trade back to full size whenever
+                    # the base sizing was already 1 contract -- the common
+                    # case -- defeating the confidence-based derating
+                    # entirely. A directive that derates below 1 contract is
+                    # skipped instead of forced back up to 1.
+                    ml_contracts = int(round(contracts * mult))
+                    if ml_contracts < 1:
+                        skipped.append({
+                            "symbol": sym,
+                            "reason": f"Stage 4 ML Meta-Labeler sizing multiplier ({mult:.2f}x) derated position below 1 contract (P(Win)={ml_score.get('prob_win', 0):.2f})",
+                            "ml_score": ml_score,
+                        })
+                        continue
+                    contracts = ml_contracts
                 except Exception as exc:
                     logger.debug("ML Meta-labeler evaluation skipped: %s", exc)
 
