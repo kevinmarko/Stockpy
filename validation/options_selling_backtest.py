@@ -108,6 +108,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -459,6 +460,17 @@ class _CyclePlan:
 
 
 _CYCLE_PLAN_CACHE: Dict[Tuple[str, str, str, str], _CyclePlan] = {}
+# Guards _CYCLE_PLAN_CACHE's get/compute/set sequence in _get_cycle_plan --
+# scripts/refresh_validations.py's --workers>1 path can invoke multiple
+# options-selling STRATEGY_REGISTRY adapters concurrently from separate
+# threads, and this cache is keyed by (ticker, start, end, closes-fingerprint)
+# rather than by strategy, so two adapters sharing a universe/window race on
+# the same key. Without a lock, concurrent threads could double up on the
+# expensive GJR-GARCH fit (wasteful) and invoke the underlying arch/scipy
+# optimizer path concurrently from the same process (thread-safety
+# unverified) -- both closed by serializing the whole get-or-compute
+# sequence per key.
+_CYCLE_PLAN_CACHE_LOCK = threading.Lock()
 
 
 def _closes_fingerprint(closes: pd.Series) -> str:
@@ -623,12 +635,13 @@ def _get_cycle_plan(ticker: str, start: str, end: str, closes: pd.Series) -> _Cy
     per-cycle computation once, not once per adapter.
     """
     key = _cycle_plan_cache_key(ticker, start, end, closes)
-    cached = _CYCLE_PLAN_CACHE.get(key)
-    if cached is not None:
-        return cached
-    plan = _compute_cycle_plan(ticker, start, end, closes)
-    _CYCLE_PLAN_CACHE[key] = plan
-    return plan
+    with _CYCLE_PLAN_CACHE_LOCK:
+        cached = _CYCLE_PLAN_CACHE.get(key)
+        if cached is not None:
+            return cached
+        plan = _compute_cycle_plan(ticker, start, end, closes)
+        _CYCLE_PLAN_CACHE[key] = plan
+        return plan
 
 
 def _reset_cycle_plan_cache() -> None:

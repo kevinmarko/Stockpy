@@ -170,6 +170,7 @@ pytest tests/test_quantitative_models.py            # run a single test file
 pytest tests/test_quantitative_models.py::test_graham_number_imaginary_bounds  # run a single test
 python3 database_setup.py        # (re)build the SQLite schema in quant_platform.db from config.COLUMN_SCHEMA
 python3 -m validation.harness --strategy <name> --start YYYY-MM-DD --end YYYY-MM-DD # run strategy validation harness
+python -m scripts.refresh_validations --strategies <name> --workers 4 # walk-forward strategy validation cadence (concurrent)
 python scripts/preflight_check.py            # pre-live readiness gate (exit 0 = all pass)
 python scripts/preflight_check.py --json     # machine-readable JSON output
 python -m execution.kill_switch --status     # check / activate / deactivate the global kill switch
