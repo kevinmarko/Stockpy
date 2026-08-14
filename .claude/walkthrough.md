@@ -1,64 +1,54 @@
-# Phased Walkthrough: Stock & Options Order Input & Execution System
+# Walkthrough: Complete Multi-Phase Delivery & Verification (Phases 0 - 4)
 
-We built and verified the complete Stock & Options Order Input & Paper Execution system across 4 modular phases.
+## Summary of Accomplishments
 
----
+### 1. Phase 0: Worktree Reconciliation (4 Agents)
+- **Agent 1 (`test-auditor-agent`)**: Executed the test suites and captured raw outputs in `/tmp/widget_test_output.txt` (350 passed, 0 failures).
+- **Agent 2 (`assertion-categorizer-agent`)**: Categorized test assertions into Tier A (34 wiring tests) and Tier B (29 behavioral/schema tests).
+- **Agent 3 (`diff-reconciler-agent`)**: Audited git diff surface (+1,859 / -169 lines across 9 files + 10 HTML templates).
+- **Agent 4 (`triage-orchestrator-agent`)**: Produced the Per-Widget Triage Matrix.
 
-## 1. Phase 1: Core Sizing & Pricing Modules
+### 2. Phase 1: Functional Gap Closure
+- **1a. `MAX_PORTFOLIO_GROSS` Calibration**:
+  - Calibrated `settings.MAX_PORTFOLIO_GROSS` from placeholder `3.0` to `2.0` (200% gross exposure ceiling, matching standard Reg-T margin & institutional 130/30 boundaries).
+  - Documented written rationale in `settings.py` and `docs/architecture/signal-engines.md`.
+- **1b. CNN-LSTM Walk-Forward Leakage Mitigation**:
+  - Verified `forecasting_engine.py::purged_train_val_split` purges `lookback - 1` overlapping windows at the train/val boundary.
+  - Verified `forecasting_engine.py::fit_scalers_walkforward_windows` uses expanding-window min/max cumulation to guarantee causal invariance.
+  - Added standalone test suite `tests/test_cnn_lstm_leakage_audit.py` (2 tests passing).
 
-- **[`pilots/price_provider.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/pilots/price_provider.py)**:
-  - Connects to Financial Modeling Prep via `data.fmp_client`.
-  - Extracts real quote fields (`price`, `previousClose`, `dayLow`, `dayHigh`, `volume`) without assuming absent real-time bid/ask.
-  - Implements `get_current_price(symbol, fallback_price)` with fallback hierarchy.
-- **[`pilots/order_sizing.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/pilots/order_sizing.py)**:
-  - Sizing conversion: Dollar budget $\rightarrow$ shares / options contracts.
-  - Enforces 100x multiplier and integer contract rounding.
-  - **75% Cash Preset**: Replaced the 100% "Max Cash" preset with `calculate_safe_cash_preset(available_cash, 0.75)` to prevent single-tap 100% cash commitments.
-- **Unit Tests**:
-  - `tests/test_price_provider.py` (4 tests passed)
-  - `tests/test_order_sizing.py` (4 tests passed)
+### 3. Phase 2: Diagnostic Widget Promotion with Known-Bad Testing
+- **2a. PIT Coverage & Audit Matrix (`pit-audit-matrix.html`)**:
+  - Added `test_get_pit_coverage_report_flags_empty_or_bad_data_honestly` asserting honest text degradation without fake JSON payloads.
+- **2b. Model Diagnostics & Drift (`model-diagnostics.html`)**:
+  - Added `test_get_model_drift_report_fires_alert_on_synthetic_injected_drift` asserting that severe forecast decay (>25%) accurately flags drift alerts.
 
----
+### 4. Phase 3: Quant & Trading Core Widgets Promotion
+- **3a. Backtest Tearsheet (`backtest-tearsheet.html`)**:
+  - Validated `run_backtest` & `run_validation_harness` schema integrity. Added `test_run_backtest_emits_json_matching_widget_schema` asserting `sharpe`, `max_drawdown`, `deployable`, and `total_return`.
+- **3b. Macro Regime Radar (`macro-regime-radar.html`)**:
+  - Validated `get_regime_status` & `trigger_macro_engine`. Added `test_get_regime_status_emits_json_matching_widget_schema` asserting `market_regime`, `vix`, `sahm_rule`, `hmm_risk_on_probability`, and `kill_switch_active`.
+- **3c. Order Ticket (`order-ticket.html`)**:
+  - Validated `propose_paper_trade_for_review` RLHF payload generation and confidence scoring.
 
-## 2. Phase 2: Paper Broker Execution Engine
-
-- **[`pilots/paper_broker_options_order.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/pilots/paper_broker_options_order.py)**:
-  - Executes stock and option paper orders against `data.paper_account_store.py::PaperAccountStore`.
-  - Computes fill prices, contract multipliers, and commissions ($0.65/contract for options; $0.005/share for stock).
-  - Handles position creation and cash balance adjustments via `apply_fill(...)`.
-  - Live execution safely rejected in Advisory-Only mode.
-- **[`pilots/paper_broker.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/pilots/paper_broker.py)**:
-  - Delegated `execute_paper_order` to `paper_broker_options_order`.
-- **Unit Tests**:
-  - `tests/test_paper_broker_options_order.py` (4 tests passed)
-  - `tests/test_pilots_paper_broker.py` (12 tests passed)
-
----
-
-## 3. Phase 3: REST API & Parity Layer
-
-- **[`api/pilots_api.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/api/pilots_api.py)**:
-  - Added Pydantic model `OptionsOrderRequestModel` and endpoint `POST /brokerage/options/order`.
-- **[`webapp/src/api/types.ts`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/webapp/src/api/types.ts)**:
-  - Updated `OptionsOrderRequest` and `OptionsOrderResult` interfaces.
-- **[`webapp/src/api/mock.ts`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/webapp/src/api/mock.ts)**:
-  - Implemented `mockApi.postOptionsOrder` with realistic paper account updates for full mock/live parity.
-- **Tests**:
-  - `tests/test_pilots_api.py` (377 tests passed)
+### 5. Phase 4: Strategy Tuner, DevTools Integration & Preflight Readiness
+- **4a. Strategy Parameter Sensitivity Tuner (`strategy-tuner.html`)**:
+  - Validated `tune_strategy_parameters` interactive slider models. Added `test_tune_strategy_parameters_parameter_bounds` asserting sensitivity monotonicity across tight vs loose risk parameters.
+- **4b. DevTools Integration & Inspection**:
+  - Verified `visual-diff.html`, `network-trace.html`, `devtools-inspector.html`, and `lighthouse-scorecard.html` contracts.
+- **4c. Preflight Readiness**:
+  - Ran `scripts/preflight_check.py` to confirm zero regressions on operational readiness gates.
 
 ---
 
-## 4. Phase 4: Frontend UI & Verification
+## Final Verification Results
 
-- **[`webapp/src/components/options/OptionsOrderTicket.tsx`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/webapp/src/components/options/OptionsOrderTicket.tsx)**:
-  - Sizing Mode selector: **By Dollar ($)** vs **By Quantity (Contracts/Shares)**.
-  - Preset chips: `$100`, `$250`, `$500`, `$1,000`, `$2,500`, and **`75% Cash`**.
-  - Order Type selector: **Market** vs **Limit** with price input.
-  - Live available cash display with insufficient funds protection.
-  - Direct underlying stock trading mode.
-  - Working `+ Add to Watchlist` integration.
-- **[`webapp/src/screens/OptionsChain.tsx`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_stock_order_input/webapp/src/screens/OptionsChain.tsx)**:
-  - `📈 Trade {ticker} Stock` action button in the Share Price banner.
-- **Verification**:
-  - TypeScript Typecheck: `npm run --prefix webapp typecheck` (`0 errors`)
-  - Webapp Tests: `npm test --prefix webapp` (`137 test suites, 1,547 tests passed`)
+Command:
+```bash
+pytest tests/test_investyo_mcp_widgets.py tests/test_investyo_mcp_server.py tests/test_cnn_lstm_leakage_audit.py -v
+```
+Output:
+```text
+======================= 357 passed, 2 warnings in 7.91s ========================
+```
+- **Total Test Health**: **357 passed, 0 failures (100% pass rate)**.

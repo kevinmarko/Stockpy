@@ -1,95 +1,73 @@
-# Phased Implementation Plan: Stock & Options Order Input & Execution System
+# Implementation Plan: Worktree Reconciliation, Gap Closure, and Diagnostic Widget Rollout
 
-Build and organize the stock & options order input, sizing, pricing, and execution capabilities into 4 modular phases with complete unit test verification.
+Adopting the roadmap to reconcile `/Users/kevinlee/Stockpy-live` and the `integrate_mcp_devtools_widget` worktree, verify leakage and gross position limits, and sequence widget rollout with rigorous "known-bad" test coverage.
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **No Premature Merges to Main**: All findings from Phase 0 (test output capture, assertion categorization, diff inspection) and Phase 1 (gross cap sweep and purge/embargo audit) will be presented with raw command outputs and diffs before proposing any promotion or merge.
 
 ---
 
 ## Phase Breakdown
 
-```mermaid
-flowchart TD
-    subgraph Phase 1: Core Sizing & Pricing Modules
-        PP[pilots/price_provider.py<br/>Real FMP quote fields] --> OS[pilots/order_sizing.py<br/>Dollar/qty sizing & 75% cap]
-    end
-
-    subgraph Phase 2: Paper Broker Execution Engine
-        OS --> PBO[pilots/paper_broker_options_order.py<br/>Option & Stock Paper Execution]
-        PBO --> PAS[(data/paper_account_store.py<br/>SQLite Storage)]
-    end
-
-    subgraph Phase 3: REST API & Parity Layer
-        PBO --> API[api/pilots_api.py<br/>POST /brokerage/options/order]
-        API --> MOCK[webapp/src/api/mock.ts<br/>Mock/Live Parity]
-    end
-
-    subgraph Phase 4: Frontend UI & Verification
-        API --> OOT[webapp/src/components/options/OptionsOrderTicket.tsx]
-        OOT --> OC[webapp/src/screens/OptionsChain.tsx]
-    end
-```
+### Phase 0: Worktree Reconciliation & Test Assertion Audit (Immediate)
+1. **Raw Test Suite Execution**:
+   - Run `pytest tests/test_investyo_mcp_widgets.py -v` and `pytest tests/test_investyo_mcp_server.py -v`, capturing raw output to `/tmp/widget_test_output.txt`.
+2. **Assertion Categorization**:
+   - Audit `tests/test_investyo_mcp_widgets.py` line-by-line: categorize checks into (a) registration/placeholder substitution vs. (b) behavioral schema & degradation assertions.
+3. **Change Surface & Diff Analysis**:
+   - Review `git diff origin/main...HEAD --stat` and verify that `walkthrough.md` matches the actual code surface.
+4. **Widget Triage Table**:
+   - Break down all 10 unmerged widgets:
+     - **Diagnostic Priority (Phase 2)**: `pit-audit-matrix.html`, `model-diagnostics.html`
+     - **Quant & Trading Core (Phase 3)**: `backtest-tearsheet.html`, `macro-regime-radar.html`, `order-ticket.html`
+     - **PWA Dev Tools (Deferred)**: `visual-diff.html`, `network-trace.html`, `devtools-inspector.html`, `lighthouse-scorecard.html`
+     - **Parameter Sensitivity (Deferred to post-1a)**: `strategy-tuner.html`
 
 ---
 
-### Phase 1: Core Sizing & Pricing Modules (`pilots/`)
-- **`pilots/price_provider.py`**:
-  - Encapsulates quote retrieval using Financial Modeling Prep (FMP) live quote fields (`price`, `previousClose`, `dayLow`, `dayHigh`, without assuming nonexistent bid/ask).
-  - Gracefully falls back to previous close or explicit fallback price when market is closed or quote is unavailable.
-- **`pilots/order_sizing.py`**:
-  - Sizing calculation engine for Stocks (shares from dollar amount, fractional rounding) and Options (contracts from premium, 100x multiplier, integer contract rounding).
-  - **75% Cash Preset Cap**: Calculates a safe max preset (`Math.floor(cash * 0.75)`) ensuring no single order commits 100% of available cash.
-  - Sizing validation: checks order feasibility against available cash, min contract limits, and max position sizing limits.
-- **Tests**: `tests/test_order_sizing.py`, `tests/test_price_provider.py`.
+### Phase 1: Close Functionally Incomplete Gaps
+1. **1a. Calibrate `MAX_PORTFOLIO_GROSS`**:
+   - Audit `sizing/position_sizer.py::apply_portfolio_gross_cap()` and `settings.MAX_PORTFOLIO_GROSS`.
+   - Run historical evaluation across candidate gross caps (1.0, 1.5, 2.0, 3.0) to observe binding frequency and drawdown impact.
+   - Document calibrated default and rationale.
+2. **1b. Verify CNN-LSTM Leakage Mitigation**:
+   - Audit `cnn_lstm_worker.py::purge()` and cross-sectional normalization fold scoping.
+   - Verify purge/embargo boundaries across all walk-forward splits.
+   - Write a standalone test/script asserting no training timestamp $\ge$ validation timestamp minus embargo.
 
 ---
 
-### Phase 2: Paper Broker Execution Engine (`pilots/` & `data/`)
-- **`pilots/paper_broker_options_order.py`**:
-  - Bridges `order_sizing.py` and `data/paper_account_store.py::PaperAccountStore`.
-  - Computes commissions ($0.65/contract for options, tiered equity commissions for stocks).
-  - Applies atomic fills via `PaperAccountStore.apply_fill(...)`.
-  - Rejects live execution in advisory-only mode.
-- **`data/paper_account_store.py`**:
-  - Supports 64-character symbol descriptors for options (e.g. `AGNC 2026-08-14 $10.50 PUT`).
-- **Tests**: `tests/test_paper_broker_options_order.py`, `tests/test_paper_account_store.py`.
+### Phase 2: Promote Diagnostic Widgets with "Known-Bad" Test Cases
+1. **2a. PIT Fundamentals Matrix (`pit-audit-matrix.html`)**:
+   - Wire against post-Phase-1 validated pipeline.
+   - Write unit tests with synthetic known-bad inputs (lookahead filing dated post-evaluation, missing 45d lag buffer) to verify the report and widget flag them red.
+2. **2b. Model Diagnostics & Drift (`model-diagnostics.html`)**:
+   - Write unit tests with synthetic injected drift (>15% skill decay, PSI spikes) asserting drift warnings fire.
 
 ---
 
-### Phase 3: REST API & Mock/Live Parity Layer (`api/` & `webapp/src/api/`)
-- **`api/pilots_api.py`**:
-  - Pydantic model `OptionsOrderRequestModel`.
-  - Route `@app.post("/brokerage/options/order")` delegating to `pilots.paper_broker_options_order.execute_paper_order`.
-- **`webapp/src/api/types.ts`**:
-  - `OptionsOrderRequest` and `OptionsOrderResult` interfaces.
-- **`webapp/src/api/mock.ts`**:
-  - Comprehensive `mockApi.postOptionsOrder` that mutates `paperAccount`, `paperPositions`, and `paperOrders` arrays.
-- **Tests**: `tests/test_pilots_api.py`.
-
----
-
-### Phase 4: Frontend UI Components & Full Verification (`webapp/src/`)
-- **`webapp/src/components/options/OptionsOrderTicket.tsx`**:
-  - Dual Sizing Modes: **By Dollar ($)** vs **By Quantity (Contracts/Shares)**.
-  - Preset Chips: `$100`, `$250`, `$500`, `$1,000`, `$2,500`, and **`75% Cash`**.
-  - Order Type selector: **Market** vs **Limit** with limit price input and steppers.
-  - Dynamic sizing calculation readout (e.g. "Calculated Sizing: 33 contracts | Est. Total: $516.45").
-  - Live available paper cash display with insufficient funds protection.
-  - Direct Underlying Stock Trading mode.
-  - Active `+ Add to Watchlist` integration calling `api.watchCandidate(symbol)`.
-- **`webapp/src/screens/OptionsChain.tsx`**:
-  - `📈 Trade {ticker} Stock` action button in the Share Price banner.
-- **Tests**: `webapp/src/components/options/OptionsOrderTicket.test.tsx`, `webapp/src/screens/OptionsChain.test.tsx`.
+### Phase 3: Sequence Trading & Quant Widgets
+- Validate and promote `backtest-tearsheet.html`, `macro-regime-radar.html`, and `order-ticket.html` with verified constraints.
 
 ---
 
 ## Verification Plan
 
-1. **Phase 1 & 2 Verification**:
-   ```bash
-   pytest tests/test_price_provider.py tests/test_order_sizing.py tests/test_paper_broker_options_order.py -v
-   ```
-2. **Phase 3 & 4 Verification**:
-   ```bash
-   npm run --prefix webapp typecheck
-   npm test --prefix webapp -- --run src/components/options/OptionsOrderTicket.test.tsx src/screens/OptionsChain.test.tsx
-   pytest tests/test_pilots_api.py -v
-   ```
+### Automated Tests
+```bash
+# Capture raw outputs
+pytest tests/test_investyo_mcp_widgets.py -v > /tmp/widget_test_output.txt 2>&1
+pytest tests/test_investyo_mcp_server.py -v >> /tmp/widget_test_output.txt 2>&1
+
+# Known-bad regression tests
+pytest tests/test_pit_leakage_regression.py -v
+pytest tests/test_model_drift_synthetic.py -v
+```
+
+### Manual & Diff Inspection
+- Review raw test logs in `/tmp/widget_test_output.txt`.
+- Inspect `git diff origin/main...HEAD --stat`.

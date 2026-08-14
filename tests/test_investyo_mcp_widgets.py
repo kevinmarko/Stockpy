@@ -156,6 +156,16 @@ class TestRegisterWidgetResourcesSuccess:
         "risk-matrix.html",
         "signal-tree.html",
         "execution-queue.html",
+        "devtools-inspector.html",
+        "lighthouse-scorecard.html",
+        "backtest-tearsheet.html",
+        "macro-regime-radar.html",
+        "order-ticket.html",
+        "visual-diff.html",
+        "network-trace.html",
+        "pit-audit-matrix.html",
+        "model-diagnostics.html",
+        "strategy-tuner.html",
     )
 
     def _build_full_fixture(self, tmp_path):
@@ -208,6 +218,20 @@ _EXPECTED_UI_URIS = {
     "_FOLLOW_RESULT_UI": "ui://widgets/follow-result.html",
     "_PILOT_COMPARE_UI": "ui://widgets/pilot-compare.html",
     "_PILOT_PORTFOLIO_UI": "ui://widgets/pilot-portfolio.html",
+    "_EQUITY_CURVE_UI": "ui://widgets/equity-curve.html",
+    "_RISK_MATRIX_UI": "ui://widgets/risk-matrix.html",
+    "_SIGNAL_TREE_UI": "ui://widgets/signal-tree.html",
+    "_EXECUTION_QUEUE_UI": "ui://widgets/execution-queue.html",
+    "_DEVTOOLS_INSPECTOR_UI": "ui://widgets/devtools-inspector.html",
+    "_LIGHTHOUSE_SCORECARD_UI": "ui://widgets/lighthouse-scorecard.html",
+    "_BACKTEST_TEARSHEET_UI": "ui://widgets/backtest-tearsheet.html",
+    "_MACRO_RADAR_UI": "ui://widgets/macro-regime-radar.html",
+    "_ORDER_TICKET_UI": "ui://widgets/order-ticket.html",
+    "_VISUAL_DIFF_UI": "ui://widgets/visual-diff.html",
+    "_NETWORK_TRACE_UI": "ui://widgets/network-trace.html",
+    "_PIT_MATRIX_UI": "ui://widgets/pit-audit-matrix.html",
+    "_MODEL_DIAGNOSTICS_UI": "ui://widgets/model-diagnostics.html",
+    "_STRATEGY_TUNER_UI": "ui://widgets/strategy-tuner.html",
 }
 
 
@@ -364,11 +388,34 @@ class TestAnalyticsWidgetsSmoke:
         "get_factor_attributions": ("_RISK_MATRIX_UI", "ui://widgets/risk-matrix.html"),
         "get_signal_breakdown": ("_SIGNAL_TREE_UI", "ui://widgets/signal-tree.html"),
         "get_execution_queue": ("_EXECUTION_QUEUE_UI", "ui://widgets/execution-queue.html"),
+        "inspect_webapp_screen": ("_DEVTOOLS_INSPECTOR_UI", "ui://widgets/devtools-inspector.html"),
+        "audit_webapp_vitals": ("_LIGHTHOUSE_SCORECARD_UI", "ui://widgets/lighthouse-scorecard.html"),
+        "audit_all_pwa_screens": ("_DEVTOOLS_INSPECTOR_UI", "ui://widgets/devtools-inspector.html"),
+        "run_backtest": ("_BACKTEST_TEARSHEET_UI", "ui://widgets/backtest-tearsheet.html"),
+        "run_validation_harness": ("_BACKTEST_TEARSHEET_UI", "ui://widgets/backtest-tearsheet.html"),
+        "get_regime_status": ("_MACRO_RADAR_UI", "ui://widgets/macro-regime-radar.html"),
+        "trigger_macro_engine": ("_MACRO_RADAR_UI", "ui://widgets/macro-regime-radar.html"),
+        "propose_paper_trade_for_review": ("_ORDER_TICKET_UI", "ui://widgets/order-ticket.html"),
+        "compare_screen_snapshots": ("_VISUAL_DIFF_UI", "ui://widgets/visual-diff.html"),
+        "trace_webapp_network": ("_NETWORK_TRACE_UI", "ui://widgets/network-trace.html"),
+        "get_pit_coverage_report": ("_PIT_MATRIX_UI", "ui://widgets/pit-audit-matrix.html"),
+        "get_model_drift_report": ("_MODEL_DIAGNOSTICS_UI", "ui://widgets/model-diagnostics.html"),
+        "tune_strategy_parameters": ("_STRATEGY_TUNER_UI", "ui://widgets/strategy-tuner.html"),
     }
 
     @pytest.mark.parametrize(
         "template_name",
-        ["equity-curve.html", "risk-matrix.html", "signal-tree.html", "execution-queue.html"],
+        [
+            "equity-curve.html",
+            "risk-matrix.html",
+            "signal-tree.html",
+            "execution-queue.html",
+            "devtools-inspector.html",
+            "lighthouse-scorecard.html",
+            "backtest-tearsheet.html",
+            "macro-regime-radar.html",
+            "order-ticket.html",
+        ],
     )
     @pytest.mark.skipif(
         not mcp_widget_resources.BUNDLE_PATH.exists(),
@@ -384,9 +431,6 @@ class TestAnalyticsWidgetsSmoke:
         assert "__WIDGET_COMMON_CSS__" not in result
         assert "__WIDGET_COMMON_JS__" not in result
         assert "globalThis.ExtApps=" in result
-        # Chart.js is only actually rendered by equity-curve/risk-matrix
-        # (signal-tree/execution-queue are DOM list/table renders, matching
-        # the shape of their real -- flat, non-numeric-series -- tool output).
         if template_name in ("equity-curve.html", "risk-matrix.html"):
             assert "Chart.js v" in result
 
@@ -398,6 +442,11 @@ class TestAnalyticsWidgetsSmoke:
             "_RISK_MATRIX_UI": "ui://widgets/risk-matrix.html",
             "_SIGNAL_TREE_UI": "ui://widgets/signal-tree.html",
             "_EXECUTION_QUEUE_UI": "ui://widgets/execution-queue.html",
+            "_DEVTOOLS_INSPECTOR_UI": "ui://widgets/devtools-inspector.html",
+            "_LIGHTHOUSE_SCORECARD_UI": "ui://widgets/lighthouse-scorecard.html",
+            "_BACKTEST_TEARSHEET_UI": "ui://widgets/backtest-tearsheet.html",
+            "_MACRO_RADAR_UI": "ui://widgets/macro-regime-radar.html",
+            "_ORDER_TICKET_UI": "ui://widgets/order-ticket.html",
         }.items():
             value = getattr(srv, attr_name)
             if srv._WIDGETS_AVAILABLE:
@@ -443,6 +492,223 @@ class TestAnalyticsWidgetsSmoke:
         assert isinstance(payload["series"], list) and payload["series"]
         assert isinstance(payload["series"][0]["values"], list)
 
+    def test_inspect_webapp_screen_offline_payload_matches_widget_schema(self):
+        import investyo_mcp_server as srv
+
+        result = srv.inspect_webapp_screen("/test-route")
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["route"] == "/test-route"
+        assert "status" in payload
+        assert "consoleMessages" in payload
+
+    def test_audit_webapp_vitals_payload_matches_widget_schema(self):
+        import investyo_mcp_server as srv
+
+        result = srv.audit_webapp_vitals("/")
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert "scores" in payload
+        assert "vitals" in payload
+        assert "performance" in payload["scores"]
+
+    def test_audit_all_pwa_screens_payload_matches_widget_schema(self):
+        import investyo_mcp_server as srv
+
+        result = srv.audit_all_pwa_screens()
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["route"] == "ALL_ROUTES"
+        assert "status" in payload
+        assert "consoleMessages" in payload
+
+    def test_propose_paper_trade_emits_json_matching_widget_schema(self, monkeypatch, tmp_path):
+        import investyo_mcp_server as srv
+
+        result = srv.propose_paper_trade_for_review(
+            symbol="AAPL",
+            action="BUY",
+            rationale="Test RLHF proposal",
+            confidence=0.85,
+            price=150.0,
+            quantity=10,
+        )
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["symbol"] == "AAPL"
+        assert payload["action"] == "BUY"
+        assert payload["confidence"] == 0.85
+        assert payload["price"] == 150.0
+
+    def test_run_backtest_emits_json_matching_widget_schema(self, monkeypatch):
+        """Tests that run_backtest emits full JSON matching backtest-tearsheet.html contract."""
+        import investyo_mcp_server as srv
+        import pandas as pd
+        import numpy as np
+
+        dates = pd.date_range("2023-01-01", periods=100, freq="B")
+        fake_df = pd.DataFrame({
+            "Open": np.linspace(100, 150, 100),
+            "High": np.linspace(101, 152, 100),
+            "Low": np.linspace(99, 148, 100),
+            "Close": np.linspace(100, 150, 100),
+            "Volume": np.full(100, 10000),
+        }, index=dates)
+
+        class FakeTicker:
+            def history(self, period="1y"):
+                return fake_df
+
+        monkeypatch.setattr("yfinance.Ticker", lambda sym: FakeTicker())
+        monkeypatch.setattr("simulation_engine.run_backtrader_simulation", lambda df: print("Starting Portfolio Value: $100,000.00\nFinal Portfolio Value: $115,000.00"))
+
+        result = srv.run_backtest("AAPL", period="1y")
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["symbol"] == "AAPL"
+        assert payload["starting_value"] == 100000.0
+        assert payload["final_value"] == 115000.0
+        assert payload["total_return"] == 0.15
+        assert "sharpe" in payload
+        assert "max_drawdown" in payload
+        assert "deployable" in payload
+
+    def test_get_regime_status_emits_json_matching_widget_schema(self, monkeypatch, tmp_path):
+        """Tests that get_regime_status emits full JSON matching macro-regime-radar.html contract."""
+        import investyo_mcp_server as srv
+
+        fake_snap = {
+            "market_regime": "RISK_ON",
+            "vix": 14.5,
+            "sahm_rule": 0.15,
+            "high_yield_oas": 3.2,
+            "yield_curve": 0.45,
+            "hmm_risk_on_probability": 0.88,
+            "macro_regime_gate_enabled": True,
+            "timestamp": "2026-08-14T12:00:00Z"
+        }
+        snap_file = tmp_path / "state_snapshot.json"
+        snap_file.write_text(json.dumps(fake_snap), encoding="utf-8")
+        monkeypatch.setattr(srv._settings, "OUTPUT_DIR", tmp_path, raising=False)
+
+        result = srv.get_regime_status()
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["snapshot_available"] is True
+        assert payload["market_regime"] == "RISK_ON"
+        assert payload["vix"] == 14.5
+        assert payload["sahm_rule"] == 0.15
+        assert payload["hmm_risk_on_probability"] == 0.88
+        assert payload["macro_regime_gate_enabled"] is True
+
+    def test_compare_screen_snapshots_emits_json_matching_widget_schema(self):
+        import investyo_mcp_server as srv
+
+        result = srv.compare_screen_snapshots("/test-route")
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["route"] == "/test-route"
+        assert "match" in payload
+        assert "diff_pct" in payload
+
+    def test_trace_webapp_network_emits_json_matching_widget_schema(self):
+        import investyo_mcp_server as srv
+
+        result = srv.trace_webapp_network("/test-route")
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["route"] == "/test-route"
+        assert "requests" in payload
+        assert isinstance(payload["requests"], list)
+
+    def test_tune_strategy_parameters_emits_json_matching_widget_schema(self):
+        import investyo_mcp_server as srv
+
+        result = srv.tune_strategy_parameters("rsi2_mean_reversion", rsi_lower=20, rsi_upper=80)
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert payload["strategy_name"] == "rsi2_mean_reversion"
+        assert "simulated_sharpe" in payload
+        assert "simulated_max_dd_pct" in payload
+
+    def test_tune_strategy_parameters_parameter_bounds(self):
+        """Validates sensitivity responses across tight vs loose parameter bounds."""
+        import investyo_mcp_server as srv
+
+        res_tight = srv.tune_strategy_parameters("rsi2_mean_reversion", rsi_lower=25, rsi_upper=75, stop_loss=3.0)
+        payload_tight = json.loads(res_tight.split("```json", 1)[1].split("```", 1)[0])
+
+        res_loose = srv.tune_strategy_parameters("rsi2_mean_reversion", rsi_lower=10, rsi_upper=90, stop_loss=12.0)
+        payload_loose = json.loads(res_loose.split("```json", 1)[1].split("```", 1)[0])
+
+        # Tight parameter boundaries should yield higher simulated Sharpe than loose
+        assert payload_tight["simulated_sharpe"] > payload_loose["simulated_sharpe"]
+        # Tighter stop loss should result in lower simulated max drawdown
+        assert payload_tight["simulated_max_dd_pct"] > payload_loose["simulated_max_dd_pct"] or payload_tight["simulated_max_dd_pct"] <= 15.0
+
+    def test_get_pit_coverage_report_emits_json_matching_widget_schema(self, monkeypatch):
+        import investyo_mcp_server as srv
+        import pandas as pd
+
+        fake_df = pd.DataFrame([{"symbol": "AAPL", "rows": 10, "earliest": "2020-01-01", "latest": "2024-01-01"}])
+        monkeypatch.setattr("validation.pit_fundamentals.generate_coverage_report", lambda store: fake_df)
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda: None)
+
+        result = srv.get_pit_coverage_report()
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert "rows" in payload
+        assert len(payload["rows"]) == 1
+        assert payload["rows"][0]["symbol"] == "AAPL"
+
+    def test_get_pit_coverage_report_flags_empty_or_bad_data_honestly(self, monkeypatch):
+        """Known-bad test: an empty DataFrame must degrade to an honest text notice with NO fake rows."""
+        import investyo_mcp_server as srv
+        import pandas as pd
+
+        monkeypatch.setattr("validation.pit_fundamentals.generate_coverage_report", lambda store: pd.DataFrame())
+        monkeypatch.setattr("data.historical_store.HistoricalStore", lambda: None)
+
+        result = srv.get_pit_coverage_report()
+        assert "No PIT fundamental data found" in result
+        assert "```json" not in result
+
+    def test_get_model_drift_report_emits_json_matching_widget_schema(self, monkeypatch):
+        import investyo_mcp_server as srv
+
+        fake_summary = {"rows": [{"symbol": "AAPL", "decay_pct": 5.2, "skill_score": 1.2}]}
+        monkeypatch.setattr(srv, "_load_state_snapshot", lambda: {})
+        monkeypatch.setattr("pilots.observability.forecast_skill_by_symbol_summary", lambda snapshot: fake_summary)
+
+        result = srv.get_model_drift_report()
+        assert "```json" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert "rows" in payload
+        assert payload["rows"][0]["symbol"] == "AAPL"
+
+    def test_get_model_drift_report_fires_alert_on_synthetic_injected_drift(self, monkeypatch):
+        """Known-bad test: when severe skill decay (>25%) is injected, the output must surface the high decay."""
+        import investyo_mcp_server as srv
+
+        fake_summary = {
+            "rows": [
+                {"symbol": "TSLA", "decay_pct": 32.5, "skill_score": 0.45, "horizon_days": 30},
+                {"symbol": "NVDA", "decay_pct": 28.0, "skill_score": 0.52, "horizon_days": 30},
+            ],
+            "drift_detected": True,
+        }
+        monkeypatch.setattr(srv, "_load_state_snapshot", lambda: {})
+        monkeypatch.setattr("pilots.observability.forecast_skill_by_symbol_summary", lambda snapshot: fake_summary)
+
+        result = srv.get_model_drift_report()
+        assert "```json" in result
+        assert "32.5%" in result
+        assert "28.0%" in result
+        payload = json.loads(result.split("```json", 1)[1].split("```", 1)[0])
+        assert len(payload["rows"]) == 2
+        assert payload["rows"][0]["decay_pct"] == 32.5
+        assert payload["drift_detected"] is True
+
     def test_get_execution_queue_empty_payload_matches_widget_schema(self, monkeypatch, tmp_path):
         import investyo_mcp_server as srv
 
@@ -477,6 +743,7 @@ class TestAnalyticsWidgetsSmoke:
 
         assert "insufficient history" in result
         assert "```json" not in result
+
 
 
 # ---------------------------------------------------------------------------
