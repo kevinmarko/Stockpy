@@ -8,8 +8,9 @@
 - Generated and saved validation summary JSONs under `reports/` (`sector_quality_rank_validation_summary.json`, `vrp_premium_selling_validation_summary.json`, `lgbm_ranker_validation_summary.json`, `put_credit_spread_validation_summary.json`, etc.).
 
 ### 2. High-Performance Numba JIT Sequential Execution Core
-- Implemented and benchmarked `numba_backtest_loop.py` (`@njit` compiled event-driven sequential backtesting loop with path-dependent 5% stop loss, 5 bps slippage, and 10 bps fee rate).
-- Validated execution throughput of >200M bars/sec with unit tests in `tests/test_numba_backtest_loop.py`.
+- Implemented and benchmarked `numba_backtest_loop.py` (`@njit` compiled event-driven sequential backtesting loop with path-dependent 5% stop loss, 5 bps slippage, and round-trip fee accounting).
+- Enhanced stop-loss execution with `min(stop_price, current_price) * (1.0 - slippage_rate)` to prevent gap-down execution optimism.
+- Validated execution throughput of >200M bars/sec with unit tests in `tests/test_numba_backtest_loop.py` (5/5 passed).
 
 ### 3. Forecasting Backfill & Commands Tabs Integration
 - **Commands Tab**: Rebuilt `cli_introspect/command_manifest.json` and generated shell completions (`completions/investyo.bash` / `.zsh`) via `scripts/build_command_manifest.py` and `scripts/generate_shell_completion.py`.
@@ -35,11 +36,18 @@
 
 ---
 
-## Verification & Test Summary
+## Independent Auditor Subagent Findings & Final Verification
 
-1. **Python Unit Tests**:
-   - `tests/test_numba_backtest_loop.py`: 4 passed.
-   - `tests/test_vrp_premium_selling.py`, `tests/test_options_meta_labeler.py`, `tests/test_command_execution.py`, `tests/test_pilots_strategy_matrix.py`, `tests/test_pilots_strategy_health.py`: 106 passed.
-2. **TypeScript & Webapp Tests**:
-   - `tsc --noEmit -p webapp/tsconfig.json`: 0 errors.
-   - Vitest suite (`Commands.test.tsx`, `ForecastBackfillScreen.test.tsx`, `StrategyHealth.test.tsx`): 55 passed.
+### 1. Quantitative & Backtest Auditor (`0069077f-0535-453c-b03b-041c9275e1a5`)
+- **Zero Lookahead Guarantee**: Verified sequential causality ($t = 0 \dots N-1$).
+- **Microstructural Realism**: Verified that directional slippage is applied correctly (upward on buy, downward on sell).
+- **Remediated**: Added gap-down execution bounding in stop-loss triggers and exact round-trip transaction fee deduction in the trade ledger.
+
+### 2. Systems & Architecture Auditor (`14c057df-ba0c-44c9-8b67-0c4298ad348e`)
+- **Webapp Integration**: Dynamic model key derivation (`ForecastBackfillScreen.tsx`), UX copy honesty, and mock parity verified.
+- **Automated Gates**:
+  - Python tests: **118 / 118 passed**.
+  - TypeScript compilation: **0 errors**.
+  - Vitest test suite: **1,721 / 1,721 passed** across all 161 test files.
+- **Final Verdict**: **PASS (APPROVED)**.
+
