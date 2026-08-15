@@ -570,3 +570,103 @@ def generate_signals(df):
         assert res_zero.cumulative_return > res_high.cumulative_return
         assert res_zero.sharpe_ratio > res_high.sharpe_ratio
 
+
+# ---------------------------------------------------------------------------
+# 9. Regime Auditing & Strategy Validation Integration Tests
+# ---------------------------------------------------------------------------
+
+class TestRegimeAuditingAndTrendGating:
+    """Tests for multi-regime performance audits and Faber SMA-200 trend gating."""
+
+    def test_faber_trend_gate_zeroes_downtrend_exposure(self):
+        """Verifies that Faber SMA-200 trend gate eliminates long exposure during downtrends."""
+        n_bars = 400
+        dates = pd.date_range("2020-01-01", periods=n_bars, freq="D")
+        # Uptrend for first 200 bars, severe downtrend for last 200 bars
+        prices = np.concatenate([np.linspace(100, 200, 200), np.linspace(200, 50, 200)])
+        df = pd.DataFrame(
+            {
+                "Open": prices,
+                "High": prices * 1.01,
+                "Low": prices * 0.99,
+                "Close": prices,
+                "Volume": [10000] * n_bars,
+            },
+            index=dates,
+        )
+
+        raw_pos = pd.Series(1.0, index=df.index)
+        gated_pos = AutonomousBacktestRunner.apply_faber_trend_gate(raw_pos, df, window=50)
+
+        # In severe downtrend (second half), exposure should be zeroed
+        assert (gated_pos.iloc[250:] == 0.0).all()
+        # In early uptrend, exposure should be active
+        assert (gated_pos.iloc[60:190] == 1.0).all()
+
+    def test_audit_regime_performance_volatility_partition(self):
+        """Verifies 3-state volatility regime partitioning and performance metrics."""
+        runner = AutonomousBacktestRunner(cost_bps=2.0)
+        df = runner.generate_synthetic_ohlcv(n_bars=300, regime="regime_switch", seed=42)
+
+        def momentum_strat(d):
+            close = d["Close"]
+            return (close > close.rolling(20, min_periods=5).mean()).astype(float)
+
+        breakdown, stability, passes = runner.audit_regime_performance(momentum_strat, df)
+
+        assert isinstance(breakdown, dict)
+        assert len(breakdown) > 0
+        # Expect statistical volatility regimes
+        for reg_name, metrics in breakdown.items():
+            assert "sharpe" in metrics
+            assert "max_drawdown" in metrics
+            assert "win_rate" in metrics
+            assert "pnl_share" in metrics
+            assert metrics["n_bars"] > 0
+
+        assert 0.0 <= stability <= 1.0
+        assert isinstance(passes, bool)
+
+    def test_audit_regime_performance_custom_macro_indicator(self):
+        """Verifies regime audit with explicit macro state series (e.g. RISK ON vs RECESSION)."""
+        runner = AutonomousBacktestRunner(cost_bps=2.0)
+        df = runner.generate_synthetic_ohlcv(n_bars=200, seed=123)
+
+        # Assign discrete macro regimes
+        regime_labels = ["RISK ON"] * 100 + ["RECESSION"] * 100
+        regime_series = pd.Series(regime_labels, index=df.index)
+
+        def simple_long(d):
+            return pd.Series(1.0, index=d.index)
+
+        breakdown, stability, passes = runner.audit_regime_performance(
+            simple_long, df, regime_series=regime_series
+        )
+
+        assert "RISK ON" in breakdown
+        assert "RECESSION" in breakdown
+        assert breakdown["RISK ON"]["n_bars"] == 100
+        assert breakdown["RECESSION"]["n_bars"] == 100
+
+    def test_end_to_end_run_with_regime_breakdown(self):
+        """Verifies that run() populates regime_breakdown and stability score in result."""
+        runner = AutonomousBacktestRunner(cost_bps=2.0)
+        df = runner.generate_synthetic_ohlcv(n_bars=250, seed=999)
+
+        def trend_follower(d):
+            close = d["Close"]
+            return (close > close.shift(5)).astype(float)
+
+        result = runner.run(trend_follower, df, strategy_id="TrendFollowerRegimeTest")
+
+        assert result.error is None
+        assert isinstance(result.regime_breakdown, dict)
+        assert len(result.regime_breakdown) > 0
+        assert 0.0 <= result.regime_stability_score <= 1.0
+        assert isinstance(result.passes_regime_stability, bool)
+
+        summary_text = result.summary()
+        assert "REGIME BREAKDOWN:" in summary_text
+        assert "Regime Stability Score:" in summary_text
+
+

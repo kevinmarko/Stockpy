@@ -138,15 +138,88 @@ describe("ResearchCopilotView", () => {
     expect(backtestBtn).toBeDisabled();
   });
 
-  it("handles synthesis api error", async () => {
-    vi.mocked(api.synthesizeQuantResearch).mockRejectedValueOnce(new Error("Synthesis engine timed out"));
+  it("renders multi-regime breakdown and stability score when present in backtest results", async () => {
+    vi.mocked(api.synthesizeQuantResearch).mockResolvedValueOnce({
+      synthesis_id: "syn_regime_test",
+      prompt: "Regime-aware strategy",
+      synthesized_code: "def generate_signals(df):\n    return (df['Close'] > df['Close'].rolling(20).mean()).astype(float)",
+      ast_safety_passed: true,
+      ast_violations: [],
+      suggested_parameters: { lookback: 20 },
+      explanation: "Dual regime strategy.",
+      model_used: "InvestYo-QuantSynthesizer-v4",
+      confidence_score: 0.95,
+    });
+
+    vi.mocked(api.runAutonomousBacktest).mockResolvedValueOnce({
+      strategy_id: "syn_regime_test",
+      is_deployable: true,
+      sharpe_ratio: 1.75,
+      sortino_ratio: 2.3,
+      max_drawdown: 0.12,
+      pbo: 0.15,
+      dsr: 0.97,
+      turnover: 0.25,
+      annualized_return: 0.22,
+      cumulative_return: 0.55,
+      win_rate: 0.56,
+      calmar_ratio: 1.83,
+      volatility: 0.12,
+      gate_evaluations: {
+        "pbo_gate (< 0.50)": true,
+        "dsr_gate (> 0.95)": true,
+        "sharpe_gate (> 0.50)": true,
+        "max_drawdown_gate (< 0.30)": true,
+      },
+      failure_reasons: [],
+      n_paths: 15,
+      n_observations: 750,
+      execution_time_seconds: 0.95,
+      regime_breakdown: {
+        "LOW_VOL_BULL": {
+          sharpe: 2.15,
+          sortino: 2.9,
+          max_drawdown: 0.075,
+          cumulative_return: 0.18,
+          win_rate: 0.63,
+          pnl_share: 0.65,
+          n_bars: 300,
+        },
+        "HIGH_VOL_BEAR": {
+          sharpe: 0.95,
+          sortino: 1.25,
+          max_drawdown: 0.115,
+          cumulative_return: 0.025,
+          win_rate: 0.51,
+          pnl_share: 0.08,
+          n_bars: 180,
+        },
+      },
+      regime_stability_score: 0.88,
+      passes_regime_stability: true,
+      equity_curve: [],
+    });
+
     render(<ResearchCopilotView />);
 
     const synthBtn = screen.getByRole("button", { name: /Synthesize Strategy/i });
     fireEvent.click(synthBtn);
 
     await waitFor(() => {
-      expect(screen.getByText(/Synthesis engine timed out/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Execute Autonomous Backtest/i })).toBeInTheDocument();
     });
+
+    const backtestBtn = screen.getByRole("button", { name: /Execute Autonomous Backtest/i });
+    fireEvent.click(backtestBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText("Market Regime Performance & Overfitting Audit")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("88% (PASS)")).toBeInTheDocument();
+    expect(screen.getByText("LOW VOL BULL")).toBeInTheDocument();
+    expect(screen.getByText("HIGH VOL BEAR")).toBeInTheDocument();
+    expect(screen.getByText("300 bars")).toBeInTheDocument();
+    expect(screen.getByText("180 bars")).toBeInTheDocument();
   });
 });

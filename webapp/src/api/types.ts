@@ -4990,6 +4990,7 @@ export interface AutonomousBacktestRequest {
   purge_window?: number;
   embargo_window?: number;
   transaction_cost_bps?: number;
+  apply_trend_gate?: boolean;
 }
 
 export interface AutonomousBacktestResponse {
@@ -5014,6 +5015,17 @@ export interface AutonomousBacktestResponse {
   cpcv_mean_oos_sharpe?: number | null;
   cpcv_mean_oos_max_dd?: number | null;
   cpcv_mean_oos_sortino?: number | null;
+  regime_breakdown?: Record<string, {
+    sharpe: number;
+    sortino: number;
+    max_drawdown: number;
+    cumulative_return: number;
+    win_rate: number;
+    pnl_share: number;
+    n_bars: number;
+  }>;
+  regime_stability_score?: number | null;
+  passes_regime_stability?: boolean;
   equity_curve?: Array<{ date: string; equity: number; drawdown: number }>;
   error?: string | null;
   as_of?: string;

@@ -826,6 +826,81 @@ export const ResearchCopilotView: React.FC<ResearchCopilotViewProps> = ({
             </div>
           </div>
 
+          {/* Multi-Regime Performance Breakdown & Stability Audit */}
+          {backtestResult.regime_breakdown && Object.keys(backtestResult.regime_breakdown).length > 0 && (
+            <div style={{ background: theme.base, padding: 12, borderRadius: 6, border: `1px solid ${theme.border}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ fontSize: "0.8rem", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+                  <Layers size={14} color={theme.accent} />
+                  <span>Market Regime Performance & Overfitting Audit</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: "0.72rem", color: theme.textSecondary }}>
+                    Regime Stability:
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      fontWeight: 800,
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      background: backtestResult.passes_regime_stability !== false ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                      color: backtestResult.passes_regime_stability !== false ? theme.growth : theme.decline,
+                      border: `1px solid ${backtestResult.passes_regime_stability !== false ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
+                    }}
+                  >
+                    {backtestResult.regime_stability_score != null ? `${(backtestResult.regime_stability_score * 100).toFixed(0)}%` : "100%"} (
+                    {backtestResult.passes_regime_stability !== false ? "PASS" : "FAIL"})
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+                {Object.entries(backtestResult.regime_breakdown).map(([regimeName, regMetrics]) => (
+                  <div
+                    key={regimeName}
+                    style={{
+                      background: theme.surface,
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: 6,
+                      padding: "8px 10px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: "0.72rem", fontWeight: 700, color: theme.accent }}>
+                        {regimeName.replace(/_/g, " ")}
+                      </span>
+                      <span style={{ fontSize: "0.65rem", color: theme.textSecondary }}>
+                        {regMetrics.n_bars} bars
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
+                      <span style={{ color: theme.textSecondary }}>Sharpe:</span>
+                      <span style={{ fontWeight: 700, color: regMetrics.sharpe >= 1.0 ? theme.growth : theme.textPrimary }}>
+                        {regMetrics.sharpe.toFixed(2)}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
+                      <span style={{ color: theme.textSecondary }}>MaxDD:</span>
+                      <span style={{ fontWeight: 700, color: regMetrics.max_drawdown < 0.20 ? theme.growth : theme.decline }}>
+                        {(regMetrics.max_drawdown * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
+                      <span style={{ color: theme.textSecondary }}>PnL Share:</span>
+                      <span style={{ fontWeight: 700, color: regMetrics.pnl_share >= 0 ? theme.growth : theme.decline }}>
+                        {(regMetrics.pnl_share * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Mini Equity Curve Visualizer */}
           {backtestResult.equity_curve && backtestResult.equity_curve.length > 0 && (
             <div style={{ background: theme.base, padding: 12, borderRadius: 6, border: `1px solid ${theme.border}` }}>

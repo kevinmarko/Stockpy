@@ -6684,26 +6684,36 @@ def post_pilots_ai_research_synthesize(req: ResearchSynthesizeRequest) -> Dict[s
 
 
 class ResearchBacktestRequest(BaseModel):
-    code: str = Field(..., min_length=1, description="AST-safe SignalModule or strategy Python code.")
+    code: Optional[str] = Field(None, description="AST-safe SignalModule or strategy Python code.")
+    strategy_code: Optional[str] = Field(None, description="Alias for code.")
     symbol: Optional[str] = Field("SPY", description="Ticker symbol to validate against.")
+    strategy_id: Optional[str] = Field(None, description="Strategy identifier.")
+    symbols: Optional[List[str]] = Field(None, description="List of symbols.")
     start_date: Optional[str] = Field(None, description="Start date YYYY-MM-DD.")
     end_date: Optional[str] = Field(None, description="End date YYYY-MM-DD.")
     cost_bps: Optional[float] = Field(5.0, ge=0.0, description="Transaction cost in basis points per turnover.")
+    transaction_cost_bps: Optional[float] = Field(None, ge=0.0, description="Alias for cost_bps.")
+    apply_trend_gate: Optional[bool] = Field(False, description="Apply Faber SMA-200 trend gating.")
 
 
 @app.post(
     "/pilots/ai/research/backtest",
     dependencies=[Depends(require_command_token)],
 )
+@app.post(
+    "/pilots/ai/backtest/autonomous",
+    dependencies=[Depends(require_command_token)],
+)
 def post_pilots_ai_research_backtest(req: ResearchBacktestRequest) -> Dict[str, Any]:
     """Executes CPCV and evaluates quantitative strategy code against formal deployability gates (PBO, DSR, Sharpe, MaxDD)."""
-    code_clean = req.code.strip()
+    raw_code = req.code or req.strategy_code or ""
+    code_clean = raw_code.strip()
     if not code_clean:
         raise HTTPException(status_code=400, detail="Strategy code cannot be empty.")
 
     from validation.autonomous_backtest_runner import AutonomousBacktestRunner
 
-    sym = (req.symbol or "SPY").strip().upper()
+    sym = (req.symbol or (req.symbols[0] if req.symbols else "SPY") or "SPY").strip().upper()
     ohlcv_df = None
     try:
         store = HistoricalStore()
@@ -6715,11 +6725,15 @@ def post_pilots_ai_research_backtest(req: ResearchBacktestRequest) -> Dict[str, 
     if ohlcv_df is None or len(ohlcv_df) < 50:
         ohlcv_df = AutonomousBacktestRunner.generate_synthetic_ohlcv(500, regime="bull", seed=42)
 
-    runner = AutonomousBacktestRunner(cost_bps=float(req.cost_bps) if req.cost_bps is not None else 5.0)
+    cost = req.transaction_cost_bps if req.transaction_cost_bps is not None else req.cost_bps
+    cost_val = float(cost) if cost is not None else 5.0
+
+    runner = AutonomousBacktestRunner(cost_bps=cost_val)
     result = runner.run(
         strategy=code_clean,
         ohlcv_df=ohlcv_df,
-        strategy_id=sym,
+        strategy_id=req.strategy_id or sym,
+        apply_trend_gate=bool(req.apply_trend_gate),
     )
 
     return result.to_dict()

@@ -412,6 +412,9 @@ class AutonomousBacktestResult:
     cpcv_mean_oos_sharpe: float = 0.0
     cpcv_mean_oos_max_dd: float = 0.0
     cpcv_mean_oos_sortino: float = 0.0
+    regime_breakdown: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    regime_stability_score: float = 1.0
+    passes_regime_stability: bool = True
     metadata: Dict[str, Any] = field(default_factory=dict)
     returns: Optional[pd.Series] = None
     positions: Optional[pd.Series] = None
@@ -441,6 +444,9 @@ class AutonomousBacktestResult:
             "cpcv_mean_oos_sharpe": round(self.cpcv_mean_oos_sharpe, 4) if not np.isnan(self.cpcv_mean_oos_sharpe) else None,
             "cpcv_mean_oos_max_dd": round(self.cpcv_mean_oos_max_dd, 4) if not np.isnan(self.cpcv_mean_oos_max_dd) else None,
             "cpcv_mean_oos_sortino": round(self.cpcv_mean_oos_sortino, 4) if not np.isnan(self.cpcv_mean_oos_sortino) else None,
+            "regime_breakdown": self.regime_breakdown,
+            "regime_stability_score": round(self.regime_stability_score, 4) if not np.isnan(self.regime_stability_score) else None,
+            "passes_regime_stability": self.passes_regime_stability,
             "metadata": self.metadata,
             "error": self.error,
         }
@@ -467,8 +473,18 @@ class AutonomousBacktestResult:
             f" Win Rate              : {self.win_rate:.2%}",
             f" CPCV Paths Evaluated  : {self.n_paths}",
             f" Observations (Bars)   : {self.n_observations}",
+            f" Regime Stability Score: {self.regime_stability_score:.2f} -> {'PASS' if self.passes_regime_stability else 'FAIL'}",
             f" Execution Time        : {self.execution_time_seconds:.3f} s",
         ]
+        if self.regime_breakdown:
+            lines.append("-" * 68)
+            lines.append(" REGIME BREAKDOWN:")
+            for r_name, r_metrics in self.regime_breakdown.items():
+                r_sr = r_metrics.get("sharpe", 0.0)
+                r_dd = r_metrics.get("max_drawdown", 0.0)
+                r_bars = r_metrics.get("n_bars", 0)
+                r_pct = r_metrics.get("pnl_share", 0.0)
+                lines.append(f"   [{r_name}] Sharpe: {r_sr:.2f} | MaxDD: {r_dd:.1%} | PnL Share: {r_pct:.1%} ({r_bars} bars)")
         if self.failure_reasons:
             lines.append("-" * 68)
             lines.append(" GATE FAILURES:")
@@ -619,10 +635,26 @@ class AutonomousBacktestRunner:
             return strategy
         raise TypeError(f"strategy must be a Python code string or a callable, got {type(strategy)}")
 
+    @staticmethod
+    def apply_faber_trend_gate(
+        positions: pd.Series,
+        df: pd.DataFrame,
+        window: int = 200,
+    ) -> pd.Series:
+        """
+        Applies Faber (2007) SMA-200 trend gate to zero exposure during sustained downtrends.
+        Exposure is allowed only when Close >= SMA(window).
+        """
+        close = df["Close"] if "Close" in df else df["close"]
+        sma = close.rolling(window, min_periods=max(1, window // 4)).mean()
+        trend_filter = (close >= sma).astype(float)
+        return positions * trend_filter
+
     def backtest_single_path(
         self,
         strategy_fn: Callable[[pd.DataFrame], Any],
         df: pd.DataFrame,
+        apply_trend_gate: bool = False,
     ) -> Tuple[pd.Series, pd.Series, float]:
         """
         Executes strategy against OHLCV DataFrame, applying 1-bar execution lag and transaction costs.
@@ -661,6 +693,9 @@ class AutonomousBacktestRunner:
 
         # Clip positions between -1.0 and 1.0
         positions = positions.astype(float).clip(-1.0, 1.0)
+
+        if apply_trend_gate:
+            positions = self.apply_faber_trend_gate(positions, df)
 
         # 1-bar execution lag to eliminate lookahead bias:
         # Position determined at close of bar t earns return from bar t to t+1
@@ -833,6 +868,108 @@ class AutonomousBacktestRunner:
             "oos_sharpe_matrix": oos_arr,
         }
 
+    def audit_regime_performance(
+        self,
+        strategy_fn: Callable[[pd.DataFrame], Any],
+        ohlcv_df: pd.DataFrame,
+        regime_series: Optional[pd.Series] = None,
+        apply_trend_gate: bool = False,
+    ) -> Tuple[Dict[str, Dict[str, float]], float, bool]:
+        """
+        Partitions strategy performance across distinct market environments to audit regime sensitivity
+        and prevent over-optimization for single tranquil regimes.
+
+        Returns:
+            (regime_breakdown, regime_stability_score, passes_regime_stability)
+        """
+        if len(ohlcv_df) < 5:
+            return {}, 1.0, True
+
+        net_returns, positions, _to = self.backtest_single_path(
+            strategy_fn, ohlcv_df, apply_trend_gate=apply_trend_gate
+        )
+        close = ohlcv_df["Close"] if "Close" in ohlcv_df else ohlcv_df["close"]
+
+        # Build regime labels if not supplied
+        if regime_series is not None and isinstance(regime_series, pd.Series):
+            aligned_regimes = regime_series.reindex(ohlcv_df.index).fillna("UNKNOWN").astype(str)
+        else:
+            # 3-State Volatility Regime partition (Hamilton 1989 / HMM variance alignment)
+            ret_series = close.pct_change().fillna(0.0)
+            roll_vol = ret_series.rolling(20, min_periods=5).std() * np.sqrt(self.freq)
+            vol_clean = roll_vol.dropna()
+            if len(vol_clean) > 10:
+                q33 = float(vol_clean.quantile(0.33))
+                q67 = float(vol_clean.quantile(0.67))
+            else:
+                q33, q67 = 0.12, 0.25
+
+            regime_labels = []
+            for v in roll_vol:
+                if pd.isna(v):
+                    regime_labels.append("UNKNOWN")
+                elif v <= q33:
+                    regime_labels.append("LOW_VOL_BULL")
+                elif v <= q67:
+                    regime_labels.append("MID_VOL_SIDEWAYS")
+                else:
+                    regime_labels.append("HIGH_VOL_BEAR")
+            aligned_regimes = pd.Series(regime_labels, index=ohlcv_df.index)
+
+        regime_breakdown: Dict[str, Dict[str, float]] = {}
+        total_pnl = net_returns.sum()
+
+        sharpes: List[float] = []
+        max_dds: List[float] = []
+
+        for reg in aligned_regimes.unique():
+            if reg == "UNKNOWN":
+                continue
+            mask = (aligned_regimes == reg)
+            r_ret = net_returns[mask]
+            n_bars = int(mask.sum())
+            if n_bars < 2:
+                continue
+
+            r_sr = sharpe_ratio(r_ret, freq=self.freq)
+            r_sr = float(r_sr) if not np.isnan(r_sr) else 0.0
+            r_dd = compute_max_drawdown(r_ret)
+            r_down = r_ret[r_ret < 0]
+            r_down_std = r_down.std()
+            r_sortino = float(r_ret.mean() / r_down_std * np.sqrt(self.freq)) if r_down_std >= 1e-12 else 0.0
+            r_cum = float((1.0 + r_ret).prod() - 1.0)
+            r_win = float((r_ret > 0).mean())
+            pnl_share = float(r_ret.sum() / total_pnl) if abs(total_pnl) > 1e-12 else 0.0
+
+            regime_breakdown[reg] = {
+                "sharpe": round(r_sr, 4),
+                "sortino": round(r_sortino, 4),
+                "max_drawdown": round(r_dd, 4),
+                "cumulative_return": round(r_cum, 4),
+                "win_rate": round(r_win, 4),
+                "pnl_share": round(pnl_share, 4),
+                "n_bars": n_bars,
+            }
+            sharpes.append(r_sr)
+            max_dds.append(r_dd)
+
+        # Stability evaluation: penalize high dispersion across regimes or deep drawdowns in high vol
+        if not sharpes:
+            return regime_breakdown, 1.0, True
+
+        min_sr = min(sharpes)
+        max_dd_worst = max(max_dds) if max_dds else 0.0
+        sr_spread = max(sharpes) - min(sharpes)
+
+        # Stability score normalized 0.0 to 1.0
+        stability = max(0.0, min(1.0, 1.0 - (max_dd_worst * 1.5) - (0.1 * sr_spread)))
+        if min_sr < -1.0 or max_dd_worst > self.max_drawdown_max:
+            passes = False
+        else:
+            passes = bool(stability >= 0.35)
+
+        return regime_breakdown, stability, passes
+
     def run(
         self,
         strategy: Union[str, Callable],
@@ -841,15 +978,18 @@ class AutonomousBacktestRunner:
         entrypoint: Optional[str] = None,
         candidate_variants: Optional[List[Callable[[pd.DataFrame], Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        regime_series: Optional[pd.Series] = None,
+        apply_trend_gate: bool = False,
     ) -> AutonomousBacktestResult:
         """
         Full autonomous validation execution:
         1. Validates AST security of strategy code (if string).
-        2. Runs full-period net backtest.
+        2. Runs full-period net backtest with optional Faber SMA-200 trend gate.
         3. Executes Combinatorial Purged Cross-Validation with purging & embargoing.
-        4. Computes PBO, DSR, Sharpe, Sortino, Max Drawdown, Calmar, Turnover, Win Rate.
-        5. Checks hard deployability gates (PBO < 0.5, DSR > 0.95, Sharpe > 0.5, MaxDD < 30%).
-        6. Returns structured AutonomousBacktestResult.
+        4. Audits performance across market volatility regimes.
+        5. Computes PBO, DSR, Sharpe, Sortino, Max Drawdown, Calmar, Turnover, Win Rate.
+        6. Checks hard deployability gates (PBO < 0.5, DSR > 0.95, Sharpe > 0.5, MaxDD < 30%).
+        7. Returns structured AutonomousBacktestResult.
         """
         start_time = time.time()
         meta = dict(metadata or {})
@@ -889,7 +1029,9 @@ class AutonomousBacktestRunner:
             )
 
         # 2. Full-period backtest
-        net_returns, positions, mean_daily_turnover = self.backtest_single_path(strategy_fn, ohlcv_df)
+        net_returns, positions, mean_daily_turnover = self.backtest_single_path(
+            strategy_fn, ohlcv_df, apply_trend_gate=apply_trend_gate
+        )
 
         # Performance metrics
         sr = sharpe_ratio(net_returns, freq=self.freq)
@@ -932,7 +1074,12 @@ class AutonomousBacktestRunner:
         pbo = cpcv_res["pbo"]
         dsr = cpcv_res["dsr"]
 
-        # 4. Deployability Gates
+        # 4. Regime Sensitivity Audit
+        regime_breakdown, regime_stability, passes_stability = self.audit_regime_performance(
+            strategy_fn, ohlcv_df, regime_series=regime_series, apply_trend_gate=apply_trend_gate
+        )
+
+        # 5. Deployability Gates
         pbo_pass = pbo < self.pbo_max
         dsr_pass = (not np.isnan(dsr)) and (dsr > self.dsr_min)
         sharpe_pass = (not np.isnan(sr)) and (sr > self.net_sharpe_min)
@@ -954,8 +1101,10 @@ class AutonomousBacktestRunner:
             failure_reasons.append(f"Net Sharpe {sr:.3f} is below minimum threshold {self.net_sharpe_min:.2f}")
         if not max_dd_pass:
             failure_reasons.append(f"Max Drawdown {max_dd:.2%} exceeds maximum threshold {self.max_drawdown_max:.2%}")
+        if not passes_stability:
+            failure_reasons.append(f"Regime Stability Score {regime_stability:.2f} failed multi-regime consistency test")
 
-        is_deployable = bool(pbo_pass and dsr_pass and sharpe_pass and max_dd_pass)
+        is_deployable = bool(pbo_pass and dsr_pass and sharpe_pass and max_dd_pass and passes_stability)
         exec_time = time.time() - start_time
 
         return AutonomousBacktestResult(
@@ -980,6 +1129,9 @@ class AutonomousBacktestRunner:
             cpcv_mean_oos_sharpe=cpcv_res.get("mean_oos_sharpe", 0.0),
             cpcv_mean_oos_max_dd=cpcv_res.get("mean_oos_max_dd", 0.0),
             cpcv_mean_oos_sortino=cpcv_res.get("mean_oos_sortino", 0.0),
+            regime_breakdown=regime_breakdown,
+            regime_stability_score=regime_stability,
+            passes_regime_stability=passes_stability,
             metadata=meta,
             returns=net_returns,
             positions=positions,

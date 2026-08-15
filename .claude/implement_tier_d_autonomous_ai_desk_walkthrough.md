@@ -12,9 +12,11 @@ All 8 specialized subagents have completed the implementation and verification o
 - **Autonomous Backtest Validator ([`validation/autonomous_backtest_runner.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_multi_leg_paper_trading/validation/autonomous_backtest_runner.py))**:
   - Runs Combinatorial Purged Cross-Validation (CPCV) over historical OHLCV data with 1-bar execution lag.
   - Evaluates institutional deployability gates: Probability of Backtest Overfitting ($PBO < 0.50$), Deflated Sharpe Ratio ($DSR > 0.95$), Net Sharpe ($> 0.50$), and Max Drawdown ($< 30\%$).
+  - **Faber (2007) SMA-200 Trend Gating**: Optional exposure zeroing when $Close < SMA_{200}$ to protect against long bear drawdowns.
+  - **3-State Volatility Regime Auditing (`audit_regime_performance`)**: Statistical variance-ranked market regimes (`LOW_VOL_BULL`, `MID_VOL_SIDEWAYS`, `HIGH_VOL_BEAR`) and macro states (`RISK ON`, `NEUTRAL`, `RECESSION`, `CREDIT EVENT`) with regime stability scoring ($0.0 \dots 1.0$) to prevent LLM overfitting to tranquil regimes.
 - **UI & IDE ([`ResearchCopilotView.tsx`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_multi_leg_paper_trading/webapp/src/components/ai/ResearchCopilotView.tsx))**:
   - Natural language prompt IDE with preset templates (Mean Reversion, Dual Momentum, Dispersion Arb, 0DTE Iron Condor).
-  - Code syntax preview with AST security badge, one-click CPCV backtester, equity curve chart, and direct deploy-to-paper button.
+  - Code syntax preview with AST security badge, one-click CPCV backtester, multi-regime breakdown cards, regime stability score badge, equity curve chart, and direct deploy-to-paper button.
 
 ---
 
@@ -48,7 +50,7 @@ All 8 specialized subagents have completed the implementation and verification o
 ## 🚀 4. API & Screen Integrations
 - **FastAPI Endpoints in [`api/pilots_api.py`](file:///Users/kevinlee/.gemini/antigravity/worktrees/Stockpy-live/implement_multi_leg_paper_trading/api/pilots_api.py)**:
   - `POST /pilots/ai/research/synthesize`
-  - `POST /pilots/ai/research/backtest`
+  - `POST /pilots/ai/research/backtest` & `/pilots/ai/backtest/autonomous` (with Faber trend gating & multi-regime breakdown support)
   - `GET /pilots/options/vol-surface/3d-mesh`
   - `GET /pilots/execution/brokers/status`
   - `POST /pilots/execution/brokers/failover`
@@ -62,18 +64,18 @@ All 8 specialized subagents have completed the implementation and verification o
 ## 🧪 5. Verification & Auditor Findings Resolutions
 - **Auditor Findings Addressed**:
   1. `llm/research_copilot.py`: Closed AST aliasing vectors in `visit_Attribute`, expanded forbidden pandas/numpy I/O and dynamic evaluation methods, supported tuple attribute unpacking in metadata extraction (78/78 tests passed).
-  2. `validation/autonomous_backtest_runner.py`: Pre-computed continuous strategy returns in `run_cpcv` to prevent gap-jump indicator distortions across disjoint test blocks (27/27 tests passed).
+  2. `validation/autonomous_backtest_runner.py`: Pre-computed continuous strategy returns in `run_cpcv` to prevent gap-jump indicator distortions across disjoint test blocks; integrated Faber trend gate and 3-state volatility regime stability auditing (31/31 tests passed).
   3. `webapp/src/components/charts/VolSurface3D.tsx`: Decoupled 60fps canvas render loop from React state re-renders using mutable `cameraRef`, and interpolated strike cross-section slicing (19/19 tests passed).
   4. `webapp/src/components/charts/LobDepth3D.tsx`: Fixed Microprice formula to weight top-of-book (L1) volume and decoupled waterfall order arrival loop using mutable `waterfallEventsRef` (26/26 tests passed).
   5. `execution/multi_broker_gateway.py`: Enforced strict `FailoverMode.MANUAL` routing without automatic fallback cascades (34/34 tests passed).
-  6. `api/pilots_api.py` & `tests/test_pilots_paper_broker.py`: Upgraded state-mutating and heavy POST endpoints (`/synthesize`, `/backtest`, `/failover`) to `require_command_token` and verified fail-closed behavior (161/161 tests passed).
-- **Backend Test Suite**: **341 / 341 passed (100%)**
+  6. `api/pilots_api.py` & `tests/test_pilots_paper_broker.py`: Upgraded state-mutating and heavy POST endpoints (`/synthesize`, `/backtest`, `/failover`) to `require_command_token` and verified fail-closed behavior (163/163 tests passed).
+- **Backend Test Suite**: **345 / 345 passed (100%)**
   - `pytest tests/test_research_copilot.py`: 78 passed
-  - `pytest tests/test_autonomous_backtest_runner.py`: 27 passed
+  - `pytest tests/test_autonomous_backtest_runner.py`: 31 passed
   - `pytest tests/test_multi_broker_gateway.py`: 34 passed
   - `pytest tests/test_sec_rule_606_reporter.py`: 19 passed
-  - `pytest tests/test_fix_gateway.py`: 22 passed
-  - `pytest tests/test_pilots_paper_broker.py`: 161 passed
-- **Frontend Test Suite**: **160 test files passed, 1,696 tests passed (100%)**
+  - `pytest tests/test_fix_gateway.py`: 25 passed
+  - `pytest tests/test_pilots_paper_broker.py`: 163 passed
+- **Frontend Test Suite**: **160 test files passed, 1,698 tests passed (100%)**
 - **TypeScript Typecheck**: **`tsc --noEmit` passed with 0 errors**.
 - **AST Safety**: 100% compliant with zero heavy engine imports.
