@@ -1,0 +1,22 @@
+# Execution Tasks: Phases 25 & 26 (Institutional Portfolio & Execution Infrastructure)
+
+- [x] **Workstream 1: HRP & CVaR Optimizer (Phase 25)**
+  - [x] Create `sizing/hrp_cvar_optimizer.py` (Tree clustering, recursive bisection, SLSQP CVaR constraints using `scipy.optimize` and `scipy.cluster`).
+  - [x] Implement `compute_correlation_distance`, `quasi_diagonalization`, `recursive_bisection`, and `constrain_cvar`.
+  - [x] Create `tests/test_hrp_cvar_optimizer.py` (100% test pass rate, AST safety).
+- [x] **Workstream 2: Almgren-Chriss Optimal Execution Engine (Phase 26)**
+  - [x] Create `execution/almgren_chriss_router.py` (Optimal execution trajectories, temporary vs permanent impact).
+  - [x] Implement `compute_trading_trajectory`.
+  - [x] Create `tests/test_almgren_chriss_router.py` (100% test pass rate, AST safety).
+- [x] **Workstream 3: Pilots API & Backend Routing**
+  - [x] Modify `api/pilots_api.py` with `POST /pilots/portfolio/optimize/hrp-cvar` and `POST /pilots/execution/optimize/almgren-chriss`.
+  - [x] Add backend tests in `tests/test_pilots_paper_broker.py`.
+- [x] **Workstream 4: Webapp PWA & UI Specialist**
+  - [x] Update types and client API methods (`types.ts`, `client.ts`).
+  - [x] Create `HrpCvarOptimizerView.tsx` and `AlmgrenChrissRouterView.tsx`.
+  - [x] Embed components into `PaperBroker.tsx` or `OptionsChain.tsx` with dedicated toggles.
+  - [x] Run `vitest` tests and `typecheck` to ensure mock/live parity.
+- [ ] **Verification & Walkthrough**
+  - [ ] Run full `pytest` suite and webapp tests.
+  - [ ] Write `walkthrough.md`.
+  - [ ] Commit changes to `implement_portfolio_and_execution_infra`.

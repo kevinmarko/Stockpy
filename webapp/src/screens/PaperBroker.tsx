@@ -19,6 +19,8 @@ import { GexProfileView } from "../components/options/GexProfileView";
 import { LobDepthView } from "../components/options/LobDepthView";
 import { CopulaSpreadView } from "../components/options/CopulaSpreadView";
 import { MarketMakerAgentView } from "../components/options/MarketMakerAgentView";
+import { HrpCvarOptimizerView } from "../components/portfolio/HrpCvarOptimizerView";
+import { AlmgrenChrissRouterView } from "../components/execution/AlmgrenChrissRouterView";
 import type { RollOrderRequest } from "../api/types";
 
 export function PaperBroker() {
@@ -46,6 +48,8 @@ export function PaperBroker() {
   const [showLob, setShowLob] = useState(false);
   const [showCopula, setShowCopula] = useState(false);
   const [showMarketMaker, setShowMarketMaker] = useState(false);
+  const [showHrpCvar, setShowHrpCvar] = useState(false);
+  const [showAlmgrenChriss, setShowAlmgrenChriss] = useState(false);
 
   // Position Roll state
   const [rollingPosition, setRollingPosition] = useState<{ symbol: string; qty: number } | null>(null);
@@ -386,6 +390,36 @@ export function PaperBroker() {
             🤖 MM Agent Sim
           </button>
           <button
+            onClick={() => setShowHrpCvar(!showHrpCvar)}
+            style={{
+              padding: "8px 14px",
+              background: showHrpCvar ? theme.growth : theme.surface,
+              border: `1px solid ${showHrpCvar ? theme.growth : theme.border}`,
+              color: showHrpCvar ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            📈 HRP CVaR
+          </button>
+          <button
+            onClick={() => setShowAlmgrenChriss(!showAlmgrenChriss)}
+            style={{
+              padding: "8px 14px",
+              background: showAlmgrenChriss ? theme.growth : theme.surface,
+              border: `1px solid ${showAlmgrenChriss ? theme.growth : theme.border}`,
+              color: showAlmgrenChriss ? "#000" : theme.textPrimary,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            📉 Almgren-Chriss
+          </button>
+          <button
             onClick={() => setShowGammaScalper(!showGammaScalper)}
             style={{
               padding: "8px 14px",
@@ -535,6 +569,32 @@ export function PaperBroker() {
             spotPrice={account.data?.equity ? 546.50 : 546.50}
             onClose={() => setShowMarketMaker(false)}
           />
+        )}
+
+        {/* HRP CVaR Optimizer Desk */}
+        {showHrpCvar && (
+          <div style={{ position: "relative" }}>
+            <button 
+              onClick={() => setShowHrpCvar(false)}
+              style={{ position: "absolute", top: 12, right: 12, zIndex: 10, background: "transparent", border: "none", color: theme.textSecondary, cursor: "pointer" }}
+            >
+              ✕
+            </button>
+            <HrpCvarOptimizerView symbols={["AAPL", "MSFT", "NVDA", "JPM", "V"]} />
+          </div>
+        )}
+
+        {/* Almgren-Chriss Execution Router Desk */}
+        {showAlmgrenChriss && (
+          <div style={{ position: "relative" }}>
+            <button 
+              onClick={() => setShowAlmgrenChriss(false)}
+              style={{ position: "absolute", top: 12, right: 12, zIndex: 10, background: "transparent", border: "none", color: theme.textSecondary, cursor: "pointer" }}
+            >
+              ✕
+            </button>
+            <AlmgrenChrissRouterView symbol="SPY" quantity={1000} />
+          </div>
         )}
 
         {/* Volatility Forecast & Strike Mispricing Scanner */}

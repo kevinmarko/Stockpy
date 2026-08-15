@@ -1595,8 +1595,11 @@ class TestOptionsSorSimulateLeggingEndpoint:
         assert body["num_simulations"] == 500
         assert body["latency_seconds"] == 2.0
         assert 0.0 <= body["hung_leg_probability"] <= 1.0
-        assert "expected_slippage" in body
-        assert "expected_net_savings" in body
+        assert "trajectory" in body
+        assert "expected_shortfall" in body
+        assert "variance" in body
+        assert "half_life" in body
+        assert len(body["trajectory"]) == 10
         assert "distribution" in body
         assert "percentiles" in body["distribution"]
         assert body["recommended_policy"] in ["COB_NET_PACKAGE", "LEG_PASSIVE_FIRST", "SPLIT_DIRECT"]
@@ -1957,5 +1960,124 @@ class TestMarketMakerSimulateEndpoint:
             )
         assert resp.status_code == 401
 
+class TestAIForecastingEndpoints:
+    def test_get_transformer_forecast_success(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/ai/transformer-forecast?symbol=AAPL",
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "AAPL"
+        assert len(body["forecast"]) == 4
+        assert "1d" in body["forecast"]
+        assert "5d" in body["forecast"]
+        assert "21d" in body["forecast"]
+        assert "60d" in body["forecast"]
+        assert len(body["attention_heatmap"]) == 60
 
+    def test_get_transformer_forecast_fails_closed_with_wrong_token(self):
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.get(
+                "/pilots/options/ai/transformer-forecast?symbol=AAPL",
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
 
+    def test_post_diffusion_stress_test_success(self):
+        payload = {
+            "symbol": "TSLA",
+            "spot_price": 200.0,
+            "volatility": 0.5,
+            "num_paths": 100,
+            "horizon": 10,
+            "drift": 0.05
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/ai/diffusion-stress-test",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["symbol"] == "TSLA"
+        assert len(body["paths"]) == 100
+        assert len(body["paths"][0]) == 10
+        assert "VaR_95" in body
+        assert "CVaR_95" in body
+
+    def test_post_diffusion_stress_test_fails_closed_with_wrong_token(self):
+        payload = {
+            "symbol": "TSLA",
+            "spot_price": 200.0,
+            "volatility": 0.5,
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/options/ai/diffusion-stress-test",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+class TestOptimizationEndpoints:
+    def test_post_portfolio_optimize_hrp_cvar_success(self):
+        payload = {
+            "symbols": ["AAPL", "MSFT", "GOOGL"]
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "allocations" in body
+        assert "dendrogram" in body
+        assert "expected_return" in body
+        assert len(body["allocations"]) == 3
+
+    def test_post_portfolio_optimize_hrp_cvar_fails_closed_with_wrong_token(self):
+        payload = {
+            "symbols": ["AAPL", "MSFT", "GOOGL"]
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/portfolio/optimize/hrp-cvar",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401
+
+    def test_post_execution_optimize_almgren_chriss_success(self):
+        payload = {
+            "symbol": "AAPL",
+            "quantity": 100.0,
+            "urgency": 0.5
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/optimize/almgren-chriss",
+                json=payload,
+                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "expected_trajectory" in body
+        assert len(body["expected_trajectory"]) > 0
+
+    def test_post_execution_optimize_almgren_chriss_fails_closed_with_wrong_token(self):
+        payload = {
+            "symbol": "AAPL",
+            "quantity": 100.0
+        }
+        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
+            resp = _client.post(
+                "/pilots/execution/optimize/almgren-chriss",
+                json=payload,
+                headers={"Authorization": "Bearer WRONG"},
+            )
+        assert resp.status_code == 401

@@ -185,6 +185,13 @@ import type {
   CopulaPairsResponse,
   MarketMakerSimRequest,
   MarketMakerSimResponse,
+  TransformerForecastResponse,
+  DiffusionStressRequest,
+  DiffusionStressResponse,
+  HrpCvarOptimizeRequest,
+  HrpCvarOptimizeResponse,
+  AlmgrenChrissOptimizeRequest,
+  AlmgrenChrissOptimizeResponse,
 } from "./types";
 
 import { getEffectiveToken } from "../auth/apiToken";
@@ -594,6 +601,23 @@ const liveApi = {
     }),
   getForecastResult: (symbol: string) =>
     http<ForecastResult>(`/metrics/forecast/${encodeURIComponent(symbol)}`),
+  getTransformerForecast: (symbol: string) =>
+    http<TransformerForecastResponse>(`/data/ai/transformer-vol/${encodeURIComponent(symbol)}`),
+  runDiffusionStressTest: (req: DiffusionStressRequest) =>
+    http<DiffusionStressResponse>("/data/ai/diffusion-stress", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  optimizeHrpCvar: (req: HrpCvarOptimizeRequest) =>
+    http<HrpCvarOptimizeResponse>("/pilots/portfolio/optimize/hrp-cvar", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  optimizeAlmgrenChriss: (req: AlmgrenChrissOptimizeRequest) =>
+    http<AlmgrenChrissOptimizeResponse>("/pilots/execution/optimize/almgren-chriss", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
   setStrategyModules: (body: StrategyModulesUpdate) =>
     http<StrategyModulesUpdateResult>("/strategy/modules", {
       method: "PUT",

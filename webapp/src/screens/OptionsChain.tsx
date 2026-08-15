@@ -21,9 +21,11 @@ import { GexProfileView } from "../components/options/GexProfileView";
 import { LobDepthView } from "../components/options/LobDepthView";
 import { CopulaSpreadView } from "../components/options/CopulaSpreadView";
 import { MarketMakerAgentView } from "../components/options/MarketMakerAgentView";
+import { TransformerVolForecastView } from "../components/charts/TransformerVolForecastView";
+import { GenerativeDiffusionStressView } from "../components/charts/GenerativeDiffusionStressView";
 import { TabGuide } from "../components/TabGuide";
 
-type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte" | "vpin" | "sor" | "gex" | "lob" | "copula" | "mm";
+type ChainTab = "calls" | "puts" | "flow" | "crush" | "forecast" | "gamma" | "dispersion" | "zerodte" | "vpin" | "sor" | "gex" | "lob" | "copula" | "mm" | "aivol" | "stress";
 
 export function OptionsChain() {
   const { ticker } = useParams<{ ticker: string }>();
@@ -210,6 +212,8 @@ export function OptionsChain() {
           { key: "copula", label: "🔗 Copula" },
           { key: "mm", label: "🤖 MM Agent" },
           { key: "forecast", label: "🎯 Vol Scanner" },
+          { key: "aivol", label: "🤖 AI Vol" },
+          { key: "stress", label: "🌪️ Stress" },
           { key: "gamma", label: "⚡ Gamma Scalp" },
           { key: "dispersion", label: "🌐 Dispersion" },
           { key: "zerodte", label: "⚡ 0DTE" },
@@ -257,6 +261,10 @@ export function OptionsChain() {
           <LobDepthView initialSymbol={ticker || "SPY"} spotPrice={spotPrice || 546.50} />
         ) : activeTab === "forecast" ? (
           <VolForecastScanner initialSymbol={ticker} />
+        ) : activeTab === "aivol" ? (
+          <TransformerVolForecastView symbol={ticker || "SPY"} />
+        ) : activeTab === "stress" ? (
+          <GenerativeDiffusionStressView symbol={ticker || "SPY"} />
         ) : activeTab === "gamma" ? (
           <GammaScalperView initialSymbol={ticker} spotPrice={spotPrice} />
         ) : activeTab === "dispersion" ? (

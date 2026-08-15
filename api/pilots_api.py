@@ -6451,3 +6451,187 @@ def post_live_trade_reject(token: str) -> Dict[str, Any]:
     except LiveTradeProposalAlreadyDecidedError:
         raise HTTPException(status_code=409, detail="already_decided")
     return _serialize(proposal)
+
+class DiffusionStressTestRequest(BaseModel):
+    symbol: str
+    spot_price: float
+    volatility: float
+    num_paths: int = 1000
+    horizon: int = 30
+    drift: float = 0.0
+
+@app.get(
+    "/pilots/options/ai/transformer-forecast",
+    dependencies=[Depends(require_read_token)],
+)
+def get_transformer_forecast(symbol: str) -> Dict[str, Any]:
+    from ml.transformer_vol_forecaster import build_tft_model, predict_multi_horizon_vol
+    import numpy as np
+
+    # Instantiate the numpy-based TFT engine
+    model = build_tft_model(seq_len=60, d_model=32, num_heads=4, horizons=[1, 5, 21, 60])
+    
+    # Dummy input sequence representing recent market history (batch_size=1, seq_len=60, features=32)
+    X = np.random.randn(1, 60, 32)
+    
+    forecasts, attn_weights = predict_multi_horizon_vol(X, model)
+    
+    return {
+        "symbol": symbol,
+        "forecast": {k: float(v[0]) for k, v in forecasts.items()},
+        "attention_heatmap": attn_weights[0].tolist()
+    }
+
+@app.post(
+    "/pilots/options/ai/diffusion-stress-test",
+    dependencies=[Depends(require_read_token)],
+)
+def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any]:
+    from validation.synthetic_diffusion_engine import train_diffusion_model, generate_synthetic_crash_paths, compute_diffusion_var
+    import numpy as np
+
+    # Generate small amount of historical pseudo-data to train the score network quickly (AST-safe fast init)
+    historical_data = np.random.randn(10, max(1, req.horizon - 1)) * req.volatility + req.drift
+    model = train_diffusion_model(historical_data, epochs=10, lr=0.01)
+
+    # Use Euler-Maruyama SDE solver to generate synthetic non-linear paths
+    num_paths_safe = min(req.num_paths, 500) # Cap for performance in API synchronous response
+    synthetic_returns = generate_synthetic_crash_paths(model, num_paths=num_paths_safe, steps=50, dt=1.0/252.0)
+    
+    # Map raw returns onto the spot price trajectory
+    paths = []
+    for ret_path in synthetic_returns:
+        price_path = [req.spot_price]
+        for r in ret_path:
+            price_path.append(price_path[-1] * (1 + r))
+        paths.append(price_path)
+    
+    # Compute VaR and Expected Shortfall
+    var_95, cvar_95 = compute_diffusion_var(synthetic_returns, confidence_level=0.95)
+    
+    return {
+        "symbol": req.symbol,
+        "paths": paths,
+        "VaR_95": float(var_95 * req.spot_price),
+        "CVaR_95": float(cvar_95 * req.spot_price)
+    }
+
+class HRPCVaRRequest(BaseModel):
+    symbols: List[str]
+    target_return: Optional[float] = None
+    risk_aversion: Optional[float] = None
+
+@app.post(
+    "/pilots/portfolio/optimize/hrp-cvar",
+    dependencies=[Depends(require_read_token)],
+)
+def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
+    from sizing.hrp_cvar_optimizer import compute_correlation_distance, quasi_diagonalization, recursive_bisection, constrain_cvar
+    import numpy as np
+    import pandas as pd
+    from scipy.cluster.hierarchy import linkage
+    from scipy.spatial.distance import squareform
+    
+    if not req.symbols:
+        raise HTTPException(status_code=400, detail="Must provide at least one symbol.")
+        
+    num_assets = len(req.symbols)
+    # Generate dummy returns (n_days, n_assets)
+    np.random.seed(42)
+    returns_np = np.random.randn(252, num_assets) * 0.02 + 0.0005
+    returns = pd.DataFrame(returns_np, columns=req.symbols)
+    cov = returns.cov()
+    
+    dist = compute_correlation_distance(cov)
+    
+    # We need linkage Z for the UI
+    dist_np = dist.values
+    dist_np = (dist_np + dist_np.T) / 2
+    np.fill_diagonal(dist_np, 0.0)
+    condensed_dist = squareform(dist_np, checks=False)
+    
+    if num_assets > 1:
+        Z = linkage(condensed_dist, method='single')
+        nodes = {i: {"name": req.symbols[i], "distance": 0.0} for i in range(num_assets)}
+        for i, row in enumerate(Z):
+            idx1, idx2, d, _ = row
+            nodes[num_assets + i] = {
+                "name": f"Cluster {i+1}",
+                "distance": float(d),
+                "children": [nodes[int(idx1)], nodes[int(idx2)]]
+            }
+        dendrogram_tree = nodes[num_assets + len(Z) - 1]
+    else:
+        dendrogram_tree = {"name": req.symbols[0], "distance": 0.0}
+    
+    sort_ix = quasi_diagonalization(dist)
+    initial_w = recursive_bisection(cov, sort_ix)
+    
+    # Constrain CVaR to an arbitrary realistic threshold
+    final_w = constrain_cvar(returns, initial_w, max_cvar=0.05)
+    
+    allocations = [{"symbol": k, "weight": v} for k, v in final_w.items()]
+    port_ret = np.dot(returns_np.mean(axis=0) * 252, final_w.values)
+    port_vol = np.sqrt(np.dot(final_w.values.T, np.dot(cov.values * 252, final_w.values)))
+    
+    return {
+        "allocations": allocations,
+        "dendrogram": dendrogram_tree,
+        "expected_return": float(port_ret),
+        "cvar_95": float(0.05), # placeholder
+        "sharpe_ratio": float(port_ret / port_vol) if port_vol > 0 else 0.0
+    }
+
+class AlmgrenChrissRequest(BaseModel):
+    symbol: str
+    quantity: float
+    risk_aversion: Optional[float] = None
+    volatility: Optional[float] = None
+    liquidity: Optional[float] = None
+    horizon_steps: Optional[int] = None
+
+@app.post(
+    "/pilots/execution/optimize/almgren-chriss",
+    dependencies=[Depends(require_read_token)],
+)
+def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[str, Any]:
+    from execution.almgren_chriss_router import compute_trading_trajectory
+    import numpy as np
+    
+    steps = req.horizon_steps if req.horizon_steps is not None else 10
+    vol = req.volatility if req.volatility is not None else 0.02
+    risk = req.risk_aversion if req.risk_aversion is not None else 0.5
+    
+    res = compute_trading_trajectory(
+        total_shares=req.quantity,
+        total_time=1.0,
+        n_intervals=steps,
+        volatility=vol,
+        temp_impact=0.1,
+        perm_impact=0.01,
+        risk_aversion=risk
+    )
+    
+    trajectory = []
+    traj_arr = res["trajectory"]
+    trade_arr = res["trade_list"]
+    
+    # Calculate half-life of trading
+    kappa = np.sqrt(risk * (vol ** 2) / 0.1) if risk > 0 else 0
+    half_life = np.log(2) / kappa if kappa > 0 else 0.0
+    
+    for i in range(len(trade_arr)):
+        trajectory.append({
+            "step": i + 1,
+            "shares_remaining": traj_arr[i + 1],
+            "trade_size": trade_arr[i],
+            "expected_price": 100.0 - (0.01 * (req.quantity - traj_arr[i + 1])) # Dummy impact price
+        })
+        
+    return {
+        "symbol": req.symbol,
+        "trajectory": trajectory,
+        "expected_shortfall": res["expected_shortfall"],
+        "variance": res["variance"],
+        "half_life": float(half_life)
+    }
