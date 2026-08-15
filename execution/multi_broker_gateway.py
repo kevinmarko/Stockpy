@@ -38,7 +38,7 @@ import logging
 import math
 import random
 import time
-from typing import AsyncIterator, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 import uuid
 
 # AST Safety: Optional numpy/pandas acceleration with pure-stdlib fallback
