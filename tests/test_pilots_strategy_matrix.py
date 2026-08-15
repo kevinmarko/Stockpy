@@ -508,7 +508,7 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # docstring) to fetch a real chain instead of always scanning a
         # hardcoded empty chain_data=[] -- same lazy-import pattern already
         # allowed for `options_gex`/`copula_stat_arb` below.
-        allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "pandas", "data"}
+        allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "pandas", "data", "pilots"}
     if module_name == "options_gex":
         allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "scipy", "pandas", "data"}
     if module_name == "lob_simulator":

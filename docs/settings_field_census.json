@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "4238b5b967e311733da8e0af9bf99180d63f4760",
+    "git_commit": "89e450ae44076727f5ae6e2217a4642dd93797b6",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3431,13 +3431,13 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 731,
+      "total_reads": 730,
       "distinct_fields": 231,
       "counts": {
         "OUTPUT_DIR": 131,
         "SIGNAL_WEIGHTS": 21,
         "DASHBOARD_REFRESH_SECONDS": 18,
-        "LOCAL_DATA_ROOT": 18,
+        "LOCAL_DATA_ROOT": 17,
         "DISABLED_SIGNAL_MODULES": 14,
         "DEFAULT_TICKERS": 11,
         "FRED_API_KEY": 10,
@@ -3668,12 +3668,12 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 314,
+      "total_reads": 313,
       "distinct_fields": 183,
       "counts": {
         "FMP_API_KEY": 11,
-        "OPTIONS_RISK_FREE_RATE": 9,
         "ADVISORY_ONLY": 8,
+        "OPTIONS_RISK_FREE_RATE": 8,
         "FMP_NEWS_ENABLED": 7,
         "LLM_COMMENTARY_TIMEOUT_SECONDS": 7,
         "LLM_COMMENTARY_ENABLED": 6,

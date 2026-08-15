@@ -1133,8 +1133,16 @@ class TestOptionsAlertsTestEndpoint:
 # ---------------------------------------------------------------------------
 
 
+_MOCK_DISPERSION_INPUTS = (
+    {"QQQ": 450.0, "SPY": 500.0, "AAPL": 220.0, "MSFT": 420.0, "NVDA": 120.0, "AMZN": 180.0, "GOOGL": 165.0, "META": 500.0, "TSLA": 210.0, "AVGO": 160.0},
+    {"QQQ": 0.22, "SPY": 0.18, "AAPL": 0.28, "MSFT": 0.25, "NVDA": 0.45, "AMZN": 0.32, "GOOGL": 0.30, "META": 0.35, "TSLA": 0.50, "AVGO": 0.38},
+    0.45,
+)
+
+
 class TestOptionsDispersionEndpoints:
-    def test_get_dispersion_opportunities_success(self):
+    @patch("pilots.dispersion_trading._source_real_dispersion_inputs", return_value=_MOCK_DISPERSION_INPUTS)
+    def test_get_dispersion_opportunities_success(self, mock_inputs):
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
                 "/pilots/options/dispersion/opportunities",
@@ -1206,7 +1214,8 @@ class TestOptionsDispersionEndpoints:
             )
         assert resp.status_code == 401
 
-    def test_post_dispersion_execute_dry_run(self):
+    @patch("pilots.dispersion_trading._source_real_dispersion_inputs", return_value=_MOCK_DISPERSION_INPUTS)
+    def test_post_dispersion_execute_dry_run(self, mock_inputs):
         payload = {
             "index_symbol": "QQQ",
             "dry_run": True,
@@ -1239,8 +1248,10 @@ class TestOptionsDispersionEndpoints:
         body = resp.json()
         assert body["ok"] is False
         assert "Advisory-Only" in body["message"]
+
+    @patch("pilots.dispersion_trading._source_real_dispersion_inputs", return_value=_MOCK_DISPERSION_INPUTS)
     @patch("pilots.dispersion_trading.PaperAccountStore")
-    def test_post_dispersion_execute_real_paper_execution(self, mock_store_cls):
+    def test_post_dispersion_execute_real_paper_execution(self, mock_store_cls, mock_inputs):
         mock_store = mock_store_cls.return_value
         mock_store.apply_multi_leg_fill.return_value = True
 
@@ -1621,7 +1632,11 @@ class TestOptionsSorSimulateLeggingEndpoint:
 
 
 class TestOptionsGexProfileEndpoint:
-    def test_get_gex_profile_success(self):
+    @patch("data.market_data.get_provider")
+    def test_get_gex_profile_success(self, mock_provider_fn):
+        mock_prov = MagicMock()
+        mock_prov.get_latest_quote.return_value = MagicMock(price=500.0)
+        mock_provider_fn.return_value = mock_prov
         with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
             resp = _client.get(
                 "/pilots/options/gex/profile?symbol=SPY",

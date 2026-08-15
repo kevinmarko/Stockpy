@@ -69,7 +69,7 @@ export function CommandPaletteModal({
     if (!isOpen) return;
     setInput("");
     setActiveIndex(0);
-    setTimeout(() => inputRef.current?.focus(), 50);
+    const focusTimer = setTimeout(() => inputRef.current?.focus(), 50);
 
     let alive = true;
     // Both real, already-cached-elsewhere reads -- never fabricated ticker/
@@ -88,6 +88,10 @@ export function CommandPaletteModal({
       });
     return () => {
       alive = false;
+      // No explicit blur here -- this input always renders inside Modal's
+      // sheetRef subtree (Modal.tsx), whose own cleanup blurs it (covering
+      // both the desktop and mobile branches) before this cleanup runs.
+      clearTimeout(focusTimer);
     };
   }, [isOpen]);
 
