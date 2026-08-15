@@ -609,12 +609,12 @@ const liveApi = {
       body: JSON.stringify(req),
     }),
   optimizeHrpCvar: (req: HrpCvarOptimizeRequest) =>
-    http<HrpCvarOptimizeResponse>("/data/portfolio/hrp-cvar", {
+    http<HrpCvarOptimizeResponse>("/pilots/portfolio/optimize/hrp-cvar", {
       method: "POST",
       body: JSON.stringify(req),
     }),
   optimizeAlmgrenChriss: (req: AlmgrenChrissOptimizeRequest) =>
-    http<AlmgrenChrissOptimizeResponse>("/data/execution/almgren-chriss", {
+    http<AlmgrenChrissOptimizeResponse>("/pilots/execution/optimize/almgren-chriss", {
       method: "POST",
       body: JSON.stringify(req),
     }),

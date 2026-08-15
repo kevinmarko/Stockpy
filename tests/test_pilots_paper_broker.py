@@ -1584,8 +1584,11 @@ class TestOptionsSorSimulateLeggingEndpoint:
         assert body["num_simulations"] == 500
         assert body["latency_seconds"] == 2.0
         assert 0.0 <= body["hung_leg_probability"] <= 1.0
-        assert "expected_slippage" in body
-        assert "expected_net_savings" in body
+        assert "trajectory" in body
+        assert "expected_shortfall" in body
+        assert "variance" in body
+        assert "half_life" in body
+        assert len(body["trajectory"]) == 10
         assert "distribution" in body
         assert "percentiles" in body["distribution"]
         assert body["recommended_policy"] in ["COB_NET_PACKAGE", "LEG_PASSIVE_FIRST", "SPLIT_DIRECT"]
@@ -2017,9 +2020,10 @@ class TestOptimizationEndpoints:
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert "optimal_weights" in body
-        assert "dendrogram_linkage" in body
-        assert len(body["optimal_weights"]) == 3
+        assert "allocations" in body
+        assert "dendrogram" in body
+        assert "expected_return" in body
+        assert len(body["allocations"]) == 3
 
     def test_post_portfolio_optimize_hrp_cvar_fails_closed_with_wrong_token(self):
         payload = {

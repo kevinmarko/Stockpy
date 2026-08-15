@@ -6455,6 +6455,8 @@ def post_diffusion_stress_test(req: DiffusionStressTestRequest) -> Dict[str, Any
 
 class HRPCVaRRequest(BaseModel):
     symbols: List[str]
+    target_return: Optional[float] = None
+    risk_aversion: Optional[float] = None
 
 @app.post(
     "/pilots/portfolio/optimize/hrp-cvar",
@@ -6472,7 +6474,8 @@ def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
         
     num_assets = len(req.symbols)
     # Generate dummy returns (n_days, n_assets)
-    returns_np = np.random.randn(252, num_assets) * 0.02
+    np.random.seed(42)
+    returns_np = np.random.randn(252, num_assets) * 0.02 + 0.0005
     returns = pd.DataFrame(returns_np, columns=req.symbols)
     cov = returns.cov()
     
@@ -6483,7 +6486,20 @@ def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
     dist_np = (dist_np + dist_np.T) / 2
     np.fill_diagonal(dist_np, 0.0)
     condensed_dist = squareform(dist_np, checks=False)
-    Z = linkage(condensed_dist, method='single') if num_assets > 1 else np.array([])
+    
+    if num_assets > 1:
+        Z = linkage(condensed_dist, method='single')
+        nodes = {i: {"name": req.symbols[i], "distance": 0.0} for i in range(num_assets)}
+        for i, row in enumerate(Z):
+            idx1, idx2, d, _ = row
+            nodes[num_assets + i] = {
+                "name": f"Cluster {i+1}",
+                "distance": float(d),
+                "children": [nodes[int(idx1)], nodes[int(idx2)]]
+            }
+        dendrogram_tree = nodes[num_assets + len(Z) - 1]
+    else:
+        dendrogram_tree = {"name": req.symbols[0], "distance": 0.0}
     
     sort_ix = quasi_diagonalization(dist)
     initial_w = recursive_bisection(cov, sort_ix)
@@ -6491,15 +6507,25 @@ def post_portfolio_optimize_hrp_cvar(req: HRPCVaRRequest) -> Dict[str, Any]:
     # Constrain CVaR to an arbitrary realistic threshold
     final_w = constrain_cvar(returns, initial_w, max_cvar=0.05)
     
+    allocations = [{"symbol": k, "weight": v} for k, v in final_w.items()]
+    port_ret = np.dot(returns_np.mean(axis=0) * 252, final_w.values)
+    port_vol = np.sqrt(np.dot(final_w.values.T, np.dot(cov.values * 252, final_w.values)))
+    
     return {
-        "optimal_weights": final_w.to_dict(),
-        "dendrogram_linkage": Z.tolist() if num_assets > 1 else []
+        "allocations": allocations,
+        "dendrogram": dendrogram_tree,
+        "expected_return": float(port_ret),
+        "cvar_95": float(0.05), # placeholder
+        "sharpe_ratio": float(port_ret / port_vol) if port_vol > 0 else 0.0
     }
 
 class AlmgrenChrissRequest(BaseModel):
     symbol: str
     quantity: float
-    urgency: float = 0.5
+    risk_aversion: Optional[float] = None
+    volatility: Optional[float] = None
+    liquidity: Optional[float] = None
+    horizon_steps: Optional[int] = None
 
 @app.post(
     "/pilots/execution/optimize/almgren-chriss",
@@ -6507,29 +6533,42 @@ class AlmgrenChrissRequest(BaseModel):
 )
 def post_execution_optimize_almgren_chriss(req: AlmgrenChrissRequest) -> Dict[str, Any]:
     from execution.almgren_chriss_router import compute_trading_trajectory
+    import numpy as np
+    
+    steps = req.horizon_steps if req.horizon_steps is not None else 10
+    vol = req.volatility if req.volatility is not None else 0.02
+    risk = req.risk_aversion if req.risk_aversion is not None else 0.5
     
     res = compute_trading_trajectory(
         total_shares=req.quantity,
         total_time=1.0,
-        n_intervals=10,
-        volatility=0.02,
+        n_intervals=steps,
+        volatility=vol,
         temp_impact=0.1,
         perm_impact=0.01,
-        risk_aversion=req.urgency
+        risk_aversion=risk
     )
     
     trajectory = []
     traj_arr = res["trajectory"]
     trade_arr = res["trade_list"]
+    
+    # Calculate half-life of trading
+    kappa = np.sqrt(risk * (vol ** 2) / 0.1) if risk > 0 else 0
+    half_life = np.log(2) / kappa if kappa > 0 else 0.0
+    
     for i in range(len(trade_arr)):
         trajectory.append({
-            "time_step": i + 1,
-            "remaining_qty": traj_arr[i + 1],
-            "trade_qty": trade_arr[i]
+            "step": i + 1,
+            "shares_remaining": traj_arr[i + 1],
+            "trade_size": trade_arr[i],
+            "expected_price": 100.0 - (0.01 * (req.quantity - traj_arr[i + 1])) # Dummy impact price
         })
         
     return {
-        "expected_trajectory": trajectory,
+        "symbol": req.symbol,
+        "trajectory": trajectory,
         "expected_shortfall": res["expected_shortfall"],
-        "variance": res["variance"]
+        "variance": res["variance"],
+        "half_life": float(half_life)
     }
