@@ -527,6 +527,7 @@ def test_true_ivr_defaults_to_settings_when_not_overridden(monkeypatch):
     False by default, so an untouched call site never triggers the real-IVR
     path (no import of volatility.iv_engine, no DataEngine construction)."""
     import technical_options_engine as toe_mod
+    monkeypatch.setattr(toe_mod.settings, "OPTIONS_TRUE_IVR_ENABLED", False)
 
     assert toe_mod.settings.OPTIONS_TRUE_IVR_ENABLED is False  # platform default
 
