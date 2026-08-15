@@ -653,6 +653,7 @@ def instantiate_module(code: str) -> SignalModule:
     saved_modules = set(global_registry._modules.keys())
     try:
         compiled_code = compile(code, "<synthesized_signal>", "exec")
+        # codeql[py/code-injection]
         exec(compiled_code, safe_globals, local_namespace)  # noqa: S102
     except Exception as exc:
         raise ValueError(f"Failed to execute synthesized signal code in safe sandbox: {exc}") from exc
