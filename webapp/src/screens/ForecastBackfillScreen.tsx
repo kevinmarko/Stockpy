@@ -117,8 +117,8 @@ export function ForecastBackfillScreen() {
           Agentic Forecast Backfill & Meta-Labeling
         </h1>
         <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-1)" }}>
-          Multi-horizon (10d, 30d, 60d, 90d) confidence forecast backfilling for Time-Series Momentum (TSMOM)
-          and Cross-Sectional Momentum (CSMOM) via Financial Modeling Prep (FMP).
+          Multi-horizon (10d, 30d, 60d, 90d) confidence forecast backfilling across quantitative strategies,
+          momentum, quality factors, and options volatility signals.
         </p>
       </header>
 
