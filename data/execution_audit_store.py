@@ -18,7 +18,7 @@ import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, Index, Integer, String
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import create_db_engine, resolve_database_url, session_scope
@@ -45,6 +45,11 @@ class ExecutionAuditRecord(Base):
     """SQLAlchemy model for the persistent `execution_audit_records` table."""
 
     __tablename__ = "execution_audit_records"
+    __table_args__ = (
+        Index("ix_exec_audit_ts_venue_type", "routing_timestamp", "venue", "order_type"),
+        Index("ix_exec_audit_ts_is_option", "routing_timestamp", "is_option"),
+        Index("ix_exec_audit_symbol_ts", "symbol", "routing_timestamp"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     order_id = Column(String(100), nullable=False, index=True)
@@ -257,8 +262,15 @@ class ExecutionAuditStore:
             rec_id = rec.id
             return rec_id
 
-    def record_audits(self, records: List[Union[Dict[str, Any], ExecutionAuditRecord]]) -> int:
-        """Insert a batch of execution audit records in a single transaction.
+    def bulk_insert_audits(
+        self,
+        records: List[Union[Dict[str, Any], ExecutionAuditRecord]],
+        batch_size: int = 1000,
+    ) -> int:
+        """High-throughput batch insertion of execution audit records.
+
+        Optimized with chunked multi-row mapping insertion and single transaction scope.
+        Compatible with SQLite WAL pragma tuning and PostgreSQL batch COPY/INSERT operations.
         Returns the count of successfully persisted records.
         """
         if self._readonly:
@@ -266,18 +278,48 @@ class ExecutionAuditStore:
         if not records:
             return 0
 
-        with session_scope(self.Session) as session:
-            count = 0
-            for r in records:
-                rec = self._build_record_obj(r)
-                session.add(rec)
-                count += 1
-            return count
+        # Build list of normalized dictionaries for high-throughput bulk insertion
+        dict_records = [self._build_record_dict(r) for r in records]
 
-    def _build_record_obj(self, data: Union[Dict[str, Any], ExecutionAuditRecord]) -> ExecutionAuditRecord:
-        """Construct an ExecutionAuditRecord entity from dict or instance."""
+        total_inserted = 0
+        with session_scope(self.Session) as session:
+            for i in range(0, len(dict_records), batch_size):
+                chunk = dict_records[i : i + batch_size]
+                session.bulk_insert_mappings(ExecutionAuditRecord, chunk)
+                total_inserted += len(chunk)
+
+        return total_inserted
+
+    def record_audits(
+        self,
+        records: List[Union[Dict[str, Any], ExecutionAuditRecord]],
+        batch_size: int = 1000,
+    ) -> int:
+        """Insert a batch of execution audit records in a single transaction.
+        Returns the count of successfully persisted records.
+        """
+        return self.bulk_insert_audits(records, batch_size=batch_size)
+
+    def _build_record_dict(self, data: Union[Dict[str, Any], ExecutionAuditRecord]) -> Dict[str, Any]:
+        """Construct a normalized dictionary for ExecutionAuditRecord bulk insertion."""
         if isinstance(data, ExecutionAuditRecord):
-            return data
+            return {
+                "order_id": data.order_id,
+                "client_order_id": data.client_order_id,
+                "symbol": data.symbol,
+                "side": data.side,
+                "venue": data.venue,
+                "order_type": data.order_type,
+                "routing_timestamp": data.routing_timestamp,
+                "fill_price": data.fill_price,
+                "nbbo_bid": data.nbbo_bid,
+                "nbbo_ask": data.nbbo_ask,
+                "executed_shares": data.executed_shares,
+                "maker_taker_fee_rebate": data.maker_taker_fee_rebate,
+                "price_improvement": data.price_improvement,
+                "is_option": bool(data.is_option),
+                "notes": data.notes,
+            }
 
         d = dict(data or {})
         raw_order_type = d.get("order_type")
@@ -304,23 +346,30 @@ class ExecutionAuditStore:
         fee_rebate = float(_opt_float(d.get("maker_taker_fee_rebate"), 0.0) or 0.0)
         routing_ts = _coerce_dt(d.get("routing_timestamp"))
 
-        return ExecutionAuditRecord(
-            order_id=str(d.get("order_id") or d.get("client_order_id") or "UNKNOWN"),
-            client_order_id=str(d["client_order_id"]) if d.get("client_order_id") else None,
-            symbol=str(d.get("symbol", "")).upper().strip(),
-            side=side,
-            venue=str(d.get("venue", "UNKNOWN")).upper().strip(),
-            order_type=normalized_ot,
-            routing_timestamp=routing_ts,
-            fill_price=fill_price,
-            nbbo_bid=nbbo_bid,
-            nbbo_ask=nbbo_ask,
-            executed_shares=executed_shares,
-            maker_taker_fee_rebate=fee_rebate,
-            price_improvement=price_improvement,
-            is_option=bool(d.get("is_option", False)),
-            notes=str(d["notes"]) if d.get("notes") else None,
-        )
+        return {
+            "order_id": str(d.get("order_id") or d.get("client_order_id") or "UNKNOWN"),
+            "client_order_id": str(d["client_order_id"]) if d.get("client_order_id") else None,
+            "symbol": str(d.get("symbol", "")).upper().strip(),
+            "side": side,
+            "venue": str(d.get("venue", "UNKNOWN")).upper().strip(),
+            "order_type": normalized_ot,
+            "routing_timestamp": routing_ts,
+            "fill_price": fill_price,
+            "nbbo_bid": nbbo_bid,
+            "nbbo_ask": nbbo_ask,
+            "executed_shares": executed_shares,
+            "maker_taker_fee_rebate": fee_rebate,
+            "price_improvement": price_improvement,
+            "is_option": bool(d.get("is_option", False)),
+            "notes": str(d["notes"]) if d.get("notes") else None,
+        }
+
+    def _build_record_obj(self, data: Union[Dict[str, Any], ExecutionAuditRecord]) -> ExecutionAuditRecord:
+        """Construct an ExecutionAuditRecord entity from dict or instance."""
+        if isinstance(data, ExecutionAuditRecord):
+            return data
+        record_dict = self._build_record_dict(data)
+        return ExecutionAuditRecord(**record_dict)
 
     def get_records(
         self,

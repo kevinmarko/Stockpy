@@ -843,3 +843,143 @@ async def test_custom_submit_hook():
     res = await gateway.submit_order(intent)
     assert res.broker_order_id == "custom-hook-id"
     assert res.filled_avg_price == 999.0
+
+
+@pytest.mark.anyio
+async def test_concrete_broker_failover_simulation_auto_and_manual():
+    """Verify end-to-end failover across concrete adapters:
+    Primary (Alpaca/Robinhood) -> Secondary (Tradier/InteractiveBrokers/FMPPaper) in AUTO & MANUAL modes.
+    """
+    gateway = MultiBrokerGateway(
+        priority_hierarchy=["robinhood", "alpaca", "tradier", "interactive_brokers", "fmp_paper"],
+        failover_mode=FailoverMode.AUTO,
+    )
+
+    rh = RobinhoodBrokerAdapter(simulated=True)
+    alpaca = AlpacaBrokerAdapter(simulated=True)
+    tradier = TradierBrokerAdapter(simulated=True)
+    ibkr = InteractiveBrokersAdapter(simulated=True)
+    fmp = FMPPaperBrokerAdapter(simulated=True)
+
+    gateway.register_broker(rh)
+    gateway.register_broker(alpaca)
+    gateway.register_broker(tradier)
+    gateway.register_broker(ibkr)
+    gateway.register_broker(fmp)
+
+    # 1. AUTO Mode: Robinhood and Alpaca fail -> should automatically route to Tradier
+    rh.set_forced_error("Robinhood 503 API Unavailable")
+    alpaca.set_forced_error("Alpaca Rate Limit Exceeded")
+
+    intent1 = OrderIntent(
+        strategy_id="swing_momentum",
+        symbol="AAPL",
+        side=OrderSide.BUY,
+        qty=10.0,
+        limit_price=175.0,
+    )
+    res1 = await gateway.submit_order(intent1)
+    assert res1.status == OrderStatus.FILLED
+    assert "tradier-" in str(res1.broker_order_id)
+
+    audit1 = gateway.get_routing_audits()[-1]
+    assert audit1.primary_broker_id == "robinhood"
+    assert audit1.executed_broker_id == "tradier"
+    assert audit1.was_failover is True
+    assert len(audit1.attempts) == 3
+
+    # 2. AUTO Mode: Tradier and IBKR also fail -> cascade down to FMPPaper
+    tradier.set_forced_error("Tradier Maintenance Window")
+    ibkr.set_forced_error("IBKR TWS Gateway Disconnected")
+
+    intent2 = OrderIntent(
+        strategy_id="mean_reversion",
+        symbol="MSFT",
+        side=OrderSide.SELL,
+        qty=5.0,
+        limit_price=410.0,
+    )
+    res2 = await gateway.submit_order(intent2)
+    assert res2.status == OrderStatus.FILLED
+    assert "fmp_paper-" in str(res2.broker_order_id)
+
+    audit2 = gateway.get_routing_audits()[-1]
+    assert audit2.executed_broker_id == "fmp_paper"
+    assert len(audit2.attempts) == 5
+
+    # 3. MANUAL Mode: Set manual override to InteractiveBrokers after resetting its error
+    ibkr.set_forced_error(None)
+    gateway.set_failover_mode(FailoverMode.MANUAL)
+    gateway.set_manual_override("interactive_brokers")
+
+    intent3 = OrderIntent(
+        strategy_id="hedging",
+        symbol="SPY",
+        side=OrderSide.BUY,
+        qty=20.0,
+        limit_price=510.0,
+    )
+    res3 = await gateway.submit_order(intent3)
+    assert res3.status == OrderStatus.FILLED
+    assert "interactive_brokers-" in str(res3.broker_order_id)
+
+    # 4. MANUAL Mode failure: If manual override broker errors, no auto-failover to other brokers
+    ibkr.set_forced_error("IBKR Socket Error")
+    intent4 = OrderIntent(
+        strategy_id="hedging",
+        symbol="QQQ",
+        side=OrderSide.BUY,
+        qty=15.0,
+    )
+    res4 = await gateway.submit_order(intent4)
+    assert res4.status == OrderStatus.ERROR
+    assert "IBKR Socket Error" in str(res4.error_message)
+
+
+@pytest.mark.anyio
+async def test_circuit_breaker_full_transition_cycle():
+    """Verify complete circuit breaker lifecycle:
+    CLOSED -> OPEN (consecutive failures >= 3 / error rate > 50%) -> HALF_OPEN (cooldown) -> CLOSED (recovery probes).
+    """
+    cfg = CircuitBreakerConfig(
+        max_consecutive_failures=3,
+        latency_threshold_ms=500.0,
+        error_rate_threshold=0.50,
+        min_requests_for_error_rate=4,
+        half_open_probe_successes=2,
+        cooldown_seconds=0.05,
+    )
+    cb = CircuitBreaker("cb_test", cfg)
+
+    # Initial state
+    assert cb.state == CircuitState.CLOSED
+    assert cb.can_execute() is True
+
+    # 1. High latency logging does not immediately trip CLOSED circuit
+    cb.record_success(latency_ms=600.0)
+    assert cb.state == CircuitState.CLOSED
+
+    # 2. Trip on consecutive failures >= 3
+    cb.record_failure("Failure 1", consecutive_failures=1)
+    assert cb.state == CircuitState.CLOSED
+    cb.record_failure("Failure 2", consecutive_failures=2)
+    assert cb.state == CircuitState.CLOSED
+    cb.record_failure("Failure 3", consecutive_failures=3)
+    assert cb.state == CircuitState.OPEN
+    assert cb.can_execute() is False
+
+    # 3. Wait for cooldown to transition to HALF_OPEN
+    await asyncio.sleep(0.06)
+    assert cb.can_execute() is True
+    assert cb.state == CircuitState.HALF_OPEN
+
+    # 4. Recovery probes in HALF_OPEN
+    cb.record_success(latency_ms=10.0)
+    assert cb.state == CircuitState.HALF_OPEN
+    assert cb.half_open_successes == 1
+
+    cb.record_success(latency_ms=12.0)
+    # Passed required 2 probes -> returns to CLOSED
+    assert cb.state == CircuitState.CLOSED
+    assert cb.can_execute() is True
+

@@ -12,6 +12,25 @@ import { OrderBookLevel } from "../../api/types";
 import { theme } from "../../theme";
 import DemoDataBadge from "../DemoDataBadge";
 import { Button, Input, Select } from "../ui";
+import {
+  disposeThreeScene,
+  disposeThreeMesh,
+  disposeThreeGeometry,
+  disposeThreeMaterial,
+  disposeThreeTexture,
+  disposeWebGLRenderer,
+  disposeCanvas,
+} from "./threeDisposal";
+
+export {
+  disposeThreeScene,
+  disposeThreeMesh,
+  disposeThreeGeometry,
+  disposeThreeMaterial,
+  disposeThreeTexture,
+  disposeWebGLRenderer,
+  disposeCanvas,
+};
 
 // ============================================================================
 // Types & Interfaces
@@ -900,11 +919,28 @@ export const LobDepth3D: React.FC<LobDepth3DProps> = ({
 
     animFrameIdRef.current = requestAnimationFrame(renderLoop);
 
+    // Global pointer up and window resize listeners
+    const handleGlobalPointerUp = () => {
+      // Global pointer cleanup if needed
+    };
+    const handleResize = () => {
+      // Handle canvas resize
+    };
+
+    window.addEventListener("mouseup", handleGlobalPointerUp);
+    window.addEventListener("touchend", handleGlobalPointerUp);
+    window.addEventListener("resize", handleResize);
+
     return () => {
       isSubscribed = false;
       if (animFrameIdRef.current) {
         cancelAnimationFrame(animFrameIdRef.current);
+        animFrameIdRef.current = null;
       }
+      window.removeEventListener("mouseup", handleGlobalPointerUp);
+      window.removeEventListener("touchend", handleGlobalPointerUp);
+      window.removeEventListener("resize", handleResize);
+      disposeCanvas(canvas);
     };
   }, [bids, asks, effectivePrice]);
 

@@ -20,6 +20,7 @@ import pytest
 import pandas as pd
 
 from data.execution_audit_store import (
+    ExecutionAuditRecord,
     ExecutionAuditStore,
     calculate_price_improvement,
     classify_limit_order,
@@ -275,6 +276,48 @@ class TestExecutionAuditStorePersistence:
 
         with pytest.raises(RuntimeError):
             reader.clear_records()
+
+    def test_composite_indexes_present(self):
+        """Verify composite indexes for SEC Rule 606 aggregations are properly declared."""
+        indexes = {idx.name: [c.name for c in idx.columns] for idx in ExecutionAuditRecord.__table__.indexes}
+        assert "ix_exec_audit_ts_venue_type" in indexes
+        assert indexes["ix_exec_audit_ts_venue_type"] == ["routing_timestamp", "venue", "order_type"]
+
+        assert "ix_exec_audit_ts_is_option" in indexes
+        assert indexes["ix_exec_audit_ts_is_option"] == ["routing_timestamp", "is_option"]
+
+        assert "ix_exec_audit_symbol_ts" in indexes
+        assert indexes["ix_exec_audit_symbol_ts"] == ["symbol", "routing_timestamp"]
+
+    def test_high_throughput_bulk_insert_audits(self, mem_store):
+        """Verify high-throughput batch insert chunking across hundreds of records."""
+        records = []
+        for i in range(250):
+            records.append({
+                "order_id": f"BULK-{i:04d}",
+                "symbol": "SPY" if i % 2 == 0 else "QQQ",
+                "side": "buy" if i % 3 == 0 else "sell",
+                "venue": "CITADEL" if i % 2 == 0 else "VIRTU",
+                "order_type": "Market" if i % 4 == 0 else "Marketable Limit",
+                "routing_timestamp": datetime(2026, 1, 15, 10, 0, 0),
+                "fill_price": 500.0 + (i * 0.01),
+                "executed_shares": 100.0,
+                "maker_taker_fee_rebate": 0.25,
+                "price_improvement": 1.00,
+                "is_option": (i % 5 == 0),
+            })
+
+        # Insert with small batch size of 50 to exercise chunked batching
+        inserted = mem_store.bulk_insert_audits(records, batch_size=50)
+        assert inserted == 250
+        assert mem_store.count() == 250
+
+        # Query to verify data integrity
+        spy_recs = mem_store.get_records(symbol="SPY")
+        assert len(spy_recs) == 125
+
+        options_recs = mem_store.get_records(is_option=True)
+        assert len(options_recs) == 50
 
 
 class TestSecRule606ReporterQuarterlyMetrics:

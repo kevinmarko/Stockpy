@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   LobDepth3D,
@@ -8,6 +8,13 @@ import {
   generateMockLobData,
   simulateIncomingOrder,
   checkWebGLSupport,
+  disposeThreeScene,
+  disposeThreeMesh,
+  disposeThreeGeometry,
+  disposeThreeMaterial,
+  disposeThreeTexture,
+  disposeWebGLRenderer,
+  disposeCanvas,
 } from "./LobDepth3D";
 import { OrderBookLevel } from "../../api/types";
 
@@ -56,6 +63,7 @@ describe("LobDepth3D Pure Calculations & Helpers", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -248,6 +256,7 @@ describe("LobDepth3D Component Rendering & Interactions", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -505,4 +514,60 @@ describe("LobDepth3D Component Rendering & Interactions", () => {
 
     expect(screen.getByTestId("queue-priority-panel")).toBeInTheDocument();
   });
+
+  it("verifies unmount cancels animation frame, removes window listeners, and zeroes out canvas dimensions", () => {
+    const cancelAnimSpy = vi.spyOn(window, "cancelAnimationFrame");
+    const removeEventListenerSpy = vi.spyOn(window, "removeEventListener");
+
+    const { unmount } = render(
+      <LobDepth3D symbol="SPY" autoPlayWaterfall={true} />
+    );
+
+    const canvas = screen.getByTestId("lob-depth-canvas") as HTMLCanvasElement;
+    expect(canvas).toBeInTheDocument();
+
+    unmount();
+
+    // Verify cancelAnimationFrame was called
+    expect(cancelAnimSpy).toHaveBeenCalled();
+
+    // Verify window event listeners were cleaned up
+    expect(removeEventListenerSpy).toHaveBeenCalledWith("mouseup", expect.any(Function));
+    expect(removeEventListenerSpy).toHaveBeenCalledWith("touchend", expect.any(Function));
+    expect(removeEventListenerSpy).toHaveBeenCalledWith("resize", expect.any(Function));
+
+    // Verify canvas backbuffers were zeroed out
+    expect(canvas.width).toBe(0);
+    expect(canvas.height).toBe(0);
+  });
+
+  describe("LobDepth3D Three.js & WebGL Disposal Export Suite", () => {
+    it("exports valid disposal routines that execute cleanly", () => {
+      expect(typeof disposeThreeScene).toBe("function");
+      expect(typeof disposeThreeMesh).toBe("function");
+      expect(typeof disposeThreeGeometry).toBe("function");
+      expect(typeof disposeThreeMaterial).toBe("function");
+      expect(typeof disposeThreeTexture).toBe("function");
+      expect(typeof disposeWebGLRenderer).toBe("function");
+      expect(typeof disposeCanvas).toBe("function");
+
+      const mockMesh = {
+        dispose: vi.fn(),
+        geometry: { dispose: vi.fn() },
+        material: { dispose: vi.fn(), map: { dispose: vi.fn() } },
+      };
+
+      disposeThreeMesh(mockMesh);
+      expect(mockMesh.geometry).toBeNull();
+      expect(mockMesh.material).toBeNull();
+
+      const canvas = document.createElement("canvas");
+      canvas.width = 400;
+      canvas.height = 300;
+      disposeCanvas(canvas);
+      expect(canvas.width).toBe(0);
+      expect(canvas.height).toBe(0);
+    });
+  });
 });
+

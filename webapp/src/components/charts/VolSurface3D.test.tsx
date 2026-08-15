@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   VolSurface3D,
@@ -8,6 +8,13 @@ import {
   sampleColormap,
   sliceMesh,
   calculateSurfaceMetrics,
+  disposeThreeScene,
+  disposeThreeMesh,
+  disposeThreeGeometry,
+  disposeThreeMaterial,
+  disposeThreeTexture,
+  disposeWebGLRenderer,
+  disposeCanvas,
   type VolSurface3DPoint,
 } from "./VolSurface3D";
 import type { VolSurfaceResponse } from "../../api/types";
@@ -104,6 +111,7 @@ describe("VolSurface3D Component & Helpers Suite", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -370,12 +378,278 @@ describe("VolSurface3D Component & Helpers Suite", () => {
       // Mouse move hover
       fireEvent.mouseMove(canvas, { clientX: 400, clientY: 270 });
 
-      // Wheel zoom
-      fireEvent.wheel(canvas, { deltaY: -100 });
-      fireEvent.wheel(canvas, { deltaY: 100 });
+      // Touch events (Single finger orbit + two finger pinch/pan)
+      fireEvent.touchStart(canvas, {
+        touches: [{ clientX: 100, clientY: 100 }],
+      });
+      fireEvent.touchMove(canvas, {
+        touches: [{ clientX: 130, clientY: 110 }],
+      });
+      fireEvent.touchEnd(canvas);
 
-      // Click
-      fireEvent.click(canvas);
+      fireEvent.touchStart(canvas, {
+        touches: [
+          { clientX: 100, clientY: 100 },
+          { clientX: 200, clientY: 200 },
+        ],
+      });
+      fireEvent.touchMove(canvas, {
+        touches: [
+          { clientX: 80, clientY: 80 },
+          { clientX: 220, clientY: 220 },
+        ],
+      });
+      fireEvent.touchCancel(canvas);
+    });
+
+    it("verifies unmount cancels animation frame and cleans up window event listeners", () => {
+      const cancelAnimSpy = vi.spyOn(window, "cancelAnimationFrame");
+      const removeEventListenerSpy = vi.spyOn(window, "removeEventListener");
+
+      const { unmount } = render(
+        <VolSurface3D volResponse={mockVolResponse} forceFallback={true} />
+      );
+
+      // Verify render is active
+      const canvas = screen.getByTestId("vol-surface-canvas") as HTMLCanvasElement;
+      expect(canvas).toBeInTheDocument();
+
+      // Trigger unmount
+      unmount();
+
+      // Verify cancelAnimationFrame was called
+      expect(cancelAnimSpy).toHaveBeenCalled();
+
+      // Verify window event listeners were removed
+      expect(removeEventListenerSpy).toHaveBeenCalledWith("mouseup", expect.any(Function));
+      expect(removeEventListenerSpy).toHaveBeenCalledWith("touchend", expect.any(Function));
+      expect(removeEventListenerSpy).toHaveBeenCalledWith("touchcancel", expect.any(Function));
+      expect(removeEventListenerSpy).toHaveBeenCalledWith("resize", expect.any(Function));
+
+      // Verify canvas backbuffers were zeroed out
+      expect(canvas.width).toBe(0);
+      expect(canvas.height).toBe(0);
+    });
+  });
+
+  describe("Three.js & WebGL Explicit Disposal Routines", () => {
+    it("disposeThreeTexture disposes texture, image, source, and mipmaps cleanly", () => {
+      const mockDispose = vi.fn();
+      const mockSourceDispose = vi.fn();
+      const mockImageBitmap = {
+        close: vi.fn(),
+      };
+
+      const texture = {
+        dispose: mockDispose,
+        image: mockImageBitmap,
+        source: { dispose: mockSourceDispose },
+        mipmaps: [{}, {}],
+      };
+
+      disposeThreeTexture(texture);
+
+      expect(mockDispose).toHaveBeenCalledTimes(1);
+      expect(mockSourceDispose).toHaveBeenCalledTimes(1);
+      expect(texture.image).toBeNull();
+      expect(texture.source).toBeNull();
+      expect(texture.mipmaps.length).toBe(0);
+
+      // Should handle null or undefined safely without throwing
+      expect(() => disposeThreeTexture(null)).not.toThrow();
+      expect(() => disposeThreeTexture(undefined)).not.toThrow();
+    });
+
+    it("disposeThreeMaterial disposes material and all attached texture maps and shader uniforms", () => {
+      const mockMatDispose = vi.fn();
+      const mockTexDispose1 = vi.fn();
+      const mockTexDispose2 = vi.fn();
+      const mockUniformTexDispose = vi.fn();
+
+      const material = {
+        dispose: mockMatDispose,
+        map: { dispose: mockTexDispose1 },
+        normalMap: { dispose: mockTexDispose2 },
+        roughnessMap: null,
+        uniforms: {
+          uTexture: { value: { dispose: mockUniformTexDispose } },
+          uScalar: { value: 1.5 },
+        },
+      };
+
+      disposeThreeMaterial(material);
+
+      expect(mockTexDispose1).toHaveBeenCalledTimes(1);
+      expect(mockTexDispose2).toHaveBeenCalledTimes(1);
+      expect(mockUniformTexDispose).toHaveBeenCalledTimes(1);
+      expect(mockMatDispose).toHaveBeenCalledTimes(1);
+      expect(material.map).toBeNull();
+      expect(material.normalMap).toBeNull();
+
+      // Handles array of materials
+      const multiMatDispose1 = vi.fn();
+      const multiMatDispose2 = vi.fn();
+      disposeThreeMaterial([
+        { dispose: multiMatDispose1 },
+        { dispose: multiMatDispose2 },
+      ]);
+      expect(multiMatDispose1).toHaveBeenCalledTimes(1);
+      expect(multiMatDispose2).toHaveBeenCalledTimes(1);
+
+      // Handles null safely
+      expect(() => disposeThreeMaterial(null)).not.toThrow();
+    });
+
+    it("disposeThreeGeometry disposes geometry, buffer attributes, and indices", () => {
+      const mockGeomDispose = vi.fn();
+      const mockPosAttrDispose = vi.fn();
+      const mockNormAttrDispose = vi.fn();
+      const mockIndexDispose = vi.fn();
+
+      const geometry = {
+        dispose: mockGeomDispose,
+        attributes: {
+          position: { dispose: mockPosAttrDispose },
+          normal: { dispose: mockNormAttrDispose },
+        },
+        index: { dispose: mockIndexDispose },
+      };
+
+      disposeThreeGeometry(geometry);
+
+      expect(mockPosAttrDispose).toHaveBeenCalledTimes(1);
+      expect(mockNormAttrDispose).toHaveBeenCalledTimes(1);
+      expect(mockIndexDispose).toHaveBeenCalledTimes(1);
+      expect(mockGeomDispose).toHaveBeenCalledTimes(1);
+
+      expect(() => disposeThreeGeometry(null)).not.toThrow();
+    });
+
+    it("disposeThreeMesh disposes geometry and material attached to mesh", () => {
+      const mockMeshDispose = vi.fn();
+      const mockGeomDispose = vi.fn();
+      const mockMatDispose = vi.fn();
+
+      const mesh = {
+        dispose: mockMeshDispose,
+        geometry: { dispose: mockGeomDispose },
+        material: { dispose: mockMatDispose },
+      };
+
+      disposeThreeMesh(mesh);
+
+      expect(mockGeomDispose).toHaveBeenCalledTimes(1);
+      expect(mockMatDispose).toHaveBeenCalledTimes(1);
+      expect(mockMeshDispose).toHaveBeenCalledTimes(1);
+      expect(mesh.geometry).toBeNull();
+      expect(mesh.material).toBeNull();
+
+      expect(() => disposeThreeMesh(null)).not.toThrow();
+    });
+
+    it("disposeThreeScene traverses scene hierarchy, disposes all children, and clears hierarchy", () => {
+      const mockGeomDispose1 = vi.fn();
+      const mockMatDispose1 = vi.fn();
+      const mockGeomDispose2 = vi.fn();
+      const mockMatDispose2 = vi.fn();
+      const mockSceneDispose = vi.fn();
+      const mockSceneClear = vi.fn();
+
+      const child1 = {
+        geometry: { dispose: mockGeomDispose1 },
+        material: { dispose: mockMatDispose1 },
+      };
+      const child2 = {
+        geometry: { dispose: mockGeomDispose2 },
+        material: { dispose: mockMatDispose2 },
+      };
+
+      const scene: any = {
+        dispose: mockSceneDispose,
+        clear: mockSceneClear,
+        children: [child1, child2],
+        traverse: (callback: (obj: any) => void) => {
+          callback(scene);
+          callback(child1);
+          callback(child2);
+        },
+      };
+
+      disposeThreeScene(scene);
+
+      expect(mockGeomDispose1).toHaveBeenCalledTimes(1);
+      expect(mockMatDispose1).toHaveBeenCalledTimes(1);
+      expect(mockGeomDispose2).toHaveBeenCalledTimes(1);
+      expect(mockMatDispose2).toHaveBeenCalledTimes(1);
+      expect(mockSceneClear).toHaveBeenCalledTimes(1);
+      expect(mockSceneDispose).toHaveBeenCalledTimes(1);
+
+      expect(() => disposeThreeScene(null)).not.toThrow();
+    });
+
+    it("disposeWebGLRenderer disposes renderer, forces context loss, and removes dom element", () => {
+      const mockRendererDispose = vi.fn();
+      const mockForceContextLoss = vi.fn();
+      const mockLoseContext = vi.fn();
+
+      const mockDomElement = document.createElement("canvas");
+      document.body.appendChild(mockDomElement);
+
+      const mockGl = {
+        getExtension: vi.fn((ext: string) => {
+          if (ext === "WEBGL_lose_context") {
+            return { loseContext: mockLoseContext };
+          }
+          return null;
+        }),
+      };
+
+      const renderer = {
+        dispose: mockRendererDispose,
+        forceContextLoss: mockForceContextLoss,
+        getContext: () => mockGl,
+        domElement: mockDomElement,
+      };
+
+      disposeWebGLRenderer(renderer);
+
+      expect(mockRendererDispose).toHaveBeenCalledTimes(1);
+      expect(mockForceContextLoss).toHaveBeenCalledTimes(1);
+      expect(mockLoseContext).toHaveBeenCalledTimes(1);
+      expect(renderer.domElement).toBeNull();
+      expect(document.body.contains(mockDomElement)).toBe(false);
+
+      expect(() => disposeWebGLRenderer(null)).not.toThrow();
+    });
+
+    it("disposeCanvas calls WEBGL_lose_context, clears 2D context, and zeroes out dimensions", () => {
+      const mockLoseContext = vi.fn();
+      const canvas = document.createElement("canvas");
+      canvas.width = 800;
+      canvas.height = 600;
+
+      vi.spyOn(canvas, "getContext").mockImplementation((type: string) => {
+        if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") {
+          return {
+            getExtension: (name: string) => {
+              if (name === "WEBGL_lose_context") {
+                return { loseContext: mockLoseContext };
+              }
+              return null;
+            },
+          } as any;
+        }
+        return mockCtx;
+      });
+
+      disposeCanvas(canvas);
+
+      expect(mockLoseContext).toHaveBeenCalledTimes(1);
+      expect(canvas.width).toBe(0);
+      expect(canvas.height).toBe(0);
+
+      expect(() => disposeCanvas(null)).not.toThrow();
     });
   });
 });
+

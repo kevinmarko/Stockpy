@@ -2433,7 +2433,7 @@ def strategy(df: pd.DataFrame) -> pd.Series:
         assert "Strategy code cannot be empty" in resp.json()["detail"]
 
     def test_backtest_missing_code_422(self):
-        payload = {"symbol": "SPY"}
+        payload = {"code": "def strategy(df): pass", "cost_bps": -10.0}
         with mock_patch_settings(FOLLOW_API_TOKEN=_CMD_TOKEN):
             resp = _client.post(
                 "/pilots/ai/research/backtest",

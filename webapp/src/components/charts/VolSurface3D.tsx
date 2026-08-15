@@ -12,6 +12,25 @@ import { theme } from "../../theme";
 import type { VolSurfaceResponse } from "../../api/types";
 import DemoDataBadge from "../DemoDataBadge";
 import { Button } from "../ui";
+import {
+  disposeThreeScene,
+  disposeThreeMesh,
+  disposeThreeGeometry,
+  disposeThreeMaterial,
+  disposeThreeTexture,
+  disposeWebGLRenderer,
+  disposeCanvas,
+} from "./threeDisposal";
+
+export {
+  disposeThreeScene,
+  disposeThreeMesh,
+  disposeThreeGeometry,
+  disposeThreeMaterial,
+  disposeThreeTexture,
+  disposeWebGLRenderer,
+  disposeCanvas,
+};
 
 // ============================================================================
 // Types & Interfaces
@@ -542,6 +561,7 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
   const isDraggingRef = useRef<boolean>(false);
   const dragModeRef = useRef<"orbit" | "pan">("orbit");
   const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lastTouchDistRef = useRef<number>(0);
   const animFrameIdRef = useRef<number | null>(null);
 
   // Camera and Interaction Mutable Ref (decouples 60fps render loop from React state re-renders)
@@ -751,6 +771,54 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
 
   const handleMouseUp = () => {
     isDraggingRef.current = false;
+  };
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 1) {
+      isDraggingRef.current = true;
+      dragModeRef.current = "orbit";
+      lastMousePosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 2) {
+      isDraggingRef.current = true;
+      dragModeRef.current = "pan";
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      lastTouchDistRef.current = Math.hypot(dx, dy);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!isDraggingRef.current) return;
+    if (e.touches.length === 1) {
+      const dx = e.touches[0].clientX - lastMousePosRef.current.x;
+      const dy = e.touches[0].clientY - lastMousePosRef.current.y;
+      lastMousePosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+
+      const nextYaw = (cameraRef.current.yaw + dx * 0.6) % 360;
+      const nextPitch = Math.max(5, Math.min(88, cameraRef.current.pitch + dy * 0.4));
+      cameraRef.current.yaw = nextYaw;
+      cameraRef.current.pitch = nextPitch;
+      setYaw(nextYaw);
+      setPitch(nextPitch);
+    } else if (e.touches.length === 2 && lastTouchDistRef.current > 0) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const newDist = Math.hypot(dx, dy);
+      const zoomFactor = newDist / lastTouchDistRef.current;
+      lastTouchDistRef.current = newDist;
+
+      const nextZoom = Math.max(
+        0.4,
+        Math.min(3.0, Number((cameraRef.current.zoom * (zoomFactor > 1 ? 1.03 : 0.97)).toFixed(2)))
+      );
+      cameraRef.current.zoom = nextZoom;
+      setZoom(nextZoom);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    isDraggingRef.current = false;
+    lastTouchDistRef.current = 0;
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -1222,11 +1290,31 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
 
     animFrameIdRef.current = requestAnimationFrame(render);
 
+    // Global pointer up and window resize listeners
+    const handleGlobalPointerUp = () => {
+      isDraggingRef.current = false;
+      lastTouchDistRef.current = 0;
+    };
+    const handleResize = () => {
+      // Re-trigger layout alignment if needed
+    };
+
+    window.addEventListener("mouseup", handleGlobalPointerUp);
+    window.addEventListener("touchend", handleGlobalPointerUp);
+    window.addEventListener("touchcancel", handleGlobalPointerUp);
+    window.addEventListener("resize", handleResize);
+
     return () => {
       isSubscribed = false;
       if (animFrameIdRef.current) {
         cancelAnimationFrame(animFrameIdRef.current);
+        animFrameIdRef.current = null;
       }
+      window.removeEventListener("mouseup", handleGlobalPointerUp);
+      window.removeEventListener("touchend", handleGlobalPointerUp);
+      window.removeEventListener("touchcancel", handleGlobalPointerUp);
+      window.removeEventListener("resize", handleResize);
+      disposeCanvas(canvas);
     };
   }, [mesh]);
 
@@ -1576,6 +1664,10 @@ export const VolSurface3D: React.FC<VolSurface3DProps> = ({
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
           onWheel={handleWheel}
           onClick={handleCanvasClick}
           data-testid="vol-surface-canvas"
