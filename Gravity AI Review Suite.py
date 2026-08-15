@@ -3537,6 +3537,7 @@ class GravityAIAuditor:
             import importlib
             import os
             import ast
+            import tempfile
             from dataclasses import fields
             from datetime import datetime, timezone
             from unittest.mock import patch, MagicMock
@@ -3561,6 +3562,44 @@ class GravityAIAuditor:
                 provider.get_intraday_bars.return_value = None
                 provider.get_fundamentals.return_value = {}
                 return provider
+
+            def _run_once_in_empty_universe_sandbox(
+                macro_mock: MagicMock, snap_mock: MagicMock, *, force_account: bool = False,
+            ):
+                """Shared by checks d/e: run main.run_once() in an isolated
+                tempdir with a deterministically empty universe.
+
+                Patches main.settings.DEFAULT_TICKERS AND main.discovery --
+                _build_universe() unions discovery()'s scan candidates in
+                BEFORE it ever consults DEFAULT_TICKERS, and discovery() reads
+                settings.OUTPUT_DIR / "scan_candidates.json", a machine-global
+                LOCAL_DATA_ROOT path that os.chdir(tmp) below does NOT
+                isolate. Without also patching discovery, a machine with a
+                real prior agentic-discovery run would make the universe
+                non-empty here and these "empty universe" checks would flake.
+
+                Returns (result, mock_fetch) so callers can assert on either.
+                """
+                with tempfile.TemporaryDirectory() as tmp:
+                    orig_dir = os.getcwd()
+                    os.chdir(tmp)
+                    try:
+                        with patch("main.fetch_account_snapshot", return_value=snap_mock) as mock_fetch, \
+                             patch("main.get_provider", return_value=_make_run_once_market_provider()), \
+                             patch("main._build_macro_dto", return_value=macro_mock), \
+                             patch("main._fetch_bars_for_universe", return_value={}), \
+                             patch("main._build_context_extras", return_value={}), \
+                             patch("main.settings.DEFAULT_TICKERS", []), \
+                             patch("main.discovery", return_value={"candidates": []}):
+                            _env_bak = os.environ.pop("WATCHLIST", None)
+                            try:
+                                result = run_once(force_account=force_account)
+                            finally:
+                                if _env_bak is not None:
+                                    os.environ["WATCHLIST"] = _env_bak
+                    finally:
+                        os.chdir(orig_dir)
+                return result, mock_fetch
 
             # ── a. RunResult is a frozen dataclass with required fields ───────
             check_a = {"status": "PASS"}
@@ -3652,24 +3691,7 @@ class GravityAIAuditor:
                 macro_mock2.market_regime = "NEUTRAL"
                 macro_mock2.vix_value = 18.0
 
-                import tempfile
-                with tempfile.TemporaryDirectory() as tmp:
-                    orig_dir = os.getcwd()
-                    os.chdir(tmp)
-                    try:
-                        with patch("main.fetch_account_snapshot", return_value=snap_mock2), \
-                             patch("main.get_provider", return_value=_make_run_once_market_provider()), \
-                             patch("main._build_macro_dto", return_value=macro_mock2), \
-                             patch("main._fetch_bars_for_universe", return_value={}), \
-                             patch("main._build_context_extras", return_value={}):
-                            _env_bak = os.environ.pop("WATCHLIST", None)
-                            try:
-                                result = run_once()
-                            finally:
-                                if _env_bak is not None:
-                                    os.environ["WATCHLIST"] = _env_bak
-                    finally:
-                        os.chdir(orig_dir)
+                result, _ = _run_once_in_empty_universe_sandbox(macro_mock2, snap_mock2)
                 assert len(result.recommendations) == 0
                 assert len(result.errors) == 0
             except Exception as exc:
@@ -3691,24 +3713,9 @@ class GravityAIAuditor:
                 macro_mock3.market_regime = "NEUTRAL"
                 macro_mock3.vix_value = 18.0
 
-                import tempfile
-                with tempfile.TemporaryDirectory() as tmp2:
-                    orig_dir2 = os.getcwd()
-                    os.chdir(tmp2)
-                    try:
-                        with patch("main.fetch_account_snapshot", return_value=snap_mock3) as mock_fetch, \
-                             patch("main.get_provider", return_value=_make_run_once_market_provider()), \
-                             patch("main._build_macro_dto", return_value=macro_mock3), \
-                             patch("main._fetch_bars_for_universe", return_value={}), \
-                             patch("main._build_context_extras", return_value={}):
-                            _env_bak2 = os.environ.pop("WATCHLIST", None)
-                            try:
-                                run_once(force_account=True)
-                            finally:
-                                if _env_bak2 is not None:
-                                    os.environ["WATCHLIST"] = _env_bak2
-                    finally:
-                        os.chdir(orig_dir2)
+                _, mock_fetch = _run_once_in_empty_universe_sandbox(
+                    macro_mock3, snap_mock3, force_account=True,
+                )
                 mock_fetch.assert_called_once_with(max_age_hours=20.0, force=True)
             except Exception as exc:
                 check_e = {"status": "FAIL", "error": str(exc)}
@@ -7262,13 +7269,25 @@ class GravityAIAuditor:
                 })
                 all_pass = all_pass and c5
 
-            # Check 6: gravity_verification_report.json written by this suite
+            # Check 6: gravity_verification_report.json written by this suite.
+            # Soft/non-blocking: self._write_gravity_verification_report() runs
+            # at the very end of export_machine_readable_report()'s call
+            # sequence, strictly AFTER this step -- so on a clean, from-scratch
+            # run the file legitimately does not exist yet here. That's a
+            # timing artifact of execution order, not a real failure, so we
+            # report the honest, literal path_exists value (never a fabricated
+            # always-True result -- CONSTRAINT #4) and tag the check "soft"
+            # (matching the established soft-check convention used elsewhere
+            # in this file, e.g. step_74's _chk(..., soft=True)) so a reader
+            # summarizing checks[]["passed"] can tell this apart from a real
+            # regression instead of it silently always reading True.
             gvr = Path("output/gravity_verification_report.json")
-            c6 = gvr.exists()
+            path_exists = gvr.exists()
             audit["checks"].append({
                 "check": "output/gravity_verification_report.json was written atomically by this suite",
-                "passed": c6,
-                "detail": f"path_exists={c6}",
+                "passed": path_exists,
+                "soft": True,
+                "detail": f"path_exists={path_exists}",
             })
             # Don't fail on this: the report is written AFTER this step runs in the
             # export sequence. We record the check for transparency but don't block.
@@ -10459,11 +10478,14 @@ class GravityAIAuditor:
            (auto-skip behaviour confirmed via ``run_checks``).
         7. ``validation_reports`` is skipped under ``ADVISORY_ONLY=True``.
         8. ``no_unexpected_risk_blocks`` is skipped under ``ADVISORY_ONLY=True``.
-        9. Total ``ALL_CHECKS`` count is 22 (15 from Stage 2 + 1 from Stage 3 +
+        9. Total ``ALL_CHECKS`` count is 27 (15 from Stage 2 and Stage 3 combined +
            check_robinhood_execution_mode + check_env_no_duplicate_keys +
            check_calibration_drift + check_robinhood_kill_switch_clear +
-           check_robinhood_queue_fresh + check_robinhood_mfa_configured +
-           check_macro_regime_gate_enabled added since).
+           check_robinhood_queue_fresh + check_robinhood_session_present +
+           check_macro_regime_gate_enabled + check_alert_channels_reachable +
+           check_broker_backend_matches_live_intent + check_daemon_pid_alive +
+           check_no_stray_database_files + check_output_dir_matches_local_data_root
+           added since).
         10. ``tests/test_preflight.py`` contains ``TestStateSnapshotFresh``
             and ``TestAdvisoryAutoSkip`` class definitions.
         """
@@ -10624,14 +10646,17 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # Check 9: total ALL_CHECKS count is 23 (22 from prior tiers +
-            # check_alert_channels_reachable added since -- this count is a
-            # simple registry-size tripwire, not a semantic assertion; bump it
-            # whenever a genuinely new preflight check is added, same as every
-            # prior bump documented in this comment's own history).
-            c9 = len(preflight_check.ALL_CHECKS) == 23
+            # Check 9: ALL_CHECKS has at least 27 entries (23 from prior tiers +
+            # check_broker_backend_matches_live_intent + check_daemon_pid_alive +
+            # check_no_stray_database_files + check_output_dir_matches_local_data_root
+            # added since -- this count is a simple registry-size tripwire, not a
+            # semantic assertion. A floor (>=), not exact equality, so a future
+            # legitimately-added preflight check no longer re-breaks this tripwire
+            # (this exact literal has already been manually bumped ~6 times); only
+            # a check being silently REMOVED from the registry should fail it.
+            c9 = len(preflight_check.ALL_CHECKS) >= 27
             audit["checks"].append({
-                "check": f"ALL_CHECKS has 23 entries (got {len(preflight_check.ALL_CHECKS)})",
+                "check": f"ALL_CHECKS has at least 27 entries (got {len(preflight_check.ALL_CHECKS)})",
                 "passed": c9,
             })
             all_pass = all_pass and c9
@@ -16037,7 +16062,7 @@ class GravityAIAuditor:
                     ("ForecastTracker(db_path=db_path, readonly=True)", 1),
                     ("ForecastTracker(readonly=True)", 1),
                 ],
-                "api/pilots_api.py": [("HistoricalStore(readonly=True)", 7)],
+                "api/pilots_api.py": [("HistoricalStore(readonly=True)", 6)],
                 "api/state_api.py": [("TransactionsStore(readonly=True)", 1)],
                 "gui/panels/analytics.py": [("HistoricalStore(readonly=True)", 1)],
                 "pilots/forecast_skill.py": [("ForecastTracker(readonly=True)", 1)],

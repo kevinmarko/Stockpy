@@ -87,7 +87,8 @@ from validation.metrics import run_cpcv_evaluation  # noqa: E402
 
 logger = logging.getLogger("ML.TrainMetaLabelers")
 
-_REGISTRY_PATH = _REPO_ROOT / "ml" / "registry.yaml"
+_DEFAULT_REGISTRY_PATH = _REPO_ROOT / "ml" / "registry.yaml"
+_REGISTRY_PATH = _DEFAULT_REGISTRY_PATH
 
 # Universe used to build the training panel: liquid, multi-sector individual
 # equities (deliberately no broad index ETFs like SPY/QQQ -- mixing an
@@ -609,8 +610,10 @@ def _update_registry_row(
     at call time (so tests can monkeypatch it). Returns True on success, False
     (and a logged warning) on any failure — never raises (dead-letter).
     """
-    if registry_path is None:
-        registry_path = _REGISTRY_PATH
+    target_path: Optional[Path] = registry_path
+    if target_path is None and _REGISTRY_PATH != _DEFAULT_REGISTRY_PATH:
+        target_path = _REGISTRY_PATH
+
     model_key = f"meta_labeler_{signal_id}"
     try:
         update_model_metrics(
@@ -619,7 +622,7 @@ def _update_registry_row(
             cpcv_dsr=cpcv_dsr,
             pbo=pbo,
             n_train=n_train,
-            path=registry_path,
+            path=target_path,
             artifact_file=artifact_file,
             hyperparameters=hyperparameters,
             train_window=train_window,
@@ -646,6 +649,7 @@ def train_signal(
     universe: Tuple[str, ...] = _DEFAULT_UNIVERSE,
     lookback_days: int = _DEFAULT_LOOKBACK_DAYS,
     seed: int = 0,
+    registry_path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Train and persist a MetaLabeler for ``signal_id``.
 
@@ -730,6 +734,7 @@ def train_signal(
             features=list(labeler._feature_names),
             cpcv_mean_oos_sharpe=cpcv.get("mean_oos_sharpe"),
             cpcv_mean_oos_max_dd=cpcv.get("mean_oos_max_dd"),
+            registry_path=registry_path,
         )
 
     logger.info(

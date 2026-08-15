@@ -1,0 +1,27 @@
+# Task Tracker: Sync ML Model Registry & LOCAL_DATA_ROOT Dual-Persistence
+
+- [x] **Investigation**: Root-cause analysis of registry overwrite due to git pulls vs machine-global `.pkl` models <!-- id: 0 -->
+- [x] **Registry Data Sync**: Update `ml/registry.yaml` with `2026-08-14` training results (`lgbm_ranker`, `meta_labeler_timeseries_momentum`, `meta_labeler_cross_sectional_momentum`) <!-- id: 1 -->
+- [x] **Dual Persistence & Smart Merge (`ml/registry_io.py`)**: <!-- id: 2 -->
+  - [x] Add `get_local_registry_path()` and `resolve_registry_path()`
+  - [x] Add bidirectional smart merge in `load_registry()` so newer git commits are not shadowed by stale local files
+  - [x] Fix `update_model_metrics()` to dual-write to `LOCAL_DATA_ROOT` and repo `ml/registry.yaml` with explicit I/O error propagation
+- [x] **Trainer Dual-Write Fix (`scripts/train_meta_labelers.py`)**: <!-- id: 3 -->
+  - [x] Fix `_update_registry_row` to pass `path=None` on unoverridden runs to trigger dual-write
+- [x] **Transparency & Self-Healing (`pilots/models.py`)**: <!-- id: 4 -->
+  - [x] Implement single-pass `_scan_local_artifacts()` for `.pkl` models
+  - [x] Ensure metric consistency: unvalidated new artifacts on disk reset metrics to `None` rather than pairing with stale metrics
+- [x] **Reader Unification**: <!-- id: 5 -->
+  - [x] Update `gui/panels/analytics_signals.py` to use `resolve_registry_path()`
+  - [x] Update `gui/panels/analytics.py` to use `resolve_registry_path()`
+  - [x] Update `investyo_mcp_server.py` to use `load_registry()`
+- [x] **Unit & Regression Testing**: <!-- id: 6 -->
+  - [x] Add smart merge tests in `tests/test_registry_load.py`
+  - [x] Add I/O error propagation tests
+  - [x] Add metric consistency self-healing tests
+  - [x] Add meta-labeler dual-persistence regression test in `tests/test_train_meta_labelers.py`
+  - [x] Ensure 100% pass across pytest suite and TypeScript typecheck
+- [x] **Documentation & Architecture References**: <!-- id: 7 -->
+  - [x] Update `docs/architecture/data-layer.md`
+  - [x] Update `docs/architecture/ml-and-reports.md`
+  - [x] Commit PR artifacts (`.claude/` plan, task tracker, walkthrough)

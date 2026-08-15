@@ -160,4 +160,37 @@ describe("UnusualFlowFeed", () => {
 
     expect(handleClose).toHaveBeenCalled();
   });
+
+  it("renders correctly when backend returns records format without trades key", async () => {
+    vi.mocked(api.getUnusualOptionsFlow).mockResolvedValue({
+      records: [
+        {
+          contract_symbol: "AAPL260821C00230000",
+          symbol: "AAPL",
+          timestamp: "15:01:00",
+          option_type: "call",
+          strike: 230.0,
+          expiration: "2026-08-21",
+          aggressiveness: "ask_sweep",
+          sentiment: "bullish",
+          volume: 5000,
+          open_interest: 800,
+          vol_oi_ratio: 6.25,
+          trade_price: 5.5,
+          underlying_notional: 2750000,
+          iv: 0.35,
+          price: 5.5,
+          notional: 2750000,
+        },
+      ],
+      count: 1,
+    } as any);
+
+    render(<UnusualFlowFeed />);
+
+    expect(await screen.findByText("AAPL")).toBeInTheDocument();
+    expect(screen.getByText("6.25x")).toBeInTheDocument();
+    expect(screen.getByText("⚡ SWEEP")).toBeInTheDocument();
+    expect(screen.getByText("🟢 BULLISH")).toBeInTheDocument();
+  });
 });

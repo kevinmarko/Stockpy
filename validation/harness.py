@@ -9,6 +9,7 @@ computes DSR/PBO, and enforces strict deployability gates.
 import os
 import argparse
 import logging
+import threading
 from datetime import datetime, date
 from typing import Callable, List, Dict, Any, Tuple, Optional
 import numpy as np
@@ -383,6 +384,19 @@ class ValidationReport:
             # already IS SPY, making a separate overlay redundant).
             "macro_benchmark_curve": self.macro_benchmark_curve or [],
         }
+
+
+# Serializes StrategyValidationHarness.run()'s write-summary -> glob-read
+# every sibling *_validation_summary.json -> recompute family stats ->
+# re-write sequence (see step 6/6b in run()). scripts/refresh_validations.py's
+# --workers>1 path can call run() for multiple strategies concurrently from
+# separate threads sharing one reports_dir; without this lock, one thread's
+# family-wise multiple-testing snapshot could be computed mid-write of
+# another thread's summary file, making the result non-deterministic and
+# run-to-run inconsistent. compute_family_multiple_testing_report() is
+# read-only itself (never writes), so this lock only needs to wrap the
+# read-modify-write sequence in run(), not the function below.
+_FAMILY_REPORT_LOCK = threading.Lock()
 
 
 def compute_family_multiple_testing_report(
@@ -925,31 +939,42 @@ class StrategyValidationHarness:
         if self.is_options_selling:
             print(format_stress_summary(report.stress_test_results))
 
-        # 6. Write machine-readable JSON summary for preflight_check and dashboard
-        # FIRST — the family-wise multiple-testing sweep below scans reports/
-        # for every *_validation_summary.json on disk, so this strategy's own
-        # summary must already be present for it to participate.
-        self._write_json_summary(report)
-
-        # 6b. Opportunistic family-wise multiple-testing correction (Benjamini-
-        # Hochberg + family-corrected DSR) across every strategy validation
-        # summary currently on disk — see validation/multiple_testing.py and
-        # compute_family_multiple_testing_report()'s docstring for rationale.
-        # Dead-letter resilient: any failure here must never abort an
-        # otherwise-successful validation run.
-        try:
-            report.family_multiple_testing = compute_family_multiple_testing_report(
-                reports_dir=self.reports_dir
-            )
-            # Re-write the JSON summary now that family_multiple_testing is
-            # populated, so downstream consumers (preflight, dashboard) see it
-            # without needing a second harness run.
+        # 6/6b. Write the JSON summary, then compute the family-wise
+        # multiple-testing correction across every summary on disk, then
+        # re-write. Serialized via _FAMILY_REPORT_LOCK: a concurrent
+        # scripts/refresh_validations.py --workers>1 run may have another
+        # strategy's run() executing this same sequence against the same
+        # reports_dir at once, and without a lock the glob-read below could
+        # observe a sibling summary mid-write (see _write_json_summary's own
+        # atomic-replace, which prevents a torn read) or simply an
+        # inconsistent, run-order-dependent subset of strategies.
+        with _FAMILY_REPORT_LOCK:
+            # 6. Write machine-readable JSON summary for preflight_check and
+            # dashboard FIRST — the family-wise multiple-testing sweep below
+            # scans reports/ for every *_validation_summary.json on disk, so
+            # this strategy's own summary must already be present for it to
+            # participate.
             self._write_json_summary(report)
-        except Exception as exc:
-            logger.warning(
-                "StrategyValidationHarness.run(%s): family multiple-testing "
-                "correction failed (non-fatal): %s", strategy_name, exc,
-            )
+
+            # 6b. Opportunistic family-wise multiple-testing correction (Benjamini-
+            # Hochberg + family-corrected DSR) across every strategy validation
+            # summary currently on disk — see validation/multiple_testing.py and
+            # compute_family_multiple_testing_report()'s docstring for rationale.
+            # Dead-letter resilient: any failure here must never abort an
+            # otherwise-successful validation run.
+            try:
+                report.family_multiple_testing = compute_family_multiple_testing_report(
+                    reports_dir=self.reports_dir
+                )
+                # Re-write the JSON summary now that family_multiple_testing is
+                # populated, so downstream consumers (preflight, dashboard) see it
+                # without needing a second harness run.
+                self._write_json_summary(report)
+            except Exception as exc:
+                logger.warning(
+                    "StrategyValidationHarness.run(%s): family multiple-testing "
+                    "correction failed (non-fatal): %s", strategy_name, exc,
+                )
 
         # 6c. Append this run's snapshot to the per-strategy history file
         # (reports/history/<strategy>_validation_history.jsonl) so PBO/DSR/
@@ -985,9 +1010,16 @@ class StrategyValidationHarness:
             reports_dir.mkdir(parents=True, exist_ok=True)
             safe_name = report.name.replace(" ", "_").replace("/", "_")
             dest = reports_dir / f"{safe_name}_validation_summary.json"
-            dest.write_text(
+            # Write to a sibling temp file then atomically replace, so a
+            # concurrent compute_family_multiple_testing_report() glob-read
+            # (possibly from another thread validating a different strategy
+            # against the same reports_dir) can never observe a torn/partial
+            # file mid-write.
+            tmp_dest = dest.with_suffix(dest.suffix + f".tmp-{os.getpid()}-{threading.get_ident()}")
+            tmp_dest.write_text(
                 json.dumps(report.to_summary_dict(), indent=2), encoding="utf-8"
             )
+            os.replace(tmp_dest, dest)
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning(

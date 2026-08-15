@@ -274,6 +274,68 @@ class Settings(BaseSettings):
         default="15:45",
         description="Mandatory hard exit time (ET, HH:MM) to close all open 0DTE positions and avoid pin/settlement risk.",
     )
+    OPTIONS_DRL_RISK_AVERSION_GAMMA: float = Field(
+        default=0.10,
+        description=(
+            "Avellaneda-Stoikov (2008) absolute risk-aversion parameter gamma for "
+            "ml/drl_market_maker.py's DRL/AS market-making simulation engine — "
+            "controls inventory-skew strength in the reservation price R(s,q,t) = "
+            "s - q*gamma*sigma^2*(T-t) and the optimal quoting half-spread. "
+            "Matches this module's prior hardcoded DEFAULT_GAMMA default."
+        ),
+    )
+    OPTIONS_VPIN_TOXICITY_THRESHOLD: float = Field(
+        default=0.35,
+        description=(
+            "pilots/options_vpin.py's VPIN (Volume-Synchronized Probability of "
+            "Informed Trading / Toxicity) toxicity gating threshold from the "
+            "Easley/Lopez de Prado/O'Hara literature — VPIN above this value is "
+            "classified HIGH_TOXICITY (vs. LOW/MODERATE) and triggers defensive "
+            "spread-widening via apply_defensive_spread_concession(). Promoted "
+            "from the module's prior hardcoded DEFAULT_TOXICITY_THRESHOLD."
+        ),
+    )
+    OPTIONS_SOR_LEGGING_LATENCY_SECONDS: float = Field(
+        default=2.0,
+        description=(
+            "pilots/options_sor.py's simulate_legging_execution() assumed "
+            "inter-leg execution latency (seconds) between the passive leg "
+            "filling and the active leg completing — drives the Monte Carlo "
+            "spot-drift window (dt_years) underlying every hung-leg-probability "
+            "and adverse-selection-cost estimate in the legging hazard "
+            "simulator. Promoted from the function's prior hardcoded "
+            "latency_seconds=2.0 default."
+        ),
+    )
+    OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE: float = Field(
+        default=5.0,
+        description=(
+            "pilots/lob_simulator.py's DEFAULT_MARKET_ORDER_RATE — the Cont/Stoikov/"
+            "Talreja (2010) market-order Poisson arrival rate theta (orders/sec) used "
+            "as the default/fallback across calculate_cont_stoikov_fill_probability(), "
+            "evaluate_optimal_queue_level(), and simulate_queue_fill() (the live "
+            "POST /pilots/options/lob/simulate-queue resolver) whenever a caller "
+            "doesn't supply an empirically-measured rate from "
+            "compute_lob_arrival_rates(). Promoted from the module's prior "
+            "hardcoded DEFAULT_MARKET_ORDER_RATE = 5.0 default."
+        ),
+    )
+    OPTIONS_GEX_SEARCH_RANGE_PCT: float = Field(
+        default=0.20,
+        description=(
+            "pilots/options_gex.py's calculate_zero_gamma_flip() relative search "
+            "radius (+/- pct of spot) for the initial Brent's-method/bisection "
+            "bracket used to solve for the Zero-Gamma Flip Point (S*) — the spot "
+            "price where aggregate dealer Net GEX crosses zero. Directly "
+            "determines whether zero_gamma_flip/distance_to_flip_pct come back "
+            "populated or None for a given chain (a search range too narrow for "
+            "a symbol's actual OI distribution silently degrades to 'no flip "
+            "found' before the function's own secondary +/-40-60% expanded-grid "
+            "fallback ever engages). Promoted from the module's prior hardcoded "
+            "DEFAULT_SEARCH_RANGE_PCT default; pure promotion, not a behavior "
+            "change."
+        ),
+    )
 
 
 
@@ -1485,11 +1547,14 @@ class Settings(BaseSettings):
     # MAX_POSITION_WEIGHT clamp), on top of -- not instead of -- the per-name
     # ceiling above. Uses apply_portfolio_gross_cap(): the risk-aware
     # portfolio_vol_target path when a covariance matrix is supplied, else a
-    # sum-of-|weight| gross-exposure fallback. Conservative default (3.0 =
-    # 300% gross, i.e. non-binding for a typical <10-name book at
-    # MAX_POSITION_WEIGHT=1.0) until the Phase 2b backtest sweep picks a
-    # deliberately-tuned value.
-    MAX_PORTFOLIO_GROSS: float = 3.0
+    # sum-of-|weight| gross-exposure fallback.
+    # Calibrated to 2.0 (200% gross exposure ceiling, matching standard Reg-T
+    # margin and institutional 130/30 - 2x leverage boundaries). In advisory
+    # mode (5% max per name across 20 symbols = 1.0x), this is non-binding;
+    # in execution mode with high Kelly allocations across >8 concurrent names,
+    # it applies a uniform scalar reducing leverage to 2.0x while preserving
+    # relative cross-sectional signal conviction.
+    MAX_PORTFOLIO_GROSS: float = 2.0
 
     # --- Cap-aware escalation (sizing/position_sizer.py + sizing/cap_audit_store.py) ---
     # Opt-in (default False): a name that binds the same hard sizing ceiling
@@ -4575,6 +4640,15 @@ class Settings(BaseSettings):
         default_factory=lambda: ["SPY", "QQQ", "XLK", "XLF", "XLV", "XLE"],
         description="Candidate proxy ETFs find_correlated_proxy() screens "
         "against for a concentrated ticker's hedge leg.",
+    )
+    OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD: float = Field(
+        default=2.0,
+        description="pilots/copula_stat_arb.py's pairs-trading entry/exit "
+        "z-score band: |Z_t| >= this value triggers a LONG_SPREAD/SHORT_SPREAD "
+        "entry signal (default matches the module's prior hardcoded literal, "
+        "so this is a no-op until an operator changes it). Read by "
+        "generate_copula_stat_arb_signals' and evaluate_copula_stat_arb_pair's "
+        "z_entry/z_entry_threshold parameter defaults.",
     )
 
     @property

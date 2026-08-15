@@ -4175,12 +4175,28 @@ export interface DeltaHedgeResult {
   message: string;
 }
 
+/** One leg of a roll's close/open list -- mirrors api/pilots_api.py's
+ * RollOrderRequest.close_legs/open_legs (List[Dict[str, Any]], read by
+ * PaperAccountStore.apply_roll_fill). `symbol` is the full option-leg
+ * symbol string ("{TICKER} {YYYY-MM-DD} ${STRIKE} {CALL|PUT}"). */
+export interface RollOrderLeg {
+  symbol: string;
+  side: "buy" | "sell";
+  qty: number;
+}
+
+/** Matches api/pilots_api.py's RollOrderRequest exactly -- `symbol` plus the
+ * explicit close/open leg lists PaperAccountStore.apply_roll_fill requires,
+ * not a same-symbol target_expiration/target_strike shorthand the backend
+ * has no field for. */
 export interface RollOrderRequest {
-  current_symbol: string;
-  target_expiration: string;
-  target_strike?: number;
-  qty?: number;
-  net_credit_or_debit?: number;
+  symbol: string;
+  close_legs: RollOrderLeg[];
+  open_legs: RollOrderLeg[];
+  limit_price?: number;
+  contracts?: number;
+  order_type?: string;
+  is_live?: boolean;
 }
 
 export interface ClosedExitPosition {
@@ -4239,29 +4255,37 @@ export interface EarningsCrushExecutionResult {
 }
 
 export interface UnusualOptionTrade {
-  id: string;
+  id?: string;
+  contract_symbol?: string;
   symbol: string;
   timestamp: string;
-  option_type: "CALL" | "PUT";
+  option_type: "CALL" | "PUT" | "call" | "put" | string;
   strike: number;
   expiration: string;
-  dte: number;
-  trade_type: "SWEEP" | "BLOCK" | "SPLIT";
-  sentiment: "BULLISH" | "BEARISH" | "NEUTRAL";
-  aggressor_side: "ASK" | "BID" | "MID";
+  dte?: number;
+  trade_type?: "SWEEP" | "BLOCK" | "SPLIT" | "ask_sweep" | "bid_sweep" | "mid_block" | "block" | string;
+  aggressiveness?: string;
+  sentiment: "BULLISH" | "BEARISH" | "NEUTRAL" | string;
+  aggressor_side?: "ASK" | "BID" | "MID" | string;
   volume: number;
   open_interest: number;
   vol_oi_ratio: number;
   price: number;
+  trade_price?: number;
   spot_price?: number;
   notional: number;
+  underlying_notional?: number;
   iv?: number;
+  implied_volatility?: number;
+  hv_30?: number;
   historical_vol_30d?: number;
+  iv_burst_score?: number;
   iv_expansion_flag?: boolean;
 }
 
 export interface UnusualOptionsFlowResponse {
   trades: UnusualOptionTrade[];
+  records?: UnusualOptionTrade[];
   count: number;
   as_of?: string;
 }

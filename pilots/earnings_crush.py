@@ -34,6 +34,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import logging
 import math
+import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -175,6 +176,7 @@ def get_historical_earnings_moves(
     *,
     lookback_quarters: int = 8,
     lookback_days: int = 756,
+    as_of: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Retrieves the past 8 quarters of earnings actuals for a symbol and computes
@@ -188,6 +190,12 @@ def get_historical_earnings_moves(
     - store: Instance of HistoricalStore (if None, initializes dynamically)
     - lookback_quarters: Number of past earnings quarters to evaluate (default 8)
     - lookback_days: Days of price history to fetch for bar gap calculations (default 756)
+    - as_of: Point-in-time cutoff (date/datetime/ISO string). When supplied, only earnings
+      actuals and price bars dated on or before this date are used to build the realized-move
+      statistics. This is what keeps a PRE-earnings signal scored as of a past `as_of` date from
+      reading post-earnings realized moves that happened after that date (no lookahead bias).
+      Defaults to None, which reproduces the prior "always read the live/current DB state"
+      behavior exactly.
 
     Returns dictionary containing:
     - symbol: Ticker
@@ -216,6 +224,8 @@ def get_historical_earnings_moves(
             "reason": "Empty or invalid symbol provided.",
         }
 
+    as_of_date = _parse_date(as_of)
+
     # Resolve HistoricalStore if not supplied
     if store is None:
         try:
@@ -239,20 +249,32 @@ def get_historical_earnings_moves(
             "reason": "HistoricalStore is unavailable.",
         }
 
-    # Retrieve earnings actuals
+    # Retrieve earnings actuals. `on_or_before=as_of_date` is the store's dedicated
+    # point-in-time cutoff for exactly this "trailing surprise" read (see
+    # HistoricalStore.get_earnings_events's docstring) -- passing it here (rather than
+    # relying on the default "read the live/current DB state") is what prevents a
+    # PRE-earnings signal scored as of a past `as_of` date from reading earnings actuals
+    # published after that date (no lookahead bias).
     try:
         events = store.get_earnings_events(
             sym,
             actuals_only=True,
+            on_or_before=as_of_date.isoformat() if as_of_date else None,
             limit=lookback_quarters * 2,  # fetch buffer to account for duplicate or unaligned dates
         )
     except Exception as exc:
         logger.warning("Failed to fetch earnings events for %s: %s", sym, exc)
         events = []
 
-    # Retrieve price bars
+    # Retrieve price bars. HistoricalStore.get_bars has no point-in-time cutoff of its own
+    # (it always tops up to "today" from the live provider), so the cutoff is enforced here
+    # on the returned frame -- the gap-move computation below must never see a bar dated
+    # after `as_of_date` (no lookahead bias).
     try:
         bars = store.get_bars(sym, lookback_days=lookback_days)
+        if as_of_date is not None and isinstance(bars, pd.DataFrame) and not bars.empty:
+            cutoff_ts = pd.Timestamp(as_of_date)
+            bars = bars[bars.index <= cutoff_ts]
     except Exception as exc:
         logger.warning("Failed to fetch bars for %s: %s", sym, exc)
         bars = None
@@ -415,9 +437,13 @@ def snap_strike_to_grid_or_chain(
 def _extract_chain_strikes_and_iv(
     chain: Any,
     spot: float,
-) -> Tuple[List[float], List[float], float, Dict[str, Any]]:
+) -> Tuple[List[float], List[float], Optional[float], Dict[str, Any]]:
     """
     Extracts available call and put strikes, ATM IV, and best quote mappings from an options chain.
+
+    Returns `atm_iv=None` (never a fabricated baseline vol -- CONSTRAINT #4) when the chain is
+    unavailable or carries no usable per-strike implied volatility quotes; the caller must treat
+    `None` as "insufficient real data" and refuse to build an Iron Condor recommendation off it.
     """
     call_strikes: List[float] = []
     put_strikes: List[float] = []
@@ -426,7 +452,7 @@ def _extract_chain_strikes_and_iv(
     put_ivs: List[Tuple[float, float]] = []
 
     if chain is None:
-        return [], [], 0.45, quotes_map
+        return [], [], None, quotes_map
 
     # Check yfinance / DataFrame style chain (.calls, .puts)
     calls_df = getattr(chain, "calls", None)
@@ -519,9 +545,17 @@ def _extract_chain_strikes_and_iv(
     elif atm_put_iv is not None:
         atm_iv = atm_put_iv
     else:
-        atm_iv = 0.45  # realistic baseline options vol
+        # No usable per-strike IV in the fetched chain -- refuse to fabricate a plausible-looking
+        # baseline vol (CONSTRAINT #4). The caller must skip/decline the recommendation rather
+        # than size an Iron Condor's edge/wings off an invented number.
+        atm_iv = None
 
-    return sorted(list(set(call_strikes))), sorted(list(set(put_strikes))), float(atm_iv), quotes_map
+    return (
+        sorted(list(set(call_strikes))),
+        sorted(list(set(put_strikes))),
+        (float(atm_iv) if atm_iv is not None else None),
+        quotes_map,
+    )
 
 
 def evaluate_earnings_crush_candidates(
@@ -630,7 +664,13 @@ def evaluate_earnings_crush_candidates(
                     spot = float(bars["Close"].iloc[-1])
 
             if spot is None or spot <= 0.0 or math.isnan(spot):
-                spot = 100.0  # reasonable fallback if quote unavailable
+                # No real spot price available for this symbol -- refuse to fabricate one
+                # (CONSTRAINT #4) and size an Iron Condor's strikes/edge off an invented price.
+                logger.info(
+                    "Skipping earnings crush candidate for %s: no real spot price available.",
+                    sym,
+                )
+                continue
 
             # 3. Retrieve options chain and find target expiration
             expirations: List[str] = []
@@ -673,20 +713,35 @@ def evaluate_earnings_crush_candidates(
 
             call_strikes, put_strikes, atm_iv, quotes_map = _extract_chain_strikes_and_iv(chain_data, spot)
 
+            if atm_iv is None:
+                # No usable ATM implied volatility from either the call or put chain -- refuse
+                # to fabricate a baseline vol and size an Iron Condor's edge/wings off it
+                # (CONSTRAINT #4). Report insufficient data by skipping this candidate.
+                logger.info(
+                    "Skipping earnings crush candidate for %s: no usable ATM implied volatility "
+                    "from the options chain.",
+                    sym,
+                )
+                continue
+
             # 4. Calculate Expected Move
             exp_move_res = calculate_expected_earnings_move(spot, atm_iv, target_dte)
             expected_move_usd = exp_move_res["expected_move_usd"]
             expected_move_pct = exp_move_res["expected_move_pct"]
 
-            # 5. Retrieve Historical Realized Move
-            hist_res = get_historical_earnings_moves(sym, store)
+            # 5. Retrieve Historical Realized Move (as_of-gated -- see get_historical_earnings_moves)
+            hist_res = get_historical_earnings_moves(sym, store, as_of=as_of_date)
             realized_move_pct = hist_res["median_move_pct"]
             if realized_move_pct <= 0.0:
                 realized_move_pct = FALLBACK_MEDIAN_MOVE_PCT
 
-            # 6. Compute Crush Edge Ratio
-            crush_edge_ratio = round(expected_move_pct / realized_move_pct, 3) if realized_move_pct > 0 else 1.0
-            is_recommended = crush_edge_ratio >= resolved_min_edge
+            # 6. Compute Crush Edge Ratio (CONSTRAINT #4: Never recommend a trade on synthetic fallback data)
+            if hist_res.get("fallback") or hist_res.get("quarters_count", 0) == 0:
+                crush_edge_ratio = round(expected_move_pct / realized_move_pct, 3) if realized_move_pct > 0 else 0.0
+                is_recommended = False
+            else:
+                crush_edge_ratio = round(expected_move_pct / realized_move_pct, 3) if realized_move_pct > 0 else 0.0
+                is_recommended = bool(crush_edge_ratio >= resolved_min_edge and not hist_res.get("sparse_history", False))
 
             # 7. Construct delta-neutral Iron Condor strikes
             target_short_call = spot + 1.0 * expected_move_usd
@@ -771,10 +826,21 @@ def evaluate_earnings_crush_candidates(
             quote_sc = quotes_map.get(f"call_{short_call_strike:.2f}", {})
             quote_lc = quotes_map.get(f"call_{long_call_strike:.2f}", {})
 
-            sp_price = quote_sp.get("bid") or quote_sp.get("last") or (expected_move_usd * 0.20)
-            lp_price = quote_lp.get("ask") or quote_lp.get("last") or (expected_move_usd * 0.08)
-            sc_price = quote_sc.get("bid") or quote_sc.get("last") or (expected_move_usd * 0.20)
-            lc_price = quote_lc.get("ask") or quote_lc.get("last") or (expected_move_usd * 0.08)
+            sp_real = quote_sp.get("bid") or quote_sp.get("last")
+            lp_real = quote_lp.get("ask") or quote_lp.get("last")
+            sc_real = quote_sc.get("bid") or quote_sc.get("last")
+            lc_real = quote_lc.get("ask") or quote_lc.get("last")
+
+            # Honesty flag (matches this file's existing sparse_history/fallback convention):
+            # True whenever ANY leg's price had to fall back to the wing-width heuristic below
+            # rather than a real chain quote, so a consumer can tell a real net_credit/max_profit/
+            # max_loss apart from an estimated one (CONSTRAINT #4).
+            pricing_is_estimated = not (sp_real and lp_real and sc_real and lc_real)
+
+            sp_price = sp_real or (expected_move_usd * 0.20)
+            lp_price = lp_real or (expected_move_usd * 0.08)
+            sc_price = sc_real or (expected_move_usd * 0.20)
+            lc_price = lc_real or (expected_move_usd * 0.08)
 
             net_credit = max(0.10, (sp_price - lp_price) + (sc_price - lc_price))
             net_credit = round(net_credit, 2)
@@ -805,6 +871,7 @@ def evaluate_earnings_crush_candidates(
                 "net_credit": net_credit,
                 "max_profit": max_profit,
                 "max_loss": max_loss,
+                "pricing_is_estimated": pricing_is_estimated,
                 "historical_summary": {
                     "quarters_count": hist_res["quarters_count"],
                     "median_move_pct": hist_res["median_move_pct"],
@@ -820,6 +887,16 @@ def evaluate_earnings_crush_candidates(
 
     # Sort candidates by crush_edge_ratio descending
     candidates.sort(key=lambda c: float(c.get("crush_edge_ratio", 0.0)), reverse=True)
+
+    # Dispatch alerts for qualifying candidates (non-blocking, condition-deduped)
+    for cand in candidates:
+        if cand.get("is_recommended") or float(cand.get("crush_edge_ratio", 0.0)) >= 1.35:
+            try:
+                from pilots.options_alerts import dispatch_earnings_crush_alert
+                dispatch_earnings_crush_alert(cand)
+            except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+                logger.debug("Earnings crush alert dispatch failed for %s: %s", cand.get("symbol", ""), exc)
+
     return candidates
 
 

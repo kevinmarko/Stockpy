@@ -9,6 +9,8 @@ interface LogStreamProps {
   isStreaming?: boolean;
 }
 
+export const MAX_LOG_LINES = 2000;
+
 export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
   const [logs, setLogs] = useState<string[]>([]);
   const [filter, setFilter] = useState("");
@@ -26,7 +28,15 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
 
     eventSource.onmessage = (event) => {
       if (event.data) {
-        setLogs((prev) => [...prev, event.data]);
+        setLogs((prev) => {
+          // One copy either way (not a copy-to-append then a second
+          // copy-to-trim) -- matters once a busy stream is steady-state at
+          // the cap, which is exactly the scenario MAX_LOG_LINES targets.
+          if (prev.length < MAX_LOG_LINES) return [...prev, event.data];
+          const next = prev.slice(prev.length - MAX_LOG_LINES + 1);
+          next.push(event.data);
+          return next;
+        });
       }
     };
 

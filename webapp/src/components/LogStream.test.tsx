@@ -113,4 +113,21 @@ describe("LogStream (live streaming, simulated EventSource)", () => {
 
     expect(scrollIntoViewSpy).not.toHaveBeenCalled();
   });
+
+  it("caps the log buffer to MAX_LOG_LINES to prevent unbounded memory growth", async () => {
+    const { LogStream, MAX_LOG_LINES } = await import("./LogStream");
+    render(<LogStream jobId="job-capped" isStreaming />);
+    const es = FakeEventSource.instances[0];
+
+    // Emit more than MAX_LOG_LINES
+    for (let i = 1; i <= MAX_LOG_LINES + 5; i++) {
+      es.emit(`log entry ${i}`);
+    }
+
+    // First 5 entries should have slid out of buffer
+    expect(screen.queryByText("log entry 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("log entry 5")).not.toBeInTheDocument();
+    // Latest entry should be present
+    expect(await screen.findByText(`log entry ${MAX_LOG_LINES + 5}`)).toBeInTheDocument();
+  });
 });

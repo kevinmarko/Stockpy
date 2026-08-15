@@ -266,72 +266,28 @@ def calculate_black_scholes_greeks_and_price(
     r: Optional[float] = None,
 ) -> Dict[str, Optional[float]]:
     """
-    Computes Black-Scholes European theoretical price and Greeks.
+    Computes Black-Scholes European theoretical price and Greeks (delegates to canonical pilots.options_risk).
     Guards against zero/negative spot, strike, sigma, or expiration.
     """
-    opt_type = str(option_type).lower().strip()
+    from pilots.options_risk import calculate_black_scholes_greeks
+
     rate = _get_risk_free_rate(r)
-
-    if spot <= 0 or strike <= 0:
-        return {
-            "price": 0.0,
-            "delta": 0.0,
-            "gamma": 0.0,
-            "vega": 0.0,
-            "theta": 0.0,
-            "intrinsic": 0.0,
-            "extrinsic": 0.0,
-        }
-
-    intrinsic = max(0.0, spot - strike) if opt_type == "call" else max(0.0, strike - spot)
-
-    if t_years <= _DEGENERATE_THRESHOLD or sigma <= _DEGENERATE_THRESHOLD:
-        delta = 1.0 if (opt_type == "call" and spot > strike) else (-1.0 if (opt_type == "put" and spot < strike) else 0.0)
-        return {
-            "price": float(intrinsic),
-            "delta": float(delta),
-            "gamma": 0.0,
-            "vega": 0.0,
-            "theta": 0.0,
-            "intrinsic": float(intrinsic),
-            "extrinsic": 0.0,
-        }
-
-    vol_sqrt_t = sigma * math.sqrt(t_years)
-    if vol_sqrt_t < _DEGENERATE_THRESHOLD:
-        vol_sqrt_t = _DEGENERATE_THRESHOLD
-
-    d1 = (math.log(spot / strike) + (rate + 0.5 * sigma**2) * t_years) / vol_sqrt_t
-    d2 = d1 - vol_sqrt_t
-
-    n_d1 = float(norm.cdf(d1))
-    n_d2 = float(norm.cdf(d2))
-    pdf_d1 = float(norm.pdf(d1))
-
-    if opt_type == "call":
-        price = spot * n_d1 - strike * math.exp(-rate * t_years) * n_d2
-        delta = n_d1
-        theta_annual = -(spot * pdf_d1 * sigma) / (2.0 * math.sqrt(t_years)) - rate * strike * math.exp(-rate * t_years) * n_d2
-    else:
-        price = strike * math.exp(-rate * t_years) * float(norm.cdf(-d2)) - spot * float(norm.cdf(-d1))
-        delta = n_d1 - 1.0
-        theta_annual = -(spot * pdf_d1 * sigma) / (2.0 * math.sqrt(t_years)) + rate * strike * math.exp(-rate * t_years) * float(norm.cdf(-d2))
-
-    price = max(0.0, float(price))
-    gamma = pdf_d1 / (spot * vol_sqrt_t)
-    vega_raw = spot * pdf_d1 * math.sqrt(t_years)
-    vega_1pct = vega_raw / 100.0
-    theta_daily = theta_annual / TRADING_DAYS_PER_YEAR
-    extrinsic = max(0.0, price - intrinsic)
-
+    res = calculate_black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        t_years=t_years,
+        sigma=sigma,
+        option_type=option_type,
+        r=rate,
+    )
     return {
-        "price": round(price, 4),
-        "delta": round(float(delta), 4),
-        "gamma": round(float(gamma), 6),
-        "vega": round(float(vega_1pct), 4),
-        "theta": round(float(theta_daily), 4),
-        "intrinsic": round(float(intrinsic), 4),
-        "extrinsic": round(float(extrinsic), 4),
+        "price": round(res["price"], 4),
+        "delta": round(res["delta"], 4),
+        "gamma": round(res["gamma"], 6),
+        "vega": round(res["vega_1pct"], 4),
+        "theta": round(res["theta_daily"], 4),
+        "intrinsic": round(res["intrinsic"], 4),
+        "extrinsic": round(res["extrinsic"], 4),
     }
 
 
@@ -859,7 +815,7 @@ def build_candidate_strategy_trades(
                 net_delta = round((long_put.get("delta") or 0.0) - (short_put.get("delta") or 0.0), 4)
                 net_gamma = round((long_put.get("gamma") or 0.0) - (short_put.get("gamma") or 0.0), 6)
                 net_vega = round((long_put.get("vega") or 0.0) - (short_put.get("vega") or 0.0), 4)
-                net_theta = round((short_put.get("theta") or 0.0) - (long_put.get("theta") or 0.0), 4)
+                net_theta = round((long_put.get("theta") or 0.0) - (short_put.get("theta") or 0.0), 4)
                 score = round((short_put.get("spread") or 0.03) * 100.0, 1)
 
                 bull_put_trade = CandidateStrategyTrade(
@@ -915,7 +871,7 @@ def build_candidate_strategy_trades(
                 net_delta = round((long_call.get("delta") or 0.0) - (short_call.get("delta") or 0.0), 4)
                 net_gamma = round((long_call.get("gamma") or 0.0) - (short_call.get("gamma") or 0.0), 6)
                 net_vega = round((long_call.get("vega") or 0.0) - (short_call.get("vega") or 0.0), 4)
-                net_theta = round((short_call.get("theta") or 0.0) - (long_call.get("theta") or 0.0), 4)
+                net_theta = round((long_call.get("theta") or 0.0) - (short_call.get("theta") or 0.0), 4)
                 score = round((short_call.get("spread") or 0.03) * 100.0, 1)
 
                 bear_call_trade = CandidateStrategyTrade(

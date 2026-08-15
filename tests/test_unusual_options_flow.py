@@ -696,12 +696,15 @@ class TestASTSafety:
         tree = ast.parse(module_path.read_text(encoding="utf-8"))
 
         imported_roots = set()
+        imported_modules = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     imported_roots.add(alias.name.split(".")[0])
+                    imported_modules.add(alias.name)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported_roots.add(node.module.split(".")[0])
+                imported_modules.add(node.module)
 
         forbidden = {
             "processing_engine",
@@ -719,7 +722,10 @@ class TestASTSafety:
         overlap = imported_roots & forbidden
         assert not overlap, f"pilots/unusual_options_flow.py must not import {overlap}"
 
-        # Assert all imports are within clean allowlist
+        # Assert all imports are within clean allowlist. "data" is permitted ONLY as the
+        # lazy, function-scoped `data.market_data` provider import (the same live-chain
+        # fetch pattern already used by pilots/options_gex.py, pilots/vol_mispricing.py,
+        # and pilots/har_volatility.py) — never a heavier `data.*` submodule.
         allowed_roots = {
             "__future__",
             "dataclasses",
@@ -733,9 +739,21 @@ class TestASTSafety:
             "numpy",
             "pandas",
             "settings",
+            "data",
+            "pilots",
         }
         unrecognized = imported_roots - allowed_roots
         assert not unrecognized, f"Unrecognized import roots in unusual_options_flow.py: {unrecognized}"
+
+        data_modules = {m for m in imported_modules if m == "data" or m.startswith("data.")}
+        assert data_modules <= {"data.market_data"}, (
+            f"pilots/unusual_options_flow.py may only import data.market_data, found: {data_modules}"
+        )
+
+        pilots_modules = {m for m in imported_modules if m == "pilots" or m.startswith("pilots.")}
+        assert pilots_modules <= {"pilots.options_alerts"}, (
+            f"pilots/unusual_options_flow.py may only import pilots.options_alerts, found: {pilots_modules}"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 from scipy.stats import norm
 
+from settings import settings
+
 logger = logging.getLogger(__name__)
 
 # Execution Policies
@@ -183,39 +185,22 @@ def calculate_leg_greeks(
     option_type: str = "call",
     r: float = 0.045,
 ) -> Dict[str, float]:
-    """Computes Black-Scholes Delta and Gamma for a single option leg."""
-    if spot <= 0 or strike <= 0:
-        return {"delta": 0.0, "gamma": 0.0, "price": 0.0}
+    """Computes Black-Scholes Delta and Gamma for a single option leg (delegates to canonical pilots.options_risk)."""
+    from pilots.options_risk import calculate_black_scholes_greeks
 
-    opt_type = (option_type or "call").lower()
-
-    if t_years <= _DEGENERATE_EPSILON or sigma <= _DEGENERATE_EPSILON or np.isnan(sigma):
-        if opt_type == "call":
-            price = max(0.0, spot - strike)
-            delta = 1.0 if spot > strike else 0.0
-        else:
-            price = max(0.0, strike - spot)
-            delta = -1.0 if spot < strike else 0.0
-        return {"delta": delta, "gamma": 0.0, "price": float(price)}
-
-    vol_sqrt_t = sigma * np.sqrt(t_years)
-    if vol_sqrt_t < _DEGENERATE_EPSILON:
-        vol_sqrt_t = _DEGENERATE_EPSILON
-
-    d1 = (np.log(spot / strike) + (r + 0.5 * sigma**2) * t_years) / vol_sqrt_t
-    d2 = d1 - vol_sqrt_t
-
-    if opt_type == "call":
-        price = spot * norm.cdf(d1) - strike * math.exp(-r * t_years) * norm.cdf(d2)
-        delta = float(norm.cdf(d1))
-    else:
-        price = strike * math.exp(-r * t_years) * norm.cdf(-d2) - spot * norm.cdf(-d1)
-        delta = float(norm.cdf(d1) - 1.0)
-
-    denom_gamma = spot * vol_sqrt_t
-    gamma = float(norm.pdf(d1) / denom_gamma) if denom_gamma >= _DEGENERATE_EPSILON else 0.0
-
-    return {"delta": delta, "gamma": gamma, "price": float(price)}
+    greeks = calculate_black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        t_years=t_years,
+        sigma=sigma,
+        option_type=option_type,
+        r=r,
+    )
+    return {
+        "delta": float(greeks.get("delta", 0.0)),
+        "gamma": float(greeks.get("gamma", 0.0)),
+        "price": float(greeks.get("price", 0.0)),
+    }
 
 
 def _normalize_leg_data(
@@ -696,7 +681,7 @@ def simulate_legging_execution(
     legs: List[Dict[str, Any]],
     spot_price: float,
     volatility: float = 0.25,
-    latency_seconds: float = 2.0,
+    latency_seconds: Optional[float] = None,
     num_simulations: int = 1000,
     random_seed: Optional[int] = None,
     risk_free_rate: float = 0.045,
@@ -714,8 +699,9 @@ def simulate_legging_execution(
         Current underlying spot price.
     volatility : float
         Annualized implied/historical volatility (default 0.25).
-    latency_seconds : float
-        Inter-leg execution delay in seconds (default 2.0).
+    latency_seconds : Optional[float]
+        Inter-leg execution delay in seconds. Defaults to
+        `settings.OPTIONS_SOR_LEGGING_LATENCY_SECONDS` (2.0) when not provided.
     num_simulations : int
         Number of Monte Carlo paths (default 1000).
     random_seed : Optional[int]
@@ -732,7 +718,11 @@ def simulate_legging_execution(
     num_simulations = max(10, int(num_simulations or 1000))
     spot_price = float(spot_price) if spot_price and spot_price > 0 else 100.0
     volatility = float(volatility) if volatility and volatility > 0 else 0.25
-    latency_seconds = max(0.0, float(latency_seconds if latency_seconds is not None else 2.0))
+    default_latency_seconds = float(getattr(settings, "OPTIONS_SOR_LEGGING_LATENCY_SECONDS", 2.0))
+    latency_seconds = max(
+        0.0,
+        float(latency_seconds if latency_seconds is not None else default_latency_seconds),
+    )
 
     if not legs or len(legs) < 2:
         return LeggingSimulationResult(
@@ -861,16 +851,32 @@ def simulate_legging_execution(
     active_leg_dprice = (active_delta * spot_jumps) + (0.5 * active_gamma * (spot_jumps ** 2))
     adverse_slippage = active_sign * active_leg_dprice
 
-    # Hung leg condition: adverse slippage exceeds tolerance threshold or moves against trader
+    # Hung leg condition: adverse slippage exceeds tolerance threshold or moves against trader.
+    # This flags the paths where chasing the active leg at its repriced level is no longer a
+    # realistic/economic fill -- in reality the algo abandons the sweep and the trader is left
+    # holding ONLY the passive leg: an unintended, NAKED single-leg position, not "both legs
+    # filled, just at a worse price."
     spread_tol = max(0.01, 0.5 * active_leg["spread"])
     hung_mask = (adverse_slippage > spread_tol) if dt_years > 0 else np.zeros(num_simulations, dtype=bool)
     hung_leg_probability = float(np.mean(hung_mask))
     hung_leg_percentage = hung_leg_probability * 100.0
 
-    # Total slippage cost across all runs
+    # Naked-exposure cost: without this, every simulated path (hung or not) priced the active
+    # leg as though it eventually filled at natural_price + dprice, silently treating a hung
+    # leg as if both legs always fill together and understating legging risk. A genuinely hung
+    # leg instead leaves the passive leg naked, and the realistic remedy is to cross its own
+    # bid-ask spread again to flatten the unintended position (or accept open-ended directional
+    # risk, which is at least as costly) -- so charge that real, additional round-trip unwind
+    # cost on hung paths only, leaving the ordinary (filled) slippage distribution untouched.
+    naked_unwind_cost = float(passive_leg["spread"]) * float(passive_leg["ratio"])
+    adverse_slippage = np.where(hung_mask, adverse_slippage + naked_unwind_cost, adverse_slippage)
+
+    # Total slippage cost across all runs (now honestly includes the naked-exposure unwind
+    # cost incurred on hung paths, rather than silently ignoring that risk).
     avg_slippage_cost = float(np.mean(np.maximum(0.0, adverse_slippage)))
 
-    # Net dollar savings distribution = Gross Spread Savings - Adverse Slippage
+    # Net dollar savings distribution = Gross Spread Savings - Adverse Slippage (incl. the
+    # naked-exposure unwind cost charged above on hung paths).
     simulated_savings = base_savings - adverse_slippage
     expected_net_edge_captured = float(np.mean(simulated_savings))
 

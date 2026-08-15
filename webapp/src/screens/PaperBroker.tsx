@@ -146,11 +146,24 @@ export function PaperBroker() {
 
   const handleRollSubmit = async () => {
     if (!rollingPosition) return;
+    // rollingPosition.symbol is "{TICKER} {YYYY-MM-DD} ${STRIKE} {CALL|PUT}".
+    // Parse it to build the close leg and the new-expiration open leg the
+    // backend's RollOrderRequest actually requires (symbol/close_legs/open_legs)
+    // -- defaulting the open leg's strike to the current strike when the
+    // operator didn't pick a different one (a pure calendar roll).
+    const parts = rollingPosition.symbol.trim().split(/\s+/);
+    const ticker = parts[0];
+    const optType = parts[parts.length - 1];
+    const currentStrike = parseFloat((parts[2] || "").replace("$", ""));
+    const targetStrike = rollTargetStrike ?? currentStrike;
+    const qty = Math.abs(rollingPosition.qty);
+    const isShort = rollingPosition.qty < 0;
+    const newSymbol = `${ticker} ${rollTargetExp} $${targetStrike.toFixed(2)} ${optType}`;
     const res = await rollMutation.run({
-      current_symbol: rollingPosition.symbol,
-      target_expiration: rollTargetExp,
-      target_strike: rollTargetStrike,
-      qty: Math.abs(rollingPosition.qty),
+      symbol: ticker,
+      close_legs: [{ symbol: rollingPosition.symbol, side: isShort ? "buy" : "sell", qty }],
+      open_legs: [{ symbol: newSymbol, side: isShort ? "sell" : "buy", qty }],
+      contracts: qty,
     });
     if (res) {
       setRollingPosition(null);

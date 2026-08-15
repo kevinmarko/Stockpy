@@ -245,6 +245,10 @@ class RunResult:
     started_at : datetime  (UTC-aware)
     finished_at : datetime (UTC-aware)
     duration_seconds : float
+    macro_dto : MacroEconomicDTO | None
+        The cycle's real macro context (built once by MacroStep), so callers
+        after run_once() returns (e.g. the automated options executor) can
+        gate on real VIX/regime/HY-OAS state instead of a default None.
     """
 
     snapshot: AccountSnapshot
@@ -253,6 +257,7 @@ class RunResult:
     started_at: datetime
     finished_at: datetime
     duration_seconds: float
+    macro_dto: Optional[MacroEconomicDTO] = None
 
 
 # ---------------------------------------------------------------------------
@@ -974,6 +979,7 @@ def run_once(force_account: bool = False) -> RunResult:
         started_at=started_at,
         finished_at=finished_at,
         duration_seconds=(finished_at - started_at).total_seconds(),
+        macro_dto=ctx.macro_dto,
     )
     if not ctx.stopped:
         _log_summary(result)
@@ -1415,7 +1421,11 @@ def main() -> None:
 
                 # 2. Open New Strategy Option Positions
                 if getattr(settings, "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", False):
-                    _exec_res = _executor.execute_strategy_directives()
+                    # Pass the cycle's real macro_dto (threaded through
+                    # RunResult by run_once()) so the VIX/CREDIT-EVENT
+                    # premium-selling regime gate is actually evaluated instead
+                    # of silently no-op'ing on a default-None macro context.
+                    _exec_res = _executor.execute_strategy_directives(macro_dto=result.macro_dto)
                     logger.info(
                         "Automated strategy options paper execution completed: "
                         "%d executed, %d skipped, %d failed",

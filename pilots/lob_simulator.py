@@ -56,6 +56,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from settings import settings
+
 try:
     from scipy.special import gammainc, gammaincc, factorial
     _SCIPY_AVAILABLE = True
@@ -70,7 +72,13 @@ DEFAULT_TIME_HORIZON_SEC = 60.0
 DEFAULT_NUM_SIMULATIONS = 1000
 DEFAULT_MARKET_ORDER_AVG_SIZE = 1.0
 DEFAULT_TICK_SIZE = 0.01
-DEFAULT_MARKET_ORDER_RATE = 5.0
+# Operator-configurable via settings.OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE (default 5.0, this
+# module's prior hardcoded literal) — the single most load-bearing Poisson calibration parameter
+# in this file: it's the market-order arrival rate (theta, orders/sec) used as the default/
+# fallback across calculate_cont_stoikov_fill_probability(), evaluate_optimal_queue_level(), and
+# simulate_queue_fill() (the live POST /pilots/options/lob/simulate-queue resolver) whenever a
+# caller doesn't supply an empirically-measured rate from compute_lob_arrival_rates().
+DEFAULT_MARKET_ORDER_RATE = settings.OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE
 DEFAULT_CANCEL_RATE = 0.02
 DEFAULT_VOLATILITY = 0.25
 
@@ -520,7 +528,7 @@ def compute_lob_arrival_rates(
         )
 
     # Determine observation duration
-    if observation_duration_sec is not None and observation_duration_sec > 0:
+    if observation_duration_sec is not None and observation_duration_sec > EPSILON:
         duration = float(observation_duration_sec)
     else:
         duration = max_ts - min_ts
@@ -944,7 +952,12 @@ def simulate_queue_position(
             vel = depleted_so_far / max(EPSILON, T)
             depletion_velocities.append(vel)
 
-        adverse_move_flags.append(adverse_move and (not is_filled or adverse_move))
+        # `adverse_move` can only be set True while `s_rem > EPSILON` (the while-loop condition
+        # above), so by construction it is already "adverse move occurred before/at fill" — the
+        # previous `adverse_move and (not is_filled or adverse_move)` was a tautology that always
+        # evaluated to plain `adverse_move` (verify: adverse_move=False -> False either way;
+        # adverse_move=True -> True and (not is_filled or True) -> True and True -> True).
+        adverse_move_flags.append(adverse_move)
 
         if store_sample_trajectories and sim_idx < 5:
             sample_trajectories.append({
@@ -1137,16 +1150,20 @@ def simulate_lob_dynamics(
                 can_price = rng.choice(valid_asks)
                 ask_book[can_price] = max(0.0, ask_book[can_price] - 1.0)
 
-        # Record metrics at time t
-        cur_bids = sorted([(p, s) for p, s in bid_book.items() if s > EPSILON], key=lambda x: x[0], reverse=True)
-        cur_asks = sorted([(p, s) for p, s in ask_book.items() if s > EPSILON], key=lambda x: x[0])
-        if cur_bids and cur_asks:
-            b_bid = cur_bids[0][0]
-            b_ask = cur_asks[0][0]
+        # Record metrics at time t.
+        # Only the touch (best bid/ask) is needed here, so an O(n) max/min scan over the
+        # post-event book replaces the previous full O(n log n) sort-then-take-index-0 —
+        # same result, cheaper per event. (The end-of-loop `final_bids`/`final_asks` below
+        # still need a genuine full sort since LOBSnapshot wants every level, not just the top.)
+        cur_valid_bids = [(p, s) for p, s in bid_book.items() if s > EPSILON]
+        cur_valid_asks = [(p, s) for p, s in ask_book.items() if s > EPSILON]
+        if cur_valid_bids and cur_valid_asks:
+            b_bid, b_bid_size = max(cur_valid_bids, key=lambda x: x[0])
+            b_ask, b_ask_size = min(cur_valid_asks, key=lambda x: x[0])
             m_price = (b_bid + b_ask) / 2.0
             sp = b_ask - b_bid
-            tot_depth = cur_bids[0][1] + cur_asks[0][1]
-            u_price = (cur_asks[0][1] * b_bid + cur_bids[0][1] * b_ask) / tot_depth if tot_depth > 0 else m_price
+            tot_depth = b_bid_size + b_ask_size
+            u_price = (b_ask_size * b_bid + b_bid_size * b_ask) / tot_depth if tot_depth > 0 else m_price
 
             timestamps.append(round(t, 4))
             mid_prices.append(round(m_price, 4))
@@ -1469,6 +1486,17 @@ def evaluate_optimal_queue_level(
     if urgency_str not in ("passive", "normal", "aggressive", "immediate"):
         urgency_str = "normal"
 
+    # Defensive floor on the Poisson-rate inputs, matching the convention already used by
+    # calculate_cont_stoikov_fill_probability()/calculate_expected_fill_latency() in this same
+    # module. Both rates are used as raw divisors below (e.g. `market_order_rate + EPSILON`);
+    # without this floor a legitimate, empirically-measured "zero market order flow observed"
+    # value of 0.0 (or a stray negative) would collapse the denominator to ~EPSILON and blow
+    # `latency_sec`/`time_reach` up to ~1e14, which then propagates unclamped into the returned
+    # `expected_fill_latency_sec` field (only the internal adverse-selection calc downstream caps
+    # it via `min(latency_sec, time_horizon_sec)` — the reported candidate value does not).
+    market_order_rate = max(0.01, float(market_order_rate))
+    cancel_rate = max(0.0, float(cancel_rate))
+
     norm_bids = _normalize_lob_levels(bids, side="buy")
     norm_asks = _normalize_lob_levels(asks, side="sell")
 
@@ -1782,7 +1810,7 @@ def simulate_queue_fill(
         queue_ahead=d_ahead,
         lambda_limit=float(lambda_limit) if lambda_limit is not None else 4.0,
         mu_cancel=float(mu_cancel) if mu_cancel is not None else 0.05,
-        theta_market=float(theta_market) if theta_market is not None else 5.0,
+        theta_market=float(theta_market) if theta_market is not None else DEFAULT_MARKET_ORDER_RATE,
         time_horizon_sec=float(time_horizon_sec) if time_horizon_sec is not None else 60.0,
         num_simulations=int(num_simulations) if num_simulations is not None else 500,
         random_seed=random_seed,

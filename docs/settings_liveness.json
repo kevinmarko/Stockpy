@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 290,
-    "no_op": 4,
-    "restart_required": 91,
-    "total": 385
+    "live_safe": 294,
+    "no_op": 3,
+    "restart_required": 94,
+    "total": 391
   },
   "dynamic_sites": [
     {
@@ -313,6 +313,7 @@
     "OPAL_RESEARCH_PROVIDER",
     "OPAL_RESEARCH_TIMEOUT_SECONDS",
     "OPENAI_API_KEY",
+    "OPTIONS_0DTE_ENABLED",
     "OPTIONS_0DTE_HARD_EXIT_TIME",
     "OPTIONS_0DTE_PROFIT_TARGET_PCT",
     "OPTIONS_0DTE_STOP_LOSS_PCT",
@@ -322,13 +323,16 @@
     "OPTIONS_DELTA_HEDGE_ENABLED",
     "OPTIONS_EARNINGS_MIN_EDGE",
     "OPTIONS_EARNINGS_WING_MULTIPLIER",
+    "OPTIONS_GEX_SEARCH_RANGE_PCT",
     "OPTIONS_MANAGE_DTE_THRESHOLD",
     "OPTIONS_MATRIX_ENABLED",
     "OPTIONS_META_LABELER_ENABLED",
     "OPTIONS_PROFIT_TARGET_PCT",
     "OPTIONS_RISK_FREE_RATE",
+    "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
     "OPTIONS_STOP_LOSS_MULTIPLE",
     "OPTIONS_TRUE_IVR_ENABLED",
+    "OPTIONS_VPIN_TOXICITY_THRESHOLD",
     "ORCHESTRATOR_API_PORT",
     "ORCHESTRATOR_DAEMON_ENABLED",
     "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
@@ -433,22 +437,21 @@
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS"
   ],
   "no_op": [
-    "OPTIONS_0DTE_ENABLED",
     "OPTIONS_EARNINGS_CRUSH_ENABLED",
     "PROMPT_MAX_CHARS",
     "SENTIMENT_PIT_MIN_MONTHS"
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 797,
+    "attr": 803,
     "factory_param": 4,
-    "getattr_const": 306,
+    "getattr_const": 314,
     "os_environ": 24
   },
   "read_forms_distinct_fields": {
-    "attr": 231,
+    "attr": 234,
     "factory_param": 4,
-    "getattr_const": 179,
+    "getattr_const": 183,
     "os_environ": 17
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -733,7 +736,7 @@
           "decorator_arg",
           "module_level"
         ],
-        "site": "gui/panels/analytics.py:242",
+        "site": "gui/panels/analytics.py:247",
         "via": []
       },
       {
@@ -2215,7 +2218,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4646",
+        "site": "investyo_mcp_server.py:5257",
         "via": []
       }
     ],
@@ -2235,7 +2238,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4598",
+        "site": "investyo_mcp_server.py:5209",
         "via": []
       }
     ],
@@ -2275,7 +2278,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:4606",
+        "site": "investyo_mcp_server.py:5217",
         "via": []
       }
     ],
@@ -2287,6 +2290,50 @@
           "init_self_assign"
         ],
         "site": "ml/forecast_backfill.py:155",
+        "via": []
+      }
+    ],
+    "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "default_arg",
+          "module_level"
+        ],
+        "site": "pilots/copula_stat_arb.py:1047",
+        "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "default_arg",
+          "module_level"
+        ],
+        "site": "pilots/copula_stat_arb.py:1132",
+        "via": []
+      }
+    ],
+    "OPTIONS_DRL_RISK_AVERSION_GAMMA": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "ml/drl_market_maker.py:88",
+        "via": []
+      }
+    ],
+    "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE": [
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "pilots/lob_simulator.py:81",
         "via": []
       }
     ],
@@ -2548,7 +2595,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11027",
+        "site": "Gravity AI Review Suite.py:11052",
         "via": []
       }
     ],
@@ -2817,7 +2864,7 @@
         "rules": [
           "os_environ"
         ],
-        "site": "main.py:273",
+        "site": "main.py:278",
         "via": []
       },
       {
@@ -2851,12 +2898,13 @@
     "closure_value": 1,
     "cross_module_init_helper": 73,
     "decorator_arg": 13,
+    "default_arg": 2,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 11,
     "init_body": 6,
     "init_self_assign": 41,
     "method_self_assign": 4,
-    "module_level": 74,
+    "module_level": 78,
     "os_environ": 24
   },
   "restart_required_via_name_literal_only": [

@@ -503,6 +503,14 @@ class TestRunOnce:
         """No held symbols and no watchlist → empty RunResult; advisory never called."""
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
+        # _build_universe() also unions discovery()'s scan candidates in BEFORE
+        # consulting DEFAULT_TICKERS, and discovery() reads settings.OUTPUT_DIR /
+        # "scan_candidates.json" -- a machine-global LOCAL_DATA_ROOT path that
+        # monkeypatch.chdir(tmp_path) below does NOT isolate. Without this, a
+        # machine/CI runner with a real prior agentic-discovery run would make
+        # the universe non-empty here and this "empty universe" assertion would
+        # flake exactly like the DEFAULT_TICKERS gap this test already guards.
+        monkeypatch.setattr("main.discovery", lambda *a, **kw: {"candidates": []})
         monkeypatch.chdir(tmp_path)
         mock_snap.return_value = _make_snapshot(positions={})
         mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)

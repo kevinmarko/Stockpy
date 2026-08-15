@@ -251,21 +251,27 @@ class PaperAccountStore:
                 session.add(acc)
 
     def apply_fill(
-        self, 
+        self,
         client_order_id: str,
-        symbol: str, 
-        side: str, 
-        qty: float, 
-        fill_price: float, 
+        symbol: str,
+        side: str,
+        qty: float,
+        fill_price: float,
         commission_and_fees: float = 0.0,
         target_qty: Optional[float] = None,
         status: str = OrderStatus.FILLED,
         allow_short: bool = False,
+        collateral_required: Optional[float] = None,
     ) -> bool:
 
         """
         Updates cash and position. Returns True if successful, False if insufficient funds/inventory.
         Records the order.
+
+        ``collateral_required``, when provided, is checked against available cash
+        before a short position is opened or increased (mirroring the check
+        already performed by ``apply_multi_leg_fill``/``apply_roll_fill``) -- a
+        single-leg naked short otherwise has no margin requirement at all.
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
@@ -324,10 +330,19 @@ class PaperAccountStore:
                         logger.warning(f"Insufficient inventory for paper sell of {qty} {symbol}: pos={current_qty}")
                         self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty)
                         return False
-                    
+
+                    if pos.qty < qty - _QTY_EPSILON and is_option_contract:
+                        # Overselling past long inventory opens/increases a naked
+                        # short -- require the same collateral check as opening
+                        # one from flat (below).
+                        if collateral_required and collateral_required > 0 and acc.cash_balance < collateral_required:
+                            logger.warning(f"Insufficient collateral for paper short sell of {qty} {symbol}: required={collateral_required}, cash={acc.cash_balance}")
+                            self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty)
+                            return False
+
                     total_proceeds = cost_basis_impact - commission_and_fees
                     acc.cash_balance += total_proceeds
-                    
+
                     pos.qty -= qty
                     if abs(pos.qty) < _QTY_EPSILON:
                         session.delete(pos)
@@ -337,6 +352,11 @@ class PaperAccountStore:
                     # Selling to open short (options or short stock)
                     if not is_option_contract:
                         logger.warning(f"Insufficient inventory for paper sell of {qty} {symbol}: pos={current_qty}")
+                        self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty)
+                        return False
+
+                    if collateral_required and collateral_required > 0 and acc.cash_balance < collateral_required:
+                        logger.warning(f"Insufficient collateral for paper short sell of {qty} {symbol}: required={collateral_required}, cash={acc.cash_balance}")
                         self._insert_order(session, client_order_id, symbol, side, qty, 0.0, None, OrderStatus.REJECTED, target_qty)
                         return False
 
@@ -496,17 +516,31 @@ class PaperAccountStore:
             commission_and_fees = 0.65 * contracts * len(all_legs)
 
         if net_cash_impact is None:
-            # Calculate from leg prices
+            # Calculate from leg prices. Whether the ×100 contract multiplier
+            # applies is determined by WHICH field actually carries the price
+            # (this codebase's leg-dict convention: "fill_price" is always
+            # already a per-contract dollar amount, "raw_price" is per-share),
+            # never by guessing from the price's magnitude -- a premium ≥$50
+            # /share (deep ITM, LEAPS) is a legitimate raw_price and must
+            # still be scaled by 100, which a `price < 50.0` heuristic gets
+            # silently wrong.
             leg_cash_sum = 0.0
             for l in all_legs:
                 side = str(l.get("side", "buy")).lower().strip()
-                price = float(l.get("fill_price", 0.0) or l.get("raw_price", 0.0) or 0.0)
                 qty = float(l.get("qty", contracts))
-                multiplier = 100.0 if " " in str(l.get("symbol", "")) else 1.0
-                if side == "buy":
-                    leg_cash_sum -= qty * price * (multiplier if price < 50.0 else 1.0)
+                option_multiplier = 100.0 if " " in str(l.get("symbol", "")) else 1.0
+                fill_price_raw = l.get("fill_price")
+                if fill_price_raw:
+                    # Already a full per-contract dollar amount -- use as-is.
+                    price = float(fill_price_raw)
+                    scale = 1.0
                 else:
-                    leg_cash_sum += qty * price * (multiplier if price < 50.0 else 1.0)
+                    price = float(l.get("raw_price", 0.0) or 0.0)
+                    scale = option_multiplier
+                if side == "buy":
+                    leg_cash_sum -= qty * price * scale
+                else:
+                    leg_cash_sum += qty * price * scale
             net_cash_impact = leg_cash_sum - commission_and_fees
 
         with session_scope(self.Session) as session:
@@ -733,7 +767,18 @@ class PaperAccountStore:
                         except Exception:
                             spot = None
                     if spot is None:
-                        spot = strike  # Fallback ATM if no quote available
+                        # No honest spot price available -- do NOT fabricate one
+                        # (CONSTRAINT #4). Leave the position open so a later
+                        # call, once a real quote is available again, can
+                        # settle it at its actual intrinsic value instead of
+                        # silently forcing it to zero.
+                        logger.warning(
+                            "settle_expired_options: no quote available for %s "
+                            "(expired %s); skipping settlement rather than "
+                            "fabricating spot=strike.",
+                            ticker, exp_str,
+                        )
+                        continue
 
                     # Calculate intrinsic value
                     if opt_type == "CALL":

@@ -84,9 +84,11 @@ def test_compute_implied_correlation():
     rho_low = compute_implied_correlation(index_iv=0.14, constituent_ivs=const_ivs, weights=weights)
     assert 0.0 <= rho_low < 1.0
 
-    # Degenerate guards
-    assert compute_implied_correlation(index_iv=0.0, constituent_ivs=const_ivs, weights=weights) == 0.50
-    assert compute_implied_correlation(index_iv=0.20, constituent_ivs={}, weights=weights) == 0.50
+    # Degenerate guards -- CONSTRAINT #4: a non-computable correlation must come back None
+    # (never a fabricated "typical" 0.50 guess) so a caller can tell "no real data" apart from
+    # "computed a genuine 0.50 correlation".
+    assert compute_implied_correlation(index_iv=0.0, constituent_ivs=const_ivs, weights=weights) is None
+    assert compute_implied_correlation(index_iv=0.20, constituent_ivs={}, weights=weights) is None
 
 
 def test_compute_realized_correlation_matrix():

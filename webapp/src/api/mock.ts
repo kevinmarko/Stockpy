@@ -11082,7 +11082,17 @@ export const mockApi = {
     job_id: string,
   ): Promise<{ job_id: string; cancelled: boolean }> {
     const job = _mockJobs[job_id];
-    if (job) job.cancelled = true;
+    if (!job) {
+      return delay({ job_id, cancelled: false }, 100);
+    }
+    if (job.cancelled) {
+      return delay({ job_id, cancelled: true }, 100);
+    }
+    const isRunning = Date.now() - job.startedAt < 2000;
+    if (!isRunning) {
+      return delay({ job_id, cancelled: false }, 100);
+    }
+    job.cancelled = true;
     return delay({ job_id, cancelled: true }, 100);
   },
 
@@ -11932,10 +11942,12 @@ export const mockApi = {
     });
   },
   async rollPaperOptionPosition(request: RollOrderRequest) {
+    const closeSymbol = request.close_legs[0]?.symbol ?? request.symbol;
+    const openSymbol = request.open_legs[0]?.symbol ?? request.symbol;
     return delay<OptionsOrderResult>({
       ok: true,
       order_id: `ord_roll_${Date.now()}`,
-      message: `Successfully rolled ${request.current_symbol} to ${request.target_expiration}${request.target_strike ? ` @ strike $${request.target_strike}` : ""}. Net credit/debit applied.`,
+      message: `Successfully rolled ${closeSymbol} to ${openSymbol}. Net credit/debit applied.`,
     });
   },
   async getEarningsCrushCandidates(symbols?: string[]) {
@@ -12238,6 +12250,7 @@ export const mockApi = {
 
     return delay<UnusualOptionsFlowResponse>({
       trades: filtered,
+      records: filtered,
       count: filtered.length,
       as_of: new Date().toISOString(),
     });

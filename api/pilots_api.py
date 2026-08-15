@@ -5776,7 +5776,11 @@ def post_paper_broker_strategy_options_execute(body: Optional[StrategyOptionsExe
     symbols = body.symbols if body else None
     dry_run = body.dry_run if body else False
     max_notional = body.max_notional if body else None
-    return execute_strategy_options(symbols=symbols, dry_run=dry_run, max_notional=max_notional)
+    try:
+        return execute_strategy_options(symbols=symbols, dry_run=dry_run, max_notional=max_notional)
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: strategy-options/execute failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while executing strategy options; see server logs for detail."}
 
 @app.get("/pilots/paper-broker/greeks", dependencies=[Depends(require_read_token)])
 def get_paper_broker_portfolio_greeks() -> Dict[str, Any]:
@@ -5798,12 +5802,16 @@ def post_paper_broker_manage_exits(body: Optional[ManageExitsRequest] = None) ->
     profit_target_pct = body.profit_target_pct if body else None
     stop_loss_multiple = body.stop_loss_multiple if body else None
     manage_dte_threshold = body.manage_dte_threshold if body else None
-    return manage_position_exits(
-        dry_run=dry_run,
-        profit_target_pct=profit_target_pct,
-        stop_loss_multiple=stop_loss_multiple,
-        manage_dte_threshold=manage_dte_threshold,
-    )
+    try:
+        return manage_position_exits(
+            dry_run=dry_run,
+            profit_target_pct=profit_target_pct,
+            stop_loss_multiple=stop_loss_multiple,
+            manage_dte_threshold=manage_dte_threshold,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: manage-exits failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while managing position exits; see server logs for detail."}
 
 @app.post(
     "/pilots/paper-broker/roll",
@@ -5999,11 +6007,11 @@ def post_paper_broker_settle_expired() -> Dict[str, Any]:
     """Scans and settles all expired option contracts in the paper broker account."""
     from data.paper_account_store import PaperAccountStore
     try:
-        from data_engine import DataEngine
-        engine = DataEngine()
+        from data.market_data import get_provider
+        engine = get_provider()
     except Exception:
         engine = None
-    
+
     store = PaperAccountStore()
     settled = store.settle_expired_options(market_provider=engine)
     return {
@@ -6062,7 +6070,7 @@ def get_options_flow_unusual(
         min_notional=min_notional,
         limit=limit,
     )
-    return {"count": len(records), "records": records}
+    return {"count": len(records), "records": records, "trades": records}
 
 
 @app.get("/pilots/options/flow/sentiment", dependencies=[Depends(require_read_token)])
@@ -6122,11 +6130,15 @@ class OptionsAlertTestRequest(BaseModel):
 def post_options_alerts_test(body: OptionsAlertTestRequest) -> Dict[str, Any]:
     """Dispatches a test options alert to configured notification channels (Discord, Slack, Email, File, Console)."""
     from pilots.options_alerts import dispatch_options_alert
-    return dispatch_options_alert(
-        alert_type=body.alert_type,
-        payload=body.payload,
-        channels=body.channels,
-    )
+    try:
+        return dispatch_options_alert(
+            alert_type=body.alert_type,
+            payload=body.payload,
+            channels=body.channels,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: alerts/test failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while dispatching test alert; see server logs for detail."}
 
 
 @app.post("/pilots/options/multi-leg/price", dependencies=[Depends(require_read_token)])
@@ -6215,12 +6227,16 @@ def get_options_dispersion_opportunities(
 def post_options_dispersion_execute(body: DispersionExecuteRequest) -> Dict[str, Any]:
     """Executes a vega-neutral dispersion basket into the paper broker."""
     from pilots.dispersion_trading import execute_dispersion_trade
-    return execute_dispersion_trade(
-        index_symbol=body.index_symbol,
-        basket=body.basket,
-        dry_run=body.dry_run,
-        is_live=body.is_live,
-    )
+    try:
+        return execute_dispersion_trade(
+            index_symbol=body.index_symbol,
+            basket=body.basket,
+            dry_run=body.dry_run,
+            is_live=body.is_live,
+        )
+    except Exception as exc:  # noqa: BLE001 - dead-letter: never leak exception detail to the client
+        logger.error("pilots_api: dispersion/execute failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": "Internal error while executing dispersion trade; see server logs for detail."}
 
 
 @app.get("/pilots/options/zero-dte/signals", dependencies=[Depends(require_read_token)])
@@ -6375,8 +6391,55 @@ def get_options_copula_pairs(
         sy = "GLD"
     if not sx:
         sx = "GDX"
+    sy = sy.upper().strip()
+    sx = sx.upper().strip()
 
-    res = compute_copula_spread_analysis(symbol_y=sy, symbol_x=sx)
+    # Fetch REAL historical Close series for both legs via the shared
+    # CompositeProvider (same pattern as pairs_ondemand._fetch_close /
+    # POST /data/pairs/analyze's analyze_pair) so a live copula request is
+    # scored against actual market history instead of always falling into
+    # compute_copula_spread_analysis's synthetic fallback. Never raises —
+    # dead-lettered per symbol; any fetch/alignment shortfall leaves the
+    # *_arg values None, and compute_copula_spread_analysis's own honest
+    # synthetic fallback (flagged via the response's is_synthetic field)
+    # takes over exactly as before.
+    prices_y_arg = None
+    prices_x_arg = None
+    dates_arg = None
+    try:
+        import pandas as pd
+
+        provider = get_provider()
+        closes: Dict[str, Any] = {}
+        for sym in (sy, sx):
+            try:
+                bars = provider.get_intraday_bars(sym, lookback_days=252)
+                if bars is not None and not bars.empty and "Close" in bars.columns:
+                    closes[sym] = bars["Close"]
+            except Exception as exc:  # noqa: BLE001 - dead-letter per symbol
+                logger.debug("copula/pairs: bars fetch failed for %s: %s", sym, exc)
+        if sy in closes and sx in closes:
+            aligned = pd.DataFrame({sy: closes[sy], sx: closes[sx]}).dropna(how="any")
+            if len(aligned) >= 15:
+                prices_y_arg = aligned[sy].to_numpy()
+                prices_x_arg = aligned[sx].to_numpy()
+                dates_arg = [
+                    d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
+                    for d in aligned.index
+                ]
+    except Exception as exc:  # noqa: BLE001 - never blocks the endpoint (CONSTRAINT #6)
+        logger.debug(
+            "copula/pairs: real-data fetch unavailable for %s/%s, will use synthetic fallback: %s",
+            sy, sx, exc,
+        )
+
+    res = compute_copula_spread_analysis(
+        symbol_y=sy,
+        symbol_x=sx,
+        prices_y=prices_y_arg,
+        prices_x=prices_x_arg,
+        dates=dates_arg,
+    )
     return res.to_dict() if hasattr(res, "to_dict") else dict(res)
 
 

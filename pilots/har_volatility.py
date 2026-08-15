@@ -67,7 +67,7 @@ DAILY_WINDOW: int = 1
 WEEKLY_WINDOW: int = 5
 MONTHLY_WINDOW: int = 22
 _MIN_OBSERVATIONS_FOR_FIT: int = MONTHLY_WINDOW + 2  # 24 observations minimum
-_DEGENERATE_THRESHOLD: float = 1e-14
+_DEGENERATE_THRESHOLD: float = 1e-12
 
 
 class HARModelResult(dict):

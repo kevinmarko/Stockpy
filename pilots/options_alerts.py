@@ -39,6 +39,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 from settings import settings
 
@@ -118,11 +119,21 @@ def post_webhook(
     ts = datetime.now(timezone.utc).isoformat()
 
     try:
-        # Detect webhook provider format
-        if "discord.com/api/webhooks" in url or "discordapp.com/api/webhooks" in url:
+        # Detect webhook provider format via a real hostname parse -- a plain
+        # substring/`.endswith()` check on the raw URL string can be spoofed
+        # by e.g. "evil.example.com/discord.com/api/webhooks" or a lookalike
+        # subdomain, which would pick the wrong payload shape for whatever
+        # host the request actually goes to (CodeQL py/incomplete-url-
+        # substring-sanitization). `webhook_url` is always operator-
+        # configured (settings.OPTIONS_ALERT_WEBHOOK_URL or an explicit
+        # override), never externally supplied, so this isn't reachable by
+        # an attacker today -- fixed anyway since the correct check is no
+        # more code.
+        host = (urlparse(url).hostname or "").lower()
+        if host in ("discord.com", "discordapp.com") and "/api/webhooks" in urlparse(url).path:
             content = f"{emoji} **[{level.upper()}]** `{ts}`\n{message}"
             body_dict: Dict[str, Any] = {"content": content}
-        elif "hooks.slack.com" in url:
+        elif host == "hooks.slack.com" or host.endswith(".slack.com"):
             text = f"{emoji} *[{level.upper()}]* `{ts}`\n{message}"
             body_dict = {"text": text}
         else:
@@ -312,7 +323,15 @@ def dispatch_uoa_whale_alert(
     }
 
     channels_dispatched: List[str] = []
-    dedup_key = f"uoa_whale_{symbol}_{contract_symbol or f'{strike}_{option_type}_{expiration}'}"
+    # Dedup key includes `sentiment` deliberately: without it, a bullish sweep followed
+    # by a genuinely NEW, opposite-direction (bearish) sweep on the SAME contract within
+    # settings.ALERT_DEDUP_WINDOW_SECONDS would be wrongly treated as a duplicate of the
+    # earlier alert and silently suppressed — direction reversal on institutional flow is
+    # exactly the kind of new information this alert exists to surface, not noise to
+    # dedupe away. Same-direction repeats on the same contract still correctly dedupe.
+    dedup_key = (
+        f"uoa_whale_{symbol}_{contract_symbol or f'{strike}_{option_type}_{expiration}'}_{sentiment}"
+    )
 
     # 1. Multi-channel dispatch via observability/alerts.py
     try:
@@ -329,6 +348,11 @@ def dispatch_uoa_whale_alert(
         webhook_res = post_webhook(target_webhook, message, level=level, extra=extra)
         if webhook_res.get("ok"):
             channels_dispatched.append("custom_webhook")
+        else:
+            logger.warning(
+                "UOA whale alert webhook delivery failed for %s: %s",
+                symbol, webhook_res.get("error"),
+            )
 
     return {
         "dispatched": True,
@@ -336,6 +360,7 @@ def dispatch_uoa_whale_alert(
         "message": message,
         "channels": channels_dispatched,
         "webhook_status": webhook_res.get("status") if webhook_res else None,
+        "webhook_error": webhook_res.get("error") if webhook_res else None,
         "extra": extra,
         "reason": None,
     }
@@ -477,6 +502,11 @@ def dispatch_earnings_crush_alert(
         webhook_res = post_webhook(target_webhook, message, level=level, extra=extra)
         if webhook_res.get("ok"):
             channels_dispatched.append("custom_webhook")
+        else:
+            logger.warning(
+                "Earnings crush alert webhook delivery failed for %s: %s",
+                symbol, webhook_res.get("error"),
+            )
 
     return {
         "dispatched": True,
@@ -484,6 +514,7 @@ def dispatch_earnings_crush_alert(
         "message": message,
         "channels": channels_dispatched,
         "webhook_status": webhook_res.get("status") if webhook_res else None,
+        "webhook_error": webhook_res.get("error") if webhook_res else None,
         "extra": extra,
         "reason": None,
     }
@@ -591,6 +622,11 @@ def dispatch_delta_hedge_alert(
         webhook_res = post_webhook(target_webhook, message, level=level, extra=extra)
         if webhook_res.get("ok"):
             channels_dispatched.append("custom_webhook")
+        else:
+            logger.warning(
+                "Delta hedge alert webhook delivery failed for %s: %s",
+                symbol, webhook_res.get("error"),
+            )
 
     return {
         "dispatched": True,
@@ -598,6 +634,7 @@ def dispatch_delta_hedge_alert(
         "message": message,
         "channels": channels_dispatched,
         "webhook_status": webhook_res.get("status") if webhook_res else None,
+        "webhook_error": webhook_res.get("error") if webhook_res else None,
         "extra": extra,
         "reason": None,
     }

@@ -136,7 +136,7 @@ def get_delta_hedge_preview(
             "spy_spot": spy_spot,
         }
     else:
-        return {
+        preview = {
             "symbol": "SPY",
             "net_dollar_delta": round(net_dollar_delta, 2),
             "beta_weighted_delta_spy": round(beta_delta, 2),
@@ -148,6 +148,12 @@ def get_delta_hedge_preview(
             "reason": f"Delta imbalance ({beta_delta:+.2f} SPY-equiv) exceeds tolerance band (±{tolerance_band_shares:.1f} shares)",
             "spy_spot": spy_spot,
         }
+        try:
+            from pilots.options_alerts import dispatch_delta_hedge_alert
+            dispatch_delta_hedge_alert(preview)
+        except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+            logger.debug("Delta hedge preview alert dispatch failed: %s", exc)
+        return preview
 
 
 def execute_delta_hedge(
@@ -178,12 +184,26 @@ def execute_delta_hedge(
         try:
             from pilots.price_provider import get_current_price
             resolved_price = get_current_price("SPY")
-            if resolved_price > 0:
-                spy_spot = resolved_price
-            else:
-                spy_spot = 500.0
+            spy_spot = resolved_price if resolved_price > 0 else None
         except Exception:
-            spy_spot = 500.0
+            spy_spot = None
+
+        if spy_spot is None:
+            # No honest SPY price available -- refuse to execute rather than
+            # fabricate one (CONSTRAINT #4): a fabricated price would be
+            # written into the real paper-account ledger as fill_price below.
+            return {
+                "ok": False,
+                "hedged": False,
+                "action": "HOLD",
+                "shares": 0.0,
+                "symbol": "SPY",
+                "order_id": None,
+                "reason": "SPY spot price unavailable",
+                "message": "Delta hedge not executed: no live SPY quote available (refusing to fill at a fabricated price).",
+                "order": None,
+                "fill": None,
+            }
 
     if portfolio_greeks is None:
         try:
@@ -215,8 +235,14 @@ def execute_delta_hedge(
 
     client_order_id = f"hedge_spy_{uuid.uuid4().hex[:12]}"
     fill_price = float(spy_spot)
-    qty = float(shares_override) if shares_override is not None else float(order["qty"] if order else 0)
-    side = str(order["side"]).lower() if order else ("buy" if qty > 0 else "sell")
+    # shares_override may carry its side as a sign (negative = sell); derive
+    # `side` from that sign BEFORE taking the absolute value -- apply_fill's
+    # cash/position math assumes a non-negative qty, so passing a negative
+    # value through unabs'd inverts both the cash impact and the resulting
+    # position's sign.
+    raw_qty = float(shares_override) if shares_override is not None else float(order["qty"] if order else 0)
+    qty = abs(raw_qty)
+    side = str(order["side"]).lower() if order else ("buy" if raw_qty > 0 else "sell")
 
     if dry_run:
         return {
@@ -255,6 +281,13 @@ def execute_delta_hedge(
             "fill": None,
             "message": f"Delta hedge order rejected by store for {side.upper()} {qty} SPY.",
         }
+
+    # Dispatch delta hedge alert (non-blocking, deduped)
+    try:
+        from pilots.options_alerts import dispatch_delta_hedge_alert
+        dispatch_delta_hedge_alert(order or {"symbol": "SPY", "side": side, "shares_needed": raw_qty, "current_beta_weighted_delta": getattr(portfolio_greeks, "beta_weighted_delta_spy", 0.0) if hasattr(portfolio_greeks, "beta_weighted_delta_spy") else (portfolio_greeks.get("beta_weighted_delta_spy", 0.0) if isinstance(portfolio_greeks, dict) else 0.0)})
+    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+        logger.debug("Delta hedge execution alert dispatch failed: %s", exc)
 
     return {
         "ok": True,

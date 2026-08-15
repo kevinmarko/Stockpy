@@ -179,7 +179,18 @@ def _synthetic_spy_from_params(params: dict) -> pd.Series:
     rets = rng.normal(loc=params["loc"], scale=params["scale"], size=params["n"])
     prices = params["base_price"] * np.cumprod(1 + rets)
     idx = pd.bdate_range(end=params["index_end"], periods=params["n"])
-    return pd.Series(prices, index=idx)
+    return pd.Series(prices, index=idx, name="SPY_synthetic")
+
+
+@pytest.fixture(scope="module")
+def golden() -> dict:
+    with open(_GOLDEN_FIXTURE_PATH) as f:
+        return json.load(f)
+
+
+@pytest.fixture(scope="module")
+def golden_spy(golden: dict) -> pd.Series:
+    return _synthetic_spy_from_params(golden["_meta"]["synthetic_spy_params"])
 
 
 class TestSharedMtmHelperByteIdentical:
@@ -211,15 +222,6 @@ class TestSharedMtmHelperByteIdentical:
     strike solver deterministic across platforms" (a separate, much harder
     property no test here claims).
     """
-
-    @pytest.fixture(scope="class")
-    def golden(self) -> dict:
-        with open(_GOLDEN_FIXTURE_PATH) as f:
-            return json.load(f)
-
-    @pytest.fixture(scope="class")
-    def golden_spy(self, golden: dict) -> pd.Series:
-        return _synthetic_spy_from_params(golden["_meta"]["synthetic_spy_params"])
 
     @staticmethod
     def _patched_cycle_plan_replay(replay: List[dict]):

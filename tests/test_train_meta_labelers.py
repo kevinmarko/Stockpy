@@ -462,3 +462,51 @@ def test_bad_model_stays_non_deployable_gate_is_genuine(tmp_models_dir, tmp_regi
             f"dsr={dsr}, pbo={pbo} should give deployable={expected}, "
             f"got {row['deployable']}"
         )
+
+
+def test_update_registry_row_dual_persists_when_unoverridden(tmp_path, monkeypatch):
+    """When _REGISTRY_PATH is default and registry_path=None, _update_registry_row
+    passes path=None to update_model_metrics, dual-writing to LOCAL_DATA_ROOT."""
+    from settings import settings
+    import ml.registry_io as reg_io
+    import yaml
+
+    fake_local = tmp_path / "stockpy_local"
+    local_reg = fake_local / "ml_models" / "registry.yaml"
+    local_reg.parent.mkdir(parents=True)
+    local_reg.write_text("""
+models:
+  meta_labeler_timeseries_momentum:
+    role: meta_labeler
+    trained_date: '2026-08-01'
+    cpcv_dsr: 0.1
+    pbo: 0.8
+    deployable: false
+""", encoding="utf-8")
+
+    fake_repo_reg = tmp_path / "repo_ml" / "registry.yaml"
+    fake_repo_reg.parent.mkdir(parents=True)
+    fake_repo_reg.write_text(local_reg.read_text(encoding="utf-8"), encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+    monkeypatch.setattr(reg_io, "_DEFAULT_REGISTRY_PATH", fake_repo_reg)
+    monkeypatch.setattr(trainer, "_DEFAULT_REGISTRY_PATH", fake_repo_reg)
+    monkeypatch.setattr(trainer, "_REGISTRY_PATH", fake_repo_reg)
+
+    # Call _update_registry_row with default registry_path=None and default _REGISTRY_PATH
+    success = trainer._update_registry_row(
+        "timeseries_momentum",
+        trained_date="2026-08-15",
+        cpcv_dsr=0.99,
+        pbo=0.1,
+        n_train=500,
+        registry_path=None,
+    )
+    assert success is True
+
+    # Assert that LOCAL_DATA_ROOT's registry was updated!
+    data = yaml.safe_load(local_reg.read_text(encoding="utf-8"))
+    row = data["models"]["meta_labeler_timeseries_momentum"]
+    assert row["trained_date"] == "2026-08-15"
+    assert row["cpcv_dsr"] == 0.99
+    assert row["deployable"] is True

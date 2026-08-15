@@ -31,7 +31,14 @@ Key Capabilities:
 Design Invariants:
 * **AST-Safe (CONSTRAINT #1 & #3)** — Pure compute/read module. Never imports heavy engines
   (`processing_engine`, `technical_options_engine`, `strategy_engine`, `macro_engine`, etc.).
-* **Honesty (CONSTRAINT #4)** — Preserves None / 0.0 for uncomputable metrics, never fabricates fake prices.
+  The one exception is a lazy, function-scoped `data.market_data` import inside
+  `get_unusual_options_activity`'s live-fetch helpers (`_fetch_live_options_chain_map`,
+  `_resolve_live_spot_price`) — the same lightweight `CompositeOptionsProvider`/
+  `CompositeProvider` live-fetch pattern already used by `pilots/options_gex.py`,
+  `pilots/vol_mispricing.py`, and `pilots/har_volatility.py`; enforced by
+  `tests/test_unusual_options_flow.py::TestASTSafety`.
+* **Honesty (CONSTRAINT #4)** — Preserves None / 0.0 for uncomputable metrics, never fabricates fake
+  prices, and never falls back to a synthetic/simulated chain when the live provider has no data.
 * **Never Raises (CONSTRAINT #6)** — Degrades gracefully on empty/malformed option chains.
 """
 
@@ -59,6 +66,8 @@ DEFAULT_MIN_VOLUME = 500
 IV_BURST_THRESHOLD = 1.25
 TRADING_DAYS_PER_YEAR = 252.0
 _FILENAME = "unusual_options_flow.json"
+MAX_PERSISTED_UOA_RECORDS = 2000  # bounds output/unusual_options_flow.json growth (read-through cache)
+LIVE_SCAN_MAX_EXPIRATIONS = 6  # nearest expirations scanned per symbol on a live-fetch cache miss
 
 __all__ = [
     "UOARecord",
@@ -93,13 +102,15 @@ _HUMAN_SYM_RE = re.compile(
 @dataclass
 class UOARecord:
     """Standardized Unusual Options Activity container supporting both attribute and dict-like access."""
-    symbol: str
+    id: Optional[str] = None
+    symbol: str = ""
     contract_symbol: str = ""
     expiration: str = ""
     strike: float = 0.0
     option_type: str = "call"  # "call" or "put"
     trade_price: float = 0.0
     price: float = 0.0
+    spot_price: Optional[float] = None
     bid: float = 0.0
     ask: float = 0.0
     volume: int = 0
@@ -109,11 +120,13 @@ class UOARecord:
     underlying_notional: float = 0.0  # Underlying notional (spot * volume * 100)
     aggressiveness: str = "mid_block"  # "ask_sweep", "bid_sweep", "mid_block"
     trade_type: str = "block"  # "ask_sweep", "bid_sweep", "mid_block", "block"
+    aggressor_side: str = ""  # "ASK", "BID", "MID"
     sentiment: str = "NEUTRAL"  # "BULLISH", "BEARISH", "NEUTRAL"
     iv: Optional[float] = None
     implied_volatility: Optional[float] = None
     hv_30: Optional[float] = None
     historical_volatility: Optional[float] = None
+    historical_vol_30d: Optional[float] = None
     iv_burst_score: Optional[float] = None  # IV / HV_30
     iv_burst_detected: bool = False
     iv_expansion_flag: bool = False
@@ -128,6 +141,11 @@ class UOARecord:
             self.trade_price = self.price
         elif self.price == 0.0 and self.trade_price > 0.0:
             self.price = self.trade_price
+
+        # Sync id
+        if not self.id:
+            opt_type_upper = self.option_type.upper()
+            self.id = self.contract_symbol or f"{self.symbol}-{self.expiration}-{self.strike}-{opt_type_upper}-{self.timestamp}"
 
         # Sync trade_type and aggressiveness
         if self.aggressiveness == "mid_block" and self.trade_type == "block":
@@ -144,10 +162,21 @@ class UOARecord:
             self.implied_volatility = self.iv
 
         # Sync HV aliases
-        if self.hv_30 is None and self.historical_volatility is not None:
-            self.hv_30 = self.historical_volatility
-        elif self.historical_volatility is None and self.hv_30 is not None:
-            self.historical_volatility = self.hv_30
+        hvs = [x for x in (self.hv_30, self.historical_volatility, self.historical_vol_30d) if x is not None]
+        if hvs:
+            hv_val = hvs[0]
+            self.hv_30 = hv_val
+            self.historical_volatility = hv_val
+            self.historical_vol_30d = hv_val
+
+        # Sync aggressor_side
+        if not self.aggressor_side:
+            if self.aggressiveness == "ask_sweep":
+                self.aggressor_side = "ASK"
+            elif self.aggressiveness == "bid_sweep":
+                self.aggressor_side = "BID"
+            else:
+                self.aggressor_side = "MID"
 
         # Sync IV expansion flags
         if self.iv_burst_detected and not self.iv_expansion_flag:
@@ -771,6 +800,7 @@ def scan_unusual_options_activity(
                 option_type=opt_type,
                 trade_price=trade_price,
                 price=trade_price,
+                spot_price=resolved_spot,
                 bid=bid,
                 ask=ask,
                 volume=volume,
@@ -789,6 +819,7 @@ def scan_unusual_options_activity(
                 iv_burst_detected=iv_burst_detected,
                 iv_expansion_flag=iv_burst_detected,
                 description=desc,
+                timestamp=datetime.now(timezone.utc).isoformat(),
             )
             anomalies.append(record)
 
@@ -953,13 +984,84 @@ def get_symbol_flow_sentiment(
     return calculate_net_flow_sentiment(symbol, records)
 
 
+def _fetch_live_options_chain_map(
+    symbol: str,
+    max_expirations: int = LIVE_SCAN_MAX_EXPIRATIONS,
+) -> Optional[Dict[str, Any]]:
+    """Fetches a real multi-expiration options chain for `symbol` via `CompositeOptionsProvider`.
+
+    Mirrors the exact live-chain-fetch pattern already used by
+    `pilots/options_gex.py::get_options_gex_profile`, `pilots/vol_mispricing.py`, and
+    `pilots/har_volatility.py` (lazy `from data.market_data import get_options_provider`
+    inside the function body, never at module scope). Returns an `{expiration: chain}`
+    mapping (yfinance-style objects carrying `.calls`/`.puts` DataFrames) on success, or
+    `None` on any failure or empty result.
+
+    Deliberately never falls back to a synthetic/simulated chain (CONSTRAINT #4): this
+    module scans for REAL institutional order flow, so "the provider has nothing" must
+    degrade to "no data", never a plausible-looking fabricated substitute.
+    """
+    try:
+        from data.market_data import get_options_provider
+
+        provider = get_options_provider()
+        expirations = provider.fetch_options_chain(symbol)
+        if not expirations or not isinstance(expirations, (list, tuple)):
+            return None
+
+        chain_map: Dict[str, Any] = {}
+        for exp in list(expirations)[:max_expirations]:
+            chain = provider.fetch_options_chain(symbol, str(exp))
+            if chain:
+                chain_map[str(exp)] = chain
+        return chain_map or None
+    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+        logger.debug("_fetch_live_options_chain_map failed for %s: %s", symbol, exc)
+        return None
+
+
+def _resolve_live_spot_price(symbol: str) -> Optional[float]:
+    """Resolves the current spot price for `symbol` via the general market data provider.
+
+    Same pattern as `pilots/options_gex.py::get_options_gex_profile`'s spot resolution.
+    Returns `None` (never a fabricated price — CONSTRAINT #4) on any failure.
+    """
+    try:
+        from data.market_data import get_provider
+
+        market_provider = get_provider()
+        if market_provider is not None:
+            quote = market_provider.get_latest_quote(symbol)
+            price = getattr(quote, "price", None)
+            if price and float(price) > 0:
+                return float(price)
+    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+        logger.debug("_resolve_live_spot_price failed for %s: %s", symbol, exc)
+    return None
+
+
 def get_unusual_options_activity(
     symbols: Optional[List[str]] = None,
     min_vol_oi: Optional[float] = None,
     min_notional: Optional[float] = None,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    """Public accessor for unusual options activity flow."""
+    """Public accessor for unusual options activity flow — a read-through cache.
+
+    Read order:
+    1. Persisted UOA records (`load_uoa_records()`), filtered by `symbols`/thresholds.
+    2. On a miss, and only for a caller-supplied, bounded `symbols` list (never an
+       unfiltered universe-wide scan inside one synchronous read request), fetches a
+       REAL options chain per symbol via `CompositeOptionsProvider`
+       (`data/market_data.py` — see `_fetch_live_options_chain_map`), scans it for
+       genuine anomalies, and persists any findings via `save_uoa_records()` so this
+       call and future reads (including `signals/options_flow_sentiment.py`'s
+       `pre_compute`) see real data instead of a structurally-empty result.
+
+    Honesty (CONSTRAINT #4): never fabricates a record. A request with no `symbols`
+    and nothing persisted yet, or a provider miss for every requested symbol, degrades
+    to `[]` rather than a synthetic/simulated scan.
+    """
     persisted = load_uoa_records()
     if persisted:
         records = [r.to_dict() if hasattr(r, "to_dict") else asdict(r) for r in persisted]
@@ -973,23 +1075,53 @@ def get_unusual_options_activity(
         if records:
             return records[:limit]
 
-    # Generate or scan dynamically
-    uoa = scan_unusual_options_activity(
-        chain_data=[],
-        min_vol_oi_ratio=min_vol_oi if min_vol_oi is not None else DEFAULT_MIN_VOL_OI_RATIO,
-        min_notional=min_notional if min_notional is not None else DEFAULT_MIN_NOTIONAL,
-    )
-    records = []
-    for item in uoa:
-        if hasattr(item, "to_dict"):
-            records.append(item.to_dict())
-        elif hasattr(item, "__dataclass_fields__"):
-            records.append(asdict(item))
-        elif isinstance(item, dict):
-            records.append(item)
-    if symbols:
-        clean_syms = {s.upper().strip() for s in symbols}
-        records = [r for r in records if str(r.get("symbol", "")).upper() in clean_syms]
+    # Nothing usable persisted. A live scan only makes sense for a bounded, caller-named
+    # symbol list — scanning "the whole market" synchronously inside one read request
+    # isn't viable, so an unfiltered request with nothing persisted yet honestly
+    # returns [] rather than a meaningless scan of an empty chain.
+    if not symbols:
+        return []
+
+    new_records: List[UOARecord] = []
+    for sym in sorted({s.upper().strip() for s in symbols if s and s.strip()}):
+        chain_map = _fetch_live_options_chain_map(sym)
+        if not chain_map:
+            continue
+        spot_price = _resolve_live_spot_price(sym)
+        scanned = scan_unusual_options_activity(chain_data=chain_map, spot_price=spot_price)
+        new_records.extend(scanned)
+
+    if not new_records:
+        return []
+
+    # Persist newly-discovered records alongside whatever was already on disk so later
+    # reads (and OptionsFlowSentimentSignal.pre_compute) build on real accumulated flow
+    # instead of each request clobbering the last one's findings. Trimmed to the most
+    # recent MAX_PERSISTED_UOA_RECORDS (by timestamp) so a read-triggered write can't
+    # grow output/unusual_options_flow.json without bound.
+    try:
+        merged = list(persisted) + new_records
+        if len(merged) > MAX_PERSISTED_UOA_RECORDS:
+            merged.sort(key=lambda r: r.timestamp or "", reverse=True)
+            merged = merged[:MAX_PERSISTED_UOA_RECORDS]
+        save_uoa_records(merged)
+    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+        logger.debug("get_unusual_options_activity: failed to persist new records: %s", exc)
+
+    # Dispatch whale sweep alerts for qualifying records (non-blocking, condition-deduped)
+    for rec in new_records:
+        try:
+            from pilots.options_alerts import dispatch_uoa_whale_alert
+            dispatch_uoa_whale_alert(rec)
+        except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+            logger.debug("UOA whale alert dispatch failed for %s: %s", getattr(rec, "contract_symbol", ""), exc)
+
+    records = [r.to_dict() for r in new_records]
+    if min_vol_oi is not None:
+        records = [r for r in records if float(r.get("vol_oi_ratio", 0)) >= min_vol_oi]
+    if min_notional is not None:
+        records = [r for r in records if float(r.get("notional", 0)) >= min_notional]
+    records.sort(key=lambda r: r.get("notional", 0.0), reverse=True)
     return records[:limit]
 
 

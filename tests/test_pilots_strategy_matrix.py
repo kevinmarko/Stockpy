@@ -501,7 +501,14 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
     if module_name == "prompt_registry":
         allowed = allowed | {"prompt_registry"}
     if module_name == "unusual_options_flow":
-        allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "pandas"}
+        # pilots.unusual_options_flow's get_unusual_options_activity() now does
+        # a real read-through cache: persisted records first, and on a
+        # bounded-symbol miss a lazy, function-scoped `from data.market_data
+        # import get_options_provider/get_provider` (see the module's own
+        # docstring) to fetch a real chain instead of always scanning a
+        # hardcoded empty chain_data=[] -- same lazy-import pattern already
+        # allowed for `options_gex`/`copula_stat_arb` below.
+        allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "pandas", "data", "pilots"}
     if module_name == "options_gex":
         allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "scipy", "pandas", "data"}
     if module_name == "lob_simulator":

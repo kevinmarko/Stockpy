@@ -136,18 +136,22 @@ describe("SmartOrderRouterView", () => {
       />
     );
 
+    await screen.findByText("$1.30");
+
     const routeBtn = await screen.findByRole("button", {
       name: /🚀 Route & Execute via LEG PASSIVE FIRST/i,
     });
     fireEvent.click(routeBtn);
 
-    expect(handleRouteMock).toHaveBeenCalledWith(
-      "LEG_PASSIVE_FIRST",
-      expect.objectContaining({
-        recommended_route: "LEG_PASSIVE_FIRST",
-        expected_savings: 27.0,
-      })
-    );
+    await waitFor(() => {
+      expect(handleRouteMock).toHaveBeenCalledWith(
+        "LEG_PASSIVE_FIRST",
+        expect.objectContaining({
+          recommended_route: "LEG_PASSIVE_FIRST",
+          expected_savings: 27.0,
+        })
+      );
+    });
 
     expect(
       await screen.findByText(/Order routed via Synthetic Legging \(Passive First\)/i)

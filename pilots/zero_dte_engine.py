@@ -39,16 +39,22 @@ import math
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 import uuid
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
 
 from data.paper_account_store import PaperAccountStore, PaperOrder, PaperPosition
 from settings import settings
 
 
 logger = logging.getLogger(__name__)
+
+# US equity/options market timezone. The 0DTE hard-exit-time rule (e.g. "15:45") is always
+# quoted in ET (see module docstring / OPTIONS_0DTE_HARD_EXIT_TIME) -- comparing it against a
+# naive `datetime.now(timezone.utc).time()` would compare a UTC wall-clock time against an ET
+# threshold, silently firing the hard stop hours early (EDT, UTC-4) or late (EST, UTC-5).
+_ET = ZoneInfo("America/New_York")
 
 __all__ = [
     "compute_opening_range",
@@ -525,33 +531,20 @@ def parse_chain_data(
     chain_data: Any,
     underlying: str,
     target_type: str = "CALL",
-    spot_price: float = 100.0,
+    spot_price: Optional[float] = None,
     min_delta: float = 0.40,
     max_delta: float = 0.55,
 ) -> Optional[Dict[str, Any]]:
     """
     Finds the optimal 0DTE option contract matching delta range [0.40, 0.55] from chain data.
+
+    Returns None (never a fabricated synthetic contract -- CONSTRAINT #4) when no real chain
+    data is supplied, or no contract of the target type can be found in it. A caller must treat
+    a missing chain as "no tradable contract", never as license to invent a bid/ask/delta and
+    route it into a live BUY_CALL/BUY_PUT signal.
     """
     if not chain_data:
-        # Generate synthetic contract around spot
-        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        strike = round(spot_price, 0)
-        sym = f"{underlying} {today_str} ${strike:.2f} {target_type.upper()}"
-        target_delta = 0.48 if target_type.upper() == "CALL" else -0.48
-        return {
-            "symbol": underlying,
-            "contract_symbol": sym,
-            "underlying": underlying,
-            "strike": strike,
-            "option_type": target_type.upper(),
-            "expiration": today_str,
-            "dte": 0.0,
-            "delta": target_delta,
-            "bid": 1.20,
-            "ask": 1.25,
-            "mid_price": 1.225,
-            "estimated_cost": 122.50,
-        }
+        return None
 
     target_type = target_type.upper()
     candidates = []
@@ -577,6 +570,17 @@ def parse_chain_data(
 
     if candidates:
         best = candidates[0]
+        raw_strike = best.get("strike")
+        if raw_strike is None:
+            raw_strike = spot_price
+        if raw_strike is None:
+            # No real strike on the matched contract and no spot_price to fall back to --
+            # refuse rather than report a strike of 0.0/None as if it were real (CONSTRAINT #4).
+            logger.debug(
+                "parse_chain_data: matched contract for %s has no strike and no spot_price "
+                "fallback; skipping.", underlying,
+            )
+            return None
         bid = float(best.get("bid", 0.0))
         ask = float(best.get("ask", 0.0))
         mid = (bid + ask) / 2.0 if (bid + ask) > 0 else float(best.get("lastPrice", best.get("price", 1.0)))
@@ -584,7 +588,7 @@ def parse_chain_data(
             "symbol": best.get("symbol", underlying),
             "contract_symbol": best.get("contract_symbol", best.get("symbol", f"{underlying}-0DTE")),
             "underlying": underlying,
-            "strike": float(best.get("strike", spot_price)),
+            "strike": float(raw_strike),
             "option_type": target_type,
             "expiration": best.get("expiration", datetime.now(timezone.utc).strftime("%Y-%m-%d")),
             "dte": float(best.get("dte", 0.0)),
@@ -632,8 +636,24 @@ def scan_0dte_breakouts(
             pass
 
     if spot <= 0:
-        fallback_map = {"SPY": 560.0, "QQQ": 490.0, "NVDA": 125.0, "TSLA": 210.0, "AAPL": 225.0, "MSFT": 420.0}
-        spot = fallback_map.get(sym, 100.0)
+        # No real quote resolvable for this symbol from any source -- refuse to fabricate one
+        # (CONSTRAINT #4; matches `pilots/options_hedging.py::execute_delta_hedge`'s "refuse
+        # rather than fabricate") and generate a live BUY_CALL/BUY_PUT signal off an invented
+        # price. Degrade honestly to NO_SIGNAL instead.
+        return ZeroDteBreakoutSignal(
+            symbol=sym,
+            signal_type="NO_SIGNAL",
+            action="NO_ACTION",
+            current_price=0.0,
+            orb_high=0.0,
+            orb_low=0.0,
+            confidence=0.0,
+            selected_contract=None,
+            squeeze_result=SqueezeResult(status="NO_DATA"),
+            opening_range=OpeningRange(valid=False, is_valid=False),
+            volume_surge=False,
+            reason=f"No live quote available for {sym}; refusing to generate a signal from a fabricated spot price.",
+        )
 
     # Opening range and squeeze
     if intraday_bars is not None:
@@ -651,28 +671,70 @@ def scan_0dte_breakouts(
         else:
             vol_surge = True
     else:
-        orb = OpeningRange(high=spot * 1.003, low=spot * 0.997, valid=True)
-        squeeze = SqueezeResult(squeeze_fired=True, momentum=0.45)
-        vol_surge = True
+        # No intraday bars supplied at all -- there is no real opening range or squeeze data
+        # to evaluate. Degrade honestly (CONSTRAINT #4) instead of fabricating a synthetic
+        # range derived from spot alone (spot*1.003/spot*0.997 -- which, since it always
+        # brackets spot by construction, could never actually register a breakout, but still
+        # reported fabricated squeeze_fired/momentum metadata as if it were real).
+        orb = OpeningRange(valid=False, is_valid=False)
+        squeeze = SqueezeResult(status="NO_DATA")
+        vol_surge = False
 
     orb_high = orb.high
     orb_low = orb.low
+
+    if not orb.valid:
+        return ZeroDteBreakoutSignal(
+            symbol=sym,
+            signal_type="NO_SIGNAL",
+            action="NO_ACTION",
+            current_price=round(spot, 4),
+            orb_high=0.0,
+            orb_low=0.0,
+            confidence=0.0,
+            selected_contract=None,
+            squeeze_result=squeeze,
+            opening_range=orb,
+            volume_surge=False,
+            reason="No intraday opening-range bar data available; cannot evaluate a breakout.",
+        )
 
     bullish = spot > orb_high and orb.valid
     bearish = spot < orb_low and orb.valid
 
     if bullish:
         sig_type = "BULLISH_BREAKOUT"
-        action = "BUY_CALL"
         selected = parse_chain_data(chain_data, underlying=sym, target_type="CALL", spot_price=spot)
         conf = min(0.95, 0.65 + (0.15 if vol_surge else 0.0) + (0.10 if squeeze.squeeze_fired else 0.0))
-        reason = f"Bullish breakout above 15m ORB High ${orb_high:.2f} (Current: ${spot:.2f})"
+        if selected is None:
+            # A real breakout was detected, but no real options chain data was available to
+            # select a contract -- refuse to fabricate one (CONSTRAINT #4) and report
+            # non-actionable rather than silently inventing a bid/ask/delta to trade against.
+            action = "NO_ACTION"
+            conf = 0.0
+            reason = (
+                f"Bullish breakout above 15m ORB High ${orb_high:.2f} (Current: ${spot:.2f}) but "
+                "no real options chain data was available to select a contract; refusing to "
+                "fabricate one."
+            )
+        else:
+            action = "BUY_CALL"
+            reason = f"Bullish breakout above 15m ORB High ${orb_high:.2f} (Current: ${spot:.2f})"
     elif bearish:
         sig_type = "BEARISH_BREAKDOWN"
-        action = "BUY_PUT"
         selected = parse_chain_data(chain_data, underlying=sym, target_type="PUT", spot_price=spot)
         conf = min(0.95, 0.65 + (0.15 if vol_surge else 0.0) + (0.10 if squeeze.squeeze_fired else 0.0))
-        reason = f"Bearish breakdown below 15m ORB Low ${orb_low:.2f} (Current: ${spot:.2f})"
+        if selected is None:
+            action = "NO_ACTION"
+            conf = 0.0
+            reason = (
+                f"Bearish breakdown below 15m ORB Low ${orb_low:.2f} (Current: ${spot:.2f}) but "
+                "no real options chain data was available to select a contract; refusing to "
+                "fabricate one."
+            )
+        else:
+            action = "BUY_PUT"
+            reason = f"Bearish breakdown below 15m ORB Low ${orb_low:.2f} (Current: ${spot:.2f})"
     else:
         sig_type = "NO_SIGNAL"
         action = "NO_ACTION"
@@ -702,8 +764,38 @@ def get_0dte_signals(
 ) -> Dict[str, Any]:
     """
     Retrieves current 0DTE momentum signals and opening range status for the symbol.
+
+    Gated by `settings.OPTIONS_0DTE_ENABLED` (default False -- this is the master switch for
+    "automated 0DTE options momentum breakout trading and lifecycle management" per its own
+    settings.py description). When disabled, returns an honest `signal="DISABLED"` /
+    `is_actionable=False` response instead of scanning and surfacing a live breakout signal.
     """
     sym = (symbol or "SPY").upper().strip()
+
+    if not bool(getattr(settings, "OPTIONS_0DTE_ENABLED", False)):
+        return {
+            "symbol": sym,
+            "spot": 0.0,
+            "signal": "DISABLED",
+            "direction": "NEUTRAL",
+            "action": "NO_ACTION",
+            "is_actionable": False,
+            "reason": "0DTE momentum breakout trading is disabled (settings.OPTIONS_0DTE_ENABLED=False).",
+            "opening_high": 0.0,
+            "opening_low": 0.0,
+            "opening_range": OpeningRange(valid=False, is_valid=False).to_dict(),
+            "squeeze": SqueezeResult(status="NO_DATA").to_dict(),
+            "candidate_contract": None,
+            "selected_contract": None,
+            "confidence": 0.0,
+            "risk_parameters": {
+                "profit_target_pct": getattr(settings, "OPTIONS_0DTE_PROFIT_TARGET_PCT", 0.75),
+                "stop_loss_pct": getattr(settings, "OPTIONS_0DTE_STOP_LOSS_PCT", 0.30),
+                "hard_exit_time": getattr(settings, "OPTIONS_0DTE_HARD_EXIT_TIME", "15:45"),
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
     bars = None
     try:
         from data.historical_store import HistoricalStore
@@ -742,20 +834,30 @@ def get_0dte_signals(
 
 
 
+def _to_et_time(dt: datetime) -> time:
+    """Returns `dt`'s wall-clock time in US/Eastern. A tz-aware `dt` is converted; a naive `dt`
+    is assumed to already express ET wall-clock (this module's/callers' existing convention --
+    e.g. `current_time_str="15:45"` in tests -- for an explicit, caller-supplied value)."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(_ET).time()
+    return dt.time()
+
+
 def _parse_time_value(time_input: Optional[Union[str, datetime, time]]) -> Optional[time]:
-    """Parses various time representations into standard datetime.time."""
+    """Parses various time representations into standard datetime.time (US/Eastern wall-clock
+    -- see `_to_et_time`)."""
     if time_input is None:
         return None
     if isinstance(time_input, time):
         return time_input
     if isinstance(time_input, datetime):
-        return time_input.time()
+        return _to_et_time(time_input)
     if isinstance(time_input, str):
         t_str = time_input.strip()
         # Handle ISO strings like "2026-08-14T11:00:00"
         if "T" in t_str:
             try:
-                return datetime.fromisoformat(t_str).time()
+                return _to_et_time(datetime.fromisoformat(t_str))
             except Exception:
                 t_str = t_str.split("T")[1]
         try:
@@ -821,8 +923,9 @@ def evaluate_0dte_exits(
     effective_time_input = current_time if current_time is not None else (current_time_str if current_time_str is not None else current_time_et)
     parsed_current_time = _parse_time_value(effective_time_input)
     if parsed_current_time is None:
-        now = datetime.now(timezone.utc)
-        parsed_current_time = now.time()
+        # No explicit current_time supplied -- resolve "now" in US/Eastern (never bare UTC;
+        # the hard-exit-time threshold below, e.g. "15:45", is always quoted in ET).
+        parsed_current_time = datetime.now(_ET).time()
 
     # Parse hard exit time
     parsed_hard_time = _parse_time_value(raw_hard_time) or time(15, 45)

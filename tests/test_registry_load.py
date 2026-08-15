@@ -172,3 +172,184 @@ def test_meta_labeler_registry_register_has():
 
     assert registry.has("ts_momentum")
     assert not registry.has("cross_sectional_momentum")
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Registry path resolution & LOCAL_DATA_ROOT priorities
+# ---------------------------------------------------------------------------
+
+def test_resolve_registry_path_priorities(tmp_path, monkeypatch):
+    from settings import settings
+    from ml.registry_io import resolve_registry_path, _DEFAULT_REGISTRY_PATH
+
+    # Priority 1: Explicit path
+    custom = tmp_path / "custom.yaml"
+    assert resolve_registry_path(custom) == custom
+
+    # Priority 2: LOCAL_DATA_ROOT / ml_models / registry.yaml if it exists
+    fake_local = tmp_path / "stockpy_local"
+    local_reg = fake_local / "ml_models" / "registry.yaml"
+    local_reg.parent.mkdir(parents=True)
+    local_reg.write_text("models: {}\n", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+    assert resolve_registry_path() == local_reg
+
+    # Priority 3: Fallback to _DEFAULT_REGISTRY_PATH if local doesn't exist
+    local_reg.unlink()
+    assert resolve_registry_path() == _DEFAULT_REGISTRY_PATH
+
+
+def test_model_registry_rows_self_healing(tmp_path, monkeypatch):
+    """Self-healing discovery: if a newer dated .pkl exists in LOCAL_DATA_ROOT/ml_models,
+    model_registry_rows surfaces the real artifact date and calculates freshness."""
+    from settings import settings
+    from pilots.models import model_registry_rows
+
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
+
+    # Write a registry with an older date
+    reg_file = models_dir / "registry.yaml"
+    reg_file.write_text("""
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: '2026-08-01'
+    cpcv_dsr: 0.99
+    pbo: 0.2
+    n_train: 400
+    deployable: true
+    notes: Test note
+    artifact_file: lgbm_20260801.pkl
+""", encoding="utf-8")
+
+    # Create a newer physical artifact on disk with matching artifact_file
+    (models_dir / "lgbm_20260814.pkl").write_text("binary", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    rows = model_registry_rows()
+    row = next(r for r in rows if r["name"] == "lgbm_ranker")
+    # Self-healed to the newer physical artifact date
+    assert row["trained_date"] == "2026-08-14"
+
+
+def test_model_registry_rows_unvalidated_artifact_resets_metrics(tmp_path, monkeypatch):
+    """If a new .pkl exists on disk whose filename does not match the registry's validated
+    artifact_file, the row surfaces the new date but resets metrics to None (CONSTRAINT #4)."""
+    from settings import settings
+    from pilots.models import model_registry_rows
+
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
+
+    reg_file = models_dir / "registry.yaml"
+    reg_file.write_text("""
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: '2026-08-01'
+    cpcv_dsr: 0.99
+    pbo: 0.2
+    n_train: 400
+    deployable: true
+    notes: Test note
+    artifact_file: lgbm_20260801.pkl
+""", encoding="utf-8")
+
+    # New artifact on disk with different filename/date
+    (models_dir / "lgbm_20260815.pkl").write_text("binary", encoding="utf-8")
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    rows = model_registry_rows()
+    row = next(r for r in rows if r["name"] == "lgbm_ranker")
+    assert row["trained_date"] == "2026-08-15"
+    assert row["cpcv_dsr"] is None
+    assert row["pbo"] is None
+    assert row["deployable"] is False
+
+
+def test_load_registry_smart_merge_git_newer(tmp_path, monkeypatch):
+    """When git-tracked registry has a newer model than LOCAL_DATA_ROOT, git entry wins."""
+    from settings import settings
+    from ml.registry_io import load_registry
+
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
+
+    # Local has an older model
+    local_reg = models_dir / "registry.yaml"
+    local_reg.write_text("""
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: '2026-08-01'
+    cpcv_dsr: 0.90
+    pbo: 0.4
+    n_train: 300
+    deployable: false
+""", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    # load_registry merges with repo _DEFAULT_REGISTRY_PATH (which has 2026-08-14)
+    data = load_registry()
+    assert "models" in data
+    assert data["models"]["lgbm_ranker"]["trained_date"] == "2026-08-14"
+    assert data["models"]["lgbm_ranker"]["deployable"] is True
+
+
+def test_load_registry_smart_merge_local_newer(tmp_path, monkeypatch):
+    """When LOCAL_DATA_ROOT has a newer retrained model than git, local entry wins."""
+    from settings import settings
+    from ml.registry_io import load_registry
+
+    fake_local = tmp_path / "stockpy_local"
+    models_dir = fake_local / "ml_models"
+    models_dir.mkdir(parents=True)
+
+    # Local has a freshly retrained model with newer date (2026-09-01 > 2026-08-14)
+    local_reg = models_dir / "registry.yaml"
+    local_reg.write_text("""
+models:
+  lgbm_ranker:
+    role: cross_sectional_ranker
+    path: ml/models/lgbm_latest.pkl
+    trained_date: '2026-09-01'
+    cpcv_dsr: 0.999
+    pbo: 0.1
+    n_train: 800
+    deployable: true
+""", encoding="utf-8")
+
+    monkeypatch.setattr(settings, "LOCAL_DATA_ROOT", fake_local)
+
+    data = load_registry()
+    assert "models" in data
+    assert data["models"]["lgbm_ranker"]["trained_date"] == "2026-09-01"
+    assert data["models"]["lgbm_ranker"]["cpcv_dsr"] == 0.999
+
+
+def test_update_model_metrics_explicit_path_error_propagates(tmp_path, monkeypatch):
+    """When an explicit unwriteable path is passed, update_model_metrics propagates the write error."""
+    import ml.registry_io as reg_io
+
+    valid_reg = tmp_path / "reg.yaml"
+    valid_reg.write_text("models:\n  lgbm_ranker:\n    role: test\n    trained_date: '2026-08-01'\n", encoding="utf-8")
+
+    # Mock _dump_registry to simulate a filesystem write failure
+    def _fail_dump(*args, **kwargs):
+        raise PermissionError("Simulated read-only filesystem")
+
+    monkeypatch.setattr(reg_io, "_dump_registry", _fail_dump)
+
+    with pytest.raises(PermissionError):
+        reg_io.update_model_metrics("lgbm_ranker", path=valid_reg, trained_date="2026-08-15")
+
