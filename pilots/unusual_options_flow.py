@@ -1087,6 +1087,14 @@ def get_unusual_options_activity(
     except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
         logger.debug("get_unusual_options_activity: failed to persist new records: %s", exc)
 
+    # Dispatch whale sweep alerts for qualifying records (non-blocking, condition-deduped)
+    for rec in new_records:
+        try:
+            from pilots.options_alerts import dispatch_uoa_whale_alert
+            dispatch_uoa_whale_alert(rec)
+        except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+            logger.debug("UOA whale alert dispatch failed for %s: %s", getattr(rec, "contract_symbol", ""), exc)
+
     records = [r.to_dict() for r in new_records]
     if min_vol_oi is not None:
         records = [r for r in records if float(r.get("vol_oi_ratio", 0)) >= min_vol_oi]

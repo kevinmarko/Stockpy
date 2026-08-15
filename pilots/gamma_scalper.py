@@ -79,86 +79,27 @@ def _bs_price_and_greeks(
     r: float = 0.045,
 ) -> Dict[str, float]:
     """
-    Computes per-share Black-Scholes price and Greeks with degenerate guards.
+    Computes per-share Black-Scholes price and Greeks with degenerate guards (delegates to canonical pilots.options_risk).
     Returns: {price, delta, gamma, theta_annual, theta_daily, theta, vega_1pct}.
     """
-    opt_type = str(option_type).upper().strip()
+    from pilots.options_risk import calculate_black_scholes_greeks
 
-    if spot <= 0 or strike <= 0:
-        return {
-            "price": 0.0,
-            "delta": 0.0,
-            "gamma": 0.0,
-            "theta_annual": 0.0,
-            "theta_daily": 0.0,
-            "theta": 0.0,
-            "vega_1pct": 0.0,
-        }
-
-    # 0DTE / Expiration fallback: intrinsic value, delta in {0, 1, -1}, 0 Greeks
-    if t_years <= _DEGENERATE_THRESHOLD:
-        if opt_type == "CALL":
-            price = max(0.0, spot - strike)
-            delta = 1.0 if spot > strike else 0.0
-        else:
-            price = max(0.0, strike - spot)
-            delta = -1.0 if spot < strike else 0.0
-        return {
-            "price": float(price),
-            "delta": float(delta),
-            "gamma": 0.0,
-            "theta_annual": 0.0,
-            "theta_daily": 0.0,
-            "theta": 0.0,
-            "vega_1pct": 0.0,
-        }
-
-    # Degenerate volatility guard
-    if sigma <= _DEGENERATE_THRESHOLD or np.isnan(sigma):
-        price = max(0.0, spot - strike) if opt_type == "CALL" else max(0.0, strike - spot)
-        delta = 1.0 if (opt_type == "CALL" and spot > strike) else (-1.0 if (opt_type == "PUT" and spot < strike) else 0.0)
-        return {
-            "price": float(price),
-            "delta": float(delta),
-            "gamma": 0.0,
-            "theta_annual": 0.0,
-            "theta_daily": 0.0,
-            "theta": 0.0,
-            "vega_1pct": 0.0,
-        }
-
-    vol_sqrt_t = sigma * math.sqrt(t_years)
-    if vol_sqrt_t < _DEGENERATE_THRESHOLD:
-        vol_sqrt_t = _DEGENERATE_THRESHOLD
-
-    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / vol_sqrt_t
-    d2 = d1 - vol_sqrt_t
-
-    pdf_d1 = norm.pdf(d1)
-    denom_gamma = spot * vol_sqrt_t
-    gamma = float(pdf_d1 / denom_gamma) if denom_gamma >= _DEGENERATE_THRESHOLD else 0.0
-
-    if opt_type == "CALL":
-        price = spot * norm.cdf(d1) - strike * math.exp(-r * t_years) * norm.cdf(d2)
-        delta = float(norm.cdf(d1))
-        theta_annual = -(spot * pdf_d1 * sigma) / (2.0 * math.sqrt(t_years)) - r * strike * math.exp(-r * t_years) * norm.cdf(d2)
-    else:
-        price = strike * math.exp(-r * t_years) * norm.cdf(-d2) - spot * norm.cdf(-d1)
-        delta = float(norm.cdf(d1) - 1.0)
-        theta_annual = -(spot * pdf_d1 * sigma) / (2.0 * math.sqrt(t_years)) + r * strike * math.exp(-r * t_years) * norm.cdf(-d2)
-
-    theta_daily = float(theta_annual / TRADING_DAYS_PER_YEAR)
-    raw_vega = float(spot * pdf_d1 * math.sqrt(t_years))
-    vega_1pct = raw_vega / 100.0
-
+    res = calculate_black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        t_years=t_years,
+        sigma=sigma,
+        option_type=option_type,
+        r=r,
+    )
     return {
-        "price": float(max(0.0, price)),
-        "delta": float(delta),
-        "gamma": float(max(0.0, gamma)),
-        "theta_annual": float(theta_annual),
-        "theta_daily": float(theta_daily),
-        "theta": float(theta_daily),
-        "vega_1pct": float(vega_1pct),
+        "price": float(res["price"]),
+        "delta": float(res["delta"]),
+        "gamma": float(res["gamma"]),
+        "theta_annual": float(res["theta_annual"]),
+        "theta_daily": float(res["theta_daily"]),
+        "theta": float(res["theta_daily"]),
+        "vega_1pct": float(res["vega_1pct"]),
     }
 
 

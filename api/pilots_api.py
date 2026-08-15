@@ -6050,7 +6050,7 @@ def get_options_flow_unusual(
         min_notional=min_notional,
         limit=limit,
     )
-    return {"count": len(records), "records": records}
+    return {"count": len(records), "records": records, "trades": records}
 
 
 @app.get("/pilots/options/flow/sentiment", dependencies=[Depends(require_read_token)])

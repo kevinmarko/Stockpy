@@ -136,7 +136,7 @@ def get_delta_hedge_preview(
             "spy_spot": spy_spot,
         }
     else:
-        return {
+        preview = {
             "symbol": "SPY",
             "net_dollar_delta": round(net_dollar_delta, 2),
             "beta_weighted_delta_spy": round(beta_delta, 2),
@@ -148,6 +148,12 @@ def get_delta_hedge_preview(
             "reason": f"Delta imbalance ({beta_delta:+.2f} SPY-equiv) exceeds tolerance band (±{tolerance_band_shares:.1f} shares)",
             "spy_spot": spy_spot,
         }
+        try:
+            from pilots.options_alerts import dispatch_delta_hedge_alert
+            dispatch_delta_hedge_alert(preview)
+        except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+            logger.debug("Delta hedge preview alert dispatch failed: %s", exc)
+        return preview
 
 
 def execute_delta_hedge(
@@ -275,6 +281,13 @@ def execute_delta_hedge(
             "fill": None,
             "message": f"Delta hedge order rejected by store for {side.upper()} {qty} SPY.",
         }
+
+    # Dispatch delta hedge alert (non-blocking, deduped)
+    try:
+        from pilots.options_alerts import dispatch_delta_hedge_alert
+        dispatch_delta_hedge_alert(order or {"symbol": "SPY", "side": side, "shares_needed": raw_qty, "current_beta_weighted_delta": getattr(portfolio_greeks, "beta_weighted_delta_spy", 0.0) if hasattr(portfolio_greeks, "beta_weighted_delta_spy") else (portfolio_greeks.get("beta_weighted_delta_spy", 0.0) if isinstance(portfolio_greeks, dict) else 0.0)})
+    except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+        logger.debug("Delta hedge execution alert dispatch failed: %s", exc)
 
     return {
         "ok": True,

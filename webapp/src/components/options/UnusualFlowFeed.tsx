@@ -44,7 +44,50 @@ export const UnusualFlowFeed: React.FC<UnusualFlowFeedProps> = ({
     [selectedTickerForSentiment]
   );
 
-  const trades: UnusualOptionTrade[] = flowQuery.data?.trades || [];
+  const rawList = flowQuery.data?.trades || flowQuery.data?.records || [];
+  const trades: UnusualOptionTrade[] = rawList.map((t, idx) => {
+    const rawTradeType = String(t.trade_type || t.aggressiveness || "BLOCK").toUpperCase();
+    const tradeType = rawTradeType.includes("SWEEP")
+      ? "SWEEP"
+      : rawTradeType.includes("SPLIT")
+      ? "SPLIT"
+      : "BLOCK";
+    const sentimentUpper = String(t.sentiment || "NEUTRAL").toUpperCase() as
+      | "BULLISH"
+      | "BEARISH"
+      | "NEUTRAL";
+    const rawOpt = String(t.option_type || "CALL").toUpperCase();
+    const optTypeUpper = rawOpt.includes("P") ? "PUT" : "CALL";
+    const aggSide = (
+      t.aggressor_side ||
+      (String(t.aggressiveness || "").toLowerCase().includes("ask")
+        ? "ASK"
+        : String(t.aggressiveness || "").toLowerCase().includes("bid")
+        ? "BID"
+        : "MID")
+    ).toUpperCase() as "ASK" | "BID" | "MID";
+
+    return {
+      ...t,
+      id:
+        t.id ||
+        t.contract_symbol ||
+        `${t.symbol}-${t.expiration}-${t.strike}-${optTypeUpper}-${t.timestamp || idx}`,
+      option_type: optTypeUpper,
+      trade_type: tradeType,
+      sentiment: sentimentUpper,
+      aggressor_side: aggSide,
+      strike: Number(t.strike || 0),
+      volume: Number(t.volume || 0),
+      open_interest: Number(t.open_interest || 0),
+      vol_oi_ratio: Number(t.vol_oi_ratio || 0),
+      price: Number(t.price != null ? t.price : t.trade_price != null ? t.trade_price : 0),
+      notional: Number(
+        t.notional != null ? t.notional : t.underlying_notional != null ? t.underlying_notional : 0
+      ),
+      iv: t.iv != null ? t.iv : t.implied_volatility,
+    };
+  });
   const sentiment: FlowSentimentData | undefined = sentimentQuery.data?.sentiment;
 
   // Filter client-side for sentiment and trade type
@@ -54,7 +97,7 @@ export const UnusualFlowFeed: React.FC<UnusualFlowFeedProps> = ({
     return true;
   });
 
-  const totalFilteredNotional = filteredTrades.reduce((acc, t) => acc + t.notional, 0);
+  const totalFilteredNotional = filteredTrades.reduce((acc, t) => acc + (t.notional || 0), 0);
   const bullishTradesCount = filteredTrades.filter((t) => t.sentiment === "BULLISH").length;
   const bearishTradesCount = filteredTrades.filter((t) => t.sentiment === "BEARISH").length;
 
@@ -530,7 +573,7 @@ export const UnusualFlowFeed: React.FC<UnusualFlowFeedProps> = ({
                           ${t.strike.toFixed(1)} {t.option_type}
                         </span>
                         <span style={{ fontSize: 12, fontWeight: 500 }}>
-                          {t.expiration} ({t.dte}d)
+                          {t.expiration}{t.dte != null ? ` (${t.dte}d)` : ""}
                         </span>
                       </div>
                       {t.iv != null && (

@@ -740,6 +740,7 @@ class TestASTSafety:
             "pandas",
             "settings",
             "data",
+            "pilots",
         }
         unrecognized = imported_roots - allowed_roots
         assert not unrecognized, f"Unrecognized import roots in unusual_options_flow.py: {unrecognized}"
@@ -747,6 +748,11 @@ class TestASTSafety:
         data_modules = {m for m in imported_modules if m == "data" or m.startswith("data.")}
         assert data_modules <= {"data.market_data"}, (
             f"pilots/unusual_options_flow.py may only import data.market_data, found: {data_modules}"
+        )
+
+        pilots_modules = {m for m in imported_modules if m == "pilots" or m.startswith("pilots.")}
+        assert pilots_modules <= {"pilots.options_alerts"}, (
+            f"pilots/unusual_options_flow.py may only import pilots.options_alerts, found: {pilots_modules}"
         )
 
 

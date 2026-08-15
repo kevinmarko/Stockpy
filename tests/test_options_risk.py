@@ -43,12 +43,16 @@ def test_calculate_black_scholes_greeks_call_and_put():
     assert g_call["gamma"] > 0
     assert g_call["vega_1pct"] > 0
     assert g_call["theta_daily"] < 0  # Long option loses value to time decay
+    assert g_call["rho_1pct"] > 0     # Call gains value when interest rates rise
+    assert g_call["rho"] > 0
 
     g_put = calculate_black_scholes_greeks(spot, strike, t_years, sigma, option_type="put")
     assert -0.55 < g_put["delta"] < -0.35
     assert g_put["gamma"] > 0
     assert g_put["vega_1pct"] > 0
     assert g_put["theta_daily"] < 0
+    assert g_put["rho_1pct"] < 0     # Put loses value when interest rates rise
+    assert g_put["rho"] < 0
 
 
 def test_calculate_position_greeks_stock():

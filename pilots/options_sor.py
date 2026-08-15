@@ -185,39 +185,22 @@ def calculate_leg_greeks(
     option_type: str = "call",
     r: float = 0.045,
 ) -> Dict[str, float]:
-    """Computes Black-Scholes Delta and Gamma for a single option leg."""
-    if spot <= 0 or strike <= 0:
-        return {"delta": 0.0, "gamma": 0.0, "price": 0.0}
+    """Computes Black-Scholes Delta and Gamma for a single option leg (delegates to canonical pilots.options_risk)."""
+    from pilots.options_risk import calculate_black_scholes_greeks
 
-    opt_type = (option_type or "call").lower()
-
-    if t_years <= _DEGENERATE_EPSILON or sigma <= _DEGENERATE_EPSILON or np.isnan(sigma):
-        if opt_type == "call":
-            price = max(0.0, spot - strike)
-            delta = 1.0 if spot > strike else 0.0
-        else:
-            price = max(0.0, strike - spot)
-            delta = -1.0 if spot < strike else 0.0
-        return {"delta": delta, "gamma": 0.0, "price": float(price)}
-
-    vol_sqrt_t = sigma * np.sqrt(t_years)
-    if vol_sqrt_t < _DEGENERATE_EPSILON:
-        vol_sqrt_t = _DEGENERATE_EPSILON
-
-    d1 = (np.log(spot / strike) + (r + 0.5 * sigma**2) * t_years) / vol_sqrt_t
-    d2 = d1 - vol_sqrt_t
-
-    if opt_type == "call":
-        price = spot * norm.cdf(d1) - strike * math.exp(-r * t_years) * norm.cdf(d2)
-        delta = float(norm.cdf(d1))
-    else:
-        price = strike * math.exp(-r * t_years) * norm.cdf(-d2) - spot * norm.cdf(-d1)
-        delta = float(norm.cdf(d1) - 1.0)
-
-    denom_gamma = spot * vol_sqrt_t
-    gamma = float(norm.pdf(d1) / denom_gamma) if denom_gamma >= _DEGENERATE_EPSILON else 0.0
-
-    return {"delta": delta, "gamma": gamma, "price": float(price)}
+    greeks = calculate_black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        t_years=t_years,
+        sigma=sigma,
+        option_type=option_type,
+        r=r,
+    )
+    return {
+        "delta": float(greeks.get("delta", 0.0)),
+        "gamma": float(greeks.get("gamma", 0.0)),
+        "price": float(greeks.get("price", 0.0)),
+    }
 
 
 def _normalize_leg_data(

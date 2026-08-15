@@ -135,30 +135,20 @@ def calculate_option_price(
     opt_type: str = "call",
     r: Optional[float] = None,
 ) -> float:
-    """Calculates Black-Scholes unit price for an option contract ($/contract, multiplier=100)."""
-    if r is None:
-        r = float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045))
+    """Calculates Black-Scholes unit price for an option contract ($/contract, multiplier=100) using canonical pilots.options_risk."""
+    from pilots.options_risk import calculate_black_scholes_greeks
 
-    if dte <= 0:
-        if str(opt_type).lower() == "call":
-            intrinsic = max(0.0, spot - strike)
-        else:
-            intrinsic = max(0.0, strike - spot)
-        return max(0.01, round(intrinsic, 4)) * 100.0
-
-    t_years = max(1, dte) / 365.0
-    sigma = max(0.01, iv)
-    vol_sqrt_t = sigma * math.sqrt(t_years)
-
-    d1 = (math.log(spot / strike) + (r + 0.5 * (sigma ** 2)) * t_years) / vol_sqrt_t
-    d2 = d1 - vol_sqrt_t
-
-    if str(opt_type).lower() == "call":
-        bs_price = spot * norm.cdf(d1) - strike * math.exp(-r * t_years) * norm.cdf(d2)
-    else:
-        bs_price = strike * math.exp(-r * t_years) * norm.cdf(-d2) - spot * norm.cdf(-d1)
-
-    return max(0.01, round(bs_price, 4)) * 100.0
+    t_years = max(0, dte) / 365.0
+    sigma = max(0.01, iv) if (iv is not None and iv > 0) else 0.0
+    res = calculate_black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        t_years=t_years,
+        sigma=sigma,
+        option_type=opt_type,
+        r=r,
+    )
+    return max(0.01, round(res["price"], 4)) * 100.0
 
 
 def compute_implied_correlation(

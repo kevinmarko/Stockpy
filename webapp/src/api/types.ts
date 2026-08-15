@@ -4255,29 +4255,37 @@ export interface EarningsCrushExecutionResult {
 }
 
 export interface UnusualOptionTrade {
-  id: string;
+  id?: string;
+  contract_symbol?: string;
   symbol: string;
   timestamp: string;
-  option_type: "CALL" | "PUT";
+  option_type: "CALL" | "PUT" | "call" | "put" | string;
   strike: number;
   expiration: string;
-  dte: number;
-  trade_type: "SWEEP" | "BLOCK" | "SPLIT";
-  sentiment: "BULLISH" | "BEARISH" | "NEUTRAL";
-  aggressor_side: "ASK" | "BID" | "MID";
+  dte?: number;
+  trade_type?: "SWEEP" | "BLOCK" | "SPLIT" | "ask_sweep" | "bid_sweep" | "mid_block" | "block" | string;
+  aggressiveness?: string;
+  sentiment: "BULLISH" | "BEARISH" | "NEUTRAL" | string;
+  aggressor_side?: "ASK" | "BID" | "MID" | string;
   volume: number;
   open_interest: number;
   vol_oi_ratio: number;
   price: number;
+  trade_price?: number;
   spot_price?: number;
   notional: number;
+  underlying_notional?: number;
   iv?: number;
+  implied_volatility?: number;
+  hv_30?: number;
   historical_vol_30d?: number;
+  iv_burst_score?: number;
   iv_expansion_flag?: boolean;
 }
 
 export interface UnusualOptionsFlowResponse {
   trades: UnusualOptionTrade[];
+  records?: UnusualOptionTrade[];
   count: number;
   as_of?: string;
 }

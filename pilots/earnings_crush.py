@@ -735,9 +735,13 @@ def evaluate_earnings_crush_candidates(
             if realized_move_pct <= 0.0:
                 realized_move_pct = FALLBACK_MEDIAN_MOVE_PCT
 
-            # 6. Compute Crush Edge Ratio
-            crush_edge_ratio = round(expected_move_pct / realized_move_pct, 3) if realized_move_pct > 0 else 1.0
-            is_recommended = crush_edge_ratio >= resolved_min_edge
+            # 6. Compute Crush Edge Ratio (CONSTRAINT #4: Never recommend a trade on synthetic fallback data)
+            if hist_res.get("fallback") or hist_res.get("quarters_count", 0) == 0:
+                crush_edge_ratio = round(expected_move_pct / realized_move_pct, 3) if realized_move_pct > 0 else 0.0
+                is_recommended = False
+            else:
+                crush_edge_ratio = round(expected_move_pct / realized_move_pct, 3) if realized_move_pct > 0 else 0.0
+                is_recommended = bool(crush_edge_ratio >= resolved_min_edge and not hist_res.get("sparse_history", False))
 
             # 7. Construct delta-neutral Iron Condor strikes
             target_short_call = spot + 1.0 * expected_move_usd
@@ -883,6 +887,16 @@ def evaluate_earnings_crush_candidates(
 
     # Sort candidates by crush_edge_ratio descending
     candidates.sort(key=lambda c: float(c.get("crush_edge_ratio", 0.0)), reverse=True)
+
+    # Dispatch alerts for qualifying candidates (non-blocking, condition-deduped)
+    for cand in candidates:
+        if cand.get("is_recommended") or float(cand.get("crush_edge_ratio", 0.0)) >= 1.35:
+            try:
+                from pilots.options_alerts import dispatch_earnings_crush_alert
+                dispatch_earnings_crush_alert(cand)
+            except Exception as exc:  # noqa: BLE001 — never raises (CONSTRAINT #6)
+                logger.debug("Earnings crush alert dispatch failed for %s: %s", cand.get("symbol", ""), exc)
+
     return candidates
 
 

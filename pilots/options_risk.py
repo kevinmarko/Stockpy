@@ -53,46 +53,76 @@ def calculate_black_scholes_greeks(
     r: Optional[float] = None,
 ) -> Dict[str, float]:
     """
-    Computes Black-Scholes Greeks for a single option contract.
+    Computes Black-Scholes Greeks and theoretical pricing for a single option contract.
     Enforces degenerate input guards (< 1e-12) and 0DTE intrinsic delta fallback.
-    Returns per-share Greeks:
-    - Delta: in (-1, 1) or exact [-1, 0, 1] at 0DTE
-    - Gamma: per $1 underlying move
-    - Theta_Daily: $/day decay (annual theta / 252)
-    - Vega_1pct: $ per 1% change in IV (raw vega / 100)
+    Returns per-share Greeks and pricing metrics:
+    - delta: in (-1, 1) or exact [-1, 0, 1] at 0DTE
+    - gamma: per $1 underlying move
+    - theta_daily / theta: $/day decay (annual theta / 252)
+    - theta_annual: $/year decay
+    - vega_1pct / vega: $ per 1% change in IV (raw vega / 100)
+    - vega_raw: raw vega (dV/dsigma)
+    - price: theoretical unit option price
+    - intrinsic: max(0, S-K) for calls, max(0, K-S) for puts
+    - extrinsic: max(0, price - intrinsic)
     """
     if r is None:
         r = float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045))
 
+    opt_type = str(option_type or "call").lower().strip()
+
     if spot <= 0 or strike <= 0:
-        return {"delta": 0.0, "gamma": 0.0, "theta_daily": 0.0, "vega_1pct": 0.0, "price": 0.0}
+        return {
+            "delta": 0.0,
+            "gamma": 0.0,
+            "theta_daily": 0.0,
+            "theta_annual": 0.0,
+            "theta": 0.0,
+            "vega_1pct": 0.0,
+            "vega": 0.0,
+            "vega_raw": 0.0,
+            "price": 0.0,
+            "intrinsic": 0.0,
+            "extrinsic": 0.0,
+        }
+
+    intrinsic = max(0.0, spot - strike) if opt_type == "call" else max(0.0, strike - spot)
 
     # 0DTE / Expiration fallback: when T <= 1e-12, intrinsic delta applies, Greeks decay to 0
     if t_years <= _DEGENERATE_THRESHOLD:
-        if option_type == "call":
-            price = max(0.0, spot - strike)
-            delta = 1.0 if spot > strike else 0.0
-        else:
-            price = max(0.0, strike - spot)
-            delta = -1.0 if spot < strike else 0.0
+        delta = 1.0 if (opt_type == "call" and spot > strike) else (-1.0 if (opt_type == "put" and spot < strike) else 0.0)
         return {
-            "delta": delta,
+            "delta": float(delta),
             "gamma": 0.0,
             "theta_daily": 0.0,
+            "theta_annual": 0.0,
+            "theta": 0.0,
             "vega_1pct": 0.0,
-            "price": float(price),
+            "vega": 0.0,
+            "vega_raw": 0.0,
+            "price": float(intrinsic),
+            "intrinsic": float(intrinsic),
+            "extrinsic": 0.0,
         }
 
     # Missing or degenerate volatility guard
     if sigma <= _DEGENERATE_THRESHOLD or np.isnan(sigma):
-        price = max(0.0, spot - strike) if option_type == "call" else max(0.0, strike - spot)
-        delta = 1.0 if (option_type == "call" and spot > strike) else (-1.0 if (option_type == "put" and spot < strike) else 0.0)
+        delta = 1.0 if (opt_type == "call" and spot > strike) else (-1.0 if (opt_type == "put" and spot < strike) else 0.0)
         return {
-            "delta": delta,
+            "delta": float(delta),
             "gamma": 0.0,
             "theta_daily": 0.0,
+            "theta_annual": 0.0,
+            "theta": 0.0,
             "vega_1pct": 0.0,
-            "price": float(price),
+            "vega": 0.0,
+            "vega_raw": 0.0,
+            "rho": 0.0,
+            "rho_1pct": 0.0,
+            "rho_raw": 0.0,
+            "price": float(intrinsic),
+            "intrinsic": float(intrinsic),
+            "extrinsic": 0.0,
         }
 
     vol_sqrt_t = sigma * np.sqrt(t_years)
@@ -101,28 +131,43 @@ def calculate_black_scholes_greeks(
 
     d1 = (np.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / vol_sqrt_t
     d2 = d1 - vol_sqrt_t
+    discount = math.exp(-r * t_years)
 
-    if option_type == "call":
-        price = spot * norm.cdf(d1) - strike * math.exp(-r * t_years) * norm.cdf(d2)
+    if opt_type == "call":
+        price = spot * norm.cdf(d1) - strike * discount * norm.cdf(d2)
         delta = float(norm.cdf(d1))
-        theta_annual = -(spot * norm.pdf(d1) * sigma) / (2 * np.sqrt(t_years)) - r * strike * math.exp(-r * t_years) * norm.cdf(d2)
+        theta_annual = -(spot * norm.pdf(d1) * sigma) / (2 * np.sqrt(t_years)) - r * strike * discount * norm.cdf(d2)
+        raw_rho = float(strike * t_years * discount * norm.cdf(d2))
     else:
-        price = strike * math.exp(-r * t_years) * norm.cdf(-d2) - spot * norm.cdf(-d1)
+        price = strike * discount * norm.cdf(-d2) - spot * norm.cdf(-d1)
         delta = float(norm.cdf(d1) - 1.0)
-        theta_annual = -(spot * norm.pdf(d1) * sigma) / (2 * np.sqrt(t_years)) + r * strike * math.exp(-r * t_years) * norm.cdf(-d2)
+        theta_annual = -(spot * norm.pdf(d1) * sigma) / (2 * np.sqrt(t_years)) + r * strike * discount * norm.cdf(-d2)
+        raw_rho = float(-strike * t_years * discount * norm.cdf(-d2))
 
+    price = float(max(0.0, price))
     denom_gamma = spot * vol_sqrt_t
     gamma = float(norm.pdf(d1) / denom_gamma) if denom_gamma >= _DEGENERATE_THRESHOLD else 0.0
     raw_vega = float(spot * norm.pdf(d1) * np.sqrt(t_years))
     vega_1pct = raw_vega / 100.0  # dollar change per 1% change in vol
+    rho_1pct = raw_rho / 100.0   # dollar change per 1% change in interest rate
     theta_daily = float(theta_annual / TRADING_DAYS_PER_YEAR)
+    extrinsic = float(max(0.0, price - intrinsic))
 
     return {
         "delta": delta,
         "gamma": gamma,
         "theta_daily": theta_daily,
+        "theta_annual": float(theta_annual),
+        "theta": theta_daily,
         "vega_1pct": vega_1pct,
-        "price": float(price),
+        "vega": vega_1pct,
+        "vega_raw": raw_vega,
+        "rho": rho_1pct,
+        "rho_1pct": rho_1pct,
+        "rho_raw": raw_rho,
+        "price": price,
+        "intrinsic": float(intrinsic),
+        "extrinsic": extrinsic,
     }
 
 
