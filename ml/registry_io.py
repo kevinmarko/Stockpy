@@ -21,9 +21,10 @@ Design rules
 
 from __future__ import annotations
 
+from datetime import date, datetime
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
 
@@ -69,49 +70,157 @@ _REGISTRY_HEADER = """\
 
 
 def compute_deployable(cpcv_dsr: Optional[float], pbo: Optional[float]) -> bool:
-    """The single deployability gate: DSR > 0.95 AND PBO < 0.5.
+    """The single deployability gate: DSR > DSR_MIN AND PBO < PBO_MAX.
 
     Returns ``False`` whenever either metric is ``None`` (honest — an
     uncomputable metric can never clear the gate).
     """
+    try:
+        from validation.thresholds import DSR_MIN, PBO_MAX
+    except Exception:
+        DSR_MIN, PBO_MAX = 0.95, 0.50
+
     return (
         cpcv_dsr is not None
-        and cpcv_dsr > 0.95
+        and cpcv_dsr > DSR_MIN
         and pbo is not None
-        and pbo < 0.5
+        and pbo < PBO_MAX
     )
 
 
+def get_local_registry_path() -> Optional[Path]:
+    """Return the machine-global registry path under LOCAL_DATA_ROOT, or None."""
+    try:
+        from settings import settings  # noqa: PLC0415
+        return settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"
+    except Exception:
+        return None
+
+
 def resolve_registry_path(path: Optional[Path] = None) -> Path:
-    """Resolve the registry YAML path.
+    """Resolve the registry YAML path for single-path consumers.
 
     Priority:
     1. Explicit caller-provided ``path``.
-    2. Machine-global runtime registry: ``settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"``
+    2. CWD test/custom ``ml/registry.yaml`` if running in an isolated non-repo CWD (e.g. pytest tmp_path).
+    3. Machine-global runtime registry: ``settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"``
        if it exists.
-    3. Repo-root fallback: ``_DEFAULT_REGISTRY_PATH`` (``ml/registry.yaml``).
+    4. Repo-root fallback: ``_DEFAULT_REGISTRY_PATH`` (``ml/registry.yaml``).
     """
     if path is not None:
         return Path(path)
+
     try:
-        from settings import settings  # noqa: PLC0415
-        local_path = settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"
-        if local_path.exists():
-            return local_path
+        is_in_repo = Path.cwd().resolve() == _DEFAULT_REGISTRY_PATH.parent.parent.resolve()
     except Exception:
-        pass
+        is_in_repo = True
+
+    if not is_in_repo:
+        return Path("ml/registry.yaml")
+
+    local_path = get_local_registry_path()
+    if local_path is not None and local_path.exists():
+        return local_path
     return _DEFAULT_REGISTRY_PATH
 
 
-def load_registry(path: Optional[Path] = None) -> dict:
-    """Load the registry YAML into a plain dict (empty dict on missing file)."""
-    resolved = resolve_registry_path(path)
-    if not resolved.exists():
-        logger.warning("Registry file not found at %s — starting empty.", resolved)
+def _parse_entry_date(value: Any) -> Optional[date]:
+    """Helper to parse a model entry's trained_date into a date object."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.strptime(str(value).strip(), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _load_yaml_file(path: Path) -> dict:
+    """Load and parse a YAML file into a dict, returning {} on missing/error."""
+    try:
+        if not path.exists():
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception as exc:
+        logger.debug("Failed to read registry YAML at %s: %s", path, exc)
         return {}
-    with open(resolved, "r") as f:
-        data = yaml.safe_load(f) or {}
-    return data
+
+
+def load_registry(path: Optional[Path] = None) -> dict:
+    """Load the registry YAML.
+
+    When ``path`` is explicitly provided, loads that file directly.
+    When ``path`` is ``None`` (default runtime):
+    Performs a bidirectional smart-merge between the repo-tracked ``ml/registry.yaml``
+    and the machine-global ``LOCAL_DATA_ROOT / ml_models / registry.yaml``.
+    For each model, whichever source has the newer ``trained_date`` is preserved,
+    preventing stale local files from shadowing fresh git pulls and preventing git
+    checkouts from wiping fresh local retrains. If merged changes occur, synchronizes
+    the local copy.
+    """
+    if path is not None:
+        target = Path(path)
+        if not target.exists():
+            logger.warning("Registry file not found at %s — starting empty.", target)
+            return {}
+        return _load_yaml_file(target)
+
+    try:
+        is_in_repo = Path.cwd().resolve() == _DEFAULT_REGISTRY_PATH.parent.parent.resolve()
+    except Exception:
+        is_in_repo = True
+
+    if not is_in_repo:
+        resolved = resolve_registry_path()
+        return _load_yaml_file(resolved)
+
+    repo_data = _load_yaml_file(_DEFAULT_REGISTRY_PATH)
+    local_path = get_local_registry_path()
+    local_data = _load_yaml_file(local_path) if local_path is not None else {}
+
+    if not repo_data and not local_data:
+        return {}
+    if not repo_data:
+        return local_data
+    if not local_data:
+        return repo_data
+
+    # Merge per-model:
+    merged: dict[str, Any] = dict(repo_data)
+    repo_models = dict(repo_data.get("models") or {})
+    local_models = dict(local_data.get("models") or {})
+    merged_models = dict(repo_models)
+
+    if isinstance(local_models, dict):
+        for model_key, local_spec in local_models.items():
+            if not isinstance(local_spec, dict):
+                continue
+            if model_key not in merged_models:
+                merged_models[model_key] = local_spec
+            else:
+                repo_spec = merged_models[model_key]
+                d_local = _parse_entry_date(local_spec.get("trained_date"))
+                d_repo = _parse_entry_date(repo_spec.get("trained_date")) if isinstance(repo_spec, dict) else None
+
+                # If local has a newer or equal date (or repo has none), local wins
+                if d_local is not None and (d_repo is None or d_local >= d_repo):
+                    merged_models[model_key] = local_spec
+                # Otherwise, repo wins (e.g. freshly pulled commit has newer trained_date)
+
+    merged["models"] = merged_models
+
+    # Self-sync local file if it differed
+    if local_path is not None and local_data != merged:
+        try:
+            _dump_registry(merged, local_path)
+        except Exception as exc:
+            logger.debug("Failed to sync merged registry to %s: %s", local_path, exc)
+
+    return merged
 
 
 def update_model_metrics(
@@ -139,22 +248,22 @@ def update_model_metrics(
     When ``path`` is ``None``, writes to both ``settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"``
     (machine-global runtime state, immune to git branch/worktree switches) AND mirrors
     to the repo-root ``ml/registry.yaml`` (for git tracking/commits).
-    When ``path`` is explicitly passed (e.g. unit tests), only writes to that target path.
+    When ``path`` is explicitly passed (e.g. unit tests), only writes to that target path
+    and propagates any write error.
 
     Returns the resulting model sub-dict.  Raises ``KeyError`` if the model key
     does not already exist in the registry (we update in place, never invent
     new roles).
     """
+    fail_hard = False
     if path is not None:
         target_paths = [Path(path)]
+        fail_hard = True
     else:
         target_paths = []
-        try:
-            from settings import settings  # noqa: PLC0415
-            local_path = settings.LOCAL_DATA_ROOT / "ml_models" / "registry.yaml"
+        local_path = get_local_registry_path()
+        if local_path is not None:
             target_paths.append(local_path)
-        except Exception:
-            pass
         if _DEFAULT_REGISTRY_PATH not in target_paths:
             target_paths.append(_DEFAULT_REGISTRY_PATH)
 
@@ -182,15 +291,24 @@ def update_model_metrics(
     entry["cpcv_mean_oos_sharpe"] = cpcv_mean_oos_sharpe
     entry["cpcv_mean_oos_max_dd"] = cpcv_mean_oos_max_dd
 
+    success_count = 0
+    last_exc = None
     for target in target_paths:
         try:
             _dump_registry(data, target)
+            success_count += 1
         except Exception as exc:
+            last_exc = exc
             logger.warning("Failed to dump registry to %s: %s", target, exc)
+            if fail_hard:
+                raise
+
+    if success_count == 0:
+        raise IOError(f"Failed to persist registry updates to any target path: {last_exc}") from last_exc
 
     logger.info(
-        "Registry updated: %s trained_date=%s dsr=%s pbo=%s n_train=%s deployable=%s",
-        model_key, trained_date, cpcv_dsr, pbo, n_train, entry["deployable"],
+        "Registry updated: %s trained_date=%s dsr=%s pbo=%s n_train=%s deployable=%s (written to %d targets)",
+        model_key, trained_date, cpcv_dsr, pbo, n_train, entry["deployable"], success_count,
     )
     return entry
 
@@ -205,7 +323,7 @@ def _dump_registry(data: dict, path: Path) -> None:
         width=100,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(_REGISTRY_HEADER)
         f.write("\n")
         f.write(body)

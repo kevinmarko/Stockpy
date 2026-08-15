@@ -222,13 +222,18 @@ def _load_registry_rows_cached(path_str: str, mtime: float) -> List[Dict[str, An
 
 
 def _load_ml_registry_rows() -> List[Dict[str, Any]]:
-    """Resolve ``ml/registry.yaml`` (repo-root relative) and load its rows.
+    """Resolve ``ml/registry.yaml`` (or LOCAL_DATA_ROOT) and load its rows.
 
     Returns ``[]`` when the file is missing/unreadable/malformed so the panel
     shows an "unavailable" info message rather than an exception or a fabricated
     row (CONSTRAINT #6).
     """
-    path = _REPO_ROOT / "ml" / "registry.yaml"
+    try:
+        from ml.registry_io import resolve_registry_path  # noqa: PLC0415
+        path = resolve_registry_path()
+    except Exception:
+        path = _REPO_ROOT / "ml" / "registry.yaml"
+
     try:
         if not path.exists():
             return []
@@ -759,14 +764,12 @@ def render_analytics() -> None:
         from gui.panels import analytics_signals
 
         st.divider()
-        analytics_signals.render_ml_registry()
-        st.divider()
         analytics_signals.render_news_sentiment(snap)
         st.divider()
         analytics_signals.render_slippage_covar(snap)
     except Exception as exc:  # noqa: BLE001 — sibling module optional / in-flight
         logger.debug("analytics_signals panels unavailable: %s", exc)
         st.caption(
-            "_Signals-analytics panels (ML registry / news sentiment / "
+            "_Signals-analytics panels (news sentiment / "
             "slippage & CoVaR) are not available yet._"
         )

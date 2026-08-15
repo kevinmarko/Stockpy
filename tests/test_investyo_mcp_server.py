@@ -2573,6 +2573,45 @@ class TestGetModelRegistryStatus:
         monkeypatch.chdir(tmp_path)
         assert "not found" in srv.get_model_registry_status()
 
+    def test_production_shaped_registry(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ml").mkdir()
+        recent = datetime.now().strftime("%Y-%m-%d")
+        (tmp_path / "ml" / "registry.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "models": {
+                        "lgbm_ranker": {
+                            "role": "cross_sectional_ranker",
+                            "trained_date": recent,
+                            "cpcv_dsr": 0.99,
+                            "pbo": 0.20,
+                            "deployable": True,
+                            "features": ["momentum", "volatility"],
+                        },
+                        "meta_labeler_timeseries_momentum": {
+                            "role": "meta_labeler",
+                            "trained_date": "2025-01-01",
+                            "cpcv_dsr": 0.10,
+                            "pbo": 0.80,
+                            "deployable": False,
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = srv.get_model_registry_status()
+
+        assert "lgbm_ranker" in result
+        assert "Fresh" in result
+        assert "✅ DEPLOYABLE" in result
+        assert "CPCV DSR**: 0.99" in result
+        assert "meta_labeler_timeseries_momentum" in result
+        assert "STALE" in result
+        assert "❌ NOT DEPLOYABLE" in result
+
     def test_list_shaped_registry_with_stale_model(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
         (tmp_path / "ml").mkdir()
@@ -2603,6 +2642,13 @@ class TestGetModelRegistryStatus:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "ml").mkdir()
         (tmp_path / "ml" / "registry.yaml").write_text("", encoding="utf-8")
+
+        assert srv.get_model_registry_status() == "Registry is empty."
+
+    def test_empty_models_mapping(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "ml").mkdir()
+        (tmp_path / "ml" / "registry.yaml").write_text("models: {}\n", encoding="utf-8")
 
         assert srv.get_model_registry_status() == "Registry is empty."
 
